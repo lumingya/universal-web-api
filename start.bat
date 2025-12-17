@@ -55,17 +55,57 @@ REM ---------- 2) 检查 Python ----------
 echo [STEP] 检查 Python 环境
 echo ----------------------------------------
 
+REM 检查 Python 命令是否存在
 where python >nul 2>&1
 if %errorlevel% neq 0 (
-    echo [ERROR] 未找到 Python，请先安装 Python 3.8+
+    echo [ERROR] 系统中未找到 Python
+    echo.
+    echo 解决方案:
+    echo   1. 下载 Python: https://www.python.org/downloads/
+    echo   2. 安装时勾选 "Add Python to PATH"
+    echo   3. 重启命令行窗口
+    echo.
     pause
     exit /b 1
 )
 
-for /f "tokens=*" %%i in ('python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2^>nul') do set "PYTHON_VERSION=%%i"
-echo [OK] Python %PYTHON_VERSION%
-echo.
+REM 测试 Python 是否能运行
+python -c "import sys" >nul 2>&1
+if %errorlevel% neq 0 (
+    echo [ERROR] Python 已安装但无法正常运行
+    echo.
+    echo 建议:
+    echo   - 以管理员身份运行此脚本
+    echo   - 重新安装 Python
+    echo.
+    pause
+    exit /b 1
+)
 
+REM 获取版本信息（多种方法）
+set "PYTHON_VERSION="
+for /f "tokens=2" %%v in ('python --version 2^>^&1') do set "PYTHON_VERSION=%%v"
+
+if defined PYTHON_VERSION (
+    echo [OK] 检测到 Python %PYTHON_VERSION%
+) else (
+    REM 降级显示
+    echo [OK] Python 已安装并可用
+    set "PYTHON_VERSION=未知版本"
+)
+
+REM 检查版本要求（不阻塞）
+python -c "import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)" 2>nul
+if %errorlevel% neq 0 (
+    echo.
+    echo [警告] 当前 Python 版本可能低于 3.8
+    echo        某些功能可能无法正常使用
+    echo        建议升级到 Python 3.8 或更高版本
+    echo.
+    timeout /t 5 /nobreak >nul
+)
+
+echo.
 REM ---------- 3) 虚拟环境 ----------
 echo [STEP] 准备虚拟环境
 echo ----------------------------------------
