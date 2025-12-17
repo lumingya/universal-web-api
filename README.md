@@ -206,7 +206,6 @@ data: [DONE]
 | DeepSeek (chat.deepseek.com) | ✅ | - |
 | Google AI Studio | ✅ | 需 Google 账号 |
 | LMArena (lmarena.ai) | ✅ | 建议启用隐身模式 |
-| Claude (claude.ai) | ⚠️ | 反爬较严格 |
 
 ## 架构说明
 
