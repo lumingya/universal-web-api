@@ -1,271 +1,194 @@
-# Universal Web-to-API
+# Universal Web API
 
-将任意 AI 网站转换为 OpenAI 兼容 API
+> 💡 **一句话介绍**：将任何你常用的 AI 网站（ChatGPT, DeepSeek, Claude 等）转换为标准的 API 接口，完全免费，支持本地部署。
+
+## 📖 目录
+1.  [项目简介](#-项目简介)
+2.  [小白快速开始 (必读)](#-小白快速开始)
+3.  [⚠️ 重要注意事项与已知限制](#-重要注意事项与已知限制)
+4.  [核心功能配置](#-核心功能配置)
+5.  [API 调用示例](#-api-调用示例)
+6.  [常见问题与报错 (FAQ)](#-常见问题与报错-faq)
 
 ---
 
-## 简介
+## 💡 项目简介
 
-Universal Web-to-API 是一个工具，能够将任意 AI 聊天网站（如 ChatGPT、Grok、DeepSeek、Claude 等）转换为标准的 OpenAI 兼容 API。
+这是一个基于 **浏览器自动化 (DrissionPage)** 技术的工具。它就像一个“机器人助理”，会在你的电脑上打开一个浏览器窗口，模仿人类的操作去和 AI 网页对话，然后把 AI 的回复传回来给你。
 
-**工作原理**：通过控制本地 Chrome 浏览器，自动化执行"输入消息 → 发送 → 读取回复"的流程，并将结果以 OpenAI API 格式返回。
+**核心优势：**
+* ✅ **0 成本**：直接利用网页版的免费对话额度。
+* ✅ **数据安全**：账号在你自己本地登录，Cookie 不会上云，隐私完全掌握在自己手中。
+* ✅ **高度智能**：内置 AI 语义分析引擎，不需要你去查网页源代码，只要告诉机器人“输入框在哪里”，它就能自己找到。
 
-## 特性
+---
 
-- **通用兼容** - 支持任意 AI 聊天网站，无需等待官方 API
-- **智能识别** - AI 自动分析页面结构，无需手动配置选择器
-- **流式输出** - 完整支持 SSE 流式响应，实时返回 AI 回复
-- **OpenAI 兼容** - 标准 `/v1/chat/completions` 接口，可直接对接现有应用
-- **可视化管理** - 内置 Dashboard，图形化编辑配置
-- **隐身模式** - 模拟人类操作，降低被检测风险
-- **热更新** - 配置修改无需重启服务
-- **优雅取消** - 支持请求中断，快速响应客户端断开
+## 🚀 小白快速开始
 
-## 快速开始
+### 1. 下载与安装
 
-### 环境要求
+> **⚠️ 注意：** 主页面的代码可能是旧版本的开发代码。请务必前往右侧的 **[Releases]** 页面下载最新打包好的版本！
 
-- Python 3.8+
-- Chrome 浏览器（推荐最新版）
-- Windows
-- Linus/macOS 未测试
+1.  下载 Release 中的压缩包。
+2.  解压到一个 **没有中文路径** 的文件夹里（例如 `D:\AI_Tools\Universal-Web-API`）。
+3.  确保你的电脑上安装了 **Google Chrome 浏览器**。
 
-### Windows 一键启动
+### 2. 启动与进入配置页面
 
-双击运行 `start.bat`，脚本会自动完成以下操作：
+1.  双击运行文件夹里的 **`start.bat`** 脚本。
+    * 脚本会自动检测环境并安装必要的依赖，第一次运行可能需要一点时间，请耐心等待。
+2.  当出现黑色命令行窗口（CMD）并停止滚动时，你会看到类似下面的提示：
+    ```text
+    Web UI 已启动，请访问: [http://127.0.0.1:8199](http://127.0.0.1:8199)
+    ```
+3.  **如何打开配置界面**：
+    * 按住键盘上的 **Ctrl** 键，鼠标点击这个链接。
+    * 或者手动复制 `http://127.0.0.1:8199` 到你的浏览器地址栏打开。
 
-1. 创建 Python 虚拟环境
-2. 安装所有依赖
-3. 启动独立 Chrome 实例（不影响日常使用的 Chrome）
-4. 启动 API 服务
+### 3. 登录账号
 
-启动完成后：
+程序启动后，会自动弹出一个新的 Chrome 浏览器窗口。
+1.  在这个自动弹出的浏览器里，打开你要使用的 AI 网站。
+2.  **手动登录你的账号**。
+3.  登录成功后，不要关闭浏览器，回到刚才打开的 Web UI 网页（8199端口）开始配置。
 
-- API 地址: http://127.0.0.1:8199
-- Dashboard: http://127.0.0.1:8199/dashboard
-- API 文档: http://127.0.0.1:8199/docs
+---
 
+## ⚠️ 重要注意事项与已知限制
 
-### 首次使用
+在使用本工具前，请务必阅读以下两条限制，否则脚本可能会无法正常工作。
 
-1. 在启动的 Chrome 浏览器中打开目标 AI 网站（如 https://chatgpt.com ）
-2. **完成登录**（重要！），同时务必先手动发送一次请求，确保页面内存在ai回复内容。
-3. 发送 API 请求，服务会自动识别页面结构
+### 🛑 运行中请勿干扰浏览器
+当工作流正在执行（即 AI 正在回复或脚本正在操作）时：
+* **禁止操作**：不要去点击网页上的任何按钮（特别是不要替脚本点击“发送”）。
+* **禁止切屏**：尽量不要切换浏览器的标签页或最小化窗口。
+* **后果**：人为干预会导致脚本逻辑错乱，引发 **脚本死锁 (Deadlock)** 或产生预期之外的行为。
+* **正确做法**：你可以静静地看着浏览器自动操作，不要动手。如果脚本卡死，请关闭黑色命令行窗口，**重启 `start.bat`**。
 
-```bash
-curl http://127.0.0.1:8199/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "gpt-4",
-    "messages": [{"role": "user", "content": "Hello!"}],
-    "stream": true
-  }'
-```
+### 📉 特殊格式抓取限制
+目前的版本在内容抓取上存在一定局限性：
+* **代码块与 LaTeX**：如果 AI 回复的内容被包裹在复杂的代码块（Code Block）中，或者包含复杂的 LaTeX 数学公式，脚本**可能无法完整捕捉**，或者抓取结果会出现预期之外的格式错误。
+* 我们会持续优化这一点，但在当前版本中请知悉此限制。
 
-## 配置说明
+---
 
-### 环境变量 (.env)
+## ⚙️ 核心功能配置
 
-```env
-# 服务配置
-APP_HOST=127.0.0.1          # 监听地址
-APP_PORT=8199               # 监听端口
-APP_DEBUG=true              # 调试模式
-LOG_LEVEL=INFO              # 日志级别
+### 工作流与 AI 语义识别
 
-# 认证配置
-AUTH_ENABLED=false          # 是否启用认证
-AUTH_TOKEN=your-secret      # Bearer Token
+这是本项目的核心。为了适配不同的网站，你可以通过“工作流”告诉机器人怎么操作。
+**对于小白用户，通常只需要关注三个要素：**
 
-# 浏览器配置
-BROWSER_PORT=9222           # Chrome 调试端口
+| 设置项 | 说明 | 示例 |
+| :--- | :--- | :--- |
+| **Key (元素名)** | 给这个操作对象起个英文名 | `input_box` (输入框) |
+| **描述** | **最重要的一步！** 用大白话描述这是什么，AI 会根据描述去网页里找 | `这是聊天的输入框` / `这是发送按钮` |
+| **是否启用** | 勾选后，机器人执行时才会操作这一步 | `☑️` |
 
-# AI 分析配置（用于自动识别页面结构）
-HELPER_API_KEY=xxx          # 辅助 AI 的 API Key
-HELPER_BASE_URL=http://...  # 辅助 AI 的 API 地址
-HELPER_MODEL=gpt-4          # 辅助 AI 模型名称
-```
+*大部分主流网站我们已经预设好了配置，你也可以直接导入其他用户分享的配置文件。*
 
-### 站点配置 (sites.json)
+### 隐身模式 (Stealth Mode) 与注意事项
 
-自动生成或手动编辑：
+在配置页面的站点设置中，你可以开启 **“隐身模式”**。
 
-```json
-{
-  "chatgpt.com": {
-    "selectors": {
-      "input_box": "#prompt-textarea",
-      "send_btn": "button[data-testid='send-button']",
-      "result_container": ".agent-turn .markdown",
-      "new_chat_btn": "[data-testid='create-new-chat-button']"
-    },
-    "workflow": [
-      {"action": "CLICK", "target": "new_chat_btn", "optional": true},
-      {"action": "WAIT", "target": "", "value": "0.5"},
-      {"action": "FILL_INPUT", "target": "input_box"},
-      {"action": "CLICK", "target": "send_btn", "optional": true},
-      {"action": "STREAM_WAIT", "target": "result_container"}
-    ],
-    "stealth": true
-  }
-}
-```
+* **功能**：开启后，机器人的操作会加入随机延迟和模拟人类特征，防止被网站识别为脚本。
+* **⚠️ 局限性说明**：
+    * 本模式主要应对常规网站的检测。
+    * **高强度防御无法绕过**：对于 Cloudflare 盾等级调得非常高的网站（例如 `lmarena` 或部分高频访问场景），开启隐身模式也可能被拦截（表现为：发一次请求弹一次九宫格验证码）。
+    * **建议**：如果网站没有强制弹验证码，建议**不要**开启隐身模式以提高运行速度；只有遇到拦截时再尝试开启。
 
-**选择器说明**
+### 更多高级参数
 
-| 字段 | 必需 | 说明 |
-|------|------|------|
-| input_box | 是 | 消息输入框 |
-| send_btn | 是 | 发送按钮 |
-| result_container | 是 | AI 回复内容容器 |
-| new_chat_btn | 否 | 新建对话按钮 |
-| message_wrapper | 否 | 完整消息容器（改进抓取） |
-| generating_indicator | 否 | 生成中指示器 |
+除了基础的工作流，程序还支持数十项自定义参数（如超时设置、重试策略、浏览器路径等）。
+* 一般情况下，**保持默认即可**，无需修改。
+* 如果你有特殊需求，请查阅根目录下的 **[参数解释.md](./参数解释.md)** 文件，里面有详细的参数含义说明。
 
-**工作流动作**
+---
 
-| 动作 | 说明 | 参数 |
-|------|------|------|
-| FILL_INPUT | 填入消息 | target: 选择器名 |
-| CLICK | 点击元素 | target: 选择器名 |
-| STREAM_WAIT | 流式等待回复 | target: 选择器名 |
-| WAIT | 等待固定时间 | value: 秒数 |
-| KEY_PRESS | 模拟按键 | target: 键名 (如 Enter) |
+## 🔌 API 调用示例
 
-## API 文档
+当你的 Web UI 配置好并运行后，可以通过以下方式调用接口：
 
-### 聊天补全
+**接口地址**: `http://127.0.0.1:8199/v1/chat/completions` 
 
-```
-POST /v1/chat/completions
-Content-Type: application/json
-Authorization: Bearer <token>  # 如果启用了认证
-```
-
-**请求体**
-
-```json
-{
-  "model": "gpt-4",
-  "messages": [
-    {"role": "system", "content": "You are a helpful assistant."},
-    {"role": "user", "content": "Hello!"}
-  ],
-  "stream": true
-}
-```
-
-**流式响应**
-
-```
-data: {"id":"chatcmpl-xxx","choices":[{"delta":{"content":"Hello"}}]}
-data: {"id":"chatcmpl-xxx","choices":[{"delta":{"content":"!"}}]}
-data: {"id":"chatcmpl-xxx","choices":[{"delta":{},"finish_reason":"stop"}]}
-data: [DONE]
-```
-
-**非流式响应**
-
-```json
-{
-  "id": "chatcmpl-xxx",
-  "object": "chat.completion",
-  "choices": [{
-    "message": {"role": "assistant", "content": "Hello! How can I help you?"},
-    "finish_reason": "stop"
-  }]
-}
-```
-
-### 其他接口
-
-| 接口 | 方法 | 说明 |
-|------|------|------|
-| /v1/models | GET | 获取模型列表 |
-| /health | GET | 健康检查 |
-| /api/config | GET/POST | 获取/保存站点配置 |
-| /api/config/{domain} | DELETE | 删除站点配置 |
-| /api/logs | GET | 获取实时日志 |
-| /dashboard | GET | 管理界面 |
-
-## Dashboard
-
-访问 http://127.0.0.1:8199/dashboard 打开管理界面。
-
-**功能**
-
-- 配置管理：可视化编辑选择器、拖拽排序工作流、选择器测试（高亮显示）、导入/导出配置
-- 实时日志：日志过滤、暂停/清除
-- 系统设置：环境变量编辑、浏览器常量调整
-
-## 已测试站点
-
-| 站点 | 状态 | 备注 |
-|------|------|------|
-| ChatGPT (chatgpt.com) | ✅ | 需登录，建议启用隐身模式 |
-| Grok (grok.com) | ✅ | 需 X/Twitter 账号 |
-| DeepSeek (chat.deepseek.com) | ✅ | - |
-| Google AI Studio | ✅ | 需 Google 账号 |
-| LMArena (lmarena.ai) | ✅ | 建议启用隐身模式 |
-
-## 架构说明
-
-```
-main.py (FastAPI)
-├── HTTP 路由、请求生命周期管理、客户端断开检测
-│
-├── request_manager.py
-│   └── FIFO 队列、全局锁、取消信号
-│
-├── browser_core.py
-│   └── 浏览器连接、工作流执行、流式监控
-│
-└── config_engine.py
-    └── sites.json 管理、AI 自动识别、热更新
-```
 
 ## 常见问题
 
-**Q: 提示"浏览器未连接"？**
+**Q1**: 运行 start.bat 后闪退，或者浏览器没有弹出来
+检查路径：确保你的 Chrome 浏览器安装在默认路径，或者你在配置文件中正确指定了 chrome.exe 的路径。
 
-确保 Chrome 以调试模式启动，检查端口是否为 9222（或 .env 中配置的端口）。
+**检查版本**：确保下载的是 Release 里的最新版，不要直接用 GitHub 主分支的源码（可能是未完成的开发版）。
 
-**Q: 首次请求很慢？**
+**Q2**: 网页配置打不开 (https://www.google.com/url?sa=E&source=gmail&q=http://127.0.0.1:8199 无法访问)
+请检查黑色的命令行窗口是否被关闭了？CMD 窗口必须一直开着，程序才能运行。
 
-首次访问新站点时，系统会调用 AI 分析页面结构，可能需要 10-30 秒。后续请求会使用缓存。
+检查端口 8199 是否被其他软件占用。
 
-**Q: 回复不完整或乱码？**
+**Q3**: 为什么发消息给 AI 后，一直显示“等待中”或超时？
+观察浏览器：切到那个自动弹出的浏览器看一眼。
 
-检查 result_container 选择器是否正确，可在 Dashboard 中测试选择器。
+如果是网速慢，网页还没加载出来 -> 请刷新网页。
 
-**Q: 如何支持新站点？**
+如果是弹出了验证码 -> 请手动帮机器人点一下验证码。
 
-在 Chrome 中打开目标站点并登录，发送测试请求即可自动识别。如果识别失败，在 Dashboard 中手动配置。
+调整配置：在工作流中适当增加“等待时间”，或者开启“强制刷新”让 AI 重新定位元素。
 
-**Q: 如何避免被检测？**
+检查干扰：请确认你没有在脚本运行时手动点击过网页。
 
-启用 stealth: true、避免高频请求、使用独立的 Chrome Profile、保持浏览器窗口可见。
-
-**Q: 多个请求会冲突吗？**
-
-不会。系统使用 FIFO 队列，同时只执行一个请求，其他请求会排队等待。
+**Q4**: 总是提示 "Context Too Long"
+这取决于你登录的网页版账号权益。如果你用的是免费版 ChatGPT，上下文通常限制在 8k 左右。这是网站的限制，不是本软件的限制。
 
 ## 项目结构
 
 ```
-├── main.py              # FastAPI 入口
-├── browser_core.py      # 浏览器自动化
-├── config_engine.py     # 配置管理
-├── request_manager.py   # 并发控制
-├── data_models.py       # 类型定义
-├── dashboard.html       # 前端界面
-├── dashboard.js         # 前端逻辑
-├── start.bat            # Windows 启动脚本
-├── requirements.txt     # Python 依赖
-├── .env                 # 环境配置
-└── sites.json           # 站点配置
+├── app
+│   ├── api
+│   │   ├── __init__.py
+│   │   └── routes.py
+│   ├── core
+│   │   ├── __init__.py
+│   │   ├── browser.py
+│   │   ├── config.py
+│   │   ├── elements.py
+│   │   ├── stream_monitor.py
+│   │   └── workflow.py
+│   ├── models
+│   │   ├── __init__.py
+│   │   └── schemas.py
+│   ├── services
+│   │   ├── __init__.py
+│   │   ├── config_engine.py
+│   │   └── request_manager.py
+│   ├── utils
+│   │   ├── __init__.py
+│   │   └── paste.py
+│   └── __init__.py
+├── config
+│   ├── browser_config.json
+│   └── sites.json
+├── scripts
+├── static
+│   ├── css
+│   ├── js
+│   │   └── dashboard.js
+│   └── index.html
+├── tests
+│   ├── __init__.py
+│   ├── conftest.py
+│   └── test_config_engine.py
+├── .env
+├── .gitignore
+├── clean_profile.py
+├── main.py
+├── requirements.txt
+├── show_structure.py
+├── start.bat
+└── 项目结构.txt
 ```
-
+## 网站测试：
+- 目前主要测试google ai studio,gemini.google,lmarena,deepseek,chatgpt
+- 测试结果：
+  deepseek思考模式下存在读取问题。
 ## 依赖
 
 - fastapi - Web 框架
@@ -274,12 +197,6 @@ main.py (FastAPI)
 - beautifulsoup4 - HTML 解析
 - pydantic - 数据验证
 
-
-## 致谢
-
-- [DrissionPage](https://github.com/g1879/DrissionPage) - 浏览器自动化库
-- [FastAPI](https://fastapi.tiangolo.com/) - Python Web 框架
-- [Tailwind CSS](https://tailwindcss.com/) - CSS 框架
 - [Vue.js](https://vuejs.org/) - JavaScript 框架
 
 ## 后续开发
