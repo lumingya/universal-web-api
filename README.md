@@ -31,7 +31,10 @@
 
 1.  下载 Release 中的压缩包。
 2.  解压到一个 **没有中文路径** 的文件夹里（例如 `D:\AI_Tools\Universal-Web-API`）。
-3.  确保你的电脑上安装了 **Google Chrome 浏览器**。
+3.  确保你的电脑上安装了以下任一 Chromium 内核浏览器：
+- Google Chrome（推荐）
+- Microsoft Edge（Windows 10/11 自带）
+- Brave / Vivaldi / Opera
 
 ### 2. 启动与进入配置页面
 
@@ -47,7 +50,7 @@
 
 ### 3. 登录账号
 
-程序启动后，会自动弹出一个新的 Chrome 浏览器窗口。
+程序启动后，会自动弹出一个浏览器窗口（Chrome、Edge 或其他已检测到的 Chromium 内核浏览器）。
 1.  在这个自动弹出的浏览器里，打开你要使用的 AI 网站。
 2.  **手动登录你的账号**。
 3.  登录成功后，不要关闭浏览器，回到刚才打开的 Web UI 网页（8199端口）开始配置。
@@ -115,8 +118,10 @@
 ## 常见问题
 
 **Q1**: 运行 start.bat 后闪退，或者浏览器没有弹出来
-检查路径：确保你的 Chrome 浏览器安装在默认路径，或者你在配置文件中正确指定了 chrome.exe 的路径。
-
+检查浏览器：程序会按以下优先级自动检测浏览器：Chrome → Edge → Brave → Vivaldi → Opera。如果都未找到，可以在 .env 文件中手动指定：
+```
+BROWSER_PATH=C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe
+```
 **检查版本**：确保下载的是 Release 里的最新版，不要直接用 GitHub 主分支的源码（可能是未完成的开发版）。
 
 **Q2**: 网页配置打不开 (http://127.0.0.1:8199 无法访问)
@@ -141,70 +146,76 @@
 ## 项目结构
 
 ```
-├── 📁 app  [337.4 KB]   # 🐍 Python 后端核心代码库
-│   ├── 📁 api  [40.7 KB]    # [接口层] 处理 HTTP 请求
+📁 1/  [总计: 729.0 KB]  # 项目根目录
+├── 📁 app  [392.7 KB]   # 🐍 Python 后端核心代码库
+│   ├── 📁 api  [56.8 KB]    # [接口层] 处理 HTTP 请求
 │   │   ├── 📄 __init__.py  [97 B]
-│   │   └── 📄 routes.py  [40.7 KB]    # 🚦 API 路由定义 (如 /v1/chat/completions)
-│   ├── 📁 core  [214.2 KB]   # [核心层] 浏览器自动化与底层逻辑
-│   │   ├── 📁 backup  [78.1 KB]    # 🗑️ 备份代码 (旧版逻辑，可忽略)
-│   │   │   ├── 📄 __init__.py  [587 B]
-│   │   │   ├── 📄 deep_mode.py  [12.3 KB]
-│   │   │   ├── 📄 elements.py  [7.2 KB]
-│   │   │   ├── 📄 stream_monitor.py  [28.6 KB]
-│   │   │   └── 📄 workflow.py  [29.5 KB]
-│   │   ├── 📁 extractors  [38.0 KB]    # 🧩 [提取策略层] 内容提取器
-│   │   │   ├── 📄 __init__.py  [777 B]
+│   │   └── 📄 routes.py  [56.7 KB]    # 🚦 API 路由定义 (如 /v1/chat/completions)
+│   ├── 📁 core  [231.3 KB]   # [核心层] 浏览器自动化与底层逻辑
+│   │   ├── 📁 extractors  [59.6 KB]    # 🧩 [提取策略层] 内容提取器
+│   │   │   ├── 📄 __init__.py  [898 B]
 │   │   │   ├── 📄 base.py  [2.4 KB]     # 📜 提取器基类接口 (BaseExtractor)
-│   │   │   ├── 📄 deep_mode.py  [10.8 KB]    # 🧠 深度提取模式 (JS注入、LaTeX处理)
+│   │   │   ├── 📄 deep_mode.py  [18.0 KB]    # 🧠 深度提取模式 (JS注入、LaTeX处理)
 │   │   │   ├── 📄 dom_mode.py  [5.0 KB]
 │   │   │   ├── 📄 hybrid_mode.py  [12.5 KB]
+│   │   │   ├── 📄 image_extractor.py  [14.2 KB]
 │   │   │   └── 📄 registry.py  [6.5 KB]
 │   │   ├── 📄 __init__.py  [645 B]
-│   │   ├── 📄 browser.py  [13.5 KB]    # 🌐 浏览器管理：启动Chrome、管理标签页
-│   │   ├── 📄 config.py  [12.4 KB]    # ⚙️ 核心配置：日志格式、常量定义
+│   │   ├── 📄 browser.py  [33.1 KB]    # 🌐 浏览器管理：启动Chrome、管理标签页
+│   │   ├── 📄 config.py  [20.9 KB]    # ⚙️ 核心配置：日志格式、常量定义
 │   │   ├── 📄 elements.py  [7.7 KB]     # 🔍 元素定位器：封装DOM查找逻辑
-│   │   ├── 📄 stream_monitor.py  [28.7 KB]    # 📡 流式监听器：监控变化、计算Diff
-│   │   └── 📄 workflow.py  [35.2 KB]    # 🎬 工作流执行器：执行点击、输入等动作
-│   ├── 📁 models  [14.7 KB]    # [数据模型层] 定义数据结构
+│   │   ├── 📄 stream_monitor.py  [34.0 KB]    # 📡 流式监听器：监控变化、计算Diff
+│   │   ├── 📄 tab_pool.py  [20.7 KB]
+│   │   ├── 📄 workflow.py  [48.7 KB]    # 🎬 工作流执行器：执行点击、输入等动作
+│   │   └── 📄 workflow_editor.py  [6.0 KB]
+│   ├── 📁 models  [17.4 KB]    # [数据模型层] 定义数据结构
 │   │   ├── 📄 __init__.py  [1.3 KB]
-│   │   └── 📄 schemas.py  [13.4 KB]    # 📐 Pydantic 模型：校验请求/响应格式
-│   ├── 📁 services  [56.6 KB]    # [业务逻辑层] 串联 Core 和 API
+│   │   └── 📄 schemas.py  [16.1 KB]    # 📐 Pydantic 模型：校验请求/响应格式
+│   ├── 📁 services  [66.1 KB]    # [业务逻辑层] 串联 Core 和 API
 │   │   ├── 📄 __init__.py  [435 B]
-│   │   ├── 📄 config_engine.py  [32.8 KB]    # 💾 配置引擎：读写 sites.json
+│   │   ├── 📄 config_engine.py  [46.0 KB]    # 💾 配置引擎：读写 sites.json
 │   │   ├── 📄 extractor_manager.py  [9.4 KB]
-│   │   └── 📄 request_manager.py  [14.0 KB]    # 🤵 请求管理器：调度浏览器、处理并发
-│   ├── 📁 utils  [11.0 KB]    # [工具层] 通用辅助函数
+│   │   └── 📄 request_manager.py  [10.3 KB]    # 🤵 请求管理器：调度浏览器、处理并发
+│   ├── 📁 utils  [21.0 KB]    # [工具层] 通用辅助函数
 │   │   ├── 📄 __init__.py  [257 B]
+│   │   ├── 📄 image_handler.py  [10.0 KB]
 │   │   ├── 📄 paste.py  [7.1 KB]     # 📋 剪贴板工具：处理长文本粘贴
 │   │   └── 📄 similarity.py  [3.6 KB]
 │   └── 📄 __init__.py  [181 B]
-├── 📁 config  [9.3 KB]     # 🔧 配置文件目录
-│   ├── 📄 browser_config.json  [886 B]      # 🖥️ 浏览器启动配置
+├── 📁 config  [22.0 KB]    # 🔧 配置文件目录
+│   ├── 📄 browser_config.json  [1.1 KB]     # 🖥️ 浏览器启动配置
 │   ├── 📄 extractors.json  [1.1 KB]
-│   └── 📄 sites.json  [7.3 KB]     # 🗂️ 站点数据库：URL、选择器、工作流
-├── 📁 scripts  [0 B]        # 🛠️ 运维脚本目录
-├── 📁 static  [273.5 KB]   # 🎨 前端静态资源 (Web UI)
-│   ├── 📁 backup  [81.0 KB]    # 📦 备份的前端文件
-│   │   └── 📄 index.html  [81.0 KB]
+│   ├── 📄 image_presets.json  [4.9 KB]
+│   └── 📄 sites.json  [14.9 KB]    # 🗂️ 站点数据库：URL、选择器、工作流
+├── 📁 static  [266.3 KB]   # 🎨 前端静态资源 (Web UI)
 │   ├── 📁 css  [5.1 KB]     # 💅 样式表目录
 │   │   └── 📄 dashboard.css  [5.1 KB]     # 控制面板样式
-│   ├── 📁 js  [170.5 KB]   # ⚡ 前端 JavaScript
-│   │   ├── 📁 components  [101.5 KB]   # 🧱 UI 组件库
-│   │   │   ├── 📄 ConfigTab.js  [20.2 KB]    # 配置管理页面
+│   ├── 📁 js  [236.1 KB]   # ⚡ 前端 JavaScript
+│   │   ├── 📁 components  [132.5 KB]   # 🧱 UI 组件库
+│   │   │   ├── 📄 ConfigTab.js  [49.9 KB]    # 配置管理页面
 │   │   │   ├── 📄 Dialogs.js  [27.4 KB]    # 弹窗组件
 │   │   │   ├── 📄 ExtractorTab.js  [15.6 KB]
 │   │   │   ├── 📄 LogsTab.js  [5.0 KB]     # 实时日志页面
-│   │   │   ├── 📄 SettingsTab.js  [24.1 KB]    # 系统设置页面
+│   │   │   ├── 📄 SettingsTab.js  [25.5 KB]    # 系统设置页面
 │   │   │   └── 📄 Sidebar.js  [9.1 KB]     # 侧边栏导航
-│   │   ├── 📄 dashboard.js  [62.1 KB]    # 🚀 前端入口文件
-│   │   └── 📄 icons.js  [6.9 KB]     # 🖼️ SVG 图标数据
-│   └── 📄 index.html  [16.9 KB]    # 🏠 Web UI 主页入口
-├── 📄 .env  [1.5 KB]     # 🔒 环境变量 (API Key、调试开关等)
+│   │   ├── 📄 dashboard.js  [64.7 KB]    # 🚀 前端入口文件
+│   │   ├── 📄 icons.js  [6.9 KB]     # 🖼️ SVG 图标数据
+│   │   └── 📄 workflow-editor-inject.js  [32.0 KB]
+│   ├── 📄 index.html  [17.1 KB]    # 🏠 Web UI 主页入口
+│   └── 📄 tutorial.html  [8.0 KB]
+├── 📄 .env  [1.7 KB]     # 🔒 环境变量 (API Key、调试开关等)
 ├── 📄 .gitignore  [307 B]      # 🚫 Git 忽略文件列表
-├── 📄 clean_profile.py  [2.0 KB]     # 🧹 清理脚本：重置浏览器用户数据目录
-├── 📄 main.py  [5.4 KB]     # ▶️ 程序主入口：启动 FastAPI 服务器
-├── 📄 requirements.txt  [310 B]      # 📦 Python 依赖列表
-└── 📄 start.bat  [6.5 KB]     # 🚀 Windows 一键启动脚本
+├── 📄 VERSION  [5 B]
+├── 📄 clean_profile.py  [2.6 KB]     # 🧹 清理脚本：重置浏览器用户数据目录
+├── 📄 main.py  [6.8 KB]     # ▶️ 程序主入口：启动 FastAPI 服务器
+├── 📄 requirements.txt  [358 B]      # 📦 Python 依赖列表
+├── 📄 start.bat  [11.9 KB]    # 🚀 Windows 一键启动脚本
+└── 📄 updater.py  [24.3 KB]
+
+============================================================
+📁 = 目录  |  📄 = 文件  |  # = 注释说明
+============================================================
+
 ```
 ## 网站测试：
 - 目前主要测试google ai studio,gemini.google,lmarena,deepseek,chatgpt
@@ -229,7 +240,7 @@
 
 | 模式 | 适用场景 | 优势 | 劣势 | 状态 |
 |------|---------|------|------|------|
-| **浏览器自动化模式** | 防护严格的网站<br>（ChatGPT、Claude、Grok 等） | • 完全模拟真实用户<br>• 可绕过大部分检测<br>• 无需分析请求结构 | • 资源占用高<br>• 响应速度较慢<br>• 依赖 Chrome 浏览器 | ✅ **当前支持** |
+| **浏览器自动化模式** | 防护严格的网站<br>（ChatGPT、Claude、Grok 等） | • 完全模拟真实用户<br>• 可绕过大部分检测<br>• 无需分析请求结构 | • 资源占用高<br>• 响应速度较慢<br>• 依赖 Chromium 内核浏览器 | ✅ **当前支持** |
 | **Cookie 模拟模式** | 防护宽松的网站<br>（部分开源 AI、本地部署等） | • 资源占用低<br>• 响应速度快<br>• 无需浏览器 | • 需要分析请求结构<br>• 容易被检测<br>• Cookie 需定期更新 | 🚧 **规划中** |
 
 ---
