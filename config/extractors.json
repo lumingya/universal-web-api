@@ -1,0 +1,38 @@
+{
+  "extractors": {
+    "hybrid_mode": {
+      "id": "hybrid_mode",
+      "name": "混合智能模式",
+      "description": "自动检测内容复杂度，智能选择最优提取策略(未完善)",
+      "class": "HybridExtractor",
+      "module": "app.core.extractors.hybrid_mode",
+      "enabled": true,
+      "config": {
+        "auto_detect": true
+      }
+    },
+    "deep_mode_v1": {
+      "id": "deep_mode_v1",
+      "name": "深度模式 (JS注入)",
+      "description": "通过 JavaScript 注入深度提取内容，支持 LaTeX",
+      "class": "DeepBrowserExtractor",
+      "module": "app.core.extractors.deep_mode",
+      "enabled": true,
+      "config": {
+        "enable_latex": true,
+        "enable_shadow_dom": true
+      }
+    },
+    "dom_direct": {
+      "id": "dom_direct",
+      "name": "DOM 直接提取",
+      "description": "直接读取 DOM innerText/textContent(未完善)",
+      "class": "DOMDirectExtractor",
+      "module": "app.core.extractors.dom_mode",
+      "enabled": true,
+      "config": {}
+    }
+  },
+  "default": "deep_mode_v1",
+  "version": "1.1"
+}

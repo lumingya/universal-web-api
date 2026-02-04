@@ -1,0 +1,37 @@
+# 环境配置（含敏感信息）
+.env
+*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+.venv/
+
+# 浏览器配置（含用户登录态，绝对不能提交！）
+chrome_profile/
+
+# 自动更新备份
+backup_*/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 日志
+*.log
+logs/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 备份文件
+*.bak
+*.backup

@@ -1,0 +1,881 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Universal Web-to-API 使用教程</title>
+    <style>
+        :root {
+            --sidebar-width: 280px;
+            --primary-color: #2563eb;
+            --text-color: #334155;
+            --bg-color: #f8fafc;
+            --border-color: #e2e8f0;
+            --code-bg: #1e293b;
+            --code-text: #e2e8f0;
+            --success-color: #10b981;
+            --warning-color: #f59e0b;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            line-height: 1.6;
+            color: var(--text-color);
+            background-color: var(--bg-color);
+            display: flex;
+            min-height: 100vh;
+        }
+
+        /* 侧边栏样式 */
+        .sidebar {
+            width: var(--sidebar-width);
+            background: white;
+            border-right: 1px solid var(--border-color);
+            position: fixed;
+            height: 100vh;
+            overflow-y: auto;
+            padding: 20px;
+            top: 0;
+            left: 0;
+            z-index: 100;
+        }
+
+        .sidebar h2 {
+            font-size: 1.2rem;
+            margin-bottom: 20px;
+            color: var(--primary-color);
+            padding-bottom: 10px;
+            border-bottom: 2px solid var(--primary-color);
+        }
+
+        .nav-link {
+            display: block;
+            padding: 10px 15px;
+            color: var(--text-color);
+            text-decoration: none;
+            border-radius: 6px;
+            margin-bottom: 5px;
+            transition: all 0.2s;
+            font-size: 0.95rem;
+        }
+
+        .nav-link:hover, .nav-link.active {
+            background-color: #eff6ff;
+            color: var(--primary-color);
+            font-weight: 500;
+        }
+
+        /* 主内容区域样式 */
+        .main-content {
+            margin-left: var(--sidebar-width);
+            padding: 40px 60px;
+            width: 100%;
+            max-width: 1200px;
+        }
+
+        section {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            margin-bottom: 30px;
+            border: 1px solid var(--border-color);
+            scroll-margin-top: 20px;
+        }
+
+        h1, h2, h3 {
+            color: #1e293b;
+            margin-bottom: 1rem;
+        }
+        
+        h1 { font-size: 2rem; border-bottom: 1px solid var(--border-color); padding-bottom: 15px; }
+        h2 { font-size: 1.5rem; margin-top: 10px; border-left: 4px solid var(--primary-color); padding-left: 10px; }
+        h3 { font-size: 1.2rem; margin-top: 20px; color: #475569; }
+
+        p { margin-bottom: 1rem; }
+        
+        ul, ol { padding-left: 1.5rem; margin-bottom: 1rem; }
+        li { margin-bottom: 0.5rem; }
+
+        code {
+            background-color: #f1f5f9;
+            padding: 0.2em 0.5em;
+            border-radius: 4px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            color: #be185d;
+            font-size: 0.9em;
+        }
+
+        pre {
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+            border-radius: 12px;
+            margin: 1.5rem 0;
+            overflow: hidden;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            position: relative;
+        }
+
+        pre::before {
+            content: '';
+            display: block;
+            height: 32px;
+            background: linear-gradient(90deg, #334155 0%, #1e293b 100%);
+            border-bottom: 1px solid #475569;
+        }
+
+        pre::after {
+            content: '● ● ●';
+            position: absolute;
+            top: 8px;
+            left: 12px;
+            font-size: 10px;
+            letter-spacing: 4px;
+            color: #64748b;
+        }
+
+        pre code {
+            display: block;
+            padding: 20px;
+            overflow-x: auto;
+            color: #e2e8f0;
+            background: transparent;
+            font-size: 0.875rem;
+            line-height: 1.7;
+            white-space: pre-wrap;
+        }
+
+        .site-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 12px;
+            margin: 20px 0;
+        }
+
+        .site-card {
+            background: #f8fafc;
+            border: 1px solid var(--border-color);
+            padding: 12px 16px;
+            border-radius: 8px;
+            font-size: 0.95rem;
+            color: var(--primary-color);
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            transition: all 0.2s ease;
+            font-weight: 500;
+        }
+
+        .site-card:hover {
+            border-color: var(--primary-color);
+            background: #eff6ff;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.15);
+        }
+
+        .site-card::before {
+            content: "🔗";
+            margin-right: 10px;
+            font-size: 0.9rem;
+        }
+
+        .site-card .model-id {
+            margin-left: auto;
+            font-size: 0.75rem;
+            color: #64748b;
+            background: #e2e8f0;
+            padding: 2px 8px;
+            border-radius: 4px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 1.5rem;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        th, td {
+            border: 1px solid var(--border-color);
+            padding: 12px;
+            text-align: left;
+        }
+
+        th {
+            background-color: #f8fafc;
+            font-weight: 600;
+        }
+
+        .btn {
+            display: inline-block;
+            background-color: var(--primary-color);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+
+        .btn:hover { 
+            background-color: #1d4ed8; 
+            transform: translateY(-1px);
+        }
+
+        .note {
+            background-color: #fffbeb;
+            border-left: 4px solid #f59e0b;
+            padding: 15px 20px;
+            margin-bottom: 1.5rem;
+            color: #92400e;
+            border-radius: 0 8px 8px 0;
+        }
+
+        .info-box {
+            background: #eff6ff;
+            border-left: 4px solid #3b82f6;
+            padding: 15px 20px;
+            margin: 20px 0;
+            border-radius: 0 8px 8px 0;
+            color: #1e40af;
+        }
+
+        .highlight-box {
+            background: #fff1f2;
+            border-left: 4px solid #e11d48;
+            padding: 15px 20px;
+            margin: 20px 0;
+            border-radius: 0 8px 8px 0;
+            color: #9f1239;
+        }
+
+        .success-box {
+            background: #f0fdf4;
+            border-left: 4px solid #10b981;
+            padding: 15px 20px;
+            margin: 20px 0;
+            border-radius: 0 8px 8px 0;
+            color: #065f46;
+        }
+
+        .config-box {
+            background: #f0fdf4;
+            border: 1px solid #bbf7d0;
+            padding: 20px;
+            border-radius: 8px;
+            margin-top: 15px;
+        }
+
+        .config-box ul {
+            margin-bottom: 0;
+        }
+
+        .troubleshoot-list {
+            background: #fefce8;
+            border: 1px solid #fef08a;
+            border-radius: 8px;
+            padding: 15px 20px;
+            margin: 15px 0;
+        }
+
+        .troubleshoot-list ol {
+            margin-bottom: 0;
+        }
+
+        .troubleshoot-list li {
+            margin-bottom: 10px;
+            color: #854d0e;
+        }
+
+        .config-group {
+            margin-bottom: 25px;
+        }
+
+        .config-group h4 {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 1.1rem;
+            color: #374151;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 1px dashed var(--border-color);
+        }
+
+        .config-group .icon {
+            font-size: 1.2rem;
+        }
+
+        /* 响应式 */
+        @media (max-width: 900px) {
+            .sidebar {
+                transform: translateX(-100%);
+            }
+            .main-content {
+                margin-left: 0;
+                padding: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="sidebar">
+        <h2>📑 目录导航</h2>
+        <nav>
+            <a href="#quick-start" class="nav-link">🚀 快速开始</a>
+            <a href="#connect-api" class="nav-link">🔌 连接 API</a>
+            <a href="#selectors" class="nav-link">🔍 选择器配置</a>
+            <a href="#extractors" class="nav-link">🧩 提取器配置</a>
+            <a href="#image-extraction" class="nav-link">🖼️ 图片提取配置</a>
+            <a href="#response-detection" class="nav-link">🌊 响应检测配置</a>
+            <a href="#workflow" class="nav-link">🎬 工作流配置</a>
+            <a href="#ai-recognition" class="nav-link">🎯 AI 元素识别配置</a>
+            <a href="#env-config" class="nav-link">⚙️ 环境配置</a>
+            <a href="#browser-config" class="nav-link">🌐 浏览器常量</a>
+            <a href="#config-manage" class="nav-link">💾 配置更新与导出</a>
+            <a href="#faq" class="nav-link">❓ 常见问题</a>
+        </nav>
+    </div>
+
+    <div class="main-content">
+        <h1>Universal Web-to-API 使用手册 (v1.8.1)</h1>
+
+        <section id="quick-start">
+            <h2>🚀 快速开始</h2>
+            <p>欢迎使用 Web-to-API。本项目将网页版 AI 对话界面转换为标准 API。</p>
+            
+            <div class="info-box">
+                <p><strong>📌 核心提示：</strong> 脚本启动后会自动打开当前这个浏览器窗口，<strong style="color: #e11d48;">请保持该浏览器窗口处于开启状态</strong>，它是服务运行的基础（本教程标签页在运行后请手动关闭，否则可能干扰。具体意思就是说当你看完这个教程后，在此浏览器打开某个ai标签页后（如deepseek），就可以把该教程关掉了）。</p>
+            </div>
+
+            <div class="note">
+                <p><strong>控制面板入口：</strong></p>
+                <a href="/dashboard" class="btn" target="_blank">打开控制面板</a>
+                <p style="margin-top: 10px;">在这里你可以可视化地修改所有配置、查看实时日志。</p>
+            </div>
+
+            <h3>✅ 已适配的站点列表</h3>
+            <p>以下网站是已经做好适配的网站，你可以直接访问并查看第二步「连接 API」来进行连接：</p>
+            
+            <div class="site-grid" id="siteGrid">
+                <!-- 站点卡片由 JavaScript 动态生成 -->
+            </div>
+
+            <h3>🆕 对于未收录的网站（自动适配）</h3>
+            <p>如果目标网站不在上述列表中，系统支持通过 AI 自动分析网页结构。详见下方「AI 元素识别配置」章节。</p>
+        </section>
+
+        <section id="connect-api">
+            <h2>🔌 连接 API</h2>
+            <p>本项目提供兼容 <strong>OpenAI 格式</strong> 的接口。</p>
+
+            <div class="config-box">
+                <p><strong>⚙️ 客户端通用配置参数：</strong></p>
+                <ul>
+                    <li><strong>服务提供商 (Provider)</strong>：选择 <code>OpenAI</code>、<code>OpenAI 兼容</code> 或 <code>自定义</code>。</li>
+                    <li><strong>API 接口地址 (Base URL)</strong>：通常填 <code>http://127.0.0.1:8199/v1</code>，部分软件需完整路径 <code>http://127.0.0.1:8199/v1/chat/completions</code></li>
+                    <li><strong>API 密钥 (API Key)</strong>：任意填写即可（例如：<code>sk-any</code>）。</li>
+                    <li><strong>模型名称 (Model)</strong>：取决于你访问的网站。你访问什么网站，实际就是什么模型，所以该项可随意填写。</li>
+                </ul>
+            </div>
+
+            <div class="success-box">
+                <p><strong>✅ 测试步骤：</strong>当你按照第一步打开了站点并登录之后，填写了对应的 URL 和服务商内容，就可以直接进行测试了。</p>
+            </div>
+
+            <h3>💡 关于登录状态</h3>
+            <ul>
+                <li><strong>推荐登录</strong>：建议在网页上登录你的账号，这样 API 也就拥有了你的账号权限（如 Plus 会员、历史记录等）。</li>
+                <li><strong>免登录</strong>：如果该网站在未登录状态下允许对话（如 LM Arena），则无需登录即可直接通过 API 调用。</li>
+            </ul>
+            
+            <div class="note">
+                <p><strong>⚠️ 关于 SillyTavern (酒馆):</strong> 在酒馆中使用 API 测试功能可能会出现 bug，<strong>建议直接发送对话进行测试</strong>，而非点击测试按钮。</p>
+            </div>
+
+            <div class="highlight-box">
+                <p><strong>⚠️ 上下文长度限制：</strong>受限于网站输入框一次性所能容纳的字符上限，上下文不能太长，否则请求会直接失败。请根据实际情况控制对话长度。</p>
+            </div>
+            <h3>已测试站点单次最大发送长度：</h3>
+                <ul>
+                    <li><strong>Chatgpt</strong>：约200k。</li>
+                    <li><strong>Gemini官网</strong>：无会员约 30 k，Pro 会员尚未发现上限。</li>
+                    <li><strong>Lmarena</strong>：120k。</li>
+                </ul>         
+        </section>
+
+        <section id="selectors">
+            <h2>🔍 选择器配置 (Selectors)</h2>
+            <p>在 <code>sites.json</code> 中，每个站点都需要定义一组 CSS 选择器，告诉程序去哪里输入、哪里点击。</p>
+            <pre><code>"selectors": {
+  "input_box": "textarea[id='prompt']",   // 输入框
+  "send_btn": "button.send-btn",          // 发送按钮
+  "result_container": ".markdown-body",   // AI 回复所在的容器
+  "new_chat_btn": "button.new-chat",      // 新建对话按钮
+  "temp_chat_btn": "button.temp-chat"     // 临时对话按钮 (自定义)
+}</code></pre>
+            <ul>
+                <li><strong>input_box</strong>: 必填。聊天输入框。</li>
+                <li><strong>send_btn</strong>: 必填。发送按钮。</li>
+                <li><strong>result_container</strong>: 必填。包含 AI 回复内容的容器。</li>
+                <li><strong>new_chat_btn</strong>: 选填。每次新会话开始时点击的按钮。</li>
+            </ul>
+
+            <div class="info-box">
+                <p><strong>💡 自定义选择器：</strong>你可以自己新增选择器，比如新增一个「临时对话按钮」，然后在工作流里添加点击这个按钮的步骤，程序就会在执行时多点一步临时对话。</p>
+            </div>
+
+            <div class="success-box">
+                <p><strong>🧪 测试选择器：</strong>可以在控制面板的「工作流可视化」中查看你配置的选择器是否正确。你也可以直接在控制面板对应的选择器配置项中，点击「测试」按钮来验证选择器是否生效。</p>
+            </div>
+        </section>
+
+        <section id="extractors">
+            <h2>🧩 提取器配置 (Extractors)</h2>
+            <p>提取器决定了如何从网页 HTML 中解析出干净的 Markdown 文本。</p>
+            <pre><code>// 在 sites.json 中为站点配置提取器
+{
+  "site_id": "chatgpt",
+  "extractor_id": "deep_mode_v1",  // 使用深度模式
+  ...
+}</code></pre>
+            <ul>
+                <li><strong>默认模式</strong>: 自动提取 <code>result_container</code> 中的文本。</li>
+                <li><strong>deep_mode (深度模式)</strong>: 针对复杂的 LaTeX 公式、代码块进行特殊处理。</li>
+            </ul>
+
+            <div class="note">
+                <p><strong>⚠️ 注意：</strong>目前只有<strong>深度模式 (deep_mode)</strong> 是经过深度优化的，其他模式都处于未完善状态。</p>
+            </div>
+
+            <div class="info-box">
+                <p><strong>💡 复杂内容处理：</strong>即使是深度模式，某些复杂的代码块也可能无法正确处理。这种情况下，可以在「响应检测配置」中开启<strong>网络拦截模式</strong>，它能处理所有情况，但目前只针对部分站点做了适配，且不支持流式输出。</p>
+            </div>
+        </section>
+
+        <section id="image-extraction">
+            <h2>🖼️ 图片提取配置</h2>
+            <p>配置程序如何处理网页中生成的图片。</p>
+            <pre><code>"image_extraction": {
+  "enabled": true,                // 是否开启图片提取
+  "selector": "img",              // 图片元素的选择器
+  "container_selector": ".img-grid", // (可选) 限定在特定区域查找
+  "download_blobs": true,         // 是否下载 blob/src 图片到本地
+  "mode": "all",                  // all: 提取所有图; first: 仅第一张
+  "max_size_mb": 10               // 最大允许大小
+}</code></pre>
+            <p><strong>文件保存位置：</strong></p>
+            <ul>
+                <li><strong>发送的图片</strong>: 保存在根目录 <code>image/</code>。</li>
+                <li><strong>捕获的图片</strong>: 保存在根目录 <code>download_images/</code>。</li>
+            </ul>
+        </section>
+
+        <section id="response-detection">
+            <h2>🌊 响应检测配置</h2>
+            <p>定义如何判断 AI 正在输出以及何时结束。支持两种检测模式：</p>
+
+            <table>
+                <tr><th>模式</th><th>是否流式</th><th>说明</th></tr>
+                <tr>
+                    <td><strong>DOM 模式</strong>（默认）</td>
+                    <td>✅ 流式</td>
+                    <td>轮询检测页面 DOM 变化，实时输出内容</td>
+                </tr>
+                <tr>
+                    <td><strong>网络拦截模式</strong></td>
+                    <td>❌ 非流式</td>
+                    <td>拦截网络请求，AI 生成完毕后一次性返回，能处理复杂内容</td>
+                </tr>
+            </table>
+
+            <div class="info-box">
+                <p><strong>💡 启用网络拦截模式：</strong>在控制面板的站点配置中，找到「网络拦截模式」开关并开启即可。注意：此模式仅适配部分站点。</p>
+            </div>
+
+            <h3>检测逻辑说明</h3>
+            <pre><code>生成结束判定 = (连续稳定次数 ≥ 稳定判定次数) AND (静默时间 > 静默超时阈值)</code></pre>
+            <p><strong>工作原理（DOM 模式）：</strong></p>
+            <ol>
+                <li>脚本每隔「默认检查间隔」秒检查一次页面内容</li>
+                <li>如果内容有变化，重置计数器</li>
+                <li>如果内容没变化，稳定次数 +1，静默时间累加</li>
+                <li>当两个条件同时满足时，判定 AI 生成完成</li>
+                <li>如果超过「初始等待」时间仍未检测到内容，判定失败</li>
+            </ol>
+
+            <h3>何时需要开启？</h3>
+            <p>如果你只是用于角色扮演，一般不需要开启此选项。但如果是用于写代码，则必须开启</p>
+
+            <h3>调优建议</h3>
+            <table>
+                <tr><th>场景</th><th>静默超时阈值</th><th>稳定判定次数</th><th>初始等待</th></tr>
+                <tr><td>快速模型 (GPT-4o)</td><td>3-5 秒</td><td>3-5 次</td><td>60 秒</td></tr>
+                <tr><td>慢速思考 (o1/Claude)</td><td>10-15 秒</td><td>8-12 次</td><td>300 秒</td></tr>
+                <tr><td>代码生成</td><td>8-10 秒</td><td>6-8 次</td><td>180 秒</td></tr>
+                <tr><td>长文生成</td><td>12-15 秒</td><td>10 次</td><td>300 秒</td></tr>
+            </table>
+        </section>
+
+        <section id="workflow">
+            <h2>🎬 工作流配置 (Workflow)</h2>
+            <p>定义一系列动作的执行顺序。常见动作包括：</p>
+            <pre><code>"workflow": [
+  { "action": "CLICK", "target": "new_chat_btn" },
+  { "action": "WAIT", "value": 0.5 },
+  { "action": "FILL_INPUT", "target": "input_box" },
+  { "action": "CLICK", "target": "send_btn" },
+  { "action": "STREAM_WAIT" }
+]</code></pre>
+            <table>
+                <tr><th>动作类型</th><th>说明</th></tr>
+                <tr><td><code>CLICK</code></td><td>点击元素 (target 为选择器 key)</td></tr>
+                <tr><td><code>FILL_INPUT</code></td><td>在输入框填入用户问题</td></tr>
+                <tr><td><code>WAIT</code></td><td>等待固定时间 (value 为秒数)</td></tr>
+                <tr><td><code>KEY_PRESS</code></td><td>模拟按键 (如 Enter)</td></tr>
+                <tr><td><code>STREAM_WAIT</code></td><td>等待响应完成</td></tr>
+            </table>
+        </section>
+
+        <section id="ai-recognition">
+            <h2>🎯 AI 元素识别配置</h2>
+            <p>当你访问的站点不在已适配列表中时，系统可以调用 AI 自动分析网页结构，识别出输入框、发送按钮等关键元素。</p>
+
+            <div class="info-box">
+                <p><strong>📍 配置位置：</strong>进入 <a href="/dashboard">控制面板</a> → 设置 → AI 元素识别</p>
+            </div>
+
+            <h3>配置项说明</h3>
+            <table>
+                <tr><th>字段</th><th>说明</th></tr>
+                <tr><td><strong>排序</strong></td><td>调整识别项的优先级顺序</td></tr>
+                <tr><td><strong>关键词 (Key)</strong></td><td>AI 需要查找的元素标识，如 <code>input_box</code>、<code>send_btn</code> 等</td></tr>
+                <tr><td><strong>描述 (Description)</strong></td><td>给 AI 的提示语，描述这个元素是什么，便于 AI 准确定位</td></tr>
+                <tr><td><strong>启用</strong></td><td>是否启用该识别项</td></tr>
+                <tr><td><strong>操作</strong></td><td>编辑或删除该识别项</td></tr>
+            </table>
+
+            <h3>默认识别项</h3>
+            <table>
+                <tr><th>关键词</th><th>描述</th><th>必需</th></tr>
+                <tr><td><code>input_box</code></td><td>用户输入文本的输入框（textarea 或 contenteditable 元素）</td><td>✅</td></tr>
+                <tr><td><code>send_btn</code></td><td>发送消息的按钮（通常是 type=submit 或带有发送图标的按钮）</td><td>✅</td></tr>
+                <tr><td><code>result_container</code></td><td>AI 回复内容的容器（仅包含 AI 的输出文本，不含用户消息）</td><td>✅</td></tr>
+                <tr><td><code>new_chat_btn</code></td><td>新建对话的按钮（点击后开始新的对话）</td><td>❌</td></tr>
+                <tr><td><code>message_wrapper</code></td><td>消息完整容器（包裹单条消息的外层元素）</td><td>❌</td></tr>
+                <tr><td><code>generating_indicator</code></td><td>生成中指示器（如停止按钮、加载动画）</td><td>❌</td></tr>
+            </table>
+
+            <h3>使用流程</h3>
+            <ol>
+                <li><strong>配置 API</strong>：在控制面板 → 设置 → 环境配置 → AI 分析配置中，填写你自己的 OpenAI 格式 API 地址和 Key。</li>
+                <li><strong>访问新站点</strong>：在浏览器中打开一个未适配的网站。</li>
+                <li><strong>触发识别</strong>：向本服务接口 (<code>http://127.0.0.1:8199</code>) 发送一条测试消息。</li>
+                <li><strong>自动分析</strong>：系统会调用你配置的 API 分析网页，大约消耗 <strong>8000 tokens</strong>（一次性消耗）。</li>
+            </ol>
+
+            <div class="note">
+                <p><strong>💡 提示：</strong>如果你只使用已经配置好的站点，则不需要关注此功能。如果你想自己新增站点，可以利用此功能让 AI 帮你自动配置参数，配置效果取决于 AI 的能力。</p>
+            </div>
+             <div class="note">
+                <p><strong>💡 提示：</strong>如果你有一定技术水平，也可以自行配置，步骤如下：</p>
+            <h3>使用流程</h3>
+            <ol>
+                <li><strong>不配置 API</strong>：不填写API，这样自动配置将会失效。</li>
+                <li><strong>获取默认配置</strong>：失败后，系统会自动分配一个默认配置，需要刷新才能看到。</li>
+                <li><strong>手动配置</strong>：到目标网站手动获取各个选择器名并填入对应框中。</li>
+                <li><strong>进行测试</strong>：你可以点击在工作流中点击可视化按钮，查看你的配置是否正确。或者直接点击测试按钮。</li>
+            </ol>                    
+            </div>
+
+        </section>
+
+        <section id="env-config">
+            <h2>⚙️ 环境配置</h2>
+            <p>在控制面板 → 设置 → 环境配置中修改，<strong>需重启服务生效</strong>。</p>
+
+            <div class="config-group">
+                <h4><span class="icon">🖥️</span> 服务配置</h4>
+                <table>
+                    <tr><th>配置项</th><th>默认值</th><th>说明</th></tr>
+                    <tr><td>监听地址</td><td><code>127.0.0.1</code></td><td>0.0.0.0 允许外部访问，127.0.0.1 仅本地</td></tr>
+                    <tr><td>监听端口</td><td><code>8199</code></td><td>HTTP 服务端口</td></tr>
+                    <tr><td>调试模式</td><td>开启</td><td>开启 API 文档 (/docs) 和详细错误信息</td></tr>
+                    <tr><td>日志级别</td><td><code>INFO</code></td><td>DEBUG / INFO / WARNING / ERROR</td></tr>
+                </table>
+            </div>
+
+            <div class="config-group">
+                <h4><span class="icon">🔐</span> 认证配置</h4>
+                <table>
+                    <tr><th>配置项</th><th>默认值</th><th>说明</th></tr>
+                    <tr><td>启用认证</td><td>关闭</td><td>是否要求 API 调用时提供 Bearer Token</td></tr>
+                    <tr><td>Bearer Token</td><td>空</td><td>启用认证时必须设置</td></tr>
+                </table>
+            </div>
+
+            <div class="config-group">
+                <h4><span class="icon">🌐</span> CORS 配置</h4>
+                <table>
+                    <tr><th>配置项</th><th>默认值</th><th>说明</th></tr>
+                    <tr><td>启用 CORS</td><td>开启</td><td>是否允许跨域请求</td></tr>
+                    <tr><td>允许的跨域源</td><td><code>*</code></td><td>多个用逗号分隔，* 表示全部允许</td></tr>
+                </table>
+            </div>
+
+            <div class="config-group">
+                <h4><span class="icon">🔀</span> 代理配置</h4>
+                <table>
+                    <tr><th>配置项</th><th>默认值</th><th>说明</th></tr>
+                    <tr><td>启用代理</td><td>关闭</td><td>开启后浏览器将通过代理服务器访问网络</td></tr>
+                    <tr><td>代理地址</td><td><code>socks5://127.0.0.1:1080</code></td><td>支持 socks5:// 或 http:// 协议</td></tr>
+                    <tr><td>绕过代理</td><td><code>localhost,127.0.0.1</code></td><td>不走代理的地址，多个用逗号分隔</td></tr>
+                </table>
+            </div>
+
+            <div class="config-group">
+                <h4><span class="icon">🌍</span> 浏览器配置</h4>
+                <table>
+                    <tr><th>配置项</th><th>默认值</th><th>说明</th></tr>
+                    <tr><td>Chrome 调试端口</td><td><code>9222</code></td><td>浏览器远程调试端口</td></tr>
+                </table>
+            </div>
+
+            <div class="config-group">
+                <h4><span class="icon">📊</span> Dashboard 配置</h4>
+                <table>
+                    <tr><th>配置项</th><th>默认值</th><th>说明</th></tr>
+                    <tr><td>启用 Dashboard</td><td>开启</td><td>是否开启 Web 控制面板</td></tr>
+                    <tr><td>Dashboard 文件路径</td><td><code>dashboard.html</code></td><td>入口文件位置</td></tr>
+                </table>
+            </div>
+
+            <div class="config-group">
+                <h4><span class="icon">🤖</span> AI 分析配置</h4>
+                <table>
+                    <tr><th>配置项</th><th>默认值</th><th>说明</th></tr>
+                    <tr><td>API Key</td><td>空</td><td>辅助 AI 的 API 密钥</td></tr>
+                    <tr><td>API 地址</td><td><code>http://127.0.0.1:5104/v1</code></td><td>API 基础 URL</td></tr>
+                    <tr><td>模型名称</td><td><code>gemini-3.0-pro</code></td><td>使用的模型名称</td></tr>
+                    <tr><td>HTML 最大字符数</td><td><code>120000</code></td><td>超过会截断以节省 Token</td></tr>
+                </table>
+            </div>
+
+            <div class="config-group">
+                <h4><span class="icon">📁</span> 配置文件</h4>
+                <table>
+                    <tr><th>配置项</th><th>默认值</th><th>说明</th></tr>
+                    <tr><td>站点配置文件路径</td><td><code>sites.json</code></td><td>站点配置存放位置</td></tr>
+                </table>
+            </div>
+        </section>
+
+        <section id="browser-config">
+            <h2>🌐 浏览器常量</h2>
+            <p>在控制面板 → 设置 → 浏览器常量中修改，<strong>即时生效</strong>。</p>
+
+            <div class="config-group">
+                <h4><span class="icon">🔌</span> 连接配置</h4>
+                <table>
+                    <tr><th>配置项</th><th>默认值</th><th>说明</th></tr>
+                    <tr><td>调试端口</td><td><code>9222</code></td><td>Chrome DevTools 远程调试端口</td></tr>
+                    <tr><td>连接超时</td><td><code>10</code> 秒</td><td>浏览器连接超时时间</td></tr>
+                </table>
+            </div>
+
+            <div class="config-group">
+                <h4><span class="icon">⏱️</span> 操作延迟</h4>
+                <p style="color: #64748b; font-size: 0.9rem; margin-bottom: 10px;">模拟人类操作的随机延迟范围，防止被网站检测为机器人</p>
+                <table>
+                    <tr><th>配置项</th><th>默认值</th><th>说明</th></tr>
+                    <tr><td>隐身延迟下限</td><td><code>0.1</code> 秒</td><td>隐蔽操作的最小延迟</td></tr>
+                    <tr><td>隐身延迟上限</td><td><code>0.3</code> 秒</td><td>隐蔽操作的最大延迟</td></tr>
+                    <tr><td>动作延迟下限</td><td><code>0.15</code> 秒</td><td>点击/输入等动作的最小延迟</td></tr>
+                    <tr><td>动作延迟上限</td><td><code>0.3</code> 秒</td><td>点击/输入等动作的最大延迟</td></tr>
+                </table>
+            </div>
+
+            <div class="config-group">
+                <h4><span class="icon">🔍</span> 元素查找</h4>
+                <table>
+                    <tr><th>配置项</th><th>默认值</th><th>说明</th></tr>
+                    <tr><td>默认等待时间</td><td><code>3</code> 秒</td><td>查找元素的默认超时</td></tr>
+                    <tr><td>备用等待时间</td><td><code>1</code> 秒</td><td>首次失败后的重试超时</td></tr>
+                    <tr><td>缓存有效期</td><td><code>5</code> 秒</td><td>元素位置缓存时间</td></tr>
+                </table>
+            </div>
+
+            <div class="config-group">
+                <h4><span class="icon">📡</span> 响应检测</h4>
+                <p style="color: #64748b; font-size: 0.9rem; margin-bottom: 10px;">控制 AI 响应的检测频率和超时判定</p>
+                <table>
+                    <tr><th>配置项</th><th>默认值</th><th>说明</th></tr>
+                    <tr><td>检查间隔下限</td><td><code>0.1</code> 秒</td><td>轮询检测的最快频率</td></tr>
+                    <tr><td>检查间隔上限</td><td><code>1.0</code> 秒</td><td>轮询检测的最慢频率</td></tr>
+                    <tr><td>默认检查间隔</td><td><code>0.3</code> 秒</td><td>初始轮询间隔</td></tr>
+                    <tr><td><strong>静默超时阈值</strong></td><td><code>8.0</code> 秒</td><td>🔑 内容不再变化多久后判定完成</td></tr>
+                    <tr><td>静默超时备用</td><td><code>12</code> 秒</td><td>慢速模型的宽限时间</td></tr>
+                    <tr><td>最大超时</td><td><code>600</code> 秒</td><td>单次请求的绝对超时上限</td></tr>
+                    <tr><td>初始等待</td><td><code>180</code> 秒</td><td>等待 AI 开始回复的最长时间</td></tr>
+                    <tr><td><strong>稳定判定次数</strong></td><td><code>8</code> 次</td><td>🔑 连续多少次检查内容不变判定完成</td></tr>
+                </table>
+            </div>
+
+            <div class="config-group">
+                <h4><span class="icon">⚙️</span> 响应检测（高级）</h4>
+                <p style="color: #64748b; font-size: 0.9rem; margin-bottom: 10px;">通常不需要修改</p>
+                <table>
+                    <tr><th>配置项</th><th>默认值</th><th>说明</th></tr>
+                    <tr><td>重渲染等待</td><td><code>0.5</code> 秒</td><td>等待页面重新渲染</td></tr>
+                    <tr><td>内容收缩容忍次数</td><td><code>3</code> 次</td><td>允许内容变短的次数</td></tr>
+                    <tr><td>最小有效长度</td><td><code>10</code> 字符</td><td>响应被视为有效的最小长度</td></tr>
+                    <tr><td>初始元素等待</td><td><code>10</code> 秒</td><td>等待响应元素出现的时间</td></tr>
+                    <tr><td>最大异常次数</td><td><code>5</code> 次</td><td>连续异常多少次后中止</td></tr>
+                    <tr><td>最大元素丢失次数</td><td><code>10</code> 次</td><td>元素持续丢失多少次后退出</td></tr>
+                    <tr><td>内容收缩阈值</td><td><code>0.3</code></td><td>内容缩减超过 30% 视为异常</td></tr>
+                </table>
+            </div>
+
+            <div class="config-group">
+                <h4><span class="icon">✅</span> 输入验证</h4>
+                <table>
+                    <tr><th>配置项</th><th>默认值</th><th>说明</th></tr>
+                    <tr><td>消息最大长度</td><td><code>100000</code> 字符</td><td>单条消息的最大字符数</td></tr>
+                    <tr><td>消息最大数量</td><td><code>100</code> 条</td><td>单次请求的最大消息数</td></tr>
+                </table>
+            </div>
+
+            <div class="config-group">
+                <h4><span class="icon">🖼️</span> 图片发送</h4>
+                <table>
+                    <tr><th>配置项</th><th>默认值</th><th>说明</th></tr>
+                    <tr><td>上传历史对话中的图片</td><td>开启</td><td>是否把历史消息里的图片也一起上传</td></tr>
+                </table>
+            </div>
+        </section>
+
+        <section id="config-manage">
+            <h2>💾 配置更新与导出</h2>
+            <ul>
+                <li><strong>保存</strong>: 在控制面板修改配置后，点击「保存」按钮，更改会立即写入配置文件。</li>
+                <li><strong>热重载</strong>: 大部分配置修改后立即生效，无需重启程序（环境配置除外）。</li>
+                <li><strong>备份</strong>: 建议定期备份 <code>config/</code> 目录。</li>
+            </ul>
+
+            <div class="highlight-box">
+                <p><strong>⚠️ 警告：</strong>目前可视化编辑器<strong>没有撤销功能</strong>！一旦保存无法快捷复原，请务必谨慎修改。</p>
+            </div>
+        </section>
+
+        <section id="faq">
+            <h2>❓ 常见问题</h2>
+            
+            <h3>Q1: 为什么酒馆显示连接失败？</h3>
+            <p>A: 因为酒馆点击「测试 API」时发送的请求信息过短。特别是当你同时使用酒馆测试 API 功能并且目标站点是 AI Studio 时，容易出现这个问题。<strong>建议直接发送对话消息进行测试</strong>，而非使用测试按钮。</p>
+
+            <h3>Q2: 使用时频繁失败怎么办？</h3>
+            <p>A: 请按以下几种情况进行排查：</p>
+            <div class="troubleshoot-list">
+                <ol>
+                    <li><strong>人为干涉了工作流</strong>：在工作流执行时，你点击了脚本控制的浏览器页面的其他按钮，或者切换了页面。在脚本执行过程中，你不能操作脚本控制的浏览器，最多只能看着。</li>
+                    <li><strong>折叠边框</strong>：如果你手动把页面边款缩小，或折叠某些按钮，脚本可能无法操作元素。因此必须将折叠元素全部展开（浏览器可以最小化但不能缩小边框）</li>
+                    <li><strong>网站状态异常</strong>：查看一下脚本控制的浏览器状态，可能触发了人机验证，可能单次发送的信息太长被网站拒绝，也可能发送的内容包含违规信息被拦截。</li>
+                    <li><strong>网络问题</strong>：网络波动或者代理切换了 IP，导致发送失败。这种情况可能引发脚本死锁，需要重启脚本或等待约 5 分钟。表现为：脚本后台显示发送成功，但浏览器中信息没有被实际发送或发送后又失败了。</li>
+                    <li><strong>教程页看完记得关</strong>：注意，本浏览器由脚本直接操作，不要打开除ai网站之外的其它标签页，如搜索页面，教材页面。同时如果已经打开了并且已经出现问题，重启脚本即可。</li>
+                    <li><strong>站点配置失效</strong>：如果以上问题都排除了，可能是该网站的配置已过期需要更新。你可以在 GitHub 上提 Issue 或加群反馈。如果你有一定基础，也可以手动更新选择器配置。</li>
+                </ol>
+            </div>
+
+            <h3>Q3: 我同时打开了多个页面，脚本会怎么操作？</h3>
+            <p>A: 目前脚本遵循的逻辑是「<strong>哪个可用就用哪个，当前页面优先</strong>」，并不是按照轮询顺序分配。</p>
+            <ul>
+                <li>如果想单独使用某一个网站，只能单独打开这一个网站，或打开多个同一网站的标签页。</li>
+                <li>当同时有多个请求时，脚本会按照当前页面的可用状态来分配请求。</li>
+                <li>如果没有并发需求，完全可以只打开一个标签页。</li>
+            </ul>
+
+            <h3>Q4: 控制面板的参数应该怎么调？需要调吗？</h3>
+            <p>A: <strong>大多数时候不需要调整</strong>，里面的参数都是配置好的默认值，可以满足绝大多数使用场景。</p>
+
+            <h3>Q5: 有什么已知问题？</h3>
+            <p>A: 目前已经有一些已知的问题：</p>
+            <ul>
+                <li>VScode中已经发现<strong>codex</strong>插件不适配，原因未知。</li>
+            </ul>
+
+            <h3>Q6: 这个项目有什么用？</h3>
+            <p>A: 这是一个「白嫖」项目，主要用途包括：</p>
+            <ul>
+                <li><strong>免费额度利用</strong>：很多 AI 厂商在网页端有相当多的免费额度（如 DeepSeek、AI Studio、LM Arena 等），本项目能将网页额度转化为 OpenAI 格式的 API，供前端调用。</li>
+                <li><strong>调试上下文</strong>：你可以便捷地查看前端是如何构造上下文的——只需打开浏览器复制一遍脚本发送的请求内容即可。</li>
+                <li><strong>多端口配置</strong>：多端口功能（如主端口用于聊天 AI，副端口用于绘图 AI），实现聊天 + 绘图双重白嫖。</li>
+                <li><strong>功能扩展</strong>：后续将支持绕过输入框长度限制。</li>
+            </ul>
+
+            <div class="info-box">
+                <p><strong>📬 反馈渠道：</strong></p>
+                <ul style="margin-bottom: 0;">
+                    <li>GitHub Issues：提交 bug 或建议</li>
+                    <li>QQ 群：<strong>1073037753</strong></li>
+                </ul>
+            </div>
+        </section>
+    </div>
+
+    <script>
+        // 站点配置数据
+        const sites = [
+            { url: "https://chatgpt.com", name: "chatgpt.com", id: "chatgpt" },
+            { url: "https://chat.deepseek.com", name: "chat.deepseek.com", id: "deepseek" },
+            { url: "https://gemini.google.com", name: "gemini.google.com", id: "gemini" },
+            { url: "https://grok.com", name: "grok.com", id: "grok" },
+            { url: "https://www.doubao.com", name: "doubao.com", id: "doubao" },
+            { url: "https://aistudio.google.com", name: "aistudio.google.com", id: "aistudio" },
+            { url: "https://lmarena.ai", name: "lmarena.ai", id: "lmarena" },
+            { url: "https://h2ogpte.genai.h2o.ai", name: "h2ogpte.genai.h2o.ai", id: "h2ogpte" }
+        ];
+
+        // 渲染站点卡片
+        function renderSiteGrid() {
+            const grid = document.getElementById('siteGrid');
+            grid.innerHTML = sites.map(site => `
+                <a href="${site.url}" target="_blank" class="site-card">
+                    ${site.name}
+                    <span class="model-id">${site.id}</span>
+                </a>
+            `).join('');
+        }
+
+        // 滚动高亮逻辑
+        const sections = document.querySelectorAll('section');
+        const navLinks = document.querySelectorAll('.nav-link');
+        
+        window.addEventListener('scroll', () => {
+            let current = '';
+            sections.forEach(section => {
+                const sectionTop = section.offsetTop;
+                if (scrollY >= sectionTop - 100) {
+                    current = section.getAttribute('id');
+                }
+            });
+            
+            navLinks.forEach(link => {
+                link.classList.remove('active');
+                if (link.getAttribute('href') === '#' + current) {
+                    link.classList.add('active');
+                }
+            });
+        });
+
+        // 页面加载时渲染站点
+        renderSiteGrid();
+    </script>
+</body>
+</html>

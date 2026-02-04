@@ -1,0 +1,177 @@
+{
+  "_meta": {
+    "version": "1.0",
+    "description": "图片提取预设配置库",
+    "last_updated": "2024-01-20"
+  },
+  
+  "chatgpt.com": {
+    "name": "ChatGPT",
+    "description": "OpenAI ChatGPT 官方站点",
+    "image_extraction": {
+      "enabled": true,
+      "selector": "img",
+      "container_selector": ".agent-turn .markdown",
+      "debounce_seconds": 2.0,
+      "wait_for_load": true,
+      "load_timeout_seconds": 5.0,
+      "download_blobs": true,
+      "max_size_mb": 10,
+      "mode": "all"
+    },
+    "notes": "ChatGPT 的图片通常在 markdown 容器内，使用标准 img 标签"
+  },
+  
+  "gemini.google.com": {
+    "name": "Google Gemini",
+    "description": "Google Gemini AI",
+    "image_extraction": {
+      "enabled": true,
+      "selector": "img",
+      "container_selector": ".markdown-main-panel",
+      "debounce_seconds": 2.5,
+      "wait_for_load": true,
+      "load_timeout_seconds": 6.0,
+      "download_blobs": true,
+      "max_size_mb": 10,
+      "mode": "all"
+    },
+    "notes": "Gemini 可能使用懒加载，建议稍长的 debounce 时间"
+  },
+  
+  "aistudio.google.com": {
+    "name": "Google AI Studio",
+    "description": "Google AI Studio (Gemini API)",
+    "image_extraction": {
+      "enabled": true,
+      "selector": "img",
+      "container_selector": ".chat-turn-container.model ms-cmark-node",
+      "debounce_seconds": 2.0,
+      "wait_for_load": true,
+      "load_timeout_seconds": 5.0,
+      "download_blobs": true,
+      "max_size_mb": 10,
+      "mode": "all"
+    },
+    "notes": "AI Studio 使用自定义 Web Components"
+  },
+  
+  "chat.deepseek.com": {
+    "name": "DeepSeek",
+    "description": "DeepSeek AI 对话",
+    "image_extraction": {
+      "enabled": true,
+      "selector": "img",
+      "container_selector": "div.ds-markdown",
+      "debounce_seconds": 2.0,
+      "wait_for_load": true,
+      "load_timeout_seconds": 5.0,
+      "download_blobs": true,
+      "max_size_mb": 10,
+      "mode": "all"
+    },
+    "notes": "DeepSeek 使用 ds-markdown 容器"
+  },
+  
+  "www.doubao.com": {
+    "name": "豆包",
+    "description": "字节跳动豆包 AI",
+    "image_extraction": {
+      "enabled": true,
+      "selector": "img",
+      "container_selector": "[data-testid=\"message_content\"]",
+      "debounce_seconds": 2.0,
+      "wait_for_load": true,
+      "load_timeout_seconds": 5.0,
+      "download_blobs": true,
+      "max_size_mb": 10,
+      "mode": "all"
+    },
+    "notes": "豆包使用 data-testid 属性定位"
+  },
+  
+  "grok.com": {
+    "name": "Grok",
+    "description": "xAI Grok",
+    "image_extraction": {
+      "enabled": true,
+      "selector": "img",
+      "container_selector": ".response-content-markdown",
+      "debounce_seconds": 2.0,
+      "wait_for_load": true,
+      "load_timeout_seconds": 5.0,
+      "download_blobs": true,
+      "max_size_mb": 10,
+      "mode": "all"
+    },
+    "notes": "Grok 的响应容器使用 response-content-markdown"
+  },
+  
+  "lmarena.ai": {
+    "name": "LMArena",
+    "description": "Language Model Arena",
+    "image_extraction": {
+      "enabled": true,
+      "selector": "img",
+      "container_selector": ".no-scrollbar",
+      "debounce_seconds": 2.5,
+      "wait_for_load": true,
+      "load_timeout_seconds": 6.0,
+      "download_blobs": true,
+      "max_size_mb": 10,
+      "mode": "all"
+    },
+    "notes": "LMArena 可能有多个模型同时输出，使用 prose 容器"
+  },
+  
+  "_default": {
+    "name": "通用默认配置",
+    "description": "适用于未知站点的安全默认值",
+    "image_extraction": {
+      "enabled": false,
+      "selector": "img",
+      "container_selector": null,
+      "debounce_seconds": 2.0,
+      "wait_for_load": true,
+      "load_timeout_seconds": 5.0,
+      "download_blobs": true,
+      "max_size_mb": 10,
+      "mode": "all"
+    },
+    "notes": "默认禁用，避免未知站点出现异常"
+  },
+  
+  "_aggressive": {
+    "name": "激进模式",
+    "description": "尽可能抓取所有图片（用于测试）",
+    "image_extraction": {
+      "enabled": true,
+      "selector": "img, picture img, figure img",
+      "container_selector": null,
+      "debounce_seconds": 3.0,
+      "wait_for_load": true,
+      "load_timeout_seconds": 10.0,
+      "download_blobs": true,
+      "max_size_mb": 50,
+      "mode": "all"
+    },
+    "notes": "使用更宽松的选择器和更长的等待时间"
+  },
+  
+  "_minimal": {
+    "name": "最小模式",
+    "description": "只抓取第一张图片（节省资源）",
+    "image_extraction": {
+      "enabled": true,
+      "selector": "img",
+      "container_selector": null,
+      "debounce_seconds": 1.0,
+      "wait_for_load": false,
+      "load_timeout_seconds": 3.0,
+      "download_blobs": false,
+      "max_size_mb": 5,
+      "mode": "first"
+    },
+    "notes": "快速模式，只抓取第一张图片且不转换 blob"
+  }
+}

@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Universal Web-to-API Dashboard</title>
+    
+    <!-- 外部依赖 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.staticfile.org/vue/3.3.4/vue.global.prod.min.js"></script>
+    
+    <!-- Tailwind 配置 -->
+    <script>
+        tailwind.config = { darkMode: 'class' }
+    </script>
+    
+    <!-- 自定义样式 -->
+    <link rel="stylesheet" href="/static/css/dashboard.css">
+    
+    <!-- 图标定义 -->
+    <script src="/static/js/icons.js"></script>
+</head>
+<body class="bg-gray-50 dark:bg-gray-900 transition-colors duration-300 h-screen overflow-hidden">
+    <div id="app" class="flex h-full overflow-hidden" v-cloak @click="closeAllMenus">
+
+        <!-- 隐藏的文件输入框 -->
+        <input type="file" ref="importFileInput" accept=".json" class="hidden" @change="handleImportFile">
+        <!-- 提取器配置导入文件输入框 -->
+        <input type="file" ref="extractorImportInput" accept=".json" class="hidden" @change="handleExtractorImportFile">
+
+        <!-- Toast 通知 -->
+        <div class="fixed top-4 right-4 z-50 max-w-sm">
+            <div v-for="toast in toasts"
+                 :key="toast.id"
+                 :class="['px-4 py-2 rounded shadow-lg text-white mb-2 transition-opacity duration-300',
+                          {'bg-green-500': toast.type === 'success',
+                           'bg-red-500': toast.type === 'error',
+                           'bg-blue-500': toast.type === 'info',
+                           'bg-yellow-500': toast.type === 'warning'}]"
+                 @click="removeToast(toast.id)">
+                {{ toast.message }}
+            </div>
+        </div>
+
+        <!-- 左侧栏组件 -->
+        <sidebar-component :sites="sites"
+                           :current-domain="currentDomain"
+                           :browser-status="browserStatus"
+                           :auth-enabled="authEnabled"
+                           :has-token="hasToken"
+                           :dark-mode="darkMode"
+                           :active-tab="activeTab"
+                           @select-site="selectSite"
+                           @add-site="addNewSite"
+                           @delete-site="confirmDelete"
+                           @export-site="exportSingleSite"
+                           @toggle-dark="toggleDarkMode"
+                           @refresh-status="refreshStatus"
+                           @trigger-import="triggerImport"
+                           @export-all="exportConfig"
+                           @show-token-dialog="showTokenDialog = true"
+                           @change-tab="changeTab">
+        </sidebar-component>
+
+        <!-- 主内容区 -->
+        <main class="flex-1 flex flex-col overflow-x-hidden overflow-y-auto bg-gray-50 dark:bg-gray-900">
+
+            <!-- 头部（配置/日志 Tab） -->
+            <header v-if="activeTab !== 'settings' && activeTab !== 'extractors' && currentDomain && currentConfig"
+                    class="bg-white dark:bg-gray-800 border-b dark:border-gray-700 p-4">
+                <div class="flex justify-between items-center">
+                    <div class="flex items-center gap-4">
+                        <h2 class="text-xl font-bold dark:text-white">{{ currentDomain }}</h2>
+                        <label class="flex items-center text-sm cursor-pointer dark:text-gray-300">
+                            <input type="checkbox" v-model="currentConfig.stealth" class="mr-2">
+                            <span>隐身模式</span>
+                        </label>
+                    </div>
+                    <div class="flex gap-2">
+                        <button @click="testCurrentSite"
+                                class="border dark:border-gray-700 rounded hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-white transition-colors px-2 py-0.5 text-sm">
+                            <span v-html="$icons.beaker"></span> 测试选择器
+                        </button>
+                        <button @click="showJsonPreview = true"
+                                class="border dark:border-gray-700 rounded hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-white transition-colors px-2 py-0.5 text-sm">
+                            查看 JSON
+                        </button>
+                        <button @click="exportCurrentSite"
+                                class="border dark:border-gray-700 rounded hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-white transition-colors px-2 py-0.5 text-sm">
+                            <span v-html="$icons.arrowUpTray"></span> 导出站点
+                        </button>
+                        <button @click="reanalyzeCurrentSite"
+                                class="border dark:border-gray-700 rounded hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-white transition-colors px-2 py-0.5 text-sm">
+                            重新分析
+                        </button>
+                        <button @click="loadConfig"
+                                class="border dark:border-gray-700 rounded hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-white transition-colors px-2 py-0.5 text-sm">
+                            <span v-html="$icons.arrowPath"></span> 刷新
+                        </button>
+                        <button @click="saveConfig"
+                                :disabled="isSaving"
+                                :class="['border rounded transition-colors px-2 py-0.5 text-sm',
+                                         isSaving ? 'opacity-50 cursor-not-allowed px-3 py-1 hover:bg-gray-100 dark:text-gray-400'
+                                                  : 'bg-blue-500 text-white hover:bg-blue-600 border-blue-500']">
+                            <span v-if="!isSaving" v-html="$icons.arrowDownTray"></span>
+                            {{ isSaving ? '保存中...' : ' 保存' }}
+                        </button>
+                    </div>
+                </div>
+            </header>
+
+            <!-- 提取器页头部 -->
+            <header v-if="activeTab === 'extractors'"
+                    class="bg-white dark:bg-gray-800 border-b dark:border-gray-700 p-4">
+                <div class="flex justify-between items-center">
+                    <div class="flex items-center gap-3">
+                        <span v-html="$icons.puzzle" class="text-gray-600 dark:text-gray-400"></span>
+                        <h2 class="text-xl font-bold dark:text-white">内容提取器</h2>
+                    </div>
+                    <div class="flex gap-2">
+                        <button @click="loadExtractors"
+                                class="border dark:border-gray-700 rounded hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-white transition-colors px-2 py-0.5 text-sm">
+                            <span v-html="$icons.arrowPath"></span> 刷新
+                        </button>
+                    </div>
+                </div>
+            </header>
+
+            <!-- 设置页头部 -->
+            <header v-if="activeTab === 'settings'"
+                    class="bg-white dark:bg-gray-800 border-b dark:border-gray-700 p-4">
+                <div class="flex justify-between items-center">
+                    <div class="flex items-center gap-3">
+                        <span v-html="$icons.cog" class="text-gray-600 dark:text-gray-400"></span>
+                        <h2 class="text-xl font-bold dark:text-white">系统设置</h2>
+                    </div>
+                    <div class="flex gap-2">
+                        <button @click="loadEnvConfig(); loadBrowserConstants(); loadSelectorDefinitions()"
+                                class="border dark:border-gray-700 rounded hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-white transition-colors px-2 py-0.5 text-sm">
+                            <span v-html="$icons.arrowPath"></span> 刷新
+                        </button>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Tab 切换栏 -->
+            <div class="bg-white dark:bg-gray-800 border-b dark:border-gray-700 px-4 flex gap-2">
+                <button @click="activeTab = 'config'"
+                        :class="['px-4 py-2 text-sm font-medium border-b-2 transition-colors',
+                                 activeTab === 'config'
+                                 ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+                                 : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300']">
+                    <span v-html="$icons.clipboardList"></span> 配置
+                </button>
+                <button @click="activeTab = 'tabpool'"
+                        :class="['px-4 py-2 text-sm font-medium border-b-2 transition-colors',
+                                 activeTab === 'tabpool'
+                                 ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+                                 : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300']">
+                    🗂️ 标签页
+                </button>
+                <button @click="activeTab = 'extractors'"
+                        :class="['px-4 py-2 text-sm font-medium border-b-2 transition-colors',
+                                 activeTab === 'extractors'
+                                 ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+                                 : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300']">
+                    <span v-html="$icons.puzzle"></span> 提取器
+                </button>
+                <button @click="activeTab = 'logs'"
+                        :class="['px-4 py-2 text-sm font-medium border-b-2 transition-colors',
+                                 activeTab === 'logs'
+                                 ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+                                 : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300']">
+                    <span v-html="$icons.chartBar"></span> 日志
+                    <span v-if="logs.length > 0" class="ml-1 px-1.5 py-0.5 text-xs bg-blue-100 dark:bg-blue-900 text-blue-600 dark:text-blue-300 rounded-full">{{ logs.length }}</span>
+                </button>
+                <button @click="activeTab = 'settings'"
+                        :class="['px-4 py-2 text-sm font-medium border-b-2 transition-colors',
+                                 activeTab === 'settings'
+                                 ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+                                 : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300']">
+                    <span v-html="$icons.cog"></span> 设置
+                    <span v-if="envConfigChanged || browserConstantsChanged || selectorDefinitionsChanged"
+                          class="ml-1 w-2 h-2 bg-orange-500 rounded-full inline-block"></span>
+                </button>
+            </div>
+           <div class="flex-1 overflow-y-auto">
+                <!-- Tab 内容区 -->
+                <config-tab v-if="activeTab === 'config'"
+                            :current-domain="currentDomain"
+                            :current-config="currentConfig"
+                            @add-selector="addSelector"
+                            @remove-selector="removeSelector"
+                            @update-selector-key="updateSelectorKey"
+                            @test-selector="testSelector"
+                            @add-step="addStep"
+                            @remove-step="removeStep"
+                            @move-step="moveStep"
+                            @action-change="onActionChange"
+                            @show-templates="showTemplates"
+                            @update-image-config="updateImageConfig"
+                            @test-image-extraction="testImageExtraction"
+                            @reload-config="reloadConfig">
+                </config-tab>
+
+                <!-- 标签页池 Tab -->
+                <tabpool-tab v-show="activeTab === 'tabpool'"
+                             :dark-mode="darkMode"
+                             @notify="notify($event.message, $event.type)">
+                </tabpool-tab>
+
+                <!-- 提取器 Tab -->
+                <extractor-tab v-show="activeTab === 'extractors'"
+                               :extractors="extractors"
+                               :default-extractor-id="defaultExtractorId"
+                               :sites="sites"
+                               :is-loading="isLoadingExtractors"
+                               @set-default="setDefaultExtractor"
+                               @export-config="exportExtractorConfig"
+                               @import-config="importExtractorConfig"
+                               @set-site-extractor="setSiteExtractor"
+                               @open-verify-dialog="openVerifyDialog"
+                               @refresh="loadExtractors">
+                </extractor-tab>
+
+                <!-- 日志 Tab -->
+                <logs-tab v-show="activeTab === 'logs'"
+                          :logs="logs"
+                          :filter="logLevelFilter"
+                          :paused="pauseLogs"
+                          @clear="clearLogs"
+                          @change-filter="logLevelFilter = $event"
+                          @toggle-pause="pauseLogs = !pauseLogs">
+                </logs-tab>
+
+                <!-- 设置 Tab -->
+                <settings-tab v-show="activeTab === 'settings'"
+                              :env-config="envConfig"
+                              :env-schema="envSchema"
+                              :env-collapsed="envCollapsed"
+                              :env-changed="envConfigChanged"
+                              :saving-env="isSavingEnv"
+                              :browser-constants="browserConstants"
+                              :browser-schema="browserConstantsSchema"
+                              :browser-collapsed="browserConstantsCollapsed"
+                              :browser-changed="browserConstantsChanged"
+                              :saving-browser="isSavingConstants"
+                              :selector-definitions="selectorDefinitions"
+                              :definitions-changed="selectorDefinitionsChanged"
+                              :saving-definitions="isSavingDefinitions"
+                              @save-env="saveEnvConfig"
+                              @reset-env="resetEnvConfig"
+                              @toggle-env-group="envCollapsed[$event] = !envCollapsed[$event]"
+                              @save-browser="saveBrowserConstants"
+                              @reset-browser="resetBrowserConstants"
+                              @toggle-browser-group="browserConstantsCollapsed[$event] = !browserConstantsCollapsed[$event]"
+                              @save-definitions="saveSelectorDefinitions"
+                              @reset-definitions="resetSelectorDefinitions"
+                              @add-definition="openAddDefinitionDialog"
+                              @edit-definition="openEditDefinitionDialog"
+                              @remove-definition="removeDefinition"
+                              @toggle-definition="toggleDefinitionEnabled"
+                              @move-definition="moveDefinition">
+                </settings-tab>
+            </div>
+        </main>
+
+        <!-- 弹窗区域 -->
+        <json-preview-dialog :show="showJsonPreview"
+                             :json-data="sites[currentDomain] || {}"
+                             @close="showJsonPreview = false"
+                             @copy="copyJson">
+        </json-preview-dialog>
+
+        <token-dialog :show="showTokenDialog"
+                      v-model="tempToken"
+                      @close="showTokenDialog = false"
+                      @save="saveToken">
+        </token-dialog>
+
+        <step-templates-dialog :show="showStepTemplates"
+                               @close="showStepTemplates = false"
+                               @apply="applyTemplate($event); showStepTemplates = false">
+        </step-templates-dialog>
+
+        <test-dialog :show="showTestDialog"
+                     :result="testResult"
+                     :testing="isTesting"
+                     @close="showTestDialog = false"
+                     @test="testSelectorInput = $event.selector; testTimeout = $event.timeout; testHighlight = $event.highlight; runTest()">
+        </test-dialog>
+
+        <import-dialog :show="showImportDialog"
+                       :file-name="importFileName"
+                       :import-type="importType"
+                       :imported-config="importedConfig"
+                       @close="cancelImport"
+                       @confirm="singleSiteImportDomain = $event.domain; importMode = $event.mode; executeImport()">
+        </import-dialog>
+
+        <definition-dialog :show="showAddDefinitionDialog"
+                           :edit-index="editingDefinitionIndex"
+                           :definition="newDefinition"
+                           @close="showAddDefinitionDialog = false"
+                           @save="saveDefinition">
+        </definition-dialog>
+
+        <!-- 提取器验证弹窗 -->
+        <extractor-verify-dialog :show="showVerifyDialog"
+                                 :domain="verifyDialogDomain"
+                                 :extractor-name="verifyDialogExtractorName"
+                                 @close="showVerifyDialog = false"
+                                 @verify="handleVerifyResult">
+        </extractor-verify-dialog>
+
+    </div>
+
+    <!-- 加载组件 JS -->
+    <script src="/static/js/components/Sidebar.js"></script>
+    <!-- 子组件（在 ConfigTab 之前） -->
+<script src="static/js/components/panels/SelectorPanel.js"></script>
+<script src="static/js/components/panels/ExtractorPanel.js"></script>
+<script src="static/js/components/panels/ImageConfigPanel.js"></script>
+<script src="static/js/components/panels/StreamConfigPanel.js"></script>
+<script src="static/js/components/panels/WorkflowPanel.js"></script>
+
+<!-- 主组件 -->
+<script src="static/js/components/ConfigTab.js"></script>
+    <script src="/static/js/components/LogsTab.js"></script>
+    <script src="/static/js/components/SettingsTab.js"></script>
+    <script src="/static/js/components/ExtractorTab.js"></script>
+    <script src="/static/js/components/Dialogs.js"></script>
+    <script src="/static/js/components/TabPoolTab.js"></script>
+
+    <!-- 主应用逻辑 -->
+    <script src="/static/js/dashboard.js"></script>
+</body>
+</html>
