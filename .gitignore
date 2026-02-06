@@ -24,6 +24,15 @@ backup_*/
 *.swp
 *.swo
 
+# Visual Studio
+.vs/
+bin/
+obj/
+*.user
+*.suo
+*.pdb
+*.cache
+
 # 日志
 *.log
 logs/
@@ -35,3 +44,6 @@ Thumbs.db
 # 备份文件
 *.bak
 *.backup
+
+# Node.js
+node_modules/

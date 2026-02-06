@@ -207,6 +207,14 @@ class WorkflowExecutor:
             
             elif action == "FILL_INPUT":
                 prompt = context.get("prompt", "") if context else ""
+                
+                # ===== 隐身模式：在首次输入前模拟人类浏览行为 =====
+                # Cloudflare turnstile 会在页面加载后持续监控鼠标/键盘事件，
+                # 如果从页面加载到提交表单之间没有自然交互，会触发 challenge。
+                if self.stealth_mode and not getattr(self, '_page_warmed_up', False):
+                    self._warmup_page_for_stealth()
+                    self._page_warmed_up = True
+                
                 self._execute_fill(selector, prompt, target_key, optional)
             
             elif action in ("STREAM_WAIT", "STREAM_OUTPUT"):
@@ -292,9 +300,9 @@ class WorkflowExecutor:
         if ele:
             try:
                 if self.stealth_mode:
-                    # 发送按钮前额外犹豫（40% 概率）
-                    if target_key == "send_btn" and random.random() < 0.4:
-                        hesitate = random.uniform(0.4, 0.9)
+                    # 发送按钮前额外犹豫（50% 概率）
+                    if target_key == "send_btn" and random.random() < 0.5:
+                        hesitate = random.uniform(0.5, 1.2)
                         logger.debug(f"[STEALTH] 发送前犹豫 {hesitate:.2f}s")
                         elapsed = 0
                         while elapsed < hesitate:
@@ -303,10 +311,10 @@ class WorkflowExecutor:
                             time.sleep(0.05)
                             elapsed += 0.05
                     
-                    # 鼠标移动
+                    # 鼠标移动到元素
                     try:
                         self.tab.actions.move_to(ele)
-                        self._smart_delay(0.1, 0.25)
+                        time.sleep(random.uniform(0.08, 0.2))
                     except Exception:
                         pass
                 
@@ -334,20 +342,27 @@ class WorkflowExecutor:
     # ================= 可靠发送 =================
     
     def _execute_click_send_reliably(self, selector: str, target_key: str, optional: bool):
-        """可靠发送：专门解决图片上传导致消息未发出的问题"""
+        """
+        可靠发送（v5.6 隐身模式增强版）
+        
+        - 隐身模式：零 JS 注入，盲等待+重试
+        - 普通模式：保持 JS 检查逻辑
+        """
         if self._check_cancelled():
             return
 
+        # ===== 隐身模式：无 JS 注入路径 =====
+        if self.stealth_mode:
+            self._execute_click_send_stealth(selector, target_key, optional)
+            return
+
+        # ===== 普通模式：原有逻辑 =====
         max_wait = getattr(BrowserConstants, "IMAGE_SEND_MAX_WAIT", 12.0)
         retry_interval = getattr(BrowserConstants, "IMAGE_SEND_RETRY_INTERVAL", 0.6)
 
-        # 点击前：记录输入框长度
         before_len = self._safe_get_input_len_by_key("input_box")
-
-        # 第一次点击
         self._execute_click(selector, target_key, optional)
 
-        # 快速判断一次
         time.sleep(0.25)
         after_len = self._safe_get_input_len_by_key("input_box")
 
@@ -355,7 +370,6 @@ class WorkflowExecutor:
             logger.info("发送成功")
             return
 
-        # 没成功：进入重试窗口
         logger.warning(f"[SEND] 发送未成功，进入重试窗口 max_wait={max_wait}s")
 
         elapsed = 0.0
@@ -367,7 +381,6 @@ class WorkflowExecutor:
             time.sleep(step)
             elapsed += step
 
-            # 重试点击
             self._execute_click(selector, target_key, optional)
 
             time.sleep(0.25)
@@ -379,10 +392,52 @@ class WorkflowExecutor:
 
             after_len = new_len
 
-        # 超时仍未成功
         logger.error("[SEND] 发送重试超时")
         if not optional:
             raise WorkflowError("send_btn_click_failed_due_to_uploading")
+
+    def _execute_click_send_stealth(self, selector: str, target_key: str, optional: bool):
+        """
+        隐身模式发送（零 JS 注入）
+        
+        - 无图片：直接点击
+        - 有图片：盲等待+重试
+        """
+        has_images = False
+        if hasattr(self, '_context') and self._context:
+            has_images = bool(self._context.get('images'))
+        
+        if not has_images:
+            self._execute_click(selector, target_key, optional)
+            logger.info("[STEALTH] 发送完成（无图片）")
+            return
+        
+        max_wait = getattr(BrowserConstants, 'STEALTH_SEND_IMAGE_WAIT', 8.0)
+        retry_interval = getattr(BrowserConstants, 'STEALTH_SEND_IMAGE_RETRY_INTERVAL', 1.5)
+        
+        logger.info(f"[STEALTH] 有图片，发送后等待上传 (max_wait={max_wait}s)")
+        
+        self._execute_click(selector, target_key, optional)
+        
+        elapsed = 0.0
+        retry_count = 0
+        while elapsed < max_wait:
+            if self._check_cancelled():
+                return
+            
+            wait_step = min(retry_interval, max_wait - elapsed)
+            wait_step = wait_step * random.uniform(0.8, 1.2)
+            time.sleep(wait_step)
+            elapsed += wait_step
+            
+            retry_count += 1
+            try:
+                self._execute_click(selector, target_key, True)
+                logger.debug(f"[STEALTH] 发送重试 #{retry_count} (elapsed={elapsed:.1f}s)")
+            except Exception:
+                pass
+        
+        logger.info(f"[STEALTH] 发送完成（图片模式，重试 {retry_count} 次）")
     
     def _safe_get_input_len_by_key(self, target_key: str) -> int:
         """读取输入框当前长度"""
@@ -421,11 +476,76 @@ class WorkflowExecutor:
             return False
         except Exception:
             return False
+            # ================= 隐身模式页面预热 =================
+    
+    def _warmup_page_for_stealth(self):
+        """
+        模拟人类在输入前的自然浏览行为
+        
+        目的：让 Cloudflare 的 JS 传感器收集到足够的"人类行为"数据，
+        避免在提交表单时触发 challenge。
+        
+        模拟行为：
+        1. 鼠标在页面上自然移动几次
+        2. 可能滚动一下页面
+        3. 在输入框附近停留
+        """
+        logger.debug("[STEALTH] 执行页面预热（模拟人类浏览）")
+        
+        try:
+            # 获取页面尺寸用于生成合理的鼠标坐标
+            viewport_width = 1200
+            viewport_height = 800
+            try:
+                size = self.tab.run_js("return {w: window.innerWidth, h: window.innerHeight}")
+                if size and isinstance(size, dict):
+                    viewport_width = size.get('w', 1200)
+                    viewport_height = size.get('h', 800)
+            except Exception:
+                pass
+            
+            # 1. 鼠标随机移动 2-4 次（模拟"扫视页面"）
+            move_count = random.randint(2, 4)
+            for i in range(move_count):
+                if self._check_cancelled():
+                    return
+                
+                # 生成页面中部区域的随机坐标（避免边缘）
+                x = random.randint(int(viewport_width * 0.15), int(viewport_width * 0.85))
+                y = random.randint(int(viewport_height * 0.15), int(viewport_height * 0.75))
+                
+                try:
+                    self.tab.actions.move(x, y)
+                except Exception:
+                    pass
+                
+                # 每次移动后停留
+                time.sleep(random.uniform(0.3, 0.8))
+            
+            # 2. 30% 概率滚动页面（模拟"看看页面内容"）
+            if random.random() < 0.3:
+                try:
+                    scroll_amount = random.randint(50, 200)
+                    self.tab.actions.scroll(0, scroll_amount)
+                    time.sleep(random.uniform(0.3, 0.6))
+                    # 滚回来
+                    self.tab.actions.scroll(0, -scroll_amount)
+                    time.sleep(random.uniform(0.2, 0.4))
+                except Exception:
+                    pass
+            
+            # 3. 最后一次停顿（模拟"准备开始输入"）
+            time.sleep(random.uniform(0.5, 1.0))
+            
+            logger.debug(f"[STEALTH] 页面预热完成（{move_count} 次鼠标移动）")
+            
+        except Exception as e:
+            logger.debug(f"[STEALTH] 页面预热异常（可忽略）: {e}")
     
     # ================= 输入框填充 =================
     
     def _execute_fill(self, selector: str, text: str, target_key: str, optional: bool):
-        """填充输入框（模式分离版）"""
+        """填充输入框（v5.6 模式分离版）"""
         if self._check_cancelled():
             return
 
@@ -446,6 +566,29 @@ class WorkflowExecutor:
             images = self._context.get('images', [])
             if images:
                 self._image_handler.paste_images(images)
+        
+        # ===== 隐身模式：粘贴后模拟"人类阅读/检查"延迟 =====
+        # 解决问题：粘贴 28K 字符后 1 秒内就点发送，被 CF 判定为自动化
+        if self.stealth_mode and len(text) > 0:
+            # 基础延迟：1-2 秒（模拟"看一眼输入框"）
+            base_delay = random.uniform(1.0, 2.0)
+            
+            # 长文本额外延迟：每 5000 字符加 0.3-0.6 秒（模拟滚动检查）
+            extra_per_chunk = len(text) / 5000.0
+            extra_delay = extra_per_chunk * random.uniform(0.3, 0.6)
+            
+            # 上限 3 秒（避免超长文本等太久）
+            total_review = min(base_delay + extra_delay, 3.0)
+            
+            logger.debug(f"[STEALTH] 粘贴后阅读延迟 {total_review:.1f}s (文本长度={len(text)})")
+            
+            elapsed = 0
+            step = 0.1
+            while elapsed < total_review:
+                if self._check_cancelled():
+                    return
+                time.sleep(min(step, total_review - elapsed))
+                elapsed += step
 
 
 __all__ = ['WorkflowExecutor']

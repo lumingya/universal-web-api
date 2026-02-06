@@ -90,82 +90,6 @@
       "mode": "all"
     }
   },
-  "lmarena.ai": {
-    "selectors": {
-      "input_box": "textarea[name=\"message\"]",
-      "send_btn": "button[type=\"submit\"]",
-      "result_container": "div.min-w-0:not([class*=\"bg-surface\"]) > .prose-sm",
-      "new_chat_btn": "a[href*=\"/c/new\"]",
-      "message_wrapper": null,
-      "generating_indicator": null
-    },
-    "workflow": [
-      {
-        "action": "CLICK",
-        "target": "new_chat_btn",
-        "optional": true,
-        "value": null
-      },
-      {
-        "action": "WAIT",
-        "target": "",
-        "optional": false,
-        "value": "0.5"
-      },
-      {
-        "action": "FILL_INPUT",
-        "target": "input_box",
-        "optional": false,
-        "value": null
-      },
-      {
-        "action": "CLICK",
-        "target": "send_btn",
-        "optional": true,
-        "value": null
-      },
-      {
-        "action": "KEY_PRESS",
-        "target": "Enter",
-        "optional": true,
-        "value": null
-      },
-      {
-        "action": "STREAM_WAIT",
-        "target": "result_container",
-        "optional": false,
-        "value": null
-      }
-    ],
-    "stealth": true,
-    "image_extraction": {
-      "enabled": false,
-      "selector": "img",
-      "container_selector": ".no-scrollbar",
-      "debounce_seconds": 2,
-      "wait_for_load": true,
-      "load_timeout_seconds": 50,
-      "download_blobs": true,
-      "max_size_mb": 10,
-      "mode": "all"
-    },
-    "extractor_id": "deep_mode_v1",
-    "extractor_verified": false,
-    "stream_config": {
-      "mode": "dom",
-      "hard_timeout": 300,
-      "silence_threshold": 2.5,
-      "initial_wait": 30,
-      "enable_wrapper_search": true,
-      "network": {
-        "listen_pattern": "",
-        "parser": "",
-        "first_response_timeout": 5,
-        "silence_threshold": 3,
-        "response_interval": 0.5
-      }
-    }
-  },
   "grok.com": {
     "selectors": {
       "input_box": "div.tiptap[contenteditable=\"true\"]",
@@ -585,71 +509,6 @@
       "mode": "all"
     }
   },
-  "accounts.google.com": {
-    "selectors": {
-      "input_box": "textarea",
-      "send_btn": "button[type=\"submit\"]",
-      "result_container": "div",
-      "new_chat_btn": null,
-      "message_wrapper": null,
-      "generating_indicator": null
-    },
-    "workflow": [
-      {
-        "action": "CLICK",
-        "target": "new_chat_btn",
-        "optional": true,
-        "value": null
-      },
-      {
-        "action": "WAIT",
-        "target": "",
-        "optional": false,
-        "value": "0.5"
-      },
-      {
-        "action": "FILL_INPUT",
-        "target": "input_box",
-        "optional": false,
-        "value": null
-      },
-      {
-        "action": "CLICK",
-        "target": "send_btn",
-        "optional": true,
-        "value": null
-      },
-      {
-        "action": "KEY_PRESS",
-        "target": "Enter",
-        "optional": true,
-        "value": null
-      },
-      {
-        "action": "STREAM_WAIT",
-        "target": "result_container",
-        "optional": false,
-        "value": null
-      }
-    ],
-    "stealth": false,
-    "stream_config": {
-      "silence_threshold": 2.5,
-      "initial_wait": 30,
-      "enable_wrapper_search": true
-    },
-    "image_extraction": {
-      "enabled": false,
-      "selector": "img",
-      "container_selector": null,
-      "debounce_seconds": 2,
-      "wait_for_load": true,
-      "load_timeout_seconds": 5,
-      "download_blobs": true,
-      "max_size_mb": 10,
-      "mode": "all"
-    }
-  },
   "claude.ai": {
     "selectors": {
       "input_box": "div[data-testid=\"chat-input\"]",
@@ -711,10 +570,10 @@
   },
   "arena.ai": {
     "selectors": {
-      "input_box": "textarea",
+      "input_box": "textarea[name=\"message\"]",
       "send_btn": "button[type=\"submit\"]",
-      "result_container": "div",
-      "new_chat_btn": null,
+      "result_container": "div.min-w-0:not([class*=\"bg-surface\"]) > .prose-sm",
+      "new_chat_btn": "a[href*=\"/c/new\"]",
       "message_wrapper": null,
       "generating_indicator": null
     },
@@ -738,12 +597,6 @@
         "value": null
       },
       {
-        "action": "CLICK",
-        "target": "send_btn",
-        "optional": true,
-        "value": null
-      },
-      {
         "action": "KEY_PRESS",
         "target": "Enter",
         "optional": true,
@@ -756,11 +609,20 @@
         "value": null
       }
     ],
-    "stealth": false,
+    "stealth": true,
     "stream_config": {
+      "mode": "dom",
+      "hard_timeout": 300,
       "silence_threshold": 2.5,
       "initial_wait": 30,
-      "enable_wrapper_search": true
+      "enable_wrapper_search": true,
+      "network": {
+        "listen_pattern": "",
+        "parser": "lmarena",
+        "first_response_timeout": 5,
+        "silence_threshold": 3,
+        "response_interval": 0.5
+      }
     },
     "image_extraction": {
       "enabled": false,

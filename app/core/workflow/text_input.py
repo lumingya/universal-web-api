@@ -11,6 +11,7 @@ import re
 import time
 import json
 import base64
+import random
 from typing import Optional
 import pyperclip
 from app.core.config import logger, BrowserConstants, WorkflowError
@@ -606,76 +607,149 @@ class TextInputHandler:
             f"[INPUT_SNAPSHOT] len={sample['len']} nl={sample['nl']} "
             f"head={repr(sample['head'][:40])}... tail=...{repr(sample['tail'][-40:])}"
         )
+        # ================= 人类化按键辅助（隐身模式专用）=================
     
+    def _human_key_combo(self, *keys):
+        """
+        人类化组合键：每个 key_down/key_up 之间加随机微延迟
+        
+        用法：
+            self._human_key_combo('Control', 'A')   → Ctrl+A
+            self._human_key_combo('Control', 'V')   → Ctrl+V
+            self._human_key_combo('Delete')          → Delete
+        """
+        down_up_min = getattr(BrowserConstants, 'STEALTH_KEY_DOWN_UP_MIN', 0.03)
+        down_up_max = getattr(BrowserConstants, 'STEALTH_KEY_DOWN_UP_MAX', 0.09)
+        between_min = getattr(BrowserConstants, 'STEALTH_KEY_BETWEEN_MIN', 0.04)
+        between_max = getattr(BrowserConstants, 'STEALTH_KEY_BETWEEN_MAX', 0.12)
+        
+        if len(keys) == 1:
+            self.tab.actions.key_down(keys[0])
+            time.sleep(random.uniform(down_up_min, down_up_max))
+            self.tab.actions.key_up(keys[0])
+            return
+        
+        modifier = keys[0]
+        targets = keys[1:]
+        
+        self.tab.actions.key_down(modifier)
+        time.sleep(random.uniform(between_min, between_max))
+        
+        for i, target in enumerate(targets):
+            self.tab.actions.key_down(target)
+            time.sleep(random.uniform(down_up_min, down_up_max))
+            self.tab.actions.key_up(target)
+            if i < len(targets) - 1:
+                time.sleep(random.uniform(between_min, between_max))
+        
+        time.sleep(random.uniform(down_up_min, down_up_max))
+        self.tab.actions.key_up(modifier)
+
+    def _stealth_verify_paste_light(self, ele, expected_text: str):
+        """
+        轻量级粘贴验证（隐身模式专用）
+        
+        仅通过 DrissionPage 原生属性读取，不注入 JS。
+        只做长度级别粗略检查，失败只记 warning 不重试。
+        """
+        try:
+            actual_text = ""
+            tag = ele.tag.lower() if hasattr(ele, 'tag') and ele.tag else ""
+            
+            if tag in ('textarea', 'input'):
+                actual_text = ele.attr('value') or ""
+            else:
+                actual_text = ele.text or ""
+            
+            actual_len = len(actual_text)
+            expected_len = len(expected_text)
+            
+            if expected_len == 0:
+                return
+            
+            ratio = actual_len / expected_len if expected_len > 0 else 0
+            
+            if ratio < 0.5:
+                logger.warning(
+                    f"[STEALTH_VERIFY] 粘贴可能不完整: "
+                    f"actual={actual_len}, expected={expected_len}, ratio={ratio:.2f}"
+                )
+            else:
+                logger.debug(
+                    f"[STEALTH_VERIFY] 粘贴检查通过: "
+                    f"actual={actual_len}, expected={expected_len}, ratio={ratio:.2f}"
+                )
+        except Exception as e:
+            logger.debug(f"[STEALTH_VERIFY] 检查跳过: {e}")
     # ================= 剪贴板模式输入 =================
     
     def fill_via_clipboard(self, ele, text: str):
-        """隐身模式专用：剪贴板 + Ctrl+V 输入"""
+        """
+        隐身模式专用：剪贴板 + Ctrl+V 输入（v5.6 反检测增强版）
+        
+        改进：
+        - 人类化按键时序（_human_key_combo）
+        - Ctrl+A → Ctrl+V（跳过 Delete，人类习惯：选中直接粘贴覆盖）
+        - 默认跳过 JS 注入验证（STEALTH_SKIP_PASTE_VERIFY）
+        - 验证降级为原生属性读取
+        """
         logger.debug(f"[STEALTH] 使用剪贴板粘贴，长度 {len(text)}")
     
-        try:
-            import pyperclip
-        except ImportError:
-            logger.error("[STEALTH] pyperclip 未安装，降级到 JS 方式")
-            self.fill_via_js(ele, text)
-            return
-    
         clipboard_lock = get_clipboard_lock()
+        
+        settle_min = getattr(BrowserConstants, 'STEALTH_PASTE_SETTLE_MIN', 0.4)
+        settle_max = getattr(BrowserConstants, 'STEALTH_PASTE_SETTLE_MAX', 0.8)
+        skip_verify = getattr(BrowserConstants, 'STEALTH_SKIP_PASTE_VERIFY', True)
     
         try:
-            # 聚焦输入框
+            # 1. 聚焦输入框（原生点击）
             ele.click()
-            self._smart_delay(0.1, 0.3)
+            self._smart_delay(0.15, 0.35)
         
             if self._check_cancelled():
                 return
         
-            # 全选 + 删除
-            self.tab.actions.key_down('Control').key_down('A').key_up('A').key_up('Control')
-            time.sleep(0.05)
-            self.tab.actions.key_down('Delete').key_up('Delete')
-            self._smart_delay(0.1, 0.2)
+            # 2. 全选（人类化时序）—— 粘贴会自动覆盖选中内容，无需 Delete
+            self._human_key_combo('Control', 'A')
+            self._smart_delay(0.08, 0.18)
         
             if self._check_cancelled():
                 return
         
-            # 剪贴板操作加锁
+            # 3. 剪贴板操作（加锁）
             with clipboard_lock:
-                # 备份原剪贴板
                 original_clipboard = ""
                 try:
                     original_clipboard = pyperclip.paste()
                 except Exception:
                     pass
             
-                # 写入剪贴板
                 pyperclip.copy(text)
-                time.sleep(0.05)
+                time.sleep(random.uniform(0.06, 0.15))
             
-                # Ctrl+V 粘贴
-                logger.debug("[STEALTH] 执行 Ctrl+V (锁内)")
-                self.tab.actions.key_down('Control').key_down('V').key_up('V').key_up('Control')
+                # Ctrl+V 粘贴（人类化时序）
+                self._human_key_combo('Control', 'V')
             
-                # 等待粘贴完成
-                time.sleep(0.3)
+                # 等待粘贴完成 + DOM 更新
+                time.sleep(random.uniform(settle_min, settle_max))
             
-                # 恢复原剪贴板
+                # 恢复剪贴板
                 try:
                     pyperclip.copy(original_clipboard)
                 except Exception:
                     pass
         
-            # 额外等待 DOM 更新
-            self._smart_delay(0.2, 0.4)
+            # 4. 额外等待框架响应
+            self._smart_delay(0.2, 0.5)
         
             if self._check_cancelled():
                 return
         
-            # 验证粘贴结果
-            self.verify_clipboard_result(ele, text)
-        
-            # 调试日志
-            sample = self.debug_read_input_sample(ele)
+            # 5. 验证（可配置跳过，默认跳过以避免 JS 注入）
+            if not skip_verify:
+                self._stealth_verify_paste_light(ele, text)
+            else:
+                logger.debug("[STEALTH] 跳过粘贴验证（STEALTH_SKIP_PASTE_VERIFY=true）")
     
         except Exception as e:
             logger.error(f"[STEALTH] 剪贴板粘贴失败: {e}，降级到 JS 方式")
