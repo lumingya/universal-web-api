@@ -622,7 +622,7 @@ const app = createApp({
         // 初始化折叠状态
         this.initCollapsedStates()
 
-        this.loadConfig()
+        this.loadConfig(true)
         this.refreshStatus()
         this.checkAuth()
 
@@ -728,7 +728,12 @@ const app = createApp({
             }
         },
 
-        async loadConfig() {
+        async loadConfig(silent) {
+            // 防御：@click="loadConfig" 会传入 Event 对象，需要过滤
+            if (typeof silent !== 'boolean') {
+                silent = false
+            }
+
             this.isLoading = true
             try {
                 const data = await this.apiRequest('/api/config')
@@ -736,6 +741,10 @@ const app = createApp({
 
                 if (!this.currentDomain && Object.keys(this.sites).length > 0) {
                     this.currentDomain = Object.keys(this.sites)[0]
+                }
+
+                if (!silent) {
+                    this.notify('配置已刷新 (' + Object.keys(this.sites).length + ' 个站点)', 'success')
                 }
             } catch (error) {
                 this.notify('加载配置失败: ' + error.message, 'error')
@@ -767,7 +776,7 @@ const app = createApp({
         async refreshStatus() {
             try {
                 // 1. 先重新加载所有配置 (修复刷新不出来新站点的问题)
-                await this.loadConfig();
+                await this.loadConfig(true);
 
                 // 2. 再检查健康状态
                 const health = await this.apiRequest('/health')
@@ -1870,7 +1879,7 @@ const app = createApp({
             this.showTokenDialog = false
             this.tempToken = ''
 
-            this.loadConfig()
+            this.loadConfig(true)
         },
 
         // ========== Toast 通知 ==========

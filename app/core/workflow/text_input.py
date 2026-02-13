@@ -16,7 +16,7 @@ from typing import Optional
 import pyperclip
 from app.core.config import logger, BrowserConstants, WorkflowError
 from app.core.tab_pool import get_clipboard_lock
-
+from app.utils.file_paste import prepare_file_paste
 
 # ================= 常量配置 =================
 
@@ -28,18 +28,21 @@ CHUNK_SIZE_THRESHOLD = 30000
 class TextInputHandler:
     """文本输入处理器"""
     
-    def __init__(self, tab, stealth_mode: bool, smart_delay_fn, check_cancelled_fn):
+    def __init__(self, tab, stealth_mode: bool, smart_delay_fn, check_cancelled_fn,
+                 file_paste_config: dict = None):
         """
         Args:
             tab: 浏览器标签页
             stealth_mode: 是否隐身模式
             smart_delay_fn: 智能延迟函数
             check_cancelled_fn: 取消检查函数
+            file_paste_config: 文件粘贴配置 {"enabled": bool, "threshold": int}
         """
         self.tab = tab
         self.stealth_mode = stealth_mode
         self._smart_delay = smart_delay_fn
         self._check_cancelled = check_cancelled_fn
+        self._file_paste_config = file_paste_config or {}
     
     # ================= 工具方法 =================
     
@@ -585,6 +588,12 @@ class TextInputHandler:
     
     def fill_via_js(self, ele, text: str):
         """普通模式专用：JS 填充逻辑"""
+        # 🆕 文件粘贴前置判断
+        if self._should_use_file_paste(text):
+            if self._fill_via_file_paste(ele, text):
+                return
+            logger.warning("[FILE_PASTE] 文件粘贴失败，降级到 JS 输入模式")
+        
         self.clear_input_safely(ele)
         
         # 分块写入
@@ -681,6 +690,123 @@ class TextInputHandler:
                 )
         except Exception as e:
             logger.debug(f"[STEALTH_VERIFY] 检查跳过: {e}")
+                # ================= 文件粘贴模式 =================
+    
+    def _should_use_file_paste(self, text: str) -> bool:
+        """判断是否应该使用文件粘贴模式"""
+        if not self._file_paste_config.get("enabled", False):
+            return False
+        
+        threshold = self._file_paste_config.get("threshold", 50000)
+        return len(text) > threshold
+    
+    def _fill_via_file_paste(self, ele, text: str) -> bool:
+        """
+        通过临时 txt 文件粘贴内容
+        
+        流程：
+        1. 创建临时 txt 文件并写入文本
+        2. 通过 Win32 CF_HDROP 格式复制文件到剪贴板
+        3. 聚焦输入框
+        4. Ctrl+V 粘贴文件
+        
+        Args:
+            ele: 输入框元素
+            text: 文本内容
+        
+        Returns:
+            是否成功
+        """
+        from app.core.tab_pool import get_clipboard_lock
+        
+        threshold = self._file_paste_config.get("threshold", 50000)
+        logger.info(
+            f"[FILE_PASTE] 文本长度 {len(text)} 超过阈值 {threshold}，"
+            f"使用文件粘贴模式"
+        )
+        
+        clipboard_lock = get_clipboard_lock()
+        
+        try:
+            # 1. 聚焦输入框
+            ele.click()
+            self._smart_delay(0.15, 0.35)
+            
+            if self._check_cancelled():
+                return False
+            
+            # 2. 全选现有内容（准备覆盖）
+            if self.stealth_mode:
+                self._human_key_combo('Control', 'A')
+                self._smart_delay(0.08, 0.18)
+            else:
+                self.tab.actions.key_down('Control').key_down('A').key_up('A').key_up('Control')
+                time.sleep(0.1)
+            
+            if self._check_cancelled():
+                return False
+            
+            # 3. 创建临时文件并复制到剪贴板（加锁）
+            with clipboard_lock:
+                filepath = prepare_file_paste(text)
+                if not filepath:
+                    logger.error("[FILE_PASTE] 准备文件粘贴失败")
+                    return False
+                
+                logger.debug(f"[FILE_PASTE] 临时文件: {filepath}")
+                
+                # 等待剪贴板数据就绪
+                time.sleep(random.uniform(0.08, 0.15))
+                
+                # 4. Ctrl+V 粘贴文件
+                if self.stealth_mode:
+                    self._human_key_combo('Control', 'V')
+                else:
+                    self.tab.actions.key_down('Control').key_down('V').key_up('V').key_up('Control')
+            
+            # 5. 等待文件粘贴处理完成
+            time.sleep(random.uniform(0.5, 1.0))
+            self._smart_delay(0.3, 0.6)
+            
+            if self._check_cancelled():
+                return True
+            
+            # 6. 追加引导文本（确保输入框有文字内容，否则某些网站无法发送）
+            hint_text = self._file_paste_config.get("hint_text", "完全专注于文件内容")
+            if hint_text:
+                logger.debug(f"[FILE_PASTE] 追加引导文本: {hint_text}")
+                
+                clipboard_lock_inner = get_clipboard_lock()
+                with clipboard_lock_inner:
+                    original_cb = ""
+                    try:
+                        original_cb = pyperclip.paste()
+                    except Exception:
+                        pass
+                        
+                    pyperclip.copy(hint_text)
+                    time.sleep(random.uniform(0.06, 0.12))
+                    
+                    if self.stealth_mode:
+                        self._human_key_combo('Control', 'V')
+                    else:
+                        self.tab.actions.key_down('Control').key_down('V').key_up('V').key_up('Control')
+                    
+                    time.sleep(random.uniform(0.2, 0.4))
+                    
+                    try:
+                        pyperclip.copy(original_cb)
+                    except Exception:
+                        pass
+                
+                self._smart_delay(0.2, 0.4)
+            
+            logger.info(f"[FILE_PASTE] 文件粘贴完成 ({len(text)} 字符)")
+            return True
+        
+        except Exception as e:
+            logger.error(f"[FILE_PASTE] 文件粘贴失败: {e}")
+            return False
     # ================= 剪贴板模式输入 =================
     
     def fill_via_clipboard(self, ele, text: str):
@@ -692,7 +818,14 @@ class TextInputHandler:
         - Ctrl+A → Ctrl+V（跳过 Delete，人类习惯：选中直接粘贴覆盖）
         - 默认跳过 JS 注入验证（STEALTH_SKIP_PASTE_VERIFY）
         - 验证降级为原生属性读取
+        - 🆕 文件粘贴模式：超长文本自动切换为文件粘贴
         """
+        # 🆕 文件粘贴前置判断
+        if self._should_use_file_paste(text):
+            if self._fill_via_file_paste(ele, text):
+                return
+            logger.warning("[FILE_PASTE] 文件粘贴失败，降级到剪贴板文本粘贴")
+        
         logger.debug(f"[STEALTH] 使用剪贴板粘贴，长度 {len(text)}")
     
         clipboard_lock = get_clipboard_lock()

@@ -18,7 +18,8 @@ from app.models.schemas import (
     SiteConfig,
     WorkflowStep,
     SelectorDefinition,
-    get_default_image_extraction_config
+    get_default_image_extraction_config,
+    get_default_file_paste_config
 )
 from app.services.extractor_manager import extractor_manager
 from app.core.parsers import ParserRegistry
@@ -264,6 +265,11 @@ class ConfigEngine:
                 config["image_extraction"] = get_default_image_extraction_config()
                 self.sites[domain] = config
                 self._save_config()
+                            
+            if "file_paste" not in config:
+                config["file_paste"] = get_default_file_paste_config()
+                self.sites[domain] = config
+                self._save_config()
             
             logger.debug(f"使用缓存配置: {domain}")
             return copy.deepcopy(config)
@@ -346,10 +352,15 @@ class ConfigEngine:
                 site_config["image_extraction"] = default_image_config.copy()
                 migrated_count += 1
                 logger.debug(f"迁移站点配置: {domain} (添加 image_extraction)")
+            
+            if "file_paste" not in site_config:
+                site_config["file_paste"] = get_default_file_paste_config()
+                migrated_count += 1
+                logger.debug(f"迁移站点配置: {domain} (添加 file_paste)")
         
         if migrated_count > 0:
             self._save_config()
-            logger.info(f"已迁移 {migrated_count} 个站点配置（补充 image_extraction）")
+            logger.info(f"已迁移 {migrated_count} 个站点配置")
         
         return migrated_count
     
@@ -441,7 +452,83 @@ class ConfigEngine:
                 result["mode"] = val
         
         return result
+        # ================= 文件粘贴配置管理 =================
     
+    def get_site_file_paste_config(self, domain: str) -> dict:
+        """获取站点的文件粘贴配置"""
+        self.refresh_if_changed()
+        
+        default_config = get_default_file_paste_config()
+        
+        if domain not in self.sites:
+            return default_config
+        
+        site_config = self.sites[domain]
+        file_paste_config = site_config.get("file_paste", {})
+        
+        result = default_config.copy()
+        result.update(file_paste_config)
+        
+        return result
+    
+    def set_site_file_paste_config(self, domain: str, config: dict) -> bool:
+        """设置站点的文件粘贴配置"""
+        self.refresh_if_changed()
+        
+        if domain not in self.sites:
+            logger.warning(f"站点不存在: {domain}")
+            return False
+        
+        validated = self._validate_file_paste_config(config)
+        
+        self.sites[domain]["file_paste"] = validated
+        self._save_config()
+        
+        logger.info(f"站点 {domain} 文件粘贴配置已更新 (enabled={validated.get('enabled')}, threshold={validated.get('threshold')})")
+        return True
+    
+    def get_all_file_paste_configs(self) -> dict:
+        """获取所有站点的文件粘贴配置"""
+        self.refresh_if_changed()
+        
+        default_config = get_default_file_paste_config()
+        result = {}
+        
+        for domain in self.sites:
+            if domain.startswith('_'):
+                continue
+            site_config = self.sites[domain]
+            file_paste = site_config.get("file_paste", {})
+            merged = default_config.copy()
+            merged.update(file_paste)
+            result[domain] = merged
+        
+        return result
+    
+    def _validate_file_paste_config(self, config: dict) -> dict:
+        """验证并规范化文件粘贴配置"""
+        default = get_default_file_paste_config()
+        result = default.copy()
+        
+        if not config:
+            return result
+        
+        if "enabled" in config:
+            result["enabled"] = bool(config["enabled"])
+        
+        if "threshold" in config:
+            try:
+                val = int(config["threshold"])
+                result["threshold"] = max(1000, min(val, 10000000))
+            except (ValueError, TypeError):
+                pass
+        
+        if "hint_text" in config:
+            val = str(config["hint_text"]).strip()
+            # 限制长度，避免过长的引导文本
+            result["hint_text"] = val[:500] if val else ""
+        
+        return result
     # ================= 图片预设管理 =================
     
     def list_image_presets(self):

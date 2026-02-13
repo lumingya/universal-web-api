@@ -88,6 +88,11 @@
       "download_blobs": true,
       "max_size_mb": 10,
       "mode": "all"
+    },
+    "file_paste": {
+      "enabled": true,
+      "threshold": 50000,
+      "hint_text": "完全专注于文件内容"
     }
   },
   "grok.com": {
@@ -148,6 +153,11 @@
       "download_blobs": true,
       "max_size_mb": 10,
       "mode": "all"
+    },
+    "file_paste": {
+      "enabled": true,
+      "threshold": 50000,
+      "hint_text": "完全专注于文件内容"
     }
   },
   "chatgpt.com": {
@@ -223,6 +233,11 @@
       "download_blobs": true,
       "max_size_mb": 10,
       "mode": "all"
+    },
+    "file_paste": {
+      "enabled": true,
+      "threshold": 50000,
+      "hint_text": "完全专注于文件内容"
     }
   },
   "gemini.google.com": {
@@ -317,6 +332,11 @@
       "download_blobs": true,
       "max_size_mb": 10,
       "mode": "first"
+    },
+    "file_paste": {
+      "enabled": true,
+      "threshold": 50000,
+      "hint_text": "完全专注于文件内容"
     }
   },
   "chat.deepseek.com": {
@@ -384,6 +404,11 @@
       "download_blobs": true,
       "max_size_mb": 10,
       "mode": "all"
+    },
+    "file_paste": {
+      "enabled": true,
+      "threshold": 50000,
+      "hint_text": "完全专注于文件内容"
     }
   },
   "www.doubao.com": {
@@ -442,6 +467,11 @@
       "download_blobs": true,
       "max_size_mb": 10,
       "mode": "all"
+    },
+    "file_paste": {
+      "enabled": true,
+      "threshold": 50000,
+      "hint_text": "完全专注于文件内容"
     }
   },
   "h2ogpte.genai.h2o.ai": {
@@ -507,6 +537,11 @@
       "download_blobs": true,
       "max_size_mb": 10,
       "mode": "all"
+    },
+    "file_paste": {
+      "enabled": true,
+      "threshold": 50000,
+      "hint_text": "完全专注于文件内容"
     }
   },
   "claude.ai": {
@@ -566,6 +601,11 @@
       "download_blobs": true,
       "max_size_mb": 10,
       "mode": "all"
+    },
+    "file_paste": {
+      "enabled": true,
+      "threshold": 50000,
+      "hint_text": "完全专注于文件内容"
     }
   },
   "arena.ai": {
@@ -588,7 +628,7 @@
         "action": "WAIT",
         "target": "",
         "optional": false,
-        "value": "0.5"
+        "value": 2
       },
       {
         "action": "FILL_INPUT",
@@ -617,11 +657,13 @@
       "initial_wait": 30,
       "enable_wrapper_search": true,
       "network": {
-        "listen_pattern": "",
         "parser": "lmarena",
-        "first_response_timeout": 5,
+        "url_pattern": "**/nextjs-api/stream/create-evaluation**",
+        "method": "POST",
+        "listen_pattern": "**/nextjs-api/stream/create-evaluation**",
+        "first_response_timeout": 300,
         "silence_threshold": 3,
-        "response_interval": 0.5
+        "response_interval": 1
       }
     },
     "image_extraction": {
@@ -634,6 +676,11 @@
       "download_blobs": true,
       "max_size_mb": 10,
       "mode": "all"
+    },
+    "file_paste": {
+      "enabled": false,
+      "threshold": 50000,
+      "hint_text": "完全专注于文件内容"
     }
   }
 }

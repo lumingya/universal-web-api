@@ -630,6 +630,7 @@ class BrowserCore:
         image_config = site_config.get("image_extraction", {})
         image_extraction_enabled = image_config.get("enabled", False)
         stream_config = site_config.get("stream_config", {}) or {}
+        file_paste_config = site_config.get("file_paste", {}) or {}
 
         # 🆕 提取用户发送的图片：可配置是否包含历史对话图片
         upload_history = self._get_upload_history_images_flag(default=True)
@@ -689,7 +690,8 @@ class BrowserCore:
             should_stop_checker=self._should_stop_checker,
             extractor=extractor,
             image_config=image_config,
-            stream_config=stream_config
+            stream_config=stream_config,
+            file_paste_config=file_paste_config
         )
         
         result_container_selector = selectors.get("result_container", "")

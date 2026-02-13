@@ -40,7 +40,8 @@ class WorkflowExecutor:
                  should_stop_checker: Callable[[], bool] = None,
                  extractor = None,
                  image_config: Dict = None,
-                 stream_config: Dict = None):
+                 stream_config: Dict = None,
+                 file_paste_config: Dict = None):
         self.tab = tab
         self.stealth_mode = stealth_mode
         self.finder = ElementFinder(tab)
@@ -94,7 +95,8 @@ class WorkflowExecutor:
             tab=tab,
             stealth_mode=stealth_mode,
             smart_delay_fn=self._smart_delay,
-            check_cancelled_fn=self._check_cancelled
+            check_cancelled_fn=self._check_cancelled,
+            file_paste_config=file_paste_config
         )
         
         self._image_handler = ImageInputHandler(

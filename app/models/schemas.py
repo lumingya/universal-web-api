@@ -149,6 +149,28 @@ class ImageData(BaseModel):
             }
         }
 
+class FilePasteConfig(TypedDict, total=False):
+    """
+    文件粘贴配置
+    
+    当文本长度超过阈值时，将文本写入临时 txt 文件，
+    然后以文件形式粘贴到输入框（通过 CF_HDROP 剪贴板格式）。
+    粘贴文件后，自动在输入框中追加一句引导文本，确保能正常发送。
+    
+    用于 sites.json 中的 file_paste 字段
+    """
+    enabled: bool       # 是否启用文件粘贴模式，默认 False
+    threshold: int      # 字符数阈值，超过此值时使用文件粘贴，默认 50000
+    hint_text: str      # 粘贴文件后追加的引导文本，默认 "完全专注于文件内容"
+
+
+def get_default_file_paste_config() -> 'FilePasteConfig':
+    """获取默认的文件粘贴配置"""
+    return {
+        "enabled": False,
+        "threshold": 50000,
+        "hint_text": "完全专注于文件内容"
+    }
 
 class ImageExtractionConfig(TypedDict, total=False):
     """
@@ -577,6 +599,8 @@ __all__ = [
     'ImageData',
     'ImageExtractionConfig',
     'get_default_image_extraction_config',
+    'FilePasteConfig',
+    'get_default_file_paste_config',
 ]
 
 

@@ -17,7 +17,8 @@ window.ConfigTab = {
         'extractor-panel': window.ExtractorPanel,
         'image-config-panel': window.ImageConfigPanel,
         'stream-config-panel': window.StreamConfigPanel,
-        'workflow-panel': window.WorkflowPanel
+        'workflow-panel': window.WorkflowPanel,
+        'file-paste-panel': window.FilePastePanel
     },
     data() {
         return {
@@ -26,6 +27,7 @@ window.ConfigTab = {
             workflowCollapsed: false,
             imageConfigCollapsed: false,
             streamConfigCollapsed: false,
+            filePasteCollapsed: false,
 
             // 默认配置
             defaultImageConfig: {
@@ -135,7 +137,13 @@ window.ConfigTab = {
                     @update:collapsed="streamConfigCollapsed = $event"
                     @save-stream-config="saveStreamConfig"
                 />
-
+                <!-- 文件粘贴配置面板 -->
+                <file-paste-panel
+                    :sites="$parent.sites"
+                    :current-domain="currentDomain"
+                    :collapsed="filePasteCollapsed"
+                    @update:collapsed="filePasteCollapsed = $event"
+                />
                 <!-- 工作流面板 -->
                 <workflow-panel
                     :workflow="currentConfig.workflow"

@@ -77,9 +77,9 @@
                         </label>
                     </div>
                     <div class="flex gap-2">
-                        <button @click="testCurrentSite"
+                        <button @click="refreshStatus"
                                 class="border dark:border-gray-700 rounded hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-white transition-colors px-2 py-0.5 text-sm">
-                            <span v-html="$icons.beaker"></span> 测试选择器
+                            <span v-html="$icons.arrowPath"></span> 刷新
                         </button>
                         <button @click="showJsonPreview = true"
                                 class="border dark:border-gray-700 rounded hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-white transition-colors px-2 py-0.5 text-sm">
@@ -92,10 +92,6 @@
                         <button @click="reanalyzeCurrentSite"
                                 class="border dark:border-gray-700 rounded hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-white transition-colors px-2 py-0.5 text-sm">
                             重新分析
-                        </button>
-                        <button @click="loadConfig"
-                                class="border dark:border-gray-700 rounded hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-white transition-colors px-2 py-0.5 text-sm">
-                            <span v-html="$icons.arrowPath"></span> 刷新
                         </button>
                         <button @click="saveConfig"
                                 :disabled="isSaving"
@@ -184,7 +180,7 @@
                           class="ml-1 w-2 h-2 bg-orange-500 rounded-full inline-block"></span>
                 </button>
             </div>
-           <div class="flex-1 overflow-y-auto">
+            <div class="flex-1 overflow-y-auto">
                 <!-- Tab 内容区 -->
                 <config-tab v-if="activeTab === 'config'"
                             :current-domain="currentDomain"
@@ -318,14 +314,15 @@
     <!-- 加载组件 JS -->
     <script src="/static/js/components/Sidebar.js"></script>
     <!-- 子组件（在 ConfigTab 之前） -->
-<script src="static/js/components/panels/SelectorPanel.js"></script>
-<script src="static/js/components/panels/ExtractorPanel.js"></script>
-<script src="static/js/components/panels/ImageConfigPanel.js"></script>
-<script src="static/js/components/panels/StreamConfigPanel.js"></script>
-<script src="static/js/components/panels/WorkflowPanel.js"></script>
+    <script src="static/js/components/panels/SelectorPanel.js"></script>
+    <script src="static/js/components/panels/ExtractorPanel.js"></script>
+    <script src="static/js/components/panels/ImageConfigPanel.js"></script>
+    <script src="static/js/components/panels/StreamConfigPanel.js"></script>
+    <script src="static/js/components/panels/WorkflowPanel.js"></script>
+    <script src="static/js/components/panels/FilePastePanel.js"></script>
 
-<!-- 主组件 -->
-<script src="static/js/components/ConfigTab.js"></script>
+    <!-- 主组件 -->
+    <script src="static/js/components/ConfigTab.js"></script>
     <script src="/static/js/components/LogsTab.js"></script>
     <script src="/static/js/components/SettingsTab.js"></script>
     <script src="/static/js/components/ExtractorTab.js"></script>

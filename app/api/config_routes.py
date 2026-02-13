@@ -743,6 +743,106 @@ async def reset_selector_definitions(authenticated: bool = Depends(verify_auth))
     except Exception as e:
         logger.error(f"重置元素定义失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+    # ================= 文件粘贴配置 API =================
+
+@router.get("/api/file-paste/configs")
+async def get_all_file_paste_configs(authenticated: bool = Depends(verify_auth)):
+    """获取所有站点的文件粘贴配置"""
+    try:
+        configs = config_engine.get_all_file_paste_configs()
+        return {
+            "configs": configs,
+            "count": len(configs)
+        }
+    except Exception as e:
+        logger.error(f"获取文件粘贴配置失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/sites/{domain}/file-paste")
+async def get_site_file_paste_config(
+    domain: str,
+    authenticated: bool = Depends(verify_auth)
+):
+    """获取站点的文件粘贴配置"""
+    try:
+        config = config_engine.get_site_file_paste_config(domain)
+        return {
+            "domain": domain,
+            "file_paste": config
+        }
+    except Exception as e:
+        logger.error(f"获取文件粘贴配置失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/api/sites/{domain}/file-paste")
+async def set_site_file_paste_config(
+    domain: str,
+    request: Request,
+    authenticated: bool = Depends(verify_auth)
+):
+    """设置站点的文件粘贴配置"""
+    try:
+        data = await request.json()
+        
+        success = config_engine.set_site_file_paste_config(domain, data)
+        
+        if success:
+            return {
+                "status": "success",
+                "message": f"站点 {domain} 文件粘贴配置已更新",
+                "domain": domain
+            }
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"设置失败：站点 {domain} 不存在"
+            )
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"设置文件粘贴配置失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/api/file-paste/batch")
+async def batch_update_file_paste_configs(
+    request: Request,
+    authenticated: bool = Depends(verify_auth)
+):
+    """批量更新多个站点的文件粘贴配置"""
+    try:
+        data = await request.json()
+        configs = data.get("configs", {})
+        
+        if not configs:
+            raise HTTPException(status_code=400, detail="缺少 configs 字段")
+        
+        updated = []
+        failed = []
+        
+        for domain, config in configs.items():
+            success = config_engine.set_site_file_paste_config(domain, config)
+            if success:
+                updated.append(domain)
+            else:
+                failed.append(domain)
+        
+        return {
+            "status": "success",
+            "message": f"已更新 {len(updated)} 个站点",
+            "updated": updated,
+            "failed": failed
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"批量更新文件粘贴配置失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 # 🆕 ================= 流式配置 API =================
 
 @router.get("/api/sites/{domain}/stream-config")
