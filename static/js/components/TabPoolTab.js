@@ -12,7 +12,8 @@ window.TabPoolTabComponent = {
             autoRefresh: true,
             refreshInterval: null,
             lastUpdate: null,
-            baseUrl: ''
+            baseUrl: '',
+            presetUpdating: {}  // { tabIndex: true } 正在切换预设的标签页
         };
     },
     computed: {
@@ -84,6 +85,38 @@ window.TabPoolTabComponent = {
         truncateUrl(url, maxLen = 50) {
             if (!url) return '(空)';
             return url.length > maxLen ? url.substring(0, maxLen) + '...' : url;
+        },
+
+        async changePreset(tab, newPresetName) {
+            const tabIndex = tab.persistent_index;
+            this.presetUpdating = { ...this.presetUpdating, [tabIndex]: true };
+
+            try {
+                const token = localStorage.getItem('auth_token');
+                const headers = { 'Content-Type': 'application/json' };
+                if (token) headers['Authorization'] = 'Bearer ' + token;
+
+                const response = await fetch('/api/tab-pool/tabs/' + tabIndex + '/preset', {
+                    method: 'PUT',
+                    headers,
+                    body: JSON.stringify({ preset_name: newPresetName })
+                });
+
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+
+                this.$emit('notify', { type: 'success', message: '预设已切换: ' + newPresetName });
+                await this.fetchTabs();
+            } catch (e) {
+                this.$emit('notify', { type: 'error', message: '切换预设失败: ' + e.message });
+            } finally {
+                const updated = { ...this.presetUpdating };
+                delete updated[tabIndex];
+                this.presetUpdating = updated;
+            }
+        },
+
+        getCurrentPreset(tab) {
+            return tab.preset_name || '主预设';
         }
     },
     mounted() {
@@ -187,8 +220,28 @@ window.TabPoolTabComponent = {
                                     📋 复制
                                 </button>
                             </div>
+
+                            <!-- 🆕 预设选择器 -->
+                            <div v-if="tab.available_presets && tab.available_presets.length > 0"
+                                 class="flex items-center gap-2 mt-2">
+                                <span class="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">🎛️ 预设:</span>
+                                <select :value="getCurrentPreset(tab)"
+                                        @change="changePreset(tab, $event.target.value)"
+                                        :disabled="presetUpdating[tab.persistent_index]"
+                                        class="text-xs border dark:border-gray-600 px-2 py-1 rounded bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200 focus:ring-2 focus:ring-blue-400 focus:border-transparent disabled:opacity-50 min-w-[100px]">
+                                    <option v-for="preset in tab.available_presets" :key="preset" :value="preset">
+                                        {{ preset }}
+                                    </option>
+                                </select>
+                                <span v-if="presetUpdating[tab.persistent_index]" class="text-xs text-blue-500 dark:text-blue-400">
+                                    切换中...
+                                </span>
+                            </div>
+                            <div v-else-if="tab.current_domain" class="mt-2">
+                                <span class="text-xs text-gray-400 dark:text-gray-500">🎛️ 预设: 主预设（仅有一个）</span>
+                            </div>
                         </div>
-                        
+
                         <!-- 右侧统计 -->
                         <div class="text-right text-xs text-gray-500 dark:text-gray-400 ml-4">
                             <div>请求数: {{ tab.request_count }}</div>

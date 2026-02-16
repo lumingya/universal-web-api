@@ -614,7 +614,8 @@ class BrowserCore:
             return
         
         config_engine = self._get_config_engine()
-        site_config = config_engine.get_site_config(domain, tab.html)
+        preset_name = session.preset_name  # 🆕 获取标签页绑定的预设
+        site_config = config_engine.get_site_config(domain, tab.html, preset_name=preset_name)
         if not site_config:
             yield self.formatter.pack_error(
                 "配置加载失败",
@@ -680,8 +681,8 @@ class BrowserCore:
             "images": user_images
         }
         
-        extractor = config_engine.get_site_extractor(domain)
-        logger.debug(f"[{session.id}] 使用提取器: {extractor.get_id()}")
+        extractor = config_engine.get_site_extractor(domain, preset_name=preset_name)
+        logger.debug(f"[{session.id}] 使用提取器: {extractor.get_id()} [预设: {preset_name or '主预设'}]")
         
         # 创建执行器
         executor = WorkflowExecutor(

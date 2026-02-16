@@ -76,7 +76,7 @@ async def verify_auth(authorization: Optional[str] = Header(None)) -> bool:
 @router.get("/api/tab-pool/tabs")
 async def get_tab_pool_tabs(authenticated: bool = Depends(verify_auth)):
     """
-    获取所有标签页及其持久编号
+    获取所有标签页及其持久编号和预设信息
     
     返回格式：
     {
@@ -86,7 +86,9 @@ async def get_tab_pool_tabs(authenticated: bool = Depends(verify_auth)):
                 "id": "gpt_1",
                 "url": "https://chatgpt.com/",
                 "status": "idle",
-                "route_prefix": "/tab/1"
+                "route_prefix": "/tab/1",
+                "preset_name": null,
+                "available_presets": ["主预设", "无临时聊天"]
             },
             ...
         ],
@@ -96,6 +98,21 @@ async def get_tab_pool_tabs(authenticated: bool = Depends(verify_auth)):
     try:
         browser = get_browser(auto_connect=False)
         tabs = browser.tab_pool.get_tabs_with_index()
+        
+        # 🆕 为每个标签页附加可用预设列表
+        try:
+            from app.services.config_engine import config_engine
+            for tab_info in tabs:
+                domain = tab_info.get("current_domain", "")
+                if domain:
+                    tab_info["available_presets"] = config_engine.list_presets(domain)
+                else:
+                    tab_info["available_presets"] = []
+        except Exception as e:
+            logger.debug(f"获取预设列表失败: {e}")
+            for tab_info in tabs:
+                tab_info["available_presets"] = []
+        
         return {
             "tabs": tabs,
             "count": len(tabs)
@@ -301,6 +318,105 @@ async def _non_stream_with_tab_index(
     }
 
     return JSONResponse(content=response)
+
+
+# ================= 预设管理 API =================
+
+class PresetRequest(BaseModel):
+    """预设操作请求"""
+    preset_name: str = Field(..., min_length=1, max_length=50)
+
+
+class CreatePresetRequest(BaseModel):
+    """创建预设请求"""
+    new_name: str = Field(..., min_length=1, max_length=50)
+    source_name: Optional[str] = Field(default=None)
+
+
+@router.put("/api/tab-pool/tabs/{tab_index}/preset")
+async def set_tab_preset(
+    tab_index: int,
+    body: PresetRequest,
+    authenticated: bool = Depends(verify_auth)
+):
+    """为指定标签页设置预设"""
+    try:
+        browser = get_browser(auto_connect=False)
+        
+        # 空字符串或 "主预设" 都视为恢复默认
+        preset_value = body.preset_name if body.preset_name != "主预设" else None
+        
+        success = browser.tab_pool.set_tab_preset(tab_index, preset_value)
+        
+        if success:
+            return {"success": True, "message": f"标签页 #{tab_index} 已切换到预设: {body.preset_name}"}
+        else:
+            raise HTTPException(status_code=404, detail=f"标签页 #{tab_index} 不存在")
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"设置标签页预设失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/presets/{domain}")
+async def get_site_presets(
+    domain: str,
+    authenticated: bool = Depends(verify_auth)
+):
+    """获取指定站点的所有预设"""
+    try:
+        from app.services.config_engine import config_engine
+        presets = config_engine.list_presets(domain)
+        return {"domain": domain, "presets": presets}
+    except Exception as e:
+        logger.error(f"获取预设列表失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/presets/{domain}")
+async def create_site_preset(
+    domain: str,
+    body: CreatePresetRequest,
+    authenticated: bool = Depends(verify_auth)
+):
+    """为站点创建新预设（克隆自现有预设）"""
+    try:
+        from app.services.config_engine import config_engine
+        success = config_engine.create_preset(domain, body.new_name, body.source_name)
+        
+        if success:
+            return {"success": True, "message": f"预设 '{body.new_name}' 已创建"}
+        else:
+            raise HTTPException(status_code=400, detail="创建失败（预设已存在或站点不存在）")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"创建预设失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/api/presets/{domain}/{preset_name}")
+async def delete_site_preset(
+    domain: str,
+    preset_name: str,
+    authenticated: bool = Depends(verify_auth)
+):
+    """删除指定预设（不能删除最后一个）"""
+    try:
+        from app.services.config_engine import config_engine
+        success = config_engine.delete_preset(domain, preset_name)
+        
+        if success:
+            return {"success": True, "message": f"预设 '{preset_name}' 已删除"}
+        else:
+            raise HTTPException(status_code=400, detail="删除失败（预设不存在或是最后一个）")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"删除预设失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 def _pack_error(message: str, code: str = "error") -> str:

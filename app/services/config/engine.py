@@ -54,6 +54,16 @@ class ConfigConstants:
     
     STEALTH_DOMAINS = ['lmarena.ai', 'poe.com', 'you.com', 'chatgpt.com']
 
+# ================= 预设常量 =================
+
+DEFAULT_PRESET_NAME = "主预设"
+
+# 预设内包含的配置字段（用于迁移和校验）
+PRESET_FIELDS = [
+    "selectors", "workflow", "stream_config",
+    "image_extraction", "file_paste", "stealth",
+    "extractor_id", "extractor_verified"
+]
 
 # 默认工作流
 DEFAULT_WORKFLOW: List[WorkflowStep] = [
@@ -111,7 +121,8 @@ class ConfigEngine:
         self.validator = SelectorValidator(self.global_config.get_fallback_selectors())
         self.ai_analyzer = AIAnalyzer(self.global_config)
         
-        # 迁移旧配置
+        # 迁移旧配置（顺序重要：先转预设格式，再补缺失字段）
+        self._migrate_to_presets()
         self.migrate_site_configs()
         
         logger.debug(f"配置引擎已初始化，已加载 {len(self.sites)} 个站点配置")
@@ -236,7 +247,256 @@ class ConfigEngine:
             except Exception:
                 pass
             return False
+    # ================= 预设系统核心方法 =================
     
+    def _migrate_to_presets(self):
+        """
+        将旧格式（扁平）站点配置迁移为预设格式
+        
+        旧格式: { "selectors": {...}, "workflow": [...], ... }
+        新格式: { "presets": { "主预设": { "selectors": {...}, ... } } }
+        """
+        migrated_count = 0
+        
+        for domain in list(self.sites.keys()):
+            if domain.startswith('_'):
+                continue
+            
+            site_config = self.sites[domain]
+            
+            # 已经是预设格式，跳过
+            if "presets" in site_config:
+                continue
+            
+            # 将所有已知配置字段提取到主预设中
+            preset_data = {}
+            remaining = {}
+            
+            for key, value in site_config.items():
+                if key in PRESET_FIELDS:
+                    preset_data[key] = value
+                else:
+                    # 未知字段也放入预设（保留用户自定义数据）
+                    preset_data[key] = value
+            
+            # 构建新格式
+            self.sites[domain] = {
+                "presets": {
+                    DEFAULT_PRESET_NAME: preset_data
+                }
+            }
+            
+            migrated_count += 1
+            logger.debug(f"迁移站点配置: {domain} → 预设格式")
+        
+        if migrated_count > 0:
+            self._save_config()
+            logger.info(f"✅ 已迁移 {migrated_count} 个站点配置为预设格式")
+    
+    def _get_site_data(self, domain: str, preset_name: str = None) -> Optional[Dict]:
+        """
+        获取指定站点的预设配置数据（可变引用）
+        
+        查找顺序:
+        1. 指定的 preset_name
+        2. 默认预设 "主预设"
+        3. 第一个可用预设
+        
+        Args:
+            domain: 站点域名
+            preset_name: 预设名称，None 则使用默认
+            
+        Returns:
+            预设配置字典的引用（可直接修改），或 None
+        """
+        if domain not in self.sites:
+            return None
+        
+        site = self.sites[domain]
+        presets = site.get("presets", {})
+        
+        if not presets:
+            return None
+        
+        target = preset_name or DEFAULT_PRESET_NAME
+        
+        # 1. 尝试精确匹配
+        if target in presets:
+            return presets[target]
+        
+        # 2. 回退到默认预设
+        if DEFAULT_PRESET_NAME in presets:
+            logger.debug(f"预设 '{target}' 不存在，回退到 '{DEFAULT_PRESET_NAME}'")
+            return presets[DEFAULT_PRESET_NAME]
+        
+        # 3. 使用第一个可用预设
+        first_key = next(iter(presets))
+        logger.warning(f"默认预设不存在，使用第一个预设: '{first_key}'")
+        return presets[first_key]
+    
+    def _get_site_data_readonly(self, domain: str, preset_name: str = None) -> Optional[Dict]:
+        """获取预设配置的深拷贝（只读用途）"""
+        data = self._get_site_data(domain, preset_name)
+        if data is None:
+            return None
+        return copy.deepcopy(data)
+    
+    def list_presets(self, domain: str) -> List[str]:
+        """获取指定站点的所有预设名称"""
+        self.refresh_if_changed()
+        
+        if domain not in self.sites:
+            return []
+        
+        site = self.sites[domain]
+        presets = site.get("presets", {})
+        return list(presets.keys())
+    
+    def create_preset(self, domain: str, new_name: str, 
+                      source_name: str = None) -> bool:
+        """
+        创建新预设（克隆自现有预设）
+        
+        Args:
+            domain: 站点域名
+            new_name: 新预设名称
+            source_name: 要克隆的源预设名称，None 则克隆主预设
+        
+        Returns:
+            是否成功
+        """
+        self.refresh_if_changed()
+        
+        if domain not in self.sites:
+            logger.warning(f"站点不存在: {domain}")
+            return False
+        
+        site = self.sites[domain]
+        presets = site.get("presets", {})
+        
+        if new_name in presets:
+            logger.warning(f"预设已存在: {new_name}")
+            return False
+        
+        # 获取源预设
+        source = source_name or DEFAULT_PRESET_NAME
+        source_data = presets.get(source)
+        
+        if not source_data:
+            # 尝试第一个可用预设
+            if presets:
+                source = next(iter(presets))
+                source_data = presets[source]
+            else:
+                logger.warning(f"没有可克隆的源预设")
+                return False
+        
+        # 深拷贝创建新预设
+        presets[new_name] = copy.deepcopy(source_data)
+        self._save_config()
+        
+        logger.info(f"✅ 站点 {domain} 创建预设: '{new_name}' (克隆自 '{source}')")
+        return True
+    
+    def delete_preset(self, domain: str, preset_name: str) -> bool:
+        """
+        删除预设（不允许删除最后一个预设）
+        
+        Args:
+            domain: 站点域名
+            preset_name: 要删除的预设名称
+        
+        Returns:
+            是否成功
+        """
+        self.refresh_if_changed()
+        
+        if domain not in self.sites:
+            return False
+        
+        site = self.sites[domain]
+        presets = site.get("presets", {})
+        
+        if preset_name not in presets:
+            logger.warning(f"预设不存在: {preset_name}")
+            return False
+        
+        if len(presets) <= 1:
+            logger.warning(f"不能删除最后一个预设")
+            return False
+        
+        del presets[preset_name]
+        self._save_config()
+        
+        logger.info(f"✅ 站点 {domain} 删除预设: '{preset_name}'")
+        return True
+    
+    def rename_preset(self, domain: str, old_name: str, new_name: str) -> bool:
+        """重命名预设"""
+        self.refresh_if_changed()
+        
+        if domain not in self.sites:
+            return False
+        
+        site = self.sites[domain]
+        presets = site.get("presets", {})
+        
+        if old_name not in presets:
+            return False
+        
+        if new_name in presets:
+            logger.warning(f"预设名已存在: {new_name}")
+            return False
+        
+        # 保持顺序：创建有序副本
+        new_presets = {}
+        for key, value in presets.items():
+            if key == old_name:
+                new_presets[new_name] = value
+            else:
+                new_presets[key] = value
+        
+        site["presets"] = new_presets
+        self._save_config()
+        
+        logger.info(f"✅ 站点 {domain} 重命名预设: '{old_name}' → '{new_name}'")
+        return True
+
+    # ================= 预设级 Getter/Setter =================
+    
+    def get_preset_selectors(self, domain: str, preset_name: str = None) -> Dict:
+        """获取指定预设的选择器配置"""
+        data = self._get_site_data_readonly(domain, preset_name)
+        return data.get("selectors", {}) if data else {}
+    
+    def set_preset_selectors(self, domain: str, selectors: Dict, 
+                             preset_name: str = None) -> bool:
+        """设置指定预设的选择器配置"""
+        self.refresh_if_changed()
+        data = self._get_site_data(domain, preset_name)
+        if data is None:
+            return False
+        data["selectors"] = selectors
+        self._save_config()
+        logger.info(f"站点 {domain} [{preset_name or DEFAULT_PRESET_NAME}] 选择器已更新")
+        return True
+    
+    def get_preset_workflow(self, domain: str, preset_name: str = None) -> List:
+        """获取指定预设的工作流配置"""
+        data = self._get_site_data_readonly(domain, preset_name)
+        return data.get("workflow", DEFAULT_WORKFLOW) if data else DEFAULT_WORKFLOW
+    
+    def set_preset_workflow(self, domain: str, workflow: List, 
+                            preset_name: str = None) -> bool:
+        """设置指定预设的工作流配置"""
+        self.refresh_if_changed()
+        data = self._get_site_data(domain, preset_name)
+        if data is None:
+            return False
+        data["workflow"] = workflow
+        self._save_config()
+        logger.info(f"站点 {domain} [{preset_name or DEFAULT_PRESET_NAME}] 工作流已更新")
+        return True    
     # ================= 站点配置管理 =================
     
     def list_sites(self) -> Dict[str, Any]:
@@ -249,29 +509,44 @@ class ConfigEngine:
             if not domain.startswith('_')
         }
     
-    def get_site_config(self, domain: str, html_content: str) -> Optional[SiteConfig]:
-        """获取站点配置（缓存 + AI 分析）"""
+    def get_site_config(self, domain: str, html_content: str, 
+                        preset_name: str = None) -> Optional[SiteConfig]:
+        """
+        获取站点配置（缓存 + AI 分析）
+        
+        Args:
+            domain: 站点域名
+            html_content: 页面 HTML（用于 AI 分析未知站点）
+            preset_name: 预设名称，None 则使用默认预设
+        """
         self.refresh_if_changed()
 
         if domain in self.sites:
-            config = self.sites[domain]
+            config = self._get_site_data(domain, preset_name)
             
+            if config is None:
+                logger.warning(f"站点 {domain} 无可用预设")
+                return None
+            
+            # 补充缺失字段
+            changed = False
             if "workflow" not in config:
                 config["workflow"] = DEFAULT_WORKFLOW
-                self.sites[domain] = config
-                self._save_config()
+                changed = True
             
             if "image_extraction" not in config:
                 config["image_extraction"] = get_default_image_extraction_config()
-                self.sites[domain] = config
-                self._save_config()
+                changed = True
                             
             if "file_paste" not in config:
                 config["file_paste"] = get_default_file_paste_config()
-                self.sites[domain] = config
+                changed = True
+            
+            if changed:
                 self._save_config()
             
-            logger.debug(f"使用缓存配置: {domain}")
+            used_preset = preset_name or DEFAULT_PRESET_NAME
+            logger.debug(f"使用缓存配置: {domain} [预设: {used_preset}]")
             return copy.deepcopy(config)
         
         logger.info(f"🔍 未知域名 {domain}，启动 AI 识别...")
@@ -282,7 +557,7 @@ class ConfigEngine:
         if selectors:
             selectors = self.validator.validate(selectors)
             
-            new_config: SiteConfig = {
+            new_preset: SiteConfig = {
                 "selectors": selectors,
                 "workflow": DEFAULT_WORKFLOW,
                 "stealth": self._guess_stealth(domain),
@@ -291,19 +566,24 @@ class ConfigEngine:
                     "initial_wait": 30.0,
                     "enable_wrapper_search": True
                 },
-                "image_extraction": get_default_image_extraction_config()
+                "image_extraction": get_default_image_extraction_config(),
+                "file_paste": get_default_file_paste_config()
             }
             
-            self.sites[domain] = new_config
+            self.sites[domain] = {
+                "presets": {
+                    DEFAULT_PRESET_NAME: new_preset
+                }
+            }
             self._save_config()
             
             logger.info(f"✅ 配置已生成并保存: {domain}")
-            return copy.deepcopy(new_config)
+            return copy.deepcopy(new_preset)
         
         logger.warning(f"⚠️  AI 分析失败，使用通用回退配置: {domain}")
         fallback_selectors = self.global_config.get_fallback_selectors()
         
-        fallback_config: SiteConfig = {
+        fallback_preset: SiteConfig = {
             "selectors": fallback_selectors,
             "workflow": DEFAULT_WORKFLOW,
             "stealth": False,
@@ -312,13 +592,18 @@ class ConfigEngine:
                 "initial_wait": 30.0,
                 "enable_wrapper_search": True
             },
-            "image_extraction": get_default_image_extraction_config()
+            "image_extraction": get_default_image_extraction_config(),
+            "file_paste": get_default_file_paste_config()
         }
         
-        self.sites[domain] = fallback_config
+        self.sites[domain] = {
+            "presets": {
+                DEFAULT_PRESET_NAME: fallback_preset
+            }
+        }
         self._save_config()
         
-        return copy.deepcopy(fallback_config)
+        return copy.deepcopy(fallback_preset)
     
     def delete_site_config(self, domain: str) -> bool:
         """删除指定站点配置"""
@@ -340,63 +625,70 @@ class ConfigEngine:
         return False
     
     def migrate_site_configs(self):
-        """迁移旧版站点配置，补充缺失的 image_extraction 字段"""
+        """迁移旧版站点配置，补充各预设中缺失的字段"""
         migrated_count = 0
         default_image_config = get_default_image_extraction_config()
+        default_file_paste = get_default_file_paste_config()
         
         for domain, site_config in self.sites.items():
-            if domain == "_global":
+            if domain.startswith("_"):
                 continue
             
-            if "image_extraction" not in site_config:
-                site_config["image_extraction"] = default_image_config.copy()
-                migrated_count += 1
-                logger.debug(f"迁移站点配置: {domain} (添加 image_extraction)")
+            presets = site_config.get("presets", {})
             
-            if "file_paste" not in site_config:
-                site_config["file_paste"] = get_default_file_paste_config()
-                migrated_count += 1
-                logger.debug(f"迁移站点配置: {domain} (添加 file_paste)")
+            for preset_name, preset_data in presets.items():
+                if "image_extraction" not in preset_data:
+                    preset_data["image_extraction"] = default_image_config.copy()
+                    migrated_count += 1
+                    logger.debug(f"迁移: {domain}/{preset_name} (添加 image_extraction)")
+                
+                if "file_paste" not in preset_data:
+                    preset_data["file_paste"] = default_file_paste.copy()
+                    migrated_count += 1
+                    logger.debug(f"迁移: {domain}/{preset_name} (添加 file_paste)")
         
         if migrated_count > 0:
             self._save_config()
-            logger.info(f"已迁移 {migrated_count} 个站点配置")
+            logger.info(f"已迁移 {migrated_count} 个预设配置")
         
         return migrated_count
     
     # ================= 图片配置管理 =================
     
-    def get_site_image_config(self, domain: str) -> Dict:
+    
+    def get_site_image_config(self, domain: str, preset_name: str = None) -> Dict:
         """获取站点的图片提取配置"""
         self.refresh_if_changed()
         
         default_config = get_default_image_extraction_config()
         
-        if domain not in self.sites:
+        data = self._get_site_data(domain, preset_name)
+        if data is None:
             return default_config
         
-        site_config = self.sites[domain]
-        image_config = site_config.get("image_extraction", {})
+        image_config = data.get("image_extraction", {})
         
         result = default_config.copy()
         result.update(image_config)
         
         return result
     
-    def set_site_image_config(self, domain: str, config: Dict) -> bool:
+    def set_site_image_config(self, domain: str, config: Dict, 
+                              preset_name: str = None) -> bool:
         """设置站点的图片提取配置"""
         self.refresh_if_changed()
         
-        if domain not in self.sites:
-            logger.warning(f"站点不存在: {domain}")
+        data = self._get_site_data(domain, preset_name)
+        if data is None:
+            logger.warning(f"站点或预设不存在: {domain}/{preset_name}")
             return False
         
         validated = self._validate_image_config(config)
         
-        self.sites[domain]["image_extraction"] = validated
+        data["image_extraction"] = validated
         self._save_config()
         
-        logger.info(f"站点 {domain} 图片提取配置已更新")
+        logger.info(f"站点 {domain} [{preset_name or DEFAULT_PRESET_NAME}] 图片提取配置已更新")
         return True
     
     def _validate_image_config(self, config: Dict) -> Dict:
@@ -454,41 +746,43 @@ class ConfigEngine:
         return result
         # ================= 文件粘贴配置管理 =================
     
-    def get_site_file_paste_config(self, domain: str) -> dict:
+    def get_site_file_paste_config(self, domain: str, preset_name: str = None) -> dict:
         """获取站点的文件粘贴配置"""
         self.refresh_if_changed()
         
         default_config = get_default_file_paste_config()
         
-        if domain not in self.sites:
+        data = self._get_site_data(domain, preset_name)
+        if data is None:
             return default_config
         
-        site_config = self.sites[domain]
-        file_paste_config = site_config.get("file_paste", {})
+        file_paste_config = data.get("file_paste", {})
         
         result = default_config.copy()
         result.update(file_paste_config)
         
         return result
     
-    def set_site_file_paste_config(self, domain: str, config: dict) -> bool:
+    def set_site_file_paste_config(self, domain: str, config: dict, 
+                                    preset_name: str = None) -> bool:
         """设置站点的文件粘贴配置"""
         self.refresh_if_changed()
         
-        if domain not in self.sites:
-            logger.warning(f"站点不存在: {domain}")
+        data = self._get_site_data(domain, preset_name)
+        if data is None:
+            logger.warning(f"站点或预设不存在: {domain}/{preset_name}")
             return False
         
         validated = self._validate_file_paste_config(config)
         
-        self.sites[domain]["file_paste"] = validated
+        data["file_paste"] = validated
         self._save_config()
         
-        logger.info(f"站点 {domain} 文件粘贴配置已更新 (enabled={validated.get('enabled')}, threshold={validated.get('threshold')})")
+        logger.info(f"站点 {domain} [{preset_name or DEFAULT_PRESET_NAME}] 文件粘贴配置已更新")
         return True
     
     def get_all_file_paste_configs(self) -> dict:
-        """获取所有站点的文件粘贴配置"""
+        """获取所有站点的文件粘贴配置（使用各站点的主预设）"""
         self.refresh_if_changed()
         
         default_config = get_default_file_paste_config()
@@ -497,8 +791,12 @@ class ConfigEngine:
         for domain in self.sites:
             if domain.startswith('_'):
                 continue
-            site_config = self.sites[domain]
-            file_paste = site_config.get("file_paste", {})
+            
+            data = self._get_site_data(domain)
+            if data is None:
+                continue
+            
+            file_paste = data.get("file_paste", {})
             merged = default_config.copy()
             merged.update(file_paste)
             result[domain] = merged
@@ -554,22 +852,24 @@ class ConfigEngine:
     
     # ================= 提取器管理 =================
     
-    def get_site_extractor(self, domain: str):
+    def get_site_extractor(self, domain: str, preset_name: str = None):
         """获取站点的提取器实例"""
         self.refresh_if_changed()
         
-        if domain in self.sites:
-            site_config = self.sites[domain]
-            return extractor_manager.get_extractor_for_site(site_config)
+        data = self._get_site_data(domain, preset_name)
+        if data is not None:
+            return extractor_manager.get_extractor_for_site(data)
         
         return extractor_manager.get_extractor()
     
-    def set_site_extractor(self, domain: str, extractor_id: str) -> bool:
+    def set_site_extractor(self, domain: str, extractor_id: str, 
+                           preset_name: str = None) -> bool:
         """为站点设置提取器"""
         self.refresh_if_changed()
         
-        if domain not in self.sites:
-            logger.warning(f"站点不存在: {domain}")
+        data = self._get_site_data(domain, preset_name)
+        if data is None:
+            logger.warning(f"站点或预设不存在: {domain}/{preset_name}")
             return False
         
         from app.core.extractors import ExtractorRegistry
@@ -577,33 +877,36 @@ class ConfigEngine:
             logger.error(f"提取器不存在: {extractor_id}")
             return False
         
-        self.sites[domain]["extractor_id"] = extractor_id
-        self.sites[domain]["extractor_verified"] = False
+        data["extractor_id"] = extractor_id
+        data["extractor_verified"] = False
         self._save_config()
         
-        logger.info(f"站点 {domain} 已绑定提取器: {extractor_id}")
+        logger.info(f"站点 {domain} [{preset_name or DEFAULT_PRESET_NAME}] 已绑定提取器: {extractor_id}")
         return True
     
-    def set_site_extractor_verified(self, domain: str, verified: bool = True) -> bool:
+    def set_site_extractor_verified(self, domain: str, verified: bool = True, 
+                                     preset_name: str = None) -> bool:
         """设置站点提取器验证状态"""
         self.refresh_if_changed()
         
-        if domain not in self.sites:
+        data = self._get_site_data(domain, preset_name)
+        if data is None:
             return False
         
-        self.sites[domain]["extractor_verified"] = verified
+        data["extractor_verified"] = verified
         self._save_config()
         
         return True
     
     # 🆕 ================= 流式配置管理 =================
     
-    def get_site_stream_config(self, domain: str) -> Dict[str, Any]:
+    def get_site_stream_config(self, domain: str, preset_name: str = None) -> Dict[str, Any]:
         """
         获取站点的流式配置
         
         Args:
             domain: 站点域名
+            preset_name: 预设名称
         
         Returns:
             完整的流式配置（包含默认值）
@@ -612,11 +915,11 @@ class ConfigEngine:
         
         default_config = get_default_stream_config()
         
-        if domain not in self.sites:
+        data = self._get_site_data(domain, preset_name)
+        if data is None:
             return default_config
         
-        site_config = self.sites[domain]
-        stream_config = site_config.get("stream_config", {})
+        stream_config = data.get("stream_config", {})
         
         # 合并默认值
         result = default_config.copy()
@@ -637,30 +940,33 @@ class ConfigEngine:
         
         return result
     
-    def set_site_stream_config(self, domain: str, config: Dict[str, Any]) -> bool:
+    def set_site_stream_config(self, domain: str, config: Dict[str, Any], 
+                                preset_name: str = None) -> bool:
         """
         设置站点的流式配置
         
         Args:
             domain: 站点域名
             config: 流式配置（部分或完整）
+            preset_name: 预设名称
         
         Returns:
             是否成功
         """
         self.refresh_if_changed()
         
-        if domain not in self.sites:
-            logger.warning(f"站点不存在: {domain}")
+        data = self._get_site_data(domain, preset_name)
+        if data is None:
+            logger.warning(f"站点或预设不存在: {domain}/{preset_name}")
             return False
         
         # 验证并规范化配置
         validated = self._validate_stream_config(config)
         
-        self.sites[domain]["stream_config"] = validated
+        data["stream_config"] = validated
         self._save_config()
         
-        logger.info(f"站点 {domain} 流式配置已更新 (mode={validated.get('mode')})")
+        logger.info(f"站点 {domain} [{preset_name or DEFAULT_PRESET_NAME}] 流式配置已更新 (mode={validated.get('mode')})")
         return True
     
     def _validate_stream_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
@@ -798,4 +1104,4 @@ class ConfigEngine:
         logger.info(f"元素定义已更新: {len(definitions)} 个")
 
 
-__all__ = ['ConfigEngine', 'ConfigConstants', 'DEFAULT_WORKFLOW']
+__all__ = ['ConfigEngine', 'ConfigConstants', 'DEFAULT_WORKFLOW', 'DEFAULT_PRESET_NAME']

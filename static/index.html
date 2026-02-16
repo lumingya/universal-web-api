@@ -71,8 +71,11 @@
                 <div class="flex justify-between items-center">
                     <div class="flex items-center gap-4">
                         <h2 class="text-xl font-bold dark:text-white">{{ currentDomain }}</h2>
-                        <label class="flex items-center text-sm cursor-pointer dark:text-gray-300">
-                            <input type="checkbox" v-model="currentConfig.stealth" class="mr-2">
+                        <label v-if="getActivePresetConfig()" class="flex items-center text-sm cursor-pointer dark:text-gray-300">
+                            <input type="checkbox" 
+                                   :checked="getActivePresetConfig().stealth" 
+                                   @change="getActivePresetConfig().stealth = $event.target.checked" 
+                                   class="mr-2">
                             <span>隐身模式</span>
                         </label>
                     </div>
@@ -182,7 +185,8 @@
             </div>
             <div class="flex-1 overflow-y-auto">
                 <!-- Tab 内容区 -->
-                <config-tab v-if="activeTab === 'config'"
+                <config-tab ref="configTab"
+                            v-if="activeTab === 'config'"
                             :current-domain="currentDomain"
                             :current-config="currentConfig"
                             @add-selector="addSelector"

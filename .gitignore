@@ -47,3 +47,5 @@ Thumbs.db
 
 # Node.js
 node_modules/
+# Git 提交脚本（不需要提交）
+git提交.py

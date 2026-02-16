@@ -39,6 +39,7 @@ class TabSession:
     request_count: int = 0
     error_count: int = 0
     persistent_index: int = 0  # 🆕 持久化编号（重启前不变）
+    preset_name: Optional[str] = None  # 🆕 当前使用的预设名称（None = 主预设）
     
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     
@@ -162,13 +163,14 @@ class TabSession:
         
         return {
             "id": self.id,
-            "persistent_index": self.persistent_index,  # 🆕
+            "persistent_index": self.persistent_index,
             "status": self.status.value,
             "current_task": self.current_task_id,
             "current_domain": self.current_domain,
             "url": self._safe_get_url(),
             "request_count": self.request_count,
             "busy_duration": busy_duration,
+            "preset_name": self.preset_name,  # 🆕
         }
     
     def _safe_get_url(self) -> str:
@@ -659,10 +661,54 @@ class TabPoolManager:
             result.sort(key=lambda x: x.get("persistent_index", 0))
             return result
 
-# ===== 原有代码保持不变 =====
-    def get_status(self) -> Dict:
+    # ================= 预设管理 =================
+    
+    def set_tab_preset(self, persistent_index: int, preset_name: str) -> bool:
+        """
+        为指定标签页设置预设
+        
+        Args:
+            persistent_index: 标签页持久化编号
+            preset_name: 预设名称（None 或空字符串表示恢复为主预设）
+        
+        Returns:
+            是否成功
+        """
         with self._lock:
-            tabs_info = [s.get_info() for s in self._tabs.values()]    
+            session_id = self._persistent_to_session_id.get(persistent_index)
+            if not session_id:
+                logger.warning(f"标签页 #{persistent_index} 不存在")
+                return False
+            
+            session = self._tabs.get(session_id)
+            if not session:
+                logger.warning(f"标签页 {session_id} 已被移除")
+                return False
+            
+            old_preset = session.preset_name
+            session.preset_name = preset_name if preset_name else None
+            
+            logger.info(
+                f"[{session.id}] 预设切换: "
+                f"'{old_preset or '主预设'}' → '{preset_name or '主预设'}'"
+            )
+            return True
+    
+    def get_tab_preset(self, persistent_index: int) -> Optional[str]:
+        """获取指定标签页的当前预设名称"""
+        with self._lock:
+            session_id = self._persistent_to_session_id.get(persistent_index)
+            if not session_id:
+                return None
+            
+            session = self._tabs.get(session_id)
+            if not session:
+                return None
+            
+            return session.preset_name
+
+    # ================= 状态查询 =================
+
     def get_status(self) -> Dict:
         with self._lock:
             tabs_info = [s.get_info() for s in self._tabs.values()]

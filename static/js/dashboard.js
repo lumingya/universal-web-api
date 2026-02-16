@@ -918,17 +918,15 @@ const app = createApp({
         async updateImageConfig(newConfig) {
             if (!this.currentDomain || !this.currentConfig) return;
 
-            // Vue 3 直接赋值即可保持响应式 (替代 this.$set)
-            this.currentConfig.image_extraction = newConfig;
-            
-            // 如果你有单独的 dirty flag 可以在这里设置，或者直接保存
-            // this.configChanged = true; 
+            const pc = this.getActivePresetConfig()
+            if (pc) pc.image_extraction = newConfig;
 
-            // 可选：立即同步到服务器
             try {
+                const presetName = this.getActivePresetName()
+                const payload = { ...newConfig, preset_name: presetName }
                 await this.apiRequest(`/api/sites/${this.currentDomain}/image-config`, {
                     method: 'PUT',
-                    body: JSON.stringify(newConfig)
+                    body: JSON.stringify(payload)
                 });
                 this.notify('图片配置已保存', 'success');
             } catch (error) {
@@ -954,8 +952,13 @@ const app = createApp({
             if (!this.currentDomain) return;
 
             try {
-                const data = await this.apiRequest('/api/config/' + this.currentDomain);
-                this.sites[this.currentDomain] = data;
+                const data = await this.apiRequest('/api/config/' + encodeURIComponent(this.currentDomain));
+                // 返回的数据已经是预设格式 { presets: { ... } }
+                // 对其进行规范化确保结构完整
+                const normalized = this.normalizeConfig({ [this.currentDomain]: data })
+                if (normalized[this.currentDomain]) {
+                    this.sites[this.currentDomain] = normalized[this.currentDomain]
+                }
                 this.notify('配置已重新加载', 'success');
             } catch (error) {
                 console.error('重新加载配置失败:', error);
@@ -1253,6 +1256,7 @@ const app = createApp({
                 return;
             }
 
+            // 导出整个站点（含所有预设）
             const siteConfig = this.sites[domain];
             const dataStr = JSON.stringify(siteConfig, null, 2);
             const blob = new Blob([dataStr], { type: 'application/json' });
@@ -1589,17 +1593,19 @@ const app = createApp({
 
         async setSiteExtractor(domain, extractorId) {
             try {
+                const presetName = this.getActivePresetName()
                 await this.apiRequest('/api/sites/' + encodeURIComponent(domain) + '/extractor', {
                     method: 'PUT',
-                    body: JSON.stringify({ extractor_id: extractorId })
+                    body: JSON.stringify({ extractor_id: extractorId, preset_name: presetName })
                 });
-                
-                // 更新本地状态
-                if (this.sites[domain]) {
-                    this.sites[domain].extractor_id = extractorId;
-                    this.sites[domain].extractor_verified = false;
+
+                // 更新当前预设的本地状态
+                const pc = this.getActivePresetConfig()
+                if (pc) {
+                    pc.extractor_id = extractorId;
+                    pc.extractor_verified = false;
                 }
-                
+
                 this.notify('站点 ' + domain + ' 已绑定提取器: ' + extractorId, 'success');
             } catch (error) {
                 this.notify('设置失败: ' + error.message, 'error');
@@ -1607,8 +1613,8 @@ const app = createApp({
         },
 
         openVerifyDialog(domain) {
-            const site = this.sites[domain];
-            const extractorId = site?.extractor_id || this.defaultExtractorId;
+            const pc = this.getActivePresetConfig()
+            const extractorId = pc?.extractor_id || this.defaultExtractorId;
             const extractor = this.extractors.find(e => e.id === extractorId);
             
             this.verifyDialogDomain = domain;
@@ -1624,8 +1630,9 @@ const app = createApp({
                         body: JSON.stringify({ verified: true })
                     });
                     
-                    if (this.sites[domain]) {
-                        this.sites[domain].extractor_verified = true;
+                    const pc = this.getActivePresetConfig()
+                    if (pc) {
+                        pc.extractor_verified = true;
                     }
                     
                     this.notify('验证状态已更新', 'success');
@@ -1639,16 +1646,54 @@ const app = createApp({
             this.activeTab = tab;
         },
 
+        // ========== 预设辅助方法 ==========
+
+        getActivePresetName() {
+            try {
+                if (this.$refs.configTab && this.$refs.configTab.selectedPreset) {
+                    return this.$refs.configTab.selectedPreset
+                }
+            } catch (e) { }
+            return '主预设'
+        },
+
+        getActivePresetConfig() {
+            if (!this.currentConfig) return null
+            const presets = this.currentConfig.presets
+            if (!presets) return this.currentConfig
+            const name = this.getActivePresetName()
+            return presets[name] || presets['主预设'] || Object.values(presets)[0] || null
+        },
+
         // ========== 数据操作 ==========
 
         normalizeConfig(raw) {
             const norm = {}
-            for (const [k, v] of Object.entries(raw || {})) { // 防止 raw 为空报错
-                norm[k] = {
-                    ...v, // 🔥 重点：保留后端返回的所有原始字段（如图片配置、提取器ID）
-                    selectors: v.selectors || {},
-                    workflow: v.workflow || [],
-                    stealth: !!v.stealth
+            for (const [k, v] of Object.entries(raw || {})) {
+                if (v.presets) {
+                    // 新格式：保留 presets 结构，确保每个预设有基本字段
+                    const normalizedPresets = {}
+                    for (const [presetName, presetData] of Object.entries(v.presets)) {
+                        normalizedPresets[presetName] = {
+                            ...presetData,
+                            selectors: presetData.selectors || {},
+                            workflow: presetData.workflow || [],
+                            stealth: !!presetData.stealth
+                        }
+                    }
+                    norm[k] = { presets: normalizedPresets }
+                } else {
+                    // 旧格式兼容：包装为预设（后端迁移后不应再出现，但做兜底）
+                    norm[k] = {
+                        presets: {
+                            '主预设': {
+                                ...v,
+                                selectors: v.selectors || {},
+                                workflow: v.workflow || [],
+                                stealth: !!v.stealth
+                            }
+                        }
+                    }
                 }
             }
             return norm
@@ -1660,13 +1705,20 @@ const app = createApp({
                 return false
             }
 
-            const selectors = this.currentConfig.selectors
+            // 获取当前活跃预设的配置
+            const presetConfig = this.getActivePresetConfig()
+            if (!presetConfig) {
+                this.notify('无法获取预设配置', 'error')
+                return false
+            }
+
+            const selectors = presetConfig.selectors || {}
             if (Object.keys(selectors).length === 0) {
                 this.notify('至少需要一个选择器', 'warning')
                 return false
             }
 
-            const workflow = this.currentConfig.workflow
+            const workflow = presetConfig.workflow || []
             for (let i = 0; i < workflow.length; i++) {
                 const step = workflow[i]
 
@@ -1711,9 +1763,13 @@ const app = createApp({
             }
 
             this.sites[domain] = {
-                selectors: {},
-                workflow: [],
-                stealth: false
+                presets: {
+                    '主预设': {
+                        selectors: {},
+                        workflow: [],
+                        stealth: false
+                    }
+                }
             }
             this.currentDomain = domain
             this.notify('已创建站点: ' + domain, 'success')
@@ -1737,6 +1793,8 @@ const app = createApp({
 
         addSelector(preset) {
             this.showSelectorMenu = false
+            const pc = this.getActivePresetConfig()
+            if (!pc) return
 
             let key
             if (preset === 'custom') {
@@ -1746,12 +1804,12 @@ const app = createApp({
                 key = preset
             }
 
-            if (this.currentConfig.selectors[key]) {
+            if (pc.selectors[key]) {
                 this.notify('选择器 "' + key + '" 已存在', 'warning')
                 return
             }
 
-            this.currentConfig.selectors[key] = ''
+            pc.selectors[key] = ''
             this.notify('已添加选择器: ' + key, 'success')
         },
 
@@ -1760,13 +1818,16 @@ const app = createApp({
                 return
             }
 
-            delete this.currentConfig.selectors[key]
+            const pc = this.getActivePresetConfig()
+            if (!pc) return
 
-            this.currentConfig.workflow.forEach(function (step) {
-                if (step.target === key) {
-                    step.target = ''
-                }
-            })
+            delete pc.selectors[key]
+
+                ; (pc.workflow || []).forEach(function (step) {
+                    if (step.target === key) {
+                        step.target = ''
+                    }
+                })
         },
 
         updateSelectorKey(oldKey, newKey) {
@@ -1774,24 +1835,30 @@ const app = createApp({
 
             newKey = newKey.trim()
 
-            if (this.currentConfig.selectors[newKey]) {
+            const pc = this.getActivePresetConfig()
+            if (!pc) return
+
+            if (pc.selectors[newKey]) {
                 this.notify('该键名已存在', 'error')
                 return
             }
 
-            this.currentConfig.selectors[newKey] = this.currentConfig.selectors[oldKey]
-            delete this.currentConfig.selectors[oldKey]
+            pc.selectors[newKey] = pc.selectors[oldKey]
+            delete pc.selectors[oldKey]
 
-            this.currentConfig.workflow.forEach(function (step) {
-                if (step.target === oldKey) {
-                    step.target = newKey
-                }
-            })
+                ; (pc.workflow || []).forEach(function (step) {
+                    if (step.target === oldKey) {
+                        step.target = newKey
+                    }
+                })
         },
 
         // ========== 工作流操作 ==========
 
         addStep() {
+            const pc = this.getActivePresetConfig()
+            if (!pc) return
+
             const defaultStep = {
                 action: 'CLICK',
                 target: '',
@@ -1799,15 +1866,22 @@ const app = createApp({
                 value: null
             }
 
-            this.currentConfig.workflow.push(defaultStep)
+            if (!pc.workflow) pc.workflow = []
+            pc.workflow.push(defaultStep)
         },
 
         removeStep(index) {
-            this.currentConfig.workflow.splice(index, 1)
+            const pc = this.getActivePresetConfig()
+            if (!pc || !pc.workflow) return
+
+            pc.workflow.splice(index, 1)
         },
 
         moveStep(index, direction) {
-            const arr = this.currentConfig.workflow
+            const pc = this.getActivePresetConfig()
+            if (!pc || !pc.workflow) return
+
+            const arr = pc.workflow
             const newIndex = index + direction
 
             if (newIndex < 0 || newIndex >= arr.length) return
@@ -1851,7 +1925,9 @@ const app = createApp({
                 return
             }
 
-            this.currentConfig.workflow = JSON.parse(JSON.stringify(templates[type]))
+            const pc = this.getActivePresetConfig()
+            if (!pc) return
+            pc.workflow = JSON.parse(JSON.stringify(templates[type]))
             this.showStepTemplates = false
             this.notify('模板已应用', 'success')
         },
@@ -1859,7 +1935,7 @@ const app = createApp({
         // ========== 工具功能 ==========
 
         copyJson() {
-            const text = JSON.stringify(this.sites[this.currentDomain], null, 2)
+            const text = JSON.stringify(this.getActivePresetConfig() || this.sites[this.currentDomain], null, 2)
             navigator.clipboard.writeText(text).then(() => {
                 this.notify('已复制到剪贴板', 'success')
             }).catch(() => {

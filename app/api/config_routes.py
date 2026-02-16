@@ -129,13 +129,31 @@ async def delete_site_config(
 @router.get("/api/config/{domain}")
 async def get_site_config(
     domain: str,
+    preset_name: Optional[str] = None,
     authenticated: bool = Depends(verify_auth)
 ):
-    """获取单个站点配置"""
-    if domain in config_engine.sites:
-        return config_engine.sites[domain]
-    else:
+    """
+    获取单个站点配置
+    
+    Query 参数:
+        preset_name: 预设名称（可选，默认返回整个站点结构含所有预设）
+    
+    - 不传 preset_name: 返回 { "presets": { "主预设": {...}, ... } }
+    - 传 preset_name: 返回该预设的扁平配置 { "selectors": {...}, "workflow": [...], ... }
+    """
+    if domain not in config_engine.sites:
         raise HTTPException(status_code=404, detail=f"配置不存在: {domain}")
+    
+    if preset_name:
+        # 返回指定预设的扁平配置
+        data = config_engine._get_site_data_readonly(domain, preset_name)
+        if data is None:
+            raise HTTPException(status_code=404, detail=f"预设不存在: {preset_name}")
+        return data
+    else:
+        # 返回整个站点结构（含所有预设）
+        import copy
+        return copy.deepcopy(config_engine.sites[domain])
 
 
 # ================= 图片提取配置 API =================
@@ -143,11 +161,12 @@ async def get_site_config(
 @router.get("/api/sites/{domain}/image-config")
 async def get_site_image_config(
     domain: str,
+    preset_name: Optional[str] = None,
     authenticated: bool = Depends(verify_auth)
 ):
     """获取站点的图片提取配置"""
     try:
-        config = config_engine.get_site_image_config(domain)
+        config = config_engine.get_site_image_config(domain, preset_name=preset_name)
         return {
             "domain": domain,
             "image_extraction": config,
@@ -167,8 +186,9 @@ async def set_site_image_config(
     """设置站点的图片提取配置"""
     try:
         data = await request.json()
+        preset_name = data.pop("preset_name", None)
         
-        success = config_engine.set_site_image_config(domain, data)
+        success = config_engine.set_site_image_config(domain, data, preset_name=preset_name)
         
         if success:
             return {
@@ -179,7 +199,7 @@ async def set_site_image_config(
         else:
             raise HTTPException(
                 status_code=400,
-                detail=f"设置失败：站点 {domain} 不存在"
+                detail=f"设置失败：站点或预设不存在"
             )
     
     except HTTPException:
@@ -199,11 +219,12 @@ async def toggle_site_image_extraction(
     try:
         data = await request.json()
         enabled = data.get("enabled", False)
+        preset_name = data.get("preset_name")
         
-        current_config = config_engine.get_site_image_config(domain)
+        current_config = config_engine.get_site_image_config(domain, preset_name=preset_name)
         current_config["enabled"] = enabled
         
-        success = config_engine.set_site_image_config(domain, current_config)
+        success = config_engine.set_site_image_config(domain, current_config, preset_name=preset_name)
         
         if success:
             status = "已启用" if enabled else "已禁用"
@@ -407,6 +428,7 @@ async def update_site_workflow(
     try:
         data = await request.json()
         new_workflow = data.get("workflow")
+        preset_name = data.get("preset_name")
         
         if new_workflow is None:
             raise HTTPException(status_code=400, detail="缺少 workflow 字段")
@@ -414,19 +436,19 @@ async def update_site_workflow(
         if domain not in config_engine.sites:
             raise HTTPException(status_code=404, detail=f"站点不存在: {domain}")
         
-        config_engine.sites[domain]["workflow"] = new_workflow
-        
-        success = config_engine.save_config()
+        success = config_engine.set_preset_workflow(domain, new_workflow, preset_name=preset_name)
         
         if not success:
             raise HTTPException(status_code=500, detail="保存配置文件失败")
         
-        logger.info(f"站点 {domain} 工作流已更新: {len(new_workflow)} 个步骤")
+        used_preset = preset_name or "主预设"
+        logger.info(f"站点 {domain} [{used_preset}] 工作流已更新: {len(new_workflow)} 个步骤")
         
         return {
             "status": "success",
             "message": f"工作流已保存",
             "domain": domain,
+            "preset_name": used_preset,
             "steps_count": len(new_workflow)
         }
         
@@ -546,6 +568,7 @@ async def import_extractors(
 @router.get("/api/sites/{domain}/extractor")
 async def get_site_extractor(
     domain: str,
+    preset_name: Optional[str] = None,
     authenticated: bool = Depends(verify_auth)
 ):
     """获取站点当前使用的提取器"""
@@ -553,9 +576,12 @@ async def get_site_extractor(
         if domain not in config_engine.sites:
             raise HTTPException(status_code=404, detail=f"站点不存在: {domain}")
         
-        site_config = config_engine.sites[domain]
-        extractor_id = site_config.get("extractor_id")
-        extractor_verified = site_config.get("extractor_verified", False)
+        preset_data = config_engine._get_site_data_readonly(domain, preset_name)
+        if preset_data is None:
+            raise HTTPException(status_code=404, detail=f"预设不存在")
+        
+        extractor_id = preset_data.get("extractor_id")
+        extractor_verified = preset_data.get("extractor_verified", False)
         
         if not extractor_id:
             extractor_id = extractor_manager.get_default_id()
@@ -587,11 +613,12 @@ async def set_site_extractor(
     try:
         data = await request.json()
         extractor_id = data.get("extractor_id")
+        preset_name = data.get("preset_name")
         
         if not extractor_id:
             raise HTTPException(status_code=400, detail="缺少 extractor_id")
         
-        success = config_engine.set_site_extractor(domain, extractor_id)
+        success = config_engine.set_site_extractor(domain, extractor_id, preset_name=preset_name)
         
         if success:
             return {
@@ -603,7 +630,7 @@ async def set_site_extractor(
         else:
             raise HTTPException(
                 status_code=400, 
-                detail=f"设置失败：站点不存在或提取器无效"
+                detail=f"设置失败：站点或预设不存在，或提取器无效"
             )
     
     except HTTPException:
@@ -663,8 +690,9 @@ async def mark_site_extractor_verified(
     try:
         data = await request.json()
         verified = data.get("verified", True)
+        preset_name = data.get("preset_name")
         
-        success = config_engine.set_site_extractor_verified(domain, verified)
+        success = config_engine.set_site_extractor_verified(domain, verified, preset_name=preset_name)
         
         if success:
             return {
@@ -762,11 +790,12 @@ async def get_all_file_paste_configs(authenticated: bool = Depends(verify_auth))
 @router.get("/api/sites/{domain}/file-paste")
 async def get_site_file_paste_config(
     domain: str,
+    preset_name: Optional[str] = None,
     authenticated: bool = Depends(verify_auth)
 ):
     """获取站点的文件粘贴配置"""
     try:
-        config = config_engine.get_site_file_paste_config(domain)
+        config = config_engine.get_site_file_paste_config(domain, preset_name=preset_name)
         return {
             "domain": domain,
             "file_paste": config
@@ -785,8 +814,9 @@ async def set_site_file_paste_config(
     """设置站点的文件粘贴配置"""
     try:
         data = await request.json()
+        preset_name = data.pop("preset_name", None)
         
-        success = config_engine.set_site_file_paste_config(domain, data)
+        success = config_engine.set_site_file_paste_config(domain, data, preset_name=preset_name)
         
         if success:
             return {
@@ -797,7 +827,7 @@ async def set_site_file_paste_config(
         else:
             raise HTTPException(
                 status_code=400,
-                detail=f"设置失败：站点 {domain} 不存在"
+                detail=f"设置失败：站点或预设不存在"
             )
     
     except HTTPException:
@@ -848,11 +878,12 @@ async def batch_update_file_paste_configs(
 @router.get("/api/sites/{domain}/stream-config")
 async def get_site_stream_config(
     domain: str,
+    preset_name: Optional[str] = None,
     authenticated: bool = Depends(verify_auth)
 ):
     """获取站点的流式配置"""
     try:
-        config = config_engine.get_site_stream_config(domain)
+        config = config_engine.get_site_stream_config(domain, preset_name=preset_name)
         return {
             "domain": domain,
             "stream_config": config,
@@ -873,8 +904,9 @@ async def set_site_stream_config(
     """设置站点的流式配置"""
     try:
         data = await request.json()
+        preset_name = data.pop("preset_name", None)
         
-        success = config_engine.set_site_stream_config(domain, data)
+        success = config_engine.set_site_stream_config(domain, data, preset_name=preset_name)
         
         if success:
             return {
@@ -886,7 +918,7 @@ async def set_site_stream_config(
         else:
             raise HTTPException(
                 status_code=400,
-                detail=f"设置失败：站点 {domain} 不存在"
+                detail=f"设置失败：站点或预设不存在"
             )
     
     except HTTPException:
