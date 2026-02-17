@@ -30,8 +30,6 @@
 
 ### 1. 下载与安装
 
-> **⚠️ 注意：** 主页面的代码可能是旧版本的开发代码。请务必前往右侧的 **[Releases]** 页面下载最新打包好的版本！
-
 1.  下载 Release 中的压缩包。
 2.  解压到一个 **没有中文路径** 的文件夹里（例如 `D:\AI_Tools\Universal-Web-API`）。
 3.  确保你的电脑上安装了以下任一 Chromium 内核浏览器：
@@ -72,9 +70,9 @@
 * **正确做法**：你可以静静地看着浏览器自动操作，不要动手。如果脚本卡死，请关闭黑色命令行窗口，**重启 `start.bat`**。
 
 ### 📉 特殊格式抓取限制
-目前的版本在内容抓取上存在一定局限性：
+目前的版本在如果使用提取器进行提取，那么在内容抓取上存在一定局限性：
 * **代码块与 LaTeX和超链接**：如果 AI 回复的内容被包裹在复杂的代码块（Code Block）中，或者包含复杂的 LaTeX 数学公式，脚本**可能无法完整捕捉**，或者抓取结果会出现预期之外的格式错误。
-* 我们会持续优化这一点，但在当前版本中请知悉此限制。
+* 你可以切换为非流式监听（网络拦截模式），该模式不存在这些问题，但目前只针对部分站点做出了适配（默认开启的便是适配好了的）。
 
 ---
 
@@ -125,7 +123,6 @@
 ```
 BROWSER_PATH=C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe
 ```
-**检查版本**：确保下载的是 Release 里的最新版，不要直接用 GitHub 主分支的源码（可能是未完成的开发版）。
 
 **Q2**: 网页配置打不开 (http://127.0.0.1:8199 无法访问)
 请检查黑色的命令行窗口是否被关闭了？CMD 窗口必须一直开着，程序才能运行。
@@ -149,71 +146,110 @@ BROWSER_PATH=C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe
 ## 项目结构
 
 ```
-📁 1/  [总计: 729.0 KB]  # 项目根目录
-├── 📁 app  [392.7 KB]   # 🐍 Python 后端核心代码库
-│   ├── 📁 api  [56.8 KB]    # [接口层] 处理 HTTP 请求
-│   │   ├── 📄 __init__.py  [97 B]
-│   │   └── 📄 routes.py  [56.7 KB]    # 🚦 API 路由定义 (如 /v1/chat/completions)
-│   ├── 📁 core  [231.3 KB]   # [核心层] 浏览器自动化与底层逻辑
-│   │   ├── 📁 extractors  [59.6 KB]    # 🧩 [提取策略层] 内容提取器
-│   │   │   ├── 📄 __init__.py  [898 B]
-│   │   │   ├── 📄 base.py  [2.4 KB]     # 📜 提取器基类接口 (BaseExtractor)
-│   │   │   ├── 📄 deep_mode.py  [18.0 KB]    # 🧠 深度提取模式 (JS注入、LaTeX处理)
-│   │   │   ├── 📄 dom_mode.py  [5.0 KB]
-│   │   │   ├── 📄 hybrid_mode.py  [12.5 KB]
-│   │   │   ├── 📄 image_extractor.py  [14.2 KB]
-│   │   │   └── 📄 registry.py  [6.5 KB]
-│   │   ├── 📄 __init__.py  [645 B]
-│   │   ├── 📄 browser.py  [33.1 KB]    # 🌐 浏览器管理：启动Chrome、管理标签页
-│   │   ├── 📄 config.py  [20.9 KB]    # ⚙️ 核心配置：日志格式、常量定义
-│   │   ├── 📄 elements.py  [7.7 KB]     # 🔍 元素定位器：封装DOM查找逻辑
-│   │   ├── 📄 stream_monitor.py  [34.0 KB]    # 📡 流式监听器：监控变化、计算Diff
-│   │   ├── 📄 tab_pool.py  [20.7 KB]
-│   │   ├── 📄 workflow.py  [48.7 KB]    # 🎬 工作流执行器：执行点击、输入等动作
-│   │   └── 📄 workflow_editor.py  [6.0 KB]
-│   ├── 📁 models  [17.4 KB]    # [数据模型层] 定义数据结构
-│   │   ├── 📄 __init__.py  [1.3 KB]
-│   │   └── 📄 schemas.py  [16.1 KB]    # 📐 Pydantic 模型：校验请求/响应格式
-│   ├── 📁 services  [66.1 KB]    # [业务逻辑层] 串联 Core 和 API
-│   │   ├── 📄 __init__.py  [435 B]
-│   │   ├── 📄 config_engine.py  [46.0 KB]    # 💾 配置引擎：读写 sites.json
-│   │   ├── 📄 extractor_manager.py  [9.4 KB]
-│   │   └── 📄 request_manager.py  [10.3 KB]    # 🤵 请求管理器：调度浏览器、处理并发
-│   ├── 📁 utils  [21.0 KB]    # [工具层] 通用辅助函数
-│   │   ├── 📄 __init__.py  [257 B]
-│   │   ├── 📄 image_handler.py  [10.0 KB]
-│   │   ├── 📄 paste.py  [7.1 KB]     # 📋 剪贴板工具：处理长文本粘贴
-│   │   └── 📄 similarity.py  [3.6 KB]
-│   └── 📄 __init__.py  [181 B]
-├── 📁 config  [22.0 KB]    # 🔧 配置文件目录
-│   ├── 📄 browser_config.json  [1.1 KB]     # 🖥️ 浏览器启动配置
-│   ├── 📄 extractors.json  [1.1 KB]
-│   ├── 📄 image_presets.json  [4.9 KB]
-│   └── 📄 sites.json  [14.9 KB]    # 🗂️ 站点数据库：URL、选择器、工作流
-├── 📁 static  [266.3 KB]   # 🎨 前端静态资源 (Web UI)
+📁 1/  [总计: 1.1 MB]  # 项目根目录
+├── 📁 app  [578.9 KB]   # 🐍 Python 后端核心代码库
+│   ├── 📁 api  [74.8 KB]    # [接口层] 处理 HTTP 请求
+│   │   ├── 📄 __init__.py  [97 B]       # 模块初始化
+│   │   ├── 📄 chat.py  [13.0 KB]    # 💬 聊天接口：处理 /v1/chat/completions 请求，支持流式/非流式
+│   │   ├── 📄 config_routes.py  [32.0 KB]    # 🔧 配置接口：站点配置的 CRUD API (增删改查)
+│   │   ├── 📄 routes.py  [675 B]      # 🚦 API 路由汇总：注册所有子路由到 FastAPI
+│   │   ├── 📄 system.py  [15.7 KB]    # 🖥️ 系统接口：健康检查、日志查询、系统状态等
+│   │   └── 📄 tab_routes.py  [13.4 KB]    # 📑 标签页接口：标签池管理 (创建/销毁/状态查询)
+│   ├── 📁 core  [373.4 KB]   # [核心层] 浏览器自动化与底层逻辑
+│   │   ├── 📁 extractors  [59.8 KB]    # 🧩 [提取策略层] 从 AI 网页提取回复内容
+│   │   │   ├── 📄 __init__.py  [898 B]      # 模块初始化：注册所有提取器
+│   │   │   ├── 📄 base.py  [2.4 KB]     # 📜 提取器基类接口 (BaseExtractor)，定义统一的提取方法签名
+│   │   │   ├── 📄 deep_mode.py  [18.0 KB]    # 🧠 深度提取模式：通过 JS 注入提取完整内容，支持 LaTeX/代码块处理
+│   │   │   ├── 📄 dom_mode.py  [5.0 KB]     # 🌳 DOM 提取模式：直接解析页面 DOM 元素获取文本
+│   │   │   ├── 📄 hybrid_mode.py  [12.5 KB]    # 🔀 混合提取模式：结合 DOM + 深度模式，自动择优
+│   │   │   ├── 📄 image_extractor.py  [14.4 KB]    # 🖼️ 图片提取器：提取回复中的图片 (Base64/URL)
+│   │   │   └── 📄 registry.py  [6.5 KB]     # 📋 提取器注册中心：根据站点配置自动匹配提取策略
+│   │   ├── 📁 parsers  [36.4 KB]    # 🔍 [站点解析器层] 各 AI 站点的专用内容解析
+│   │   │   ├── 📄 __init__.py  [901 B]      # 模块初始化：注册所有解析器
+│   │   │   ├── 📄 aistudio_parser.py  [7.2 KB]     # 🤖 Google AI Studio 专用解析器
+│   │   │   ├── 📄 base.py  [2.8 KB]     # 📜 解析器基类：定义通用解析接口
+│   │   │   ├── 📄 chatgpt_parser.py  [5.3 KB]     # 🤖 ChatGPT 专用解析器
+│   │   │   ├── 📄 deepseek_parser.py  [6.3 KB]     # 🤖 DeepSeek 专用解析器
+│   │   │   ├── 📄 gemini_parser.py  [6.4 KB]     # 🤖 Gemini 专用解析器
+│   │   │   ├── 📄 lmarena_parser.py  [4.2 KB]     # 🤖 LM Arena 专用解析器
+│   │   │   └── 📄 registry.py  [3.4 KB]     # 📋 解析器注册中心：根据 URL 自动匹配解析器
+│   │   ├── 📁 workflow  [65.4 KB]    # 🎬 [工作流层] 分步执行浏览器操作
+│   │   │   ├── 📄 __init__.py  [191 B]      # 模块初始化
+│   │   │   ├── 📄 executor.py  [22.8 KB]    # ⚙️ 工作流执行器：按顺序执行 Action 列表
+│   │   │   ├── 📄 image_input.py  [3.9 KB]     # 🖼️ 图片输入处理：上传图片到 AI 对话框
+│   │   │   └── 📄 text_input.py  [38.5 KB]    # ⌨️ 文本输入处理：输入文本到对话框 (支持粘贴/模拟键入)
+│   │   ├── 📄 __init__.py  [645 B]      # 模块初始化：导出核心组件
+│   │   ├── 📄 browser.py  [52.3 KB]    # 🌐 浏览器管理器：启动/连接 Chrome、创建/管理标签页
+│   │   ├── 📄 config.py  [22.4 KB]    # ⚙️ 核心配置：日志格式、超时时间、常量定义
+│   │   ├── 📄 elements.py  [7.7 KB]     # 🔍 元素定位器：封装 CSS/XPath 查找、等待元素出现
+│   │   ├── 📄 network_monitor.py  [11.9 KB]    # 🌐 网络监听器：拦截 XHR/Fetch 请求，捕获 SSE 流
+│   │   ├── 📄 stream_monitor.py  [34.0 KB]    # 📡 流式监听器：监控 DOM 变化，计算文本 Diff 实现流式输出
+│   │   ├── 📄 tab_pool.py  [28.1 KB]    # 🏊 标签池管理器：预创建标签页，复用连接，提升并发性能
+│   │   ├── 📄 workflow.py  [48.7 KB]    # 🎬 工作流引擎 (主文件)：编排点击、输入、等待等操作
+│   │   └── 📄 workflow_editor.py  [6.0 KB]     # ✏️ 工作流编辑器：可视化编辑工作流步骤 (后端支持)
+│   ├── 📁 models  [18.4 KB]    # [数据模型层] 定义数据结构
+│   │   ├── 📄 __init__.py  [1.3 KB]     # 模块初始化：导出所有模型
+│   │   └── 📄 schemas.py  [17.1 KB]    # 📐 Pydantic 模型：定义请求体/响应体的数据格式和校验规则
+│   ├── 📁 services  [85.3 KB]    # [业务逻辑层] 串联 Core 和 API
+│   │   ├── 📁 config  [64.8 KB]    # 🔧 配置引擎模块：站点配置的读取/写入/校验
+│   │   │   ├── 📄 __init__.py  [322 B]      # 模块初始化：导出配置引擎
+│   │   │   ├── 📄 engine.py  [39.5 KB]    # ⚙️ 配置引擎核心：解析 sites.json，管理站点生命周期
+│   │   │   ├── 📄 managers.py  [8.2 KB]     # 👔 配置管理器：处理配置的增删改查和版本管理
+│   │   │   └── 📄 processors.py  [16.8 KB]    # 🔄 配置处理器：校验、迁移、合并配置数据
+│   │   ├── 📄 __init__.py  [435 B]      # 模块初始化
+│   │   ├── 📄 config_engine.py  [431 B]      # 💾 配置引擎入口：对外暴露的简化接口 (Facade 模式)
+│   │   ├── 📄 extractor_manager.py  [9.4 KB]     # 🧩 提取器管理器：根据站点选择并调用合适的内容提取器
+│   │   └── 📄 request_manager.py  [10.3 KB]    # 🤵 请求管理器：调度浏览器标签、处理并发请求队列
+│   ├── 📁 utils  [26.9 KB]    # [工具层] 通用辅助函数
+│   │   ├── 📄 __init__.py  [257 B]      # 模块初始化
+│   │   ├── 📄 file_paste.py  [5.9 KB]     # 📎 文件粘贴工具：处理文件拖拽/粘贴上传
+│   │   ├── 📄 image_handler.py  [10.0 KB]    # 🖼️ 图片处理工具：格式转换、压缩、Base64 编解码
+│   │   ├── 📄 paste.py  [7.1 KB]     # 📋 剪贴板工具：模拟 Ctrl+V 粘贴长文本
+│   │   └── 📄 similarity.py  [3.6 KB]     # 📊 文本相似度工具：比较文本差异 (用于流式 Diff 计算)
+│   └── 📄 __init__.py  [181 B]      # 模块初始化
+├── 📁 config  [31.7 KB]    # 🔧 配置文件目录
+│   ├── 📄 browser_config.json  [1.4 KB]     # 🖥️ 浏览器启动配置 (端口、User-Agent、窗口大小等)
+│   ├── 📄 extractors.json  [1.1 KB]     # 🧩 提取器配置：各站点使用的提取模式映射
+│   ├── 📄 image_presets.json  [4.9 KB]     # 🖼️ 图片预设配置：压缩参数、尺寸限制等
+│   └── 📄 sites.json  [24.3 KB]    # 🗂️ 站点数据库：URL、CSS 选择器、工作流步骤定义
+├── 📁 static  [349.3 KB]   # 🎨 前端静态资源 (Web UI 控制面板)
 │   ├── 📁 css  [5.1 KB]     # 💅 样式表目录
-│   │   └── 📄 dashboard.css  [5.1 KB]     # 控制面板样式
-│   ├── 📁 js  [236.1 KB]   # ⚡ 前端 JavaScript
-│   │   ├── 📁 components  [132.5 KB]   # 🧱 UI 组件库
-│   │   │   ├── 📄 ConfigTab.js  [49.9 KB]    # 配置管理页面
-│   │   │   ├── 📄 Dialogs.js  [27.4 KB]    # 弹窗组件
-│   │   │   ├── 📄 ExtractorTab.js  [15.6 KB]
-│   │   │   ├── 📄 LogsTab.js  [5.0 KB]     # 实时日志页面
-│   │   │   ├── 📄 SettingsTab.js  [25.5 KB]    # 系统设置页面
-│   │   │   └── 📄 Sidebar.js  [9.1 KB]     # 侧边栏导航
-│   │   ├── 📄 dashboard.js  [64.7 KB]    # 🚀 前端入口文件
-│   │   ├── 📄 icons.js  [6.9 KB]     # 🖼️ SVG 图标数据
-│   │   └── 📄 workflow-editor-inject.js  [32.0 KB]
-│   ├── 📄 index.html  [17.1 KB]    # 🏠 Web UI 主页入口
-│   └── 📄 tutorial.html  [8.0 KB]
-├── 📄 .env  [1.7 KB]     # 🔒 环境变量 (API Key、调试开关等)
-├── 📄 .gitignore  [307 B]      # 🚫 Git 忽略文件列表
-├── 📄 VERSION  [5 B]
+│   │   └── 📄 dashboard.css  [5.1 KB]     # 🎨 控制面板样式：布局、主题、响应式适配
+│   ├── 📁 js  [282.0 KB]   # ⚡ 前端 JavaScript 代码
+│   │   ├── 📁 components  [174.3 KB]   # 🧱 UI 组件库 (模块化拆分)
+│   │   │   ├── 📁 panels  [61.2 KB]    # 📊 配置子面板：各功能区的独立配置 UI
+│   │   │   │   ├── 📄 ExtractorPanel.js  [1.9 KB]     # 🧩 提取器配置面板：选择/切换提取模式
+│   │   │   │   ├── 📄 FilePastePanel.js  [8.8 KB]     # 📎 文件粘贴配置面板：设置文件上传行为
+│   │   │   │   ├── 📄 ImageConfigPanel.js  [18.1 KB]    # 🖼️ 图片配置面板：图片处理参数设置
+│   │   │   │   ├── 📄 SelectorPanel.js  [7.0 KB]     # 🎯 选择器配置面板：CSS/XPath 选择器编辑
+│   │   │   │   ├── 📄 StreamConfigPanel.js  [14.4 KB]    # 📡 流式配置面板：流式输出参数调整
+│   │   │   │   └── 📄 WorkflowPanel.js  [11.0 KB]    # 🎬 工作流配置面板：编辑操作步骤
+│   │   │   ├── 📁 shared  [2.0 KB]     # 🔗 共享组件：可复用的基础 UI 组件
+│   │   │   │   └── 📄 CollapsiblePanel.js  [2.0 KB]     # 📂 折叠面板组件：可展开/收起的内容容器
+│   │   │   ├── 📄 ConfigTab.js  [15.4 KB]    # 🔧 配置管理页面：站点配置的可视化编辑
+│   │   │   ├── 📄 Dialogs.js  [27.4 KB]    # 💬 弹窗组件：确认框、输入框、提示框
+│   │   │   ├── 📄 ExtractorTab.js  [15.6 KB]    # 🧩 提取器管理页面：提取器状态监控和配置
+│   │   │   ├── 📄 LogsTab.js  [5.0 KB]     # 📋 实时日志页面：WebSocket 推送的日志流
+│   │   │   ├── 📄 SettingsTab.js  [25.5 KB]    # ⚙️ 系统设置页面：全局参数配置
+│   │   │   ├── 📄 Sidebar.js  [9.7 KB]     # 📌 侧边栏导航：页面切换菜单
+│   │   │   └── 📄 TabPoolTab.js  [12.4 KB]    # 🏊 标签池管理页面：查看/操作预创建的标签页
+│   │   ├── 📄 dashboard.js  [68.8 KB]    # 🚀 前端入口文件：初始化 App、路由、WebSocket
+│   │   ├── 📄 icons.js  [6.9 KB]     # 🖼️ SVG 图标数据：内联图标资源
+│   │   └── 📄 workflow-editor-inject.js  [32.0 KB]    # ✏️ 工作流编辑器注入脚本：在目标页面注入可视化编辑器
+│   ├── 📄 index.html  [18.9 KB]    # 🏠 Web UI 主页入口 (SPA)
+│   └── 📄 tutorial.html  [43.4 KB]    # 📚 使用教程页面：功能说明和操作指南
+├── 📄 .env  [2.0 KB]     # 🔒 环境变量 (API Key、调试开关等)
+├── 📄 .gitignore  [549 B]      # 🚫 Git 忽略文件列表
+├── 📄 LICENSE  [33.7 KB]    # 📜 开源许可证
+├── 📄 README.md  [16.1 KB]    # 📖 项目说明文档
+├── 📄 VERSION  [5 B]        # 🏷️ 版本号文件
 ├── 📄 clean_profile.py  [2.6 KB]     # 🧹 清理脚本：重置浏览器用户数据目录
-├── 📄 main.py  [6.8 KB]     # ▶️ 程序主入口：启动 FastAPI 服务器
+├── 📄 git提交.py  [17.0 KB]    # 📤 Git 提交辅助脚本：自动化 add/commit/push
+├── 📄 main.py  [7.3 KB]     # ▶️ 程序主入口：启动 FastAPI 服务器
 ├── 📄 requirements.txt  [358 B]      # 📦 Python 依赖列表
-├── 📄 start.bat  [11.9 KB]    # 🚀 Windows 一键启动脚本
-└── 📄 updater.py  [24.3 KB]
+├── 📄 start.bat  [18.2 KB]    # 🚀 Windows 一键启动脚本
+├── 📄 updater.py  [24.3 KB]    # 🔄 自动更新器：检查版本、拉取更新
+└── 📄 参数解释.md  [8.4 KB]     # 📝 配置参数说明文档
 
 ============================================================
 📁 = 目录  |  📄 = 文件  |  # = 注释说明
