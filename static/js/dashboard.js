@@ -1669,6 +1669,12 @@ const app = createApp({
 
         normalizeConfig(raw) {
             const norm = {}
+            // 预设内的字段列表（用于清理顶层残留）
+            const PRESET_FIELDS = [
+                'selectors', 'workflow', 'stealth', 'stream_config',
+                'image_extraction', 'file_paste',
+                'extractor_id', 'extractor_verified'
+            ]
             for (const [k, v] of Object.entries(raw || {})) {
                 if (v.presets) {
                     // 新格式：保留 presets 结构，确保每个预设有基本字段
@@ -1681,7 +1687,15 @@ const app = createApp({
                             stealth: !!presetData.stealth
                         }
                     }
-                    norm[k] = { presets: normalizedPresets }
+                    // 构建站点对象，只保留 presets，清理预设外的残留字段
+                    const siteObj = { presets: normalizedPresets }
+                    // 保留非预设字段（如未来可能的站点级元数据）
+                    for (const [field, value] of Object.entries(v)) {
+                        if (field !== 'presets' && !PRESET_FIELDS.includes(field)) {
+                            siteObj[field] = value
+                        }
+                    }
+                    norm[k] = siteObj
                 } else {
                     // 旧格式兼容：包装为预设（后端迁移后不应再出现，但做兜底）
                     norm[k] = {

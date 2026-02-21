@@ -10,7 +10,7 @@ app/core/workflow/executor.py - 工作流执行器
 
 import time
 import random
-from typing import Generator, Dict, Any, Callable
+from typing import Generator, Dict, Any, Callable, Optional
 
 from app.core.config import (
     logger,
@@ -20,6 +20,7 @@ from app.core.config import (
     WorkflowError,
 )
 from app.core.elements import ElementFinder
+from app.utils.human_mouse import smooth_move_mouse, idle_drift, human_scroll, cdp_precise_click
 from app.core.stream_monitor import StreamMonitor
 from app.core.network_monitor import (
     create_network_monitor,
@@ -89,7 +90,9 @@ class WorkflowExecutor:
         )
         
         self._completion_id = SSEFormatter._generate_id()
-        
+                
+        # 🆕 隐身模式鼠标位置追踪（CDP 绝对坐标）
+        self._mouse_pos = None
         # 初始化输入处理器
         self._text_handler = TextInputHandler(
             tab=tab,
@@ -165,6 +168,108 @@ class WorkflowExecutor:
             time.sleep(min(step, total_delay - elapsed))
             elapsed += step
     
+    # ================= 隐身模式辅助方法 =================
+    
+    def _idle_wait(self, duration: float):
+        """
+        带微漂移的空闲等待（隐身模式专用）
+        
+        如果有已知鼠标位置，等待期间产生微小漂移事件；
+        否则退化为纯 sleep（仍可中断）。
+        """
+        if self._mouse_pos is not None:
+            self._mouse_pos = idle_drift(
+                tab=self.tab,
+                duration=duration,
+                center_pos=self._mouse_pos,
+                check_cancelled=self._check_cancelled
+            )
+        else:
+            elapsed = 0
+            step = 0.1
+            while elapsed < duration:
+                if self._check_cancelled():
+                    return
+                time.sleep(min(step, duration - elapsed))
+                elapsed += step
+    
+    def _stealth_move_to_element(self, ele):
+        """
+        隐身模式下平滑移动鼠标到元素附近
+        
+        通过 DrissionPage 原生属性获取坐标，不注入 JS。
+        如果坐标获取失败，跳过移动（后续 click 自带定位）。
+        """
+        if self._mouse_pos is None:
+            return
+        
+        target = self._get_element_viewport_pos(ele)
+        if target is None:
+            return
+        
+        # 随机偏移（不精确命中中心）
+        tx = target[0] + random.randint(-8, 8)
+        ty = target[1] + random.randint(-5, 5)
+        
+        try:
+            self._mouse_pos = smooth_move_mouse(
+                tab=self.tab,
+                from_pos=self._mouse_pos,
+                to_pos=(tx, ty),
+                check_cancelled=self._check_cancelled
+            )
+        except Exception as e:
+            logger.debug(f"[STEALTH] 平滑移动异常（可忽略）: {e}")
+    
+    def _get_element_viewport_pos(self, ele) -> Optional[tuple]:
+        """
+        获取元素视口坐标（不注入 JS）
+        
+        依次尝试多种 DrissionPage 原生属性。
+        对于可见的固定位置元素（如聊天输入框），
+        页面坐标近似等于视口坐标。
+        """
+        try:
+            r = ele.rect
+            
+            # 尝试 viewport 相关属性
+            for attr in ('viewport_midpoint', 'viewport_click_point'):
+                pos = getattr(r, attr, None)
+                if pos and len(pos) >= 2:
+                    return (int(pos[0]), int(pos[1]))
+            
+            # midpoint（页面坐标，对可见元素近似视口坐标）
+            pos = getattr(r, 'midpoint', None)
+            if pos and len(pos) >= 2:
+                return (int(pos[0]), int(pos[1]))
+            
+            # click_point
+            pos = getattr(r, 'click_point', None)
+            if pos and len(pos) >= 2:
+                return (int(pos[0]), int(pos[1]))
+            
+            # location + size 计算中心
+            loc = getattr(r, 'location', None)
+            size = getattr(r, 'size', None)
+            if loc and size and len(loc) >= 2 and len(size) >= 2:
+                return (int(loc[0] + size[0] / 2), int(loc[1] + size[1] / 2))
+        except Exception:
+            pass
+        
+        return None
+    
+    def _get_viewport_size(self) -> tuple:
+        """获取视口尺寸（不注入 JS）"""
+        try:
+            r = self.tab.rect
+            for attr in ('viewport_size', 'size'):
+                s = getattr(r, attr, None)
+                if s and len(s) >= 2 and s[0] > 100:
+                    return (int(s[0]), int(s[1]))
+        except Exception:
+            pass
+        return (1200, 800)
+    
     # ================= 步骤执行 =================
     
     def execute_step(self, action: str, selector: str,
@@ -191,9 +296,18 @@ class WorkflowExecutor:
                     elapsed += 0.1
             
             elif action == "KEY_PRESS":
-                self._execute_keypress(target_key or value)
+                key = target_key or value
+                # 包含 Enter 的按键（Enter、Ctrl+Enter 等）可能触发提交
+                if key and "Enter" in key and self._network_monitor is not None:
+                    self._network_monitor.pre_start()
+                self._execute_keypress(key)
             
             elif action == "CLICK":
+                # ===== 隐身模式：首次交互前执行人类行为预热 =====
+                if self.stealth_mode and not getattr(self, '_page_warmed_up', False):
+                    self._warmup_page_for_stealth()
+                    self._page_warmed_up = True
+                
                 if target_key == "send_btn":
                     # 🆕 发送前启动网络监听（如果已配置）
                     if self._network_monitor is not None:
@@ -208,14 +322,11 @@ class WorkflowExecutor:
                     self._execute_click(selector, target_key, optional)
             
             elif action == "FILL_INPUT":
-                prompt = context.get("prompt", "") if context else ""
                 
-                # ===== 隐身模式：在首次输入前模拟人类浏览行为 =====
-                # Cloudflare turnstile 会在页面加载后持续监控鼠标/键盘事件，
-                # 如果从页面加载到提交表单之间没有自然交互，会触发 challenge。
-                if self.stealth_mode and not getattr(self, '_page_warmed_up', False):
-                    self._warmup_page_for_stealth()
-                    self._page_warmed_up = True
+                prompt = context.get("prompt", "") if context else ""
+                # v5.12：复用模式下可以提前启动（无额外 CDP session 风险）
+                if self._network_monitor is not None:
+                    self._network_monitor.pre_start()
                 
                 self._execute_fill(selector, prompt, target_key, optional)
             
@@ -286,14 +397,22 @@ class WorkflowExecutor:
                 raise
     
     def _execute_keypress(self, key: str):
-        """执行按键操作"""
+        """执行按键操作（隐身模式人类化时序）"""
         if self._check_cancelled():
             return
-        self.tab.actions.key_down(key).key_up(key)
+       
+        
+        if self.stealth_mode:
+            self.tab.actions.key_down(key)
+            time.sleep(random.uniform(0.05, 0.13))
+            self.tab.actions.key_up(key)
+        else:
+            self.tab.actions.key_down(key).key_up(key)
+        
         self._smart_delay(0.1, 0.2)
     
     def _execute_click(self, selector: str, target_key: str, optional: bool):
-        """执行点击操作（v5.5 增强版）"""
+        """执行点击操作（v5.7 隐身模式人类化点击）"""
         if self._check_cancelled():
             return
         
@@ -302,29 +421,19 @@ class WorkflowExecutor:
         if ele:
             try:
                 if self.stealth_mode:
-                    # 发送按钮前额外犹豫（50% 概率）
+                    # 发送按钮前额外犹豫（50% 概率，带微漂移）
                     if target_key == "send_btn" and random.random() < 0.5:
                         hesitate = random.uniform(0.5, 1.2)
                         logger.debug(f"[STEALTH] 发送前犹豫 {hesitate:.2f}s")
-                        elapsed = 0
-                        while elapsed < hesitate:
-                            if self._check_cancelled():
-                                return
-                            time.sleep(0.05)
-                            elapsed += 0.05
+                        self._idle_wait(hesitate)
                     
-                    # 鼠标移动到元素
-                    try:
-                        self.tab.actions.move_to(ele)
-                        time.sleep(random.uniform(0.08, 0.2))
-                    except Exception:
-                        pass
+                    # 🆕 人类化点击（平滑移动 + CDP mousedown/mouseup 带间隔）
+                    self._stealth_click_element(ele)
+                else:
+                    if self._check_cancelled():
+                        return
+                    ele.click()
                 
-                if self._check_cancelled():
-                    return
-                
-                # 原生点击
-                ele.click()
                 self._smart_delay(
                     BrowserConstants.ACTION_DELAY_MIN,
                     BrowserConstants.ACTION_DELAY_MAX
@@ -333,13 +442,98 @@ class WorkflowExecutor:
             except Exception as click_err:
                 logger.debug(f"点击异常: {click_err}")
                 if target_key == "send_btn":
+                    logger.warning(f"[CLICK] 发送按钮点击失败，降级到 Enter 键: {click_err}")
                     self._execute_keypress("Enter")
+                elif self.stealth_mode:
+                    # 隐身模式下非发送按钮点击失败，向上抛出（不偷偷用 ele.click）
+                    raise
         
         elif target_key == "send_btn":
             self._execute_keypress("Enter")
         
         elif not optional:
             raise ElementNotFoundError(f"点击目标未找到: {selector}")
+    
+    def _stealth_click_element(self, ele):
+        """
+        隐身模式人类化点击（v5.9 — 彻底消灭 ele.click() 降级路径）
+        
+        关键：
+        - 所有路径均使用 cdp_precise_click（force=0.5），绝不降级到 ele.click()
+        - 坐标获取失败时，尝试 JS 获取 getBoundingClientRect 作为最后手段
+        - 若坐标完全无法获取，抛出异常由上层处理（而非偷偷用 ele.click() 触发 CF）
+        """
+        if self._check_cancelled():
+            return
+        
+        # 1. 获取元素坐标（多重尝试）
+        target = self._get_element_viewport_pos(ele)
+        
+        if target is None:
+            # 最后手段：通过 JS 获取坐标（仅在原生属性全部失败时）
+            try:
+                rect = ele.run_js(
+                    "const r = this.getBoundingClientRect();"
+                    "return {x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2)}"
+                )
+                if rect and rect.get('x') and rect.get('y'):
+                    target = (int(rect['x']), int(rect['y']))
+                    logger.debug(f"[STEALTH] 原生属性获取坐标失败，JS getBoundingClientRect 获取: {target}")
+            except Exception as e:
+                logger.debug(f"[STEALTH] JS 坐标获取也失败: {e}")
+        
+        if target is None:
+            # 🔴 绝不降级到 ele.click()，抛出异常
+            raise Exception("[STEALTH] 无法获取元素坐标，拒绝使用 ele.click()（会触发 CF）")
+        
+        # 随机偏移（不精确命中中心）
+        click_x = target[0] + random.randint(-6, 6)
+        click_y = target[1] + random.randint(-4, 4)
+        
+        # 2. 平滑移动鼠标到目标
+        if self._mouse_pos is not None:
+            self._mouse_pos = smooth_move_mouse(
+                tab=self.tab,
+                from_pos=self._mouse_pos,
+                to_pos=(click_x, click_y),
+                check_cancelled=self._check_cancelled
+            )
+        else:
+            from app.utils.human_mouse import _dispatch_mouse_move
+            _dispatch_mouse_move(self.tab, click_x, click_y)
+            self._mouse_pos = (click_x, click_y)
+        
+        if self._check_cancelled():
+            return
+        
+        # 3. 短暂停顿（模拟"确认要点击"）
+        time.sleep(random.uniform(0.05, 0.15))
+        
+        # 4. 精确 CDP 点击（含 force=0.5 修复）
+        success = cdp_precise_click(
+            tab=self.tab,
+            x=click_x,
+            y=click_y,
+            check_cancelled=self._check_cancelled
+        )
+        
+        if not success:
+            # 🔴 CDP 点击失败也不降级到 ele.click()，而是重试一次
+            logger.warning("[STEALTH] CDP 精确点击失败，重试一次...")
+            time.sleep(random.uniform(0.1, 0.3))
+            success = cdp_precise_click(
+                tab=self.tab,
+                x=click_x,
+                y=click_y,
+                check_cancelled=self._check_cancelled
+            )
+            if not success:
+                raise Exception("[STEALTH] CDP 精确点击两次均失败，拒绝降级到 ele.click()")
+        
+        # 更新鼠标位置
+        self._mouse_pos = (click_x, click_y)
+        
+        logger.debug(f"[STEALTH] 人类化点击完成: ({click_x}, {click_y})")
     
     # ================= 可靠发送 =================
     
@@ -482,64 +676,59 @@ class WorkflowExecutor:
     
     def _warmup_page_for_stealth(self):
         """
-        模拟人类在输入前的自然浏览行为
+        页面预热（v5.8 — 简化版，降低行为指纹风险）
         
-        目的：让 Cloudflare 的 JS 传感器收集到足够的"人类行为"数据，
-        避免在提交表单时触发 challenge。
-        
-        模拟行为：
-        1. 鼠标在页面上自然移动几次
-        2. 可能滚动一下页面
-        3. 在输入框附近停留
+        改进：
+        - 修复死代码（_dispatch_mouse_move = None 覆盖导入）
+        - 减少随机扫视次数（1-2 次，真实用户打开熟悉页面不会大量扫视）
+        - 移除随机滚动（在已登录的对话页面滚动不自然）
+        - 保留微漂移（等待期间的手部抖动仍有价值）
         """
-        logger.debug("[STEALTH] 执行页面预热（模拟人类浏览）")
+        logger.debug("[STEALTH] 执行页面预热")
         
         try:
-            # 获取页面尺寸用于生成合理的鼠标坐标
-            viewport_width = 1200
-            viewport_height = 800
-            try:
-                size = self.tab.run_js("return {w: window.innerWidth, h: window.innerHeight}")
-                if size and isinstance(size, dict):
-                    viewport_width = size.get('w', 1200)
-                    viewport_height = size.get('h', 800)
-            except Exception:
-                pass
+            from app.utils.human_mouse import _dispatch_mouse_move
             
-            # 1. 鼠标随机移动 2-4 次（模拟"扫视页面"）
-            move_count = random.randint(2, 4)
+            vw, vh = self._get_viewport_size()
+            
+            # 初始化鼠标位置（视口中上部，模拟"刚把鼠标放到页面"）
+            init_x = vw // 2 + random.randint(-80, 80)
+            init_y = int(vh * 0.3) + random.randint(-40, 40)
+            self._mouse_pos = (init_x, init_y)
+            _dispatch_mouse_move(self.tab, init_x, init_y)
+            
+            # 短暂停顿（模拟"看到页面内容"）
+            self._idle_wait(random.uniform(0.4, 0.9))
+            
+            if self._check_cancelled():
+                return
+            
+            # 1-2 次轻微移动（模拟目光扫过，不是大幅扫视）
+            move_count = random.randint(1, 2)
             for i in range(move_count):
                 if self._check_cancelled():
                     return
                 
-                # 生成页面中部区域的随机坐标（避免边缘）
-                x = random.randint(int(viewport_width * 0.15), int(viewport_width * 0.85))
-                y = random.randint(int(viewport_height * 0.15), int(viewport_height * 0.75))
+                # 小幅移动（不超过视口 30%）
+                dx = random.randint(-int(vw * 0.15), int(vw * 0.15))
+                dy = random.randint(-int(vh * 0.12), int(vh * 0.12))
+                target_x = max(50, min(vw - 50, self._mouse_pos[0] + dx))
+                target_y = max(50, min(vh - 50, self._mouse_pos[1] + dy))
                 
-                try:
-                    self.tab.actions.move(x, y)
-                except Exception:
-                    pass
+                self._mouse_pos = smooth_move_mouse(
+                    tab=self.tab,
+                    from_pos=self._mouse_pos,
+                    to_pos=(target_x, target_y),
+                    check_cancelled=self._check_cancelled
+                )
                 
-                # 每次移动后停留
-                time.sleep(random.uniform(0.3, 0.8))
+                # 微漂移停留
+                self._idle_wait(random.uniform(0.3, 0.6))
             
-            # 2. 30% 概率滚动页面（模拟"看看页面内容"）
-            if random.random() < 0.3:
-                try:
-                    scroll_amount = random.randint(50, 200)
-                    self.tab.actions.scroll(0, scroll_amount)
-                    time.sleep(random.uniform(0.3, 0.6))
-                    # 滚回来
-                    self.tab.actions.scroll(0, -scroll_amount)
-                    time.sleep(random.uniform(0.2, 0.4))
-                except Exception:
-                    pass
+            # 最后停顿
+            self._idle_wait(random.uniform(0.3, 0.7))
             
-            # 3. 最后一次停顿（模拟"准备开始输入"）
-            time.sleep(random.uniform(0.5, 1.0))
-            
-            logger.debug(f"[STEALTH] 页面预热完成（{move_count} 次鼠标移动）")
+            logger.debug(f"[STEALTH] 页面预热完成（{move_count} 次移动）")
             
         except Exception as e:
             logger.debug(f"[STEALTH] 页面预热异常（可忽略）: {e}")
@@ -547,7 +736,7 @@ class WorkflowExecutor:
     # ================= 输入框填充 =================
     
     def _execute_fill(self, selector: str, text: str, target_key: str, optional: bool):
-        """填充输入框（v5.6 模式分离版）"""
+        """填充输入框（v5.7 隐身增强版）"""
         if self._check_cancelled():
             return
 
@@ -557,11 +746,13 @@ class WorkflowExecutor:
                 raise ElementNotFoundError("找不到输入框")
             return
 
-        # 填充文本
+        # 🆕 隐身模式：人类化点击聚焦输入框 + 剪贴板粘贴
         if self.stealth_mode:
-            self._text_handler.fill_via_clipboard(ele, text)
+            self._stealth_click_element(ele)
+            time.sleep(random.uniform(0.1, 0.25))
+            self._text_handler.fill_via_clipboard_no_click(ele, text)
         else:
-            self._text_handler.fill_via_js(ele, text)
+            self._text_handler.fill_via_js(ele, text)   
         
         # 粘贴图片
         if hasattr(self, '_context') and self._context:
@@ -569,28 +760,17 @@ class WorkflowExecutor:
             if images:
                 self._image_handler.paste_images(images)
         
-        # ===== 隐身模式：粘贴后模拟"人类阅读/检查"延迟 =====
-        # 解决问题：粘贴 28K 字符后 1 秒内就点发送，被 CF 判定为自动化
+        # ===== 隐身模式：粘贴后模拟"人类阅读/检查"延迟（带微漂移）=====
         if self.stealth_mode and len(text) > 0:
-            # 基础延迟：1-2 秒（模拟"看一眼输入框"）
             base_delay = random.uniform(1.0, 2.0)
-            
-            # 长文本额外延迟：每 5000 字符加 0.3-0.6 秒（模拟滚动检查）
             extra_per_chunk = len(text) / 5000.0
             extra_delay = extra_per_chunk * random.uniform(0.3, 0.6)
-            
-            # 上限 3 秒（避免超长文本等太久）
             total_review = min(base_delay + extra_delay, 3.0)
             
             logger.debug(f"[STEALTH] 粘贴后阅读延迟 {total_review:.1f}s (文本长度={len(text)})")
             
-            elapsed = 0
-            step = 0.1
-            while elapsed < total_review:
-                if self._check_cancelled():
-                    return
-                time.sleep(min(step, total_review - elapsed))
-                elapsed += step
+            # 🆕 等待期间保持微漂移（消灭"事件沙漠"）
+            self._idle_wait(total_review)
 
 
 __all__ = ['WorkflowExecutor']

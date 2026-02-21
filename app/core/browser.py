@@ -698,6 +698,7 @@ class BrowserCore:
         result_container_selector = selectors.get("result_container", "")
         
         try:
+            
             for step in workflow:
                 if self._should_stop_checker():
                     logger.info(f"[{session.id}] 工作流被用户中断")

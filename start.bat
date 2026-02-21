@@ -4,7 +4,7 @@ setlocal EnableExtensions EnableDelayedExpansion
 
 REM ===============================
 REM Universal Web-to-API 启动脚本
-REM v2.3 - 增强错误检测
+REM v2.3 - DrissionPage 反检测补丁
 REM ===============================
 
 cd /d "%~dp0"
@@ -367,6 +367,21 @@ if "!NEED_INSTALL!"=="1" (
 )
 echo.
 
+REM ---------- 6.5) DrissionPage 反检测补丁 ----------
+echo [STEP] 应用 DrissionPage 补丁
+echo ----------------------------------------
+
+if exist "patch_drissionpage.py" (
+    python patch_drissionpage.py
+    if !errorlevel! neq 0 (
+        echo [WARN] 补丁应用失败，网络监听模式可能触发 CF 检测
+        echo        项目仍可正常运行（DOM 模式不受影响）
+    )
+) else (
+    echo [WARN] 未找到 patch_drissionpage.py，跳过补丁
+)
+echo.
+
 REM ---------- 7) 启动浏览器 ----------
 echo [STEP] 准备 Chromium 内核浏览器
 echo ----------------------------------------
@@ -505,8 +520,11 @@ echo.
 
 REM ---------- 8) 显示版本信息 ----------
 if exist "VERSION" (
-    set /p CURRENT_VER=<VERSION
-    echo   当前版本: v!CURRENT_VER!
+    echo   版本信息:
+    echo   ----------------------------------------
+    type VERSION
+    echo.
+    echo   ----------------------------------------
 )
 
 REM ---------- 9) 启动服务 ----------

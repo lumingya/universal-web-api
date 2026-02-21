@@ -121,9 +121,10 @@ class ConfigEngine:
         self.validator = SelectorValidator(self.global_config.get_fallback_selectors())
         self.ai_analyzer = AIAnalyzer(self.global_config)
         
-        # 迁移旧配置（顺序重要：先转预设格式，再补缺失字段）
+        # 迁移旧配置（顺序重要：先转预设格式，再补缺失字段，最后清理残留）
         self._migrate_to_presets()
         self.migrate_site_configs()
+        self._cleanup_preset_residuals()
         
         logger.debug(f"配置引擎已初始化，已加载 {len(self.sites)} 个站点配置")
     
@@ -292,6 +293,47 @@ class ConfigEngine:
         if migrated_count > 0:
             self._save_config()
             logger.info(f"✅ 已迁移 {migrated_count} 个站点配置为预设格式")
+    
+        if migrated_count > 0:
+            self._save_config()
+            logger.info(f"✅ 已迁移 {migrated_count} 个站点配置为预设格式")
+    
+    def _cleanup_preset_residuals(self):
+        """
+        清理站点配置中预设外的残留字段
+        
+        当站点已有 presets 结构时，顶层不应再有 selectors/workflow/file_paste 等字段。
+        这些残留通常由旧版 bug 或手动编辑产生。
+        """
+        cleaned_count = 0
+        
+        for domain in list(self.sites.keys()):
+            if domain.startswith('_'):
+                continue
+            
+            site_config = self.sites[domain]
+            
+            # 只处理已有 presets 结构的站点
+            if "presets" not in site_config:
+                continue
+            
+            # 找出预设外的残留字段
+            residual_keys = []
+            for key in list(site_config.keys()):
+                if key == "presets":
+                    continue
+                if key in PRESET_FIELDS:
+                    residual_keys.append(key)
+            
+            # 删除残留
+            for key in residual_keys:
+                del site_config[key]
+                cleaned_count += 1
+                logger.debug(f"清理残留: {domain}.{key}")
+        
+        if cleaned_count > 0:
+            self._save_config()
+            logger.info(f"✅ 已清理 {cleaned_count} 个预设外残留字段")
     
     def _get_site_data(self, domain: str, preset_name: str = None) -> Optional[Dict]:
         """

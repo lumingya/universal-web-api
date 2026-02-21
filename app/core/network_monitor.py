@@ -106,35 +106,29 @@ class NetworkMonitor:
         
     def pre_start(self):
         """
-        提前启动网络监听（在发送消息前调用）
+        在发送动作之前启动网络监听
         
-        调用时机：在 CLICK send_btn 之前
-        作用：确保能捕获到发送后的网络请求
+        v5.11 改进：
+        - 恢复实际启动（延迟启动会错过 requestWillBeSent 事件）
+        - 但调用时机从 FILL_INPUT 延后到 CLICK send_btn / KEY_PRESS Enter 之前
+        - 暴露窗口：从"发送前一刻"到"回复结束"，而非"输入开始"到"回复结束"
+        
+        调用时机：仅在 CLICK send_btn 或 KEY_PRESS Enter 之前
         """
         if self._pre_started or self._is_listening:
-            logger.debug("[NetworkMonitor] 监听已启动，跳过重复启动")
             return
         
         if not self._listen_pattern:
-            logger.warning("[NetworkMonitor] listen_pattern 未配置，跳过预启动")
+            logger.warning("[NetworkMonitor] listen_pattern 未配置")
             return
         
         try:
+            # 启用复用模式：使用 tab 主连接，不创建额外 CDP session
+            self.tab.listen._reuse_driver = True
             self.tab.listen.start(self._listen_pattern)
             self._pre_started = True
             self._is_listening = True
-            
-            # 等待监听器就绪
-            time.sleep(0.3)
-            
-            # === 探针：验证监听状态 ===
-            try:
-                listening_targets = self.tab.listen.get_listening()
-                logger.debug(f"[PROBE] 预启动后监听列表: {listening_targets}")
-            except Exception as e:
-                logger.debug(f"[PROBE] 无法获取监听列表: {e}")
-            
-            logger.debug(f"[NetworkMonitor] 预启动监听 (pattern={self._listen_pattern!r})")
+            logger.debug(f"[NetworkMonitor] 发送前启动监听 - 复用模式 (pattern={self._listen_pattern!r})")
         except Exception as e:
             logger.error(f"[NetworkMonitor] 预启动失败: {e}")
     
@@ -142,6 +136,11 @@ class NetworkMonitor:
                 completion_id: Optional[str] = None) -> Generator[str, None, None]:
         """
         监听网络响应并流式输出
+        
+        v5.11：
+        - pre_start 已在发送前启动监听
+        - 此处仅做兜底检查（正常不应走到未启动的情况）
+        - 响应结束后立即 stop()，最小化暴露窗口
         
         Args:
             selector: 选择器（兼容参数，实际不使用）
@@ -161,20 +160,15 @@ class NetworkMonitor:
         if completion_id is None:
             completion_id = SSEFormatter._generate_id()
         
-        logger.debug(
-            f"[NetworkMonitor] 启动监听 "
-            f"(pattern={self._listen_pattern!r})"
-        )
-        
         # 重置解析器状态
         self.parser.reset()
         self._total_chunks = 0
         
-        # 启动网络监听（如果未预启动）
+        # 兜底：如果 pre_start 未被调用，在此启动（可能错过首包）
         if not self._is_listening:
             logger.warning(
-                "[NetworkMonitor] 监听未预启动，将在此启动 "
-                "（可能错过部分请求）"
+                "[NetworkMonitor] 监听未预启动，在此启动"
+                "（可能错过 requestWillBeSent）"
             )
             try:
                 self.tab.listen.start(self._listen_pattern)
@@ -182,14 +176,13 @@ class NetworkMonitor:
             except Exception as e:
                 logger.error(f"[NetworkMonitor] 启动监听失败: {e}")
                 raise NetworkMonitorError(f"启动监听失败: {e}")
-     
-        try:
-            # 流式输出阶段
-                yield from self._stream_output_phase(completion_id)
         
+        try:
+            yield from self._stream_output_phase(completion_id)
         finally:
-            # 清理：停止监听
+            # 立即停止：关闭 Network.enable + 释放额外 CDP session
             self._cleanup()
+            self._pre_started = False
     
     def _stream_output_phase(self, completion_id: str) -> Generator[str, None, None]:
         """
@@ -282,14 +275,32 @@ class NetworkMonitor:
         logger.debug(f"[NetworkMonitor] 监听结束 (chunks={self._total_chunks}, duration={time.time() - phase_start:.1f}s)")
         
     def _cleanup(self):
-        """清理：停止网络监听"""
+        """
+        清理：停止网络监听并释放额外的 CDP session
+        
+        tab.listen.stop() 内部会：
+        1. 移除所有 Network.* 事件回调
+        2. 关闭独立的 Driver 连接（释放额外的 CDP session）
+        
+        这会关闭 Target.attachToTarget 创建的额外 session，
+        消除 Network.enable 的全局副作用。
+        """
         if self._is_listening:
             try:
                 self.tab.listen.stop()
                 self._is_listening = False
-                logger.debug("[NetworkMonitor] 已停止监听")
+                logger.debug("[NetworkMonitor] 已停止监听（CDP session 已释放）")
             except Exception as e:
                 logger.debug(f"[NetworkMonitor] 停止监听失败: {e}")
+        
+        # 即使 _is_listening 已经是 False，也尝试确保 listen 已停止
+        # （防止异常路径导致状态不一致）
+        elif hasattr(self.tab, 'listen') and self.tab.listen.listening:
+            try:
+                self.tab.listen.stop()
+                logger.debug("[NetworkMonitor] 补充停止残留监听")
+            except Exception:
+                pass
 
 
 # ================= 工厂函数 =================

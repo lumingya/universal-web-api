@@ -98,16 +98,26 @@ async def save_config(
 ):
     """保存站点配置"""
     try:
-        with open(ConfigConstants.CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(request.config, f, indent=2, ensure_ascii=False)
-
-        config_engine.reload_config()
+        # 过滤掉前端可能误传的内部键
+        new_sites = {
+            k: v for k, v in request.config.items()
+            if not k.startswith('_')
+        }
+        config_engine.sites = new_sites
+        
+        # 通过引擎保存（自动包含 _global）
+        success = config_engine.save_config()
+        
+        if not success:
+            raise HTTPException(status_code=500, detail="配置文件写入失败")
 
         return {
             "status": "success",
             "message": "配置已保存",
-            "sites_count": len(request.config)
+            "sites_count": len(new_sites)
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

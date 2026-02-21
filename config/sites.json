@@ -1,4 +1,44 @@
 {
+  "_global": {
+    "selector_definitions": [
+      {
+        "key": "input_box",
+        "description": "用户输入文本的输入框（textarea 或 contenteditable 元素）",
+        "enabled": true,
+        "required": true
+      },
+      {
+        "key": "send_btn",
+        "description": "发送消息的按钮（通常是 type=submit 或带有发送图标的按钮）",
+        "enabled": true,
+        "required": true
+      },
+      {
+        "key": "result_container",
+        "description": "AI 回复内容的容器（仅包含 AI 的输出文本，不含用户消息）",
+        "enabled": true,
+        "required": true
+      },
+      {
+        "key": "new_chat_btn",
+        "description": "新建对话的按钮（点击后开始新的对话）",
+        "enabled": true,
+        "required": false
+      },
+      {
+        "key": "message_wrapper",
+        "description": "消息完整容器（包裹单条消息的外层元素，用于多节点拼接）",
+        "enabled": false,
+        "required": false
+      },
+      {
+        "key": "generating_indicator",
+        "description": "生成中指示器（如停止按钮、加载动画，用于检测是否还在输出）",
+        "enabled": false,
+        "required": false
+      }
+    ]
+  },
   "aistudio.google.com": {
     "presets": {
       "主预设": {
@@ -97,11 +137,6 @@
           "hint_text": "完全专注于文件内容"
         }
       }
-    },
-    "file_paste": {
-      "enabled": false,
-      "threshold": 50000,
-      "hint_text": "完全专注于文件内容"
     }
   },
   "grok.com": {
@@ -166,16 +201,11 @@
           "mode": "all"
         },
         "file_paste": {
-          "enabled": true,
-          "threshold": 50000,
+          "enabled": false,
+          "threshold": 5000,
           "hint_text": "完全专注于文件内容"
         }
       }
-    },
-    "file_paste": {
-      "enabled": false,
-      "threshold": 50000,
-      "hint_text": "完全专注于文件内容"
     }
   },
   "chatgpt.com": {
@@ -256,15 +286,10 @@
         },
         "file_paste": {
           "enabled": true,
-          "threshold": 50000,
+          "threshold": 180000,
           "hint_text": "完全专注于文件内容"
         }
       }
-    },
-    "file_paste": {
-      "enabled": false,
-      "threshold": 50000,
-      "hint_text": "完全专注于文件内容"
     }
   },
   "gemini.google.com": {
@@ -281,7 +306,7 @@
           "选择模型": ".mat-mdc-menu-item:nth-of-type(3)"
         },
         "stream_config": {
-          "mode": "network",
+          "mode": "dom",
           "hard_timeout": 600,
           "silence_threshold": 2.5,
           "initial_wait": 30,
@@ -467,11 +492,6 @@
           "hint_text": "完全专注于文件内容"
         }
       }
-    },
-    "file_paste": {
-      "enabled": false,
-      "threshold": 50000,
-      "hint_text": "完全专注于文件内容"
     }
   },
   "chat.deepseek.com": {
@@ -548,11 +568,6 @@
           "hint_text": "完全专注于文件内容"
         }
       }
-    },
-    "file_paste": {
-      "enabled": false,
-      "threshold": 50000,
-      "hint_text": "完全专注于文件内容"
     }
   },
   "www.doubao.com": {
@@ -620,11 +635,6 @@
           "hint_text": "完全专注于文件内容"
         }
       }
-    },
-    "file_paste": {
-      "enabled": false,
-      "threshold": 50000,
-      "hint_text": "完全专注于文件内容"
     }
   },
   "h2ogpte.genai.h2o.ai": {
@@ -699,11 +709,6 @@
           "hint_text": "完全专注于文件内容"
         }
       }
-    },
-    "file_paste": {
-      "enabled": false,
-      "threshold": 50000,
-      "hint_text": "完全专注于文件内容"
     }
   },
   "claude.ai": {
@@ -767,16 +772,11 @@
           "mode": "all"
         },
         "file_paste": {
-          "enabled": true,
+          "enabled": false,
           "threshold": 50000,
           "hint_text": "完全专注于文件内容"
         }
       }
-    },
-    "file_paste": {
-      "enabled": false,
-      "threshold": 50000,
-      "hint_text": "完全专注于文件内容"
     }
   },
   "arena.ai": {
@@ -824,7 +824,7 @@
         ],
         "stealth": true,
         "stream_config": {
-          "mode": "dom",
+          "mode": "network",
           "hard_timeout": 300,
           "silence_threshold": 2.5,
           "initial_wait": 30,
@@ -833,7 +833,7 @@
             "parser": "lmarena",
             "url_pattern": "**/nextjs-api/stream/create-evaluation**",
             "method": "POST",
-            "listen_pattern": "**/nextjs-api/stream/create-evaluation**",
+            "listen_pattern": "/nextjs-api/stream/create-evaluation",
             "first_response_timeout": 300,
             "silence_threshold": 3,
             "response_interval": 1
@@ -856,11 +856,6 @@
           "hint_text": "完全专注于文件内容"
         }
       }
-    },
-    "file_paste": {
-      "enabled": false,
-      "threshold": 50000,
-      "hint_text": "完全专注于文件内容"
     }
   }
 }

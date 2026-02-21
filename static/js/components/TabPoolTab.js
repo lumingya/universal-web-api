@@ -42,7 +42,7 @@ window.TabPoolTabComponent = {
         async fetchTabs() {
             this.loading = true;
             try {
-                const token = localStorage.getItem('auth_token');
+                const token = localStorage.getItem('api_token');
                 const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
                 
                 const response = await fetch('/api/tab-pool/tabs', { headers });
@@ -92,7 +92,7 @@ window.TabPoolTabComponent = {
             this.presetUpdating = { ...this.presetUpdating, [tabIndex]: true };
 
             try {
-                const token = localStorage.getItem('auth_token');
+                const token = localStorage.getItem('api_token');
                 const headers = { 'Content-Type': 'application/json' };
                 if (token) headers['Authorization'] = 'Bearer ' + token;
 

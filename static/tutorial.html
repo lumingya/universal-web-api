@@ -15,6 +15,71 @@
             --code-text: #e2e8f0;
             --success-color: #10b981;
             --warning-color: #f59e0b;
+            --sidebar-bg: #ffffff;
+            --card-bg: #ffffff;
+            --info-bg: #eff6ff;
+            --info-border: #3b82f6;
+            --info-text: #1e40af;
+            --note-bg: #fffbeb;
+            --note-border: #f59e0b;
+            --note-text: #92400e;
+            --highlight-bg: #fff1f2;
+            --highlight-border: #e11d48;
+            --highlight-text: #9f1239;
+            --success-bg: #f0fdf4;
+            --success-border: #10b981;
+            --success-text: #065f46;
+            --config-bg: #f0fdf4;
+            --config-border: #bbf7d0;
+            --troubleshoot-bg: #fefce8;
+            --troubleshoot-border: #fef08a;
+            --troubleshoot-text: #854d0e;
+            --site-card-bg: #f8fafc;
+            --site-card-hover-bg: #eff6ff;
+            --site-card-model-bg: #e2e8f0;
+            --site-card-model-text: #64748b;
+            --th-bg: #f8fafc;
+            --code-inline-bg: #f1f5f9;
+            --code-inline-text: #be185d;
+            --h1-color: #1e293b;
+            --h3-color: #475569;
+            --desc-color: #64748b;
+        }
+
+        [data-theme="dark"] {
+            --primary-color: #60a5fa;
+            --text-color: #cbd5e1;
+            --bg-color: #0f172a;
+            --border-color: #334155;
+            --sidebar-bg: #1e293b;
+            --card-bg: #1e293b;
+            --info-bg: #1e3a5f;
+            --info-border: #3b82f6;
+            --info-text: #93c5fd;
+            --note-bg: #422006;
+            --note-border: #f59e0b;
+            --note-text: #fcd34d;
+            --highlight-bg: #4c0519;
+            --highlight-border: #f43f5e;
+            --highlight-text: #fda4af;
+            --success-bg: #052e16;
+            --success-border: #10b981;
+            --success-text: #6ee7b7;
+            --config-bg: #052e16;
+            --config-border: #065f46;
+            --troubleshoot-bg: #422006;
+            --troubleshoot-border: #854d0e;
+            --troubleshoot-text: #fcd34d;
+            --site-card-bg: #1e293b;
+            --site-card-hover-bg: #1e3a5f;
+            --site-card-model-bg: #334155;
+            --site-card-model-text: #94a3b8;
+            --th-bg: #334155;
+            --code-inline-bg: #334155;
+            --code-inline-text: #f472b6;
+            --h1-color: #e2e8f0;
+            --h3-color: #94a3b8;
+            --desc-color: #94a3b8;
         }
 
         * {
@@ -30,12 +95,12 @@
             background-color: var(--bg-color);
             display: flex;
             min-height: 100vh;
+            transition: background-color 0.3s, color 0.3s;
         }
 
-        /* 侧边栏样式 */
         .sidebar {
             width: var(--sidebar-width);
-            background: white;
+            background: var(--sidebar-bg);
             border-right: 1px solid var(--border-color);
             position: fixed;
             height: 100vh;
@@ -44,6 +109,7 @@
             top: 0;
             left: 0;
             z-index: 100;
+            transition: background-color 0.3s, border-color 0.3s;
         }
 
         .sidebar h2 {
@@ -66,12 +132,33 @@
         }
 
         .nav-link:hover, .nav-link.active {
-            background-color: #eff6ff;
+            background-color: var(--info-bg);
             color: var(--primary-color);
             font-weight: 500;
         }
 
-        /* 主内容区域样式 */
+        .theme-toggle {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            margin-bottom: 15px;
+            padding: 8px 12px;
+            background: var(--site-card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            cursor: pointer;
+            color: var(--text-color);
+            font-size: 0.9rem;
+            transition: all 0.2s;
+            width: 100%;
+        }
+
+        .theme-toggle:hover {
+            border-color: var(--primary-color);
+            background: var(--info-bg);
+        }
+
         .main-content {
             margin-left: var(--sidebar-width);
             padding: 40px 60px;
@@ -80,35 +167,36 @@
         }
 
         section {
-            background: white;
+            background: var(--card-bg);
             padding: 30px;
             border-radius: 12px;
             box-shadow: 0 1px 3px rgba(0,0,0,0.05);
             margin-bottom: 30px;
             border: 1px solid var(--border-color);
             scroll-margin-top: 20px;
+            transition: background-color 0.3s, border-color 0.3s;
         }
 
         h1, h2, h3 {
-            color: #1e293b;
+            color: var(--h1-color);
             margin-bottom: 1rem;
         }
-        
+
         h1 { font-size: 2rem; border-bottom: 1px solid var(--border-color); padding-bottom: 15px; }
         h2 { font-size: 1.5rem; margin-top: 10px; border-left: 4px solid var(--primary-color); padding-left: 10px; }
-        h3 { font-size: 1.2rem; margin-top: 20px; color: #475569; }
+        h3 { font-size: 1.2rem; margin-top: 20px; color: var(--h3-color); }
 
         p { margin-bottom: 1rem; }
-        
+
         ul, ol { padding-left: 1.5rem; margin-bottom: 1rem; }
         li { margin-bottom: 0.5rem; }
 
         code {
-            background-color: #f1f5f9;
+            background-color: var(--code-inline-bg);
             padding: 0.2em 0.5em;
             border-radius: 4px;
             font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-            color: #be185d;
+            color: var(--code-inline-text);
             font-size: 0.9em;
         }
 
@@ -158,7 +246,7 @@
         }
 
         .site-card {
-            background: #f8fafc;
+            background: var(--site-card-bg);
             border: 1px solid var(--border-color);
             padding: 12px 16px;
             border-radius: 8px;
@@ -173,7 +261,7 @@
 
         .site-card:hover {
             border-color: var(--primary-color);
-            background: #eff6ff;
+            background: var(--site-card-hover-bg);
             transform: translateY(-2px);
             box-shadow: 0 4px 12px rgba(37, 99, 235, 0.15);
         }
@@ -187,8 +275,8 @@
         .site-card .model-id {
             margin-left: auto;
             font-size: 0.75rem;
-            color: #64748b;
-            background: #e2e8f0;
+            color: var(--site-card-model-text);
+            background: var(--site-card-model-bg);
             padding: 2px 8px;
             border-radius: 4px;
         }
@@ -208,7 +296,7 @@
         }
 
         th {
-            background-color: #f8fafc;
+            background-color: var(--th-bg);
             font-weight: 600;
         }
 
@@ -223,75 +311,67 @@
             transition: all 0.2s;
         }
 
-        .btn:hover { 
-            background-color: #1d4ed8; 
+        .btn:hover {
+            background-color: #1d4ed8;
             transform: translateY(-1px);
         }
 
         .note {
-            background-color: #fffbeb;
-            border-left: 4px solid #f59e0b;
+            background-color: var(--note-bg);
+            border-left: 4px solid var(--note-border);
             padding: 15px 20px;
             margin-bottom: 1.5rem;
-            color: #92400e;
+            color: var(--note-text);
             border-radius: 0 8px 8px 0;
         }
 
         .info-box {
-            background: #eff6ff;
-            border-left: 4px solid #3b82f6;
+            background: var(--info-bg);
+            border-left: 4px solid var(--info-border);
             padding: 15px 20px;
             margin: 20px 0;
             border-radius: 0 8px 8px 0;
-            color: #1e40af;
+            color: var(--info-text);
         }
 
         .highlight-box {
-            background: #fff1f2;
-            border-left: 4px solid #e11d48;
+            background: var(--highlight-bg);
+            border-left: 4px solid var(--highlight-border);
             padding: 15px 20px;
             margin: 20px 0;
             border-radius: 0 8px 8px 0;
-            color: #9f1239;
+            color: var(--highlight-text);
         }
 
         .success-box {
-            background: #f0fdf4;
-            border-left: 4px solid #10b981;
+            background: var(--success-bg);
+            border-left: 4px solid var(--success-border);
             padding: 15px 20px;
             margin: 20px 0;
             border-radius: 0 8px 8px 0;
-            color: #065f46;
+            color: var(--success-text);
         }
 
         .config-box {
-            background: #f0fdf4;
-            border: 1px solid #bbf7d0;
+            background: var(--config-bg);
+            border: 1px solid var(--config-border);
             padding: 20px;
             border-radius: 8px;
             margin-top: 15px;
         }
 
-        .config-box ul {
-            margin-bottom: 0;
-        }
+        .config-box ul { margin-bottom: 0; }
 
         .troubleshoot-list {
-            background: #fefce8;
-            border: 1px solid #fef08a;
+            background: var(--troubleshoot-bg);
+            border: 1px solid var(--troubleshoot-border);
             border-radius: 8px;
             padding: 15px 20px;
             margin: 15px 0;
         }
 
-        .troubleshoot-list ol {
-            margin-bottom: 0;
-        }
-
-        .troubleshoot-list li {
-            margin-bottom: 10px;
-            color: #854d0e;
-        }
+        .troubleshoot-list ol { margin-bottom: 0; }
+        .troubleshoot-list li { margin-bottom: 10px; color: var(--troubleshoot-text); }
 
         .config-group {
             margin-bottom: 25px;
@@ -302,25 +382,17 @@
             align-items: center;
             gap: 8px;
             font-size: 1.1rem;
-            color: #374151;
+            color: var(--h3-color);
             margin-bottom: 12px;
             padding-bottom: 8px;
             border-bottom: 1px dashed var(--border-color);
         }
 
-        .config-group .icon {
-            font-size: 1.2rem;
-        }
+        .config-group .icon { font-size: 1.2rem; }
 
-        /* 响应式 */
         @media (max-width: 900px) {
-            .sidebar {
-                transform: translateX(-100%);
-            }
-            .main-content {
-                margin-left: 0;
-                padding: 20px;
-            }
+            .sidebar { transform: translateX(-100%); }
+            .main-content { margin-left: 0; padding: 20px; }
         }
     </style>
 </head>
@@ -328,50 +400,62 @@
 
     <div class="sidebar">
         <h2>📑 目录导航</h2>
+        <button class="theme-toggle" onclick="toggleTheme()">
+            <span id="themeIcon">🌙</span>
+            <span id="themeText">夜间模式</span>
+        </button>
         <nav>
             <a href="#quick-start" class="nav-link">🚀 快速开始</a>
             <a href="#connect-api" class="nav-link">🔌 连接 API</a>
+            <a href="#tab-pool" class="nav-link">🗂️ 标签页池</a>
+            <a href="#presets" class="nav-link">🎛️ 预设系统</a>
             <a href="#selectors" class="nav-link">🔍 选择器配置</a>
             <a href="#extractors" class="nav-link">🧩 提取器配置</a>
             <a href="#image-extraction" class="nav-link">🖼️ 图片提取配置</a>
             <a href="#response-detection" class="nav-link">🌊 响应检测配置</a>
             <a href="#workflow" class="nav-link">🎬 工作流配置</a>
-            <a href="#ai-recognition" class="nav-link">🎯 AI 元素识别配置</a>
+            <a href="#file-paste" class="nav-link">📄 文件粘贴</a>
+            <a href="#stealth-mode" class="nav-link">🛡️ 隐身模式</a>
+            <a href="#ai-recognition" class="nav-link">🎯 AI 元素识别</a>
             <a href="#env-config" class="nav-link">⚙️ 环境配置</a>
             <a href="#browser-config" class="nav-link">🌐 浏览器常量</a>
-            <a href="#config-manage" class="nav-link">💾 配置更新与导出</a>
+            <a href="#config-manage" class="nav-link">💾 配置管理</a>
             <a href="#faq" class="nav-link">❓ 常见问题</a>
         </nav>
     </div>
 
     <div class="main-content">
-        <h1>Universal Web-to-API 使用手册 (v1.8.1)</h1>
+        <h1>Universal Web-to-API 使用手册 (v2.3.1)</h1>
 
+        <!-- ==================== 快速开始 ==================== -->
         <section id="quick-start">
             <h2>🚀 快速开始</h2>
-            <p>欢迎使用 Web-to-API。本项目将网页版 AI 对话界面转换为标准 API。</p>
-            
+            <p>欢迎使用 Web-to-API。本项目将网页版 AI 对话界面转换为标准 OpenAI 兼容 API。</p>
+
             <div class="info-box">
-                <p><strong>📌 核心提示：</strong> 脚本启动后会自动打开当前这个浏览器窗口，<strong style="color: #e11d48;">请保持该浏览器窗口处于开启状态</strong>，它是服务运行的基础（本教程标签页在运行后请手动关闭，否则可能干扰。具体意思就是说当你看完这个教程后，在此浏览器打开某个ai标签页后（如deepseek），就可以把该教程关掉了）。</p>
+                <p><strong>📌 核心提示：</strong> 脚本启动后会自动打开当前这个浏览器窗口，<strong style="color: var(--highlight-border);">请保持该浏览器窗口处于开启状态</strong>，它是服务运行的基础。本教程标签页在运行后请手动关闭，否则可能干扰脚本操作。</p>
             </div>
 
             <div class="note">
                 <p><strong>控制面板入口：</strong></p>
-                <a href="/dashboard" class="btn" target="_blank">打开控制面板</a>
-                <p style="margin-top: 10px;">在这里你可以可视化地修改所有配置、查看实时日志。</p>
+                <a href="/" class="btn" target="_blank">打开控制面板</a>
+                <p style="margin-top: 10px;">控制面板地址：<code>http://127.0.0.1:8199/</code>，可在这里可视化地修改所有配置、查看实时日志。</p>
             </div>
 
             <h3>✅ 已适配的站点列表</h3>
-            <p>以下网站是已经做好适配的网站，你可以直接访问并查看第二步「连接 API」来进行连接：</p>
-            
-            <div class="site-grid" id="siteGrid">
-                <!-- 站点卡片由 JavaScript 动态生成 -->
+            <p>以下网站已做好适配，可以直接访问并连接 API：</p>
+
+            <div class="site-grid" id="siteGrid"></div>
+
+            <div class="highlight-box">
+                <p><strong>⚠️ 关于 arena.ai：</strong>该站点非常看重 IP 质量。<strong>IP 好的可以一直对话，IP 不好的一次就会被拦截</strong>。IP 好坏不仅取决于纯净度，更重要的是<strong>历史行为和共享人数</strong>——有时候机房 IP 会比原生双 ISP 更具优势。经测试，即便关闭网络监听模式，IP 质量不佳时仍会频繁触发 Cloudflare 人机验证。这是站点本身的安全策略，与脚本无关。<br><small style="opacity: 0.8;">（感谢测试者 @喵团子爱摸鱼 的反馈）</small></p>
             </div>
 
             <h3>🆕 对于未收录的网站（自动适配）</h3>
             <p>如果目标网站不在上述列表中，系统支持通过 AI 自动分析网页结构。详见下方「AI 元素识别配置」章节。</p>
         </section>
 
+        <!-- ==================== 连接 API ==================== -->
         <section id="connect-api">
             <h2>🔌 连接 API</h2>
             <p>本项目提供兼容 <strong>OpenAI 格式</strong> 的接口。</p>
@@ -380,7 +464,13 @@
                 <p><strong>⚙️ 客户端通用配置参数：</strong></p>
                 <ul>
                     <li><strong>服务提供商 (Provider)</strong>：选择 <code>OpenAI</code>、<code>OpenAI 兼容</code> 或 <code>自定义</code>。</li>
-                    <li><strong>API 接口地址 (Base URL)</strong>：通常填 <code>http://127.0.0.1:8199/v1</code>，部分软件需完整路径 <code>http://127.0.0.1:8199/v1/chat/completions</code></li>
+                    <li><strong>API 接口地址 (Base URL)</strong>：
+                        <ul>
+                            <li>默认（自动分配标签页）：<code>http://127.0.0.1:8199/v1</code></li>
+                            <li>指定标签页：<code>http://127.0.0.1:8199/tab/1/v1</code>（编号见标签页池）</li>
+                            <li>部分软件需完整路径：<code>http://127.0.0.1:8199/v1/chat/completions</code></li>
+                        </ul>
+                    </li>
                     <li><strong>API 密钥 (API Key)</strong>：任意填写即可（例如：<code>sk-any</code>）。</li>
                     <li><strong>模型名称 (Model)</strong>：取决于你访问的网站。你访问什么网站，实际就是什么模型，所以该项可随意填写。</li>
                 </ul>
@@ -395,25 +485,166 @@
                 <li><strong>推荐登录</strong>：建议在网页上登录你的账号，这样 API 也就拥有了你的账号权限（如 Plus 会员、历史记录等）。</li>
                 <li><strong>免登录</strong>：如果该网站在未登录状态下允许对话（如 LM Arena），则无需登录即可直接通过 API 调用。</li>
             </ul>
-            
+
             <div class="note">
                 <p><strong>⚠️ 关于 SillyTavern (酒馆):</strong> 在酒馆中使用 API 测试功能可能会出现 bug，<strong>建议直接发送对话进行测试</strong>，而非点击测试按钮。</p>
             </div>
 
             <div class="highlight-box">
-                <p><strong>⚠️ 上下文长度限制：</strong>受限于网站输入框一次性所能容纳的字符上限，上下文不能太长，否则请求会直接失败。请根据实际情况控制对话长度。</p>
+                <p><strong>⚠️ 上下文长度限制：</strong>受限于网站输入框一次性所能容纳的字符上限，上下文不能太长，否则请求会直接失败。请根据实际情况控制对话长度。对于长文本场景，可以开启「文件粘贴」功能来绕过部分限制。</p>
             </div>
+
             <h3>已测试站点单次最大发送长度：</h3>
-                <ul>
-                    <li><strong>Chatgpt</strong>：约200k。</li>
-                    <li><strong>Gemini官网</strong>：无会员约 30 k，Pro 会员尚未发现上限。</li>
-                    <li><strong>Lmarena</strong>：120k。</li>
-                </ul>         
+            <ul>
+                <li><strong>ChatGPT</strong>：约 200k。</li>
+                <li><strong>Gemini 官网</strong>：无会员约 30k，Pro 会员尚未发现上限。</li>
+                <li><strong>LM Arena</strong>：120k。</li>
+            </ul>
         </section>
 
+        <!-- ==================== 标签页池 ==================== -->
+        <section id="tab-pool">
+            <h2>🗂️ 标签页池</h2>
+            <p>标签页池是本项目的核心调度机制。脚本会自动扫描浏览器中打开的所有 AI 网站标签页，并为每个标签页分配一个<strong>持久编号</strong>。</p>
+
+            <h3>工作原理</h3>
+            <ol>
+                <li>你在浏览器中打开一个或多个 AI 网站标签页（如 ChatGPT、Gemini 等）</li>
+                <li>脚本自动检测并将它们加入标签页池，分配编号（1, 2, 3...）</li>
+                <li>API 请求到达时，自动选择一个空闲的标签页来处理</li>
+                <li>处理完成后，标签页被释放回池中，等待下一个请求</li>
+            </ol>
+
+            <h3>两种路由方式</h3>
+            <table>
+                <tr><th>路由</th><th>地址格式</th><th>说明</th></tr>
+                <tr>
+                    <td><strong>默认路由</strong></td>
+                    <td><code>/v1/chat/completions</code></td>
+                    <td>自动选择一个空闲标签页处理请求</td>
+                </tr>
+                <tr>
+                    <td><strong>指定标签页</strong></td>
+                    <td><code>/tab/{编号}/v1/chat/completions</code></td>
+                    <td>使用特定编号的标签页，如果该标签页忙碌则排队等待</td>
+                </tr>
+            </table>
+
+            <div class="info-box">
+                <p><strong>💡 何时使用指定标签页：</strong></p>
+                <ul style="margin-bottom: 0;">
+                    <li>当你想让某个客户端始终使用特定的 AI 站点时</li>
+                    <li>当你为不同标签页配置了不同的预设时（见下方「预设系统」）</li>
+                    <li>当你需要确保对话的连续性时</li>
+                </ul>
+            </div>
+
+            <h3>在控制面板中管理</h3>
+            <p>在控制面板中点击「标签页」选项卡，可以：</p>
+            <ul>
+                <li>查看所有标签页的实时状态（空闲/忙碌/错误）</li>
+                <li>查看每个标签页的当前 URL 和请求计数</li>
+                <li>复制指定标签页的 API 端点地址</li>
+                <li>为标签页切换不同的预设配置</li>
+            </ul>
+
+            <div class="note">
+                <p><strong>⚠️ 注意事项：</strong></p>
+                <ul style="margin-bottom: 0;">
+                    <li>标签页编号在脚本运行期间保持不变，重启后会重新分配</li>
+                    <li>关闭浏览器中的标签页后，对应的编号会自动释放</li>
+                    <li>新打开的标签页会在几秒内被自动检测到并加入池中</li>
+                    <li><code>chrome://newtab</code> 等空白页不会被加入池，页面加载完成后才会被识别</li>
+                </ul>
+            </div>
+        </section>
+
+        <!-- ==================== 预设系统 ==================== -->
+        <section id="presets">
+            <h2>🎛️ 预设系统</h2>
+            <p>预设系统允许你为同一个站点创建<strong>多套独立的配置方案</strong>，并将不同预设分配给不同的标签页。</p>
+
+            <h3>典型应用场景</h3>
+            <table>
+                <tr><th>标签页</th><th>预设名称</th><th>配置差异</th></tr>
+                <tr>
+                    <td>标签页 #1</td>
+                    <td>Pro 模型对话</td>
+                    <td>完整工作流（含 new_chat_btn）、较长超时、启用深度提取</td>
+                </tr>
+                <tr>
+                    <td>标签页 #2</td>
+                    <td>快速识图</td>
+                    <td>简化工作流、启用图片提取、较短超时</td>
+                </tr>
+                <tr>
+                    <td>标签页 #3</td>
+                    <td>代码助手</td>
+                    <td>启用文件粘贴、高阈值、启用网络监听模式</td>
+                </tr>
+            </table>
+
+            <h3>如何使用预设</h3>
+
+            <p><strong>1. 创建预设</strong></p>
+            <ol>
+                <li>在控制面板中选择一个站点</li>
+                <li>在「配置」选项卡顶部可以看到预设选择器</li>
+                <li>点击「＋ 新建预设」，输入名称后创建</li>
+                <li>新预设会克隆当前选中预设的所有配置</li>
+                <li>然后可以独立修改新预设的选择器、工作流、提取器等配置</li>
+            </ol>
+
+            <p><strong>2. 为标签页分配预设</strong></p>
+            <ol>
+                <li>切换到「标签页」选项卡</li>
+                <li>在对应标签页的行中找到「预设」下拉框</li>
+                <li>选择想要使用的预设即可</li>
+            </ol>
+
+            <p><strong>3. 通过 API 使用指定预设的标签页</strong></p>
+            <pre><code># 假设标签页 #1 使用"Pro 模型对话"预设，标签页 #2 使用"快速识图"预设
+
+# 使用 Pro 模型对话
+curl http://127.0.0.1:8199/tab/1/v1/chat/completions
+
+# 使用快速识图
+curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
+
+            <div class="info-box">
+                <p><strong>💡 提示：</strong>每个预设包含独立的选择器、工作流、流式配置、图片提取、文件粘贴等全套配置。修改一个预设不会影响其他预设。</p>
+            </div>
+
+            <h3>预设配置结构</h3>
+            <pre><code>{
+  "gemini.google.com": {
+    "presets": {
+      "主预设": {
+        "selectors": { ... },
+        "workflow": [ ... ],
+        "stream_config": { ... },
+        "image_extraction": { "enabled": false },
+        "file_paste": { "threshold": 50000 }
+      },
+      "快速识图": {
+        "selectors": { ... },
+        "workflow": [ ... ],
+        "image_extraction": { "enabled": true, "mode": "first" },
+        "file_paste": { "threshold": 10000 }
+      }
+    }
+  }
+}</code></pre>
+
+            <div class="note">
+                <p><strong>⚠️ 注意：</strong>删除预设不可撤销，且至少需要保留一个预设。如果只有一个预设，删除按钮会被禁用。</p>
+            </div>
+        </section>
+
+        <!-- ==================== 选择器配置 ==================== -->
         <section id="selectors">
             <h2>🔍 选择器配置 (Selectors)</h2>
-            <p>在 <code>sites.json</code> 中，每个站点都需要定义一组 CSS 选择器，告诉程序去哪里输入、哪里点击。</p>
+            <p>每个站点（的每个预设）都需要定义一组 CSS 选择器，告诉程序去哪里输入、哪里点击。</p>
             <pre><code>"selectors": {
   "input_box": "textarea[id='prompt']",   // 输入框
   "send_btn": "button.send-btn",          // 发送按钮
@@ -433,16 +664,16 @@
             </div>
 
             <div class="success-box">
-                <p><strong>🧪 测试选择器：</strong>可以在控制面板的「工作流可视化」中查看你配置的选择器是否正确。你也可以直接在控制面板对应的选择器配置项中，点击「测试」按钮来验证选择器是否生效。</p>
+                <p><strong>🧪 测试选择器：</strong>在控制面板的选择器配置项中点击「测试」按钮可以验证选择器是否生效，也可以在「工作流可视化」中查看配置是否正确。</p>
             </div>
         </section>
 
+        <!-- ==================== 提取器配置 ==================== -->
         <section id="extractors">
             <h2>🧩 提取器配置 (Extractors)</h2>
             <p>提取器决定了如何从网页 HTML 中解析出干净的 Markdown 文本。</p>
-            <pre><code>// 在 sites.json 中为站点配置提取器
+            <pre><code>// 在站点配置中为预设配置提取器
 {
-  "site_id": "chatgpt",
   "extractor_id": "deep_mode_v1",  // 使用深度模式
   ...
 }</code></pre>
@@ -460,6 +691,7 @@
             </div>
         </section>
 
+        <!-- ==================== 图片提取配置 ==================== -->
         <section id="image-extraction">
             <h2>🖼️ 图片提取配置</h2>
             <p>配置程序如何处理网页中生成的图片。</p>
@@ -478,6 +710,7 @@
             </ul>
         </section>
 
+        <!-- ==================== 响应检测配置 ==================== -->
         <section id="response-detection">
             <h2>🌊 响应检测配置</h2>
             <p>定义如何判断 AI 正在输出以及何时结束。支持两种检测模式：</p>
@@ -487,22 +720,21 @@
                 <tr>
                     <td><strong>DOM 模式</strong>（默认）</td>
                     <td>✅ 流式</td>
-                    <td>轮询检测页面 DOM 变化，实时输出内容</td>
+                    <td>轮询检测页面 DOM 变化，实时输出内容。适用于绝大多数场景</td>
                 </tr>
                 <tr>
                     <td><strong>网络拦截模式</strong></td>
                     <td>❌ 非流式</td>
-                    <td>拦截网络请求，AI 生成完毕后一次性返回，能处理复杂内容</td>
+                    <td>拦截浏览器网络请求，AI 生成完毕后一次性返回完整内容</td>
                 </tr>
             </table>
 
-            <div class="info-box">
-                <p><strong>💡 启用网络拦截模式：</strong>在控制面板的站点配置中，找到「网络拦截模式」开关并开启即可。注意：此模式仅适配部分站点。</p>
-            </div>
+            <h3>DOM 模式（默认推荐）</h3>
+            <p>DOM 模式通过轮询页面内容变化来检测 AI 的输出，支持流式返回。对不同网站的兼容性有所差异，<strong>普遍存在代码块读取不完整的问题</strong>（因为代码块的 HTML 渲染结构较复杂）。如果你主要用于角色扮演等纯文本场景，DOM 模式完全够用；如果用于写代码，可能需要配合网络拦截模式。</p>
 
-            <h3>检测逻辑说明</h3>
+            <h4>检测逻辑</h4>
             <pre><code>生成结束判定 = (连续稳定次数 ≥ 稳定判定次数) AND (静默时间 > 静默超时阈值)</code></pre>
-            <p><strong>工作原理（DOM 模式）：</strong></p>
+            <p><strong>工作原理：</strong></p>
             <ol>
                 <li>脚本每隔「默认检查间隔」秒检查一次页面内容</li>
                 <li>如果内容有变化，重置计数器</li>
@@ -511,10 +743,7 @@
                 <li>如果超过「初始等待」时间仍未检测到内容，判定失败</li>
             </ol>
 
-            <h3>何时需要开启？</h3>
-            <p>如果你只是用于角色扮演，一般不需要开启此选项。但如果是用于写代码，则必须开启</p>
-
-            <h3>调优建议</h3>
+            <h4>调优建议</h4>
             <table>
                 <tr><th>场景</th><th>静默超时阈值</th><th>稳定判定次数</th><th>初始等待</th></tr>
                 <tr><td>快速模型 (GPT-4o)</td><td>3-5 秒</td><td>3-5 次</td><td>60 秒</td></tr>
@@ -522,11 +751,82 @@
                 <tr><td>代码生成</td><td>8-10 秒</td><td>6-8 次</td><td>180 秒</td></tr>
                 <tr><td>长文生成</td><td>12-15 秒</td><td>10 次</td><td>300 秒</td></tr>
             </table>
+
+            <h3>网络拦截模式</h3>
+
+            <div class="highlight-box">
+                <p><strong>⚠️ 重要提醒：</strong>网络拦截模式目前仅针对部分站点做了适配。<strong>如果某个站点默认没有开启网络拦截，请不要手动开启</strong>——大概率是没有适配，或者开启后会产生副作用（如增加被 Cloudflare 检测的风险）。</p>
+            </div>
+
+            <p>网络拦截模式通过拦截浏览器的 XHR/Fetch 请求来获取 AI 的完整回复，能完美处理代码块等复杂内容。但由于 DrissionPage 不支持流式读取网络响应，<strong>所有内容必须等 AI 完全生成后才能一次性返回</strong>，因此不支持流式输出。</p>
+
+            <div class="info-box">
+                <p><strong>💡 启用方式：</strong>在控制面板的站点配置中，找到「流式配置」面板，将模式切换为「网络拦截」即可。</p>
+            </div>
+
+            <h4>网络拦截配置项</h4>
+            <table>
+                <tr><th>配置项</th><th>说明</th><th>示例</th></tr>
+                <tr>
+                    <td><strong>URL 匹配模式</strong></td>
+                    <td>网络请求 URL 中包含此字符串时拦截（必填）</td>
+                    <td><code>GenerateContent</code></td>
+                </tr>
+                <tr>
+                    <td><strong>响应解析器</strong></td>
+                    <td>用于解析拦截到的响应数据的解析器 ID（必填）</td>
+                    <td>根据站点自动匹配</td>
+                </tr>
+                <tr>
+                    <td><strong>首次响应超时</strong></td>
+                    <td>等待 AI 返回完整回复的最长时间。由于非流式特性，这实际上是<strong>整个回复的生成超时</strong>，而不是首个字符的等待时间</td>
+                    <td><code>300</code> 秒</td>
+                </tr>
+                <tr>
+                    <td><strong>静默超时</strong></td>
+                    <td>拦截到响应后，多久没有新数据判定为完成</td>
+                    <td><code>3</code> 秒</td>
+                </tr>
+                <tr>
+                    <td><strong>轮询间隔</strong></td>
+                    <td>检查是否有新的网络响应的频率</td>
+                    <td><code>0.5</code> 秒</td>
+                </tr>
+            </table>
+
+            <h4>通用配置项（两种模式共用）</h4>
+            <table>
+                <tr><th>配置项</th><th>说明</th><th>默认值</th></tr>
+                <tr>
+                    <td><strong>全局硬超时</strong></td>
+                    <td>单次请求的绝对超时上限，超过此时间无论如何都会结束。在现有情景下与首次超时并无绝对区别</td>
+                    <td><code>300</code> 秒</td>
+                </tr>
+                <tr>
+                    <td><strong>静默超时 (DOM)</strong></td>
+                    <td>网路监听模式下的静默超时阈值</td>
+                    <td><code>3</code> 秒</td>
+                </tr>
+                <tr>
+                    <td><strong>初始等待</strong></td>
+                    <td>等待 AI 开始回复的最长时间</td>
+                    <td><code>30</code> 秒</td>
+                </tr>
+            </table>
+
+            <div class="note">
+                <p><strong>💡 关于超时配置：</strong>在网络拦截模式下，「首次响应超时」和「全局硬超时」实际效果相似，因为 DrissionPage 不支持流式返回——首次响应就是完整响应。建议两者设为相同的值。对于慢速思考模型（如 o1），可能需要设为 300 秒以上。</p>
+            </div>
+
+            <div class="highlight-box">
+                <p><strong>⚠️ 关于 arena.ai：</strong>该站点建议<strong>不要</strong>开启网络拦截模式。因为网络监听会创建额外的浏览器连接，增加被 Cloudflare 检测到的概率。请使用默认的 DOM 模式。</p>
+            </div>
         </section>
 
+        <!-- ==================== 工作流配置 ==================== -->
         <section id="workflow">
             <h2>🎬 工作流配置 (Workflow)</h2>
-            <p>定义一系列动作的执行顺序。常见动作包括：</p>
+            <p>定义一系列动作的执行顺序。每个预设可以有独立的工作流。</p>
             <pre><code>"workflow": [
   { "action": "CLICK", "target": "new_chat_btn" },
   { "action": "WAIT", "value": 0.5 },
@@ -544,12 +844,80 @@
             </table>
         </section>
 
+        <!-- ==================== 文件粘贴 ==================== -->
+        <section id="file-paste">
+            <h2>📄 文件粘贴</h2>
+            <p>当发送的文本长度超过设定的阈值时，系统会自动将文本写入临时 <code>.txt</code> 文件，然后以文件粘贴的方式发送到输入框。这可以绕过部分网站对输入框字符数的限制。</p>
+
+            <h3>配置项说明</h3>
+            <table>
+                <tr><th>配置项</th><th>默认值</th><th>说明</th></tr>
+                <tr><td>启用</td><td>关闭</td><td>是否开启文件粘贴模式</td></tr>
+                <tr><td>阈值</td><td><code>50000</code> 字符</td><td>文本长度超过此值时触发文件粘贴</td></tr>
+                <tr><td>引导文本</td><td><code>完全专注于文件内容</code></td><td>粘贴文件后自动在输入框中追加的文字</td></tr>
+            </table>
+
+            <div class="info-box">
+                <p><strong>💡 适用场景：</strong>文件粘贴模式仅适用于<strong>支持文件上传</strong>的 AI 网站（如 Gemini、ChatGPT 等）。如果目标网站不支持文件上传，开启此功能会导致发送失败。</p>
+            </div>
+
+            <h3>配置方式</h3>
+            <p>在控制面板的「配置」选项卡中找到「文件粘贴」面板，可以针对每个站点（的每个预设）独立配置。也支持批量启用/禁用所有站点。</p>
+
+            <div class="note">
+                <p><strong>⚠️ 注意：</strong>引导文本的作用是确保 AI 能正确理解粘贴的文件内容。如果留空，部分网站可能不会自动读取文件。</p>
+            </div>
+        </section>
+
+        <!-- ==================== 隐身模式 ==================== -->
+        <section id="stealth-mode">
+            <h2>🛡️ 隐身模式</h2>
+            <p>隐身模式用于绕过网站的反自动化检测（如 Cloudflare 人机验证）。开启后，脚本的所有操作（点击、鼠标移动、滚动等）都会模拟真实人类行为。</p>
+
+            <h3>何时需要开启</h3>
+            <ul>
+                <li><strong>需要开启</strong>：访问有 Cloudflare 防护的站点（如 arena.ai、chatgpt.com 等）</li>
+                <li><strong>不需要开启</strong>：访问无防护或低防护的站点（如 AI Studio、DeepSeek 等）</li>
+            </ul>
+
+            <div class="info-box">
+                <p><strong>💡 如何开启：</strong>在控制面板中选择站点后，在页面顶部勾选「隐身模式」复选框即可。该设置是每个预设独立的。</p>
+            </div>
+
+            <h3>隐身模式做了什么</h3>
+            <table>
+                <tr><th>行为</th><th>普通模式</th><th>隐身模式</th></tr>
+                <tr><td>鼠标点击</td><td>直接 CDP 命令</td><td>模拟真实鼠标按压（含 pressure、微移、释放偏移）</td></tr>
+                <tr><td>鼠标移动</td><td>瞬间跳转</td><td>人类化曲线移动</td></tr>
+                <tr><td>空闲时</td><td>无动作</td><td>随机微漂移（模拟手部抖动）</td></tr>
+                <tr><td>滚动</td><td>直接调用</td><td>纯 CDP 滚轮事件</td></tr>
+                <tr><td>操作间隔</td><td>最小延迟</td><td>随机化延迟（0.1-0.3 秒）</td></tr>
+            </table>
+
+            <h3>DrissionPage 补丁</h3>
+            <p>为了最大程度减少被检测的风险，本项目需要对 DrissionPage 库进行一个小补丁，让网络监听功能复用浏览器的主连接而非创建额外的连接。</p>
+            <ul>
+                <li><strong>自动执行</strong>：<code>start.bat</code> 启动脚本会在依赖安装后自动执行补丁</li>
+                <li><strong>手动执行</strong>：<code>python patch_drissionpage.py</code></li>
+                <li><strong>恢复原文件</strong>：<code>python patch_drissionpage.py --restore</code></li>
+            </ul>
+
+            <div class="note">
+                <p><strong>⚠️ 注意：</strong>每次升级 DrissionPage 后需要重新执行补丁。补丁支持重复执行（幂等），不会重复打补丁。</p>
+            </div>
+
+            <div class="highlight-box">
+                <p><strong>⚠️ 关于 arena.ai 的特别说明：</strong>即便开启了隐身模式并关闭了网络监听，在半小时内连续对话约 10 条也几乎一定会触发 Cloudflare 人机验证。这是该站点本身的安全策略，真人操作也同样会触发，并非脚本问题。</p>
+            </div>
+        </section>
+
+        <!-- ==================== AI 元素识别 ==================== -->
         <section id="ai-recognition">
             <h2>🎯 AI 元素识别配置</h2>
             <p>当你访问的站点不在已适配列表中时，系统可以调用 AI 自动分析网页结构，识别出输入框、发送按钮等关键元素。</p>
 
             <div class="info-box">
-                <p><strong>📍 配置位置：</strong>进入 <a href="/dashboard">控制面板</a> → 设置 → AI 元素识别</p>
+                <p><strong>📍 配置位置：</strong>进入 <a href="/">控制面板</a> → 设置 → AI 元素识别</p>
             </div>
 
             <h3>配置项说明</h3>
@@ -573,7 +941,7 @@
                 <tr><td><code>generating_indicator</code></td><td>生成中指示器（如停止按钮、加载动画）</td><td>❌</td></tr>
             </table>
 
-            <h3>使用流程</h3>
+            <h3>使用流程（AI 自动配置）</h3>
             <ol>
                 <li><strong>配置 API</strong>：在控制面板 → 设置 → 环境配置 → AI 分析配置中，填写你自己的 OpenAI 格式 API 地址和 Key。</li>
                 <li><strong>访问新站点</strong>：在浏览器中打开一个未适配的网站。</li>
@@ -584,19 +952,19 @@
             <div class="note">
                 <p><strong>💡 提示：</strong>如果你只使用已经配置好的站点，则不需要关注此功能。如果你想自己新增站点，可以利用此功能让 AI 帮你自动配置参数，配置效果取决于 AI 的能力。</p>
             </div>
-             <div class="note">
-                <p><strong>💡 提示：</strong>如果你有一定技术水平，也可以自行配置，步骤如下：</p>
-            <h3>使用流程</h3>
-            <ol>
-                <li><strong>不配置 API</strong>：不填写API，这样自动配置将会失效。</li>
-                <li><strong>获取默认配置</strong>：失败后，系统会自动分配一个默认配置，需要刷新才能看到。</li>
-                <li><strong>手动配置</strong>：到目标网站手动获取各个选择器名并填入对应框中。</li>
-                <li><strong>进行测试</strong>：你可以点击在工作流中点击可视化按钮，查看你的配置是否正确。或者直接点击测试按钮。</li>
-            </ol>                    
-            </div>
 
+            <div class="note">
+                <p><strong>💡 手动配置流程：</strong>如果你有一定技术水平，也可以自行配置：</p>
+                <ol>
+                    <li><strong>不配置 API</strong>：不填写 API，这样自动配置将会失效。</li>
+                    <li><strong>获取默认配置</strong>：失败后，系统会自动分配一个默认配置，需要刷新才能看到。</li>
+                    <li><strong>手动配置</strong>：到目标网站手动获取各个选择器名并填入对应框中。</li>
+                    <li><strong>进行测试</strong>：在工作流中点击可视化按钮查看配置是否正确，或直接点击测试按钮。</li>
+                </ol>
+            </div>
         </section>
 
+        <!-- ==================== 环境配置 ==================== -->
         <section id="env-config">
             <h2>⚙️ 环境配置</h2>
             <p>在控制面板 → 设置 → 环境配置中修改，<strong>需重启服务生效</strong>。</p>
@@ -677,6 +1045,7 @@
             </div>
         </section>
 
+        <!-- ==================== 浏览器常量 ==================== -->
         <section id="browser-config">
             <h2>🌐 浏览器常量</h2>
             <p>在控制面板 → 设置 → 浏览器常量中修改，<strong>即时生效</strong>。</p>
@@ -692,7 +1061,7 @@
 
             <div class="config-group">
                 <h4><span class="icon">⏱️</span> 操作延迟</h4>
-                <p style="color: #64748b; font-size: 0.9rem; margin-bottom: 10px;">模拟人类操作的随机延迟范围，防止被网站检测为机器人</p>
+                <p style="color: var(--desc-color); font-size: 0.9rem; margin-bottom: 10px;">模拟人类操作的随机延迟范围，防止被网站检测为机器人</p>
                 <table>
                     <tr><th>配置项</th><th>默认值</th><th>说明</th></tr>
                     <tr><td>隐身延迟下限</td><td><code>0.1</code> 秒</td><td>隐蔽操作的最小延迟</td></tr>
@@ -714,7 +1083,7 @@
 
             <div class="config-group">
                 <h4><span class="icon">📡</span> 响应检测</h4>
-                <p style="color: #64748b; font-size: 0.9rem; margin-bottom: 10px;">控制 AI 响应的检测频率和超时判定</p>
+                <p style="color: var(--desc-color); font-size: 0.9rem; margin-bottom: 10px;">控制 AI 响应的检测频率和超时判定</p>
                 <table>
                     <tr><th>配置项</th><th>默认值</th><th>说明</th></tr>
                     <tr><td>检查间隔下限</td><td><code>0.1</code> 秒</td><td>轮询检测的最快频率</td></tr>
@@ -730,7 +1099,7 @@
 
             <div class="config-group">
                 <h4><span class="icon">⚙️</span> 响应检测（高级）</h4>
-                <p style="color: #64748b; font-size: 0.9rem; margin-bottom: 10px;">通常不需要修改</p>
+                <p style="color: var(--desc-color); font-size: 0.9rem; margin-bottom: 10px;">通常不需要修改</p>
                 <table>
                     <tr><th>配置项</th><th>默认值</th><th>说明</th></tr>
                     <tr><td>重渲染等待</td><td><code>0.5</code> 秒</td><td>等待页面重新渲染</td></tr>
@@ -761,11 +1130,14 @@
             </div>
         </section>
 
+        <!-- ==================== 配置管理 ==================== -->
         <section id="config-manage">
-            <h2>💾 配置更新与导出</h2>
+            <h2>💾 配置管理</h2>
             <ul>
                 <li><strong>保存</strong>: 在控制面板修改配置后，点击「保存」按钮，更改会立即写入配置文件。</li>
                 <li><strong>热重载</strong>: 大部分配置修改后立即生效，无需重启程序（环境配置除外）。</li>
+                <li><strong>导入/导出</strong>: 支持导出全量配置或单个站点配置为 JSON 文件，也可以导入配置文件。</li>
+                <li><strong>预设管理</strong>: 每个站点的预设可以独立创建、删除、切换。预设的导出包含在站点配置中。</li>
                 <li><strong>备份</strong>: 建议定期备份 <code>config/</code> 目录。</li>
             </ul>
 
@@ -774,9 +1146,10 @@
             </div>
         </section>
 
+        <!-- ==================== FAQ ==================== -->
         <section id="faq">
             <h2>❓ 常见问题</h2>
-            
+
             <h3>Q1: 为什么酒馆显示连接失败？</h3>
             <p>A: 因为酒馆点击「测试 API」时发送的请求信息过短。特别是当你同时使用酒馆测试 API 功能并且目标站点是 AI Studio 时，容易出现这个问题。<strong>建议直接发送对话消息进行测试</strong>，而非使用测试按钮。</p>
 
@@ -785,38 +1158,48 @@
             <div class="troubleshoot-list">
                 <ol>
                     <li><strong>人为干涉了工作流</strong>：在工作流执行时，你点击了脚本控制的浏览器页面的其他按钮，或者切换了页面。在脚本执行过程中，你不能操作脚本控制的浏览器，最多只能看着。</li>
-                    <li><strong>折叠边框</strong>：如果你手动把页面边款缩小，或折叠某些按钮，脚本可能无法操作元素。因此必须将折叠元素全部展开（浏览器可以最小化但不能缩小边框）</li>
+                    <li><strong>折叠边框</strong>：如果你手动把页面边框缩小，或折叠某些按钮，脚本可能无法操作元素。因此必须将折叠元素全部展开（浏览器可以最小化但不能缩小边框）。</li>
                     <li><strong>网站状态异常</strong>：查看一下脚本控制的浏览器状态，可能触发了人机验证，可能单次发送的信息太长被网站拒绝，也可能发送的内容包含违规信息被拦截。</li>
                     <li><strong>网络问题</strong>：网络波动或者代理切换了 IP，导致发送失败。这种情况可能引发脚本死锁，需要重启脚本或等待约 5 分钟。表现为：脚本后台显示发送成功，但浏览器中信息没有被实际发送或发送后又失败了。</li>
-                    <li><strong>教程页看完记得关</strong>：注意，本浏览器由脚本直接操作，不要打开除ai网站之外的其它标签页，如搜索页面，教材页面。同时如果已经打开了并且已经出现问题，重启脚本即可。</li>
+                    <li><strong>教程页看完记得关</strong>：注意，本浏览器由脚本直接操作，不要打开除 AI 网站之外的其它标签页，如搜索页面、教程页面。同时如果已经打开了并且已经出现问题，重启脚本即可。</li>
                     <li><strong>站点配置失效</strong>：如果以上问题都排除了，可能是该网站的配置已过期需要更新。你可以在 GitHub 上提 Issue 或加群反馈。如果你有一定基础，也可以手动更新选择器配置。</li>
                 </ol>
             </div>
 
             <h3>Q3: 我同时打开了多个页面，脚本会怎么操作？</h3>
-            <p>A: 目前脚本遵循的逻辑是「<strong>哪个可用就用哪个，当前页面优先</strong>」，并不是按照轮询顺序分配。</p>
+            <p>A: 脚本使用<strong>标签页池</strong>自动管理所有打开的标签页：</p>
             <ul>
-                <li>如果想单独使用某一个网站，只能单独打开这一个网站，或打开多个同一网站的标签页。</li>
-                <li>当同时有多个请求时，脚本会按照当前页面的可用状态来分配请求。</li>
-                <li>如果没有并发需求，完全可以只打开一个标签页。</li>
+                <li><strong>默认路由</strong>（<code>/v1/chat/completions</code>）：自动选择一个空闲标签页处理请求</li>
+                <li><strong>指定标签页</strong>（<code>/tab/1/v1/chat/completions</code>）：使用编号为 1 的标签页</li>
+                <li>你可以为不同标签页分配不同的<strong>预设</strong>，实现同一站点的多种用途（如对话 + 识图）</li>
+                <li>当同时有多个请求时，空闲标签页会被依次分配；如果所有标签页都忙碌，新请求会排队等待</li>
             </ul>
 
-            <h3>Q4: 控制面板的参数应该怎么调？需要调吗？</h3>
+            <h3>Q4: 标签页池中看不到新打开的标签页？</h3>
+            <p>A: 请检查以下几点：</p>
+            <ul>
+                <li>新标签页的网页是否已经<strong>加载完成</strong>（`chrome://newtab` 等空白页不会被识别）</li>
+                <li>等待 2-3 秒后点击「立即刷新」按钮</li>
+                <li>如果仍然看不到，重启脚本即可</li>
+            </ul>
+
+            <h3>Q5: 控制面板的参数应该怎么调？需要调吗？</h3>
             <p>A: <strong>大多数时候不需要调整</strong>，里面的参数都是配置好的默认值，可以满足绝大多数使用场景。</p>
 
-            <h3>Q5: 有什么已知问题？</h3>
+            <h3>Q6: 有什么已知问题？</h3>
             <p>A: 目前已经有一些已知的问题：</p>
             <ul>
-                <li>VScode中已经发现<strong>codex</strong>插件不适配，原因未知。</li>
+                <li>VSCode 中已经发现 <strong>Codex</strong> 插件不适配，原因未知。</li>
+                <li>DrissionPage 补丁需在每次升级 DrissionPage 后重新执行。</li>
             </ul>
 
-            <h3>Q6: 这个项目有什么用？</h3>
+            <h3>Q7: 这个项目有什么用？</h3>
             <p>A: 这是一个「白嫖」项目，主要用途包括：</p>
             <ul>
                 <li><strong>免费额度利用</strong>：很多 AI 厂商在网页端有相当多的免费额度（如 DeepSeek、AI Studio、LM Arena 等），本项目能将网页额度转化为 OpenAI 格式的 API，供前端调用。</li>
                 <li><strong>调试上下文</strong>：你可以便捷地查看前端是如何构造上下文的——只需打开浏览器复制一遍脚本发送的请求内容即可。</li>
-                <li><strong>多端口配置</strong>：多端口功能（如主端口用于聊天 AI，副端口用于绘图 AI），实现聊天 + 绘图双重白嫖。</li>
-                <li><strong>功能扩展</strong>：后续将支持绕过输入框长度限制。</li>
+                <li><strong>多标签页 + 多预设</strong>：同时开多个标签页，为不同标签页配置不同预设（如主端口用于聊天，副端口用于识图），实现多用途并行。</li>
+                <li><strong>长文本绕过</strong>：通过文件粘贴功能，绕过部分网站输入框的字符限制。</li>
             </ul>
 
             <div class="info-box">
@@ -830,7 +1213,7 @@
     </div>
 
     <script>
-        // 站点配置数据
+        // 站点配置数据（域名已更新）
         const sites = [
             { url: "https://chatgpt.com", name: "chatgpt.com", id: "chatgpt" },
             { url: "https://chat.deepseek.com", name: "chat.deepseek.com", id: "deepseek" },
@@ -838,7 +1221,7 @@
             { url: "https://grok.com", name: "grok.com", id: "grok" },
             { url: "https://www.doubao.com", name: "doubao.com", id: "doubao" },
             { url: "https://aistudio.google.com", name: "aistudio.google.com", id: "aistudio" },
-            { url: "https://lmarena.ai", name: "lmarena.ai", id: "lmarena" },
+            { url: "https://arena.ai", name: "arena.ai", id: "arena" },
             { url: "https://h2ogpte.genai.h2o.ai", name: "h2ogpte.genai.h2o.ai", id: "h2ogpte" }
         ];
 
@@ -853,10 +1236,42 @@
             `).join('');
         }
 
+        // 夜间模式
+        function toggleTheme() {
+            const current = document.documentElement.getAttribute('data-theme');
+            const next = current === 'dark' ? 'light' : 'dark';
+            document.documentElement.setAttribute('data-theme', next);
+            localStorage.setItem('tutorial-theme', next);
+            updateThemeButton(next);
+        }
+
+        function updateThemeButton(theme) {
+            const icon = document.getElementById('themeIcon');
+            const text = document.getElementById('themeText');
+            if (theme === 'dark') {
+                icon.textContent = '☀️';
+                text.textContent = '日间模式';
+            } else {
+                icon.textContent = '🌙';
+                text.textContent = '夜间模式';
+            }
+        }
+
+        function initTheme() {
+            const saved = localStorage.getItem('tutorial-theme');
+            if (saved) {
+                document.documentElement.setAttribute('data-theme', saved);
+                updateThemeButton(saved);
+            } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+                document.documentElement.setAttribute('data-theme', 'dark');
+                updateThemeButton('dark');
+            }
+        }
+
         // 滚动高亮逻辑
         const sections = document.querySelectorAll('section');
         const navLinks = document.querySelectorAll('.nav-link');
-        
+
         window.addEventListener('scroll', () => {
             let current = '';
             sections.forEach(section => {
@@ -865,7 +1280,7 @@
                     current = section.getAttribute('id');
                 }
             });
-            
+
             navLinks.forEach(link => {
                 link.classList.remove('active');
                 if (link.getAttribute('href') === '#' + current) {
@@ -874,7 +1289,8 @@
             });
         });
 
-        // 页面加载时渲染站点
+        // 页面加载时初始化
+        initTheme();
         renderSiteGrid();
     </script>
 </body>

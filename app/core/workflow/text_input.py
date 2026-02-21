@@ -319,6 +319,44 @@ class TextInputHandler:
               const sel = window.getSelection();
               if (!sel) return false;
 
+              // ── 策略 0：尝试框架级 API（Quill / ProseMirror / Tiptap）──
+              try {{
+                // Quill（Gemini 的 rich-textarea 使用）
+                const quillEl = el.closest('.ql-container') || el.parentElement?.closest('.ql-container');
+                if (quillEl && quillEl.__quill) {{
+                  const q = quillEl.__quill;
+                  if (!isAppend) q.setText('\\n');
+                  const idx = isAppend ? q.getLength() - 1 : 0;
+                  q.insertText(idx, newText, 'user');
+                  return true;
+                }}
+                // Quill 2.x（实例可能挂在不同位置）
+                if (el.__quill) {{
+                  const q = el.__quill;
+                  if (!isAppend) q.setText('\\n');
+                  const idx = isAppend ? q.getLength() - 1 : 0;
+                  q.insertText(idx, newText, 'user');
+                  return true;
+                }}
+              }} catch(qe) {{ /* Quill API 不可用，继续降级 */ }}
+
+              try {{
+                // ProseMirror / Tiptap（Grok 的 tiptap 编辑器）
+                if (el.pmViewDesc && el.pmViewDesc.view) {{
+                  const view = el.pmViewDesc.view;
+                  const state = view.state;
+                  let tr;
+                  if (!isAppend) {{
+                    tr = state.tr.replaceWith(0, state.doc.content.size, state.schema.text(newText));
+                  }} else {{
+                    tr = state.tr.insertText(newText, state.doc.content.size);
+                  }}
+                  view.dispatch(tr);
+                  return true;
+                }}
+              }} catch(pe) {{ /* ProseMirror API 不可用，继续降级 */ }}
+
+              // ── 策略 1：execCommand（传统 contenteditable）──
               sel.removeAllRanges();
               const range = document.createRange();
               range.selectNodeContents(el);
@@ -335,15 +373,17 @@ class TextInputHandler:
               let success = false;
               try {{ success = document.execCommand('insertText', false, newText); }} catch(e) {{}}
 
-              if (!success) {{
-                const tn = document.createTextNode(newText);
-                range.insertNode(tn);
-                range.setStartAfter(tn);
-                range.collapse(true);
-                sel.removeAllRanges();
-                sel.addRange(range);
+              if (success) {{
+                fireInputEvent(newText);
+                return true;
               }}
 
+              // ── 策略 2：直接 DOM 写入（最终降级）──
+              if (!isAppend) {{
+                el.innerText = newText;
+              }} else {{
+                el.innerText = (el.innerText || '') + newText;
+              }}
               fireInputEvent(newText);
               return true;
             }}
@@ -404,8 +444,11 @@ class TextInputHandler:
         # 首块：覆盖写入
         first_chunk = text[:chunk_size]
         if not self.set_input_atomic(ele, first_chunk, mode="overwrite"):
-            logger.error("[CHUNKED_INPUT] 首块写入失败")
-            return False
+            logger.warning("[CHUNKED_INPUT] 首块原子写入失败，尝试备用方案")
+            # 降级：直接 JS 赋值
+            if not self.fill_via_js_backup(ele, first_chunk):
+                logger.error("[CHUNKED_INPUT] 首块写入彻底失败")
+                return False
         
         logger.debug(f"[CHUNKED_INPUT] 首块完成: 0-{chunk_size}")
         time.sleep(0.1)
@@ -807,6 +850,74 @@ class TextInputHandler:
         except Exception as e:
             logger.error(f"[FILE_PASTE] 文件粘贴失败: {e}")
             return False
+    def fill_via_clipboard_no_click(self, ele, text: str):
+        """
+        隐身模式专用：跳过 ele.click() 的剪贴板粘贴
+        
+        假设调用方已经通过人类化点击聚焦了输入框。
+        """
+        # 🆕 文件粘贴前置判断
+        if self._should_use_file_paste(text):
+            if self._fill_via_file_paste(ele, text):
+                return
+            logger.warning("[FILE_PASTE] 文件粘贴失败，降级到剪贴板文本粘贴")
+        
+        logger.debug(f"[STEALTH] 使用剪贴板粘贴（无click），长度 {len(text)}")
+        
+        clipboard_lock = get_clipboard_lock()
+        
+        settle_min = getattr(BrowserConstants, 'STEALTH_PASTE_SETTLE_MIN', 0.4)
+        settle_max = getattr(BrowserConstants, 'STEALTH_PASTE_SETTLE_MAX', 0.8)
+        skip_verify = getattr(BrowserConstants, 'STEALTH_SKIP_PASTE_VERIFY', True)
+        
+        try:
+            if self._check_cancelled():
+                return
+            
+            # 全选（人类化时序）
+            self._human_key_combo('Control', 'A')
+            self._smart_delay(0.08, 0.18)
+            
+            if self._check_cancelled():
+                return
+            
+            # 剪贴板操作（加锁）
+            with clipboard_lock:
+                original_clipboard = ""
+                try:
+                    original_clipboard = pyperclip.paste()
+                except Exception:
+                    pass
+                
+                pyperclip.copy(text)
+                time.sleep(random.uniform(0.06, 0.15))
+                
+                # Ctrl+V 粘贴
+                self._human_key_combo('Control', 'V')
+                
+                # 等待粘贴完成
+                time.sleep(random.uniform(settle_min, settle_max))
+                
+                # 恢复剪贴板
+                try:
+                    pyperclip.copy(original_clipboard)
+                except Exception:
+                    pass
+            
+            # 额外等待框架响应
+            self._smart_delay(0.2, 0.5)
+            
+            if self._check_cancelled():
+                return
+            
+            if not skip_verify:
+                self._stealth_verify_paste_light(ele, text)
+            else:
+                logger.debug("[STEALTH] 跳过粘贴验证")
+        
+        except Exception as e:
+            logger.error(f"[STEALTH] 剪贴板粘贴失败: {e}，降级到 JS 方式")
+            self.fill_via_js(ele, text)
     # ================= 剪贴板模式输入 =================
     
     def fill_via_clipboard(self, ele, text: str):

@@ -301,64 +301,86 @@ class TabPoolManager:
         return time.time() - self._last_scan_time >= self.SCAN_INTERVAL
     
     def _scan_new_tabs(self):
-        """扫描并添加新标签页（已持有锁）- 修复版"""
+        """扫描并添加新标签页（已持有锁）"""
         try:
-            current_tab_ids = self.page.get_tabs()
+            current_tabs = self.page.get_tabs()
+            current_tab_set = set(current_tabs)
             
-            # 明确永久跳过的页面（这些不会变成有效页面）
-            permanent_skip_patterns = [
-                "chrome://newtab/", 
-                "chrome://new-tab-page/", 
-                "chrome-error://",
-                "chrome://crashes/",
-                "chrome://settings/",
-            ]
+            # ===== 第一步：清理已关闭的标签页 =====
+            # 找出池中存在、但浏览器中已消失的标签页
+            sessions_to_remove = []
+            for session_id, session in self._tabs.items():
+                # 查找该 session 对应的 raw_tab_id
+                raw_id = None
+                for rid, pidx in self._raw_id_to_persistent.items():
+                    if self._persistent_to_session_id.get(pidx) == session_id:
+                        raw_id = rid
+                        break
+                
+                if raw_id is not None and raw_id not in current_tab_set:
+                    sessions_to_remove.append((session_id, raw_id, session))
             
-            # 临时跳过的页面（可能正在加载，下次再检查）
-            temporary_skip_patterns = [
-                "about:blank",
+            for session_id, raw_id, session in sessions_to_remove:
+                if session.status == TabStatus.BUSY:
+                    logger.warning(f"[{session_id}] 标签页已关闭但仍在忙碌，标记为错误")
+                    session.mark_error("标签页已被关闭")
+                else:
+                    logger.info(f"[{session_id}] 标签页已关闭，从池中移除")
+                    del self._tabs[session_id]
+                
+                # 清理映射
+                self._known_tab_ids.discard(raw_id)
+                p_idx = self._raw_id_to_persistent.pop(raw_id, None)
+                if p_idx is not None:
+                    self._persistent_to_session_id.pop(p_idx, None)
+                if self._active_session_id == session_id:
+                    self._active_session_id = None
+            
+            # ===== 第二步：构建"已在池中的 tab 对象"集合 =====
+            tabs_in_pool = set()
+            for rid in self._raw_id_to_persistent:
+                pidx = self._raw_id_to_persistent[rid]
+                sid = self._persistent_to_session_id.get(pidx)
+                if sid and sid in self._tabs:
+                    tabs_in_pool.add(rid)
+            
+            # ===== 第三步：扫描新标签页 =====
+            skip_urls = [
+                "chrome://", "chrome-error://", "about:blank",
+                "edge://", "brave://",
             ]
             
             new_count = 0
-            for raw_tab_id in current_tab_ids:
-                # 检查是否已达到最大数量
+            for raw_tab in current_tabs:
                 if len(self._tabs) >= self.max_tabs:
                     break
                 
-                # 检查是否已知
-                if raw_tab_id in self._known_tab_ids:
+                # 已在池中，跳过
+                if raw_tab in tabs_in_pool:
                     continue
                 
                 try:
-                    tab = self.page.get_tab(raw_tab_id)
+                    tab = self.page.get_tab(raw_tab)
                     if not tab:
                         continue
                     
-                    # 获取 URL
                     url = ""
                     try:
                         url = tab.url or ""
                     except Exception:
                         pass
                     
-                    # 情况 1：永久无效页面 - 记录并跳过
-                    if any(p in url for p in permanent_skip_patterns):
-                        self._known_tab_ids.add(raw_tab_id)
+                    # 无效/空白页面 - 跳过，下次再检查
+                    if not url or any(url.startswith(p) or p in url for p in skip_urls):
                         continue
                     
-                    # 情况 2：临时无效（空 URL 或 about:blank）- 跳过但不记录
-                    # 下次扫描时会重新检查
-                    if not url or any(p in url for p in temporary_skip_patterns):
-                        # 不加入 _known_tab_ids，允许下次重新扫描
-                        continue
-                    
-                    # 情况 3：有效页面 - 添加到池
-                    session = self._wrap_tab(tab, raw_tab_id)
+                    # 有效页面 - 添加到池
+                    session = self._wrap_tab(tab, raw_tab)
                     self._tabs[session.id] = session
                     new_count += 1
                     
-                    display_url = url[:50] + "..." if len(url) > 50 else url
-                    logger.debug(f"🆕 发现新标签页: {session.id} -> {display_url}")
+                    display_url = url[:60] + "..." if len(url) > 60 else url
+                    logger.info(f"🆕 发现新标签页: {session.id} -> {display_url}")
                     
                 except Exception as e:
                     logger.debug(f"处理标签页出错: {e}")
@@ -367,34 +389,32 @@ class TabPoolManager:
             self._last_scan_time = time.time()
             
             if new_count > 0:
-                logger.debug(f"扫描完成: +{new_count} 个，当前共 {len(self._tabs)} 个标签页")
+                logger.info(f"扫描完成: +{new_count} 个，当前共 {len(self._tabs)} 个标签页")
                 
         except Exception as e:
-            logger.debug(f"扫描标签页失败: {e}")
+            logger.warning(f"扫描标签页失败: {e}")
     
     def initialize(self):
-        """初始化池 - 修复版"""
+        """初始化标签页池"""
         with self._lock:
             if self._initialized:
                 return
             
-            # 永久跳过的页面
-            permanent_skip_patterns = [
-                "chrome://newtab/", 
-                "chrome://new-tab-page/",
-                "chrome-error://",
+            skip_urls = [
+                "chrome://", "chrome-error://", "about:blank",
+                "edge://", "brave://",
             ]
             
             try:
-                existing_tab_ids = self.page.get_tabs()
-                logger.debug(f"检测到 {len(existing_tab_ids)} 个标签页")
+                existing_tabs = self.page.get_tabs()
+                logger.debug(f"检测到 {len(existing_tabs)} 个标签页")
                 
-                for raw_tab_id in existing_tab_ids:
+                for raw_tab in existing_tabs:
                     if len(self._tabs) >= self.max_tabs:
                         break
                     
                     try:
-                        tab = self.page.get_tab(raw_tab_id)
+                        tab = self.page.get_tab(raw_tab)
                         if not tab:
                             continue
                         
@@ -404,21 +424,16 @@ class TabPoolManager:
                         except Exception:
                             pass
                         
-                        # 永久无效页面 - 记录并跳过
-                        if any(p in url for p in permanent_skip_patterns):
-                            self._known_tab_ids.add(raw_tab_id)
+                        # 无效/空白页面 - 跳过，后续扫描会重新检查
+                        if not url or any(url.startswith(p) or p in url for p in skip_urls):
                             continue
                         
-                        # 临时无效（空 URL 或 about:blank）- 跳过但不记录
-                        if not url or "about:blank" in url:
-                            continue
-                        
-                        # 有效页面 - 添加到池并记录
-                        session = self._wrap_tab(tab, raw_tab_id)
+                        # 有效页面 - 添加到池
+                        session = self._wrap_tab(tab, raw_tab)
                         self._tabs[session.id] = session
                         
-                        display_url = url[:50] + "..." if len(url) > 50 else url
-                        logger.debug(f"TabPool: {session.id} -> {display_url}")                        
+                        display_url = url[:60] + "..." if len(url) > 60 else url
+                        logger.info(f"TabPool: {session.id} -> {display_url}")
                     except Exception as e:
                         logger.debug(f"处理标签页出错: {e}")
                         continue
@@ -433,7 +448,8 @@ class TabPoolManager:
             
             self._initialized = True
             self._last_scan_time = time.time()
-            logger.debug(f"TabPool 就绪: {len(self._tabs)} 个标签页")    
+            logger.info(f"TabPool 就绪: {len(self._tabs)} 个标签页")
+            
     def _check_stuck_tabs(self):
         """检查并释放卡死的标签页"""
         now = time.time()
@@ -462,7 +478,27 @@ class TabPoolManager:
                 to_remove.append(tab_id)
     
         for tab_id in to_remove:
+            session = self._tabs[tab_id]
             logger.warning(f"[{tab_id}] 不健康或错误状态，从池中移除")
+            
+            # 清理映射表，允许相同 raw_tab_id 被重新扫描
+            raw_ids_to_remove = [
+                raw_id for raw_id, p_idx in self._raw_id_to_persistent.items()
+                if self._persistent_to_session_id.get(p_idx) == tab_id
+            ]
+            for raw_id in raw_ids_to_remove:
+                self._known_tab_ids.discard(raw_id)
+                del self._raw_id_to_persistent[raw_id]
+            
+            # 清理持久编号映射
+            p_idx = session.persistent_index
+            if p_idx and self._persistent_to_session_id.get(p_idx) == tab_id:
+                del self._persistent_to_session_id[p_idx]
+            
+            # 清理活动标签页记录
+            if self._active_session_id == tab_id:
+                self._active_session_id = None
+            
             del self._tabs[tab_id]
     
     def acquire(self, task_id: str, timeout: float = None) -> Optional[TabSession]:
@@ -470,15 +506,17 @@ class TabPoolManager:
         timeout = timeout or self.acquire_timeout
         deadline = time.time() + timeout
         logged_waiting = False
+        first_iteration = True
 
         with self._condition:
             while True:
                 if self._shutdown:
                     return None
                 
-                # 定期扫描新标签页
-                if self._should_scan():
+                # 首次进入或定期扫描新标签页
+                if first_iteration or self._should_scan():
                     self._scan_new_tabs()
+                    first_iteration = False
                 
                 # 检查卡死的标签页
                 self._check_stuck_tabs()
@@ -558,14 +596,31 @@ class TabPoolManager:
             logger.info(f"强制释放 {count} 个标签页")
             return count
     
-    def refresh_tabs(self) -> int:
+    def refresh_tabs(self) -> Dict:
         """手动刷新标签页列表（供外部调用）"""
         with self._lock:
             old_count = len(self._tabs)
-            self._last_scan_time = 0  # 强制下次扫描
+            old_ids = set(self._tabs.keys())
+            
+            # 强制扫描（不受时间间隔限制）
+            self._last_scan_time = 0
             self._scan_new_tabs()
-            new_count = len(self._tabs) - old_count
-            return new_count
+            
+            # 同时清理不健康的标签页
+            self._cleanup_unhealthy_tabs()
+            
+            new_ids = set(self._tabs.keys())
+            added = new_ids - old_ids
+            removed = old_ids - new_ids
+            
+            if added or removed:
+                logger.info(f"刷新完成: +{len(added)} -{len(removed)} = {len(self._tabs)} 个标签页")
+            
+            return {
+                "added": len(added),
+                "removed": len(removed),
+                "total": len(self._tabs)
+            }
     
     @asynccontextmanager
     async def get_tab(self, task_id: str, timeout: float = None):
@@ -646,9 +701,9 @@ class TabPoolManager:
     def get_tabs_with_index(self) -> List[Dict]:
         """获取所有标签页及其持久编号（供 API 调用）"""
         with self._lock:
-            # 先扫描确保最新
-            if self._should_scan():
-                self._scan_new_tabs()
+            # 每次查询都扫描，确保前端看到最新状态
+            self._scan_new_tabs()
+            self._last_scan_time = time.time()
             
             result = []
             for session in self._tabs.values():

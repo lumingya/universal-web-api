@@ -35,13 +35,41 @@ window.FilePastePanel = {
             this.$emit('update:collapsed', !this.collapsed);
         },
 
-        getFilePaste(domain) {
+        /**
+         * 获取指定站点的活跃预设配置（可变引用）
+         * 查找顺序：ConfigTab 选中的预设 → 主预设 → 第一个预设
+         */
+        _getActivePresetData(domain) {
             const site = this.sites[domain];
-            if (!site) return { ...this.defaultFilePaste };
-            if (!site.file_paste) {
-                site.file_paste = { ...this.defaultFilePaste };
+            if (!site) return null;
+
+            const presets = site.presets;
+            if (!presets) return site; // 兼容旧格式（无 presets 的扁平结构）
+
+            // 如果是当前选中的站点，尝试使用 ConfigTab 选中的预设
+            if (domain === this.currentDomain) {
+                try {
+                    const configTab = this.$parent?.$refs?.configTab;
+                    if (configTab && configTab.selectedPreset && presets[configTab.selectedPreset]) {
+                        return presets[configTab.selectedPreset];
+                    }
+                } catch (e) { /* 忽略 */ }
             }
-            return site.file_paste;
+
+            // 回退：主预设 → 第一个预设
+            if (presets['主预设']) return presets['主预设'];
+            const keys = Object.keys(presets);
+            return keys.length > 0 ? presets[keys[0]] : null;
+        },
+
+        getFilePaste(domain) {
+            const presetData = this._getActivePresetData(domain);
+            if (!presetData) return { ...this.defaultFilePaste };
+
+            if (!presetData.file_paste) {
+                presetData.file_paste = { ...this.defaultFilePaste };
+            }
+            return presetData.file_paste;
         },
 
         toggleEnabled(domain) {
