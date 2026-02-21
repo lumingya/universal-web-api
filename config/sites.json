@@ -303,7 +303,7 @@
           "message_wrapper": null,
           "generating_indicator": "",
           "点击模型选择": "[data-test-id=\"logo-pill-label-container\"]",
-          "选择模型": ".mat-mdc-menu-item:nth-of-type(3)"
+          "选择模型": ".mat-mdc-menu-item:nth-of-type(1)"
         },
         "stream_config": {
           "mode": "dom",
@@ -786,7 +786,7 @@
           "input_box": "textarea[name=\"message\"]",
           "send_btn": "button[type=\"submit\"]",
           "result_container": "div.min-w-0:not([class*=\"bg-surface\"]) > .prose-sm",
-          "new_chat_btn": "a[href*=\"/c/new\"]",
+          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href*=\"direct\"]",
           "message_wrapper": null,
           "generating_indicator": null
         },
