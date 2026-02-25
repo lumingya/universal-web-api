@@ -8,8 +8,9 @@ OUTPUT_FILE = '项目结构.txt'
 
 EXCLUDE = {
     '__pycache__', '.git', 'venv', 'env', '.venv',
-    'node_modules', '.idea', '.vscode', 'backup_stage7',
+    'node_modules', '.idea', '.vscode', '.vs', 'backup_stage7',
     'backup_old_files', 'chrome_profile', 'logs',
+    'download_images', 'image',  # 新增：忽略图片文件夹
     OUTPUT_FILE
 }
 
