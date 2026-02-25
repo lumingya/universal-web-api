@@ -49,3 +49,7 @@ Thumbs.db
 node_modules/
 # Git 提交脚本（不需要提交）
 git提交.py
+
+download_images/
+image/
+.vs/

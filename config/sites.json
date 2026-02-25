@@ -44,7 +44,7 @@
       "主预设": {
         "selectors": {
           "input_box": "textarea[formcontrolname=\"promptText\"]",
-          "send_btn": "button[aria-label=\"Run\"]",
+          "send_btn": "ms-run-button button",
           "result_container": ".chat-turn-container.model ms-prompt-chunk:not(:has(ms-thought-chunk)) ms-cmark-node.cmark-node",
           "new_chat_btn": "button[aria-label=\"New chat\"]",
           "confirm_btn": "button.ms-button-primary[type=\"button\"]"
@@ -303,7 +303,7 @@
           "message_wrapper": null,
           "generating_indicator": "",
           "点击模型选择": "[data-test-id=\"logo-pill-label-container\"]",
-          "选择模型": ".mat-mdc-menu-item:nth-of-type(1)"
+          "选择模型": ".mat-mdc-menu-item:nth-of-type(3)"
         },
         "stream_config": {
           "mode": "dom",
