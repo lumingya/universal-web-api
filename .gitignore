@@ -25,7 +25,7 @@ backup_*/
 *.swo
 
 # Visual Studio
-.vs/
+**/.vs/
 bin/
 obj/
 *.user
@@ -52,4 +52,3 @@ git提交.py
 
 download_images/
 image/
-.vs/
