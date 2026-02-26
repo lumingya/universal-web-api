@@ -11,7 +11,7 @@ app/services/config/engine.py - 配置引擎主类
 import json
 import os
 import copy
-import logging
+from app.core.config import get_logger
 from typing import Dict, Optional, List, Any
 from app.core.parsers import ParserRegistry
 from app.models.schemas import (
@@ -27,7 +27,7 @@ from .managers import GlobalConfigManager, ImagePresetsManager
 from .processors import HTMLCleaner, SelectorValidator, AIAnalyzer
 
 
-logger = logging.getLogger('config_engine')
+logger = get_logger("CFG_ENG")
 if not logger.handlers:
     handler = logging.StreamHandler()
     formatter = logging.Formatter('[%(asctime)s] %(levelname)s [Config] %(message)s', datefmt='%H:%M:%S')

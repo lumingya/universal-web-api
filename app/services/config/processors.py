@@ -11,7 +11,7 @@ import json
 import os
 import re
 import time
-import logging
+from app.core.config import get_logger
 from typing import Dict, Optional
 from urllib import request, error
 
@@ -23,7 +23,7 @@ from app.core.config import AppConfig
 from .managers import GlobalConfigManager
 
 
-logger = logging.getLogger('config_engine')
+logger = get_logger("CFG_PRC")
 
 
 # ================= 常量 =================

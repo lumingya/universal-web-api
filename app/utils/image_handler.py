@@ -12,7 +12,7 @@ import os
 import re
 import hashlib
 import time
-import logging
+from app.core.config import get_logger
 import requests
 import base64
 import json
@@ -22,7 +22,7 @@ from typing import List, Dict, Optional, Tuple
 from PIL import Image
 
 
-logger = logging.getLogger('utils.image_handler')
+logger = get_logger("IMG_HDL")
 
 # ================= 配置常量 =================
 

@@ -11,6 +11,9 @@ import time
 import random
 import json
 from typing import Optional
+from app.core.config import get_logger
+
+logger = get_logger("PASTE")
 
 # 通用 JS 函数（挂到 window 上避免作用域问题）
 UNIVERSAL_INSERT_JS = r"""
@@ -105,20 +108,20 @@ def safe_universal_paste(page, selector: str, text_content: str,
     try:
         page.run_js(UNIVERSAL_INSERT_JS)
     except Exception as e:
-        print(f"[Paste] 注入 JS 失败: {e}")
+        logger.error(f"注入 JS 失败: {e}")
         return False
     
     # 获取元素对象
     ele = page.ele(selector)
     if not ele:
-        print(f"[Paste] 找不到元素: {selector}")
+        logger.warning(f"找不到元素: {selector}")
         return False
 
     # 分块逻辑
     total_length = len(text_content)
     chunks = [text_content[i:i+chunk_size] for i in range(0, total_length, chunk_size)]
     
-    print(f"[Paste] 开始粘贴，共 {len(chunks)} 块，总长度 {total_length}")
+    logger.debug(f"开始粘贴，共 {len(chunks)} 块，总长度 {total_length}")
 
     total_sent = 0
     
@@ -152,23 +155,23 @@ def safe_universal_paste(page, selector: str, text_content: str,
                 if actual_increase >= len(chunk) * 0.95:
                     success = True
                     total_sent += len(chunk)
-                    print(f"[Paste] 第 {i+1}/{len(chunks)} 块成功，+{actual_increase} 字符")
+                    logger.debug(f"第 {i+1}/{len(chunks)} 块成功，+{actual_increase} 字符")
                     break
                 else:
-                    print(f"[Paste] 第 {i+1} 块校验失败 (预期+{len(chunk)}，实际+{actual_increase})，重试 {retry+1}/{max_retries}")
+                    logger.warning(f"第 {i+1} 块校验失败 (预期+{len(chunk)}，实际+{actual_increase})，重试 {retry+1}/{max_retries}")
                     
             except Exception as e:
-                print(f"[Paste] 第 {i+1} 块写入异常: {e}，重试 {retry+1}/{max_retries}")
+                logger.warning(f"第 {i+1} 块写入异常: {e}，重试 {retry+1}/{max_retries}")
         
         if not success:
-            print(f"[Paste] 第 {i+1} 块最终失败，已写入 {total_sent}/{total_length} 字符")
+            logger.error(f"第 {i+1} 块最终失败，已写入 {total_sent}/{total_length} 字符")
             return False
         
         # 随机延时：模拟人类分段复制粘贴的思考时间
         if i < len(chunks) - 1:  # 最后一块不需要延时
             time.sleep(random.uniform(min_delay, max_delay))
 
-    print(f"[Paste] 粘贴完成，共 {total_sent} 字符")
+    logger.debug(f"粘贴完成，共 {total_sent} 字符")
     return True
 
 
@@ -178,7 +181,7 @@ def clear_and_paste(page, selector: str, text_content: str, **kwargs) -> bool:
     """
     ele = page.ele(selector)
     if not ele:
-        print(f"[Paste] 找不到元素: {selector}")
+        logger.warning(f"找不到元素: {selector}")
         return False
     
     # 清空内容
@@ -194,7 +197,7 @@ def clear_and_paste(page, selector: str, text_content: str, **kwargs) -> bool:
         """, ele)
         time.sleep(0.1)
     except Exception as e:
-        print(f"[Paste] 清空失败: {e}")
+        logger.warning(f"清空失败: {e}")
     
     return safe_universal_paste(page, selector, text_content, **kwargs)
 

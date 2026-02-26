@@ -184,7 +184,7 @@ if /I "%AUTO_UPDATE_ENABLED%"=="true" (
     
     if exist "updater.py" (
         echo [INFO] 检查 GitHub 最新版本...
-        python updater.py
+        venv\Scripts\python.exe updater.py
         
         if !errorlevel! equ 0 (
             echo [INFO] 更新已应用，建议重新启动脚本
@@ -325,22 +325,39 @@ for /f "tokens=*" %%i in ('certutil -hashfile requirements.txt MD5 2^>nul ^| fin
     if not defined CURRENT_HASH set "CURRENT_HASH=%%i"
 )
 
+REM 判断是否需要安装
+set "NEED_INSTALL=0"
+
 if not defined CURRENT_HASH (
     echo [WARN] 无法计算依赖文件哈希，将强制安装
     set "NEED_INSTALL=1"
-) else (
-    set "NEED_INSTALL=0"
-    if not exist "!REQ_HASH_FILE!" set "NEED_INSTALL=1"
-    if exist "!REQ_HASH_FILE!" (
-        set /p OLD_HASH=<"!REQ_HASH_FILE!"
-        if not "!OLD_HASH!"=="!CURRENT_HASH!" set "NEED_INSTALL=1"
+)
+
+REM 条件1: 哈希文件不存在（首次运行）
+if "!NEED_INSTALL!"=="0" if not exist "!REQ_HASH_FILE!" set "NEED_INSTALL=1"
+
+REM 条件2: 哈希变化（requirements.txt 被更新）
+if "!NEED_INSTALL!"=="0" if exist "!REQ_HASH_FILE!" (
+    set /p OLD_HASH=<"!REQ_HASH_FILE!"
+    if not "!OLD_HASH!"=="!CURRENT_HASH!" set "NEED_INSTALL=1"
+)
+
+REM 条件3: 验证所有包是否真正已安装（防止之前安装不完整）
+if "!NEED_INSTALL!"=="0" (
+    if exist "check_deps.py" (
+        echo [INFO] 验证已安装的依赖...
+        venv\Scripts\python.exe check_deps.py >nul 2>&1
+        if !errorlevel! neq 0 (
+            echo [WARN] 检测到部分依赖缺失或损坏，将重新安装
+            set "NEED_INSTALL=1"
+        )
     )
 )
 
 if "!NEED_INSTALL!"=="1" (
     echo [INFO] 安装 Python 依赖包...
     echo.
-    pip install -r requirements.txt
+    venv\Scripts\python.exe -m pip install -r requirements.txt
     if !errorlevel! neq 0 (
         echo.
         echo [ERROR] 依赖安装失败
@@ -356,9 +373,20 @@ if "!NEED_INSTALL!"=="1" (
         echo     3. 使用国内镜像:
         echo        pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
         echo.
+        REM 安装失败时删除哈希，确保下次重试
+        if exist "!REQ_HASH_FILE!" del "!REQ_HASH_FILE!"
         pause
         exit /b 1
     )
+
+    REM 二次验证：确认包真的装好了
+    echo [INFO] 验证安装结果...
+    venv\Scripts\python.exe -m pip check >nul 2>&1
+    if !errorlevel! neq 0 (
+        echo [WARN] pip check 报告依赖冲突，但不影响运行
+    )
+
+    REM 只有安装成功才写入哈希
     echo !CURRENT_HASH!> "!REQ_HASH_FILE!"
     echo.
     echo [OK] 依赖安装完成
@@ -372,7 +400,7 @@ echo [STEP] 应用 DrissionPage 补丁
 echo ----------------------------------------
 
 if exist "patch_drissionpage.py" (
-    python patch_drissionpage.py
+    venv\Scripts\python.exe patch_drissionpage.py
     if !errorlevel! neq 0 (
         echo [WARN] 补丁应用失败，网络监听模式可能触发 CF 检测
         echo        项目仍可正常运行（DOM 模式不受影响）
@@ -392,7 +420,7 @@ if not exist "%PROFILE_DIR%" mkdir "%PROFILE_DIR%" >nul 2>&1
 REM 每次启动前自动清理配置文件
 if exist "clean_profile.py" (
     echo [INFO] 执行浏览器配置瘦身...
-    python clean_profile.py "%PROFILE_DIR%"
+    venv\Scripts\python.exe clean_profile.py "%PROFILE_DIR%"
     echo.
 ) else (
     echo [WARN] 未找到 clean_profile.py，跳过清理
@@ -554,7 +582,7 @@ echo.
 REM ========== 循环重启机制 ==========
 :SERVICE_LOOP
 
-python main.py
+venv\Scripts\python.exe main.py
 set "EXIT_CODE=!errorlevel!"
 
 if !EXIT_CODE! equ 0 (

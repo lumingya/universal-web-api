@@ -9,7 +9,7 @@ app/services/config/managers.py - 配置子管理器
 import json
 import os
 import copy
-import logging
+from app.core.config import get_logger
 from typing import Dict, List, Any, Optional
 
 from app.models.schemas import (
@@ -19,7 +19,7 @@ from app.models.schemas import (
 )
 
 
-logger = logging.getLogger('config_engine')
+logger = get_logger("CFG_MGR")
 
 
 # ================= 全局配置管理器 =================

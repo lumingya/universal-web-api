@@ -11,11 +11,11 @@ import os
 import struct
 import tempfile
 import shutil
-import logging
+from app.core.config import get_logger
 from pathlib import Path
 from typing import Optional
 
-logger = logging.getLogger('file_paste')
+logger = get_logger("FPASTE")
 
 # ================= 临时目录管理 =================
 

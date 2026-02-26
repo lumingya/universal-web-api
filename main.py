@@ -1,9 +1,12 @@
 """
 main.py - FastAPI 应用入口
 """
-
+import logging
+logging.getLogger("urllib3").setLevel(logging.WARNING)
 import os
 import logging
+import sys
+print(f"[DEBUG] Python: {sys.executable}")
 from pathlib import Path
 from contextlib import asynccontextmanager
 from app.core import get_browser

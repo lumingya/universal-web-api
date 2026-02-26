@@ -10,13 +10,13 @@ app/services/extractor_manager.py - 提取器配置管理器
 
 import os
 import json
-import logging
+from app.core.config import get_logger
 from typing import Dict, Optional, List, Any
 
 from app.core.extractors import ExtractorRegistry, BaseExtractor
 
 
-logger = logging.getLogger('extractor_manager')
+logger = get_logger("EXTRACT")
 
 
 class ExtractorConfigManager:

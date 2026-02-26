@@ -12,11 +12,12 @@ Phase A 实现：
 - 仅记录 mime、byte_size、前缀片段
 """
 
-import logging
 from typing import List, Optional, Any, Dict
 from datetime import datetime
 
-logger = logging.getLogger(__name__)
+from app.core.config import get_logger
+
+logger = get_logger("IMG_EXT")
 
 
 def get_default_image_extraction_config() -> Dict:
@@ -251,11 +252,11 @@ class ImageExtractor:
         
         # 检查是否启用
         if not final_config.get("enabled", False):
-            logger.debug(f"{self._log_prefix} 图片提取未启用，跳过")
+            logger.debug(f" 图片提取未启用，跳过")
             return []
         
         if not element:
-            logger.debug(f"{self._log_prefix} 元素为空，跳过")
+            logger.debug(f" 元素为空，跳过")
             return []
         
         # 构建 JS 参数
@@ -271,7 +272,7 @@ class ImageExtractor:
         }
         
         logger.debug(
-            f"{self._log_prefix} 开始提取: selector={js_opts['selector']}, "
+            f"开始提取: selector={js_opts['selector']}, "
             f"container={container_selector or 'element'}, mode={js_opts['mode']}"
         )
         
@@ -280,7 +281,7 @@ class ImageExtractor:
             result = element.run_js(self.EXTRACT_IMAGES_JS, js_opts)
             
             if not result:
-                logger.debug(f"{self._log_prefix} JS 返回空结果")
+                logger.debug(f" JS 返回空结果")
                 return []
             
             raw_images = result.get("images", [])
@@ -288,23 +289,23 @@ class ImageExtractor:
             
             # 记录警告（不中断流程）
             for w in warnings:
-                logger.warning(f"{self._log_prefix} {w}")
+                logger.warning(f" {w}")
             
             # 规范化 + 去重
             images = self._normalize_and_dedupe(raw_images)
             
             # 日志摘要
-            logger.debug(f"{self._log_prefix} 提取完成: {len(images)} 张图片")
+            logger.debug(f" 提取完成: {len(images)} 张图片")
             for img in images[:5]:  # 最多记录前 5 张
                 self._log_image_summary(img)
             if len(images) > 5:
-                logger.debug(f"{self._log_prefix} ... 还有 {len(images) - 5} 张")
+                logger.debug(f" ... 还有 {len(images) - 5} 张")
             
             return images
             
         except Exception as e:
             # 🔴 关键：图片提取失败不能影响主流程
-            logger.error(f"{self._log_prefix} 提取失败（已降级为空列表）: {e}")
+            logger.error(f" 提取失败（已降级为空列表）: {e}")
             return []
     
     def _normalize_and_dedupe(self, raw_images: List[Dict]) -> List[Dict]:
@@ -338,7 +339,7 @@ class ImageExtractor:
             
             # 去重检查
             if key in seen_keys:
-                logger.debug(f"{self._log_prefix} 跳过重复: {key[:50]}...")
+                logger.debug(f" 跳过重复: {key[:50]}...")
                 continue
             seen_keys.add(key)
             

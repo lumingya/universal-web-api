@@ -191,10 +191,6 @@ async def _stream_with_lifecycle(
                 for chunk in gen:
                     chunk_counter += 1
                     
-                    # 🔍 探针：记录 chunk 内容摘要
-                    chunk_preview = chunk[:100] if isinstance(chunk, str) else str(chunk)[:100]
-                    has_images = '"images"' in chunk if isinstance(chunk, str) else False
-                    logger.debug(f"[WORKER] Chunk #{chunk_counter}: has_images={has_images}, preview={chunk_preview}")
                     
                     if ctx.should_stop():
                         logger.info("工作线程检测到取消")
