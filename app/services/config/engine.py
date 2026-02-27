@@ -28,12 +28,6 @@ from .processors import HTMLCleaner, SelectorValidator, AIAnalyzer
 
 
 logger = get_logger("CFG_ENG")
-if not logger.handlers:
-    handler = logging.StreamHandler()
-    formatter = logging.Formatter('[%(asctime)s] %(levelname)s [Config] %(message)s', datefmt='%H:%M:%S')
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
 
 
 # ================= 常量配置 =================
