@@ -1918,6 +1918,26 @@ const app = createApp({
             }
         },
 
+        showTemplates() {
+            this.showStepTemplates = true
+        },
+
+        handleExtractorImportFile(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    const config = JSON.parse(e.target.result);
+                    this.importExtractorConfig(config);
+                } catch (error) {
+                    this.notify('JSON 解析失败: ' + error.message, 'error');
+                }
+            };
+            reader.readAsText(file);
+            event.target.value = '';
+        },
         applyTemplate(type) {
             const templates = {
                 'default': [
@@ -1996,7 +2016,8 @@ const app = createApp({
 // ========== 组件注册 ==========
 app.component('sidebar-component', window.SidebarComponent);
 app.component('config-tab', window.ConfigTab);
-app.component('tabpool-tab', window.TabPoolTabComponent);  // 🆕 标签页池
+app.component('tabpool-tab', window.TabPoolTabComponent);
+app.component('commands-tab', window.CommandsTabComponent);  // 🆕 命令系统
 app.component('logs-tab', window.LogsTab);
 app.component('settings-tab', window.SettingsTab);
 app.component('json-preview-dialog', window.JsonPreviewDialog);

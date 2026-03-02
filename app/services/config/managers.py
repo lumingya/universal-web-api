@@ -30,10 +30,13 @@ class GlobalConfigManager:
     
     管理 _global 节点中的配置，包括：
     - selector_definitions: 元素定义列表
+    - commands: 自动化命令列表
+    - 以及任意扩展字段（通过 get/set 访问）
     """
     
     def __init__(self):
         self._selector_definitions: List[SelectorDefinition] = get_default_selector_definitions()
+        self._extra: Dict[str, Any] = {}  # 通用扩展存储（commands 等）
     
     def load(self, global_section: Dict[str, Any]):
         """从 _global 节点加载配置"""
@@ -45,6 +48,15 @@ class GlobalConfigManager:
             if isinstance(defs, list):
                 self._selector_definitions = defs
                 logger.debug(f"已加载 {len(defs)} 个元素定义")
+        
+        # 加载所有非 selector_definitions 的字段到通用存储
+        for key, value in global_section.items():
+            if key != "selector_definitions":
+                self._extra[key] = value
+        
+        if "commands" in self._extra:
+            cmd_count = len(self._extra["commands"]) if isinstance(self._extra["commands"], list) else 0
+            logger.debug(f"已加载 {cmd_count} 个自动化命令")
     
     def get_selector_definitions(self) -> List[SelectorDefinition]:
         """获取元素定义列表"""
@@ -119,11 +131,22 @@ class GlobalConfigManager:
         
         return "\n".join(lines)
     
+    def get(self, key: str, default: Any = None) -> Any:
+        """获取通用配置值"""
+        return copy.deepcopy(self._extra.get(key, default))
+    
+    def set(self, key: str, value: Any):
+        """设置通用配置值"""
+        self._extra[key] = value
+    
     def to_dict(self) -> Dict[str, Any]:
         """导出为字典（用于保存）"""
-        return {
+        result = {
             "selector_definitions": self._selector_definitions
         }
+        # 合并通用存储中的所有字段
+        result.update(self._extra)
+        return result
 
 
 # ================= 图片预设管理器 =================

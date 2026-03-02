@@ -37,7 +37,8 @@
         "enabled": false,
         "required": false
       }
-    ]
+    ],
+    "commands": []
   },
   "aistudio.google.com": {
     "presets": {
@@ -303,7 +304,7 @@
           "message_wrapper": null,
           "generating_indicator": "",
           "点击模型选择": "[data-test-id=\"logo-pill-label-container\"]",
-          "选择模型": ".mat-mdc-menu-item:nth-of-type(1)"
+          "选择模型": ".mat-mdc-menu-item:nth-of-type(3)"
         },
         "stream_config": {
           "mode": "network",

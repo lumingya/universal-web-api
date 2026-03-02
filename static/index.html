@@ -4,19 +4,19 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Universal Web-to-API Dashboard</title>
-    
+
     <!-- 外部依赖 -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.staticfile.org/vue/3.3.4/vue.global.prod.min.js"></script>
-    
+    <script src="https://cdn.staticfile.org/vue/3.3.4/vue.global.js"></script>
+
     <!-- Tailwind 配置 -->
     <script>
         tailwind.config = { darkMode: 'class' }
     </script>
-    
+
     <!-- 自定义样式 -->
     <link rel="stylesheet" href="/static/css/dashboard.css">
-    
+
     <!-- 图标定义 -->
     <script src="/static/js/icons.js"></script>
 </head>
@@ -72,9 +72,9 @@
                     <div class="flex items-center gap-4">
                         <h2 class="text-xl font-bold dark:text-white">{{ currentDomain }}</h2>
                         <label v-if="getActivePresetConfig()" class="flex items-center text-sm cursor-pointer dark:text-gray-300">
-                            <input type="checkbox" 
-                                   :checked="getActivePresetConfig().stealth" 
-                                   @change="getActivePresetConfig().stealth = $event.target.checked" 
+                            <input type="checkbox"
+                                   :checked="getActivePresetConfig().stealth"
+                                   @change="getActivePresetConfig().stealth = $event.target.checked"
                                    class="mr-2">
                             <span>隐身模式</span>
                         </label>
@@ -173,6 +173,13 @@
                     <span v-html="$icons.chartBar"></span> 日志
                     <span v-if="logs.length > 0" class="ml-1 px-1.5 py-0.5 text-xs bg-blue-100 dark:bg-blue-900 text-blue-600 dark:text-blue-300 rounded-full">{{ logs.length }}</span>
                 </button>
+                <button @click="activeTab = 'commands'"
+                        :class="['px-4 py-2 text-sm font-medium border-b-2 transition-colors',
+                                 activeTab === 'commands'
+                                 ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+                                 : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300']">
+                    ⚡ 命令
+                </button>
                 <button @click="activeTab = 'settings'"
                         :class="['px-4 py-2 text-sm font-medium border-b-2 transition-colors',
                                  activeTab === 'settings'
@@ -222,7 +229,11 @@
                                @open-verify-dialog="openVerifyDialog"
                                @refresh="loadExtractors">
                 </extractor-tab>
-
+                <!-- 命令 Tab -->
+                <commands-tab v-show="activeTab === 'commands'"
+                              :dark-mode="darkMode"
+                              @notify="notify($event.message, $event.type)">
+                </commands-tab>
                 <!-- 日志 Tab -->
                 <logs-tab v-show="activeTab === 'logs'"
                           :logs="logs"
@@ -332,6 +343,7 @@
     <script src="/static/js/components/ExtractorTab.js"></script>
     <script src="/static/js/components/Dialogs.js"></script>
     <script src="/static/js/components/TabPoolTab.js"></script>
+    <script src="/static/js/components/CommandsTab.js"></script>
 
     <!-- 主应用逻辑 -->
     <script src="/static/js/dashboard.js"></script>

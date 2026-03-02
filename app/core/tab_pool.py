@@ -113,6 +113,13 @@ class TabSession:
                     self.current_domain = None
                 except Exception as e:
                     logger.debug(f"清空页面失败: {e}")
+        
+        # 🆕 触发命令检查（在锁外执行，避免阻塞）
+        try:
+            from app.services.command_engine import command_engine
+            command_engine.check_triggers(self)
+        except Exception as e:
+            logger.debug(f"命令触发检查异常: {e}")
     
     def force_release(self):
         """强制释放（不管当前状态）- 修复版：尝试重置页面，失败则标记为 ERROR"""

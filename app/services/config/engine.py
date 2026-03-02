@@ -288,9 +288,6 @@ class ConfigEngine:
             self._save_config()
             logger.info(f"✅ 已迁移 {migrated_count} 个站点配置为预设格式")
     
-        if migrated_count > 0:
-            self._save_config()
-            logger.info(f"✅ 已迁移 {migrated_count} 个站点配置为预设格式")
     
     def _cleanup_preset_residuals(self):
         """

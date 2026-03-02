@@ -42,9 +42,78 @@ class ChatRequest(BaseModel):
     stream: Optional[bool] = Field(default=False)
     temperature: Optional[float] = Field(default=0.7, ge=0, le=2)
     max_tokens: Optional[int] = Field(default=None, ge=1)
+    response_format: Optional[dict] = Field(default=None)
+
+
+# ================= response_format 转化 =================
+
+DEFAULT_RESPONSE_FORMAT_HINTS = {
+    "json_object": "\n\n[系统指令：请以 JSON 格式输出你的回复。确保输出是有效的 JSON 对象，不要包含 ```json 代码块标记或任何其他非 JSON 文字。]",
+    "json_schema": "\n\n[系统指令：请严格按照以下 JSON Schema 格式输出你的回复，确保输出是有效的 JSON，不要包含代码块标记：\n{schema}]",
+    "text": ""
+}
+
+
+def _get_response_format_hint(format_type: str) -> str:
+    """获取指定格式类型的提示词模板"""
+    try:
+        from app.services.config_engine import config_engine
+        hints = config_engine.global_config.get("response_format_hints")
+        if hints and isinstance(hints, dict) and format_type in hints:
+            return hints[format_type]
+    except Exception:
+        pass
+    return DEFAULT_RESPONSE_FORMAT_HINTS.get(format_type, "")
+
+
+def _apply_response_format(messages: list, response_format: dict) -> list:
+    """将 response_format 转化为提示词并追加到最后一条用户消息"""
+    if not response_format:
+        return messages
+    
+    format_type = response_format.get("type", "text")
+    hint_template = _get_response_format_hint(format_type)
+    
+    if not hint_template:
+        return messages
+    
+    hint = hint_template
+    
+    if format_type == "json_schema":
+        json_schema = response_format.get("json_schema", {})
+        schema_content = json_schema.get("schema", json_schema)
+        try:
+            schema_str = json.dumps(schema_content, ensure_ascii=False, indent=2)
+            hint = hint_template.replace("{schema}", schema_str)
+        except Exception:
+            hint = hint_template.replace("{schema}", str(schema_content))
+    
+    import copy
+    new_messages = copy.deepcopy(messages)
+    
+    for i in range(len(new_messages) - 1, -1, -1):
+        msg = new_messages[i]
+        if msg.get("role") == "user":
+            content = msg.get("content", "")
+            
+            if isinstance(content, str):
+                msg["content"] = content + hint
+                break
+            elif isinstance(content, list):
+                for j in range(len(content) - 1, -1, -1):
+                    item = content[j]
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        item["text"] = item.get("text", "") + hint
+                        break
+                else:
+                    content.append({"type": "text", "text": hint})
+                break
+    
+    return new_messages
 
 
 # ================= 认证依赖 =================
+
 
 async def verify_auth(authorization: Optional[str] = Header(None)) -> bool:
     """验证 Bearer Token"""
@@ -136,6 +205,13 @@ async def chat_completions(
         except Exception as e:
             logger.warning(f"图片输入校验异常（已放行）: {e}")
 
+        # 🆕 处理 response_format 参数（直接修改 body.messages）
+        if body.response_format:
+            format_type = body.response_format.get("type", "text")
+            if format_type != "text":
+                logger.debug(f"检测到 response_format.type={format_type}，转化为提示词")
+                body.messages = _apply_response_format(body.messages, body.response_format)
+        
         # 调试日志
         try:
             raw = json.dumps(body.messages, ensure_ascii=False)

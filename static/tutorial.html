@@ -390,15 +390,158 @@
 
         .config-group .icon { font-size: 1.2rem; }
 
+        /* ===== 汉堡菜单按钮 ===== */
+        .hamburger {
+            display: none;
+            position: fixed;
+            top: 12px;
+            left: 12px;
+            z-index: 200;
+            width: 40px;
+            height: 40px;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            background: var(--card-bg);
+            cursor: pointer;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 5px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            transition: background-color 0.3s, border-color 0.3s;
+        }
+
+        .hamburger span {
+            display: block;
+            width: 20px;
+            height: 2px;
+            background: var(--text-color);
+            border-radius: 2px;
+            transition: all 0.3s;
+        }
+
+        .hamburger.active span:nth-child(1) {
+            transform: rotate(45deg) translate(5px, 5px);
+        }
+        .hamburger.active span:nth-child(2) {
+            opacity: 0;
+        }
+        .hamburger.active span:nth-child(3) {
+            transform: rotate(-45deg) translate(5px, -5px);
+        }
+
+        /* ===== 侧边栏遮罩 ===== */
+        .sidebar-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.4);
+            z-index: 99;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        .sidebar-overlay.active {
+            opacity: 1;
+        }
+
+        /* ===== 移动端适配 ===== */
         @media (max-width: 900px) {
-            .sidebar { transform: translateX(-100%); }
-            .main-content { margin-left: 0; padding: 20px; }
+            .hamburger {
+                display: flex;
+            }
+
+            .sidebar {
+                transform: translateX(-100%);
+                transition: transform 0.3s ease;
+                z-index: 150;
+            }
+            .sidebar.open {
+                transform: translateX(0);
+            }
+
+            .sidebar-overlay.active {
+                display: block;
+            }
+
+            .main-content {
+                margin-left: 0;
+                padding: 60px 16px 30px 16px;
+            }
+
+            h1 {
+                font-size: 1.4rem;
+            }
+            h2 {
+                font-size: 1.2rem;
+            }
+            h3 {
+                font-size: 1.05rem;
+            }
+
+            section {
+                padding: 20px 16px;
+            }
+
+            /* 表格横向滚动 */
+            table {
+                display: block;
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+                white-space: nowrap;
+            }
+
+            /* 代码块 */
+            pre code {
+                font-size: 0.8rem;
+                padding: 14px;
+            }
+
+            /* 站点网格单列 */
+            .site-grid {
+                grid-template-columns: 1fr;
+            }
+
+            /* 信息框收紧 */
+            .info-box, .note, .highlight-box, .success-box, .config-box, .troubleshoot-list {
+                padding: 12px 14px;
+                font-size: 0.9rem;
+            }
+        }
+
+        /* 小屏进一步收紧 */
+        @media (max-width: 480px) {
+            .main-content {
+                padding: 55px 10px 20px 10px;
+            }
+
+            section {
+                padding: 16px 12px;
+                border-radius: 8px;
+            }
+
+            h1 {
+                font-size: 1.2rem;
+            }
+
+            .site-card {
+                font-size: 0.85rem;
+                padding: 10px 12px;
+            }
+
+            .site-card .model-id {
+                font-size: 0.7rem;
+            }
         }
     </style>
 </head>
 <body>
 
-    <div class="sidebar">
+    <button class="hamburger" id="hamburgerBtn" onclick="toggleSidebar()" aria-label="打开导航菜单">
+        <span></span><span></span><span></span>
+    </button>
+    <div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
+
+    <div class="sidebar" id="sidebar">
         <h2>📑 目录导航</h2>
         <button class="theme-toggle" onclick="toggleTheme()">
             <span id="themeIcon">🌙</span>
@@ -416,6 +559,7 @@
             <a href="#workflow" class="nav-link">🎬 工作流配置</a>
             <a href="#file-paste" class="nav-link">📄 文件粘贴</a>
             <a href="#stealth-mode" class="nav-link">🛡️ 隐身模式</a>
+            <a href="#commands" class="nav-link">⚡ 自动化命令</a>
             <a href="#ai-recognition" class="nav-link">🎯 AI 元素识别</a>
             <a href="#env-config" class="nav-link">⚙️ 环境配置</a>
             <a href="#browser-config" class="nav-link">🌐 浏览器常量</a>
@@ -425,7 +569,11 @@
     </div>
 
     <div class="main-content">
-        <h1>Universal Web-to-API 使用手册 (v2.3.1)</h1>
+        <h1 style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+            Universal Web-to-API 使用手册 (v2.3.1)
+            <a href="https://github.com/lumingya/universal-web-api" target="_blank" style="display: inline-flex; align-items: center; gap: 6px; font-size: 0.8rem; font-weight: 500; color: var(--text-color); text-decoration: none; background: var(--site-card-bg); border: 1px solid var(--border-color); padding: 6px 14px; border-radius: 8px; transition: all 0.2s;" onmouseover="this.style.borderColor='var(--primary-color)';this.style.color='var(--primary-color)';this.style.background='var(--info-bg)'" onmouseout="this.style.borderColor='var(--border-color)';this.style.color='var(--text-color)';this.style.background='var(--site-card-bg)'"
+            ><svg height="18" width="18" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0;"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path></svg>GitHub</a>
+        </h1>
 
         <!-- ==================== 快速开始 ==================== -->
         <section id="quick-start">
@@ -910,7 +1058,233 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
                 <p><strong>⚠️ 关于 arena.ai 的特别说明：</strong>即便开启了隐身模式并关闭了网络监听，在半小时内连续对话约 10 条也几乎一定会触发 Cloudflare 人机验证。这是该站点本身的安全策略，真人操作也同样会触发，并非脚本问题。</p>
             </div>
         </section>
+        <!-- ==================== 自动化命令 ==================== -->
+        <section id="commands">
+            <h2>⚡ 自动化命令</h2>
+            <p>命令系统允许你设置<strong>触发条件</strong>和<strong>执行动作</strong>，实现标签页的自动化管理。例如：每对话 10 次自动清除 Cookie 并刷新页面，或检测到 Cloudflare 验证时自动切换代理节点。</p>
 
+            <div class="info-box">
+                <p><strong>📍 配置位置：</strong>进入 <a href="/">控制面板</a> → 命令</p>
+            </div>
+
+            <h3>两种模式</h3>
+            <table>
+                <tr><th>模式</th><th>说明</th><th>适用场景</th></tr>
+                <tr>
+                    <td><strong>简单模式</strong></td>
+                    <td>选择触发条件 + 配置动作列表，零代码操作</td>
+                    <td>常规自动化需求</td>
+                </tr>
+                <tr>
+                    <td><strong>高级模式</strong></td>
+                    <td>直接编写 JavaScript 或 Python 脚本</td>
+                    <td>复杂逻辑、自定义操作</td>
+                </tr>
+            </table>
+
+            <h3>触发条件</h3>
+            <table>
+                <tr><th>类型</th><th>说明</th><th>示例</th></tr>
+                <tr>
+                    <td><code>request_count</code></td>
+                    <td>对话次数达到阈值</td>
+                    <td>每 10 次对话触发一次</td>
+                </tr>
+                <tr>
+                    <td><code>error_count</code></td>
+                    <td>连续错误次数达到阈值</td>
+                    <td>连续失败 3 次后触发</td>
+                </tr>
+                <tr>
+                    <td><code>idle_timeout</code></td>
+                    <td>标签页空闲超过指定时间</td>
+                    <td>空闲 5 分钟后触发</td>
+                </tr>
+                <tr>
+                    <td><code>page_check</code></td>
+                    <td>页面出现指定内容</td>
+                    <td>检测到 "Cloudflare" 时触发</td>
+                </tr>
+            </table>
+
+            <h3>作用范围</h3>
+            <ul>
+                <li><strong>所有标签页</strong>：命令对所有标签页生效</li>
+                <li><strong>指定域名</strong>：仅对包含特定域名的标签页生效（如 <code>chatgpt.com</code>）</li>
+                <li><strong>指定标签页</strong>：仅对特定编号的标签页生效（如 #1）</li>
+            </ul>
+
+            <h3>内置动作</h3>
+            <table>
+                <tr><th>动作</th><th>说明</th><th>参数</th></tr>
+                <tr>
+                    <td><code>clear_cookies</code></td>
+                    <td>清除当前标签页的 Cookie</td>
+                    <td>无</td>
+                </tr>
+                <tr>
+                    <td><code>refresh_page</code></td>
+                    <td>刷新页面</td>
+                    <td>无</td>
+                </tr>
+                <tr>
+                    <td><code>new_chat</code></td>
+                    <td>点击新建对话按钮</td>
+                    <td>无（需配置 <code>new_chat_btn</code> 选择器）</td>
+                </tr>
+                <tr>
+                    <td><code>run_js</code></td>
+                    <td>在页面中执行 JavaScript</td>
+                    <td>JavaScript 代码</td>
+                </tr>
+                <tr>
+                    <td><code>wait</code></td>
+                    <td>等待指定秒数</td>
+                    <td>秒数（如 2）</td>
+                </tr>
+                <tr>
+                    <td><code>switch_preset</code></td>
+                    <td>切换标签页预设</td>
+                    <td>预设名称</td>
+                </tr>
+                <tr>
+                    <td><code>navigate</code></td>
+                    <td>导航到指定 URL</td>
+                    <td>目标 URL</td>
+                </tr>
+                <tr>
+                    <td><code>switch_proxy</code></td>
+                    <td>切换代理节点（Clash）</td>
+                    <td>见下方详细说明</td>
+                </tr>
+            </table>
+
+            <h3>🔀 代理切换功能</h3>
+            <p>通过 Clash API 自动切换代理节点，适用于需要频繁更换 IP 的场景（如绕过频率限制）。</p>
+
+            <div class="note">
+                <p><strong>⚠️ 前提条件：</strong>需要运行 Clash 并开启 External Controller。在 Clash 配置文件中确保有以下设置：</p>
+                <pre><code>external-controller: 127.0.0.1:9090
+secret: ""  # 如果设置了密钥，需要在命令配置中填写</code></pre>
+            </div>
+
+            <h4>代理切换配置项</h4>
+            <table>
+                <tr><th>配置项</th><th>默认值</th><th>说明</th></tr>
+                <tr>
+                    <td>Clash API 地址</td>
+                    <td><code>http://127.0.0.1:9090</code></td>
+                    <td>Clash 的 External Controller 地址</td>
+                </tr>
+                <tr>
+                    <td>代理组名称</td>
+                    <td><code>Proxy</code></td>
+                    <td>要切换的代理组，需与 Clash 配置一致</td>
+                </tr>
+                <tr>
+                    <td>切换模式</td>
+                    <td>随机</td>
+                    <td>随机 / 轮询 / 指定节点</td>
+                </tr>
+                <tr>
+                    <td>Clash Secret</td>
+                    <td>空</td>
+                    <td>如果 Clash 设置了密钥，需要填写</td>
+                </tr>
+                <tr>
+                    <td>切换后刷新页面</td>
+                    <td>开启</td>
+                    <td>切换节点后是否刷新页面</td>
+                </tr>
+                <tr>
+                    <td>排除节点关键词</td>
+                    <td><code>DIRECT,REJECT,GLOBAL,...</code></td>
+                    <td>包含这些关键词的节点不会被选中</td>
+                </tr>
+            </table>
+
+            <div class="info-box">
+                <p><strong>💡 查看代理组名称：</strong>访问 <code>http://127.0.0.1:9090/proxies</code> 或在 Clash 配置文件中搜索 <code>proxy-groups:</code>，第一个 <code>name:</code> 通常就是主代理组。</p>
+            </div>
+
+            <h3>典型使用示例</h3>
+
+            <h4>示例 1：每 10 次对话清理 Cookie 并刷新</h4>
+            <div class="config-box">
+                <ul style="margin-bottom: 0;">
+                    <li><strong>触发条件</strong>：对话次数 = 10</li>
+                    <li><strong>作用范围</strong>：指定域名 = <code>chatgpt.com</code></li>
+                    <li><strong>动作列表</strong>：
+                        <ol>
+                            <li>清除 Cookie</li>
+                            <li>刷新页面</li>
+                        </ol>
+                    </li>
+                </ul>
+            </div>
+
+            <h4>示例 2：检测到 Cloudflare 时切换 IP</h4>
+            <div class="config-box">
+                <ul style="margin-bottom: 0;">
+                    <li><strong>触发条件</strong>：页面检查 = <code>Cloudflare</code></li>
+                    <li><strong>作用范围</strong>：所有标签页</li>
+                    <li><strong>动作列表</strong>：
+                        <ol>
+                            <li>切换代理节点（随机）</li>
+                            <li>等待 2 秒</li>
+                            <li>刷新页面</li>
+                        </ol>
+                    </li>
+                </ul>
+            </div>
+
+            <h4>示例 3：每 5 次对话轮换 IP</h4>
+            <div class="config-box">
+                <ul style="margin-bottom: 0;">
+                    <li><strong>触发条件</strong>：对话次数 = 5</li>
+                    <li><strong>作用范围</strong>：指定域名 = <code>arena.ai</code></li>
+                    <li><strong>动作列表</strong>：
+                        <ol>
+                            <li>切换代理节点（轮询模式，切换后刷新）</li>
+                        </ol>
+                    </li>
+                </ul>
+            </div>
+
+            <h3>高级模式：自定义脚本</h3>
+            <p>高级模式允许你编写完整的 JavaScript 或 Python 脚本来实现复杂逻辑。</p>
+
+            <h4>JavaScript 脚本</h4>
+            <p>脚本在浏览器页面中执行（等同于 DevTools Console）：</p>
+            <pre><code>// 清除所有 Cookie 并刷新
+document.cookie.split(";").forEach(c => {
+    document.cookie = c.trim().split("=")[0] + 
+        "=;expires=Thu, 01 Jan 1970 00:00:00 UTC;path=/";
+});
+location.reload();</code></pre>
+
+            <h4>Python 脚本</h4>
+            <p>可用变量：<code>tab</code>（标签页）、<code>session</code>（会话）、<code>browser</code>、<code>config_engine</code>、<code>logger</code>、<code>time</code>、<code>json</code></p>
+            <pre><code># 记录当前状态并执行操作
+logger.info(f"当前 URL: {tab.url}")
+logger.info(f"请求次数: {session.request_count}")
+
+# 检查特定条件后执行
+if session.error_count > 2:
+    tab.run_js("location.reload()")
+    logger.info("检测到多次错误，已刷新页面")</code></pre>
+
+            <div class="highlight-box">
+                <p><strong>⚠️ 安全提示：</strong>高级模式允许执行任意代码，请确保脚本来源可信。Python 脚本在后端执行，拥有完整的系统访问权限。</p>
+            </div>
+
+            <h3>命令执行时机</h3>
+            <p>命令在<strong>每次对话完成后</strong>自动检查触发条件。如果满足条件，动作会在<strong>后台异步执行</strong>，不会阻塞正在进行的对话。</p>
+
+            <div class="note">
+                <p><strong>💡 手动测试：</strong>在命令列表中点击 ▶️ 按钮可以手动触发命令（会在第一个空闲标签页上执行），用于调试配置是否正确。</p>
+            </div>
+        </section>
         <!-- ==================== AI 元素识别 ==================== -->
         <section id="ai-recognition">
             <h2>🎯 AI 元素识别配置</h2>
@@ -1193,6 +1567,18 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
                 <li>DrissionPage 补丁需在每次升级 DrissionPage 后重新执行。</li>
             </ul>
 
+            <h3>Q7: 代理切换命令不生效怎么办？</h3>
+            <p>A: 请检查以下几点：</p>
+            <div class="troubleshoot-list">
+                <ol>
+                    <li><strong>Clash 是否运行</strong>：确保 Clash 正在运行且 External Controller 已启用。</li>
+                    <li><strong>API 地址是否正确</strong>：默认是 <code>http://127.0.0.1:9090</code>，部分 Clash 客户端可能使用其他端口。</li>
+                    <li><strong>代理组名称是否正确</strong>：访问 <code>http://127.0.0.1:9090/proxies</code> 查看实际的代理组名称。</li>
+                    <li><strong>是否设置了 Secret</strong>：如果 Clash 配置了 <code>secret</code>，需要在命令配置中填写。</li>
+                    <li><strong>查看日志</strong>：在控制面板的「日志」选项卡中查看 <code>[CMD]</code> 开头的日志，会显示切换结果或错误原因。</li>
+                </ol>
+            </div>
+
             <h3>Q7: 这个项目有什么用？</h3>
             <p>A: 这是一个「白嫖」项目，主要用途包括：</p>
             <ul>
@@ -1285,6 +1671,34 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
                 link.classList.remove('active');
                 if (link.getAttribute('href') === '#' + current) {
                     link.classList.add('active');
+                }
+            });
+        });
+
+        // 侧边栏开关
+        function toggleSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            const overlay = document.getElementById('sidebarOverlay');
+            const btn = document.getElementById('hamburgerBtn');
+            const isOpen = sidebar.classList.contains('open');
+
+            sidebar.classList.toggle('open');
+            btn.classList.toggle('active');
+
+            if (!isOpen) {
+                overlay.style.display = 'block';
+                requestAnimationFrame(() => overlay.classList.add('active'));
+            } else {
+                overlay.classList.remove('active');
+                setTimeout(() => { overlay.style.display = 'none'; }, 300);
+            }
+        }
+
+        // 手机端点击导航链接后自动关闭侧边栏
+        navLinks.forEach(link => {
+            link.addEventListener('click', () => {
+                if (window.innerWidth <= 900) {
+                    toggleSidebar();
                 }
             });
         });
