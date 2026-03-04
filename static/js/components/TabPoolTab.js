@@ -115,6 +115,37 @@ window.TabPoolTabComponent = {
             }
         },
 
+        async terminateTask(tab) {
+            const tabIndex = tab.persistent_index;
+            const task = tab.current_task || '(无 task_id)';
+            if (!confirm(`确定终止标签页 #${tabIndex} 的当前任务吗？\n当前任务: ${task}`)) return;
+
+            try {
+                const token = localStorage.getItem('api_token');
+                const headers = { 'Content-Type': 'application/json' };
+                if (token) headers['Authorization'] = 'Bearer ' + token;
+
+                const response = await fetch('/api/tab-pool/tabs/' + tabIndex + '/terminate', {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify({
+                        reason: 'manual_terminate_from_tab_pool',
+                        clear_page: true
+                    })
+                });
+
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                const data = await response.json();
+                const msg = data.cancelled
+                    ? `标签页 #${tabIndex} 已终止并解除占用`
+                    : `标签页 #${tabIndex} 已解除占用（无可取消请求）`;
+                this.$emit('notify', { type: 'success', message: msg });
+                await this.fetchTabs();
+            } catch (e) {
+                this.$emit('notify', { type: 'error', message: '终止任务失败: ' + e.message });
+            }
+        },
+
         getCurrentPreset(tab) {
             return tab.preset_name || '主预设';
         }
@@ -251,6 +282,11 @@ window.TabPoolTabComponent = {
                             <div v-if="tab.current_task" class="text-blue-600 dark:text-blue-400 truncate max-w-32">
                                 任务: {{ tab.current_task }}
                             </div>
+                            <button v-if="tab.status === 'busy' || tab.current_task"
+                                    @click="terminateTask(tab)"
+                                    class="mt-2 px-2 py-1 rounded bg-red-600 text-white hover:bg-red-700 text-xs">
+                                终止并解锁
+                            </button>
                         </div>
                     </div>
                 </div>

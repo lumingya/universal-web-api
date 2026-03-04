@@ -333,6 +333,18 @@ class CreatePresetRequest(BaseModel):
     source_name: Optional[str] = Field(default=None)
 
 
+class RenamePresetRequest(BaseModel):
+    """重命名预设请求"""
+    old_name: str = Field(..., min_length=1, max_length=50)
+    new_name: str = Field(..., min_length=1, max_length=50)
+
+
+class TerminateTabRequest(BaseModel):
+    """终止标签页当前任务请求"""
+    reason: str = Field(default="manual_terminate_from_tab_pool", max_length=120)
+    clear_page: bool = Field(default=True)
+
+
 @router.put("/api/tab-pool/tabs/{tab_index}/preset")
 async def set_tab_preset(
     tab_index: int,
@@ -357,6 +369,35 @@ async def set_tab_preset(
         raise
     except Exception as e:
         logger.error(f"设置标签页预设失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/tab-pool/tabs/{tab_index}/terminate")
+async def terminate_tab_task(
+    tab_index: int,
+    body: TerminateTabRequest,
+    authenticated: bool = Depends(verify_auth)
+):
+    """按标签页编号终止当前任务并释放占用。"""
+    if tab_index < 1:
+        raise HTTPException(status_code=400, detail="标签页编号必须大于 0")
+
+    try:
+        browser = get_browser(auto_connect=False)
+        result = browser.tab_pool.terminate_by_index(
+            tab_index,
+            reason=(body.reason or "manual_terminate_from_tab_pool"),
+            clear_page=bool(body.clear_page),
+        )
+        if not result.get("ok"):
+            if result.get("error") == "tab_not_found":
+                raise HTTPException(status_code=404, detail=f"标签页 #{tab_index} 不存在")
+            raise HTTPException(status_code=400, detail=result.get("error", "terminate_failed"))
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"终止标签页任务失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -394,6 +435,31 @@ async def create_site_preset(
         raise
     except Exception as e:
         logger.error(f"创建预设失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/api/presets/{domain}/rename")
+async def rename_site_preset(
+    domain: str,
+    body: RenamePresetRequest,
+    authenticated: bool = Depends(verify_auth)
+):
+    """重命名指定预设"""
+    try:
+        from app.services.config_engine import config_engine
+        success = config_engine.rename_preset(domain, body.old_name, body.new_name)
+
+        if success:
+            return {
+                "success": True,
+                "message": f"预设 '{body.old_name}' 已重命名为 '{body.new_name}'",
+            }
+        else:
+            raise HTTPException(status_code=400, detail="重命名失败（预设不存在或新名称已存在）")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"重命名预设失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -189,6 +189,10 @@ class BrowserConstants:
         'STREAM_CONTENT_SHRINK_THRESHOLD': 0.3,
         'STREAM_USER_MSG_WAIT': 1.5,
         'STREAM_PRE_BASELINE_DELAY': 0.3,
+        'GLOBAL_NETWORK_INTERCEPTION_ENABLED': False,
+        'GLOBAL_NETWORK_INTERCEPTION_LISTEN_PATTERN': 'http',
+        'GLOBAL_NETWORK_INTERCEPTION_WAIT_TIMEOUT': 0.5,
+        'GLOBAL_NETWORK_INTERCEPTION_RETRY_DELAY': 1.0,
     }
     
     # ===== 类属性（会被配置文件覆盖）=====
@@ -238,6 +242,12 @@ class BrowserConstants:
     # 两阶段 baseline 配置
     STREAM_USER_MSG_WAIT = 1.5
     STREAM_PRE_BASELINE_DELAY = 0.3
+
+    # 全局常驻网络监听（仅事件上报）
+    GLOBAL_NETWORK_INTERCEPTION_ENABLED = False
+    GLOBAL_NETWORK_INTERCEPTION_LISTEN_PATTERN = "http"
+    GLOBAL_NETWORK_INTERCEPTION_WAIT_TIMEOUT = 0.5
+    GLOBAL_NETWORK_INTERCEPTION_RETRY_DELAY = 1.0
 
     @classmethod
     def _load_config(cls):

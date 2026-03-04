@@ -781,61 +781,6 @@
   },
   "arena.ai": {
     "presets": {
-      "1": {
-        "selectors": {
-          "input_box": "textarea[name=\"message\"]",
-          "send_btn": "button[type=\"submit\"]",
-          "result_container": "div.min-w-0:not([class*=\"bg-surface\"]) > .prose-sm",
-          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href*=\"direct\"]",
-          "message_wrapper": null,
-          "generating_indicator": null
-        },
-        "workflow": [
-          {
-            "action": "COORD_CLICK",
-            "target": "",
-            "optional": false,
-            "value": {
-              "x": 511,
-              "y": 427,
-              "random_radius": 1
-            }
-          }
-        ],
-        "stealth": true,
-        "stream_config": {
-          "mode": "network",
-          "hard_timeout": 300,
-          "silence_threshold": 2.5,
-          "initial_wait": 30,
-          "enable_wrapper_search": true,
-          "network": {
-            "parser": "lmarena",
-            "url_pattern": "**/nextjs-api/stream/create-evaluation**",
-            "method": "POST",
-            "listen_pattern": "/nextjs-api/stream/create-evaluation",
-            "first_response_timeout": 300,
-            "silence_threshold": 3,
-            "response_interval": 1
-          }
-        },
-        "image_extraction": {
-          "enabled": false,
-          "selector": "img",
-          "container_selector": null,
-          "debounce_seconds": 2,
-          "wait_for_load": true,
-          "load_timeout_seconds": 5,
-          "download_blobs": true,
-          "max_size_mb": 10,
-          "mode": "all"
-        },
-        "file_paste": {
-          "enabled": false,
-          "threshold": 50000,
-          "hint_text": "完全专注于文件内容"
-        }
-      },
       "主预设": {
         "selectors": {
           "input_box": "textarea[name=\"message\"]",
@@ -984,9 +929,64 @@
             "target": "",
             "optional": false,
             "value": {
-              "x": 277,
-              "y": 436,
+              "x": 313,
+              "y": 390,
               "random_radius": 10
+            }
+          }
+        ],
+        "stealth": true,
+        "stream_config": {
+          "mode": "network",
+          "hard_timeout": 300,
+          "silence_threshold": 2.5,
+          "initial_wait": 30,
+          "enable_wrapper_search": true,
+          "network": {
+            "parser": "lmarena",
+            "url_pattern": "**/nextjs-api/stream/create-evaluation**",
+            "method": "POST",
+            "listen_pattern": "/nextjs-api/stream/create-evaluation",
+            "first_response_timeout": 300,
+            "silence_threshold": 3,
+            "response_interval": 1
+          }
+        },
+        "image_extraction": {
+          "enabled": false,
+          "selector": "img",
+          "container_selector": null,
+          "debounce_seconds": 2,
+          "wait_for_load": true,
+          "load_timeout_seconds": 5,
+          "download_blobs": true,
+          "max_size_mb": 10,
+          "mode": "all"
+        },
+        "file_paste": {
+          "enabled": false,
+          "threshold": 50000,
+          "hint_text": "完全专注于文件内容"
+        }
+      },
+      "过cf盾": {
+        "selectors": {
+          "input_box": "textarea[name=\"message\"]",
+          "send_btn": "button[type=\"submit\"]",
+          "result_container": "div.min-w-0:not([class*=\"bg-surface\"]) > .prose-sm",
+          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href*=\"direct\"]",
+          "message_wrapper": null,
+          "generating_indicator": null
+        },
+        "workflow": [
+          {
+            "action": "COORD_CLICK",
+            "target": "",
+            "optional": false,
+            "value": {
+              "x": 511,
+              "y": 427,
+              "random_radius": 1
             }
           }
         ],

@@ -118,7 +118,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Universal Web-to-API",
     description="将任意 AI Web 界面转换为 OpenAI 兼容 API",
-    version="2.0.0",
+    version="2.5.6",
     docs_url="/docs" if AppConfig.DEBUG else None,
     redoc_url="/redoc" if AppConfig.DEBUG else None,
     lifespan=lifespan
@@ -145,7 +145,7 @@ async def root():
     # 如果没有 Dashboard，返回 API 信息
     return JSONResponse({
         "service": "Universal Web-to-API",
-        "version": "2.0.0",
+        "version": "2.5.6",
         "dashboard": "请确保 static/index.html 存在",
         "docs": "/docs"
     })

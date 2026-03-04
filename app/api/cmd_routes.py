@@ -44,12 +44,19 @@ class CommandCreateRequest(BaseModel):
     trigger: dict = Field(default_factory=lambda: {
         "type": "request_count", "value": 10,
         "command_id": "",
+        "action_ref": "",
+        "match_rule": "equals",
+        "expected_value": "",
+        "match_mode": "keyword",
+        "status_codes": "403,429,500,502,503,504",
+        "abort_on_match": True,
         "scope": "all", "domain": "", "tab_index": None
     })
     actions: list = Field(default_factory=lambda: [
         {"type": "clear_cookies"},
         {"type": "refresh_page"},
     ])
+    group_name: str = Field(default="")
     script: str = Field(default="")
     script_lang: str = Field(default="javascript")
 
@@ -60,12 +67,22 @@ class CommandUpdateRequest(BaseModel):
     mode: Optional[str] = None
     trigger: Optional[dict] = None
     actions: Optional[list] = None
+    group_name: Optional[str] = None
     script: Optional[str] = None
     script_lang: Optional[str] = None
 
 
 class CommandReorderRequest(BaseModel):
     command_ids: List[str]
+
+
+class CommandGroupAssignRequest(BaseModel):
+    command_ids: List[str]
+    group_name: str = Field(default="", max_length=100)
+
+
+class CommandGroupExecuteRequest(BaseModel):
+    include_disabled: bool = Field(default=False)
 
 
 # ================= 路由 =================
@@ -114,6 +131,30 @@ async def reorder_commands(
 ):
     success = command_engine.reorder_commands(body.command_ids)
     return {"success": success}
+
+
+@router.get("/api/command-groups")
+async def list_command_groups(authenticated: bool = Depends(verify_auth)):
+    groups = command_engine.list_command_groups()
+    return {"groups": groups, "count": len(groups)}
+
+
+@router.put("/api/command-groups")
+async def assign_command_group(
+    body: CommandGroupAssignRequest,
+    authenticated: bool = Depends(verify_auth)
+):
+    updated = command_engine.set_commands_group(body.command_ids, body.group_name)
+    return {"success": True, "updated": updated, "group_name": (body.group_name or "").strip()}
+
+
+@router.delete("/api/command-groups/{group_name}")
+async def disband_command_group(
+    group_name: str,
+    authenticated: bool = Depends(verify_auth)
+):
+    updated = command_engine.disband_group(group_name)
+    return {"success": True, "updated": updated, "group_name": group_name}
 
 
 @router.put("/api/commands/{command_id}")
@@ -171,4 +212,57 @@ async def test_command(command_id: str, authenticated: bool = Depends(verify_aut
         raise
     except Exception as e:
         logger.error(f"手动触发失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/command-groups/{group_name}/execute")
+async def execute_command_group(
+    group_name: str,
+    body: Optional[CommandGroupExecuteRequest] = None,
+    authenticated: bool = Depends(verify_auth)
+):
+    normalized_name = (group_name or "").strip()
+    if not normalized_name:
+        raise HTTPException(status_code=400, detail="命令组名称不能为空")
+
+    include_disabled = bool(body.include_disabled) if body else False
+
+    try:
+        from app.core.browser import get_browser
+        browser = get_browser(auto_connect=False)
+        pool = browser.tab_pool
+
+        status = pool.get_status()
+        idle_tabs = [t for t in status.get("tabs", []) if t["status"] == "idle"]
+
+        if not idle_tabs:
+            raise HTTPException(status_code=409, detail="没有空闲标签页可用于执行命令组")
+
+        tab_index = idle_tabs[0]["persistent_index"]
+        session = pool.acquire_by_index(tab_index, f"group_test_{normalized_name}", timeout=5)
+
+        if not session:
+            raise HTTPException(status_code=409, detail="获取标签页失败")
+
+        try:
+            result = command_engine.execute_command_group(
+                group_name=normalized_name,
+                session=session,
+                include_disabled=include_disabled,
+            )
+            if not result.get("ok"):
+                raise HTTPException(status_code=400, detail=result.get("error", "命令组执行失败"))
+            return {
+                "success": True,
+                "message": f"命令组已在标签页 #{tab_index} 执行",
+                "tab_index": tab_index,
+                **result,
+            }
+        finally:
+            pool.release(session.id, check_triggers=False)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"执行命令组失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))

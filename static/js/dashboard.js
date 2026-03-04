@@ -299,6 +299,43 @@ const BROWSER_CONSTANTS_SCHEMA = {
                 default: true
             }
         }
+    },
+    globalIntercept: {
+        label: '全局网络拦截',
+        icon: '🛡️',
+        collapsed: true,
+        items: {
+            GLOBAL_NETWORK_INTERCEPTION_ENABLED: {
+                label: '启用常驻监听',
+                desc: '空闲标签页持续监听网络事件；任务执行时会自动让位给工作流监听',
+                type: 'switch',
+                default: false
+            },
+            GLOBAL_NETWORK_INTERCEPTION_LISTEN_PATTERN: {
+                label: '监听模式',
+                desc: 'DrissionPage listen.start() 的 pattern，通常用 http',
+                type: 'text',
+                default: 'http'
+            },
+            GLOBAL_NETWORK_INTERCEPTION_WAIT_TIMEOUT: {
+                label: '轮询超时',
+                unit: '秒',
+                desc: 'wait() 单次等待超时，越小响应越快但开销更高',
+                type: 'number',
+                step: 0.1,
+                min: 0.1,
+                default: 0.5
+            },
+            GLOBAL_NETWORK_INTERCEPTION_RETRY_DELAY: {
+                label: '异常重试间隔',
+                unit: '秒',
+                desc: '监听器异常后重启间隔',
+                type: 'number',
+                step: 0.1,
+                min: 0.2,
+                default: 1.0
+            }
+        }
     }
 };
 

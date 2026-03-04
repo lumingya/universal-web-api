@@ -10,6 +10,7 @@ app/core/workflow/executor.py - 工作流执行器
 
 import time
 import random
+import threading
 from typing import Generator, Dict, Any, Callable, Optional
 
 from app.core.config import (
@@ -25,7 +26,8 @@ from app.core.stream_monitor import StreamMonitor
 from app.core.network_monitor import (
     create_network_monitor,
     NetworkMonitorTimeout,
-    NetworkMonitorError
+    NetworkMonitorError,
+    NetworkInterceptionTriggered,
 )
 
 from .text_input import TextInputHandler
@@ -42,8 +44,10 @@ class WorkflowExecutor:
                  extractor = None,
                  image_config: Dict = None,
                  stream_config: Dict = None,
-                 file_paste_config: Dict = None):
+                 file_paste_config: Dict = None,
+                 session = None):
         self.tab = tab
+        self.session = session
         self.stealth_mode = stealth_mode
         self.finder = ElementFinder(tab)
         self.formatter = SSEFormatter()
@@ -58,18 +62,30 @@ class WorkflowExecutor:
         self._stream_monitor = None
         
         # 检查是否启用网络监听模式
-        stream_mode = stream_config.get("mode", "dom") if stream_config else "dom"
+        self._stream_mode = stream_config.get("mode", "dom") if stream_config else "dom"
         network_config = stream_config.get("network", {}) if stream_config else {}
-        
-        # 只有当 mode="network" 且配置了 parser 时才启用网络监听
-        if stream_mode == "network" and network_config and network_config.get("parser"):
-            # 创建网络监听器
+        self._intercept_only_mode = False
+
+        interception_enabled = False
+        interception_pattern = ""
+        if self.session is not None:
+            try:
+                from app.services.command_engine import command_engine
+                interception_enabled = command_engine.has_network_interception_for_session(self.session)
+                if interception_enabled:
+                    interception_pattern = command_engine.get_network_listen_pattern(self.session)
+            except Exception as e:
+                logger.debug(f"[Executor] 读取网络拦截命令失败（忽略）: {e}")
+
+        # 正常网络流式：使用 parser 解析增量
+        if self._stream_mode == "network" and network_config and network_config.get("parser"):
             try:
                 self._network_monitor = create_network_monitor(
                     tab=tab,
                     formatter=self.formatter,
                     stream_config=stream_config,
-                    stop_checker=should_stop_checker
+                    stop_checker=should_stop_checker,
+                    event_handler=self._handle_network_event
                 )
                 logger.debug(
                     f"[Executor] 网络监听器已启用 "
@@ -77,6 +93,32 @@ class WorkflowExecutor:
                 )
             except Exception as e:
                 logger.warning(f"[Executor] 网络监听器创建失败: {e}")
+
+        # DOM 流式 + 网络异常拦截：启用 event-only 网络监听（独立于 stream_mode）
+        elif interception_enabled:
+            try:
+                interception_cfg = dict(network_config or {})
+                if not interception_cfg.get("listen_pattern"):
+                    interception_cfg["listen_pattern"] = interception_pattern or "http"
+                interception_cfg["event_only"] = True
+                interception_cfg.setdefault("first_response_timeout", 8)
+                interception_cfg.setdefault("silence_threshold", 2)
+                interception_cfg.setdefault("response_interval", 0.3)
+
+                self._network_monitor = create_network_monitor(
+                    tab=tab,
+                    formatter=self.formatter,
+                    stream_config={"network": interception_cfg},
+                    stop_checker=should_stop_checker,
+                    event_handler=self._handle_network_event
+                )
+                self._intercept_only_mode = True
+                logger.debug(
+                    "[Executor] 网络异常拦截已启用（event-only） "
+                    f"(pattern={interception_cfg.get('listen_pattern')!r})"
+                )
+            except Exception as e:
+                logger.warning(f"[Executor] 网络异常拦截监听创建失败: {e}")
         
         # 始终创建 DOM 监听器（作为回退）
         self._stream_monitor = StreamMonitor(
@@ -117,6 +159,34 @@ class WorkflowExecutor:
         
         if self.stealth_mode:
             logger.debug("[STEALTH] 隐身模式已启用")
+
+    def _handle_network_event(self, event: Dict[str, Any]) -> bool:
+        """
+        将网络事件上报给命令引擎。
+        返回 True 表示命中拦截条件，应立即中断当前监听。
+        """
+        if not self.session:
+            return False
+        try:
+            from app.services.command_engine import command_engine
+            matched = bool(command_engine.handle_network_event(self.session, event))
+            if matched:
+                # 让 DOM/STREAM 流程也能立即停下来（与 stream_mode 无关）
+                try:
+                    from app.services.request_manager import request_manager
+                    request_manager.cancel_current("network_intercepted")
+                except Exception:
+                    pass
+                try:
+                    if hasattr(self.tab, "stop_loading"):
+                        self.tab.stop_loading()
+                    self.tab.run_js("if (window.stop) { window.stop(); }")
+                except Exception:
+                    pass
+            return matched
+        except Exception as e:
+            logger.debug(f"[Executor] 网络事件上报失败（忽略）: {e}")
+            return False
     
     # ================= 控制方法 =================
     
@@ -343,10 +413,17 @@ class WorkflowExecutor:
             elif action in ("STREAM_WAIT", "STREAM_OUTPUT"):
                 user_input = context.get("prompt", "") if context else ""
                 
-                # 🆕 优先尝试网络监听，失败则回退到 DOM 监听
+                # 网络流式输出与网络异常拦截解耦：
+                # - mode=network: 走网络流式（可回退 DOM）
+                # - mode!=network 且启用拦截: 后台消费网络事件，前台仍走 DOM
                 monitor_used = None
-                
-                if self._network_monitor is not None:
+                use_network_stream = (
+                    self._network_monitor is not None
+                    and not self._intercept_only_mode
+                    and self._stream_mode == "network"
+                )
+
+                if use_network_stream:
                     try:
                         logger.debug("[Executor] 尝试网络监听模式")
                         yield from self._network_monitor.monitor(
@@ -355,6 +432,10 @@ class WorkflowExecutor:
                             completion_id=self._completion_id
                         )
                         monitor_used = "network"
+
+                    except NetworkInterceptionTriggered as e:
+                        logger.warning(f"[Executor] 网络拦截已触发: {e}")
+                        raise WorkflowError("network_intercepted")
                     
                     except NetworkMonitorTimeout as e:
                         logger.warning(
@@ -381,13 +462,46 @@ class WorkflowExecutor:
                         monitor_used = "dom_fallback"
                 
                 else:
+                    event_thread = None
+
+                    # DOM 模式下，若启用了网络拦截，则后台消费事件
+                    if self._network_monitor is not None and self._intercept_only_mode:
+                        def _consume_events():
+                            try:
+                                for _ in self._network_monitor.monitor(
+                                    selector=selector,
+                                    user_input=user_input,
+                                    completion_id=self._completion_id,
+                                ):
+                                    if self._check_cancelled():
+                                        break
+                            except (NetworkInterceptionTriggered, NetworkMonitorTimeout, NetworkMonitorError):
+                                pass
+                            except Exception as e:
+                                logger.debug(f"[Executor] 后台网络事件监听结束: {e}")
+
+                        event_thread = threading.Thread(
+                            target=_consume_events,
+                            daemon=True,
+                            name="net-intercept-bg",
+                        )
+                        event_thread.start()
+
                     # 未配置网络监听，直接使用 DOM 监听
-                    yield from self._stream_monitor.monitor(
-                        selector=selector,
-                        user_input=user_input,
-                        completion_id=self._completion_id
-                    )
-                    monitor_used = "dom"
+                    try:
+                        yield from self._stream_monitor.monitor(
+                            selector=selector,
+                            user_input=user_input,
+                            completion_id=self._completion_id
+                        )
+                        monitor_used = "dom"
+                    finally:
+                        if event_thread is not None:
+                            try:
+                                self._network_monitor._cleanup()
+                            except Exception:
+                                pass
+                            event_thread.join(timeout=0.2)
                 
                 if monitor_used:
                     logger.debug(f"[Executor] 监听完成 (mode={monitor_used})")

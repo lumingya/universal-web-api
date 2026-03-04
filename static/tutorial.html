@@ -570,7 +570,7 @@
 
     <div class="main-content">
         <h1 style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
-            Universal Web-to-API 使用手册 (v2.3.1)
+            Universal Web-to-API 使用手册 (v2.5.6)
             <a href="https://github.com/lumingya/universal-web-api" target="_blank" style="display: inline-flex; align-items: center; gap: 6px; font-size: 0.8rem; font-weight: 500; color: var(--text-color); text-decoration: none; background: var(--site-card-bg); border: 1px solid var(--border-color); padding: 6px 14px; border-radius: 8px; transition: all 0.2s;" onmouseover="this.style.borderColor='var(--primary-color)';this.style.color='var(--primary-color)';this.style.background='var(--info-bg)'" onmouseout="this.style.borderColor='var(--border-color)';this.style.color='var(--text-color)';this.style.background='var(--site-card-bg)'"
             ><svg height="18" width="18" viewBox="0 0 16 16" fill="currentColor" style="flex-shrink:0;"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path></svg>GitHub</a>
         </h1>
@@ -872,8 +872,8 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
                 </tr>
                 <tr>
                     <td><strong>网络拦截模式</strong></td>
-                    <td>❌ 非流式</td>
-                    <td>拦截浏览器网络请求，AI 生成完毕后一次性返回完整内容</td>
+                    <td>✅ 流式（按站点适配）</td>
+                    <td>拦截浏览器网络请求并解析增量响应，通常更快、更稳</td>
                 </tr>
             </table>
 
@@ -906,7 +906,7 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
                 <p><strong>⚠️ 重要提醒：</strong>网络拦截模式目前仅针对部分站点做了适配。<strong>如果某个站点默认没有开启网络拦截，请不要手动开启</strong>——大概率是没有适配，或者开启后会产生副作用（如增加被 Cloudflare 检测的风险）。</p>
             </div>
 
-            <p>网络拦截模式通过拦截浏览器的 XHR/Fetch 请求来获取 AI 的完整回复，能完美处理代码块等复杂内容。但由于 DrissionPage 不支持流式读取网络响应，<strong>所有内容必须等 AI 完全生成后才能一次性返回</strong>，因此不支持流式输出。</p>
+            <p>网络拦截模式通过拦截浏览器的 XHR/Fetch 请求来获取 AI 的响应，并通过站点解析器提取增量内容。对于已适配站点，通常可实现稳定流式输出，且对复杂内容（如代码块）兼容性更好。</p>
 
             <div class="info-box">
                 <p><strong>💡 启用方式：</strong>在控制面板的站点配置中，找到「流式配置」面板，将模式切换为「网络拦截」即可。</p>
@@ -927,7 +927,7 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
                 </tr>
                 <tr>
                     <td><strong>首次响应超时</strong></td>
-                    <td>等待 AI 返回完整回复的最长时间。由于非流式特性，这实际上是<strong>整个回复的生成超时</strong>，而不是首个字符的等待时间</td>
+                    <td>等待首次有效网络响应的最长时间；超时后会根据模式回退或中止</td>
                     <td><code>300</code> 秒</td>
                 </tr>
                 <tr>
@@ -963,7 +963,7 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
             </table>
 
             <div class="note">
-                <p><strong>💡 关于超时配置：</strong>在网络拦截模式下，「首次响应超时」和「全局硬超时」实际效果相似，因为 DrissionPage 不支持流式返回——首次响应就是完整响应。建议两者设为相同的值。对于慢速思考模型（如 o1），可能需要设为 300 秒以上。</p>
+                <p><strong>💡 关于超时配置：</strong>慢速思考模型（如 o1/长推理）建议提高「首次响应超时」与「全局硬超时」。两者不必完全相同：前者控制“首包等待”，后者控制“整轮上限”。</p>
             </div>
 
             <div class="highlight-box">
@@ -1082,7 +1082,7 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
                 </tr>
             </table>
 
-            <h3>触发条件</h3>
+            <h3>触发条件（与代码一致）</h3>
             <table>
                 <tr><th>类型</th><th>说明</th><th>示例</th></tr>
                 <tr>
@@ -1105,6 +1105,21 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
                     <td>页面出现指定内容</td>
                     <td>检测到 "Cloudflare" 时触发</td>
                 </tr>
+                <tr>
+                    <td><code>command_triggered</code></td>
+                    <td>当某条命令触发后，再触发本命令</td>
+                    <td>A 成功后执行 B</td>
+                </tr>
+                <tr>
+                    <td><code>command_result_match</code></td>
+                    <td>匹配上游命令/步骤的返回值（等于/包含/不等于）</td>
+                    <td>JS 探针返回 <code>CSS_FAILED</code> 时触发</td>
+                </tr>
+                <tr>
+                    <td><code>network_request_error</code></td>
+                    <td>按 URL 规则 + 状态码拦截网络异常</td>
+                    <td>命中 <code>/queue/join</code> + <code>429</code> 时触发</td>
+                </tr>
             </table>
 
             <h3>作用范围</h3>
@@ -1114,7 +1129,7 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
                 <li><strong>指定标签页</strong>：仅对特定编号的标签页生效（如 #1）</li>
             </ul>
 
-            <h3>内置动作</h3>
+            <h3>内置动作（与代码一致）</h3>
             <table>
                 <tr><th>动作</th><th>说明</th><th>参数</th></tr>
                 <tr>
@@ -1143,9 +1158,14 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
                     <td>秒数（如 2）</td>
                 </tr>
                 <tr>
-                    <td><code>switch_preset</code></td>
-                    <td>切换标签页预设</td>
+                    <td><code>execute_preset</code></td>
+                    <td>切换标签页预设（兼容旧 <code>switch_preset</code>）</td>
                     <td>预设名称</td>
+                </tr>
+                <tr>
+                    <td><code>execute_workflow</code></td>
+                    <td>立即执行目标预设工作流</td>
+                    <td>预设名称 + 可选 prompt</td>
                 </tr>
                 <tr>
                     <td><code>navigate</code></td>
@@ -1157,7 +1177,81 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
                     <td>切换代理节点（Clash）</td>
                     <td>见下方详细说明</td>
                 </tr>
+                <tr>
+                    <td><code>send_webhook</code></td>
+                    <td>发送外部告警（钉钉/企微/Telegram/Server 酱）</td>
+                    <td>URL、方法、Payload、Header、超时</td>
+                </tr>
+                <tr>
+                    <td><code>execute_command_group</code></td>
+                    <td>在当前标签页顺序执行指定命令组</td>
+                    <td>命令组名称、是否包含禁用命令</td>
+                </tr>
+                <tr>
+                    <td><code>abort_task</code></td>
+                    <td>中断当前任务并可终止后续动作</td>
+                    <td>中断原因、是否停止后续动作</td>
+                </tr>
+                <tr>
+                    <td><code>release_tab_lock</code></td>
+                    <td>强制解除当前标签页占用，可选清空页面并中断后续动作</td>
+                    <td>原因标记、是否重置空白页、是否停止后续动作</td>
+                </tr>
             </table>
+
+            <h3>命令组（分组执行）</h3>
+            <p>你可以把多条命令收纳到同一个命令组，便于批量执行和编排复用。</p>
+            <ul>
+                <li>在命令列表里可批量“收纳为命令组 / 解散分组 / 解散整组”。</li>
+                <li>支持手动执行整组（优先在空闲标签页执行，返回成功/失败统计）。</li>
+                <li>可在动作链中使用 <code>execute_command_group</code> 触发整组执行。</li>
+                <li>组内命令按列表顺序执行，可选是否包含禁用命令。</li>
+            </ul>
+
+            <h3>条件分支：命令结果匹配</h3>
+            <p><code>command_result_match</code> 是命令系统的“大脑”。它会读取上游命令的执行结果（或某个具体步骤的结果），按规则判断是否触发下游命令。</p>
+
+            <table>
+                <tr><th>字段</th><th>含义</th><th>建议</th></tr>
+                <tr>
+                    <td>监听命令</td>
+                    <td>要观察哪条命令</td>
+                    <td>选择稳定输出结果的上游命令</td>
+                </tr>
+                <tr>
+                    <td>目标步骤</td>
+                    <td>可选；不填则匹配命令最终返回值</td>
+                    <td>推荐绑定关键步骤（如 JS 探针步骤）</td>
+                </tr>
+                <tr>
+                    <td>匹配规则</td>
+                    <td><code>equals</code> / <code>contains</code> / <code>not_equals</code></td>
+                    <td>状态码/状态字符串建议用 <code>equals</code></td>
+                </tr>
+                <tr>
+                    <td>期望值</td>
+                    <td>需要命中的目标内容</td>
+                    <td>如 <code>CSS_FAILED</code> / <code>SUCCESS</code></td>
+                </tr>
+            </table>
+
+            <h3>外部告警：Webhook</h3>
+            <p><code>send_webhook</code> 可将异常信息推送到手机或群机器人，实现无人值守下的人类介入。</p>
+            <p>支持模板变量：<code>{{tab_index}}</code>、<code>{{domain}}</code>、<code>{{network_status}}</code>、<code>{{network_url}}</code>、<code>{{timestamp}}</code>。</p>
+            <pre><code>{"msg":"标签页 #{{tab_index}} 在 {{domain}} 命中 {{network_status}}，URL={{network_url}}"}</code></pre>
+
+            <h3>网络异常拦截（2.5.6）</h3>
+            <p><code>network_request_error</code> 用于拦截底层 HTTP 异常（如 403/429/5xx）。</p>
+            <ul>
+                <li>支持关键词或正则匹配 URL。</li>
+                <li>支持状态码白名单（如 <code>403,429,500,502,503,504</code>）。</li>
+                <li>可勾选“命中后立即中断等待”，让恢复动作秒级执行。</li>
+                <li><strong>已独立于 stream 模式</strong>：即使站点是 DOM 模式，也会启动 event-only 网络监听用于拦截。</li>
+            </ul>
+
+            <div class="note">
+                <p><strong>💡 正则输入位置：</strong>当规则类型切到“正则表达式”时，正则内容就在上方的 URL 输入框中填写。示例：<code>.*/queue/join.*</code></p>
+            </div>
 
             <h3>🔀 代理切换功能</h3>
             <p>通过 Clash API 自动切换代理节点，适用于需要频繁更换 IP 的场景（如绕过频率限制）。</p>
@@ -1248,6 +1342,32 @@ secret: ""  # 如果设置了密钥，需要在命令配置中填写</code></pre
                             <li>切换代理节点（轮询模式，切换后刷新）</li>
                         </ol>
                     </li>
+                </ul>
+            </div>
+
+            <h4>示例 4：网络 429 立即换 IP + 告警</h4>
+            <div class="config-box">
+                <ul style="margin-bottom: 0;">
+                    <li><strong>触发条件</strong>：网络请求异常拦截</li>
+                    <li><strong>URL 规则</strong>：<code>.*/queue/join.*</code>（正则）</li>
+                    <li><strong>状态码</strong>：<code>429,502,503</code></li>
+                    <li><strong>动作列表</strong>：
+                        <ol>
+                            <li>切换代理节点（随机）</li>
+                            <li>等待 1 秒</li>
+                            <li>刷新页面</li>
+                            <li>发送 Webhook 告警（可选）</li>
+                        </ol>
+                    </li>
+                </ul>
+            </div>
+
+            <h4>示例 5：CSS 探针失败走核弹重置</h4>
+            <div class="config-box">
+                <ul style="margin-bottom: 0;">
+                    <li><strong>上游命令 A</strong>：运行 JS 探针，返回 <code>SUCCESS</code> 或 <code>CSS_FAILED</code></li>
+                    <li><strong>下游命令 B 触发</strong>：命令结果匹配（监听 A，规则=等于，期望值=<code>CSS_FAILED</code>）</li>
+                    <li><strong>B 动作</strong>：清 Cookie → 刷新 → 执行预设恢复流程</li>
                 </ul>
             </div>
 

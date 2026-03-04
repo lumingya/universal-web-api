@@ -9,7 +9,7 @@ app/core/network_monitor.py - 网络响应拦截监听器
 """
 
 import time
-from typing import Generator, Optional, Dict, Callable
+from typing import Generator, Optional, Dict, Callable, Any
 
 from app.core.config import logger, SSEFormatter, BrowserConstants
 from app.core.parsers import ParserRegistry, ResponseParser
@@ -25,6 +25,30 @@ class NetworkMonitorTimeout(Exception):
 class NetworkMonitorError(Exception):
     """网络监听错误异常"""
     pass
+
+
+class NetworkInterceptionTriggered(NetworkMonitorError):
+    """网络拦截命中后主动中断当前监听。"""
+    pass
+
+
+class _EventOnlyParser(ResponseParser):
+    """仅用于消费网络事件，不输出任何流式内容。"""
+
+    @classmethod
+    def get_id(cls) -> str:
+        return "event_only"
+
+    def reset(self):
+        return None
+
+    def parse_chunk(self, raw_response: str) -> Dict[str, Any]:
+        return {
+            "content": "",
+            "images": [],
+            "done": False,
+            "error": None,
+        }
 
 
 # ================= 网络监听器 =================
@@ -54,7 +78,8 @@ class NetworkMonitor:
     def __init__(self, tab, formatter: SSEFormatter,
                  parser: ResponseParser,
                  stop_checker: Optional[Callable[[], bool]] = None,
-                 stream_config: Optional[Dict] = None):
+                 stream_config: Optional[Dict] = None,
+                 event_handler: Optional[Callable[[Dict[str, Any]], bool]] = None):
         """
         初始化网络监听器
         
@@ -69,6 +94,7 @@ class NetworkMonitor:
         self.formatter = formatter
         self.parser = parser
         self._should_stop = stop_checker or (lambda: False)
+        self._event_handler = event_handler
         
         # 从配置中加载参数
         self._stream_config = stream_config or {}
@@ -103,6 +129,49 @@ class NetworkMonitor:
             f"(pattern={self._listen_pattern!r}, "
             f"parser={parser.get_id()})"
         )
+
+    def _extract_event(self, response: Any) -> Dict[str, Any]:
+        req = getattr(response, "request", None)
+        resp = getattr(response, "response", None)
+
+        url = (
+            getattr(req, "url", None)
+            or getattr(resp, "url", None)
+            or getattr(response, "url", None)
+            or ""
+        )
+        method = (
+            getattr(req, "method", None)
+            or getattr(response, "method", None)
+            or ""
+        )
+        status = (
+            getattr(resp, "status", None)
+            or getattr(resp, "status_code", None)
+            or getattr(response, "status", None)
+            or 0
+        )
+
+        try:
+            status = int(status)
+        except Exception:
+            status = 0
+
+        return {
+            "url": str(url or ""),
+            "method": str(method or "").upper(),
+            "status": status,
+            "timestamp": time.time(),
+        }
+
+    def _dispatch_event(self, event: Dict[str, Any]) -> bool:
+        if not self._event_handler:
+            return False
+        try:
+            return bool(self._event_handler(event))
+        except Exception as e:
+            logger.debug(f"[NetworkMonitor] 事件回调异常（忽略）: {e}")
+            return False
         
     def pre_start(self):
         """
@@ -223,16 +292,24 @@ class NetworkMonitor:
                     break
                 continue
 
-            # 检查响应对象结构
-            if not hasattr(response, 'response') or not hasattr(response.response, 'body'):
-                logger.debug(f"[NetworkMonitor] 响应对象结构异常: {type(response).__name__}")
-                continue
-
             # 标记已收到响应（在读取 body 之前！）
             if not has_received_response:
                 has_received_response = True
                 logger.debug("[NetworkMonitor] 已捕获到首次响应")
             last_activity_time = time.time()
+
+            event = self._extract_event(response)
+            if self._dispatch_event(event):
+                logger.warning(
+                    "[NetworkMonitor] 命中网络异常拦截，主动中断监听 "
+                    f"(status={event.get('status')}, url={event.get('url', '')[:100]})"
+                )
+                raise NetworkInterceptionTriggered("network_intercepted")
+
+            # 检查响应对象结构
+            if not hasattr(response, 'response') or not hasattr(response.response, 'body'):
+                logger.debug(f"[NetworkMonitor] 响应对象结构异常: {type(response).__name__}")
+                continue
 
             # 读取响应体
             raw_body = response.response.body
@@ -307,7 +384,8 @@ class NetworkMonitor:
 
 def create_network_monitor(tab, formatter: SSEFormatter,
                            stream_config: Dict,
-                           stop_checker: Optional[Callable[[], bool]] = None) -> NetworkMonitor:
+                           stop_checker: Optional[Callable[[], bool]] = None,
+                           event_handler: Optional[Callable[[Dict[str, Any]], bool]] = None) -> NetworkMonitor:
     """
     创建网络监听器（工厂函数）
     
@@ -327,21 +405,26 @@ def create_network_monitor(tab, formatter: SSEFormatter,
     
     # 获取解析器 ID
     parser_id = network_config.get("parser")
+    event_only = bool(network_config.get("event_only", False))
     if not parser_id:
-        raise ValueError("network.parser 未配置")
-    
-    # 获取解析器实例
-    try:
-        parser = ParserRegistry.get(parser_id)
-    except ValueError as e:
-        raise ValueError(f"解析器不存在: {e}")
+        if event_only and event_handler is not None:
+            parser = _EventOnlyParser()
+        else:
+            raise ValueError("network.parser 未配置")
+    else:
+        # 获取解析器实例
+        try:
+            parser = ParserRegistry.get(parser_id)
+        except ValueError as e:
+            raise ValueError(f"解析器不存在: {e}")
     
     return NetworkMonitor(
         tab=tab,
         formatter=formatter,
         parser=parser,
         stop_checker=stop_checker,
-        stream_config=stream_config
+        stream_config=stream_config,
+        event_handler=event_handler,
     )
 
 
@@ -349,5 +432,6 @@ __all__ = [
     'NetworkMonitor',
     'NetworkMonitorTimeout',
     'NetworkMonitorError',
+    'NetworkInterceptionTriggered',
     'create_network_monitor',
 ]

@@ -28,6 +28,8 @@ window.ConfigTab = {
             presetLoading: false,
             newPresetName: '',
             showNewPresetInput: false,
+            renamePresetName: '',
+            showRenamePresetInput: false,
 
             // 折叠状态
             selectorCollapsed: false,
@@ -139,6 +141,7 @@ window.ConfigTab = {
             const name = this.newPresetName.trim();
             if (!name) return;
             if (!this.currentDomain) return;
+            const sourcePreset = this.selectedPreset;
 
             try {
                 const response = await fetch('/api/presets/' + encodeURIComponent(this.currentDomain), {
@@ -146,7 +149,7 @@ window.ConfigTab = {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         new_name: name,
-                        source_name: this.selectedPreset
+                        source_name: sourcePreset
                     })
                 });
 
@@ -156,10 +159,47 @@ window.ConfigTab = {
                     await this.loadPresets();
                     this.selectedPreset = name;
                     this.$emit('reload-config');
-                    alert('✅ 预设 "' + name + '" 已创建（克隆自 "' + this.selectedPreset + '"）');
+                    alert('✅ 预设 "' + name + '" 已创建（克隆自 "' + sourcePreset + '"）');
                 } else {
                     const err = await response.json();
                     alert('❌ 创建失败: ' + (err.detail || '未知错误'));
+                }
+            } catch (e) {
+                alert('❌ 网络错误: ' + e.message);
+            }
+        },
+
+        async renamePreset() {
+            const newName = this.renamePresetName.trim();
+            if (!newName) return;
+            if (!this.currentDomain) return;
+            if (!this.selectedPreset) return;
+            if (newName === this.selectedPreset) {
+                this.showRenamePresetInput = false;
+                this.renamePresetName = '';
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/presets/' + encodeURIComponent(this.currentDomain) + '/rename', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        old_name: this.selectedPreset,
+                        new_name: newName
+                    })
+                });
+
+                if (response.ok) {
+                    this.showRenamePresetInput = false;
+                    this.renamePresetName = '';
+                    await this.loadPresets();
+                    this.selectedPreset = newName;
+                    this.$emit('reload-config');
+                    alert('✅ 预设已重命名为 "' + newName + '"');
+                } else {
+                    const err = await response.json();
+                    alert('❌ 重命名失败: ' + (err.detail || '未知错误'));
                 }
             } catch (e) {
                 alert('❌ 网络错误: ' + e.message);
@@ -200,10 +240,18 @@ window.ConfigTab = {
             handler(newDomain) {
                 if (newDomain) {
                     this.selectedPreset = '主预设';
+                    this.showNewPresetInput = false;
+                    this.showRenamePresetInput = false;
+                    this.newPresetName = '';
+                    this.renamePresetName = '';
                     this.loadPresets();
                 } else {
                     this.availablePresets = [];
                     this.selectedPreset = '主预设';
+                    this.showNewPresetInput = false;
+                    this.showRenamePresetInput = false;
+                    this.newPresetName = '';
+                    this.renamePresetName = '';
                 }
             },
             immediate: true
@@ -243,7 +291,7 @@ window.ConfigTab = {
                             <div v-if="showNewPresetInput" class="flex items-center gap-2">
                                 <input v-model="newPresetName"
                                        @keyup.enter="createPreset"
-                                       @keyup.escape="showNewPresetInput = false"
+                                       @keyup.escape="showNewPresetInput = false; newPresetName = ''"
                                        placeholder="输入预设名称"
                                        class="border dark:border-gray-600 px-2 py-1 rounded text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white w-32 focus:ring-2 focus:ring-blue-400"
                                        autofocus>
@@ -257,9 +305,33 @@ window.ConfigTab = {
                                     取消
                                 </button>
                             </div>
-                            <button v-else @click="showNewPresetInput = true"
+                            <button v-else @click="showNewPresetInput = true; showRenamePresetInput = false; renamePresetName = ''"
                                     class="px-3 py-1 text-xs font-medium bg-blue-500 text-white rounded hover:bg-blue-600 flex items-center gap-1">
                                 ＋ 新建预设
+                            </button>
+
+                            <!-- 重命名预设 -->
+                            <div v-if="showRenamePresetInput" class="flex items-center gap-2">
+                                <input v-model="renamePresetName"
+                                       @keyup.enter="renamePreset"
+                                       @keyup.escape="showRenamePresetInput = false; renamePresetName = ''"
+                                       :placeholder="'重命名 ' + selectedPreset"
+                                       class="border dark:border-gray-600 px-2 py-1 rounded text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white w-36 focus:ring-2 focus:ring-amber-400">
+                                <button @click="renamePreset"
+                                        :disabled="!renamePresetName.trim()"
+                                        class="px-2 py-1 text-xs bg-amber-500 text-white rounded hover:bg-amber-600 disabled:opacity-50">
+                                    重命名
+                                </button>
+                                <button @click="showRenamePresetInput = false; renamePresetName = ''"
+                                        class="px-2 py-1 text-xs bg-gray-300 dark:bg-gray-600 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-400 dark:hover:bg-gray-500">
+                                    取消
+                                </button>
+                            </div>
+                            <button v-else
+                                    @click="showRenamePresetInput = true; renamePresetName = selectedPreset; showNewPresetInput = false; newPresetName = ''"
+                                    :disabled="!selectedPreset"
+                                    class="px-3 py-1 text-xs font-medium text-amber-700 dark:text-amber-300 border border-amber-300 dark:border-amber-700 rounded hover:bg-amber-50 dark:hover:bg-amber-900/30 disabled:opacity-30">
+                                ✎ 重命名
                             </button>
 
                             <!-- 删除预设 -->

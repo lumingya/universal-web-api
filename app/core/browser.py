@@ -693,7 +693,8 @@ class BrowserCore:
             extractor=extractor,
             image_config=image_config,
             stream_config=stream_config,
-            file_paste_config=file_paste_config
+            file_paste_config=file_paste_config,
+            session=session,
         )
         
         result_container_selector = selectors.get("result_container", "")

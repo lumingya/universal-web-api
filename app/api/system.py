@@ -253,6 +253,10 @@ async def get_browser_constants(authenticated: bool = Depends(verify_auth)):
                 'STREAM_MAX_ABNORMAL_COUNT': 5,
                 'STREAM_MAX_ELEMENT_MISSING': 10,
                 'STREAM_CONTENT_SHRINK_THRESHOLD': 0.3,
+                'GLOBAL_NETWORK_INTERCEPTION_ENABLED': False,
+                'GLOBAL_NETWORK_INTERCEPTION_LISTEN_PATTERN': 'http',
+                'GLOBAL_NETWORK_INTERCEPTION_WAIT_TIMEOUT': 0.5,
+                'GLOBAL_NETWORK_INTERCEPTION_RETRY_DELAY': 1.0,
             }
 
         return {"config": config}
