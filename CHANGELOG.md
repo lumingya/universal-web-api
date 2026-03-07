@@ -27,6 +27,8 @@
 - 标签页扫描新增 `devtools://` / `chrome-devtools://` 过滤，修复反复 `+1` 后立即移除的抖动日志
 - 请求在 `client_disconnected` 取消时会回滚 `request_count` 且跳过命令触发检查，避免断连请求误触发自动命令
 - Windows 启动时切换 `SelectorEventLoopPolicy` 并过滤已知 `WinError 10054` 噪音回调，减少控制台异常栈刷屏
+- 修复 DrissionPage 监听线程竞态：`Listener._loading_finished` 在驱动释放后不再调用空对象，避免 `AttributeError: 'NoneType' object has no attribute 'run'`
+- 为 DrissionPage 事件循环增加稳定性兜底，单次回调异常不再导致 `_handle_event_loop` 线程退出
 
 ## [2.5.6] - 2026-03-04
 

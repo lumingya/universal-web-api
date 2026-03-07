@@ -1378,7 +1378,10 @@ const app = createApp({
             this.isLoadingEnv = true;
             try {
                 const data = await this.apiRequest('/api/settings/env');
-                this.envConfig = data.config || {};
+                this.envConfig = {
+                    ...this.getEnvDefaults(),
+                    ...(data.config || {})
+                };
                 this.envConfigOriginal = JSON.parse(JSON.stringify(this.envConfig));
             } catch (error) {
                 console.error('加载环境配置失败:', error);
@@ -1429,7 +1432,10 @@ const app = createApp({
             this.isLoadingConstants = true;
             try {
                 const data = await this.apiRequest('/api/settings/browser-constants');
-                this.browserConstants = data.config || {};
+                this.browserConstants = {
+                    ...this.getBrowserConstantsDefaults(),
+                    ...(data.config || {})
+                };
                 this.browserConstantsOriginal = JSON.parse(JSON.stringify(this.browserConstants));
             } catch (error) {
                 console.error('加载浏览器常量失败:', error);

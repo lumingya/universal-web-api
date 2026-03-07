@@ -52,3 +52,8 @@ git提交.py
 
 download_images/
 image/
+
+# Codex/Playwright 临时产物
+assets/frontend-preview.png
+assets/ai-web-preview.png
+output/playwright/

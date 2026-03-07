@@ -221,8 +221,8 @@ app = FastAPI(
     title="Universal Web-to-API",
     description="将任意 AI Web 界面转换为 OpenAI 兼容 API",
     version="2.5.6",
-    docs_url="/docs" if AppConfig.DEBUG else None,
-    redoc_url="/redoc" if AppConfig.DEBUG else None,
+    docs_url="/docs" if AppConfig.is_debug() else None,
+    redoc_url="/redoc" if AppConfig.is_debug() else None,
     lifespan=lifespan
 )
 

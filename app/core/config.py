@@ -342,6 +342,24 @@ class _WebLogHandler(logging.Handler):
             self.handleError(record)
 
 
+class _SafeStreamHandler(logging.StreamHandler):
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            stream = self.stream
+            stream.write(msg + self.terminator)
+            self.flush()
+        except UnicodeEncodeError:
+            try:
+                stream = self.stream
+                encoding = getattr(stream, "encoding", None) or "utf-8"
+                safe_msg = msg.encode(encoding, errors="replace").decode(encoding, errors="replace")
+                stream.write(safe_msg + self.terminator)
+                self.flush()
+            except Exception:
+                self.handleError(record)
+
+
 # 创建全局 Web 日志处理器
 _web_log_handler = _WebLogHandler()
 _web_log_handler.setLevel(logging.INFO)
@@ -401,7 +419,7 @@ class SecureLogger:
             logger.handlers.clear()
         
         # 控制台输出 handler
-        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler = _SafeStreamHandler(sys.stdout)
         console_handler.setLevel(level)
         console_handler.setFormatter(logging.Formatter('%(message)s'))
         logger.addHandler(console_handler)
@@ -428,29 +446,29 @@ class SecureLogger:
         for handler in self._logger.handlers:
             handler.setLevel(level)
 
-    def debug(self, msg: str):
-        self._logger.debug(self._format('DEBUG', msg))
+    def debug(self, msg: str, *args, **kwargs):
+        self._logger.debug(self._format('DEBUG', str(msg)), *args, **kwargs)
 
-    def info(self, msg: str):
-        self._logger.info(self._format('INFO', msg))
+    def info(self, msg: str, *args, **kwargs):
+        self._logger.info(self._format('INFO', str(msg)), *args, **kwargs)
 
-    def warning(self, msg: str):
-        self._logger.warning(self._format('WARNING', msg))
+    def warning(self, msg: str, *args, **kwargs):
+        self._logger.warning(self._format('WARNING', str(msg)), *args, **kwargs)
 
-    def error(self, msg: str):
-        self._logger.error(self._format('ERROR', msg))
+    def error(self, msg: str, *args, **kwargs):
+        self._logger.error(self._format('ERROR', str(msg)), *args, **kwargs)
 
-    def exception(self, msg: str):
-        self._logger.exception(self._format('ERROR', msg))
+    def exception(self, msg: str, *args, **kwargs):
+        self._logger.exception(self._format('ERROR', str(msg)), *args, **kwargs)
         
-    def success(self, msg: str):
-        self._logger.info(self._format('SUCCESS', msg))
+    def success(self, msg: str, *args, **kwargs):
+        self._logger.info(self._format('SUCCESS', str(msg)), *args, **kwargs)
 
-    def stream(self, msg: str):
-        self._logger.info(self._format('STREAM', msg))
+    def stream(self, msg: str, *args, **kwargs):
+        self._logger.info(self._format('STREAM', str(msg)), *args, **kwargs)
         
-    def network(self, msg: str):
-        self._logger.info(self._format('NETWORK', msg))
+    def network(self, msg: str, *args, **kwargs):
+        self._logger.info(self._format('NETWORK', str(msg)), *args, **kwargs)
     @contextlib.contextmanager
     def context(self, request_id: str):
         """上下文管理器，用于在代码块中自动设置 request_id"""

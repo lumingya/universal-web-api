@@ -28,7 +28,7 @@ _STANDALONE_BS = re.compile(r"\\\n")              # backslash + real LF
 
 
 def _clean_escaped(text: str) -> str:
-    """
+    r"""
     Gemini 返回的字符串仍可能残留多余的反斜杠：
       1. \<ctx\>        →  <ctx>
       2. \\n            →  \n  →  换行

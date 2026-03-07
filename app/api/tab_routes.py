@@ -49,7 +49,7 @@ async def verify_auth(authorization: Optional[str] = Header(None)) -> bool:
     if not AppConfig.is_auth_enabled():
         return True
 
-    if not AppConfig.AUTH_TOKEN:
+    if not AppConfig.get_auth_token():
         raise HTTPException(status_code=500, detail="服务配置错误")
 
     if not authorization:
