@@ -1180,8 +1180,12 @@ const app = createApp({
                 return { valid: false };
             }
 
-            // 检查是否是单站点格式（直接包含 selectors/workflow）
-            if (config.selectors !== undefined || config.workflow !== undefined) {
+            // 检查是否是单站点格式（旧格式 selectors/workflow，或新格式 presets/default_preset）
+            if (
+                config.selectors !== undefined
+                || config.workflow !== undefined
+                || (config.presets && typeof config.presets === 'object' && !Array.isArray(config.presets))
+            ) {
                 // 单站点格式
                 if (!this.validateSingleSiteConfig(config)) {
                     return { valid: false };
@@ -1215,8 +1219,34 @@ const app = createApp({
         },
 
         validateSingleSiteConfig(config) {
+            if (typeof config !== 'object' || config === null || Array.isArray(config)) {
+                return false;
+            }
+
+            if (config.presets !== undefined) {
+                if (typeof config.presets !== 'object' || config.presets === null || Array.isArray(config.presets)) {
+                    return false;
+                }
+
+                for (const presetData of Object.values(config.presets)) {
+                    if (typeof presetData !== 'object' || presetData === null || Array.isArray(presetData)) {
+                        return false;
+                    }
+
+                    if (presetData.selectors !== undefined && (typeof presetData.selectors !== 'object' || Array.isArray(presetData.selectors))) {
+                        return false;
+                    }
+
+                    if (presetData.workflow !== undefined && !Array.isArray(presetData.workflow)) {
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+
             // selectors 必须是对象（如果存在）
-            if (config.selectors !== undefined && typeof config.selectors !== 'object') {
+            if (config.selectors !== undefined && (typeof config.selectors !== 'object' || Array.isArray(config.selectors))) {
                 return false;
             }
 
@@ -1234,13 +1264,11 @@ const app = createApp({
             }
 
             for (const [domain, siteConfig] of Object.entries(config)) {
-                if (typeof siteConfig !== 'object') return false;
-
-                if (siteConfig.selectors && typeof siteConfig.selectors !== 'object') {
+                if (!domain || typeof domain !== 'string') {
                     return false;
                 }
 
-                if (siteConfig.workflow && !Array.isArray(siteConfig.workflow)) {
+                if (!this.validateSingleSiteConfig(siteConfig)) {
                     return false;
                 }
             }
@@ -1259,12 +1287,12 @@ const app = createApp({
                     return;
                 }
 
-                // 规范化单站点配置
-                const normalizedSite = {
-                    selectors: this.importedConfig.selectors || {},
-                    workflow: this.importedConfig.workflow || [],
-                    stealth: !!this.importedConfig.stealth
-                };
+                const normalizedMap = this.normalizeConfig({ [domain]: this.importedConfig });
+                const normalizedSite = normalizedMap[domain];
+                if (!normalizedSite) {
+                    this.notify('导入文件格式无效', 'error');
+                    return;
+                }
 
                 // 检查是否会覆盖
                 if (this.sites[domain] && this.importMode !== 'replace') {
