@@ -1,7 +1,7 @@
 {
   "commands": [
     {
-      "name": "自动清除cookie",
+      "name": "自动清除 Cookie",
       "enabled": true,
       "mode": "simple",
       "trigger": {
@@ -132,7 +132,7 @@
       "group_name": "命令组1"
     },
     {
-      "name": "切换到对应模型",
+      "name": "ARENA_SWITCH_MODEL_WHEN_READY",
       "enabled": true,
       "mode": "simple",
       "trigger": {
@@ -154,7 +154,7 @@
         {
           "type": "execute_workflow",
           "prompt": "",
-          "preset_name": "选择模型",
+          "preset_name": "閫夋嫨妯″瀷",
           "action_id": "step_1_model"
         }
       ],
@@ -166,7 +166,7 @@
       "group_name": "命令组1"
     },
     {
-      "name": "新命令",
+      "name": "NEW_COMMAND",
       "enabled": false,
       "mode": "simple",
       "trigger": {
@@ -185,10 +185,10 @@
           "type": "switch_proxy",
           "clash_api": "http://127.0.0.1:9097",
           "clash_secret": "1",
-          "selector": "高质量轮询",
+          "selector": "high_quality_round_robin",
           "mode": "round_robin",
           "node_name": "",
-          "exclude_keywords": "DIRECT,REJECT,GLOBAL,自动选择,故障转移",
+          "exclude_keywords": "DIRECT,REJECT,GLOBAL,鑷姩閫夋嫨,鏁呴殰杞Щ",
           "refresh_after": true
         }
       ],
@@ -198,7 +198,7 @@
       "group_name": "命令组1"
     },
     {
-      "name": "清cookie后黑屏恢复",
+      "name": "ARENA_RECOVER_BLACK_SCREEN_AFTER_COOKIE_CLEAR",
       "enabled": true,
       "mode": "simple",
       "trigger": {
@@ -231,7 +231,7 @@
         },
         {
           "type": "execute_workflow",
-          "preset_name": "过cf盾",
+          "preset_name": "verify",
           "prompt": "",
           "action_id": "step_3_verify"
         },
@@ -254,7 +254,7 @@
       "trigger_count": 1
     },
     {
-      "name": "清cookie后人机验证恢复",
+      "name": "ARENA_RECOVER_VERIFY_AFTER_COOKIE_CLEAR",
       "enabled": true,
       "mode": "simple",
       "trigger": {
@@ -278,7 +278,7 @@
       "actions": [
         {
           "type": "execute_workflow",
-          "preset_name": "过cf盾",
+          "preset_name": "verify",
           "prompt": "",
           "action_id": "step_1_verify"
         },
@@ -301,7 +301,7 @@
       "trigger_count": 1
     },
     {
-      "name": "黑屏恢复后切换模型",
+      "name": "ARENA_SWITCH_MODEL_AFTER_BLACK_RECOVERY",
       "enabled": true,
       "mode": "simple",
       "trigger": {
@@ -322,7 +322,7 @@
       "actions": [
         {
           "type": "execute_workflow",
-          "preset_name": "选择模型",
+          "preset_name": "閫夋嫨妯″瀷",
           "prompt": "",
           "action_id": "step_1_model"
         }
@@ -333,7 +333,7 @@
       "group_name": "命令组1"
     },
     {
-      "name": "切换模型下2",
+      "name": "切换模型中",
       "enabled": true,
       "mode": "simple",
       "trigger": {
@@ -360,7 +360,7 @@
         {
           "type": "execute_workflow",
           "action_id": "step_2",
-          "preset_name": "选择模型",
+          "preset_name": "閫夋嫨妯″瀷",
           "prompt": ""
         }
       ],
@@ -368,11 +368,11 @@
       "script": "",
       "script_lang": "javascript",
       "id": "cmd_69640733",
-      "last_triggered": 1772753033.1186135,
-      "trigger_count": 1486
+      "last_triggered": 1773291742.7462838,
+      "trigger_count": 1489
     },
     {
-      "name": "验证恢复后切换模型",
+      "name": "ARENA_SWITCH_MODEL_AFTER_VERIFY_RECOVERY",
       "enabled": true,
       "mode": "simple",
       "trigger": {
@@ -393,7 +393,7 @@
       "actions": [
         {
           "type": "execute_workflow",
-          "preset_name": "选择模型",
+          "preset_name": "閫夋嫨妯″瀷",
           "prompt": "",
           "action_id": "step_1_model"
         }
@@ -404,7 +404,7 @@
       "group_name": "命令组1"
     },
     {
-      "name": "网络恢复后切换模型",
+      "name": "ARENA_SWITCH_MODEL_AFTER_NETWORK_RECOVERY",
       "enabled": true,
       "mode": "simple",
       "trigger": {
@@ -425,7 +425,7 @@
       "actions": [
         {
           "type": "execute_workflow",
-          "preset_name": "选择模型",
+          "preset_name": "閫夋嫨妯″瀷",
           "prompt": "",
           "action_id": "step_1_model"
         }
@@ -540,6 +540,92 @@
       "script_lang": "javascript",
       "last_triggered": 1772639578.8383894,
       "trigger_count": 1
+    },
+    {
+      "id": "cmd_gemrf001",
+      "name": "自动刷新页面",
+      "enabled": true,
+      "mode": "simple",
+      "trigger": {
+        "type": "page_check",
+        "value": "出了点问题",
+        "command_id": "",
+        "action_ref": "",
+        "match_rule": "equals",
+        "expected_value": "",
+        "match_mode": "keyword",
+        "status_codes": "403,429,500,502,503,504",
+        "abort_on_match": true,
+        "scope": "domain",
+        "domain": "gemini.google.com",
+        "tab_index": null,
+        "priority": 4,
+        "periodic_enabled": true,
+        "periodic_interval_sec": 3,
+        "periodic_jitter_sec": 1,
+        "fire_mode": "level",
+        "cooldown_sec": 6
+      },
+      "actions": [
+        {
+          "type": "refresh_page",
+          "action_id": "step_1_refresh"
+        },
+        {
+          "type": "wait",
+          "seconds": 2,
+          "action_id": "step_2_wait"
+        },
+        {
+          "type": "run_js",
+          "seconds": 1,
+          "action_id": "step_3",
+          "code": "(() => {   const btn = document.querySelector('button.temp-chat-button');   if (!btn) return 'temp_chat_button_not_found';   btn.click();   return 'temp_chat_button_clicked'; })()"
+        }
+      ],
+      "group_name": "GEMINI_AUTO_RECOVERY",
+      "script": "",
+      "script_lang": "javascript",
+      "last_triggered": 1773308793.5556521,
+      "trigger_count": 5
+    },
+    {
+      "id": "cmd_gemsw001",
+      "name": "自动切换预设",
+      "enabled": true,
+      "mode": "simple",
+      "trigger": {
+        "type": "page_check",
+        "value": "你已达到 Pro 模型的用量限额",
+        "command_id": "",
+        "action_ref": "",
+        "match_rule": "equals",
+        "expected_value": "",
+        "match_mode": "keyword",
+        "status_codes": "403,429,500,502,503,504",
+        "abort_on_match": true,
+        "scope": "domain",
+        "domain": "gemini.google.com",
+        "tab_index": null,
+        "priority": 4,
+        "periodic_enabled": true,
+        "periodic_interval_sec": 3,
+        "periodic_jitter_sec": 1,
+        "fire_mode": "edge",
+        "cooldown_sec": 6
+      },
+      "actions": [
+        {
+          "type": "execute_preset",
+          "preset_name": "快速模型",
+          "action_id": "step_1_switch_preset"
+        }
+      ],
+      "group_name": "GEMINI_AUTO_RECOVERY",
+      "script": "",
+      "script_lang": "javascript",
+      "last_triggered": 1773277820.3978999,
+      "trigger_count": 7
     },
     {
       "id": "cmd_cftmj001",

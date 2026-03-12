@@ -8,15 +8,18 @@ app/core/workflow/text_input.py - 文本输入处理
 """
 
 import re
+import os
 import time
 import json
 import base64
 import random
+import mimetypes
 from typing import Optional
 import pyperclip
 from app.core.config import logger, BrowserConstants, WorkflowError
 from app.core.tab_pool import get_clipboard_lock
-from app.utils.file_paste import prepare_file_paste
+from app.utils.file_paste import create_temp_txt, copy_file_to_clipboard
+from app.utils.human_mouse import smooth_move_mouse
 
 # ================= 常量配置 =================
 
@@ -29,7 +32,8 @@ class TextInputHandler:
     """文本输入处理器"""
     
     def __init__(self, tab, stealth_mode: bool, smart_delay_fn, check_cancelled_fn,
-                 file_paste_config: dict = None):
+                 file_paste_config: dict = None,
+                 selectors: dict = None):
         """
         Args:
             tab: 浏览器标签页
@@ -43,6 +47,7 @@ class TextInputHandler:
         self._smart_delay = smart_delay_fn
         self._check_cancelled = check_cancelled_fn
         self._file_paste_config = file_paste_config or {}
+        self._selectors = selectors or {}
     
     # ================= 工具方法 =================
     
@@ -733,7 +738,416 @@ class TextInputHandler:
                 )
         except Exception as e:
             logger.debug(f"[STEALTH_VERIFY] 检查跳过: {e}")
-                # ================= 文件粘贴模式 =================
+
+    # ================= 文件粘贴模式 =================
+
+    def _get_selector_value(self, key: str) -> str:
+        """读取当前站点配置里的选择器。"""
+        value = self._selectors.get(key)
+        return str(value).strip() if value else ""
+
+    def _normalize_selector(self, selector: str) -> str:
+        """统一补全选择器语法，默认按 CSS 处理。"""
+        selector = (selector or "").strip()
+        if not selector:
+            return ""
+        if selector.startswith(("tag:", "@", "xpath:", "css:")) or "@@" in selector:
+            return selector
+        return f"css:{selector}"
+
+    def _find_elements(self, selector: str, timeout: float = 1.2) -> list:
+        """查找多个元素，兼容裸 CSS 和 DrissionPage 语法。"""
+        normalized = self._normalize_selector(selector)
+        if not normalized:
+            return []
+
+        try:
+            return list(self.tab.eles(normalized, timeout=timeout) or [])
+        except Exception as e:
+            logger.debug(f"[FILE_PASTE] 查找元素失败 {selector!r}: {e}")
+            return []
+
+    def _find_first_element(self, selector: str, timeout: float = 1.2):
+        """查找单个元素。"""
+        elements = self._find_elements(selector, timeout=timeout)
+        return elements[0] if elements else None
+
+    def _guess_mime_type(self, filepath: str) -> str:
+        """推断文件 MIME。"""
+        mime_type, _ = mimetypes.guess_type(filepath)
+        return mime_type or "application/octet-stream"
+
+    def _get_element_file_count(self, ele) -> int:
+        """Read the selected file count from a file input element."""
+        try:
+            count = ele.run_js("return (this.files && this.files.length) || 0;")
+            return int(count or 0)
+        except Exception:
+            return 0
+
+    def _wait_for_upload_signal(self, filepath: str, timeout: float = 2.5) -> bool:
+        """
+        Wait for page-level evidence that a file was actually attached.
+
+        Without this check, silent upload failures can be misclassified as success
+        and only the hint text gets submitted to the model.
+        """
+        filename = os.path.basename(filepath or "").strip()
+        stem = os.path.splitext(filename)[0].strip()
+        needles = [item.lower() for item in (filename, stem) if item]
+        deadline = time.time() + max(0.2, timeout)
+        expected_names_js = json.dumps(needles, ensure_ascii=False)
+
+        js = """
+        return (function() {
+            try {
+                const expectedNames = __EXPECTED_NAMES__;
+                const inputs = Array.from(document.querySelectorAll('input[type="file"]'));
+                const fileCount = inputs.reduce((sum, input) => {
+                    return sum + ((input.files && input.files.length) || 0);
+                }, 0);
+
+                const text = (document.body && document.body.innerText)
+                    ? String(document.body.innerText).toLowerCase()
+                    : '';
+                const matchedName = Array.isArray(expectedNames)
+                    && expectedNames.some(name => name && text.includes(name));
+
+                const fileText = Array.from(
+                    document.querySelectorAll(
+                        '.file-card-list, .fileitem-file-name, .fileitem-file-name-text, .message-input-column-file'
+                    )
+                )
+                    .map(el => String(el.textContent || '').toLowerCase())
+                    .join('\\n');
+                const matchedFileNode = Array.isArray(expectedNames)
+                    && expectedNames.some(name => name && fileText.includes(name));
+
+                return { ok: true, fileCount, matchedName, matchedFileNode };
+            } catch (error) {
+                return {
+                    ok: false,
+                    fileCount: 0,
+                    matchedName: false,
+                    matchedFileNode: false,
+                    error: String(error && error.message ? error.message : error)
+                };
+            }
+        })();
+        """.replace("__EXPECTED_NAMES__", expected_names_js)
+
+        while time.time() < deadline:
+            if self._check_cancelled():
+                return False
+
+            try:
+                result = self.tab.run_js(js) or {}
+            except Exception as e:
+                logger.debug(f"[FILE_PASTE] 检查文件上传信号失败: {e}")
+                result = {}
+
+            file_count = int(result.get("fileCount", 0) or 0)
+            if file_count > 0 or bool(result.get("matchedName")) or bool(result.get("matchedFileNode")):
+                logger.debug(
+                    f"[FILE_PASTE] 检测到文件上传信号 "
+                    f"(file_count={file_count}, matched_name={bool(result.get('matchedName'))}, "
+                    f"matched_file_node={bool(result.get('matchedFileNode'))})"
+                )
+                return True
+
+            time.sleep(0.2)
+
+        logger.warning(f"[FILE_PASTE] 未检测到文件上传信号: {filename or filepath}")
+        return False
+
+    def _click_upload_button_if_configured(self) -> bool:
+        """点击站点配置里的上传按钮，常用于唤起动态 file input。"""
+        selector = self._get_selector_value("upload_btn")
+        if not selector:
+            return False
+
+        button = self._find_first_element(selector, timeout=1.5)
+        if not button:
+            logger.debug("[FILE_PASTE] 已配置 upload_btn，但当前页面未找到")
+            return False
+
+        try:
+            button.click()
+            self._smart_delay(0.15, 0.35)
+            logger.info("[FILE_PASTE] 已点击上传按钮")
+            return True
+        except Exception as e:
+            logger.debug(f"[FILE_PASTE] 点击上传按钮失败: {e}")
+            return False
+
+    def _list_file_inputs(self, selector: str = "") -> list:
+        """列出 file input 候选元素。"""
+        if selector:
+            return self._find_elements(selector, timeout=1.5)
+
+        try:
+            return list(self.tab.eles('css:input[type="file"]') or [])
+        except Exception as e:
+            logger.debug(f"[FILE_PASTE] 查找通用 file input 失败: {e}")
+            return []
+
+    def _upload_file_via_input(self, filepath: str, selector: str = "") -> bool:
+        """使用 file input 直接上传文件。"""
+        candidates = self._list_file_inputs(selector)
+        if not candidates:
+            logger.debug("[FILE_PASTE] 当前没有可用的 file input")
+            return False
+
+        for index, file_input in enumerate(candidates, 1):
+            try:
+                if file_input.attr("disabled") is not None:
+                    continue
+
+                file_input.input(filepath)
+                try:
+                    file_input.run_js(
+                        """
+                        this.dispatchEvent(new Event('input', { bubbles: true }));
+                        this.dispatchEvent(new Event('change', { bubbles: true }));
+                        """
+                    )
+                except Exception:
+                    pass
+
+                selected_count = self._get_element_file_count(file_input)
+                if selected_count <= 0:
+                    logger.debug(
+                        f"[FILE_PASTE] file input #{index} 未真正挂载文件 "
+                        f"(selector={selector or 'input[type=file]'})"
+                    )
+                    continue
+
+                logger.debug(
+                    f"[FILE_PASTE] 已通过 file input 上传文件 "
+                    f"(candidate={index}, files={selected_count})"
+                )
+                return True
+            except Exception as e:
+                logger.debug(f"[FILE_PASTE] file input #{index} 上传失败: {e}")
+
+        return False
+
+    def _dispatch_native_file_drag(self, zone, filepath: str) -> bool:
+        """
+        Use CDP drag events to simulate a browser-level file drop.
+
+        This is closer to a real OS drag-and-drop than page-injected DragEvent,
+        and works better on sites like Qwen that register file drops at the browser layer.
+        """
+        try:
+            point = zone.run_js(
+                """
+                return (function() {
+                    try {
+                        this.scrollIntoView({ block: 'center', inline: 'center' });
+                    } catch (e) {}
+                    const rect = this.getBoundingClientRect();
+                    const minX = rect.left + Math.min(40, Math.max(8, rect.width * 0.15));
+                    const maxX = rect.right - Math.min(40, Math.max(8, rect.width * 0.15));
+                    const minY = rect.top + Math.min(24, Math.max(6, rect.height * 0.2));
+                    const maxY = rect.bottom - Math.min(24, Math.max(6, rect.height * 0.2));
+                    const x = Math.round((minX + maxX) / 2);
+                    const y = Math.round((minY + maxY) / 2);
+                    return {
+                        x,
+                        y,
+                        width: Math.round(window.innerWidth || 1280),
+                        height: Math.round(window.innerHeight || 720)
+                    };
+                }).call(this);
+                """
+            ) or {}
+        except Exception as e:
+            logger.debug(f"[FILE_PASTE] 读取 drop zone 坐标失败: {e}")
+            return False
+
+        target_x = int(point.get("x", 0) or 0)
+        target_y = int(point.get("y", 0) or 0)
+        viewport_w = int(point.get("width", 1280) or 1280)
+        viewport_h = int(point.get("height", 720) or 720)
+
+        if target_x <= 0 or target_y <= 0:
+            logger.debug("[FILE_PASTE] drop zone 坐标无效，跳过原生拖拽")
+            return False
+
+        start_x = max(8, min(viewport_w - 8, target_x - random.randint(160, 280)))
+        start_y = max(8, min(viewport_h - 8, target_y - random.randint(100, 180)))
+        mid_x = int((start_x + target_x) / 2)
+        mid_y = int((start_y + target_y) / 2)
+
+        drag_data = {
+            "items": [],
+            "files": [filepath],
+            "dragOperationsMask": 1,
+        }
+
+        try:
+            smooth_move_mouse(
+                self.tab,
+                from_pos=(start_x, start_y),
+                to_pos=(target_x, target_y),
+                duration=random.uniform(0.18, 0.42),
+                check_cancelled=self._check_cancelled,
+            )
+
+            self.tab.run_cdp(
+                "Input.dispatchDragEvent",
+                type="dragEnter",
+                x=start_x,
+                y=start_y,
+                data=drag_data,
+                modifiers=0,
+            )
+            time.sleep(random.uniform(0.03, 0.08))
+
+            self.tab.run_cdp(
+                "Input.dispatchDragEvent",
+                type="dragOver",
+                x=mid_x,
+                y=mid_y,
+                data=drag_data,
+                modifiers=0,
+            )
+            time.sleep(random.uniform(0.04, 0.1))
+
+            self.tab.run_cdp(
+                "Input.dispatchDragEvent",
+                type="dragOver",
+                x=target_x,
+                y=target_y,
+                data=drag_data,
+                modifiers=0,
+            )
+            time.sleep(random.uniform(0.04, 0.1))
+
+            self.tab.run_cdp(
+                "Input.dispatchDragEvent",
+                type="drop",
+                x=target_x,
+                y=target_y,
+                data=drag_data,
+                modifiers=0,
+            )
+            logger.debug("[FILE_PASTE] 已通过 CDP 原生拖拽投递文件")
+            return True
+        except Exception as e:
+            logger.debug(f"[FILE_PASTE] CDP 原生拖拽失败: {e}")
+            return False
+
+    def _upload_file_via_drop_zone(self, filepath: str, selector: str) -> bool:
+        """通过拖拽事件把文件投递到配置的 drop zone。"""
+        zone = self._find_first_element(selector, timeout=1.5)
+        if not zone:
+            logger.debug("[FILE_PASTE] 已配置 drop_zone，但当前页面未找到")
+            return False
+
+        if self._dispatch_native_file_drag(zone, filepath):
+            return True
+
+        try:
+            with open(filepath, "rb") as f:
+                raw = f.read()
+        except Exception as e:
+            logger.error(f"[FILE_PASTE] 读取临时文件失败: {e}")
+            return False
+
+        filename = os.path.basename(filepath)
+        mime_type = self._guess_mime_type(filepath)
+        b64_data = base64.b64encode(raw).decode("ascii")
+        escaped_name = json.dumps(filename)
+        escaped_mime = json.dumps(mime_type)
+        escaped_data = json.dumps(b64_data)
+
+        js = f"""
+        return (async function() {{
+            try {{
+                const fileName = {escaped_name};
+                const mimeType = {escaped_mime};
+                const b64 = {escaped_data};
+                const binary = atob(b64);
+                const bytes = new Uint8Array(binary.length);
+                for (let i = 0; i < binary.length; i++) {{
+                    bytes[i] = binary.charCodeAt(i);
+                }}
+
+                const file = new File([bytes], fileName, {{
+                    type: mimeType,
+                    lastModified: Date.now()
+                }});
+
+                const dt = new DataTransfer();
+                dt.items.add(file);
+
+                const target = this;
+                try {{
+                    target.scrollIntoView({{ block: 'center', inline: 'center' }});
+                }} catch (e) {{}}
+
+                for (const eventName of ['dragenter', 'dragover', 'drop']) {{
+                    const event = new DragEvent(eventName, {{
+                        bubbles: true,
+                        cancelable: true,
+                        dataTransfer: dt
+                    }});
+                    target.dispatchEvent(event);
+                }}
+
+                return true;
+            }} catch (error) {{
+                console.error('drop upload failed', error);
+                return false;
+            }}
+        }}).call(this);
+        """
+
+        try:
+            ok = bool(zone.run_js(js))
+            if ok:
+                logger.info("[FILE_PASTE] 已通过拖拽区域上传文件")
+            return ok
+        except Exception as e:
+            logger.debug(f"[FILE_PASTE] drop zone 上传失败: {e}")
+            return False
+
+    def _upload_file_via_site_targets(self, filepath: str) -> bool:
+        """
+        站点感知的上传顺序：
+        1. 配置的 file_input
+        2. 点击 upload_btn 后再次尝试 file_input / 通用 file input
+        3. 配置的 drop_zone 拖拽
+        4. 通用 input[type=file]
+        """
+        configured_file_input = self._get_selector_value("file_input")
+        configured_drop_zone = self._get_selector_value("drop_zone")
+
+        if configured_file_input and self._upload_file_via_input(filepath, configured_file_input):
+            return True
+
+        if self._upload_file_via_input(filepath):
+            return True
+
+        if configured_drop_zone and self._upload_file_via_drop_zone(filepath, configured_drop_zone):
+            return True
+
+        clicked_upload_button = self._click_upload_button_if_configured()
+        if clicked_upload_button:
+            time.sleep(0.35)
+            if configured_file_input and self._upload_file_via_input(filepath, configured_file_input):
+                return True
+            if self._upload_file_via_input(filepath):
+                return True
+            if configured_drop_zone and self._upload_file_via_drop_zone(filepath, configured_drop_zone):
+                return True
+
+        if self._upload_file_via_input(filepath):
+            return True
+
+        return False
     
     def _should_use_file_paste(self, text: str) -> bool:
         """判断是否应该使用文件粘贴模式"""
@@ -745,14 +1159,13 @@ class TextInputHandler:
     
     def _fill_via_file_paste(self, ele, text: str) -> bool:
         """
-        通过临时 txt 文件粘贴内容
-        
+        通过临时 txt 文件上传内容
+
         流程：
         1. 创建临时 txt 文件并写入文本
-        2. 通过 Win32 CF_HDROP 格式复制文件到剪贴板
-        3. 聚焦输入框
-        4. Ctrl+V 粘贴文件
-        
+        2. 优先尝试页面中的 input[type=file] 直接上传
+        3. 若无可用 file input，再回退到 Win32 CF_HDROP + Ctrl+V
+
         Args:
             ele: 输入框元素
             text: 文本内容
@@ -789,32 +1202,43 @@ class TextInputHandler:
             if self._check_cancelled():
                 return False
             
-            # 3. 创建临时文件并复制到剪贴板（加锁）
-            with clipboard_lock:
-                filepath = prepare_file_paste(text)
-                if not filepath:
-                    logger.error("[FILE_PASTE] 准备文件粘贴失败")
-                    return False
-                
-                logger.debug(f"[FILE_PASTE] 临时文件: {filepath}")
-                
-                # 等待剪贴板数据就绪
-                time.sleep(random.uniform(0.08, 0.15))
-                
-                # 4. Ctrl+V 粘贴文件
-                if self.stealth_mode:
-                    self._human_key_combo('Control', 'V')
-                else:
-                    self.tab.actions.key_down('Control').key_down('V').key_up('V').key_up('Control')
+            # 3. 创建临时文件
+            filepath = create_temp_txt(text)
+            if not filepath:
+                logger.error("[FILE_PASTE] 创建临时文件失败")
+                return False
+
+            logger.debug(f"[FILE_PASTE] 临时文件: {filepath}")
+
+            # 4. 优先尝试站点专配上传入口，再回退到通用 file input
+            uploaded = self._upload_file_via_site_targets(filepath)
+
+            # 5. 若站点没有可用上传入口，再退回剪贴板文件粘贴
+            if not uploaded:
+                with clipboard_lock:
+                    if not copy_file_to_clipboard(filepath):
+                        logger.error("[FILE_PASTE] 复制文件到剪贴板失败")
+                        return False
+
+                    time.sleep(random.uniform(0.08, 0.15))
+
+                    if self.stealth_mode:
+                        self._human_key_combo('Control', 'V')
+                    else:
+                        self.tab.actions.key_down('Control').key_down('V').key_up('V').key_up('Control')
             
-            # 5. 等待文件粘贴处理完成
+            # 6. 等待文件处理完成
             time.sleep(random.uniform(0.5, 1.0))
             self._smart_delay(0.3, 0.6)
             
             if self._check_cancelled():
                 return True
+
+            if not self._wait_for_upload_signal(filepath):
+                logger.warning("[FILE_PASTE] 文件上传未生效，放弃文件粘贴模式")
+                return False
             
-            # 6. 追加引导文本（确保输入框有文字内容，否则某些网站无法发送）
+            # 7. 追加引导文本（确保输入框有文字内容，否则某些网站无法发送）
             hint_text = self._file_paste_config.get("hint_text", "完全专注于文件内容")
             if hint_text:
                 logger.debug(f"[FILE_PASTE] 追加引导文本: {hint_text}")
@@ -850,6 +1274,7 @@ class TextInputHandler:
         except Exception as e:
             logger.error(f"[FILE_PASTE] 文件粘贴失败: {e}")
             return False
+
     def fill_via_clipboard_no_click(self, ele, text: str):
         """
         隐身模式专用：跳过 ele.click() 的剪贴板粘贴

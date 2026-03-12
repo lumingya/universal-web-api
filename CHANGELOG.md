@@ -1,3 +1,15 @@
+## [2.5.8] - 2026-03-12
+
+### 🧰 函数调用兼容说明
+- 补充 OpenAI 标准函数调用格式说明，明确支持 `tools` / `tool_choice`，并兼容旧字段 `functions` / `function_call`
+- 文档中明确说明该能力依赖网页端提示词和模型自身理解能力，整体稳定性通常不如官方原生 Tool Calling
+- 新增“函数调用兼容说明”教程区域，补充适用场景、常见失败原因与实战建议
+
+### 📝 文档与版本同步
+- README 新增函数调用兼容说明章节
+- 教程页新增函数调用解释区域
+- 对外展示版本号同步为 `v2.5.8`
+
 ## [2.5.7] - 2026-03-05
 
 ### ✨ 命令调度与触发
@@ -27,8 +39,6 @@
 - 标签页扫描新增 `devtools://` / `chrome-devtools://` 过滤，修复反复 `+1` 后立即移除的抖动日志
 - 请求在 `client_disconnected` 取消时会回滚 `request_count` 且跳过命令触发检查，避免断连请求误触发自动命令
 - Windows 启动时切换 `SelectorEventLoopPolicy` 并过滤已知 `WinError 10054` 噪音回调，减少控制台异常栈刷屏
-- 修复 DrissionPage 监听线程竞态：`Listener._loading_finished` 在驱动释放后不再调用空对象，避免 `AttributeError: 'NoneType' object has no attribute 'run'`
-- 为 DrissionPage 事件循环增加稳定性兜底，单次回调异常不再导致 `_handle_event_loop` 线程退出
 
 ## [2.5.6] - 2026-03-04
 

@@ -45,7 +45,7 @@ class GlobalConfigManager:
         if "selector_definitions" in global_section:
             defs = global_section["selector_definitions"]
             if isinstance(defs, list):
-                self._selector_definitions = defs
+                self._selector_definitions = self._merge_selector_definitions(defs)
                 logger.debug(f"已加载 {len(defs)} 个元素定义")
         
         # 加载所有非 selector_definitions 的字段到通用存储
@@ -63,7 +63,19 @@ class GlobalConfigManager:
     
     def set_selector_definitions(self, definitions: List[SelectorDefinition]):
         """设置元素定义列表"""
-        self._selector_definitions = definitions
+        self._selector_definitions = self._merge_selector_definitions(definitions)
+
+    def _merge_selector_definitions(self, definitions: List[SelectorDefinition]) -> List[SelectorDefinition]:
+        """合并内置默认字段，确保升级后新增的选择器能自动出现。"""
+        merged = copy.deepcopy(definitions or [])
+        existing_keys = {item.get("key") for item in merged if isinstance(item, dict)}
+
+        for default_def in get_default_selector_definitions():
+            key = default_def.get("key")
+            if key not in existing_keys:
+                merged.append(default_def)
+
+        return merged
     
     def get_enabled_definitions(self) -> List[SelectorDefinition]:
         """获取启用的元素定义"""
@@ -82,6 +94,9 @@ class GlobalConfigManager:
             "new_chat_btn": None,
             "message_wrapper": None,
             "generating_indicator": None,
+            "upload_btn": None,
+            "file_input": 'input[type="file"]',
+            "drop_zone": None,
         }
         
         result = {}

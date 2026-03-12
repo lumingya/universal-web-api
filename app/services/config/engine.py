@@ -89,7 +89,7 @@ def get_default_network_config() -> Dict[str, Any]:
     return {
         "listen_pattern": "",           # URL 匹配模式（必填）
         "parser": "",                   # 解析器 ID（必填）
-        "first_response_timeout": 5.0,  # 首次响应超时（秒）
+        "first_response_timeout": 300.0,  # 首次响应超时（秒）
         "silence_threshold": 3.0,       # 静默超时（秒）
         "response_interval": 0.5        # 轮询间隔（秒）
     }
@@ -166,7 +166,7 @@ class ConfigEngine:
         try:
             current_mtime = os.path.getmtime(self.config_file)
             if current_mtime != self.last_mtime:
-                logger.info(f"⚡ 检测到配置文件变化 (new mtime: {current_mtime})")
+                logger.debug(f"⚡ 检测到配置文件变化 (new mtime: {current_mtime})")
                 self.reload_config()
         except Exception as e:
             logger.error(f"检查文件变化失败: {e}")
@@ -198,7 +198,7 @@ class ConfigEngine:
                 if not k.startswith('_')
             }
             self.last_mtime = mtime
-            logger.info(f"✅ 配置已热重载 (Sites: {len(self.sites)})")
+            logger.debug(f"✅ 配置已热重载 (Sites: {len(self.sites)})")
             
         except json.JSONDecodeError as e:
             logger.error(f"❌ 重载配置失败（JSON格式错误），保留旧配置: {e}")
@@ -1291,7 +1291,7 @@ class ConfigEngine:
                 try:
                     val = float(config[key])
                     if key == "first_response_timeout":
-                        result[key] = max(1, min(val, 30))
+                        result[key] = max(1, min(val, 300))
                     elif key == "silence_threshold":
                         result[key] = max(0.5, min(val, 30))
                     elif key == "response_interval":

@@ -10,6 +10,7 @@ import socket
 import sys
 import threading
 import time
+import webbrowser
 from urllib.request import urlopen
 print(f"[DEBUG] Python: {sys.executable}")
 from pathlib import Path
@@ -85,8 +86,8 @@ _setup_windows_event_loop_policy()
 
 # ================= Lifespan =================
 
-def _open_tutorial_non_blocking(tutorial_url: str, initial_delay_sec: float = 1.2):
-    """后台打开教程页，避免在启动阶段阻塞主服务。"""
+def _open_dashboard_non_blocking(dashboard_url: str, initial_delay_sec: float = 1.2):
+    """Use the system browser for the local dashboard, not the controlled browser."""
     def _worker():
         try:
             time.sleep(max(0.0, float(initial_delay_sec)))
@@ -95,7 +96,7 @@ def _open_tutorial_non_blocking(tutorial_url: str, initial_delay_sec: float = 1.
             ready = False
             for _ in range(12):
                 try:
-                    with urlopen(tutorial_url, timeout=1.2) as resp:
+                    with urlopen(dashboard_url, timeout=1.2) as resp:
                         status_code = int(getattr(resp, "status", 200) or 200)
                         if 200 <= status_code < 500:
                             ready = True
@@ -104,18 +105,13 @@ def _open_tutorial_non_blocking(tutorial_url: str, initial_delay_sec: float = 1.
                     time.sleep(0.5)
 
             if not ready:
-                logger.warning(f"[startup] 教程页服务未就绪，跳过自动打开: {tutorial_url}")
+                logger.warning(f"[startup] 控制面板未就绪，跳过自动打开: {dashboard_url}")
                 return
 
-            browser = get_browser(auto_connect=False)
-            if not browser.ensure_connection():
-                logger.warning("[startup] 浏览器不可用，跳过自动打开教程页")
-                return
-
-            browser.page.get(tutorial_url, retry=0, show_errmsg=False)
-            logger.info(f"📚 教程页已后台打开: {tutorial_url}")
+            webbrowser.open_new_tab(dashboard_url)
+            logger.info(f"[startup] 控制面板已在系统浏览器打开: {dashboard_url}")
         except Exception as e:
-            logger.warning(f"[startup] 后台打开教程页失败: {e}")
+            logger.warning(f"[startup] 打开控制面板失败: {e}")
 
     threading.Thread(
         target=_worker,
@@ -148,33 +144,33 @@ async def lifespan(app: FastAPI):
         health = browser.health_check()
     
         if health["connected"]:
-            # 检查是否需要打开教程页（仅当浏览器刚启动、没有实际内容时）
-            should_open_tutorial = False
+            # 检查是否需要打开控制面板（仅当浏览器刚启动、没有实际内容时）
+            should_open_dashboard = False
             
             try:
                 tab_ids = browser.page.get_tabs()
                 
                 if len(tab_ids) == 0:
                     # 没有任何标签页
-                    should_open_tutorial = True
+                    should_open_dashboard = True
                 elif len(tab_ids) == 1:
                     # 只有一个标签页，检查是否是空白页
                     url = browser.page.url or ""
                     blank_patterns = ("about:blank", "chrome://newtab/", "chrome://new-tab-page/", "")
                     if url in blank_patterns:
-                        should_open_tutorial = True
-                # 多个标签页 = 用户已在使用，不打开教程
+                        should_open_dashboard = True
+                # 多个标签页 = 用户已在使用，不打开控制面板
                 
             except Exception as e:
                 logger.debug(f"检查标签页状态失败: {e}")
             
-            if should_open_tutorial:
+            if should_open_dashboard:
                 try:
-                    tutorial_url = f"http://{AppConfig.get_host()}:{AppConfig.get_port()}/static/tutorial.html"
-                    logger.info(f"📚 首次启动，后台打开教程页（非阻塞）: {tutorial_url}")
-                    _open_tutorial_non_blocking(tutorial_url, initial_delay_sec=1.2)
+                    dashboard_url = f"http://{AppConfig.get_host()}:{AppConfig.get_port()}/static/tutorial.html"
+                    logger.info(f"[startup] 首次启动，使用系统浏览器打开教程页: {dashboard_url}")
+                    _open_dashboard_non_blocking(dashboard_url, initial_delay_sec=1.2)
                 except Exception as e:
-                    logger.warning(f"⚠️ 无法打开教程页: {e}")
+                    logger.warning(f"⚠️ 无法打开控制面板: {e}")
             else:
                 # 显示已连接状态
                 pool_info = health.get("tab_pool", {})
@@ -220,9 +216,9 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Universal Web-to-API",
     description="将任意 AI Web 界面转换为 OpenAI 兼容 API",
-    version="2.5.6",
-    docs_url="/docs" if AppConfig.is_debug() else None,
-    redoc_url="/redoc" if AppConfig.is_debug() else None,
+    version="2.5.8",
+    docs_url="/docs" if AppConfig.DEBUG else None,
+    redoc_url="/redoc" if AppConfig.DEBUG else None,
     lifespan=lifespan
 )
 
@@ -247,7 +243,7 @@ async def root():
     # 如果没有 Dashboard，返回 API 信息
     return JSONResponse({
         "service": "Universal Web-to-API",
-        "version": "2.5.6",
+        "version": "2.5.8",
         "dashboard": "请确保 static/index.html 存在",
         "docs": "/docs"
     })

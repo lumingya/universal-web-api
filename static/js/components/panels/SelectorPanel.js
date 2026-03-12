@@ -79,6 +79,21 @@ window.SelectorPanel = {
                             <div class="font-semibold text-gray-900 dark:text-white">generating_indicator</div>
                             <div class="text-gray-500 dark:text-gray-400">生成中指示器（检测是否结束）</div>
                         </button>
+                        <button @click="addSelector('upload_btn')"
+                                class="w-full text-left px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700 text-xs transition-colors">
+                            <div class="font-semibold text-gray-900 dark:text-white">upload_btn</div>
+                            <div class="text-gray-500 dark:text-gray-400">打开上传面板或原生选文件的按钮</div>
+                        </button>
+                        <button @click="addSelector('file_input')"
+                                class="w-full text-left px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700 text-xs transition-colors">
+                            <div class="font-semibold text-gray-900 dark:text-white">file_input</div>
+                            <div class="text-gray-500 dark:text-gray-400">原生 input[type=file]，适合直接注入文件</div>
+                        </button>
+                        <button @click="addSelector('drop_zone')"
+                                class="w-full text-left px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700 text-xs transition-colors">
+                            <div class="font-semibold text-gray-900 dark:text-white">drop_zone</div>
+                            <div class="text-gray-500 dark:text-gray-400">支持拖拽文件的区域，适合不吃粘贴的网站</div>
+                        </button>
                     </div>
                 </div>
             </div>

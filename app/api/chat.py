@@ -13,7 +13,7 @@ import time
 import asyncio
 import queue
 import threading
-from typing import Optional
+from typing import Optional, Any, Dict, List
 
 from fastapi import APIRouter, Request, HTTPException, Header, Depends
 from fastapi.responses import StreamingResponse, JSONResponse
@@ -27,10 +27,25 @@ from app.services.request_manager import (
     RequestStatus, 
     watch_client_disconnect
 )
+from app.services.tool_calling import (
+    build_browser_messages_for_tools,
+    build_tool_completion_response,
+    has_tool_calling_request,
+    iter_tool_stream_chunks,
+    normalize_tool_request,
+    parse_tool_response,
+)
 
 logger = get_logger("API.CHAT")
 
 router = APIRouter()
+
+
+def _debug_preview(value: Any, limit: int = 240) -> str:
+    text = repr(value)
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
 
 
 # ================= 请求模型 =================
@@ -43,6 +58,11 @@ class ChatRequest(BaseModel):
     temperature: Optional[float] = Field(default=0.7, ge=0, le=2)
     max_tokens: Optional[int] = Field(default=None, ge=1)
     response_format: Optional[dict] = Field(default=None)
+    tools: Optional[list] = Field(default=None)
+    tool_choice: Optional[Any] = Field(default=None)
+    parallel_tool_calls: Optional[bool] = Field(default=None)
+    functions: Optional[list] = Field(default=None)
+    function_call: Optional[Any] = Field(default=None)
 
 
 # ================= response_format 转化 =================
@@ -120,7 +140,7 @@ async def verify_auth(authorization: Optional[str] = Header(None)) -> bool:
     if not AppConfig.is_auth_enabled():
         return True
 
-    if not AppConfig.get_auth_token():
+    if not AppConfig.AUTH_TOKEN:
         raise HTTPException(status_code=500, detail="服务配置错误")
 
     if not authorization:
@@ -219,6 +239,23 @@ async def chat_completions(
         except Exception as e:
             logger.debug(f"messages_preview_failed: {e}")
 
+        if has_tool_calling_request(
+            messages=body.messages,
+            tools=body.tools,
+            functions=body.functions,
+        ):
+            if body.stream:
+                return StreamingResponse(
+                    _stream_tool_calling_with_lifecycle(request, body, ctx),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no"
+                    }
+                )
+            return await _non_stream_tool_calling_with_lifecycle(request, body, ctx)
+
         if body.stream:
             return StreamingResponse(
                 _stream_with_lifecycle(request, body, ctx),
@@ -277,12 +314,6 @@ async def _stream_with_lifecycle(
                 logger.error(f"工作线程异常: {e}")
                 chunk_queue.put(("ERROR", str(e)))
             finally:
-                if gen is not None:
-                    try:
-                        gen.close()
-                    except Exception as e:
-                        logger.debug(f"关闭生成器异常: {e}")
-        
                 chunk_queue.put(None)
                 logger.debug("工作线程结束")
 
@@ -431,6 +462,160 @@ async def _non_stream_with_lifecycle(
     }
 
     return JSONResponse(content=response)
+
+
+def _execute_browser_non_stream_messages(
+    browser,
+    messages: List[Dict[str, Any]],
+    request_id: str,
+) -> Dict[str, Any]:
+    payload = None
+    for chunk in browser.execute_workflow(messages, stream=False, task_id=request_id):
+        payload = chunk
+
+    if not payload:
+        raise RuntimeError("empty_browser_response")
+
+    data = json.loads(payload)
+    if "error" in data:
+        error = data.get("error") or {}
+        raise RuntimeError(str(error.get("message") or "browser_execution_failed"))
+    return data
+
+
+def _extract_assistant_content(response: Dict[str, Any]) -> str:
+    try:
+        return str(
+            response.get("choices", [])[0]
+            .get("message", {})
+            .get("content", "")
+            or ""
+        )
+    except Exception:
+        return ""
+
+
+def _run_tool_calling_sync(
+    browser,
+    body: ChatRequest,
+    request_id: str,
+) -> Dict[str, Any]:
+    tools, tool_choice = normalize_tool_request(
+        tools=body.tools,
+        tool_choice=body.tool_choice,
+        functions=body.functions,
+        function_call=body.function_call,
+    )
+
+    browser_messages = build_browser_messages_for_tools(
+        messages=body.messages,
+        tools=tools,
+        tool_choice=tool_choice,
+        parallel_tool_calls=body.parallel_tool_calls,
+    )
+
+    browser_response = _execute_browser_non_stream_messages(
+        browser=browser,
+        messages=browser_messages,
+        request_id=request_id,
+    )
+    assistant_text = _extract_assistant_content(browser_response)
+    logger.debug(f"tool_calling assistant_text={_debug_preview(assistant_text)}")
+    parsed = parse_tool_response(assistant_text, tools)
+    logger.debug(
+        "tool_calling parsed result "
+        f"mode={parsed.get('mode')} "
+        f"tool_calls={len(parsed.get('tool_calls') or [])} "
+        f"content={_debug_preview(parsed.get('content'))}"
+    )
+    return build_tool_completion_response(body.model, parsed)
+
+
+async def _complete_tool_calling_with_lifecycle(
+    request: Request,
+    body: ChatRequest,
+    ctx: RequestContext,
+) -> Dict[str, Any]:
+    disconnect_task = None
+    try:
+        disconnect_task = asyncio.create_task(
+            watch_client_disconnect(request, ctx, check_interval=0.3)
+        )
+
+        browser = get_browser(auto_connect=False)
+        browser.set_stop_checker(ctx.should_stop)
+        request_manager.start_request(ctx)
+
+        response = await asyncio.to_thread(
+            _run_tool_calling_sync,
+            browser,
+            body,
+            ctx.request_id,
+        )
+
+        if not ctx.should_stop() and ctx.status == RequestStatus.RUNNING:
+            ctx.mark_completed()
+
+        return response
+
+    except asyncio.CancelledError:
+        ctx.request_cancel("coroutine_cancelled")
+        raise
+    except Exception as e:
+        logger.error(f"tool_calling_failed: {e}")
+        ctx.mark_failed(str(e))
+        raise
+    finally:
+        if disconnect_task:
+            disconnect_task.cancel()
+            try:
+                await disconnect_task
+            except asyncio.CancelledError:
+                pass
+        request_manager.finish_request(ctx, success=(ctx.status == RequestStatus.COMPLETED))
+
+
+async def _non_stream_tool_calling_with_lifecycle(
+    request: Request,
+    body: ChatRequest,
+    ctx: RequestContext,
+) -> JSONResponse:
+    try:
+        response = await _complete_tool_calling_with_lifecycle(request, body, ctx)
+        return JSONResponse(content=response)
+    except Exception as e:
+        return JSONResponse(
+            content={
+                "error": {
+                    "message": f"执行错误: {e}",
+                    "type": "execution_error",
+                    "code": "tool_calling_failed",
+                }
+            },
+            status_code=500,
+        )
+
+
+async def _stream_tool_calling_with_lifecycle(
+    request: Request,
+    body: ChatRequest,
+    ctx: RequestContext
+):
+    try:
+        response = await _complete_tool_calling_with_lifecycle(request, body, ctx)
+        message = response.get("choices", [{}])[0].get("message", {}) or {}
+        parsed = {
+            "content": message.get("content"),
+            "tool_calls": message.get("tool_calls") or [],
+        }
+        for chunk in iter_tool_stream_chunks(body.model, parsed):
+            if await request.is_disconnected():
+                ctx.request_cancel("client_disconnected")
+                break
+            yield chunk
+            await asyncio.sleep(0)
+    except Exception as e:
+        yield _pack_error(f"执行错误: {str(e)}", "tool_calling_failed")
 
 
 def _pack_error(message: str, code: str = "error") -> str:

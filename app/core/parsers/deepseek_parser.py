@@ -8,7 +8,7 @@ deepseek_parser.py - DeepSeek 响应解析器
 """
 
 import json
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Tuple
 
 from app.core.config import logger
 from .base import ResponseParser
@@ -54,18 +54,21 @@ class DeepSeekParser(ResponseParser):
             new_data = raw_response[self._last_raw_length:]
             self._last_raw_length = current_len
             
-            # 解析新增的SSE事件
-            delta_content = self._parse_sse_chunk(new_data)
+            # 解析新增的 SSE 事件
+            delta_content, chunk_done = self._parse_sse_chunk(new_data)
             
             if delta_content:
                 result["content"] = delta_content
                 self._accumulated_content += delta_content
             
-            # 检测结束标志
+            if chunk_done:
+                result["done"] = True
+            
+            # 兜底检测结束标志
             if "event: finish" in new_data or "event: close" in new_data:
                 result["done"] = True
             
-            # 检测状态完成标志
+            # 兜底检测状态完成标志
             if '"status"' in new_data and '"FINISHED"' in new_data:
                 result["done"] = True
             
@@ -75,9 +78,10 @@ class DeepSeekParser(ResponseParser):
         
         return result
     
-    def _parse_sse_chunk(self, chunk: str) -> str:
-        """解析SSE数据块，提取文本增量"""
+    def _parse_sse_chunk(self, chunk: str) -> Tuple[str, bool]:
+        """解析 SSE 数据块，返回 (文本增量, 是否完成)。"""
         content = ""
+        done = False
         current_event = None
         
         lines = chunk.split('\n')
@@ -99,7 +103,10 @@ class DeepSeekParser(ResponseParser):
                 continue
             
             # 跳过特殊事件的数据
-            if current_event in ('ready', 'update_session', 'title', 'finish', 'close'):
+            if current_event in ('ready', 'update_session', 'title'):
+                continue
+            if current_event in ('finish', 'close'):
+                done = True
                 continue
             
             # 解析数据行
@@ -109,37 +116,41 @@ class DeepSeekParser(ResponseParser):
             
             try:
                 data = json.loads(data_str)
-                extracted = self._extract_content(data)
+                extracted, item_done = self._extract_content(data)
                 if extracted:
                     content += extracted
+                if item_done:
+                    done = True
             except json.JSONDecodeError:
                 continue
         
-        return content
+        return content, done
     
-    def _extract_content(self, data: Dict[str, Any]) -> str:
-        """从数据事件中提取文本内容"""
+    def _extract_content(self, data: Dict[str, Any]) -> Tuple[str, bool]:
+        """从数据事件中提取文本内容和完成状态。"""
         content = ""
+        done = False
+        path = str(data.get("p", "") or "")
+        operation = str(data.get("o", "") or "")
         
-        # 格式1: 纯增量 {"v": "文本"}
-        if "v" in data and isinstance(data["v"], str):
-            return data["v"]
+        # 格式1: 路径追加 {"p": "response/fragments/-1/content", "o": "APPEND", "v": "..."}
+        if operation == "APPEND" and "content" in path and isinstance(data.get("v"), str):
+            return data["v"], False
         
-        # 格式2: 路径追加 {"p": "response/fragments/-1/content", "o": "APPEND", "v": "..."}
-        if data.get("o") == "APPEND" and "v" in data:
-            path = data.get("p", "")
-            if "content" in path and isinstance(data["v"], str):
-                return data["v"]
+        # 格式2: 状态更新 {"p":"response/status","o":"SET","v":"FINISHED"}
+        if operation == "SET" and path.endswith("status") and str(data.get("v", "") or "").upper() == "FINISHED":
+            return "", True
         
         # 格式3: 批量操作 {"p": "response", "o": "BATCH", "v": [...]}
-        if data.get("o") == "BATCH" and isinstance(data.get("v"), list):
+        if operation == "BATCH" and isinstance(data.get("v"), list):
             for op in data["v"]:
                 if isinstance(op, dict):
-                    # 递归处理子操作
-                    sub_content = self._extract_batch_content(op)
+                    sub_content, sub_done = self._extract_batch_content(op)
                     if sub_content:
                         content += sub_content
-            return content
+                    if sub_done:
+                        done = True
+            return content, done
         
         # 格式4: 初始响应 {"v": {"response": {..., "fragments": [...]}}}
         if "v" in data and isinstance(data["v"], dict):
@@ -148,12 +159,20 @@ class DeepSeekParser(ResponseParser):
             for frag in fragments:
                 if isinstance(frag, dict) and "content" in frag:
                     content += frag["content"]
-            return content
+            status = str(response.get("status", "") or "").upper()
+            if status == "FINISHED":
+                done = True
+            return content, done
         
-        return content
+        # 格式5: 纯增量 {"v": "文本"}
+        # 仅在不是状态/路径补丁时才视为真实文本。
+        if "v" in data and isinstance(data["v"], str) and not path and not operation:
+            return data["v"], False
+        
+        return content, done
     
-    def _extract_batch_content(self, op: Dict[str, Any]) -> str:
-        """从批量操作中提取内容"""
+    def _extract_batch_content(self, op: Dict[str, Any]) -> Tuple[str, bool]:
+        """从批量操作中提取内容和完成状态。"""
         path = op.get("p", "")
         operation = op.get("o", "")
         value = op.get("v")
@@ -164,13 +183,21 @@ class DeepSeekParser(ResponseParser):
             for frag in value:
                 if isinstance(frag, dict) and "content" in frag:
                     content += frag["content"]
-            return content
+            return content, False
         
         # 内容追加
         if "content" in path and operation == "APPEND" and isinstance(value, str):
-            return value
+            return value, False
         
-        return ""
+        # 完成状态批量更新
+        if operation == "SET" and str(path).endswith("status") and str(value or "").upper() == "FINISHED":
+            return "", True
+        
+        # quasi_status 也可作为完成信号
+        if operation == "SET" and str(path).endswith("quasi_status") and str(value or "").upper() == "FINISHED":
+            return "", True
+        
+        return "", False
     
     def reset(self):
         """重置状态"""

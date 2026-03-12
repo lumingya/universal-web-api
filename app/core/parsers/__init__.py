@@ -13,6 +13,10 @@ from .gemini_parser import GeminiParser
 from .chatgpt_parser import ChatGPTParser
 from .deepseek_parser import DeepSeekParser
 from .aistudio_parser import AIStudioParser
+from .doubao_parser import DoubaoParser
+from .claude_parser import ClaudeParser
+from .kimi_parser import KimiParser
+from .qwen_parser import QwenParser
 from .lmarena_parser import LmarenaParser
 from .lmarena_side_left_parser import LmarenaSideLeftParser
 
@@ -21,6 +25,10 @@ ParserRegistry.register_class(GeminiParser)
 ParserRegistry.register_class(ChatGPTParser)
 ParserRegistry.register_class(DeepSeekParser)
 ParserRegistry.register_class(AIStudioParser)
+ParserRegistry.register_class(DoubaoParser)
+ParserRegistry.register_class(ClaudeParser)
+ParserRegistry.register_class(KimiParser)
+ParserRegistry.register_class(QwenParser)
 ParserRegistry.register_class(LmarenaParser)
 ParserRegistry.register_class(LmarenaSideLeftParser)
 
@@ -31,6 +39,10 @@ __all__ = [
     'ChatGPTParser',
     'DeepSeekParser',
     'AIStudioParser',
+    'DoubaoParser',
+    'ClaudeParser',
+    'KimiParser',
+    'QwenParser',
     'LmarenaParser',
     'LmarenaSideLeftParser',
 ]

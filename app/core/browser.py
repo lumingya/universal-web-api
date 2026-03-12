@@ -32,6 +32,7 @@ from app.core.config import (
     MessageValidator,
 )
 from app.utils.image_handler import extract_images_from_messages
+from app.utils.site_url import extract_remote_site_domain
 from app.core.workflow import WorkflowExecutor
 from app.core.tab_pool import TabPoolManager, TabSession, get_clipboard_lock
 
@@ -601,32 +602,16 @@ class BrowserCore:
             yield self.formatter.pack_finish()
             return
     
-        # 3. 安全解析域名（允许 localhost 和内网短域名）
+        # 3. 只允许真实远程站点，拒绝本地链接和内网地址。
         try:
-            if "://" not in url:
-                raise ValueError(f"无效的 URL 格式: {url}")
-            domain = url.split("//")[-1].split("/")[0]
-            
+            domain = extract_remote_site_domain(url)
             if not domain:
-                raise ValueError(f"无效的域名: {domain}")
-            
-            # 提取主机名（排除端口号）
-            hostname = domain.split(":")[0].lower()
-            
-            # 允许的本地/内网主机名
-            local_hosts = ("localhost", "127.0.0.1", "::1")
-            is_local = hostname in local_hosts
-            has_dot = "." in hostname
-            
-            # 只有既不是本地主机、也不包含点号的才报错
-            if not is_local and not has_dot:
-                raise ValueError(f"无效的域名: {domain}")
-            
+                raise ValueError(f"not a remote site url: {url}")
             session.current_domain = domain
         except Exception as e:
             logger.warning(f"[{session.id}] URL 解析失败: {url}, 错误: {e}")
             yield self.formatter.pack_error(
-                "页面地址异常，请检查是否打开了正确的网站",
+                "当前页面不是可解析的网站，请打开真实的远程站点页面后再试",
                 code="invalid_url"
             )
             yield self.formatter.pack_finish()
@@ -724,6 +709,7 @@ class BrowserCore:
             image_config=image_config,
             stream_config=stream_config,
             file_paste_config=file_paste_config,
+            selectors=selectors,
             session=session,
         )
         

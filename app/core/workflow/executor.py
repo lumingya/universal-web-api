@@ -8,9 +8,11 @@ app/core/workflow/executor.py - 工作流执行器
 - 与 StreamMonitor 协同
 """
 
+import json
 import time
 import random
 import threading
+import uuid
 from typing import Generator, Dict, Any, Callable, Optional
 
 from app.core.config import (
@@ -21,6 +23,7 @@ from app.core.config import (
     WorkflowError,
 )
 from app.core.elements import ElementFinder
+from app.core.parsers import ParserRegistry
 from app.utils.human_mouse import smooth_move_mouse, idle_drift, human_scroll, cdp_precise_click
 from app.core.stream_monitor import StreamMonitor
 from app.core.network_monitor import (
@@ -38,6 +41,110 @@ from .image_input import ImageInputHandler
 
 class WorkflowExecutor:
     """工作流执行器"""
+
+    _KIMI_CAPTURE_BOOTSTRAP_JS = r"""
+(() => {
+  const W = window;
+  const KEY = "__KIMI_CAPTURE__";
+  const TARGET = "/apiv2/kimi.gateway.chat.v1.ChatService/Chat";
+
+  const toEscapedBytes = (chunk) => {
+    let out = "";
+    for (let i = 0; i < chunk.length; i += 1) {
+      out += "\\u00" + chunk[i].toString(16).padStart(2, "0");
+    }
+    return out;
+  };
+
+  const cap = W[KEY] = W[KEY] || {
+    installed: false,
+    seq: 0,
+    requests: [],
+    currentToken: null,
+    maxRequests: 12
+  };
+
+  if (cap.installed) {
+    return { installed: true, patched: false, requests: cap.requests.length };
+  }
+
+  if (typeof W.fetch !== "function") {
+    return { installed: false, reason: "fetch_missing" };
+  }
+
+  const originalFetch = W.fetch.bind(W);
+  cap.installed = true;
+  cap.installedAt = Date.now();
+
+  W.fetch = async function(input, init) {
+    const response = await originalFetch(input, init);
+
+    try {
+      const url = input && typeof input === "object" && "url" in input
+        ? String(input.url || "")
+        : String(input || "");
+
+      if (!url.includes(TARGET)) {
+        return response;
+      }
+
+      const request = {
+        id: "kimi_" + (++cap.seq),
+        url,
+        token: cap.currentToken || null,
+        startedAt: Date.now(),
+        lastChunkAt: 0,
+        chunkCount: 0,
+        escapedFullText: "",
+        complete: false,
+        error: null,
+        contentType: response.headers ? (response.headers.get("content-type") || "") : ""
+      };
+
+      cap.requests.push(request);
+      while (cap.requests.length > (cap.maxRequests || 12)) {
+        cap.requests.shift();
+      }
+
+      const cloned = response.clone();
+      if (cloned.body && typeof cloned.body.getReader === "function") {
+        const reader = cloned.body.getReader();
+        (async () => {
+          try {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) {
+                request.complete = true;
+                request.endedAt = Date.now();
+                break;
+              }
+              if (!value) {
+                continue;
+              }
+              request.chunkCount += 1;
+              request.lastChunkAt = Date.now();
+              request.escapedFullText += toEscapedBytes(value);
+            }
+          } catch (error) {
+            request.error = String(error && error.message ? error.message : error);
+            request.complete = true;
+            request.endedAt = Date.now();
+          }
+        })();
+      } else {
+        request.complete = true;
+        request.endedAt = Date.now();
+      }
+    } catch (error) {
+      cap.lastHookError = String(error && error.message ? error.message : error);
+    }
+
+    return response;
+  };
+
+  return { installed: true, patched: true, requests: cap.requests.length };
+})();
+"""
     
     def __init__(self, tab, stealth_mode: bool = False, 
                  should_stop_checker: Callable[[], bool] = None,
@@ -45,6 +152,7 @@ class WorkflowExecutor:
                  image_config: Dict = None,
                  stream_config: Dict = None,
                  file_paste_config: Dict = None,
+                 selectors: Dict = None,
                  session = None):
         self.tab = tab
         self.session = session
@@ -56,6 +164,7 @@ class WorkflowExecutor:
         self._extractor = extractor
         self._image_config = image_config or {}  
         self._stream_config = stream_config or {}
+        self._selectors = selectors or {}
         
         # 🆕 初始化双 Monitor（优先网络，回退 DOM）
         self._network_monitor = None
@@ -64,7 +173,17 @@ class WorkflowExecutor:
         # 检查是否启用网络监听模式
         self._stream_mode = stream_config.get("mode", "dom") if stream_config else "dom"
         network_config = stream_config.get("network", {}) if stream_config else {}
+        self._network_config = network_config
         self._intercept_only_mode = False
+        self._use_kimi_page_capture = (
+            self._stream_mode == "network"
+            and str(network_config.get("parser", "") or "").strip().lower() == "kimi"
+        )
+        self._kimi_capture_token: Optional[str] = None
+        self._kimi_capture_init_js_id: Optional[str] = None
+        self._kimi_page_parser = ParserRegistry.get("kimi") if self._use_kimi_page_capture else None
+        if self._use_kimi_page_capture:
+            self._ensure_kimi_page_capture_init_js()
 
         interception_enabled = False
         interception_pattern = ""
@@ -101,7 +220,7 @@ class WorkflowExecutor:
                 if not interception_cfg.get("listen_pattern"):
                     interception_cfg["listen_pattern"] = interception_pattern or "http"
                 interception_cfg["event_only"] = True
-                interception_cfg.setdefault("first_response_timeout", 8)
+                interception_cfg.setdefault("first_response_timeout", 300)
                 interception_cfg.setdefault("silence_threshold", 2)
                 interception_cfg.setdefault("response_interval", 0.3)
 
@@ -141,7 +260,8 @@ class WorkflowExecutor:
             stealth_mode=stealth_mode,
             smart_delay_fn=self._smart_delay,
             check_cancelled_fn=self._check_cancelled,
-            file_paste_config=file_paste_config
+            file_paste_config=file_paste_config,
+            selectors=self._selectors,
         )
         
         self._image_handler = ImageInputHandler(
@@ -187,6 +307,172 @@ class WorkflowExecutor:
         except Exception as e:
             logger.debug(f"[Executor] 网络事件上报失败（忽略）: {e}")
             return False
+
+    def _prepare_kimi_page_capture(self) -> None:
+        if not self._use_kimi_page_capture:
+            return
+
+        self._ensure_kimi_page_capture_init_js()
+        token = f"kimi_{uuid.uuid4().hex[:12]}"
+        install_result = self.tab.run_js(
+            f"return {self._KIMI_CAPTURE_BOOTSTRAP_JS.strip()}"
+        )
+        reset_result = self.tab.run_js(
+            """
+            return (function(token) {
+              const cap = window.__KIMI_CAPTURE__ = window.__KIMI_CAPTURE__ || {};
+              cap.currentToken = token;
+              cap.requests = [];
+              cap.lastResetAt = Date.now();
+              return { ok: true, token: cap.currentToken };
+            })(arguments[0]);
+            """,
+            token,
+        )
+        self._kimi_capture_token = token
+        if install_result is not None:
+            logger.debug(f"[Executor] Kimi 页面抓流已准备: {install_result}")
+
+    def _ensure_kimi_page_capture_init_js(self) -> None:
+        if not self._use_kimi_page_capture or self._kimi_capture_init_js_id:
+            return
+
+        try:
+            self._kimi_capture_init_js_id = self.tab.add_init_js(
+                self._KIMI_CAPTURE_BOOTSTRAP_JS.strip()
+            )
+            logger.debug(
+                f"[Executor] Kimi 页面抓流已注册 document-start 注入: {self._kimi_capture_init_js_id}"
+            )
+        except Exception as e:
+            logger.debug(f"[Executor] Kimi document-start 注入失败: {e}")
+
+    def _get_kimi_page_capture_state(self) -> Dict[str, Any]:
+        state = self.tab.run_js(
+            """
+            return (function(token) {
+              const cap = window.__KIMI_CAPTURE__;
+              if (!cap) {
+                return { installed: false, found: false };
+              }
+
+              const requests = Array.isArray(cap.requests) ? cap.requests : [];
+              let target = null;
+
+              for (let i = requests.length - 1; i >= 0; i -= 1) {
+                const item = requests[i];
+                if (!token || item.token === token) {
+                  target = item;
+                  break;
+                }
+              }
+
+              return {
+                installed: true,
+                currentToken: cap.currentToken || null,
+                found: !!target,
+                requestId: target ? (target.id || "") : "",
+                escapedFullText: target ? (target.escapedFullText || "") : "",
+                complete: !!(target && target.complete),
+                error: target ? (target.error || null) : null,
+                chunkCount: target ? (target.chunkCount || 0) : 0,
+                startedAt: target ? (target.startedAt || 0) : 0,
+                lastChunkAt: target ? (target.lastChunkAt || 0) : 0
+              };
+            })(arguments[0]);
+            """,
+            self._kimi_capture_token or "",
+        )
+        return state if isinstance(state, dict) else {}
+
+    def _monitor_kimi_page_capture(
+        self,
+        completion_id: str,
+    ) -> Generator[str, None, None]:
+        if not self._use_kimi_page_capture or self._kimi_page_parser is None:
+            raise NetworkMonitorError("kimi_page_capture_disabled")
+
+        parser = self._kimi_page_parser
+        parser.reset()
+
+        first_response_timeout = float(
+            self._network_config.get("first_response_timeout", 30) or 30
+        )
+        response_interval = float(
+            self._network_config.get("response_interval", 0.3) or 0.3
+        )
+        silence_threshold = float(
+            self._network_config.get("silence_threshold", 3) or 3
+        )
+        hard_timeout = float(
+            self._stream_config.get("hard_timeout", 300) or 300
+        )
+
+        phase_start = time.time()
+        last_activity = phase_start
+        last_raw_len = 0
+        seen_request = False
+
+        while True:
+            if self._check_cancelled():
+                logger.debug("[Executor] Kimi 页面抓流被取消")
+                break
+
+            now = time.time()
+            if now - phase_start > hard_timeout:
+                raise NetworkMonitorError(f"kimi_page_capture_hard_timeout:{hard_timeout:.1f}s")
+
+            state = self._get_kimi_page_capture_state()
+            if not state.get("installed"):
+                raise NetworkMonitorError("kimi_page_capture_not_installed")
+
+            if state.get("error"):
+                raise NetworkMonitorError(f"kimi_page_capture_error:{state.get('error')}")
+
+            raw_response = str(state.get("escapedFullText", "") or "")
+            if state.get("found"):
+                if not seen_request:
+                    logger.debug(
+                        "[Executor] Kimi 页面抓流已命中请求 "
+                        f"(request_id={state.get('requestId')}, token={self._kimi_capture_token})"
+                    )
+                seen_request = True
+
+            if len(raw_response) > last_raw_len:
+                last_activity = now
+                last_raw_len = len(raw_response)
+
+            if raw_response:
+                parse_result = parser.parse_chunk(raw_response)
+                if parse_result.get("error"):
+                    raise NetworkMonitorError(f"kimi_page_capture_parse_error:{parse_result['error']}")
+
+                content = parse_result.get("content", "")
+                done = bool(parse_result.get("done")) or bool(state.get("complete"))
+
+                if content:
+                    logger.debug(f"[Executor] Kimi 页面抓流产出: {repr(content)[:240]}")
+                    yield self.formatter.pack_chunk(content, completion_id=completion_id)
+
+                if done:
+                    logger.debug("[Executor] Kimi 页面抓流完成")
+                    break
+
+            elif seen_request and state.get("complete"):
+                logger.debug("[Executor] Kimi 页面抓流请求已结束但无有效内容")
+                break
+
+            if not seen_request and (now - phase_start) > first_response_timeout:
+                raise NetworkMonitorTimeout(f"kimi_page_capture_first_response_timeout:{first_response_timeout:.1f}s")
+
+            if seen_request and (now - last_activity) > silence_threshold:
+                logger.debug(
+                    "[Executor] Kimi 页面抓流静默超时 "
+                    f"({now - last_activity:.1f}s)"
+                )
+                break
+
+            time.sleep(max(0.05, response_interval))
     
     # ================= 控制方法 =================
     
@@ -368,8 +654,13 @@ class WorkflowExecutor:
             elif action == "KEY_PRESS":
                 key = target_key or value
                 # 包含 Enter 的按键（Enter、Ctrl+Enter 等）可能触发提交
-                if self._combo_contains_submit_key(key) and self._network_monitor is not None:
-                    self._network_monitor.pre_start()
+                if self._combo_contains_submit_key(key):
+                    self._wait_for_attachments_ready_before_send(
+                        self._selectors.get("send_btn", "")
+                    )
+                    if self._network_monitor is not None:
+                        self._prepare_kimi_page_capture()
+                        self._network_monitor.pre_start()
                 self._execute_keypress_combo(key)
 
             elif action == "JS_EXEC":
@@ -382,8 +673,10 @@ class WorkflowExecutor:
                     self._page_warmed_up = True
                 
                 if target_key == "send_btn":
+                    self._wait_for_attachments_ready_before_send(selector)
                     # 🆕 发送前启动网络监听（如果已配置）
                     if self._network_monitor is not None:
+                        self._prepare_kimi_page_capture()
                         self._network_monitor.pre_start()
                     
                     self._execute_click_send_reliably(
@@ -404,10 +697,6 @@ class WorkflowExecutor:
             elif action == "FILL_INPUT":
                 
                 prompt = context.get("prompt", "") if context else ""
-                # v5.12：复用模式下可以提前启动（无额外 CDP session 风险）
-                if self._network_monitor is not None:
-                    self._network_monitor.pre_start()
-                
                 self._execute_fill(selector, prompt, target_key, optional)
             
             elif action in ("STREAM_WAIT", "STREAM_OUTPUT"):
@@ -425,13 +714,20 @@ class WorkflowExecutor:
 
                 if use_network_stream:
                     try:
-                        logger.debug("[Executor] 尝试网络监听模式")
-                        yield from self._network_monitor.monitor(
-                            selector=selector,
-                            user_input=user_input,
-                            completion_id=self._completion_id
-                        )
-                        monitor_used = "network"
+                        if self._use_kimi_page_capture:
+                            logger.debug("[Executor] 尝试 Kimi 页面抓流模式")
+                            yield from self._monitor_kimi_page_capture(
+                                completion_id=self._completion_id
+                            )
+                            monitor_used = "kimi_page"
+                        else:
+                            logger.debug("[Executor] 尝试网络监听模式")
+                            yield from self._network_monitor.monitor(
+                                selector=selector,
+                                user_input=user_input,
+                                completion_id=self._completion_id
+                            )
+                            monitor_used = "network"
 
                     except NetworkInterceptionTriggered as e:
                         logger.warning(f"[Executor] 网络拦截已触发: {e}")
@@ -912,7 +1208,141 @@ class WorkflowExecutor:
         logger.debug(f"[STEALTH] 人类化点击完成: ({click_x}, {click_y})")
     
     # ================= 可靠发送 =================
-    
+
+    def _probe_attachment_readiness(self, send_selector: str = "") -> Dict[str, Any]:
+        """Inspect whether attachments are still uploading and whether send looks available."""
+        selector_json = json.dumps((send_selector or "").strip(), ensure_ascii=False)
+        js = f"""
+        return (function() {{
+            try {{
+                const sendSelector = {selector_json};
+                const root =
+                    document.querySelector('.message-input-wrapper, .message-input-container, .chat-layout-input-container')
+                    || document.querySelector('#dropzone-container')
+                    || document.body;
+
+                const attachmentSelectors = [
+                    '.file-card-list',
+                    '.fileitem-btn',
+                    '.fileitem-file-name',
+                    '.fileitem-file-name-text',
+                    '.message-input-column-file',
+                    '[class*="attach"]',
+                    '[class*="upload"]',
+                    '[class*="fileitem"]',
+                    '[class*="image-preview"]',
+                    '[data-testid*="upload"]',
+                    'img[src^="blob:"]',
+                    'img[src^="data:image"]'
+                ].join(',');
+
+                const pendingSelectors = [
+                    'progress',
+                    '[role="progressbar"]',
+                    '[aria-busy="true"]',
+                    '[class*="uploading"]',
+                    '[class*="pending"]',
+                    '[class*="progress"]',
+                    '[class*="spinner"]',
+                    '[class*="loading"]'
+                ].join(',');
+
+                const attachmentCount = root.querySelectorAll(attachmentSelectors).length;
+                const pendingCount = root.querySelectorAll(pendingSelectors).length;
+                const rootText = String(root.innerText || '').toLowerCase();
+                const pendingText = /上传中|处理中|loading|uploading|processing|preparing/.test(rootText);
+
+                let sendBtn = null;
+                if (sendSelector) {{
+                    try {{
+                        sendBtn = document.querySelector(sendSelector);
+                    }} catch (e) {{}}
+                }}
+
+                const sendDisabled = !!sendBtn && (
+                    !!sendBtn.disabled
+                    || sendBtn.getAttribute('aria-disabled') === 'true'
+                    || /disabled|loading|uploading|sending/.test(String(sendBtn.className || '').toLowerCase())
+                );
+
+                return {{
+                    ok: true,
+                    attachmentCount,
+                    pendingCount,
+                    pendingText,
+                    sendFound: !!sendBtn,
+                    sendDisabled,
+                    ready: attachmentCount === 0 || (!sendDisabled && pendingCount === 0 && !pendingText)
+                }};
+            }} catch (error) {{
+                return {{
+                    ok: false,
+                    attachmentCount: 0,
+                    pendingCount: 0,
+                    pendingText: false,
+                    sendFound: false,
+                    sendDisabled: false,
+                    ready: true,
+                    error: String(error && error.message ? error.message : error)
+                }};
+            }}
+        }})();
+        """
+
+        try:
+            return self.tab.run_js(js) or {}
+        except Exception as e:
+            logger.debug(f"[SEND] 附件状态探测失败: {e}")
+            return {
+                "ok": False,
+                "attachmentCount": 0,
+                "pendingCount": 0,
+                "pendingText": False,
+                "sendFound": False,
+                "sendDisabled": False,
+                "ready": True,
+            }
+
+    def _wait_for_attachments_ready_before_send(self, send_selector: str = ""):
+        """Wait for file/image uploads to settle before attempting submit."""
+        max_wait = getattr(BrowserConstants, "ATTACHMENT_READY_MAX_WAIT", 20.0)
+        check_interval = getattr(BrowserConstants, "ATTACHMENT_READY_CHECK_INTERVAL", 0.35)
+
+        state = self._probe_attachment_readiness(send_selector)
+        if state.get("ready", True):
+            return
+
+        logger.debug(
+            "[SEND] 检测到附件仍在处理，发送前等待 "
+            f"(attachments={state.get('attachmentCount', 0)}, "
+            f"pending={state.get('pendingCount', 0)}, "
+            f"send_disabled={state.get('sendDisabled', False)})"
+        )
+
+        elapsed = 0.0
+        while elapsed < max_wait:
+            if self._check_cancelled():
+                return
+
+            sleep_for = min(check_interval, max_wait - elapsed)
+            time.sleep(sleep_for)
+            elapsed += sleep_for
+
+            state = self._probe_attachment_readiness(send_selector)
+            if state.get("ready", True):
+                logger.debug(
+                    "[SEND] 附件已就绪，继续发送 "
+                    f"(waited={elapsed:.1f}s, attachments={state.get('attachmentCount', 0)})"
+                )
+                return
+
+        logger.warning(
+            "[SEND] 等待附件就绪超时，继续尝试发送 "
+            f"(attachments={state.get('attachmentCount', 0)}, "
+            f"pending={state.get('pendingCount', 0)}, "
+            f"send_disabled={state.get('sendDisabled', False)})"
+        )
+
     def _execute_click_send_reliably(self, selector: str, target_key: str, optional: bool):
         """
         可靠发送（v5.6 隐身模式增强版）

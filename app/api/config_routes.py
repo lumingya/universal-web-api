@@ -20,6 +20,7 @@ from app.core.config import AppConfig, get_logger
 from app.core import get_browser, BrowserConnectionError
 from app.services.config_engine import config_engine, ConfigConstants
 from app.services.extractor_manager import extractor_manager
+from app.utils.site_url import extract_remote_site_domain
 from app.utils.similarity import verify_extraction
 
 logger = get_logger("API.CONFIG")
@@ -41,7 +42,7 @@ async def verify_auth(authorization: Optional[str] = Header(None)) -> bool:
     if not AppConfig.is_auth_enabled():
         return True
 
-    if not AppConfig.get_auth_token():
+    if not AppConfig.AUTH_TOKEN:
         raise HTTPException(status_code=500, detail="服务配置错误")
 
     if not authorization:
@@ -393,7 +394,12 @@ async def inject_workflow_editor(request: Request):
                 content={"success": False, "message": "请先打开目标网站"}
             )
         
-        actual_domain = url.split("//")[-1].split("/")[0]
+        actual_domain = extract_remote_site_domain(url)
+        if not actual_domain:
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "message": "当前页面不是可解析的网站，请先打开真实的远程站点"}
+            )
         
         if target_domain and target_domain != actual_domain:
             logger.warning(f"域名不匹配: 期望 {target_domain}, 实际 {actual_domain}")
@@ -998,7 +1004,7 @@ async def get_stream_config_defaults(authenticated: bool = Depends(verify_auth))
             "hard_timeout": {"min": 10, "max": 600},
             "silence_threshold": {"min": 0.5, "max": 30},
             "initial_wait": {"min": 5, "max": 120},
-            "first_response_timeout": {"min": 1, "max": 30},
+            "first_response_timeout": {"min": 1, "max": 300},
             "response_interval": {"min": 0.1, "max": 5}
         },
         "mode_options": ["dom", "network"]

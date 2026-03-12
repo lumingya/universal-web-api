@@ -11,7 +11,6 @@
 
     <!-- 自定义样式 -->
     <link rel="stylesheet" href="/static/css/dashboard.css">
-    <link rel="icon" href="data:,">
 
     <!-- 图标定义 -->
 </head>
@@ -331,11 +330,12 @@
     </div>
 
     <!-- 加载组件 JS -->
-    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="/static/vendor/tailwindcss.js"></script>
     <script>
-        tailwind.config = { darkMode: 'class' }
+        window.tailwind = window.tailwind || {};
+        window.tailwind.config = { darkMode: 'class' };
     </script>
-    <script src="https://cdn.staticfile.org/vue/3.3.4/vue.global.js"></script>
+    <script src="/static/vendor/vue.global.prod.js"></script>
     <script src="/static/js/icons.js"></script>
     <script src="/static/js/components/Sidebar.js"></script>
     <!-- 子组件（在 ConfigTab 之前） -->

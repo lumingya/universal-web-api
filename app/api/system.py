@@ -29,14 +29,6 @@ logger = get_logger("API.SYSTEM")
 router = APIRouter()
 
 
-def _stringify_env_value(value) -> str:
-    if isinstance(value, bool):
-        return 'true' if value else 'false'
-    if isinstance(value, (int, float)):
-        return str(value)
-    return "" if value is None else str(value)
-
-
 # ================= 认证依赖 =================
 
 async def verify_auth(authorization: Optional[str] = Header(None)) -> bool:
@@ -44,7 +36,7 @@ async def verify_auth(authorization: Optional[str] = Header(None)) -> bool:
     if not AppConfig.is_auth_enabled():
         return True
 
-    if not AppConfig.get_auth_token():
+    if not AppConfig.AUTH_TOKEN:
         raise HTTPException(status_code=500, detail="服务配置错误")
 
     if not authorization:
@@ -171,7 +163,6 @@ async def save_env_config(
                 lines = f.readlines()
 
         new_lines = []
-        handled_keys = set()
 
         for line in lines:
             stripped = line.strip()
@@ -184,25 +175,18 @@ async def save_env_config(
                 key = stripped.split('=', 1)[0].strip()
 
                 if key in new_config:
-                    value = _stringify_env_value(new_config[key])
+                    value = new_config[key]
+
+                    if isinstance(value, bool):
+                        value = 'true' if value else 'false'
+                    elif isinstance(value, (int, float)):
+                        value = str(value)
+
                     new_lines.append(f"{key}={value}\n")
-                    handled_keys.add(key)
                 else:
                     new_lines.append(line)
             else:
                 new_lines.append(line)
-
-        missing_items = [
-            (key, _stringify_env_value(value))
-            for key, value in new_config.items()
-            if key not in handled_keys
-        ]
-
-        if missing_items:
-            if new_lines and new_lines[-1].strip():
-                new_lines.append("\n")
-            for key, value in missing_items:
-                new_lines.append(f"{key}={value}\n")
 
         with open(env_path, 'w', encoding='utf-8') as f:
             f.writelines(new_lines)
@@ -236,17 +220,44 @@ async def save_env_config(
 async def get_browser_constants(authenticated: bool = Depends(verify_auth)):
     """读取浏览器常量配置"""
     try:
-        from app.core import BrowserConstants
         config_path = Path("config/browser_config.json")
 
         if config_path.exists():
             with open(config_path, 'r', encoding='utf-8') as f:
-                config = {
-                    **BrowserConstants.get_defaults(),
-                    **json.load(f)
-                }
+                config = json.load(f)
         else:
-            config = BrowserConstants.get_defaults()
+            config = {
+                'DEFAULT_PORT': 9222,
+                'CONNECTION_TIMEOUT': 10,
+                'STEALTH_DELAY_MIN': 0.1,
+                'STEALTH_DELAY_MAX': 0.3,
+                'ACTION_DELAY_MIN': 0.15,
+                'ACTION_DELAY_MAX': 0.3,
+                'DEFAULT_ELEMENT_TIMEOUT': 3,
+                'FALLBACK_ELEMENT_TIMEOUT': 1,
+                'ELEMENT_CACHE_MAX_AGE': 5.0,
+                'STREAM_CHECK_INTERVAL_MIN': 0.1,
+                'STREAM_CHECK_INTERVAL_MAX': 1.0,
+                'STREAM_CHECK_INTERVAL_DEFAULT': 0.3,
+                'STREAM_SILENCE_THRESHOLD': 8.0,
+                'STREAM_MAX_TIMEOUT': 600,
+                'STREAM_INITIAL_WAIT': 180,
+                'STREAM_RERENDER_WAIT': 0.5,
+                'STREAM_CONTENT_SHRINK_TOLERANCE': 3,
+                'STREAM_MIN_VALID_LENGTH': 10,
+                'STREAM_STABLE_COUNT_THRESHOLD': 8,
+                'STREAM_SILENCE_THRESHOLD_FALLBACK': 12,
+                'MAX_MESSAGE_LENGTH': 100000,
+                'MAX_MESSAGES_COUNT': 100,
+                'STREAM_INITIAL_ELEMENT_WAIT': 10,
+                'STREAM_MAX_ABNORMAL_COUNT': 5,
+                'STREAM_MAX_ELEMENT_MISSING': 10,
+                'STREAM_CONTENT_SHRINK_THRESHOLD': 0.3,
+                'GLOBAL_NETWORK_INTERCEPTION_ENABLED': False,
+                'GLOBAL_NETWORK_INTERCEPTION_LISTEN_PATTERN': 'http',
+                'GLOBAL_NETWORK_INTERCEPTION_WAIT_TIMEOUT': 0.5,
+                'GLOBAL_NETWORK_INTERCEPTION_RETRY_DELAY': 1.0,
+            }
 
         return {"config": config}
 
@@ -266,7 +277,6 @@ async def save_browser_constants(
         config = data.get("config", {})
 
         config_path = Path("config/browser_config.json")
-        config_path.parent.mkdir(parents=True, exist_ok=True)
 
         with open(config_path, 'w', encoding='utf-8') as f:
             json.dump(config, f, indent=2, ensure_ascii=False)
@@ -323,7 +333,7 @@ async def test_selector(
                 query_selector = f'css:{selector}'
 
             elements = tab.eles(query_selector, timeout=timeout)
-            logger.info(f"[DEBUG] query={query_selector}, result={type(elements)}, len={len(elements) if elements else 0}")
+            logger.debug(f"[DEBUG] query={query_selector}, result={type(elements)}, len={len(elements) if elements else 0}")
 
             if not elements:
                 return {"success": False, "count": 0, "message": "元素未找到"}
@@ -379,11 +389,10 @@ async def test_selector(
                     if highlight:
                         try:
                             css_selector = selector if not selector.startswith(('tag:', '@', 'xpath:', 'css:')) else selector.replace('css:', '')
-                            selector_literal = json.dumps(css_selector)
                             tab.run_js(f"""
                                 (function() {{
                                     try {{
-                                        const elements = document.querySelectorAll({selector_literal});
+                                        const elements = document.querySelectorAll('{css_selector}');
                                         if (elements[{idx}]) {{
                                             const el = elements[{idx}];
                                             el.style.outline = '3px solid red';
@@ -431,7 +440,7 @@ async def request_status(authenticated: bool = Depends(verify_auth)):
 @router.post("/api/debug/force-release")
 async def force_release(authenticated: bool = Depends(verify_auth)):
     """强制释放锁"""
-    if not AppConfig.is_debug():
+    if not AppConfig.DEBUG:
         raise HTTPException(status_code=403, detail="调试功能未启用")
 
     was_locked = request_manager.is_locked()

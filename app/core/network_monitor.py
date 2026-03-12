@@ -9,10 +9,18 @@ app/core/network_monitor.py - 网络响应拦截监听器
 """
 
 import time
+import json
 from typing import Generator, Optional, Dict, Callable, Any
 
 from app.core.config import logger, SSEFormatter, BrowserConstants
 from app.core.parsers import ParserRegistry, ResponseParser
+
+
+def _debug_preview(value: Any, limit: int = 240) -> str:
+    text = repr(value)
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
 
 
 # ================= 自定义异常 =================
@@ -70,7 +78,7 @@ class NetworkMonitor:
     """
     
     # 默认超时配置
-    DEFAULT_FIRST_RESPONSE_TIMEOUT = 5.0   # 首次响应超时（触发回退）
+    DEFAULT_FIRST_RESPONSE_TIMEOUT = 300.0   # 首次响应超时（触发回退）
     DEFAULT_HARD_TIMEOUT = 300             # 全局硬超时
     DEFAULT_RESPONSE_INTERVAL = 0.5        # 响应轮询间隔
     DEFAULT_SILENCE_THRESHOLD = 3.0        # 静默超时（无新数据）
@@ -130,6 +138,45 @@ class NetworkMonitor:
             f"parser={parser.get_id()})"
         )
 
+    def _listen_is_active(self) -> bool:
+        try:
+            return bool(
+                hasattr(self.tab, "listen")
+                and getattr(self.tab.listen, "listening", False)
+            )
+        except Exception:
+            return False
+
+    def _safe_stop_listen(self):
+        try:
+            if self._listen_is_active():
+                self.tab.listen.stop()
+        except Exception:
+            pass
+
+    def _start_listen(self):
+        if not self._listen_pattern:
+            raise NetworkMonitorError("listen_pattern 未配置")
+
+        self.tab.listen._reuse_driver = True
+        self.tab.listen.start(self._listen_pattern)
+        self._pre_started = True
+        self._is_listening = True
+
+    def _ensure_listening(self, reason: str):
+        if self._is_listening and self._listen_is_active():
+            return
+
+        self._is_listening = False
+        self._pre_started = False
+        self._safe_stop_listen()
+        try:
+            self._start_listen()
+            logger.debug(f"[NetworkMonitor] 已重建监听 ({reason})")
+        except Exception as e:
+            logger.error(f"[NetworkMonitor] 启动监听失败 ({reason}): {e}")
+            raise NetworkMonitorError(f"启动监听失败: {e}")
+
     def _extract_event(self, response: Any) -> Dict[str, Any]:
         req = getattr(response, "request", None)
         resp = getattr(response, "response", None)
@@ -172,6 +219,82 @@ class NetworkMonitor:
         except Exception as e:
             logger.debug(f"[NetworkMonitor] 事件回调异常（忽略）: {e}")
             return False
+
+    @staticmethod
+    def _nested_get(container: Any, *path: str) -> Any:
+        current = container
+        for key in path:
+            if current is None:
+                return None
+            if isinstance(current, dict):
+                current = current.get(key)
+            else:
+                current = getattr(current, key, None)
+        return current
+
+    def _extract_raw_body(self, response: Any) -> tuple[Any, str]:
+        resp = getattr(response, "response", None)
+        if resp is None:
+            return None, "missing_response"
+
+        for source_name, source_value in (
+            ("response._stream.fullText", self._nested_get(resp, "_stream", "fullText")),
+            ("response.stream.fullText", self._nested_get(resp, "stream", "fullText")),
+            ("response._stream.chunks", self._nested_get(resp, "_stream", "chunks")),
+            ("response.stream.chunks", self._nested_get(resp, "stream", "chunks")),
+            ("event._stream.fullText", self._nested_get(response, "_stream", "fullText")),
+            ("event.stream.fullText", self._nested_get(response, "stream", "fullText")),
+            ("event._stream.chunks", self._nested_get(response, "_stream", "chunks")),
+            ("event.stream.chunks", self._nested_get(response, "stream", "chunks")),
+        ):
+            if source_value in (None, "", [], ()):
+                continue
+            if source_name.endswith(".chunks"):
+                merged = self._merge_stream_chunks(source_value)
+                if merged:
+                    return merged, source_name
+                continue
+            return source_value, source_name
+
+        direct_body = getattr(resp, "body", None)
+        if direct_body not in (None, "", b"", bytearray()):
+            if isinstance(direct_body, dict):
+                stream_full_text = self._nested_get(direct_body, "_stream", "fullText")
+                if stream_full_text not in (None, ""):
+                    return stream_full_text, "body._stream.fullText"
+            return direct_body, "body"
+
+        return None, "empty"
+
+    @staticmethod
+    def _merge_stream_chunks(chunks: Any) -> str:
+        if not isinstance(chunks, list):
+            return ""
+
+        parts = []
+        for chunk in chunks:
+            data = NetworkMonitor._nested_get(chunk, "data")
+            if data in (None, ""):
+                continue
+            if isinstance(data, (bytes, bytearray)):
+                data = data.decode("utf-8", errors="ignore")
+            elif not isinstance(data, str):
+                data = str(data)
+            parts.append(data)
+        return "".join(parts)
+
+    @staticmethod
+    def _normalize_raw_body(raw_body: Any) -> str:
+        if isinstance(raw_body, str):
+            return raw_body
+        if isinstance(raw_body, (bytes, bytearray)):
+            try:
+                return bytes(raw_body).decode("utf-8", errors="ignore")
+            except Exception:
+                return bytes(raw_body).decode("utf-8", "replace")
+        if isinstance(raw_body, (dict, list)):
+            return json.dumps(raw_body, ensure_ascii=False)
+        return str(raw_body)
         
     def pre_start(self):
         """
@@ -184,7 +307,7 @@ class NetworkMonitor:
         
         调用时机：仅在 CLICK send_btn 或 KEY_PRESS Enter 之前
         """
-        if self._pre_started or self._is_listening:
+        if self._pre_started and self._listen_is_active():
             return
         
         if not self._listen_pattern:
@@ -193,10 +316,7 @@ class NetworkMonitor:
         
         try:
             # 启用复用模式：使用 tab 主连接，不创建额外 CDP session
-            self.tab.listen._reuse_driver = True
-            self.tab.listen.start(self._listen_pattern)
-            self._pre_started = True
-            self._is_listening = True
+            self._ensure_listening("pre_start")
             logger.debug(f"[NetworkMonitor] 发送前启动监听 - 复用模式 (pattern={self._listen_pattern!r})")
         except Exception as e:
             logger.error(f"[NetworkMonitor] 预启动失败: {e}")
@@ -234,17 +354,12 @@ class NetworkMonitor:
         self._total_chunks = 0
         
         # 兜底：如果 pre_start 未被调用，在此启动（可能错过首包）
-        if not self._is_listening:
+        if not self._is_listening or not self._listen_is_active():
             logger.warning(
                 "[NetworkMonitor] 监听未预启动，在此启动"
                 "（可能错过 requestWillBeSent）"
             )
-            try:
-                self.tab.listen.start(self._listen_pattern)
-                self._is_listening = True
-            except Exception as e:
-                logger.error(f"[NetworkMonitor] 启动监听失败: {e}")
-                raise NetworkMonitorError(f"启动监听失败: {e}")
+            self._ensure_listening("monitor_start")
         
         try:
             yield from self._stream_output_phase(completion_id)
@@ -276,7 +391,17 @@ class NetworkMonitor:
             timeout = self._first_response_timeout if not has_received_response else self._response_interval
             
             # 等待响应
-            response = self.tab.listen.wait(timeout=timeout)
+            try:
+                if not self._listen_is_active():
+                    self._ensure_listening("wait_inactive")
+                response = self.tab.listen.wait(timeout=timeout)
+            except Exception as e:
+                err_text = str(e)
+                if "监听未启动或已停止" in err_text and not has_received_response:
+                    logger.warning("[NetworkMonitor] wait 前监听已失效，尝试重建后重试")
+                    self._ensure_listening("wait_restart")
+                    continue
+                raise NetworkMonitorError(err_text) from e
 
             # 检查是否为无效响应
             if response is None or response is False:
@@ -307,23 +432,22 @@ class NetworkMonitor:
                 raise NetworkInterceptionTriggered("network_intercepted")
 
             # 检查响应对象结构
-            if not hasattr(response, 'response') or not hasattr(response.response, 'body'):
+            if not hasattr(response, 'response'):
                 logger.debug(f"[NetworkMonitor] 响应对象结构异常: {type(response).__name__}")
                 continue
 
-            # 读取响应体
-            raw_body = response.response.body
-            if isinstance(raw_body, (bytes, bytearray)):
-                try:
-                    raw_body = raw_body.decode('utf-8', errors='ignore')
-                except Exception:
-                    raw_body = raw_body.decode('utf-8', 'replace')
+            # 读取响应体，流式协议优先使用 _stream.fullText
+            raw_body, raw_body_source = self._extract_raw_body(response)
+            raw_body = self._normalize_raw_body(raw_body)
 
             if not raw_body:
                 logger.debug("[NetworkMonitor] 响应体为空，跳过")
                 continue
 
-            logger.debug(f"[NetworkMonitor] 捕获响应 (size={len(raw_body)} bytes)")
+            logger.debug(
+                f"[NetworkMonitor] 捕获响应 "
+                f"(source={raw_body_source}, size={len(raw_body)} chars)"
+            )
 
             # 解析响应
             try:
@@ -341,6 +465,7 @@ class NetworkMonitor:
             done = parse_result.get("done", False)
 
             if content:
+                logger.debug(f"[NetworkMonitor] parsed content={_debug_preview(content)}")
                 last_activity_time = time.time()
                 self._total_chunks += 1
                 yield self.formatter.pack_chunk(content, completion_id=completion_id)
@@ -364,17 +489,18 @@ class NetworkMonitor:
         """
         if self._is_listening:
             try:
-                self.tab.listen.stop()
+                self._safe_stop_listen()
                 self._is_listening = False
+                self._pre_started = False
                 logger.debug("[NetworkMonitor] 已停止监听（CDP session 已释放）")
             except Exception as e:
                 logger.debug(f"[NetworkMonitor] 停止监听失败: {e}")
         
         # 即使 _is_listening 已经是 False，也尝试确保 listen 已停止
         # （防止异常路径导致状态不一致）
-        elif hasattr(self.tab, 'listen') and self.tab.listen.listening:
+        elif self._listen_is_active():
             try:
-                self.tab.listen.stop()
+                self._safe_stop_listen()
                 logger.debug("[NetworkMonitor] 补充停止残留监听")
             except Exception:
                 pass

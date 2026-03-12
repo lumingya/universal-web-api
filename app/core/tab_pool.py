@@ -18,6 +18,7 @@ from enum import Enum
 from contextlib import asynccontextmanager
 
 from app.core.config import logger, BrowserConstants
+from app.utils.site_url import extract_remote_site_domain
 
 
 class TabStatus(Enum):
@@ -569,8 +570,7 @@ class TabPoolManager:
         session = TabSession(id=tab_id, tab=tab)
         
         try:
-            if url and "://" in url:
-                session.current_domain = url.split("//")[-1].split("/")[0]
+            session.current_domain = extract_remote_site_domain(url)
         except:
             pass
         
@@ -869,9 +869,9 @@ class TabPoolManager:
                             
                             # task_id 已在上下文中，无需重复
                             if logged_waiting:
-                                logger.info(f"等待结束 → {session.id}")
+                                logger.debug(f"等待结束 → {session.id}")
                             else:
-                                logger.info(f"TabPool → {session.id}")
+                                logger.debug(f"TabPool → {session.id}")
                             return session
                 
                 # 检查超时
@@ -1034,7 +1034,7 @@ class TabPoolManager:
                         if self._auto_activate_on_acquire and session.id != self._active_session_id:
                             session.activate()
                             self._active_session_id = session.id
-                        logger.info(f"TabPool → {session.id} (#{persistent_index})")
+                        logger.debug(f"TabPool → {session.id} (#{persistent_index})")
                         return session
                 
                 # 标签页忙碌，等待

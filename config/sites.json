@@ -36,6 +36,24 @@
         "description": "生成中指示器（如停止按钮、加载动画，用于检测是否还在输出）",
         "enabled": false,
         "required": false
+      },
+      {
+        "key": "upload_btn",
+        "description": "打开文件选择器的上传按钮（点击后通常会弹出原生选文件）",
+        "enabled": false,
+        "required": false
+      },
+      {
+        "key": "file_input",
+        "description": "原生文件输入框（input[type=file]），用于直接注入文件",
+        "enabled": false,
+        "required": false
+      },
+      {
+        "key": "drop_zone",
+        "description": "支持拖拽上传的区域（某些站点不支持粘贴但支持拖拽）",
+        "enabled": false,
+        "required": false
       }
     ]
   },
@@ -65,10 +83,10 @@
         },
         "workflow": [
           {
-            "action": "CLICK",
-            "target": "new_chat_btn",
-            "optional": true,
-            "value": null
+            "action": "JS_EXEC",
+            "target": "",
+            "optional": false,
+            "value": "window.location.assign('/');"
           },
           {
             "action": "WAIT",
@@ -153,10 +171,10 @@
         },
         "workflow": [
           {
-            "action": "CLICK",
-            "target": "new_chat_btn",
-            "optional": true,
-            "value": null
+            "action": "JS_EXEC",
+            "target": "",
+            "optional": false,
+            "value": "window.location.assign('/');"
           },
           {
             "action": "WAIT",
@@ -405,7 +423,7 @@
           "message_wrapper": null,
           "generating_indicator": "",
           "点击模型选择": "[data-test-id=\"logo-pill-label-container\"]",
-          "选择模型": ".mat-mdc-menu-item:nth-of-type(1)"
+          "选择模型": ".mat-mdc-menu-item:nth-of-type(2)"
         },
         "stream_config": {
           "mode": "network",
@@ -579,10 +597,10 @@
     "presets": {
       "主预设": {
         "selectors": {
-          "input_box": "textarea[data-testid=\"chat_input_input\"]",
-          "send_btn": "button[data-testid=\"chat_input_send_button\"]",
-          "result_container": "[data-testid=\"message_content\"]",
-          "new_chat_btn": "[data-testid=\"create_conversation_button\"]"
+          "input_box": "textarea[data-testid=\"chat_input_input\"], textarea[placeholder], textarea",
+          "send_btn": "button[data-testid=\"chat_input_send_button\"], button[aria-label*=\"发送\"], button[type=\"submit\"]",
+          "result_container": "[data-testid=\"message_content\"], [data-testid=\"message-content\"]",
+          "new_chat_btn": "[data-testid=\"create_conversation_button\"], [data-testid=\"create-new-chat-button\"], button[aria-label*=\"新对话\"]"
         },
         "workflow": [
           {
@@ -638,81 +656,20 @@
           "enabled": true,
           "threshold": 50000,
           "hint_text": "完全专注于文件内容"
-        }
-      }
-    },
-    "default_preset": "主预设"
-  },
-  "h2ogpte.genai.h2o.ai": {
-    "presets": {
-      "主预设": {
-        "selectors": {
-          "input_box": "textarea[placeholder=\"Ask anything\"]",
-          "send_btn": ".shadow-chat-input button.bg-primary-400",
-          "result_container": ".group.items-start .prose",
-          "new_chat_btn": ".w-72 .fa-pen-to-square",
-          "message_wrapper": null,
-          "generating_indicator": null
         },
-        "workflow": [
-          {
-            "action": "CLICK",
-            "target": "new_chat_btn",
-            "optional": true,
-            "value": null
-          },
-          {
-            "action": "WAIT",
-            "target": "",
-            "optional": false,
-            "value": "0.5"
-          },
-          {
-            "action": "FILL_INPUT",
-            "target": "input_box",
-            "optional": false,
-            "value": null
-          },
-          {
-            "action": "CLICK",
-            "target": "send_btn",
-            "optional": true,
-            "value": null
-          },
-          {
-            "action": "KEY_PRESS",
-            "target": "Enter",
-            "optional": true,
-            "value": null
-          },
-          {
-            "action": "STREAM_WAIT",
-            "target": "result_container",
-            "optional": false,
-            "value": null
-          }
-        ],
-        "stealth": true,
         "stream_config": {
+          "mode": "network",
+          "hard_timeout": 300,
           "silence_threshold": 2.5,
           "initial_wait": 30,
-          "enable_wrapper_search": true
-        },
-        "image_extraction": {
-          "enabled": false,
-          "selector": "img",
-          "container_selector": null,
-          "debounce_seconds": 2,
-          "wait_for_load": true,
-          "load_timeout_seconds": 5,
-          "download_blobs": true,
-          "max_size_mb": 10,
-          "mode": "all"
-        },
-        "file_paste": {
-          "enabled": true,
-          "threshold": 50000,
-          "hint_text": "完全专注于文件内容"
+          "enable_wrapper_search": true,
+          "network": {
+            "listen_pattern": "chat/completion",
+            "parser": "doubao",
+            "first_response_timeout": 300,
+            "silence_threshold": 3,
+            "response_interval": 0.5
+          }
         }
       }
     },
@@ -722,12 +679,12 @@
     "presets": {
       "主预设": {
         "selectors": {
-          "input_box": "div[data-testid=\"chat-input\"]",
-          "send_btn": "button[type=\"submit\"]",
-          "result_container": "div.font-claude-response:last-of-type",
-          "new_chat_btn": "a[aria-label=\"New chat\"]",
+          "input_box": "div[data-testid=\"chat-input\"], div[contenteditable=\"true\"][data-testid=\"chat-input\"], div.ProseMirror[contenteditable=\"true\"]",
+          "send_btn": "button[type=\"submit\"], button[aria-label*=\"Send Message\"], button[aria-label*=\"发送\"]",
+          "result_container": "div.font-claude-response:last-of-type, div[data-testid=\"assistant-message\"] .font-claude-response:last-of-type",
+          "new_chat_btn": "a[aria-label=\"New chat\"], a[href=\"/new\"], button[aria-label*=\"New chat\"], button[aria-label*=\"新聊天\"]",
           "message_wrapper": null,
-          "generating_indicator": null
+          "generating_indicator": "button[aria-label*=\"Stop\"], button[aria-label*=\"停止\"]"
         },
         "workflow": [
           {
@@ -763,9 +720,18 @@
         ],
         "stealth": true,
         "stream_config": {
+          "mode": "network",
+          "hard_timeout": 300,
           "silence_threshold": 2.5,
           "initial_wait": 30,
-          "enable_wrapper_search": true
+          "enable_wrapper_search": true,
+          "network": {
+            "listen_pattern": "chat_conversations",
+            "parser": "claude",
+            "first_response_timeout": 300,
+            "silence_threshold": 3,
+            "response_interval": 0.5
+          }
         },
         "image_extraction": {
           "enabled": false,
@@ -1122,5 +1088,169 @@
       }
     },
     "default_preset": "主预设-side"
+  },
+  "chat.qwen.ai": {
+    "presets": {
+      "主预设": {
+        "selectors": {
+          "input_box": "textarea.message-input-textarea, textarea#chat-input, textarea[data-testid=\"yuntu-textarea\"], textarea[placeholder], div[role=\"textbox\"][contenteditable=\"true\"]",
+          "send_btn": "button.send-button, .send-button, .message-input-right-button-send, .chat-prompt-send-button, #send-message-button, button[type=\"submit\"], button[aria-label*=\"发送\"], button[aria-label*=\"Send\"]",
+          "result_container": ".chat-response-message .qwen-markdown, .chat-response-message-right .qwen-markdown, .response-message-content, .custom-qwen-markdown, .qwen-markdown",
+          "new_chat_btn": "xpath://div[@id=\"sidebar\"]//div[contains(@class, \"sidebar-entry-list-content\")][.//div[contains(@class, \"sidebar-entry-list-text\") and normalize-space(.)=\"新建对话\"]][1]",
+          "message_wrapper": ".qwen-chat-message, .chat-response-message, .chat-user-message, .chat-item, [data-role]",
+          "generating_indicator": "button[aria-label*=\"停止\"], button[aria-label*=\"Stop\"]",
+          "file_input": "input[type=\"file\"]",
+          "drop_zone": "body"
+        },
+        "workflow": [
+          {
+            "action": "CLICK",
+            "target": "new_chat_btn",
+            "optional": true,
+            "value": null
+          },
+          {
+            "action": "WAIT",
+            "target": "",
+            "optional": false,
+            "value": "0.5"
+          },
+          {
+            "action": "FILL_INPUT",
+            "target": "input_box",
+            "optional": false,
+            "value": null
+          },
+          {
+            "action": "KEY_PRESS",
+            "target": "Enter",
+            "optional": true,
+            "value": null
+          },
+          {
+            "action": "STREAM_WAIT",
+            "target": "result_container",
+            "optional": false,
+            "value": null
+          }
+        ],
+        "stealth": false,
+        "stream_config": {
+          "mode": "network",
+          "hard_timeout": 300,
+          "silence_threshold": 2.5,
+          "initial_wait": 30,
+          "enable_wrapper_search": true,
+          "network": {
+            "listen_pattern": "api/v2/chat/completions",
+            "parser": "qwen",
+            "first_response_timeout": 300,
+            "silence_threshold": 3,
+            "response_interval": 0.5
+          }
+        },
+        "image_extraction": {
+          "enabled": false,
+          "selector": "img",
+          "container_selector": null,
+          "debounce_seconds": 2,
+          "wait_for_load": true,
+          "load_timeout_seconds": 5,
+          "download_blobs": true,
+          "max_size_mb": 10,
+          "mode": "all"
+        },
+        "file_paste": {
+          "enabled": true,
+          "threshold": 40000,
+          "hint_text": "完全专注于文件内容"
+        }
+      }
+    },
+    "default_preset": "主预设"
+  },
+  "www.kimi.com": {
+    "presets": {
+      "主预设": {
+        "selectors": {
+          "input_box": ".chat-input-editor[contenteditable=\"true\"], div[role=\"textbox\"][contenteditable=\"true\"], textarea[data-testid=\"chat-input\"], textarea",
+          "send_btn": ".send-button-container:not(.disabled), .send-button-container, .send-button, button.send-button, button[type=\"submit\"], button[aria-label*=\"发送\"]",
+          "result_container": ".chat-content-list .markdown, .chat-content-list .segment-content, .chat-content-item-assistant .markdown, [data-message-role=\"assistant\"] .markdown",
+          "new_chat_btn": "a.new-chat-btn, .new-chat-btn, .create-new-chat-button, button.create-new-chat-button, button[aria-label*=\"新建会话\"], button[aria-label*=\"新建对话\"], button[aria-label*=\"New chat\"]",
+          "message_wrapper": ".chat-content-list > *, .chat-content-item",
+          "generating_indicator": "button[aria-label*=\"停止\"], button[aria-label*=\"Stop\"]"
+        },
+        "workflow": [
+          {
+            "action": "JS_EXEC",
+            "target": "",
+            "optional": false,
+            "value": "window.location.assign('https://www.kimi.com/?chat_enter_method=new_chat');"
+          },
+          {
+            "action": "WAIT",
+            "target": "",
+            "optional": false,
+            "value": "0.5"
+          },
+          {
+            "action": "FILL_INPUT",
+            "target": "input_box",
+            "optional": false,
+            "value": null
+          },
+          {
+            "action": "WAIT",
+            "target": "",
+            "optional": false,
+            "value": "1.0"
+          },
+          {
+            "action": "KEY_PRESS",
+            "target": "Enter",
+            "optional": true,
+            "value": null
+          },
+          {
+            "action": "STREAM_WAIT",
+            "target": "result_container",
+            "optional": false,
+            "value": null
+          }
+        ],
+        "stealth": true,
+        "stream_config": {
+          "mode": "network",
+          "hard_timeout": 300,
+          "silence_threshold": 2.5,
+          "initial_wait": 30,
+          "enable_wrapper_search": true,
+          "network": {
+            "listen_pattern": "/apiv2/kimi.gateway.chat.v1.ChatService/Chat",
+            "parser": "kimi",
+            "first_response_timeout": 300,
+            "silence_threshold": 3,
+            "response_interval": 0.5
+          }
+        },
+        "image_extraction": {
+          "enabled": false,
+          "selector": "img",
+          "container_selector": null,
+          "debounce_seconds": 2,
+          "wait_for_load": true,
+          "load_timeout_seconds": 5,
+          "download_blobs": true,
+          "max_size_mb": 10,
+          "mode": "all"
+        },
+        "file_paste": {
+          "enabled": false,
+          "threshold": 50000,
+          "hint_text": "完全专注于文件内容"
+        }
+      }
+    },
+    "default_preset": "主预设"
   }
 }

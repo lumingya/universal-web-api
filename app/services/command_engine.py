@@ -27,6 +27,7 @@ except ImportError:
     HAS_REQUESTS = False
 
 from app.core.config import get_logger
+from app.utils.site_url import extract_remote_site_domain
 
 if TYPE_CHECKING:
     from app.core.tab_pool import TabSession
@@ -979,11 +980,10 @@ class CommandEngine:
             return domain
         try:
             url = str(getattr(session.tab, "url", "") or "")
-            if "://" in url:
-                domain = url.split("//", 1)[1].split("/", 1)[0].strip().lower()
-                if domain:
-                    session.current_domain = domain
-                    return domain
+            domain = extract_remote_site_domain(url) or ""
+            if domain:
+                session.current_domain = domain
+                return domain
         except Exception:
             pass
         return ""

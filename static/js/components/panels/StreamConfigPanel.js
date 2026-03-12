@@ -15,7 +15,7 @@ window.StreamConfigPanel = {
             defaultNetworkConfig: {
                 listen_pattern: '',
                 parser: '',
-                first_response_timeout: 5.0,
+                first_response_timeout: 300.0,
                 silence_threshold: 3.0,
                 response_interval: 0.5
             }
@@ -26,7 +26,15 @@ window.StreamConfigPanel = {
             return this.streamConfig.mode === 'network';
         },
         networkConfig() {
-            return this.streamConfig.network || this.defaultNetworkConfig;
+            return {
+                ...this.defaultNetworkConfig,
+                ...(this.streamConfig.network || {})
+            };
+        }
+    },
+    mounted() {
+        if (this.isNetworkMode) {
+            this.loadParsers();
         }
     },
     methods: {
@@ -41,6 +49,50 @@ window.StreamConfigPanel = {
 
         updateNetworkField(field, value) {
             const network = { ...this.networkConfig, [field]: value };
+            const newConfig = { ...this.streamConfig, network };
+            this.$emit('save-stream-config', newConfig);
+        },
+
+        findParserMeta(parserId) {
+            return this.availableParsers.find(parser => parser.id === parserId) || null;
+        },
+
+        getPreferredListenPattern(parserId) {
+            const parser = this.findParserMeta(parserId);
+            if (!parser || !Array.isArray(parser.patterns) || parser.patterns.length === 0) {
+                return '';
+            }
+            return String(parser.patterns[0] || '').replace(/^\*\*\//, '');
+        },
+
+        handleParserChange(parserId) {
+            const currentPattern = (this.networkConfig.listen_pattern || '').trim();
+            const nextPattern = currentPattern || this.getPreferredListenPattern(parserId);
+            const network = {
+                ...this.networkConfig,
+                parser: parserId,
+                listen_pattern: nextPattern
+            };
+            const newConfig = { ...this.streamConfig, network };
+            this.$emit('save-stream-config', newConfig);
+        },
+
+        autofillListenPatternFromCurrentParser() {
+            const parserId = (this.networkConfig.parser || '').trim();
+            const currentPattern = (this.networkConfig.listen_pattern || '').trim();
+            if (!parserId || currentPattern) {
+                return;
+            }
+
+            const suggestedPattern = this.getPreferredListenPattern(parserId);
+            if (!suggestedPattern) {
+                return;
+            }
+
+            const network = {
+                ...this.networkConfig,
+                listen_pattern: suggestedPattern
+            };
             const newConfig = { ...this.streamConfig, network };
             this.$emit('save-stream-config', newConfig);
         },
@@ -69,6 +121,7 @@ window.StreamConfigPanel = {
                 if (response.ok) {
                     const data = await response.json();
                     this.availableParsers = data.parsers || [];
+                    this.autofillListenPatternFromCurrentParser();
                 }
             } catch (e) {
                 console.error('加载解析器失败:', e);
@@ -126,7 +179,7 @@ window.StreamConfigPanel = {
                         </div>
                         <div>
                             <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">响应解析器 <span class="text-red-500">*</span></label>
-                            <select :value="networkConfig.parser" @change="updateNetworkField('parser', $event.target.value)" @focus="loadParsers"
+                            <select :value="networkConfig.parser" @change="handleParserChange($event.target.value)" @focus="loadParsers"
                                     class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-purple-400 focus:border-transparent">
                                 <option value="" disabled>选择解析器...</option>
                                 <option v-for="parser in availableParsers" :key="parser.id" :value="parser.id">{{ parser.name }}</option>
@@ -138,8 +191,8 @@ window.StreamConfigPanel = {
                         <div>
                             <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">首次响应超时</label>
                             <div class="flex items-center gap-2">
-                                <input type="number" :value="networkConfig.first_response_timeout" @input="updateNetworkField('first_response_timeout', parseFloat($event.target.value) || 5)"
-                                       min="1" max="30" step="0.5" class="flex-1 border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-purple-400 focus:border-transparent">
+                                <input type="number" :value="networkConfig.first_response_timeout" @input="updateNetworkField('first_response_timeout', parseFloat($event.target.value) || 300)"
+                                       min="1" max="300" step="0.5" class="flex-1 border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-purple-400 focus:border-transparent">
                                 <span class="text-sm text-gray-500 dark:text-gray-400">秒</span>
                             </div>
                         </div>

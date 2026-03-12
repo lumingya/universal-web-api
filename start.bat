@@ -39,6 +39,7 @@ if not defined PROXY_ENABLED set "PROXY_ENABLED=false"
 if not defined PROXY_ADDRESS set "PROXY_ADDRESS="
 if not defined PROXY_BYPASS set "PROXY_BYPASS=localhost,127.0.0.1"
 if not defined BROWSER_PROFILE_DIR set "BROWSER_PROFILE_DIR="
+if not defined BROWSER_PROFILE_NAME set "BROWSER_PROFILE_NAME="
 if not defined PROFILE_CLEAN_ENABLED set "PROFILE_CLEAN_ENABLED=true"
 
 echo.
@@ -51,6 +52,9 @@ if defined BROWSER_PROFILE_DIR (
     echo     PROFILE_DIR   : %BROWSER_PROFILE_DIR%
 ) else (
     echo     PROFILE_DIR   : %cd%\chrome_profile
+)
+if defined BROWSER_PROFILE_NAME (
+    echo     PROFILE_NAME  : %BROWSER_PROFILE_NAME%
 )
 echo     PROFILE_CLEAN : %PROFILE_CLEAN_ENABLED%
 if /I "%PROXY_ENABLED%"=="true" (
@@ -543,6 +547,9 @@ echo [INFO] 路径: !BROWSER_EXE!
 
 REM 构造浏览器启动参数
 set "BROWSER_ARGS=--remote-debugging-port=%BROWSER_PORT% --user-data-dir=""%PROFILE_DIR%"" --no-first-run --no-default-browser-check --disable-backgrounding-occluded-windows --disable-background-timer-throttling --disable-renderer-backgrounding --disable-features=CalculateNativeWinOcclusion,AutomaticTabDiscarding,TabFreeze,IntensiveWakeUpThrottling"
+if defined BROWSER_PROFILE_NAME (
+    set "BROWSER_ARGS=!BROWSER_ARGS! --profile-directory=""%BROWSER_PROFILE_NAME%"""
+)
 
 REM 添加代理参数（如果启用）
 if /I "%PROXY_ENABLED%"=="true" (

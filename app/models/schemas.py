@@ -35,6 +35,9 @@ OPTIONAL_SELECTOR_KEYS = [
     "new_chat_btn",
     "message_wrapper",
     "generating_indicator",
+    "upload_btn",
+    "file_input",
+    "drop_zone",
 ]
 
 ALL_SELECTOR_KEYS = REQUIRED_SELECTOR_KEYS + OPTIONAL_SELECTOR_KEYS
@@ -101,6 +104,24 @@ DEFAULT_SELECTOR_DEFINITIONS: List[SelectorDefinition] = [
     {
         "key": "generating_indicator",
         "description": "生成中指示器（如停止按钮、加载动画，用于检测是否还在输出）",
+        "enabled": False,
+        "required": False
+    },
+    {
+        "key": "upload_btn",
+        "description": "打开文件选择器的上传按钮（点击后通常会弹出原生选文件）",
+        "enabled": False,
+        "required": False
+    },
+    {
+        "key": "file_input",
+        "description": "原生文件输入框（input[type=file]），用于直接注入文件",
+        "enabled": False,
+        "required": False
+    },
+    {
+        "key": "drop_zone",
+        "description": "支持拖拽上传的区域（某些站点不支持粘贴但支持拖拽）",
         "enabled": False,
         "required": False
     }
@@ -208,6 +229,7 @@ class SiteConfig(TypedDict, total=False):
     stealth: bool
     stream_config: StreamConfig
     image_extraction: ImageExtractionConfig  # 🆕 新增
+    file_paste: FilePasteConfig
     extractor_id: str                        # 提取器 ID（已有）
     extractor_verified: bool                 # 提取器验证状态（已有）
 
@@ -233,6 +255,9 @@ class AIAnalysisResult(TypedDict, total=False):
     new_chat_btn: Optional[str]
     message_wrapper: Optional[str]
     generating_indicator: Optional[str]
+    upload_btn: Optional[str]
+    file_input: Optional[str]
+    drop_zone: Optional[str]
 
 
 # ================= 健康检查结果 =================
