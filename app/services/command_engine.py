@@ -19,6 +19,7 @@ import threading
 import time
 import uuid
 from typing import Dict, List, Optional, Any, TYPE_CHECKING
+from urllib.parse import urlsplit
 
 try:
     import requests
@@ -27,6 +28,10 @@ except ImportError:
     HAS_REQUESTS = False
 
 from app.core.config import get_logger
+from app.services.command_defs import ACTION_TYPES, TRIGGER_TYPES, CommandFlowAbort, _new_command_id, get_default_command
+from app.services.command_engine_actions import CommandEngineActionsMixin
+from app.services.command_engine_results import CommandEngineResultsMixin
+from app.services.command_engine_runtime import CommandEngineRuntimeMixin
 from app.utils.site_url import extract_remote_site_domain
 
 if TYPE_CHECKING:
@@ -37,82 +42,7 @@ logger = get_logger("CMD_ENG")
 
 # ================= 常量 =================
 
-TRIGGER_TYPES = {
-    "request_count": "对话次数达到阈值",
-    "error_count": "连续错误次数达到阈值",
-    "idle_timeout": "标签页空闲超过指定时间（秒）",
-    "page_check": "页面出现指定内容（如 Cloudflare 验证）",
-    "command_triggered": "当指定命令触发后执行",
-    "command_result_match": "命令执行结果匹配",
-    "network_request_error": "网络请求异常拦截",
-}
-
-ACTION_TYPES = {
-    "clear_cookies": "清除当前标签页的 Cookie",
-    "refresh_page": "刷新页面",
-    "new_chat": "点击新建对话按钮",
-    "run_js": "在页面中执行 JavaScript",
-    "wait": "等待指定秒数",
-    "execute_preset": "切换预设",
-    "execute_workflow": "执行工作流",
-    "switch_preset": "切换标签页预设",
-    "navigate": "导航到指定 URL",
-    "switch_proxy": "切换代理节点（Clash）",
-    "send_webhook": "发送 Webhook / 外部请求",
-    "execute_command_group": "执行命令组",
-    "abort_task": "中断当前任务",
-    "release_tab_lock": "解除当前标签页占用",
-}
-
-
-class CommandFlowAbort(Exception):
-    """用于中断当前命令后续动作的内部控制异常。"""
-    pass
-
-
-# ================= 工具函数 =================
-
-def _new_command_id() -> str:
-    return f"cmd_{uuid.uuid4().hex[:8]}"
-
-
-def get_default_command() -> Dict[str, Any]:
-    """获取默认命令结构"""
-    return {
-        "id": _new_command_id(),
-        "name": "新命令",
-        "enabled": True,
-        "mode": "simple",
-        "trigger": {
-            "type": "request_count",
-            "value": 10,
-            "command_id": "",
-            "action_ref": "",
-            "match_rule": "equals",
-            "expected_value": "",
-            "match_mode": "keyword",
-            "status_codes": "403,429,500,502,503,504",
-            "abort_on_match": True,
-            "scope": "all",
-            "domain": "",
-            "tab_index": None,
-            "priority": 2,
-        },
-        "actions": [
-            {"type": "clear_cookies"},
-            {"type": "refresh_page"},
-        ],
-        "group_name": "",
-        "script": "",
-        "script_lang": "javascript",
-        "last_triggered": None,
-        "trigger_count": 0,
-    }
-
-
-# ================= 命令引擎 =================
-
-class CommandEngine:
+class CommandEngine(CommandEngineRuntimeMixin, CommandEngineResultsMixin, CommandEngineActionsMixin):
     """命令引擎"""
 
     def __init__(self):
@@ -122,13 +52,17 @@ class CommandEngine:
         self._commands_mtime = 0.0
         self._commands_loaded = False
         self._commands_cache: List[Dict[str, Any]] = []
+        self._command_runtime_stats: Dict[str, Dict[str, Any]] = {}
         self._lock = threading.Lock()
         self._commands_lock = threading.RLock()
 
         # 触发状态：{(command_id, tab_id): {"req": int, "err": int, ...}}
         self._trigger_states: Dict[tuple, Dict[str, Any]] = {}
+        self._pending_async_trigger_meta: Dict[tuple, Dict[str, Any]] = {}
         # 最近命令执行结果：{(source_command_id, tab_id): {...}}
         self._command_results: Dict[tuple, Dict[str, Any]] = {}
+        # 命令结果事件：{tab_id: [event, ...]}
+        self._command_result_events: Dict[str, List[Dict[str, Any]]] = {}
         # 最近网络事件：{tab_id: [event, ...]}
         self._network_events: Dict[str, List[Dict[str, Any]]] = {}
         # 正在执行的命令（防止重复触发）
@@ -144,7 +78,7 @@ class CommandEngine:
             _baseline = int(os.getenv("CMD_REQUEST_PRIORITY_BASELINE", "2"))
         except Exception:
             _baseline = 2
-        self._request_priority_baseline = max(1, min(4, _baseline))
+        self._request_priority_baseline = _baseline
         self._activate_tab_on_command = str(
             os.getenv("CMD_ACTIVATE_TAB_ON_COMMAND", "false")
         ).strip().lower() in {"1", "true", "yes", "y", "on"}
@@ -173,8 +107,13 @@ class CommandEngine:
         self._periodic_keepalive_interval_sec = max(5.0, _keepalive_interval)
         self._last_keepalive_by_session: Dict[str, float] = {}
         self._last_tab_pool_wait_log_at = 0.0
+        self._last_periodic_summary_log_at = 0.0
+        self._periodic_active_log_interval_sec = 8.0
+        self._periodic_idle_log_interval_sec = 30.0
+        # page_check observer: {session_id: set_of_keywords_installed}
+        self._observer_keywords_by_session: Dict[str, set] = {}
 
-        logger.debug("CommandEngine 初始化")
+        logger.debug("命令引擎已初始化")
         self._start_periodic_scheduler()
 
     # ================= 延迟依赖 =================
@@ -211,12 +150,59 @@ class CommandEngine:
         except Exception as e:
             logger.debug(f"[CMD] 恢复全局网络监听失败（忽略）: {e}")
 
+    @staticmethod
+    def _format_scope_label(scope: str) -> str:
+        mapping = {
+            "all": "全部标签页",
+            "domain": "同域",
+            "tab": "当前标签页",
+        }
+        return mapping.get(str(scope or "").strip().lower(), str(scope or "未指定"))
+
+    def _set_pending_async_trigger_meta(
+        self,
+        command: Dict[str, Any],
+        session: 'TabSession',
+        meta: Optional[Dict[str, Any]],
+    ):
+        key = (str(command.get("id", "")).strip(), str(getattr(session, "id", "") or ""))
+        if not all(key):
+            return
+        with self._lock:
+            if meta:
+                self._pending_async_trigger_meta[key] = copy.deepcopy(meta)
+            else:
+                self._pending_async_trigger_meta.pop(key, None)
+
+    def _take_pending_async_trigger_meta(
+        self,
+        command: Dict[str, Any],
+        session: 'TabSession',
+    ) -> Optional[Dict[str, Any]]:
+        key = (str(command.get("id", "")).strip(), str(getattr(session, "id", "") or ""))
+        if not all(key):
+            return None
+        with self._lock:
+            meta = self._pending_async_trigger_meta.pop(key, None)
+        return copy.deepcopy(meta) if meta else None
+
+    def _should_log_periodic_summary(self, now_ts: float, due_total: int) -> bool:
+        interval = (
+            self._periodic_active_log_interval_sec
+            if due_total > 0
+            else self._periodic_idle_log_interval_sec
+        )
+        if (now_ts - self._last_periodic_summary_log_at) < interval:
+            return False
+        self._last_periodic_summary_log_at = now_ts
+        return True
+
     def _set_focus_emulation(self, session: 'TabSession', enabled: bool):
         """Best-effort focus emulation without stealing OS/browser foreground focus."""
         try:
             session.tab.run_cdp("Emulation.setFocusEmulationEnabled", enabled=bool(enabled))
         except Exception as e:
-            logger.debug(f"[CMD] focus emulation set({enabled}) failed (ignored): {e}")
+            logger.debug(f"[CMD] 焦点模拟设置失败（忽略）: enabled={enabled}, 错误={e}")
 
     def _try_wake_tab(self, session: 'TabSession', reason: str = ""):
         """
@@ -246,6 +232,249 @@ class CommandEngine:
                 except Exception:
                     pass
 
+    # --------- MutationObserver page_check 实时检测 ---------
+
+    _PAGE_CHECK_OBSERVER_JS = r"""
+(function() {
+    var kws = %KEYWORDS%;
+    function appendText(parts, value) {
+        if (typeof value === 'string' && value) parts.push(value);
+    }
+    function collectRootText(root, parts, seen) {
+        if (!root || seen.indexOf(root) !== -1) return;
+        seen.push(root);
+        try {
+            appendText(parts, root.innerText || root.textContent || '');
+        } catch (e) {}
+        var nodes = [];
+        try {
+            nodes = root.querySelectorAll ? root.querySelectorAll('*') : [];
+        } catch (e) {}
+        for (var i = 0; i < nodes.length; i++) {
+            var node = nodes[i];
+            try {
+                if (node && node.shadowRoot) collectRootText(node.shadowRoot, parts, seen);
+            } catch (e) {}
+        }
+        var iframes = [];
+        try {
+            iframes = root.querySelectorAll ? root.querySelectorAll('iframe') : [];
+        } catch (e) {}
+        for (var j = 0; j < iframes.length; j++) {
+            try {
+                var frame = iframes[j];
+                var doc = frame.contentDocument || (frame.contentWindow && frame.contentWindow.document);
+                if (doc) collectRootText(doc.documentElement || doc.body, parts, seen);
+            } catch (e) {}
+        }
+    }
+    function hasSelector(selector) {
+        try {
+            return !!document.querySelector(selector);
+        } catch (e) {
+            return false;
+        }
+    }
+    function buildSnapshot() {
+        var parts = [];
+        var seen = [];
+        appendText(parts, document.title || '');
+        collectRootText(document.documentElement || document.body, parts, seen);
+        var text = parts.join('\n').toLowerCase();
+        var cfIndicators = [];
+        if (text.indexOf('security verification') !== -1) cfIndicators.push('security verification');
+        if (text.indexOf('protected by cloudflare') !== -1) cfIndicators.push('protected by cloudflare');
+        if (text.indexOf('verify you are human') !== -1) cfIndicators.push('verify you are human');
+        if (text.indexOf('checking your browser') !== -1) cfIndicators.push('checking your browser');
+        if (text.indexOf('确认您是真人') !== -1) cfIndicators.push('确认您是真人');
+        if (
+            hasSelector('iframe[src*="challenges.cloudflare.com"]') ||
+            hasSelector('iframe[src*="turnstile"]') ||
+            hasSelector('.cf-turnstile') ||
+            hasSelector('[name="cf-turnstile-response"]') ||
+            hasSelector('[data-testid*="cf" i]')
+        ) {
+            cfIndicators.push('cloudflare');
+        } else if (text.indexOf('cloudflare') !== -1) {
+            cfIndicators.push('cloudflare');
+        }
+        if (cfIndicators.length) {
+            text += '\n' + cfIndicators.join('\n');
+        }
+        return text;
+    }
+    if (window.__pcObserver && window.__pcKeywords) {
+        var same = kws.length === window.__pcKeywords.length &&
+                   kws.every(function(k){ return window.__pcKeywords.indexOf(k) !== -1; });
+        if (same) return 'already_installed';
+        window.__pcObserver.disconnect();
+        window.__pcObserver = null;
+    }
+    window.__pcKeywords = kws;
+    window.__pcHits = {};
+    var pending = null;
+    function doCheck() {
+        pending = null;
+        try {
+            var text = buildSnapshot();
+            window.__pcSnapshot = text;
+            for (var i = 0; i < window.__pcKeywords.length; i++) {
+                var k = window.__pcKeywords[i];
+                window.__pcHits[k] = text.indexOf(k) !== -1;
+            }
+        } catch(e) {}
+    }
+    doCheck();
+    window.__pcObserver = new MutationObserver(function() {
+        if (!pending) pending = setTimeout(doCheck, 200);
+    });
+    var target = document.body || document.documentElement;
+    if (target) {
+        window.__pcObserver.observe(target, {
+            childList: true, subtree: true, characterData: true
+        });
+    }
+    return 'installed';
+})();
+"""
+
+    _PAGE_CHECK_SNAPSHOT_JS = r"""
+return (function() {
+    function appendText(parts, value) {
+        if (typeof value === 'string' && value) parts.push(value);
+    }
+    function collectRootText(root, parts, seen) {
+        if (!root || seen.indexOf(root) !== -1) return;
+        seen.push(root);
+        try {
+            appendText(parts, root.innerText || root.textContent || '');
+        } catch (e) {}
+        var nodes = [];
+        try {
+            nodes = root.querySelectorAll ? root.querySelectorAll('*') : [];
+        } catch (e) {}
+        for (var i = 0; i < nodes.length; i++) {
+            var node = nodes[i];
+            try {
+                if (node && node.shadowRoot) collectRootText(node.shadowRoot, parts, seen);
+            } catch (e) {}
+        }
+        var iframes = [];
+        try {
+            iframes = root.querySelectorAll ? root.querySelectorAll('iframe') : [];
+        } catch (e) {}
+        for (var j = 0; j < iframes.length; j++) {
+            try {
+                var frame = iframes[j];
+                var doc = frame.contentDocument || (frame.contentWindow && frame.contentWindow.document);
+                if (doc) collectRootText(doc.documentElement || doc.body, parts, seen);
+            } catch (e) {}
+        }
+    }
+    function hasSelector(selector) {
+        try {
+            return !!document.querySelector(selector);
+        } catch (e) {
+            return false;
+        }
+    }
+    var parts = [];
+    appendText(parts, document.title || '');
+    collectRootText(document.documentElement || document.body, parts, []);
+    var text = parts.join('\n').toLowerCase();
+    var cfIndicators = [];
+    if (text.indexOf('security verification') !== -1) cfIndicators.push('security verification');
+    if (text.indexOf('protected by cloudflare') !== -1) cfIndicators.push('protected by cloudflare');
+    if (text.indexOf('verify you are human') !== -1) cfIndicators.push('verify you are human');
+    if (text.indexOf('checking your browser') !== -1) cfIndicators.push('checking your browser');
+    if (text.indexOf('确认您是真人') !== -1) cfIndicators.push('确认您是真人');
+    if (
+        hasSelector('iframe[src*="challenges.cloudflare.com"]') ||
+        hasSelector('iframe[src*="turnstile"]') ||
+        hasSelector('.cf-turnstile') ||
+        hasSelector('[name="cf-turnstile-response"]') ||
+        hasSelector('[data-testid*="cf" i]')
+    ) {
+        cfIndicators.push('cloudflare');
+    } else if (text.indexOf('cloudflare') !== -1) {
+        cfIndicators.push('cloudflare');
+    }
+    if (cfIndicators.length) {
+        text += '\n' + cfIndicators.join('\n');
+    }
+    return text;
+})();
+"""
+
+    def _collect_page_check_keywords(
+        self,
+        commands: List[Dict],
+        session: 'TabSession',
+    ) -> set:
+        """Collect all page_check keywords that apply to this session."""
+        keywords: set = set()
+        for cmd in commands:
+            if not cmd.get("enabled", True):
+                continue
+            trigger = cmd.get("trigger", {}) or {}
+            if str(trigger.get("type", "")).strip().lower() != "page_check":
+                continue
+            if not bool(trigger.get("periodic_enabled", True)):
+                continue
+            if not self._matches_scope(cmd, session):
+                continue
+            value = str(trigger.get("value", "") or "").strip()
+            if value:
+                _, parts = self._parse_page_check_expression(value)
+                for part in parts:
+                    kw = part.lower().strip()
+                    if kw:
+                        keywords.add(kw)
+        return keywords
+
+    def _ensure_page_check_observer(
+        self,
+        session: 'TabSession',
+        keywords: set,
+    ):
+        """Inject or update MutationObserver for real-time page_check text detection."""
+        if not keywords:
+            return
+        sid = str(getattr(session, "id", "") or "")
+        if not sid:
+            return
+        # Skip if already installed with the same keywords AND observer is still alive
+        with self._lock:
+            installed = self._observer_keywords_by_session.get(sid)
+        if installed == keywords:
+            # Quick liveness check (outside lock — run_js is I/O)
+            try:
+                alive = session.tab.run_js("return !!window.__pcObserver")
+                if alive:
+                    return
+            except Exception:
+                pass
+            # Observer lost — clear cache, re-inject below
+            with self._lock:
+                if self._observer_keywords_by_session.get(sid) == installed:
+                    self._observer_keywords_by_session.pop(sid, None)
+        # Inject observer
+        sorted_kws = sorted(keywords)
+        js = self._PAGE_CHECK_OBSERVER_JS.replace(
+            "%KEYWORDS%", json.dumps(sorted_kws)
+        )
+        try:
+            result = session.tab.run_js(js)
+            with self._lock:
+                self._observer_keywords_by_session[sid] = set(keywords)
+            if result != "already_installed":
+                logger.debug(
+                    f"[CMD] 页面检查观察器已注入: "
+                    f"标签页={sid}, 关键词={sorted_kws}"
+                )
+        except Exception as e:
+            logger.debug(f"[CMD] 页面检查观察器注入失败: {e}")
+
     def _refresh_tab_pool_if_due(self, pool: Any):
         if not self._tab_pool_auto_refresh:
             return
@@ -257,7 +486,7 @@ class CommandEngine:
             if hasattr(pool, "refresh_tabs"):
                 pool.refresh_tabs()
         except Exception as e:
-            logger.debug(f"[CMD] tab pool refresh failed (ignored): {e}")
+            logger.debug(f"[CMD] 刷新标签页池失败（忽略）: {e}")
 
     def _maybe_periodic_keepalive(self, session: 'TabSession', now_ts: float):
         if not self._periodic_keepalive_enabled:
@@ -281,7 +510,7 @@ class CommandEngine:
             name="cmd-periodic-checker",
         )
         self._periodic_thread.start()
-        logger.debug("[CMD] periodic scheduler started")
+        logger.debug("[CMD] 周期调度器已启动")
 
     def is_scheduler_running(self) -> bool:
         thread = self._periodic_thread
@@ -303,7 +532,7 @@ class CommandEngine:
             try:
                 self._run_periodic_checks()
             except Exception as e:
-                logger.debug(f"[CMD] periodic loop error (ignored): {e}")
+                logger.debug(f"[CMD] 周期调度循环异常（忽略）: {e}")
 
     def _run_periodic_checks(self):
         try:
@@ -322,24 +551,28 @@ class CommandEngine:
         if pool is None:
             try:
                 pool = browser.tab_pool
-                logger.debug("[CMD] periodic scheduler initialized tab pool")
+                logger.debug("[CMD] 周期调度器已初始化标签页池")
             except Exception as e:
                 now = time.time()
                 if (now - self._last_tab_pool_wait_log_at) >= 10:
                     self._last_tab_pool_wait_log_at = now
-                    logger.debug(f"[CMD] periodic scheduler waiting for tab pool init: {e}")
+                    logger.debug(f"[CMD] 周期调度器等待标签页池初始化: {e}")
                 return
 
         if not hasattr(pool, "get_idle_sessions_snapshot"):
             return
         self._refresh_tab_pool_if_due(pool)
 
-        sessions = pool.get_idle_sessions_snapshot()
+        if hasattr(pool, "get_sessions_snapshot"):
+            sessions = pool.get_sessions_snapshot()
+        else:
+            sessions = pool.get_idle_sessions_snapshot()
         if not sessions:
             return
 
         now = time.time()
         active_keys = set()
+        due_total = 0
 
         enabled_commands = [
             (idx, cmd) for idx, cmd in enumerate(commands)
@@ -348,9 +581,21 @@ class CommandEngine:
 
         for session in sessions:
             session_status = str(getattr(getattr(session, "status", None), "value", "")).lower()
-            if session_status != "idle":
+            if session_status not in {"idle", "busy"}:
                 continue
-            self._maybe_periodic_keepalive(session, now)
+            is_busy_workflow = session_status == "busy" and self._has_active_workflow(session)
+            if session_status == "busy" and not is_busy_workflow:
+                continue
+            if session_status == "idle":
+                self._maybe_periodic_keepalive(session, now)
+
+            # Inject/update MutationObserver for page_check keywords on this session
+            try:
+                pc_keywords = self._collect_page_check_keywords(commands, session)
+                if pc_keywords:
+                    self._ensure_page_check_observer(session, pc_keywords)
+            except Exception:
+                pass
 
             due_commands: List[tuple[int, int, Dict[str, Any]]] = []
             for idx, cmd in enabled_commands:
@@ -362,11 +607,30 @@ class CommandEngine:
                 if not bool(trigger.get("periodic_enabled", True)):
                     continue
 
+                trigger_type = str(trigger.get("type", "")).strip().lower()
+                if (
+                    is_busy_workflow
+                    and trigger_type == "page_check"
+                    and not self._should_evaluate_page_check_while_busy_workflow(cmd)
+                ):
+                    # While a workflow is actively running, low-priority page_check
+                    # commands should not consume transient intermediate states.
+                    continue
+
                 key = (cmd_id, session.id)
                 active_keys.add(key)
 
                 interval = max(1.0, self._coerce_float(trigger.get("periodic_interval_sec", 8), 8.0))
                 jitter = max(0.0, self._coerce_float(trigger.get("periodic_jitter_sec", 2), 2.0))
+
+                # page_check commands with observer use shorter interval (observer makes check cheap)
+                if trigger_type == "page_check":
+                    sid = str(getattr(session, "id", "") or "")
+                    with self._lock:
+                        has_observer = sid in self._observer_keywords_by_session
+                    if has_observer:
+                        interval = min(interval, 1.5)
+                        jitter = 0.0
 
                 with self._lock:
                     next_at = float(self._periodic_next_run.get(key, 0.0))
@@ -379,12 +643,41 @@ class CommandEngine:
 
                 due_commands.append((self._get_command_priority(cmd), idx, cmd))
 
+            due_total += len(due_commands)
             due_commands.sort(key=lambda item: (-item[0], item[1]))
             for _, _, cmd in due_commands:
-                if str(getattr(getattr(session, "status", None), "value", "")).lower() != "idle":
+                current_status = str(getattr(getattr(session, "status", None), "value", "")).lower()
+                if current_status == "busy" and not self._has_active_workflow(session):
+                    break
+                if current_status not in {"idle", "busy"}:
                     break
                 if self._should_trigger(cmd, session):
-                    self._execute_command_async(cmd, session)
+                    meta = self._take_pending_async_trigger_meta(cmd, session) or {}
+                    if current_status == "busy":
+                        scheduled = self._schedule_command_for_active_workflow(
+                            cmd,
+                            session,
+                            interrupt_context=meta.get("interrupt_context"),
+                            trigger_rollback=meta.get("rollback"),
+                        )
+                        if not scheduled:
+                            if meta.get("rollback"):
+                                self._rollback_trigger_consumption(cmd, session, meta.get("rollback"))
+                            self._finalize_request_count_trigger_state(cmd, session, rollback=True)
+                            self._reset_page_check_latch(cmd, session, reason="workflow_schedule_failed")
+                    else:
+                        self._execute_command_async(
+                            cmd,
+                            session,
+                            interrupt_context=meta.get("interrupt_context"),
+                            trigger_rollback=meta.get("rollback"),
+                        )
+
+        if self._should_log_periodic_summary(now, due_total):
+            logger.debug(
+                f"[CMD] 周期检查: 会话数={len(sessions)}, "
+                f"已启用周期命令={len(active_keys)}, 本轮到点={due_total}"
+            )
 
         with self._lock:
             stale_keys = [k for k in self._periodic_next_run if k not in active_keys]
@@ -406,7 +699,7 @@ class CommandEngine:
             return []
 
         try:
-            with open(commands_file, "r", encoding="utf-8") as f:
+            with open(commands_file, "r", encoding="utf-8-sig") as f:
                 data = json.load(f)
 
             if isinstance(data, dict):
@@ -425,13 +718,14 @@ class CommandEngine:
             return []
 
     def _refresh_commands_if_changed(self, force: bool = False):
-        commands_file = self._get_commands_file()
-        current_mtime = os.path.getmtime(commands_file) if os.path.exists(commands_file) else 0.0
+        with self._commands_lock:
+            commands_file = self._get_commands_file()
+            current_mtime = os.path.getmtime(commands_file) if os.path.exists(commands_file) else 0.0
 
-        if force or not self._commands_loaded or current_mtime != self._commands_mtime:
-            self._commands_cache = self._read_commands_file()
-            self._commands_mtime = current_mtime
-            self._commands_loaded = True
+            if force or not self._commands_loaded or current_mtime != self._commands_mtime:
+                self._commands_cache = self._read_commands_file()
+                self._commands_mtime = current_mtime
+                self._commands_loaded = True
 
     def _save_commands(self, commands: List[Dict]) -> bool:
         commands_file = self._get_commands_file()
@@ -460,8 +754,71 @@ class CommandEngine:
                 pass
             return False
 
+    def _merge_runtime_stats_into_commands(self, commands: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if not commands:
+            return commands
+        with self._lock:
+            runtime_stats = copy.deepcopy(self._command_runtime_stats)
+        if not runtime_stats:
+            return commands
+        for cmd in commands:
+            cmd_id = str(cmd.get("id", "")).strip()
+            if not cmd_id:
+                continue
+            stats = runtime_stats.get(cmd_id)
+            if not stats:
+                continue
+            cmd.update(stats)
+        return commands
+
     def _normalize_group_name(self, group_name: Any) -> str:
         return str(group_name or "").strip()
+
+    @staticmethod
+    def _normalize_group_acquire_policy(value: Any) -> str:
+        policy = str(value or "inherit_session").strip().lower()
+        return policy if policy in {"inherit_session", "try_acquire", "require_acquire"} else "inherit_session"
+
+    def _repair_mojibake_text(self, text: Any) -> str:
+        value = str(text or "").strip()
+        if not value:
+            return ""
+
+        candidates = [value]
+        for source_encoding in ("latin-1", "cp1252"):
+            try:
+                repaired = value.encode(source_encoding).decode("utf-8")
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                continue
+            if repaired and repaired not in candidates:
+                candidates.append(repaired)
+        return candidates[-1]
+
+    def _resolve_preset_name(self, preset_name: Any, session: Optional['TabSession'] = None) -> str:
+        raw_name = str(preset_name or "").strip()
+        if not raw_name:
+            return ""
+
+        repaired_name = self._repair_mojibake_text(raw_name)
+        if repaired_name == raw_name:
+            return raw_name
+
+        domain = str(getattr(session, "current_domain", "") or "").strip() if session else ""
+        if not domain:
+            logger.warning(f"[CMD] 检测到乱码预设名，已自动修正: {raw_name} -> {repaired_name}")
+            return repaired_name
+
+        try:
+            config_engine = self._get_config_engine()
+            site = getattr(config_engine, "sites", {}).get(domain, {}) or {}
+            presets = site.get("presets", {}) or {}
+            if not presets or repaired_name in presets:
+                logger.warning(f"[CMD] 检测到乱码预设名，已自动修正: {raw_name} -> {repaired_name}")
+                return repaired_name
+        except Exception as e:
+            logger.debug(f"[CMD] 预设名乱码修正校验失败（忽略）: {e}")
+
+        return raw_name
 
     def _ensure_unique_command_name(
         self,
@@ -496,14 +853,16 @@ class CommandEngine:
     # ================= CRUD =================
 
     def _load_commands(self) -> List[Dict]:
-        """从配置引擎加载命令列表（可变引用）"""
-        self._get_config_engine()
-        self._refresh_commands_if_changed()
-        return self._commands_cache
+        """从配置引擎加载命令列表快照，避免共享可变引用。"""
+        with self._commands_lock:
+            self._get_config_engine()
+            self._refresh_commands_if_changed()
+            snapshot = self._commands_cache
+        return self._merge_runtime_stats_into_commands(copy.deepcopy(snapshot))
 
     def list_commands(self) -> List[Dict]:
-        """获取所有命令（深拷贝）"""
-        return copy.deepcopy(self._load_commands())
+        """获取所有命令"""
+        return self._load_commands()
 
     def get_command(self, command_id: str) -> Optional[Dict]:
         for cmd in self.list_commands():
@@ -525,7 +884,7 @@ class CommandEngine:
             commands.append(command)
             self._save_commands(commands)
 
-        logger.info(f"✅ 命令已添加: {command.get('name')} ({command['id']})")
+        logger.info(f"[OK] 命令已添加: {command.get('name')} ({command['id']})")
         return copy.deepcopy(command)
 
     def update_command(self, command_id: str, updates: Dict) -> Optional[Dict]:
@@ -546,7 +905,7 @@ class CommandEngine:
                     cmd.update(updates)
                     commands[i] = cmd
                     self._save_commands(commands)
-                    logger.debug(f"✅ 命令已更新: {cmd.get('name')} ({command_id})")
+                    logger.debug(f"[OK] 命令已更新: {cmd.get('name')} ({command_id})")
                     return copy.deepcopy(cmd)
 
         return None
@@ -569,8 +928,9 @@ class CommandEngine:
                 result_keys = [k for k in self._command_results if k[0] == command_id]
                 for k in result_keys:
                     del self._command_results[k]
+                self._command_runtime_stats.pop(command_id, None)
 
-        logger.info(f"✅ 命令已删除: {command_id}")
+        logger.info(f"[OK] 命令已删除: {command_id}")
         return True
 
     def reorder_commands(self, command_ids: List[str]) -> bool:
@@ -654,70 +1014,187 @@ class CommandEngine:
         session: 'TabSession',
         include_disabled: bool = False,
         source_command_id: Optional[str] = None,
+        ancestry_chain: Optional[List[str]] = None,
+        acquire_policy: Optional[str] = None,
     ) -> Dict[str, Any]:
         """在当前会话中顺序执行命令组内的命令。"""
         normalized_group = self._normalize_group_name(group_name)
         if not normalized_group:
             return {"ok": False, "error": "empty_group_name"}
+        effective_policy = self._normalize_group_acquire_policy(acquire_policy)
+
+        plan = self.preview_command_group(
+            group_name=normalized_group,
+            session=session,
+            include_disabled=include_disabled,
+            source_command_id=source_command_id,
+            ancestry_chain=ancestry_chain,
+        )
+        candidates: List[Dict[str, Any]] = list(plan.pop("_candidate_commands", []))
+        results: List[Dict[str, Any]] = []
+        initial_scope_skipped = int(plan.get("scope_skipped", 0) or 0)
+
+        if not candidates:
+            return {
+                "ok": False,
+                "error": "group_empty_or_no_runnable_commands",
+                "group_name": normalized_group,
+                "scope_skipped": initial_scope_skipped,
+                "runnable_count": plan.get("runnable_count", 0),
+            }
+
+        chain_seed = list(ancestry_chain or [])
+        if not chain_seed and source_command_id:
+            chain_seed = [source_command_id]
+        group_acquired = False
+        group_task_id = f"group_{normalized_group}_{int(time.time() * 1000)}"
+        can_acquire = hasattr(session, "acquire_for_command")
+        if effective_policy != "inherit_session":
+            if not can_acquire:
+                if effective_policy == "require_acquire":
+                    return {
+                        "ok": False,
+                        "error": "group_acquire_unavailable",
+                        "group_name": normalized_group,
+                        "acquire_policy": effective_policy,
+                    }
+            else:
+                group_acquired = bool(session.acquire_for_command(group_task_id))
+                if not group_acquired and effective_policy == "require_acquire":
+                    return {
+                        "ok": False,
+                        "error": "group_acquire_failed",
+                        "group_name": normalized_group,
+                        "acquire_policy": effective_policy,
+                    }
+
+        try:
+            for cmd in candidates:
+                command_id = cmd.get("id")
+                if not command_id:
+                    continue
+                if not self._matches_scope(cmd, session):
+                    results.append({
+                        "id": command_id,
+                        "name": cmd.get("name", command_id),
+                        "ok": False,
+                        "error": "scope_mismatch",
+                    })
+                    continue
+                exec_key = (command_id, session.id)
+                with self._lock:
+                    if exec_key in self._executing:
+                        results.append({
+                            "id": command_id,
+                            "name": cmd.get("name", command_id),
+                            "ok": False,
+                            "error": "already_executing",
+                        })
+                        continue
+                    self._executing.add(exec_key)
+                try:
+                    execution_result = self._execute_command(cmd, session, chain=chain_seed)
+                    command_ok = not self._execution_needs_page_check_retry(execution_result)
+                    results.append({
+                        "id": command_id,
+                        "name": cmd.get("name", command_id),
+                        "ok": command_ok,
+                        "result": execution_result,
+                        **({"error": "execution_not_ok"} if not command_ok else {}),
+                    })
+                except Exception as e:
+                    logger.error(f"trigger check failed [{cmd.get('name')}]: {e}")
+                    results.append({
+                        "id": command_id,
+                        "name": cmd.get("name", command_id),
+                        "ok": False,
+                        "error": str(e),
+                    })
+                finally:
+                    with self._lock:
+                        self._executing.discard(exec_key)
+        finally:
+            if group_acquired:
+                try:
+                    browser = self._get_browser()
+                    pool = getattr(browser, "_tab_pool", None)
+                    if pool is not None and hasattr(pool, "release"):
+                        pool.release(session.id, check_triggers=False)
+                    else:
+                        session.release(clear_page=False, check_triggers=False)
+                except Exception as e:
+                    logger.debug(f"[CMD] 命令组释放标签页失败（忽略）: {e}")
+
+        success_count = sum(1 for item in results if item.get("ok"))
+        failure_count = sum(1 for item in results if not item.get("ok"))
+        return {
+            "ok": len(results) > 0 and failure_count == 0,
+            "partial_ok": success_count > 0,
+            "group_name": normalized_group,
+            "executed": success_count,
+            "total": len(results),
+            "failures": failure_count,
+            "results": results,
+            "acquire_policy": effective_policy,
+            "acquired": group_acquired,
+            "scope_skipped": sum(1 for item in results if item.get("error") == "scope_mismatch"),
+            "runnable_count": plan.get("runnable_count", 0),
+        }
+
+    def preview_command_group(
+        self,
+        group_name: str,
+        session: 'TabSession',
+        include_disabled: bool = False,
+        source_command_id: Optional[str] = None,
+        ancestry_chain: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        normalized_group = self._normalize_group_name(group_name)
+        if not normalized_group:
+            return {
+                "ok": False,
+                "error": "empty_group_name",
+                "group_name": normalized_group,
+                "_candidate_commands": [],
+                "_scope_skipped_results": [],
+            }
 
         with self._commands_lock:
-            commands = copy.deepcopy(self._load_commands())
+            commands = self._load_commands()
 
-        selected: List[Dict[str, Any]] = []
+        candidates: List[Dict[str, Any]] = []
+        scope_skipped_results: List[Dict[str, Any]] = []
+        total_candidates = 0
+        ancestors = {str(item or "").strip() for item in (ancestry_chain or []) if str(item or "").strip()}
+        if source_command_id:
+            ancestors.add(str(source_command_id).strip())
         for cmd in commands:
             if self._normalize_group_name(cmd.get("group_name")) != normalized_group:
                 continue
             if not include_disabled and not cmd.get("enabled", True):
                 continue
-            if source_command_id and cmd.get("id") == source_command_id:
+            if str(cmd.get("id", "")).strip() in ancestors:
                 continue
-            selected.append(cmd)
-
-        if not selected:
-            return {"ok": False, "error": "group_empty_or_no_runnable_commands", "group_name": normalized_group}
-
-        results: List[Dict[str, Any]] = []
-        chain_seed = [source_command_id] if source_command_id else []
-        for cmd in selected:
-            command_id = cmd.get("id")
-            if not command_id:
-                continue
-            exec_key = (command_id, session.id)
-            if exec_key in self._executing:
-                results.append({
-                    "id": command_id,
-                    "name": cmd.get("name", command_id),
+            total_candidates += 1
+            candidates.append(cmd)
+            if not self._matches_scope(cmd, session):
+                scope_skipped_results.append({
+                    "id": cmd.get("id"),
+                    "name": cmd.get("name", cmd.get("id", "")),
                     "ok": False,
-                    "error": "already_executing",
+                    "error": "scope_mismatch",
                 })
                 continue
 
-            self._executing.add(exec_key)
-            try:
-                self._execute_command(cmd, session, chain=chain_seed)
-                results.append({
-                    "id": command_id,
-                    "name": cmd.get("name", command_id),
-                    "ok": True,
-                })
-            except Exception as e:
-                logger.error(f"trigger check failed [{cmd.get('name')}]: {e}")
-                results.append({
-                    "id": command_id,
-                    "name": cmd.get("name", command_id),
-                    "ok": False,
-                    "error": str(e),
-                })
-            finally:
-                self._executing.discard(exec_key)
-
-        success_count = sum(1 for item in results if item.get("ok"))
         return {
-            "ok": success_count > 0,
+            "ok": bool(candidates) and not scope_skipped_results,
+            "fully_runnable": bool(candidates) and not scope_skipped_results,
             "group_name": normalized_group,
-            "executed": success_count,
-            "total": len(results),
-            "results": results,
+            "total_candidates": total_candidates,
+            "runnable_count": total_candidates - len(scope_skipped_results),
+            "scope_skipped": len(scope_skipped_results),
+            "_candidate_commands": candidates,
+            "_scope_skipped_results": scope_skipped_results,
         }
 
     # ================= 触发检查 =================
@@ -748,7 +1225,13 @@ class CommandEngine:
         for _, cmd in ordered_commands:
             try:
                 if self._should_trigger(cmd, session):
-                    self._execute_command_async(cmd, session)
+                    meta = self._take_pending_async_trigger_meta(cmd, session) or {}
+                    self._execute_command_async(
+                        cmd,
+                        session,
+                        interrupt_context=meta.get("interrupt_context"),
+                        trigger_rollback=meta.get("rollback"),
+                    )
             except Exception as e:
                 logger.error(f"trigger check failed [{cmd.get('name')}]: {e}")
 
@@ -782,7 +1265,6 @@ class CommandEngine:
             return False
 
         should_abort = False
-        event_sig = self._build_network_signature(event_copy)
 
         for cmd in commands:
             if not cmd.get("enabled", True):
@@ -792,14 +1274,17 @@ class CommandEngine:
                 continue
             if not self._matches_scope(cmd, session):
                 continue
-            if not self._matches_network_trigger(trigger, event_copy):
+            dispatch = self._prepare_network_trigger_dispatch(cmd, session, event_copy)
+            if not dispatch:
                 continue
-
-            if not self._consume_network_signature(cmd.get("id"), session, event_sig):
-                continue
-
-            self._execute_command_async(cmd, session)
-            should_abort = should_abort or bool(trigger.get("abort_on_match", True))
+            scheduled = self._execute_command_async(
+                cmd,
+                session,
+                interrupt_context=dispatch.get("interrupt_context"),
+                trigger_rollback=dispatch.get("rollback"),
+            )
+            if scheduled:
+                should_abort = should_abort or bool(trigger.get("abort_on_match", True))
 
         return should_abort
 
@@ -913,7 +1398,7 @@ class CommandEngine:
             p = int(value)
         except Exception:
             p = int(default)
-        return max(1, min(4, p))
+        return p
 
     def _get_request_priority_baseline(self) -> int:
         return self._normalize_priority(getattr(self, "_request_priority_baseline", 2), 2)
@@ -922,6 +1407,13 @@ class CommandEngine:
         trigger = command.get("trigger", {}) or {}
         raw = trigger.get("priority", trigger.get("command_priority", 2))
         return self._normalize_priority(raw, 2)
+
+    def _should_evaluate_page_check_while_busy_workflow(self, command: Dict) -> bool:
+        trigger = command.get("trigger", {}) or {}
+        raw = trigger.get("check_while_busy_workflow", None)
+        if raw is None:
+            return True
+        return bool(raw)
 
     def _command_affects_domain(self, command: Dict) -> bool:
         actions = command.get("actions", [])
@@ -947,7 +1439,7 @@ class CommandEngine:
                 if str(tab.get("status", "")).lower() != "busy":
                     continue
                 tab_domain = str(tab.get("current_domain", "") or "").strip().lower()
-                if tab_domain and normalized in tab_domain:
+                if self._domain_matches(normalized, tab_domain):
                     return True
         except Exception:
             return False
@@ -988,6 +1480,12 @@ class CommandEngine:
             pass
         return ""
 
+    def _get_active_workflow_runtime(self, session: 'TabSession') -> Optional[Dict[str, Any]]:
+        stack = getattr(session, "_workflow_runtime_stack", None) or []
+        if not stack:
+            return None
+        runtime = stack[-1]
+        return runtime if isinstance(runtime, dict) else None
 
     def _build_request_count_state_key(self, command: Dict, session: 'TabSession') -> tuple:
         trigger = command.get("trigger", {}) or {}
@@ -1048,7 +1546,7 @@ class CommandEngine:
                         url = str(tab.get("url", "") or "")
                         if "://" in url:
                             tab_domain = url.split("//", 1)[1].split("/", 1)[0].strip().lower()
-                    if tab_domain and target_domain in tab_domain:
+                    if self._domain_matches(target_domain, tab_domain):
                         total += int(tab.get("request_count", 0) or 0)
                 except Exception:
                     continue
@@ -1069,7 +1567,7 @@ class CommandEngine:
             target_domain = str(trigger.get("domain", "") or "").strip().lower()
             session_domain = self._get_session_domain(session)
             if target_domain and session_domain:
-                if target_domain not in session_domain:
+                if not self._domain_matches(target_domain, session_domain):
                     return False
             elif target_domain:
                 return False
@@ -1080,21 +1578,30 @@ class CommandEngine:
 
         # Skip if same command already executing on this tab
         exec_key = (command["id"], session.id)
-        if exec_key in self._executing:
-            return False
+        with self._lock:
+            if exec_key in self._executing:
+                return False
 
         request_state_key = None
         scope_request_count = None
+        initial_req = None
         if trigger_type == "request_count":
             request_state_key = self._build_request_count_state_key(command, session)
             scope_request_count = self._get_scope_request_count(command, session)
+            try:
+                # Count the current completed request as the first hit so
+                # a threshold of N fires on the Nth completed request rather
+                # than the (N+1)th after state initialization.
+                initial_req = max(0, int(scope_request_count) - 1)
+            except Exception:
+                initial_req = scope_request_count
 
         # Initialize or load trigger state
         state, is_new = self._ensure_trigger_state(
             command["id"],
             session,
             state_key=request_state_key,
-            initial_req=scope_request_count,
+            initial_req=initial_req if trigger_type == "request_count" else scope_request_count,
         )
         if is_new and trigger_type != "page_check":
             return False  # Newly initialized: wait for next check cycle
@@ -1116,10 +1623,16 @@ class CommandEngine:
                     state["req_prev"] = baseline
                     state["req_pending"] = True
                     state["req"] = current_count
+            logger.debug(
+                f"[CMD] 请求计数检查: {command.get('name')} "
+                f"(当前={current_count}, 基线={baseline}, 增量={delta}, 阈值={threshold}, "
+                f"标签页={session.id}, 范围={self._format_scope_label(scope)})"
+            )
             if should_fire:
                 logger.info(
-                    f"[CMD] trigger: {command.get('name')} "
-                    f"(requests={delta}>={threshold}, tab={session.id}, scope={scope})"
+                    f"[CMD] 触发命令: {command.get('name')} "
+                    f"(请求增量={delta}, 阈值={threshold}, 标签页={session.id}, "
+                    f"范围={self._format_scope_label(scope)})"
                 )
                 return True
 
@@ -1128,8 +1641,8 @@ class CommandEngine:
             delta = session.error_count - state["err"]
             if delta >= threshold:
                 logger.info(
-                    f"[CMD] trigger: {command.get('name')} "
-                    f"(errors={delta}>={threshold})"
+                    f"[CMD] 触发命令: {command.get('name')} "
+                    f"(错误增量={delta}, 阈值={threshold})"
                 )
                 with self._lock:
                     state["err"] = session.error_count
@@ -1140,71 +1653,130 @@ class CommandEngine:
             idle = time.time() - session.last_used_at
             if idle >= threshold_sec:
                 logger.info(
-                    f"[CMD] trigger: {command.get('name')} "
-                    f"(idle={idle:.0f}s>={threshold_sec}s)"
+                    f"[CMD] 触发命令: {command.get('name')} "
+                    f"(空闲时长={idle:.0f}秒, 阈值={threshold_sec}秒)"
                 )
                 return True
 
         elif trigger_type == "page_check":
             check_text = str(trigger.get("value", ""))
             normalized_text = check_text.lower().strip()
-            current_hit = bool(check_text and self._check_page_content(session, check_text))
+            op, keywords = self._parse_page_check_expression(check_text)
+            current_hit = bool(keywords and self._check_page_content_expr(session, op, keywords))
             fire_mode = str(trigger.get("fire_mode", "edge") or "edge").strip().lower()
             cooldown_sec = max(0.0, self._coerce_float(trigger.get("cooldown_sec", 0), 0.0))
+            stable_for_sec = max(0.0, self._coerce_float(trigger.get("stable_for_sec", 0), 0.0))
             now_ts = time.time()
 
             with self._lock:
                 prev_key = str(state.get("page_key", ""))
                 prev_hit = bool(state.get("page_hit", False)) if prev_key == normalized_text else False
+                prev_stable = bool(state.get("page_stable", False)) if prev_key == normalized_text else False
+                hit_since = float(state.get("page_hit_since", 0.0) or 0.0) if prev_key == normalized_text else 0.0
+                if current_hit:
+                    if not prev_hit or hit_since <= 0:
+                        hit_since = now_ts
+                else:
+                    hit_since = 0.0
                 state["page_key"] = normalized_text
                 state["page_hit"] = current_hit
+                state["page_hit_since"] = hit_since
                 last_fire_at = float(state.get("page_last_fire_at", 0.0) or 0.0)
+                stable_hit = bool(current_hit and ((now_ts - hit_since) >= stable_for_sec))
+                state["page_stable"] = stable_hit
 
                 if fire_mode == "level":
-                    if current_hit and (cooldown_sec <= 0 or (now_ts - last_fire_at) >= cooldown_sec):
+                    if stable_hit and (cooldown_sec <= 0 or (now_ts - last_fire_at) >= cooldown_sec):
                         state["page_last_fire_at"] = now_ts
                         logger.info(
-                            f"[CMD] trigger: {command.get('name')} "
-                            f"(page_check-level: '{check_text[:30]}', cooldown={cooldown_sec}s)"
+                            f"[CMD] 触发命令: {command.get('name')} "
+                            f"(页面检查命中, 模式=持续触发, 文本='{check_text[:30]}', "
+                            f"冷却={cooldown_sec}秒)"
                         )
                         return True
                 else:
-                    if current_hit and not prev_hit:
+                    if stable_hit and not prev_stable:
                         state["page_last_fire_at"] = now_ts
                         logger.info(
-                            f"[CMD] trigger: {command.get('name')} "
-                            f"(page_check-edge: '{check_text[:30]}')"
+                            f"[CMD] 触发命令: {command.get('name')} "
+                            f"(页面检查命中, 模式=边沿触发, 文本='{check_text[:30]}')"
                         )
                         return True
 
         elif trigger_type == "command_result_match":
-            if self._match_command_result_trigger(command, session, consume=True):
+            dispatch = self._prepare_command_result_trigger_dispatch(command, session)
+            if dispatch:
+                self._set_pending_async_trigger_meta(command, session, dispatch)
                 logger.info(
-                    f"[CMD] trigger: {command.get('name')} "
-                    f"(command_result_match)"
+                    f"[CMD] 触发命令: {command.get('name')} "
+                    f"(命中命令结果匹配条件)"
+                )
+                return True
+
+        elif trigger_type == "command_result_event":
+            dispatch = self._prepare_command_result_event_dispatch(command, session)
+            if dispatch:
+                self._set_pending_async_trigger_meta(command, session, dispatch)
+                logger.info(
+                    f"[CMD] 触发命令: {command.get('name')} "
+                    f"(命中命令结果事件条件)"
                 )
                 return True
 
         elif trigger_type == "network_request_error":
-            event = self._get_latest_network_event(session.id)
-            if event and self._matches_network_trigger(trigger, event):
-                sig = self._build_network_signature(event)
-                if state.get("net_sig") != sig:
-                    with self._lock:
-                        state["net_sig"] = sig
+            dispatch = self._prepare_network_trigger_dispatch(command, session)
+            if dispatch:
+                event = (dispatch.get("interrupt_context") or {}).get("network_event", {})
+                self._set_pending_async_trigger_meta(command, session, dispatch)
+                if (dispatch.get("rollback") or {}).get("token"):
                     logger.info(
-                        f"[CMD] trigger: {command.get('name')} "
-                        f"(network_request_error status={event.get('status')}, url={event.get('url', '')[:80]})"
+                        f"[CMD] 触发命令: {command.get('name')} "
+                        f"(网络异常状态码={event.get('status')}, 地址={event.get('url', '')[:80]})"
                     )
                     return True
 
         return False
 
+    @staticmethod
+    def _parse_page_check_expression(value: str):
+        """解析 page_check 的 value 字段，支持 || (OR) 和 && (AND) 语法。
+
+        返回 (operator, keywords_list):
+        - ("or",  [kw1, kw2, ...])  — 任意一个关键词命中即触发
+        - ("and", [kw1, kw2, ...])  — 所有关键词都命中才触发
+        - ("single", [value])       — 单关键词（向后兼容）
+
+        当 || 和 && 同时出现时，|| 优先拆分。
+        """
+        raw = str(value or "").strip()
+        if not raw:
+            return ("single", [])
+        if "||" in raw:
+            parts = [p.strip() for p in raw.split("||") if p.strip()]
+            return ("or", parts) if parts else ("single", [])
+        if "&&" in raw:
+            parts = [p.strip() for p in raw.split("&&") if p.strip()]
+            return ("and", parts) if parts else ("single", [])
+        return ("single", [raw])
+
+    @staticmethod
+    def _normalize_match_text(value: Any) -> str:
+        text = str(value or "").strip().lower()
+        if not text:
+            return ""
+        return re.sub(r"\s+", " ", text)
+
     def _text_contains_needle(self, haystack: str, needle: str) -> bool:
-        hay = str(haystack or "").strip().lower()
-        ned = str(needle or "").strip().lower()
+        hay = self._normalize_match_text(haystack)
+        ned = self._normalize_match_text(needle)
         if not hay or not ned:
             return False
+
+        if re.search(r"[^\x00-\x7F]", ned):
+            compact_hay = re.sub(r"\s+", "", hay)
+            compact_ned = re.sub(r"\s+", "", ned)
+            if compact_hay and compact_ned and compact_ned in compact_hay:
+                return True
 
         # For plain word-like keywords (for example "battle"), prefer whole-word
         # matching to reduce accidental substring hits.
@@ -1214,6 +1786,22 @@ class CommandEngine:
 
         return ned in hay
 
+    def _check_page_content_expr(
+        self, session: 'TabSession', op: str, keywords: list
+    ) -> bool:
+        """根据解析后的表达式 (op, keywords) 检查页面内容。
+
+        - op="or"    任意一个关键词命中即返回 True
+        - op="and"   所有关键词都命中才返回 True
+        - op="single" 等同于 and（只有一个关键词）
+        """
+        if not keywords:
+            return False
+        if op == "or":
+            return any(self._check_page_content(session, kw) for kw in keywords)
+        else:  # "and" / "single"
+            return all(self._check_page_content(session, kw) for kw in keywords)
+
     def _check_page_content(self, session: 'TabSession', text: str) -> bool:
         needle = str(text or "").strip()
         if not needle:
@@ -1221,20 +1809,29 @@ class CommandEngine:
 
         self._try_wake_tab(session, reason="page_check")
 
-        body_text = ""
+        # Fast path: read from MutationObserver cache (near-instant)
         try:
-            body_text = str(
-                session.tab.run_js(
-                    "return (document.body && document.body.innerText) ? document.body.innerText : '';"
-                ) or ""
+            observer_ok = session.tab.run_js("return !!window.__pcObserver")
+            if observer_ok:
+                snapshot = str(session.tab.run_js("return String(window.__pcSnapshot || '')") or "")
+                if snapshot.strip():
+                    return self._text_contains_needle(snapshot, needle)
+        except Exception:
+            pass
+
+        # Slow fallback: full page snapshot scan (observer not installed or broken)
+        page_text = ""
+        try:
+            page_text = str(
+                session.tab.run_js(self._PAGE_CHECK_SNAPSHOT_JS) or ""
             )
         except Exception:
-            body_text = ""
+            page_text = ""
 
-        if body_text.strip():
-            return self._text_contains_needle(body_text, needle)
+        if page_text.strip():
+            return self._text_contains_needle(page_text, needle)
 
-        # Fallback to title only if body text is unavailable.
+        # Fallback to title only if page text is unavailable.
         try:
             title = str(session.tab.run_js("return document.title || '';") or "")
             return self._text_contains_needle(title, needle)
@@ -1258,9 +1855,14 @@ class CommandEngine:
                 return
             state["page_key"] = normalized_text
             state["page_hit"] = False
+            state["page_stable"] = False
+            state["page_hit_since"] = 0.0
 
         if reason:
-            logger.debug(f"[CMD] page_check latch reset: {command.get('name')} (tab={session.id}, reason={reason})")
+            logger.debug(
+                f"[CMD] 页面检查锁存已重置: {command.get('name')} "
+                f"(标签页={session.id}, 原因={reason})"
+            )
 
     def _finalize_request_count_trigger_state(
         self,
@@ -1296,13 +1898,27 @@ class CommandEngine:
     def _execution_needs_page_check_retry(execution_result: Any) -> bool:
         """
         Determine whether a page_check-triggered command should be retried.
-        Retry signal is inferred from action results shaped like {"ok": False, ...}.
+        Retry signal is inferred from:
+        - Step-level ok flag being False (exception during execution)
+        - Action results shaped like {"ok": False, ...}
+        - String results containing known failure prefixes (e.g. "js_failed:")
         """
         if not isinstance(execution_result, dict):
             return False
 
+        _FAIL_PREFIXES = (
+            "js_failed:",
+            "python_failed:",
+            "unsupported_lang:",
+            "ERROR:",
+            "refresh_failed:",
+            "navigate_failed:",
+        )
+
         direct_result = execution_result.get("result")
         if isinstance(direct_result, dict) and direct_result.get("ok") is False:
+            return True
+        if isinstance(direct_result, str) and direct_result.startswith(_FAIL_PREFIXES):
             return True
 
         steps = execution_result.get("steps")
@@ -1310,8 +1926,13 @@ class CommandEngine:
             for step in steps:
                 if not isinstance(step, dict):
                     continue
+                # Check step-level ok flag (set by _execute_simple on exceptions)
+                if step.get("ok") is False:
+                    return True
                 step_result = step.get("result")
                 if isinstance(step_result, dict) and step_result.get("ok") is False:
+                    return True
+                if isinstance(step_result, str) and step_result.startswith(_FAIL_PREFIXES):
                     return True
         return False
 
@@ -1328,1095 +1949,8 @@ class CommandEngine:
             "ne": "not_equals",
             "not_equal": "not_equals",
             "not_equals": "not_equals",
-            "not": "not_equals",
         }
         return mapping.get(rule_value, "equals")
-
-    def _stringify_result(self, value: Any) -> str:
-        if value is None:
-            return ""
-        if isinstance(value, str):
-            return value
-        if isinstance(value, (dict, list, tuple)):
-            try:
-                return json.dumps(value, ensure_ascii=False, sort_keys=True)
-            except Exception:
-                return str(value)
-        return str(value)
-
-    def _match_value_rule(self, actual: str, expected: str, rule: str) -> bool:
-        normalized_rule = self._normalize_match_rule(rule)
-        if normalized_rule == "contains":
-            if not expected:
-                return False
-            return expected in actual
-        if normalized_rule == "not_equals":
-            return actual != expected
-        return actual == expected
-
-    def _get_command_result(self, command_id: str, tab_id: str) -> Optional[Dict[str, Any]]:
-        with self._lock:
-            return copy.deepcopy(self._command_results.get((command_id, tab_id)))
-
-    def _match_command_result_trigger(
-        self,
-        command: Dict[str, Any],
-        session: 'TabSession',
-        consume: bool = False,
-    ) -> bool:
-        trigger = command.get("trigger", {})
-        source_id = str(trigger.get("command_id", "")).strip()
-        if not source_id:
-            return False
-
-        result_entry = self._get_command_result(source_id, session.id)
-        if not result_entry:
-            return False
-
-        action_ref = str(trigger.get("action_ref", "")).strip()
-        actual = result_entry.get("result", "")
-        if action_ref:
-            actual = result_entry.get("step_results", {}).get(action_ref, actual)
-
-        expected = self._stringify_result(trigger.get("expected_value", ""))
-        rule = trigger.get("match_rule", "equals")
-        if not self._match_value_rule(self._stringify_result(actual), expected, rule):
-            return False
-
-        if consume:
-            state, _ = self._ensure_trigger_state(command["id"], session)
-            token = str(result_entry.get("token", ""))
-            if state.get("result_token") == token:
-                return False
-            with self._lock:
-                state["result_token"] = token
-
-        return True
-
-    def _record_command_result(
-        self,
-        command: Dict[str, Any],
-        session: 'TabSession',
-        execution_result: Dict[str, Any],
-    ):
-        if not command.get("id"):
-            return
-
-        token = f"{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}"
-        step_results = {}
-        for step in execution_result.get("steps", []) or []:
-            ref = str(step.get("action_ref", "")).strip()
-            if not ref:
-                continue
-            step_results[ref] = self._stringify_result(step.get("result", ""))
-
-        entry = {
-            "token": token,
-            "timestamp": time.time(),
-            "result": self._stringify_result(execution_result.get("result", "")),
-            "step_results": step_results,
-            "mode": execution_result.get("mode", ""),
-        }
-        with self._lock:
-            self._command_results[(command["id"], session.id)] = entry
-
-    def _normalize_status_codes(self, raw_codes: Any) -> set[int]:
-        if isinstance(raw_codes, (list, tuple, set)):
-            values = raw_codes
-        else:
-            values = str(raw_codes or "").replace("，", ",").split(",")
-
-        result: set[int] = set()
-        for item in values:
-            text = str(item).strip()
-            if not text:
-                continue
-            try:
-                result.add(int(text))
-            except Exception:
-                continue
-        return result
-
-    def _pattern_to_listen_hint(self, pattern: str, mode: str) -> str:
-        raw = str(pattern or "").strip()
-        if not raw:
-            return ""
-
-        if str(mode or "").strip().lower() == "regex":
-            tokens = re.split(r"[\^\$\.\*\+\?\(\)\[\]\{\}\|\\]+", raw)
-            tokens = [t.strip() for t in tokens if t and len(t.strip()) >= 3]
-            if not tokens:
-                wildcard_fallback = raw.replace(".*", "").replace("\\/", "/")
-                wildcard_fallback = wildcard_fallback.strip("* ").strip()
-                return wildcard_fallback[:120]
-            tokens.sort(key=len, reverse=True)
-            return tokens[0][:120]
-
-        simplified = raw.strip("* ").strip()
-        return simplified[:120]
-
-    def _matches_url_rule(self, url: str, pattern: str, mode: str) -> bool:
-        if not pattern:
-            return True
-        if mode == "regex":
-            try:
-                return bool(re.search(pattern, url, flags=re.IGNORECASE))
-            except re.error:
-                logger.warning(f"[CMD] 无效正则，回退通配/关键词匹配: {pattern}")
-                wildcard = str(pattern).replace(".", r"\.").replace("*", ".*")
-                try:
-                    return bool(re.search(wildcard, url, flags=re.IGNORECASE))
-                except re.error:
-                    pass
-                simplified = str(pattern).replace("*", "").strip()
-                if simplified:
-                    return simplified.lower() in url.lower()
-        return pattern.lower() in url.lower()
-
-    def _matches_network_trigger(self, trigger: Dict[str, Any], event: Dict[str, Any]) -> bool:
-        url = str(event.get("url", "") or "")
-        status = event.get("status")
-        pattern = str(trigger.get("url_pattern") or trigger.get("value") or "").strip()
-        match_mode = str(trigger.get("match_mode", "keyword")).strip().lower()
-        codes = self._normalize_status_codes(trigger.get("status_codes", ""))
-
-        if not self._matches_url_rule(url, pattern, match_mode):
-            return False
-        if codes and int(status or 0) not in codes:
-            return False
-        return True
-
-    def _build_network_signature(self, event: Dict[str, Any]) -> str:
-        event_id = str(event.get("event_id", "")).strip()
-        if event_id:
-            return event_id
-        ts = str(event.get("timestamp", ""))
-        return f"{ts}:{event.get('status')}:{event.get('url', '')}"
-
-    def _consume_network_signature(self, command_id: str, session: 'TabSession', signature: str) -> bool:
-        if not command_id:
-            return False
-        state, _ = self._ensure_trigger_state(command_id, session)
-        if state.get("net_sig") == signature:
-            return False
-        with self._lock:
-            state["net_sig"] = signature
-        return True
-
-    def _get_latest_network_event(self, tab_id: str) -> Optional[Dict[str, Any]]:
-        with self._lock:
-            items = self._network_events.get(tab_id) or []
-            if not items:
-                return None
-            return copy.deepcopy(items[-1])
-
-    def _matches_scope(self, command: Dict, session: 'TabSession') -> bool:
-        trigger = command.get("trigger", {})
-        scope = trigger.get("scope", "all")
-
-        if scope == "domain":
-            target_domain = str(trigger.get("domain", "") or "").strip().lower()
-            session_domain = self._get_session_domain(session)
-            if target_domain and session_domain:
-                return target_domain in session_domain
-            return not target_domain
-
-        if scope == "tab":
-            target_index = trigger.get("tab_index")
-            return target_index is None or session.persistent_index == target_index
-
-        return True
-
-    def _trigger_chained_commands(
-        self,
-        source_command: Dict,
-        session: 'TabSession',
-        chain: Optional[List[str]] = None,
-    ):
-        source_id = source_command.get("id")
-        if not source_id:
-            return
-
-        chain = list(chain or [])
-        next_chain = chain + [source_id]
-
-        try:
-            commands = self._load_commands()
-        except Exception as e:
-            logger.debug(f"链式命令加载失败，跳过: {e}")
-            return
-
-        for cmd in commands:
-            if not cmd.get("enabled", True):
-                continue
-
-            target_id = cmd.get("id")
-            trigger = cmd.get("trigger", {})
-            if trigger.get("type") != "command_triggered":
-                continue
-            if trigger.get("command_id") != source_id:
-                continue
-            if not target_id or target_id in next_chain:
-                continue
-            if not self._matches_scope(cmd, session):
-                continue
-
-            exec_key = (target_id, session.id)
-            if exec_key in self._executing:
-                continue
-
-            logger.info(
-                f"[CMD] 链式触发: {source_command.get('name')} -> {cmd.get('name')} "
-                f"(tab={session.id})"
-            )
-            self._execute_command_async(cmd, session, chain=next_chain)
-
-    def _trigger_result_match_commands(
-        self,
-        source_command: Dict[str, Any],
-        session: 'TabSession',
-        chain: Optional[List[str]] = None,
-    ):
-        source_id = source_command.get("id")
-        if not source_id:
-            return
-
-        chain = list(chain or [])
-        next_chain = chain + [source_id]
-
-        try:
-            commands = self._load_commands()
-        except Exception as e:
-            logger.debug(f"条件分支命令加载失败，跳过: {e}")
-            return
-
-        for cmd in commands:
-            if not cmd.get("enabled", True):
-                continue
-
-            target_id = cmd.get("id")
-            trigger = cmd.get("trigger", {})
-            if trigger.get("type") != "command_result_match":
-                continue
-            if str(trigger.get("command_id", "")).strip() != source_id:
-                continue
-            if not target_id or target_id in next_chain:
-                continue
-            if not self._matches_scope(cmd, session):
-                continue
-            if not self._match_command_result_trigger(cmd, session, consume=True):
-                continue
-
-            exec_key = (target_id, session.id)
-            if exec_key in self._executing:
-                continue
-
-            logger.info(
-                f"[CMD] 条件分支触发: {source_command.get('name')} -> {cmd.get('name')} "
-                f"(tab={session.id})"
-            )
-            self._execute_command_async(cmd, session, chain=next_chain)
-
-    # ================= 动作执行 =================
-
-    def _execute_command_async(
-        self,
-        command: Dict,
-        session: 'TabSession',
-        chain: Optional[List[str]] = None,
-    ):
-        exec_key = (command["id"], session.id)
-        priority = self._get_command_priority(command)
-        baseline = self._get_request_priority_baseline()
-        is_high = priority > baseline
-        domain = self._get_session_domain(session)
-        domain_sensitive = bool(domain) and self._command_affects_domain(command)
-
-        with self._lock:
-            if exec_key in self._executing:
-                return
-            self._executing.add(exec_key)
-            if is_high:
-                self._counter_inc(self._pending_high_by_session, session.id)
-                if domain_sensitive:
-                    self._counter_inc(self._pending_high_by_domain, domain)
-
-        def _run():
-            acquired = False
-            moved_running = False
-            focus_emulation_applied = False
-            cmd_task_id = f"cmd_{command['id'][:8]}_{int(time.time() * 1000)}"
-            trigger = command.get("trigger", {}) or {}
-            acquire_timeout = max(1.0, self._coerce_float(trigger.get("acquire_timeout_sec", 20), 20.0))
-            deadline = time.time() + acquire_timeout
-
-            try:
-                while time.time() < deadline:
-                    if is_high and domain_sensitive:
-                        if self._has_busy_peer_on_domain(domain, exclude_session_id=session.id):
-                            time.sleep(0.05)
-                            continue
-
-                    if not is_high:
-                        try:
-                            from app.services.request_manager import request_manager
-                            status_counts = (request_manager.get_status() or {}).get("status_counts", {})
-                            queued_count = int(status_counts.get("queued", 0) or 0)
-                            if queued_count > 0:
-                                time.sleep(0.05)
-                                continue
-                        except Exception:
-                            pass
-
-                    if hasattr(session, "acquire_for_command") and session.acquire_for_command(cmd_task_id):
-                        acquired = True
-                        break
-                    status_value = str(getattr(getattr(session, "status", None), "value", "")).lower()
-                    if status_value in {"closed", "error"}:
-                        break
-                    time.sleep(0.05)
-
-                if not acquired:
-                    logger.info(
-                        f"[CMD] skip (tab busy/timeout): {command.get('name')} "
-                        f"priority={priority}, timeout={acquire_timeout}s, tab={session.id}"
-                    )
-                    self._finalize_request_count_trigger_state(command, session, rollback=True)
-                    self._reset_page_check_latch(command, session, reason="acquire_timeout")
-                    return
-
-                self._finalize_request_count_trigger_state(command, session, rollback=False)
-
-                # Optional focus behavior: disabled by default to avoid stealing user focus.
-                if self._activate_tab_on_command:
-                    try:
-                        browser = self._get_browser()
-                        pool = getattr(browser, "_tab_pool", None)
-                        active_id = getattr(pool, "_active_session_id", None) if pool is not None else None
-                        if active_id != session.id and hasattr(session, "activate"):
-                            session.activate()
-                            if pool is not None:
-                                pool._active_session_id = session.id
-                    except Exception as e:
-                        logger.debug(f"[CMD] activate target tab failed (ignored): {e}")
-                elif self._use_focus_emulation_on_command:
-                    self._set_focus_emulation(session, True)
-                    focus_emulation_applied = True
-
-                if is_high:
-                    with self._lock:
-                        self._counter_dec(self._pending_high_by_session, session.id)
-                        self._counter_inc(self._running_high_by_session, session.id)
-                        if domain_sensitive:
-                            self._counter_dec(self._pending_high_by_domain, domain)
-                            self._counter_inc(self._running_high_by_domain, domain)
-                    moved_running = True
-
-                execution_result = self._execute_command(command, session, chain=chain)
-                if self._execution_needs_page_check_retry(execution_result):
-                    self._reset_page_check_latch(command, session, reason="execution_not_ok")
-            except Exception as e:
-                logger.error(f"[CMD] command execution failed [{command.get('name')}]: {e}")
-                if not acquired:
-                    self._finalize_request_count_trigger_state(command, session, rollback=True)
-                self._reset_page_check_latch(command, session, reason="execution_exception")
-            finally:
-                if focus_emulation_applied:
-                    self._set_focus_emulation(session, False)
-                if acquired:
-                    try:
-                        browser = self._get_browser()
-                        pool = getattr(browser, "_tab_pool", None)
-                        if pool is not None and hasattr(pool, "release"):
-                            pool.release(session.id, check_triggers=False)
-                        else:
-                            session.release(clear_page=False, check_triggers=False)
-                    except Exception as e:
-                        logger.debug(f"[CMD] command release failed (ignored): {e}")
-
-                with self._lock:
-                    if is_high:
-                        if moved_running:
-                            self._counter_dec(self._running_high_by_session, session.id)
-                            if domain_sensitive:
-                                self._counter_dec(self._running_high_by_domain, domain)
-                        else:
-                            self._counter_dec(self._pending_high_by_session, session.id)
-                            if domain_sensitive:
-                                self._counter_dec(self._pending_high_by_domain, domain)
-                    self._executing.discard(exec_key)
-
-        thread = threading.Thread(
-            target=_run,
-            daemon=True,
-            name=f"cmd-{command['id'][:8]}"
-        )
-        thread.start()
-
-    def _execute_command(
-        self,
-        command: Dict,
-        session: 'TabSession',
-        chain: Optional[List[str]] = None,
-    ) -> Dict[str, Any]:
-        cmd_name = command.get("name", "未命名")
-        mode = command.get("mode", "simple")
-
-        logger.debug(f"[CMD] ▶ 执行: {cmd_name} (mode={mode}, tab={session.id})")
-        self._suspend_tab_global_network(session, reason=f"command:{command.get('id', '')}")
-        try:
-            self._update_trigger_stats(command["id"])
-
-            execution_result: Dict[str, Any]
-            if mode == "advanced":
-                execution_result = self._execute_advanced(command, session)
-            else:
-                execution_result = self._execute_simple(command, session)
-
-            self._record_command_result(command, session, execution_result)
-
-            logger.debug(f"[CMD] ✅ 完成: {cmd_name}")
-            self._trigger_chained_commands(command, session, chain=chain)
-            self._trigger_result_match_commands(command, session, chain=chain)
-            return execution_result
-        finally:
-            self._resume_tab_global_network(session, reason=f"command:{command.get('id', '')}")
-
-    def _execute_simple(self, command: Dict, session: 'TabSession') -> Dict[str, Any]:
-        actions = command.get("actions", [])
-        step_results: List[Dict[str, Any]] = []
-        last_result: Any = ""
-
-        for i, action in enumerate(actions):
-            action_type = action.get("type", "")
-            action_ref = str(action.get("action_id") or f"step_{i + 1}")
-            logger.debug(f"[CMD] 步骤 {i + 1}/{len(actions)}: {action_type}")
-            try:
-                action_result = self._execute_action(action, session)
-                last_result = action_result
-                step_results.append({
-                    "index": i,
-                    "action_ref": action_ref,
-                    "type": action_type,
-                    "result": action_result,
-                    "ok": True,
-                })
-            except CommandFlowAbort as e:
-                last_result = str(e)
-                step_results.append({
-                    "index": i,
-                    "action_ref": action_ref,
-                    "type": action_type,
-                    "result": last_result,
-                    "ok": False,
-                })
-                logger.info(f"[CMD] 动作链提前结束: {e}")
-                break
-            except Exception as e:
-                logger.error(f"[CMD] 步骤 {i + 1} 失败 ({action_type}): {e}")
-                last_result = f"ERROR: {e}"
-                step_results.append({
-                    "index": i,
-                    "action_ref": action_ref,
-                    "type": action_type,
-                    "result": last_result,
-                    "ok": False,
-                })
-
-        return {
-            "mode": "simple",
-            "result": last_result,
-            "steps": step_results,
-        }
-
-    def _execute_action(self, action: Dict, session: 'TabSession') -> Any:
-        action_type = action.get("type", "")
-        tab = session.tab
-
-        if action_type == "clear_cookies":
-            try:
-                tab.run_js(
-                    "document.cookie.split(';').forEach(c => "
-                    "document.cookie = c.trim().split('=')[0] + "
-                    "'=;expires=Thu, 01 Jan 1970 00:00:00 UTC;path=/;')"
-                )
-                logger.debug("[CMD] Cookies 已清除")
-                return "cookies_cleared"
-            except Exception as e:
-                logger.warning(f"[CMD] 清除 Cookies 失败: {e}")
-                return f"cookies_clear_failed: {e}"
-
-        elif action_type == "refresh_page":
-            try:
-                tab.refresh()
-                time.sleep(2)
-                logger.debug("[CMD] 页面已刷新")
-                return "page_refreshed"
-            except Exception as e:
-                logger.warning(f"[CMD] 刷新页面失败: {e}")
-                return f"refresh_failed: {e}"
-
-        elif action_type == "new_chat":
-            try:
-                engine = self._get_config_engine()
-                domain = session.current_domain or ""
-                site_data = engine._get_site_data(domain, session.preset_name)
-                if site_data:
-                    selector = site_data.get("selectors", {}).get("new_chat_btn", "")
-                    if selector:
-                        ele = tab.ele(selector, timeout=3)
-                        if ele:
-                            ele.click()
-                            time.sleep(1)
-                            logger.debug("[CMD] 新建对话完成")
-                            return "new_chat_clicked"
-                        else:
-                            logger.warning("[CMD] 新建对话按钮未找到")
-                            return "new_chat_button_not_found"
-                    else:
-                        logger.warning("[CMD] 未配置 new_chat_btn 选择器")
-                        return "new_chat_selector_missing"
-            except Exception as e:
-                logger.warning(f"[CMD] 新建对话失败: {e}")
-                return f"new_chat_failed: {e}"
-
-        elif action_type == "run_js":
-            code = action.get("code", "")
-            if code:
-                try:
-                    result = tab.run_js(code)
-                    logger.debug(f"[CMD] JS 执行完成: {str(result)[:100]}")
-                    return result
-                except Exception as e:
-                    logger.warning(f"[CMD] JS 执行失败: {e}")
-                    return f"js_failed: {e}"
-            return ""
-
-        elif action_type == "wait":
-            seconds = float(action.get("seconds", 1))
-            time.sleep(seconds)
-            logger.debug(f"[CMD] 等待 {seconds}s")
-            return f"waited:{seconds}"
-
-        elif action_type in {"execute_preset", "switch_preset"}:
-            return self._execute_preset_action(action, session)
-
-        elif action_type == "execute_workflow":
-            return self._execute_workflow_action(action, session)
-
-        elif action_type == "navigate":
-            url = action.get("url", "")
-            if url:
-                try:
-                    tab.get(url)
-                    time.sleep(2)
-                    logger.debug(f"[CMD] 已导航到: {url}")
-                    return f"navigated:{url}"
-                except Exception as e:
-                    logger.warning(f"[CMD] 导航失败: {e}")
-                    return f"navigate_failed:{e}"
-            return "navigate_skipped"
-
-        elif action_type == "switch_proxy":
-            return self._execute_switch_proxy(action, session)
-
-        elif action_type == "send_webhook":
-            return self._execute_webhook_action(action, session)
-
-        elif action_type == "execute_command_group":
-            return self._execute_command_group_action(action, session)
-
-        elif action_type == "abort_task":
-            result = self._execute_abort_task(action, session)
-            if bool(action.get("stop_actions", True)):
-                raise CommandFlowAbort("abort_task_triggered")
-            return result
-
-        elif action_type == "release_tab_lock":
-            result = self._execute_release_tab_lock(action, session)
-            if bool(action.get("stop_actions", True)):
-                raise CommandFlowAbort("release_tab_lock_triggered")
-            return result
-
-        else:
-            logger.warning(f"[CMD] 未知动作类型: {action_type}")
-            return ""
-
-    def _execute_preset_action(self, action: Dict, session: 'TabSession') -> Dict[str, Any]:
-        """执行预设动作，兼容旧版 switch_preset。"""
-        preset_name = str(action.get("preset_name", "")).strip()
-        if not preset_name:
-            logger.warning("[CMD] 预设名称为空，跳过执行")
-            return {"ok": False, "error": "empty_preset"}
-
-        try:
-            browser = self._get_browser()
-            browser.tab_pool.set_tab_preset(
-                session.persistent_index, preset_name
-            )
-            logger.debug(f"[CMD] 预设已切换: {preset_name}")
-            return {"ok": True, "preset": preset_name}
-        except Exception as e:
-            logger.warning(f"[CMD] 切换预设失败: {e}")
-            return {"ok": False, "error": str(e)}
-
-    def _execute_workflow_action(self, action: Dict, session: 'TabSession') -> Dict[str, Any]:
-        """在当前标签页上立即执行目标预设的工作流。"""
-        try:
-            browser = self._get_browser()
-            preset_name = str(action.get("preset_name", "")).strip()
-            prompt = str(action.get("prompt", ""))
-            timeout_default_raw = os.getenv("CMD_EXECUTE_WORKFLOW_TIMEOUT_SEC", "45")
-            timeout_sec = max(
-                1.0,
-                self._coerce_float(action.get("timeout_sec", timeout_default_raw), 45.0)
-            )
-            started_at = time.time()
-            deadline = started_at + timeout_sec
-            timed_out = False
-
-            def _action_stop_checker() -> bool:
-                nonlocal timed_out
-                if time.time() >= deadline:
-                    timed_out = True
-                    return True
-                return False
-
-            if preset_name:
-                effective_preset = preset_name
-                logger.debug(
-                    f"[CMD] 开始执行工作流: tab=#{session.persistent_index}, "
-                    f"preset={effective_preset}, timeout={timeout_sec}s"
-                )
-
-                messages = [{"role": "user", "content": prompt}]
-                for chunk in browser._execute_workflow_non_stream(
-                    session,
-                    messages,
-                    preset_name=preset_name,
-                    stop_checker=_action_stop_checker,
-                ):
-                    payload = chunk[6:].strip() if chunk.startswith("data: ") else chunk
-                    if not payload:
-                        continue
-                    try:
-                        data = json.loads(payload)
-                    except Exception:
-                        continue
-                    if isinstance(data, dict) and data.get("error"):
-                        logger.warning(f"[CMD] 工作流返回错误: {data['error']}")
-                        return {"ok": False, "error": data["error"]}
-                if timed_out:
-                    logger.warning(
-                        f"[CMD] 工作流执行超时: tab=#{session.persistent_index}, "
-                        f"preset={effective_preset}, timeout={timeout_sec}s"
-                    )
-                    return {
-                        "ok": False,
-                        "error": f"workflow_timeout:{timeout_sec}s",
-                        "timeout": timeout_sec,
-                        "preset": effective_preset,
-                    }
-
-                logger.debug(
-                    f"[CMD] 工作流执行完成: tab=#{session.persistent_index}, preset={effective_preset}"
-                )
-                return {"ok": True, "preset": effective_preset}
-
-            effective_preset = session.preset_name or "主预设"
-            logger.debug(
-                f"[CMD] 开始执行工作流: tab=#{session.persistent_index}, "
-                f"preset={effective_preset}, timeout={timeout_sec}s"
-            )
-
-            messages = [{"role": "user", "content": prompt}]
-            for chunk in browser._execute_workflow_non_stream(
-                session,
-                messages,
-                stop_checker=_action_stop_checker,
-            ):
-                payload = chunk[6:].strip() if chunk.startswith("data: ") else chunk
-                if not payload:
-                    continue
-                try:
-                    data = json.loads(payload)
-                except Exception:
-                    continue
-                if isinstance(data, dict) and data.get("error"):
-                    logger.warning(f"[CMD] 工作流返回错误: {data['error']}")
-                    return {"ok": False, "error": data["error"]}
-            if timed_out:
-                logger.warning(
-                    f"[CMD] 工作流执行超时: tab=#{session.persistent_index}, "
-                    f"preset={effective_preset}, timeout={timeout_sec}s"
-                )
-                return {
-                    "ok": False,
-                    "error": f"workflow_timeout:{timeout_sec}s",
-                    "timeout": timeout_sec,
-                    "preset": effective_preset,
-                }
-
-            logger.debug(
-                f"[CMD] 工作流执行完成: tab=#{session.persistent_index}, preset={effective_preset}"
-            )
-            return {"ok": True, "preset": effective_preset}
-        except Exception as e:
-            logger.warning(f"[CMD] 执行工作流失败: {e}")
-            return {"ok": False, "error": str(e)}
-
-    def _build_template_context(self, session: 'TabSession') -> Dict[str, Any]:
-        latest_event = self._get_latest_network_event(session.id) or {}
-        return {
-            "tab_id": session.id,
-            "tab_index": session.persistent_index,
-            "domain": session.current_domain or "",
-            "preset": session.preset_name or "主预设",
-            "request_count": session.request_count,
-            "error_count": session.error_count,
-            "task_id": session.current_task_id or "",
-            "timestamp": int(time.time()),
-            "iso_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
-            "network_url": str(latest_event.get("url", "") or ""),
-            "network_status": str(latest_event.get("status", "") or ""),
-            "network_method": str(latest_event.get("method", "") or ""),
-        }
-
-    def _render_template(self, template: Any, context: Dict[str, Any]) -> str:
-        raw = str(template or "")
-
-        def _replace(match: re.Match) -> str:
-            key = match.group(1).strip()
-            return str(context.get(key, ""))
-
-        return re.sub(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}", _replace, raw)
-
-    def _parse_json_or_string(self, raw: str) -> Any:
-        text = str(raw or "").strip()
-        if not text:
-            return ""
-        if text.startswith("{") or text.startswith("["):
-            try:
-                return json.loads(text)
-            except Exception:
-                return text
-        return text
-
-    def _execute_webhook_action(self, action: Dict, session: 'TabSession') -> Dict[str, Any]:
-        if not HAS_REQUESTS:
-            logger.error("[CMD] send_webhook 需要 requests 库，请运行: pip install requests")
-            return {"ok": False, "error": "requests_not_installed"}
-
-        ctx = self._build_template_context(session)
-        method = str(action.get("method", "POST") or "POST").strip().upper()
-        timeout = float(action.get("timeout", 8))
-        url = self._render_template(action.get("url", ""), ctx).strip()
-        if not url:
-            logger.warning("[CMD] Webhook URL 为空，跳过执行")
-            return {"ok": False, "error": "empty_url"}
-
-        payload_text = self._render_template(action.get("payload", ""), ctx)
-        payload = self._parse_json_or_string(payload_text)
-
-        raw_headers = action.get("headers")
-        headers: Dict[str, str] = {}
-        if isinstance(raw_headers, dict):
-            for key, value in raw_headers.items():
-                headers[str(key)] = self._render_template(value, ctx)
-        elif isinstance(raw_headers, str) and raw_headers.strip():
-            parsed = self._parse_json_or_string(self._render_template(raw_headers, ctx))
-            if isinstance(parsed, dict):
-                headers = {str(k): str(v) for k, v in parsed.items()}
-
-        request_kwargs: Dict[str, Any] = {
-            "method": method,
-            "url": url,
-            "timeout": timeout,
-            "headers": headers or None,
-        }
-
-        if method == "GET":
-            if isinstance(payload, dict):
-                request_kwargs["params"] = payload
-            elif payload:
-                request_kwargs["params"] = {"payload": payload}
-        else:
-            if isinstance(payload, (dict, list)):
-                request_kwargs["json"] = payload
-            elif payload:
-                request_kwargs["data"] = payload
-
-        try:
-            response = requests.request(**request_kwargs)
-            if bool(action.get("raise_for_status", False)):
-                response.raise_for_status()
-
-            logger.info(f"[CMD] Webhook 已发送: {method} {url} -> {response.status_code}")
-            return {
-                "ok": response.ok,
-                "status_code": response.status_code,
-                "url": url,
-                "body_preview": response.text[:200],
-            }
-        except Exception as e:
-            logger.warning(f"[CMD] Webhook 发送失败: {e}")
-            return {"ok": False, "error": str(e), "url": url}
-
-    def _execute_command_group_action(self, action: Dict, session: 'TabSession') -> Dict[str, Any]:
-        group_name = self._normalize_group_name(action.get("group_name"))
-        include_disabled = bool(action.get("include_disabled", False))
-        if not group_name:
-            logger.warning("[CMD] execute_command_group 缺少 group_name，跳过执行")
-            return {"ok": False, "error": "empty_group_name"}
-
-        logger.info(f"[CMD] 执行命令组动作: {group_name} (include_disabled={include_disabled})")
-        return self.execute_command_group(
-            group_name=group_name,
-            session=session,
-            include_disabled=include_disabled,
-        )
-
-    def _execute_abort_task(self, action: Dict, session: 'TabSession') -> Dict[str, Any]:
-        reason = str(action.get("reason", "abort_task_action")).strip() or "abort_task_action"
-        cancelled = False
-        try:
-            from app.services.request_manager import request_manager
-            cancelled = request_manager.cancel_current(reason)
-        except Exception as e:
-            logger.debug(f"[CMD] 取消请求失败（可忽略）: {e}")
-
-        try:
-            if hasattr(session.tab, "stop_loading"):
-                session.tab.stop_loading()
-            session.tab.run_js("if (window.stop) { window.stop(); }")
-        except Exception:
-            pass
-
-        logger.info(f"[CMD] 中断任务动作已执行 (cancelled={cancelled}, reason={reason})")
-        return {"ok": True, "cancelled": cancelled, "reason": reason}
-
-    def _execute_release_tab_lock(self, action: Dict, session: 'TabSession') -> Dict[str, Any]:
-        """
-        解除当前标签页占用：
-        - 尝试取消该标签页关联请求；
-        - 强制释放标签页 BUSY 状态；
-        - 可选重置到 about:blank。
-        """
-        reason = str(action.get("reason", "release_tab_lock_action")).strip() or "release_tab_lock_action"
-        clear_page = bool(action.get("clear_page", True))
-        try:
-            browser = self._get_browser()
-            pool = browser.tab_pool
-            result = pool.terminate_by_index(
-                session.persistent_index,
-                reason=reason,
-                clear_page=clear_page,
-            )
-            logger.info(
-                f"[CMD] 解除标签页占用完成: tab=#{session.persistent_index}, "
-                f"cancelled={result.get('cancelled')}, status={result.get('status')}, reason={reason}"
-            )
-            return result
-        except Exception as e:
-            logger.warning(f"[CMD] 解除标签页占用失败: {e}")
-            return {"ok": False, "error": str(e), "reason": reason}
-
-    # ================= 代理切换 =================
-
-    def _execute_switch_proxy(self, action: Dict, session: 'TabSession') -> Dict[str, Any]:
-        """
-        执行代理节点切换（通过 Clash API）
-        """
-        if not HAS_REQUESTS:
-            logger.error("[CMD] 切换代理需要 requests 库，请运行: pip install requests")
-            return {"ok": False, "error": "requests_not_installed"}
-
-        # 读取配置
-        clash_api = action.get("clash_api", "http://127.0.0.1:9090").rstrip("/")
-        clash_secret = action.get("clash_secret", "")
-        selector = action.get("selector", "Proxy")
-        mode = action.get("mode", "random")
-        node_name = action.get("node_name", "")
-        exclude_str = action.get("exclude_keywords", "DIRECT,REJECT,GLOBAL,自动选择,故障转移")
-        refresh_after = action.get("refresh_after", True)
-
-        exclude_keywords = [k.strip() for k in exclude_str.split(",") if k.strip()]
-
-        headers = {"Content-Type": "application/json"}
-        if clash_secret:
-            headers["Authorization"] = f"Bearer {clash_secret}"
-
-        try:
-            resp = requests.get(
-                f"{clash_api}/proxies/{selector}",
-                headers=headers,
-                timeout=5
-            )
-
-            if resp.status_code == 404:
-                logger.error(f"[CMD] 代理组 '{selector}' 不存在，请检查 Clash 配置")
-                return {"ok": False, "error": "proxy_group_not_found"}
-
-            resp.raise_for_status()
-            data = resp.json()
-
-            current_node = data.get("now", "")
-            all_nodes = data.get("all", [])
-
-            available = []
-            for node in all_nodes:
-                should_exclude = False
-                for keyword in exclude_keywords:
-                    if keyword and keyword in node:
-                        should_exclude = True
-                        break
-                if not should_exclude:
-                    available.append(node)
-
-            if not available:
-                logger.warning("[CMD] 没有可用的代理节点")
-                return {"ok": False, "error": "no_available_nodes"}
-
-            new_node = None
-
-            if mode == "specific":
-                if node_name in available:
-                    new_node = node_name
-                else:
-                    logger.warning(f"[CMD] 指定节点 '{node_name}' 不可用，回退到随机模式")
-                    mode = "random"
-
-            if mode == "random":
-                candidates = [n for n in available if n != current_node]
-                if candidates:
-                    new_node = random.choice(candidates)
-                else:
-                    new_node = random.choice(available)
-
-            elif mode == "round_robin":
-                try:
-                    current_idx = available.index(current_node)
-                    next_idx = (current_idx + 1) % len(available)
-                    new_node = available[next_idx]
-                except ValueError:
-                    new_node = available[0]
-
-            if not new_node:
-                logger.warning("[CMD] 无法选择新节点")
-                return {"ok": False, "error": "cannot_pick_node"}
-
-            if new_node == current_node:
-                logger.info(f"[CMD] 当前已是节点: {current_node}，跳过切换")
-                return {"ok": True, "switched": False, "node": current_node}
-
-            switch_resp = requests.put(
-                f"{clash_api}/proxies/{selector}",
-                json={"name": new_node},
-                headers=headers,
-                timeout=5
-            )
-            switch_resp.raise_for_status()
-
-            logger.info(f"[CMD] ✅ 代理已切换: {current_node} → {new_node}")
-
-            if refresh_after:
-                time.sleep(1)
-                try:
-                    session.tab.refresh()
-                    time.sleep(2)
-                    logger.debug("[CMD] 页面已刷新")
-                except Exception as e:
-                    logger.warning(f"[CMD] 刷新页面失败: {e}")
-
-            return {
-                "ok": True,
-                "switched": True,
-                "from": current_node,
-                "to": new_node,
-            }
-
-        except requests.exceptions.ConnectionError:
-            logger.error(f"[CMD] ❌ 无法连接到 Clash API ({clash_api})，请检查 Clash 是否运行")
-            return {"ok": False, "error": "connection_error"}
-        except requests.exceptions.Timeout:
-            logger.error("[CMD] ❌ Clash API 请求超时")
-            return {"ok": False, "error": "timeout"}
-        except requests.exceptions.HTTPError as e:
-            logger.error(f"[CMD] ❌ Clash API 错误: {e}")
-            return {"ok": False, "error": str(e)}
-        except Exception as e:
-            logger.error(f"[CMD] ❌ 切换代理失败: {e}")
-            return {"ok": False, "error": str(e)}
-
-    # ================= 高级模式 =================
-
-    def _execute_advanced(self, command: Dict, session: 'TabSession') -> Dict[str, Any]:
-        script = command.get("script", "")
-        lang = command.get("script_lang", "javascript")
-
-        if not script.strip():
-            logger.warning("[CMD] 高级模式脚本为空")
-            return {"mode": "advanced", "result": "", "steps": []}
-
-        if lang == "javascript":
-            try:
-                result = session.tab.run_js(script)
-                logger.info(f"[CMD] JS 脚本执行完成: {str(result)[:200]}")
-                return {"mode": "advanced", "result": result, "steps": []}
-            except Exception as e:
-                logger.error(f"[CMD] JS 脚本执行失败: {e}")
-                return {"mode": "advanced", "result": f"js_failed: {e}", "steps": []}
-
-        if lang == "python":
-            import json as json_module
-            context = {
-                "tab": session.tab,
-                "session": session,
-                "browser": self._get_browser(),
-                "config_engine": self._get_config_engine(),
-                "logger": logger,
-                "time": time,
-                "json": json_module,
-                "result": "",
-            }
-            try:
-                exec(script, {"__builtins__": __builtins__}, context)
-                logger.info("[CMD] Python 脚本执行完成")
-                return {"mode": "advanced", "result": context.get("result", ""), "steps": []}
-            except Exception as e:
-                logger.error(f"[CMD] Python 脚本执行失败: {e}")
-                return {"mode": "advanced", "result": f"python_failed: {e}", "steps": []}
-
-        logger.warning(f"[CMD] 不支持的脚本语言: {lang}")
-        return {"mode": "advanced", "result": f"unsupported_lang:{lang}", "steps": []}
-
-    # ================= 统计 =================
-
-    def _update_trigger_stats(self, command_id: str):
-        with self._commands_lock:
-            commands = self._load_commands()
-
-            for cmd in commands:
-                if cmd.get("id") == command_id:
-                    cmd["last_triggered"] = time.time()
-                    cmd["trigger_count"] = cmd.get("trigger_count", 0) + 1
-                    break
-
-            self._save_commands(commands)
-
-    # ================= 元信息 =================
-
-    def get_trigger_types(self) -> Dict[str, str]:
-        return copy.deepcopy(TRIGGER_TYPES)
-
-    def get_action_types(self) -> Dict[str, str]:
-        return copy.deepcopy(ACTION_TYPES)
-
-    def get_trigger_states(self) -> Dict[str, Any]:
-        result = {}
-        for (cmd_id, tab_id), state in self._trigger_states.items():
-            result[f"{cmd_id}:{tab_id}"] = state
-        return result
 
 
 # ================= 单例 =================

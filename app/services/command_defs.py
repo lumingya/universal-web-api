@@ -11,35 +11,39 @@ import uuid
 from typing import Any, Dict
 
 TRIGGER_TYPES = {
-    "request_count": "对话次数达到阈值",
-    "error_count": "连续错误次数达到阈值",
-    "idle_timeout": "标签页空闲超过指定时间（秒）",
-    "page_check": "页面出现指定内容（如 Cloudflare 验证）",
-    "command_triggered": "当指定命令触发后执行",
-    "command_result_match": "命令执行结果匹配",
-    "network_request_error": "网络请求异常拦截",
+    "request_count": "请求计数",
+    "error_count": "错误计数",
+    "idle_timeout": "空闲超时",
+    "page_check": "页面检查，适合 Cloudflare 场景",
+    "command_triggered": "命令已触发",
+    "command_result_match": "结果匹配",
+    "command_result_event": "结果事件",
+    "network_request_error": "网络异常",
 }
 
 ACTION_TYPES = {
-    "clear_cookies": "清除当前标签页的 Cookie",
+    "clear_cookies": "清除 Cookie",
     "refresh_page": "刷新页面",
-    "new_chat": "点击新建对话按钮",
-    "run_js": "在页面中执行 JavaScript",
-    "wait": "等待指定秒数",
+    "new_chat": "新建对话",
+    "run_js": "执行 JavaScript",
+    "wait": "等待",
     "execute_preset": "切换预设",
     "execute_workflow": "执行工作流",
-    "switch_preset": "切换标签页预设",
-    "navigate": "导航到指定 URL",
-    "switch_proxy": "切换代理节点（Clash）",
-    "send_webhook": "发送 Webhook / 外部请求",
+    "switch_preset": "切换预设",
+    "navigate": "跳转 URL",
+    "switch_proxy": "切换 Clash 代理",
+    "send_webhook": "发送 Webhook / 通知",
+    "send_napcat": "发送 NapCat QQ 消息",
     "execute_command_group": "执行命令组",
-    "abort_task": "中断当前任务",
-    "release_tab_lock": "解除当前标签页占用",
+    "abort_task": "中断任务",
+    "release_tab_lock": "解除标签页占用",
+    "click_element": "点击元素",
+    "click_coordinates": "点击坐标",
 }
 
 
 class CommandFlowAbort(Exception):
-    """用于中断当前命令后续动作的内部控制异常。"""
+    """用于在动作链中提前中断后续步骤。"""
     pass
 
 
@@ -48,7 +52,7 @@ def _new_command_id() -> str:
 
 
 def get_default_command() -> Dict[str, Any]:
-    """获取默认命令结构"""
+    """返回默认命令结构。"""
     return {
         "id": _new_command_id(),
         "name": "新命令",
@@ -64,10 +68,16 @@ def get_default_command() -> Dict[str, Any]:
             "match_mode": "keyword",
             "status_codes": "403,429,500,502,503,504",
             "abort_on_match": True,
+            "command_ids": [],
+            "listen_all_commands": False,
+            "informative_only": True,
             "scope": "all",
             "domain": "",
             "tab_index": None,
             "priority": 2,
+            "allow_during_workflow": True,
+            "interrupt_policy": "auto",
+            "interrupt_message": "",
         },
         "actions": [
             {"type": "clear_cookies"},

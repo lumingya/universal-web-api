@@ -192,6 +192,21 @@ class RequestManager:
         """标记请求开始执行"""
         ctx.mark_running(tab_id)
         # 日志由调用方在上下文中记录，这里不再重复
+
+    def bind_tab(self, request_id: str, tab_id: str) -> bool:
+        """为已创建/运行中的请求补绑真实标签页 ID。"""
+        if not request_id or not tab_id:
+            return False
+
+        with self._requests_lock:
+            ctx = self._requests.get(request_id)
+
+        if not ctx or ctx.is_terminal():
+            return False
+
+        with ctx._lock:
+            ctx.tab_id = tab_id
+        return True
     
     def finish_request(self, ctx: RequestContext, success: bool = True):
         """标记请求结束"""
@@ -227,12 +242,14 @@ class RequestManager:
         with self._requests_lock:
             return self._requests.get(request_id)
     
-    def get_running_requests(self) -> list:
+    def get_running_requests(self, tab_id: str = None) -> list:
         """获取所有正在执行的请求"""
+        target_tab_id = str(tab_id or "").strip()
         with self._requests_lock:
             return [
                 ctx for ctx in self._requests.values()
                 if ctx.status == RequestStatus.RUNNING
+                and (not target_tab_id or str(ctx.tab_id or "").strip() == target_tab_id)
             ]
     
     def get_status(self) -> Dict[str, Any]:
@@ -270,25 +287,28 @@ class RequestManager:
                 for ctx in self._requests.values()
             )
     
-    def get_current_request_id(self) -> Optional[str]:
+    def get_current_request_id(self, tab_id: str = None) -> Optional[str]:
         """兼容旧接口 - 获取当前执行的请求ID（返回第一个）"""
+        target_tab_id = str(tab_id or "").strip()
         with self._requests_lock:
             for ctx in self._requests.values():
-                if ctx.status == RequestStatus.RUNNING:
+                if ctx.status == RequestStatus.RUNNING and (
+                    not target_tab_id or str(ctx.tab_id or "").strip() == target_tab_id
+                ):
                     return ctx.request_id
             return None
-    
-    def cancel_current(self, reason: str = "manual") -> bool:
-        """取消当前正在执行的请求（取消所有运行中的）"""
+
+    def cancel_current(self, reason: str = "manual", tab_id: str = None) -> bool:
+        """取消当前正在执行的请求。传入 tab_id 时仅取消该标签页关联请求。"""
         cancelled = False
-        for ctx in self.get_running_requests():
+        for ctx in self.get_running_requests(tab_id=tab_id):
             if self.cancel_request(ctx.request_id, reason):
                 cancelled = True
         return cancelled
     
-    def force_release(self) -> bool:
-        """兼容旧接口 - 强制取消所有运行中的请求"""
-        return self.cancel_current("force_release")
+    def force_release(self, tab_id: str = None) -> bool:
+        """兼容旧接口 - 强制取消运行中的请求。传入 tab_id 时仅取消该标签页请求。"""
+        return self.cancel_current("force_release", tab_id=tab_id)
 
 
 # ================= 全局单例 =================

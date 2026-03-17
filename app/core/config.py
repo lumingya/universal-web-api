@@ -20,6 +20,7 @@ import logging
 import sys
 import threading
 import uuid
+import ctypes
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from functools import lru_cache
@@ -342,6 +343,111 @@ class _WebLogHandler(logging.Handler):
             self.handleError(record)
 
 
+def _enable_windows_ansi() -> bool:
+    """在 Windows 控制台中尽量启用 ANSI 颜色支持。"""
+    if os.name != "nt":
+        return True
+
+    try:
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
+        if handle in (0, -1):
+            return False
+
+        mode = ctypes.c_uint()
+        if kernel32.GetConsoleMode(handle, ctypes.byref(mode)) == 0:
+            return False
+
+        ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
+        if mode.value & ENABLE_VIRTUAL_TERMINAL_PROCESSING:
+            return True
+
+        return kernel32.SetConsoleMode(
+            handle,
+            mode.value | ENABLE_VIRTUAL_TERMINAL_PROCESSING
+        ) != 0
+    except Exception:
+        return False
+
+
+def _should_use_console_color() -> bool:
+    """判断当前控制台是否应启用 ANSI 颜色。"""
+    if os.environ.get("NO_COLOR"):
+        return False
+
+    if os.name == "nt":
+        if _enable_windows_ansi():
+            return True
+
+        # Windows Terminal / ANSICON / ConEmu 等环境通常已支持 ANSI，
+        # 即使 sys.stdout.isatty() 或 GetConsoleMode 判断不稳定，也可直接输出颜色。
+        if os.environ.get("WT_SESSION"):
+            return True
+        if os.environ.get("ANSICON"):
+            return True
+        if os.environ.get("ConEmuANSI", "").upper() == "ON":
+            return True
+        if os.environ.get("TERM_PROGRAM") == "vscode":
+            return True
+        return False
+
+    return bool(getattr(sys.stdout, "isatty", lambda: False)())
+
+
+class _ConsoleColorFormatter(logging.Formatter):
+    """仅用于控制台输出的彩色格式化器。"""
+
+    RESET = "\033[0m"
+    COLORS = {
+        "ERROR": "\033[31m",
+        "WARN": "\033[33m",
+        "KEY": "\033[94m",
+        "INFO": "\033[92m",
+    }
+    KEY_PATTERNS = (
+        "[CMD] ▶ 执行:",
+        "[CMD] 执行:",
+        "[CMD] 开始执行工作流:",
+        "[CMD] 触发命令:",
+        "[CMD] 链式触发:",
+        "[CMD] 条件分支触发:",
+        "[CMD] 结果事件触发:",
+    )
+
+    def __init__(self):
+        super().__init__("%(message)s")
+        self._use_color = _should_use_console_color()
+
+    def _resolve_tone(self, record: logging.LogRecord, message: str) -> Optional[str]:
+        level = str(record.levelname or "").upper()
+        if level in ("ERROR", "CRITICAL"):
+            return "ERROR"
+        if level == "WARNING":
+            return "WARN"
+        if level == "DEBUG":
+            return None
+        if any(pattern in message for pattern in self.KEY_PATTERNS):
+            return "KEY"
+        if level == "INFO":
+            return "INFO"
+        return None
+
+    def format(self, record: logging.LogRecord) -> str:
+        message = super().format(record)
+        if not self._use_color:
+            return message
+
+        tone = self._resolve_tone(record, message)
+        if not tone:
+            return message
+
+        color = self.COLORS.get(tone)
+        if not color:
+            return message
+
+        return f"{color}{message}{self.RESET}"
+
+
 # 创建全局 Web 日志处理器
 _web_log_handler = _WebLogHandler()
 _web_log_handler.setLevel(
@@ -405,7 +511,7 @@ class SecureLogger:
         # 控制台输出 handler
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setLevel(level)
-        console_handler.setFormatter(logging.Formatter('%(message)s'))
+        console_handler.setFormatter(_ConsoleColorFormatter())
         logger.addHandler(console_handler)
         
         # Web 前端日志收集 handler（始终添加）
@@ -548,6 +654,15 @@ class SSEFormatter:
     def pack_error(message: str, error_type: str = "execution_error",
                    code: str = "workflow_failed") -> str:
         data = {
+            "id": f"chatcmpl-error-{int(time.time() * 1000)}",
+            "object": "chat.completion.chunk",
+            "created": int(time.time()),
+            "model": "web-browser",
+            "choices": [{
+                "index": 0,
+                "delta": {"content": f"[错误] {message}"},
+                "finish_reason": None
+            }],
             "error": {
                 "message": message,
                 "type": error_type,

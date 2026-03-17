@@ -1309,6 +1309,7 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
 
             <div class="note">
                 <p><strong>💡 page_check 匹配规则：</strong>默认检查 <code>document.body.innerText</code>，仅在正文不可用时回退到 <code>document.title</code>。英文关键词（如 <code>battle</code>）按单词边界匹配，减少误命中；且为边沿触发，同一关键词持续存在时只触发一次，消失后再次出现才会再次触发。</p>
+                <p style="margin-bottom: 0;"><strong>🔀 支持与/或表达式（自 2.5.9 起）：</strong>在"检查文本"中使用 <code>||</code> 表示"或"（任意一个关键词出现即触发），使用 <code>&amp;&amp;</code> 表示"且"（所有关键词同时出现才触发）。示例：<code>出了点问题 || 发生错误</code>（页面出现任一即触发）、<code>Cloudflare &amp;&amp; verify</code>（两个同时出现才触发）。不支持混用 <code>||</code> 和 <code>&amp;&amp;</code>，混用时按 <code>||</code> 优先拆分。</p>
             </div>
 
             <h3>作用范围</h3>
@@ -1324,13 +1325,13 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
 
             <h3>命令优先级与基准点</h3>
             <ul>
-                <li>每条命令可设置 <code>priority</code>（1-4，默认 2），数字越大优先级越高。</li>
+                <li>每条命令可设置 <code>priority</code>（任意整数，默认 2），数字越大优先级越高。</li>
                 <li>系统请求基准优先级由 <code>CMD_REQUEST_PRIORITY_BASELINE</code> 控制（默认 2）。</li>
                 <li>当命令优先级高于基准点时，命令会优先于新请求获取标签页执行。</li>
                 <li>高优先级命令若包含 <code>clear_cookies</code>，会等待同域忙碌标签页结束后再执行，降低对并行会话干扰。</li>
             </ul>
             <div class="note">
-                <p><strong>💡 环境变量示例：</strong>在 <code>.env</code> 中设置 <code>CMD_REQUEST_PRIORITY_BASELINE=2</code>（范围 1-4），修改后需重启服务。</p>
+                <p><strong>💡 环境变量示例：</strong>在 <code>.env</code> 中设置 <code>CMD_REQUEST_PRIORITY_BASELINE=2</code> 作为系统请求基准优先级，修改后需重启服务。</p>
             </div>
 
             <h3>内置动作（与代码一致）</h3>
@@ -1400,6 +1401,16 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
                     <td><code>release_tab_lock</code></td>
                     <td>强制解除当前标签页占用，可选清空页面并中断后续动作</td>
                     <td>原因标记、是否重置空白页、是否停止后续动作</td>
+                </tr>
+                <tr>
+                    <td><code>click_element</code></td>
+                    <td>点击指定元素</td>
+                    <td>元素选择器 (如 <code>#submit-btn</code>)</td>
+                </tr>
+                <tr>
+                    <td><code>click_coordinates</code></td>
+                    <td>精准点击指定坐标 (隐身防风控)</td>
+                    <td>X 坐标、Y 坐标</td>
                 </tr>
             </table>
 

@@ -384,7 +384,13 @@ class _GlobalNetworkInterceptionManager:
                 try:
                     response = tab.listen.wait(timeout=self._wait_timeout)
                 except Exception as e:
-                    logger.debug(f"[GlobalNet] wait 异常: {session_id}, err={e}")
+                    if stop_event.is_set() or self._is_shutdown():
+                        break
+                    err_text = str(e)
+                    if "NoneType" in err_text and "is_running" in err_text:
+                        logger.debug(f"[GlobalNet] 监听状态失效，准备重启: {session_id}")
+                    else:
+                        logger.debug(f"[GlobalNet] wait 异常: {session_id}, err={e}")
                     listening = False
                     self._safe_stop_listen(tab)
                     time.sleep(self._retry_delay)
@@ -1207,6 +1213,11 @@ class TabPoolManager:
         """Return a shallow snapshot of currently idle tab sessions."""
         with self._lock:
             return [s for s in self._tabs.values() if s.status == TabStatus.IDLE]
+
+    def get_sessions_snapshot(self) -> List[TabSession]:
+        """Return a shallow snapshot of all current tab sessions."""
+        with self._lock:
+            return list(self._tabs.values())
     
     def shutdown(self):
         with self._lock:

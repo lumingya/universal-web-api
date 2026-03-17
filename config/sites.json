@@ -305,7 +305,7 @@
           "mode": "all"
         },
         "file_paste": {
-          "enabled": true,
+          "enabled": false,
           "threshold": 180000,
           "hint_text": "完全专注于文件内容"
         }
@@ -320,11 +320,12 @@
           "input_box": "rich-textarea .ql-editor[contenteditable=\"true\"][role=\"textbox\"]",
           "send_btn": "button.send-button",
           "result_container": ".markdown-main-panel",
-          "new_chat_btn": "button.temp-chat-button",
+          "new_chat_btn": "[data-test-id=\"expanded-button\"]",
           "message_wrapper": null,
           "generating_indicator": "",
           "点击模型选择": "[data-test-id=\"logo-pill-label-container\"]",
-          "选择模型": ".mat-mdc-menu-item:nth-of-type(3)"
+          "选择模型": ".mat-mdc-menu-item:nth-of-type(3)",
+          "临时对话按钮": "button.temp-chat-button"
         },
         "stream_config": {
           "mode": "network",
@@ -355,7 +356,7 @@
           },
           {
             "action": "CLICK",
-            "target": "new_chat_btn",
+            "target": "临时对话按钮",
             "optional": true,
             "value": null
           },
@@ -423,7 +424,7 @@
           "message_wrapper": null,
           "generating_indicator": "",
           "点击模型选择": "[data-test-id=\"logo-pill-label-container\"]",
-          "选择模型": ".mat-mdc-menu-item:nth-of-type(2)"
+          "选择模型": ".mat-mdc-menu-item:nth-of-type(1)"
         },
         "stream_config": {
           "mode": "network",
@@ -784,12 +785,6 @@
             "value": null
           },
           {
-            "action": "KEY_PRESS",
-            "target": "Enter",
-            "optional": true,
-            "value": null
-          },
-          {
             "action": "WAIT",
             "target": "",
             "optional": false,
@@ -944,6 +939,50 @@
           "hint_text": "完全专注于文件内容"
         }
       },
+      "切换SideBySide": {
+        "selectors": {},
+        "workflow": [
+          {
+            "action": "JS_EXEC",
+            "target": "",
+            "optional": false,
+            "value": "return (async () => { const normalize = (text) => String(text || '').replace(/\\s+/g, ' ').trim(); const menuBtn = [...document.querySelectorAll('button[role=\"combobox\"]')].find((el) => { const text = normalize(el.textContent); return text.includes('Battle Mode') || text.includes('Side by Side'); }); if (!menuBtn) { return 'ARENA_MODE_MENU_NOT_FOUND'; } menuBtn.click(); await new Promise((resolve) => setTimeout(resolve, 300)); const options = [...document.querySelectorAll('[role=\"option\"], [role=\"menuitem\"], p')]; const targetOption = options.find((el) => normalize(el.textContent) === 'Side by Side'); if (!targetOption) { return 'ARENA_SIDE_BY_SIDE_NOT_FOUND'; } const clickable = targetOption.closest('[role=\"option\"]') || targetOption.closest('[role=\"menuitem\"]') || targetOption.closest('button') || targetOption.parentElement || targetOption; clickable.click(); await new Promise((resolve) => setTimeout(resolve, 200)); return 'ARENA_SIDE_BY_SIDE_SELECTED'; })();"
+          }
+        ],
+        "stealth": true,
+        "stream_config": {
+          "mode": "network",
+          "hard_timeout": 300,
+          "silence_threshold": 2.5,
+          "initial_wait": 30,
+          "enable_wrapper_search": true,
+          "network": {
+            "parser": "lmarena",
+            "url_pattern": "**/nextjs-api/stream/create-evaluation**",
+            "method": "POST",
+            "listen_pattern": "/nextjs-api/stream/create-evaluation",
+            "first_response_timeout": 300,
+            "silence_threshold": 3,
+            "response_interval": 1
+          }
+        },
+        "image_extraction": {
+          "enabled": false,
+          "selector": "img",
+          "container_selector": null,
+          "debounce_seconds": 2,
+          "wait_for_load": true,
+          "load_timeout_seconds": 5,
+          "download_blobs": true,
+          "max_size_mb": 10,
+          "mode": "all"
+        },
+        "file_paste": {
+          "enabled": false,
+          "threshold": 50000,
+          "hint_text": "完全专注于文件内容"
+        }
+      },
       "过cf盾": {
         "selectors": {
           "input_box": "textarea[name=\"message\"]",
@@ -1025,12 +1064,6 @@
             "action": "FILL_INPUT",
             "target": "input_box",
             "optional": false,
-            "value": null
-          },
-          {
-            "action": "KEY_PRESS",
-            "target": "Enter",
-            "optional": true,
             "value": null
           },
           {

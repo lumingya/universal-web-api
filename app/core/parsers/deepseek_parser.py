@@ -1,225 +1,277 @@
 """
-deepseek_parser.py - DeepSeek 响应解析器
+deepseek_parser.py - DeepSeek SSE response parser.
 
-响应格式特征：
-- SSE (Server-Sent Events) 流式响应
-- 增量文本通过 data: {"v": "..."} 传递
-- 结束标志: event: finish 或 event: close
+Observed stream traits:
+- data: {"v": {"response": {"fragments": [...]}}} initializes fragment state
+- thinking mode sends THINK fragments first and answer text later in RESPONSE fragments
+- path-less data: {"v": "..."} continues the current fragment's content
+- response/status or quasi_status=FINISHED ends the stream
 """
 
+from __future__ import annotations
+
 import json
-from typing import Dict, Any, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 from app.core.config import logger
 from .base import ResponseParser
 
 
 class DeepSeekParser(ResponseParser):
-    """
-    DeepSeek API 响应解析器
-    
-    URL 特征: /api/v0/chat/completion
-    响应格式: SSE (text/event-stream)
-    """
-    
-    def __init__(self):
-        self._accumulated_content = ""
+    """Parse DeepSeek web SSE streams and ignore THINK fragments."""
+
+    def __init__(self) -> None:
         self._last_raw_length = 0
-        self._is_streaming = False
-    
+        self._pending = ""
+        self._fragment_types: List[str] = []
+        self._current_fragment_type = ""
+
     def parse_chunk(self, raw_response: str) -> Dict[str, Any]:
-        """
-        解析SSE响应流（返回增量）
-        """
-        result = {
+        result: Dict[str, Any] = {
             "content": "",
             "images": [],
             "done": False,
-            "error": None
+            "error": None,
         }
-        
+
         try:
-            # 确保是字符串
-            if isinstance(raw_response, bytes):
-                raw_response = raw_response.decode('utf-8', errors='ignore')
-            
-            if not isinstance(raw_response, str):
+            if isinstance(raw_response, (bytes, bytearray)):
+                raw_response = raw_response.decode("utf-8", errors="ignore")
+            elif not isinstance(raw_response, str):
                 raw_response = str(raw_response)
-            
-            # 只处理新增部分
+
             current_len = len(raw_response)
             if current_len <= self._last_raw_length:
                 return result
-            
-            new_data = raw_response[self._last_raw_length:]
+
+            new_data = raw_response[self._last_raw_length :]
             self._last_raw_length = current_len
-            
-            # 解析新增的 SSE 事件
-            delta_content, chunk_done = self._parse_sse_chunk(new_data)
-            
+
+            delta_content, done = self._consume_new_data(new_data)
             if delta_content:
                 result["content"] = delta_content
-                self._accumulated_content += delta_content
-            
-            if chunk_done:
-                result["done"] = True
-            
-            # 兜底检测结束标志
-            if "event: finish" in new_data or "event: close" in new_data:
-                result["done"] = True
-            
-            # 兜底检测状态完成标志
-            if '"status"' in new_data and '"FINISHED"' in new_data:
-                result["done"] = True
-            
+            result["done"] = done
+
         except Exception as e:
-            logger.debug(f"[DeepSeekParser] 解析异常: {e}")
+            logger.debug(f"[DeepSeekParser] parse exception: {e}")
             result["error"] = str(e)
-        
+
         return result
-    
-    def _parse_sse_chunk(self, chunk: str) -> Tuple[str, bool]:
-        """解析 SSE 数据块，返回 (文本增量, 是否完成)。"""
-        content = ""
+
+    def reset(self) -> None:
+        self._last_raw_length = 0
+        self._pending = ""
+        self._fragment_types = []
+        self._current_fragment_type = ""
+
+    def _consume_new_data(self, new_data: str) -> Tuple[str, bool]:
+        normalized = (self._pending + new_data).replace("\r\n", "\n")
+        if not normalized:
+            return "", False
+
+        blocks = normalized.split("\n\n")
+        if normalized.endswith("\n\n"):
+            self._pending = ""
+            complete_blocks = [block for block in blocks if block.strip()]
+        else:
+            self._pending = blocks.pop() if blocks else normalized
+            complete_blocks = [block for block in blocks if block.strip()]
+
+        content_parts: List[str] = []
         done = False
-        current_event = None
-        
-        lines = chunk.split('\n')
-        
-        for line in lines:
-            line = line.strip()
-            
-            if not line:
-                current_event = None
-                continue
-            
-            # 识别事件类型
-            if line.startswith('event:'):
-                current_event = line[6:].strip()
-                continue
-            
-            # 跳过非数据行
-            if not line.startswith('data:'):
-                continue
-            
-            # 跳过特殊事件的数据
-            if current_event in ('ready', 'update_session', 'title'):
-                continue
-            if current_event in ('finish', 'close'):
+
+        for block in complete_blocks:
+            block_content, block_done = self._parse_event_block(block)
+            if block_content:
+                content_parts.append(block_content)
+            if block_done:
                 done = True
+
+        return "".join(content_parts), done
+
+    def _parse_event_block(self, block: str) -> Tuple[str, bool]:
+        event_name = ""
+        data_lines: List[str] = []
+
+        for raw_line in block.split("\n"):
+            line = raw_line.strip()
+            if not line:
                 continue
-            
-            # 解析数据行
-            data_str = line[5:].strip()
-            if not data_str or data_str == '{}':
-                continue
-            
-            try:
-                data = json.loads(data_str)
-                extracted, item_done = self._extract_content(data)
-                if extracted:
-                    content += extracted
-                if item_done:
-                    done = True
-            except json.JSONDecodeError:
-                continue
-        
-        return content, done
-    
+            if line.startswith("event:"):
+                event_name = line[6:].strip()
+            elif line.startswith("data:"):
+                data_lines.append(line[5:].strip())
+
+        if event_name in {"ready", "update_session", "title"}:
+            return "", False
+        if event_name in {"finish", "close"}:
+            return "", True
+
+        payload = "\n".join(data_lines).strip()
+        if not payload or payload == "{}":
+            return "", False
+
+        try:
+            data = json.loads(payload)
+        except json.JSONDecodeError:
+            return "", False
+
+        return self._extract_content(data)
+
     def _extract_content(self, data: Dict[str, Any]) -> Tuple[str, bool]:
-        """从数据事件中提取文本内容和完成状态。"""
-        content = ""
-        done = False
         path = str(data.get("p", "") or "")
         operation = str(data.get("o", "") or "")
-        
-        # 格式1: 路径追加 {"p": "response/fragments/-1/content", "o": "APPEND", "v": "..."}
-        if operation == "APPEND" and "content" in path and isinstance(data.get("v"), str):
-            return data["v"], False
-        
-        # 格式2: 状态更新 {"p":"response/status","o":"SET","v":"FINISHED"}
-        if operation == "SET" and path.endswith("status") and str(data.get("v", "") or "").upper() == "FINISHED":
+        value = data.get("v")
+
+        if operation == "BATCH" and isinstance(value, list):
+            return self._extract_batch_content(value)
+
+        if isinstance(value, dict):
+            response = value.get("response")
+            if isinstance(response, dict):
+                return self._extract_response_object(response)
+
+        if self._is_done_signal(path, value):
             return "", True
-        
-        # 格式3: 批量操作 {"p": "response", "o": "BATCH", "v": [...]}
-        if operation == "BATCH" and isinstance(data.get("v"), list):
-            for op in data["v"]:
-                if isinstance(op, dict):
-                    sub_content, sub_done = self._extract_batch_content(op)
-                    if sub_content:
-                        content += sub_content
-                    if sub_done:
-                        done = True
-            return content, done
-        
-        # 格式4: 初始响应 {"v": {"response": {..., "fragments": [...]}}}
-        if "v" in data and isinstance(data["v"], dict):
-            response = data["v"].get("response", {})
-            fragments = response.get("fragments", [])
-            for frag in fragments:
-                if isinstance(frag, dict) and "content" in frag:
-                    content += frag["content"]
-            status = str(response.get("status", "") or "").upper()
-            if status == "FINISHED":
-                done = True
-            return content, done
-        
-        # 格式5: 纯增量 {"v": "文本"}
-        # 仅在不是状态/路径补丁时才视为真实文本。
-        if "v" in data and isinstance(data["v"], str) and not path and not operation:
-            return data["v"], False
-        
-        return content, done
-    
-    def _extract_batch_content(self, op: Dict[str, Any]) -> Tuple[str, bool]:
-        """从批量操作中提取内容和完成状态。"""
-        path = op.get("p", "")
-        operation = op.get("o", "")
-        value = op.get("v")
-        
-        # fragments 追加操作
-        if path == "fragments" and operation == "APPEND" and isinstance(value, list):
-            content = ""
-            for frag in value:
-                if isinstance(frag, dict) and "content" in frag:
-                    content += frag["content"]
-            return content, False
-        
-        # 内容追加
-        if "content" in path and operation == "APPEND" and isinstance(value, str):
-            return value, False
-        
-        # 完成状态批量更新
-        if operation == "SET" and str(path).endswith("status") and str(value or "").upper() == "FINISHED":
-            return "", True
-        
-        # quasi_status 也可作为完成信号
-        if operation == "SET" and str(path).endswith("quasi_status") and str(value or "").upper() == "FINISHED":
-            return "", True
-        
+
+        if self._is_fragment_append(path, operation, value):
+            return self._register_fragments(value), False
+
+        if self._is_fragment_content_patch(path, value):
+            fragment_type = self._resolve_fragment_type(path)
+            if self._should_emit_fragment_text(fragment_type):
+                return value, False
+            return "", False
+
+        if not path and not operation and isinstance(value, str):
+            if self._should_emit_fragment_text(self._current_fragment_type):
+                return value, False
+            return "", False
+
         return "", False
-    
-    def reset(self):
-        """重置状态"""
-        self._accumulated_content = ""
-        self._last_raw_length = 0
-        self._is_streaming = False
-    
+
+    def _extract_batch_content(self, operations: List[Dict[str, Any]]) -> Tuple[str, bool]:
+        content_parts: List[str] = []
+        done = False
+
+        for op in operations:
+            if not isinstance(op, dict):
+                continue
+
+            path = str(op.get("p", "") or "")
+            operation = str(op.get("o", "") or "")
+            value = op.get("v")
+
+            if self._is_done_signal(path, value):
+                done = True
+                continue
+
+            if self._is_fragment_append(path, operation, value):
+                fragment_content = self._register_fragments(value)
+                if fragment_content:
+                    content_parts.append(fragment_content)
+                continue
+
+            if self._is_fragment_content_patch(path, value):
+                fragment_type = self._resolve_fragment_type(path)
+                if self._should_emit_fragment_text(fragment_type):
+                    content_parts.append(value)
+
+        return "".join(content_parts), done
+
+    def _extract_response_object(self, response: Dict[str, Any]) -> Tuple[str, bool]:
+        fragments = response.get("fragments")
+        content = self._register_fragments(fragments) if isinstance(fragments, list) else ""
+
+        done = False
+        if self._is_done_signal("response/status", response.get("status")):
+            done = True
+        if self._is_done_signal("response/quasi_status", response.get("quasi_status")):
+            done = True
+
+        return content, done
+
+    def _register_fragments(self, fragments: List[Dict[str, Any]]) -> str:
+        content_parts: List[str] = []
+
+        for fragment in fragments:
+            if not isinstance(fragment, dict):
+                continue
+
+            fragment_type = str(fragment.get("type", "") or "").upper()
+            self._fragment_types.append(fragment_type)
+            if fragment_type:
+                self._current_fragment_type = fragment_type
+
+            text = fragment.get("content", "")
+            if isinstance(text, str) and text and self._should_emit_fragment_text(fragment_type):
+                content_parts.append(text)
+
+        return "".join(content_parts)
+
+    def _resolve_fragment_type(self, path: str) -> str:
+        marker = "response/fragments/"
+        if marker not in path or not self._fragment_types:
+            return self._current_fragment_type
+
+        index_part = path.split(marker, 1)[1].split("/", 1)[0]
+        if index_part == "-1":
+            fragment_type = self._fragment_types[-1]
+            self._current_fragment_type = fragment_type
+            return fragment_type
+
+        try:
+            index = int(index_part)
+        except ValueError:
+            return self._current_fragment_type
+
+        if index < 0:
+            index += len(self._fragment_types)
+        if 0 <= index < len(self._fragment_types):
+            fragment_type = self._fragment_types[index]
+            self._current_fragment_type = fragment_type
+            return fragment_type
+
+        return self._current_fragment_type
+
+    @staticmethod
+    def _is_fragment_append(path: str, operation: str, value: Any) -> bool:
+        if not isinstance(value, list):
+            return False
+        return operation == "APPEND" and path in {"response/fragments", "fragments"}
+
+    @staticmethod
+    def _is_fragment_content_patch(path: str, value: Any) -> bool:
+        return isinstance(value, str) and "fragments/" in path and path.endswith("/content")
+
+    @staticmethod
+    def _is_done_signal(path: str, value: Any) -> bool:
+        if not isinstance(value, str):
+            return False
+        if value.upper() != "FINISHED":
+            return False
+        return path.endswith("status") or path.endswith("quasi_status")
+
+    def _should_emit_fragment_text(self, fragment_type: str) -> bool:
+        if not self._fragment_types:
+            return True
+        return fragment_type == "RESPONSE"
+
     @classmethod
     def get_id(cls) -> str:
         return "deepseek"
-    
+
     @classmethod
     def get_name(cls) -> str:
         return "DeepSeek API"
-    
+
     @classmethod
     def get_description(cls) -> str:
-        return "解析 DeepSeek 的 API 响应（SSE流式）"
-    
+        return "Parse DeepSeek SSE streams and ignore THINK fragments"
+
     @classmethod
     def get_supported_patterns(cls) -> List[str]:
         return ["**/api/v0/chat/completion**"]
 
 
-__all__ = ['DeepSeekParser']
+__all__ = ["DeepSeekParser"]

@@ -39,6 +39,22 @@ logger = get_logger("API.TAB")
 router = APIRouter()
 
 
+def _extract_stream_error_message(chunk: Any) -> str:
+    if not isinstance(chunk, str) or not chunk.startswith("data: "):
+        return ""
+    try:
+        data_str = chunk[6:].strip()
+        if not data_str or data_str == "[DONE]":
+            return ""
+        data = json.loads(data_str)
+        error = data.get("error")
+        if not isinstance(error, dict):
+            return ""
+        return str(error.get("message") or "").strip()
+    except Exception:
+        return ""
+
+
 def _debug_preview(value: Any, limit: int = 240) -> str:
     text = repr(value)
     if len(text) <= limit:
@@ -212,7 +228,6 @@ async def _stream_with_tab_index(
         )
 
         browser = get_browser(auto_connect=False)
-        browser.set_stop_checker(ctx.should_stop)
 
         request_manager.start_request(ctx)
 
@@ -226,12 +241,17 @@ async def _stream_with_tab_index(
                     tab_index,
                     body.messages,
                     stream=True,
-                    task_id=ctx.request_id
+                    task_id=ctx.request_id,
+                    stop_checker=ctx.should_stop,
                 )
 
                 for chunk in gen:
                     if ctx.should_stop():
-                        logger.info("工作线程检测到取消")
+                        cancel_reason = str(ctx.cancel_reason or "unknown")
+                        if cancel_reason in {"cleanup", "client_disconnected", "coroutine_cancelled"}:
+                            logger.debug(f"工作线程检测到停止: {cancel_reason}")
+                        else:
+                            logger.info(f"工作线程检测到取消: {cancel_reason}")
                         break
                     chunk_queue.put(chunk)
 
@@ -239,6 +259,11 @@ async def _stream_with_tab_index(
                 logger.error(f"工作线程异常: {e}")
                 chunk_queue.put(("ERROR", str(e)))
             finally:
+                if gen is not None:
+                    try:
+                        gen.close()
+                    except Exception as e:
+                        logger.debug(f"关闭工作流生成器失败（忽略）: {e}")
                 chunk_queue.put(None)
 
         worker_thread = threading.Thread(target=worker, daemon=True)
@@ -263,6 +288,11 @@ async def _stream_with_tab_index(
                 break
 
             yield chunk
+            error_message = _extract_stream_error_message(chunk)
+            if error_message:
+                logger.warning(f"流式响应返回错误事件(tab={tab_index}): {error_message}")
+                ctx.mark_failed(error_message)
+                break
             await asyncio.sleep(0)
 
         if not ctx.should_stop() and ctx.status == RequestStatus.RUNNING:
@@ -358,6 +388,7 @@ def _execute_browser_non_stream_for_tab(
     tab_index: int,
     messages: List[Dict[str, Any]],
     request_id: str,
+    stop_checker=None,
 ) -> Dict[str, Any]:
     payload = None
     for chunk in browser.execute_workflow_for_tab_index(
@@ -365,6 +396,7 @@ def _execute_browser_non_stream_for_tab(
         messages,
         stream=False,
         task_id=request_id,
+        stop_checker=stop_checker,
     ):
         payload = chunk
 
@@ -395,6 +427,7 @@ def _run_tool_calling_sync_for_tab(
     tab_index: int,
     body: ChatRequest,
     request_id: str,
+    stop_checker=None,
 ) -> Dict[str, Any]:
     tools, tool_choice = normalize_tool_request(
         tools=body.tools,
@@ -415,6 +448,7 @@ def _run_tool_calling_sync_for_tab(
         tab_index=tab_index,
         messages=browser_messages,
         request_id=request_id,
+        stop_checker=stop_checker,
     )
     assistant_text = _extract_assistant_content(browser_response)
     logger.debug(f"tool_calling assistant_text={_debug_preview(assistant_text)}")
@@ -441,7 +475,6 @@ async def _complete_tool_calling_with_tab_index(
         )
 
         browser = get_browser(auto_connect=False)
-        browser.set_stop_checker(ctx.should_stop)
         request_manager.start_request(ctx)
 
         response = await asyncio.to_thread(
@@ -450,6 +483,7 @@ async def _complete_tool_calling_with_tab_index(
             tab_index,
             body,
             ctx.request_id,
+            ctx.should_stop,
         )
 
         if not ctx.should_stop() and ctx.status == RequestStatus.RUNNING:
@@ -718,6 +752,15 @@ async def delete_site_preset(
 def _pack_error(message: str, code: str = "error") -> str:
     """打包 SSE 错误"""
     data = {
+        "id": f"chatcmpl-error-{int(time.time() * 1000)}",
+        "object": "chat.completion.chunk",
+        "created": int(time.time()),
+        "model": "web-browser",
+        "choices": [{
+            "index": 0,
+            "delta": {"content": f"[错误] {message}"},
+            "finish_reason": None
+        }],
         "error": {
             "message": message,
             "type": "execution_error",

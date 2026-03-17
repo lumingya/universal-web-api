@@ -23,10 +23,15 @@ window.CommandsTabComponent = {
             selectedExistingGroupName: '',
             groupWorking: false,
             includeDisabledWhenRunGroup: false,
+            runGroupAcquirePolicy: 'inherit_session',
             showGroupTools: false,
             collapsedGroups: {},
             draggingCommandId: '',
             dragOverGroupName: '',
+            sourceCommandPickerOpen: false,
+            sourceCommandSearch: '',
+            sourcePickerExpandedGroups: {},
+            sourcePickerShowUngrouped: false,
 
             // 编辑弹窗
             showEditor: false,
@@ -53,6 +58,16 @@ window.CommandsTabComponent = {
                 headers: '{"Content-Type":"application/json"}',
                 timeout: 8,
                 raise_for_status: false
+            },
+            napcatDefaults: {
+                base_url: 'http://127.0.0.1:3000',
+                target_type: 'private',
+                user_id: '',
+                group_id: '',
+                message: '命令通知：{{source_command_name}}\\n{{command_result_summary}}',
+                access_token: '',
+                timeout: 8,
+                raise_for_status: true
             },
             releaseLockDefaults: {
                 reason: 'release_tab_lock_action',

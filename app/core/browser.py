@@ -287,6 +287,54 @@ class BrowserCore:
     def set_stop_checker(self, checker: Callable[[], bool]):
         """设置停止检查器"""
         self._should_stop_checker = checker or (lambda: False)
+
+    def _get_request_cancel_reason(self, task_id: str = "") -> str:
+        task = str(task_id or "").strip()
+        if not task:
+            return ""
+        try:
+            from app.services.request_manager import request_manager
+
+            ctx = request_manager.get_request(task)
+            if ctx is None:
+                return ""
+            return str(getattr(ctx, "cancel_reason", "") or "").strip().lower()
+        except Exception:
+            return ""
+
+    def _should_rollback_request_count_on_cancel(self, task_id: str = "") -> bool:
+        reason = self._get_request_cancel_reason(task_id)
+        if not reason:
+            return False
+        manual_reasons = {
+            "manual",
+            "manual_terminate",
+            "user_cancel",
+            "user_cancelled",
+            "cancel_button",
+        }
+        return reason in manual_reasons
+
+    def _release_workflow_session(
+        self,
+        session: TabSession,
+        *,
+        effective_stop_checker: Optional[Callable[[], bool]] = None,
+        task_id: str = "",
+    ):
+        cancelled = bool(effective_stop_checker and effective_stop_checker())
+        rollback_request_count = cancelled and self._should_rollback_request_count_on_cancel(task_id)
+        if cancelled and not rollback_request_count:
+            logger.debug(
+                f"[{session.id}] stop detected but request_count preserved "
+                f"(task={task_id or '-'}, reason={self._get_request_cancel_reason(task_id) or 'unknown'})"
+            )
+
+        self.tab_pool.release(
+            session.id,
+            check_triggers=not rollback_request_count,
+            rollback_request_count=rollback_request_count,
+        )
     
     @property
     def tab_pool(self) -> TabPoolManager:
@@ -414,7 +462,8 @@ class BrowserCore:
         messages: List[Dict],
         stream: bool = True,
         task_id: str = None,
-        stop_checker: Optional[Callable[[], bool]] = None
+        stop_checker: Optional[Callable[[], bool]] = None,
+        workflow_priority: Optional[int] = None,
     ) -> Generator[str, None, None]:
         """
         工作流执行入口（v2.0 改进版）
@@ -437,6 +486,7 @@ class BrowserCore:
         # 生成任务 ID（如果没有提供）
         if task_id is None:
             task_id = f"task_{int(time.time() * 1000)}"
+        effective_stop_checker = stop_checker or self._should_stop_checker
         
         # 从池中获取标签页
         session = None
@@ -451,30 +501,38 @@ class BrowserCore:
                 )
                 yield self.formatter.pack_finish()
                 return
+
+            self._bind_request_tab_id(task_id, session)
             
             # 执行工作流
             if stream:
                 yield from self._execute_workflow_stream(
                     session,
                     sanitized_messages,
-                    stop_checker=stop_checker,
+                    stop_checker=effective_stop_checker,
+                    workflow_priority=workflow_priority,
                 )
             else:
                 yield from self._execute_workflow_non_stream(
                     session,
                     sanitized_messages,
-                    stop_checker=stop_checker,
+                    stop_checker=effective_stop_checker,
+                    workflow_priority=workflow_priority,
                 )
         
         finally:
             # 释放标签页
             if session:
-                cancelled = bool(stop_checker and stop_checker())
-                self.tab_pool.release(
-                    session.id,
-                    check_triggers=not cancelled,
-                    rollback_request_count=cancelled,
+                self._release_workflow_session(
+                    session,
+                    effective_stop_checker=effective_stop_checker,
+                    task_id=task_id,
                 )
+                try:
+                    from app.services.command_engine import command_engine
+                    command_engine.schedule_deferred_workflow_commands(session, delay_sec=0.25)
+                except Exception:
+                    pass
 
     def execute_workflow_for_tab_index(
         self, 
@@ -482,7 +540,8 @@ class BrowserCore:
         messages: List[Dict],
         stream: bool = True,
         task_id: str = None,
-        stop_checker: Optional[Callable[[], bool]] = None
+        stop_checker: Optional[Callable[[], bool]] = None,
+        workflow_priority: Optional[int] = None,
     ) -> Generator[str, None, None]:
         """
         使用指定编号的标签页执行工作流
@@ -507,6 +566,7 @@ class BrowserCore:
         # 生成任务 ID
         if task_id is None:
             task_id = f"tab{tab_index}_{int(time.time() * 1000)}"
+        effective_stop_checker = stop_checker or self._should_stop_checker
         
         # 按编号获取标签页
         session = None
@@ -521,41 +581,75 @@ class BrowserCore:
                 )
                 yield self.formatter.pack_finish()
                 return
+
+            self._bind_request_tab_id(task_id, session)
             
             # 执行工作流
             if stream:
                 yield from self._execute_workflow_stream(
                     session,
                     sanitized_messages,
-                    stop_checker=stop_checker,
+                    stop_checker=effective_stop_checker,
+                    workflow_priority=workflow_priority,
                 )
             else:
                 yield from self._execute_workflow_non_stream(
                     session,
                     sanitized_messages,
-                    stop_checker=stop_checker,
+                    stop_checker=effective_stop_checker,
+                    workflow_priority=workflow_priority,
                 )
         
         finally:
             if session:
-                cancelled = bool(stop_checker and stop_checker())
-                self.tab_pool.release(
-                    session.id,
-                    check_triggers=not cancelled,
-                    rollback_request_count=cancelled,
+                self._release_workflow_session(
+                    session,
+                    effective_stop_checker=effective_stop_checker,
+                    task_id=task_id,
                 )
+                try:
+                    from app.services.command_engine import command_engine
+                    command_engine.schedule_deferred_workflow_commands(session, delay_sec=0.25)
+                except Exception:
+                    pass
+
+    def _bind_request_tab_id(self, task_id: str, session: Optional[TabSession]):
+        if not session:
+            return
+        request_id = str(task_id or "").strip()
+        if not request_id:
+            return
+        try:
+            from app.services.request_manager import request_manager
+            request_manager.bind_tab(request_id, session.id)
+        except Exception as e:
+            logger.debug(f"[{session.id}] 绑定请求标签页失败（忽略）: {e}")
    
     def _execute_workflow_stream(
-        self, 
+        self,
         session: TabSession,
         messages: List[Dict],
         preset_name: Optional[str] = None,
-        stop_checker: Optional[Callable[[], bool]] = None
+        stop_checker: Optional[Callable[[], bool]] = None,
+        workflow_priority: Optional[int] = None,
     ) -> Generator[str, None, None]:
         """流式工作流执行（v2.0）"""
     
         tab = session.tab
         effective_stop_checker = stop_checker or self._should_stop_checker
+        workflow_priority_value = 2
+        workflow_runtime = None
+        workflow_aborted = False
+        workflow_abort_message = ""
+        command_engine = None
+        try:
+            from app.services.command_engine import command_engine as _command_engine
+            command_engine = _command_engine
+            workflow_priority_value = command_engine._normalize_priority(
+                workflow_priority, command_engine._get_request_priority_baseline()
+            )
+        except Exception:
+            workflow_priority_value = 2
     
         if effective_stop_checker():
             yield self.formatter.pack_error("请求已取消", code="cancelled")
@@ -699,12 +793,31 @@ class BrowserCore:
         
         extractor = config_engine.get_site_extractor(domain, preset_name=effective_preset_name)
         logger.debug(f"[{session.id}] 使用提取器: {extractor.get_id()} [预设: {effective_preset_name or '主预设'}]")
+
+        if command_engine is not None:
+            try:
+                workflow_runtime = command_engine.begin_workflow_runtime(
+                    session,
+                    task_id=str(getattr(session, "current_task_id", "") or ""),
+                    preset_name=effective_preset_name or "",
+                    priority=workflow_priority_value,
+                )
+            except Exception as e:
+                logger.debug(f"[{session.id}] 工作流运行时注册失败（忽略）: {e}")
+
+        def _combined_stop_checker() -> bool:
+            if effective_stop_checker():
+                return True
+            if command_engine is not None and command_engine.workflow_interrupt_requested(session):
+                setattr(session, "_workflow_stop_reason", "command_interrupt")
+                return True
+            return False
         
         # 创建执行器
         executor = WorkflowExecutor(
             tab=tab,
             stealth_mode=stealth_mode,
-            should_stop_checker=effective_stop_checker,
+            should_stop_checker=_combined_stop_checker,
             extractor=extractor,
             image_config=image_config,
             stream_config=stream_config,
@@ -714,12 +827,52 @@ class BrowserCore:
         )
         
         result_container_selector = selectors.get("result_container", "")
+        setattr(session, "_workflow_stop_reason", None)
+        if not effective_stop_checker():
+            setattr(session, "_workflow_user_stop_logged", False)
         
         try:
-            
-            for step in workflow:
+            step_index = 0
+            while step_index < len(workflow):
+                step = workflow[step_index]
+                if command_engine is not None:
+                    command_engine.update_workflow_runtime_step(session, step_index, step)
+
+                stop_reason = str(getattr(session, "_workflow_stop_reason", "") or "").strip()
+                if stop_reason == "command_interrupt" or (
+                    command_engine is not None and command_engine.workflow_interrupt_requested(session)
+                ):
+                    interrupt_result = (
+                        command_engine.handle_pending_workflow_interrupts(session)
+                        if command_engine is not None
+                        else {"handled": False, "abort": False, "message": ""}
+                    )
+                    if interrupt_result.get("abort"):
+                        workflow_aborted = True
+                        workflow_abort_message = str(
+                            interrupt_result.get("message") or "工作流已被命令打断"
+                        )
+                        logger.warning(
+                            f"[{session.id}] 工作流被命令打断: "
+                            f"{interrupt_result.get('abort_by') or 'unknown'}"
+                        )
+                        yield self.formatter.pack_error(
+                            workflow_abort_message,
+                            code="workflow_interrupted",
+                        )
+                        break
+                    if interrupt_result.get("handled"):
+                        logger.info(f"[{session.id}] 工作流恢复执行")
+                        continue
+
                 if effective_stop_checker():
-                    logger.info(f"[{session.id}] 工作流被用户中断")
+                    if getattr(session, "_workflow_user_stop_logged", False):
+                        break
+                    if stop_reason == "timeout":
+                        logger.warning(f"[{session.id}] 工作流因超时停止")
+                    else:
+                        logger.info(f"[{session.id}] 工作流被用户中断")
+                    setattr(session, "_workflow_user_stop_logged", True)
                     break
                 
                 action = step.get('action', '')
@@ -731,6 +884,7 @@ class BrowserCore:
                 
                 if not selector and action not in ("WAIT", "KEY_PRESS", "COORD_CLICK", "JS_EXEC"):
                     if optional:
+                        step_index += 1
                         continue
                     else:
                         yield self.formatter.pack_error(
@@ -753,6 +907,7 @@ class BrowserCore:
                     
                     if action in ("STREAM_WAIT", "STREAM_OUTPUT"):
                         result_container_selector = selector
+                    step_index += 1
                         
                 except (ElementNotFoundError, WorkflowError):
                     break
@@ -761,9 +916,31 @@ class BrowserCore:
                         yield self.formatter.pack_error(f"执行中断: {str(e)}")
                         break
             
+            if (
+                not workflow_aborted
+                and command_engine is not None
+                and command_engine.workflow_interrupt_requested(session)
+            ):
+                interrupt_result = command_engine.handle_pending_workflow_interrupts(session)
+                if interrupt_result.get("abort"):
+                    workflow_aborted = True
+                    workflow_abort_message = str(
+                        interrupt_result.get("message") or "工作流已被命令打断"
+                    )
+                    logger.warning(
+                        f"[{session.id}] 工作流收尾阶段被命令打断: "
+                        f"{interrupt_result.get('abort_by') or 'unknown'}"
+                    )
+                    yield self.formatter.pack_error(
+                        workflow_abort_message,
+                        code="workflow_interrupted",
+                    )
+                elif interrupt_result.get("handled"):
+                    logger.info(f"[{session.id}] 工作流收尾阶段已执行挂起命令")
+
             # 图片提取
             logger.debug(f"[PROBE] Workflow 循环结束，image_enabled={image_extraction_enabled}, should_stop={effective_stop_checker()}")
-            if image_extraction_enabled and not effective_stop_checker():
+            if image_extraction_enabled and not effective_stop_checker() and not workflow_aborted:
                 logger.debug("[PROBE] 进入图片提取分支")
                 try:
                     images = self._extract_images_after_stream(
@@ -772,7 +949,7 @@ class BrowserCore:
                         image_config=image_config,
                         result_selector=result_container_selector,
                         completion_id=executor._completion_id,
-                        stop_checker=effective_stop_checker
+                        stop_checker=_combined_stop_checker
                     )
                     
                     if images:
@@ -802,6 +979,16 @@ class BrowserCore:
                     logger.warning(f"[{session.id}] 图片提取失败: {e}")
         
         finally:
+            if command_engine is not None and workflow_runtime is not None:
+                try:
+                    stop_reason = str(getattr(session, "_workflow_stop_reason", "") or "").strip()
+                    externally_stopped = bool(effective_stop_checker()) and stop_reason != "command_interrupt"
+                    command_engine.finish_workflow_runtime(
+                        session,
+                        aborted=workflow_aborted or bool(workflow_abort_message) or externally_stopped,
+                    )
+                except Exception as e:
+                    logger.debug(f"[{session.id}] 工作流运行时清理失败（忽略）: {e}")
             yield self.formatter.pack_finish()
     
     def _extract_images_after_stream(
@@ -1006,7 +1193,8 @@ class BrowserCore:
         session: TabSession,
         messages: List[Dict],
         preset_name: Optional[str] = None,
-        stop_checker: Optional[Callable[[], bool]] = None
+        stop_checker: Optional[Callable[[], bool]] = None,
+        workflow_priority: Optional[int] = None,
     ) -> Generator[str, None, None]:
         """非流式工作流执行"""
         collected_content = []
@@ -1017,6 +1205,7 @@ class BrowserCore:
             messages,
             preset_name=preset_name,
             stop_checker=stop_checker,
+            workflow_priority=workflow_priority,
         ):
             if chunk.startswith("data: [DONE]"):
                 continue

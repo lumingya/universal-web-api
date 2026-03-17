@@ -233,6 +233,17 @@ if AppConfig.is_cors_enabled():
     )
 
 
+@app.middleware("http")
+async def disable_dashboard_cache(request, call_next):
+    response = await call_next(request)
+    path = request.url.path or ""
+    if path in ("/", "/dashboard") or path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
+
 # ================= Dashboard 路由（优先级最高）=================
 
 @app.get("/", include_in_schema=False)

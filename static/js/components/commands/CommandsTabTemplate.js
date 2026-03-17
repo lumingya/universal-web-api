@@ -123,6 +123,15 @@ window.CommandsTabTemplate = `
                     <input type="checkbox" v-model="includeDisabledWhenRunGroup">
                     执行组时包含禁用命令
                 </label>
+                <label class="flex items-center gap-2 rounded-xl border border-slate-200 bg-white/80 px-3 py-2 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-900/70 dark:text-slate-300">
+                    <span>执行组占用策略</span>
+                    <select v-model="runGroupAcquirePolicy"
+                            class="rounded-lg border border-slate-200 bg-white px-2 py-1 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200">
+                        <option value="inherit_session">沿用当前会话</option>
+                        <option value="try_acquire">尝试重新占用</option>
+                        <option value="require_acquire">必须重新占用</option>
+                    </select>
+                </label>
                 <span class="text-xs text-slate-500 dark:text-slate-400">可直接拖动命令卡片到某个组头完成收纳</span>
             </div>
         </div>
@@ -350,25 +359,97 @@ window.CommandsTabTemplate = `
                                 <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
                                     {{ getTriggerTargetLabel(editingCommand.trigger) }}
                                 </label>
-                                <select v-if="editingCommand.trigger.type === 'command_triggered'"
-                                        v-model="editingCommand.trigger.command_id"
-                                        class="w-full px-3 py-2 border dark:border-gray-600 rounded bg-white dark:bg-gray-700 dark:text-white text-sm"
-                                        :disabled="sourceCommandOptions.length === 0">
-                                    <option value="" disabled>{{ getCommandTriggerPlaceholder() }}</option>
-                                    <option v-for="opt in sourceCommandOptions" :key="opt.value" :value="opt.value">
-                                        {{ opt.label }}
-                                    </option>
-                                </select>
-                                <select v-else-if="editingCommand.trigger.type === 'command_result_match'"
-                                        v-model="editingCommand.trigger.command_id"
-                                        @change="handleResultSourceChange"
-                                        class="w-full px-3 py-2 border dark:border-gray-600 rounded bg-white dark:bg-gray-700 dark:text-white text-sm"
-                                        :disabled="sourceCommandOptions.length === 0">
-                                    <option value="" disabled>{{ getCommandTriggerPlaceholder() }}</option>
-                                    <option v-for="opt in sourceCommandOptions" :key="opt.value" :value="opt.value">
-                                        {{ opt.label }}
-                                    </option>
-                                </select>
+                                <div v-if="['command_triggered', 'command_result_match', 'command_result_event'].includes(editingCommand.trigger.type)"
+                                     class="relative">
+                                    <button type="button"
+                                            @click="toggleSourceCommandPicker"
+                                            :disabled="sourceCommandOptions.length === 0"
+                                            class="flex w-full items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-2 text-left text-sm text-slate-700 transition hover:border-sky-300 hover:bg-sky-50/70 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-700 dark:text-white dark:hover:border-sky-500 dark:hover:bg-slate-800">
+                                        <div class="min-w-0">
+                                            <div class="truncate font-medium">{{ getSourceCommandButtonLabel() }}</div>
+                                            <div class="truncate text-xs text-slate-500 dark:text-slate-300">
+                                                <span v-if="editingCommand.trigger.type === 'command_result_event'">
+                                                    {{ editingCommand.trigger.listen_all_commands ? '全部命令结果' : ((selectedSourceCommandOptions || []).length + ' 条已选') }}
+                                                </span>
+                                                <span v-else>{{ selectedSourceCommandOption?.groupName || '未分组命令' }}</span>
+                                            </div>
+                                        </div>
+                                        <span class="ml-3 text-xs text-slate-400">{{ sourceCommandPickerOpen ? '收起' : '展开' }}</span>
+                                    </button>
+
+                                    <div v-if="sourceCommandPickerOpen"
+                                         class="absolute left-0 right-0 z-30 mt-2 overflow-hidden rounded-2xl border border-slate-200 bg-white/98 shadow-2xl shadow-slate-900/10 backdrop-blur dark:border-slate-700 dark:bg-slate-900/98">
+                                        <div class="border-b border-slate-200/80 p-3 dark:border-slate-700">
+                                            <div class="flex items-center gap-2">
+                                                <input v-model.trim="sourceCommandSearch"
+                                                       type="text"
+                                                       placeholder="搜索命令名 / 命令组 / ID"
+                                                       class="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700 focus:border-sky-300 focus:outline-none dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100">
+                                                <button v-if="sourceCommandSearch"
+                                                        type="button"
+                                                        @click="sourceCommandSearch = ''"
+                                                        class="rounded-lg border border-slate-200 px-2 py-2 text-xs text-slate-500 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-800">
+                                                    清空
+                                                </button>
+                                            </div>
+                                             <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                                                 优先按命令组浏览，展开组后再选择具体命令
+                                             </p>
+                                             <div v-if="editingCommand.trigger.type === 'command_result_event'"
+                                                  class="mt-3 flex items-center justify-between rounded-xl border border-emerald-200/80 bg-emerald-50/80 px-3 py-2 text-xs text-emerald-700 dark:border-emerald-800/60 dark:bg-emerald-900/20 dark:text-emerald-200">
+                                                 <div>可多选命令，或直接监听全部命令结果</div>
+                                                 <button type="button"
+                                                         @click="toggleListenAllCommands"
+                                                         class="rounded-lg border border-emerald-300 px-2 py-1 font-semibold hover:bg-emerald-100 dark:border-emerald-700 dark:hover:bg-emerald-900/40">
+                                                     {{ editingCommand.trigger.listen_all_commands ? '改为手动选择' : '监听全部命令' }}
+                                                 </button>
+                                             </div>
+                                         </div>
+
+                                        <div class="max-h-80 overflow-y-auto p-2">
+                                            <div v-if="filteredSourceCommandSections.length === 0"
+                                                 class="rounded-xl border border-dashed border-slate-200 px-3 py-6 text-center text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                                                没有匹配的来源命令
+                                            </div>
+
+                                            <div v-for="section in filteredSourceCommandSections" :key="section.key" class="mb-2 rounded-xl border border-slate-200/80 bg-slate-50/80 dark:border-slate-700 dark:bg-slate-800/70">
+                                                <button type="button"
+                                                        @click="toggleSourceCommandSection(section)"
+                                                        class="flex w-full items-center justify-between gap-3 px-3 py-2 text-left">
+                                                    <div class="min-w-0">
+                                                        <div class="truncate text-sm font-semibold text-slate-700 dark:text-slate-100">{{ section.name }}</div>
+                                                        <div class="text-xs text-slate-500 dark:text-slate-400">{{ section.commands.length }} 条命令</div>
+                                                    </div>
+                                                    <span class="rounded-full bg-slate-900/5 px-2 py-1 text-[11px] text-slate-500 dark:bg-white/5 dark:text-slate-300">
+                                                        {{ isSourceCommandSectionExpanded(section) ? '收起' : '展开' }}
+                                                    </span>
+                                                </button>
+
+                                                <div v-show="isSourceCommandSectionExpanded(section)" class="border-t border-slate-200/70 p-2 dark:border-slate-700">
+                                                    <button v-for="opt in section.commands"
+                                                            :key="opt.value"
+                                                            type="button"
+                                                            @click="selectSourceCommand(opt.value)"
+                                                            :class="[
+                                                                'mb-1 flex w-full items-center justify-between gap-3 rounded-xl px-3 py-2 text-left transition',
+                                                                isSourceCommandSelected(opt.value)
+                                                                    ? 'bg-sky-100 text-sky-800 ring-1 ring-sky-300 dark:bg-sky-900/40 dark:text-sky-200 dark:ring-sky-700'
+                                                                    : 'bg-white text-slate-700 hover:bg-sky-50 dark:bg-slate-900 dark:text-slate-100 dark:hover:bg-slate-800'
+                                                            ]">
+                                                        <div class="min-w-0">
+                                                            <div class="truncate text-sm font-medium">{{ opt.label }}</div>
+                                                            <div class="truncate text-[11px] text-slate-500 dark:text-slate-400">{{ opt.value }}</div>
+                                                        </div>
+                                                        <span v-if="!opt.enabled"
+                                                              class="rounded-full bg-slate-200 px-2 py-1 text-[11px] text-slate-500 dark:bg-slate-700 dark:text-slate-300">
+                                                            已禁用
+                                                        </span>
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
                                 <input v-else-if="editingCommand.trigger.type === 'network_request_error'"
                                        v-model.trim="editingCommand.trigger.url_pattern"
                                        type="text"
@@ -451,6 +532,23 @@ window.CommandsTabTemplate = `
                             </p>
                         </div>
 
+                        <div v-if="editingCommand.trigger.type === 'command_result_event'"
+                             class="mt-3 rounded-xl border border-emerald-200/70 bg-emerald-50/70 p-3 dark:border-emerald-800/60 dark:bg-emerald-900/20">
+                            <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+                                <label class="flex items-center gap-2 text-sm dark:text-gray-300">
+                                    <input type="checkbox" v-model="editingCommand.trigger.listen_all_commands" class="rounded">
+                                    监听全部命令返回结果
+                                </label>
+                                <label class="flex items-center gap-2 text-sm dark:text-gray-300">
+                                    <input type="checkbox" v-model="editingCommand.trigger.informative_only" class="rounded">
+                                    仅通知有信息的结果
+                                </label>
+                            </div>
+                            <p class="mt-2 text-xs text-emerald-700 dark:text-emerald-300">
+                                只监听命令最终返回值，不会按每个步骤单独触发。可用变量：<span v-pre>{{source_command_name}}</span>、<span v-pre>{{command_result_summary}}</span>、<span v-pre>{{command_result}}</span>
+                            </p>
+                        </div>
+
                         <div class="mt-3 rounded-xl border border-slate-200/70 bg-white/80 p-3 dark:border-slate-700/60 dark:bg-slate-900/40">
                             <div class="grid grid-cols-1 gap-3 md:grid-cols-4">
                                 <label class="flex items-center gap-2 text-sm dark:text-gray-300 pt-5 md:pt-6">
@@ -458,11 +556,9 @@ window.CommandsTabTemplate = `
                                     启用该命令周期检测
                                 </label>
                                 <div>
-                                    <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">命令优先级（1-4）</label>
+                                    <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">命令优先级（整数）</label>
                                     <input v-model.number="editingCommand.trigger.priority"
                                            type="number"
-                                           min="1"
-                                           max="4"
                                            step="1"
                                            class="w-full px-2 py-1.5 border dark:border-gray-600 rounded bg-white dark:bg-gray-700 dark:text-white text-sm">
                                 </div>
@@ -487,8 +583,61 @@ window.CommandsTabTemplate = `
                                 仅影响“空闲标签页周期扫描”；对话完成后的即时触发检查仍会执行。
                             </p>
                             <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                                优先级 1-4，数值越大越高。默认请求基准优先级为 2（可用环境变量 <code>CMD_REQUEST_PRIORITY_BASELINE</code> 调整）。
+                                优先级支持任意整数，数值越大越高。默认请求基准优先级为 2（可用环境变量 <code>CMD_REQUEST_PRIORITY_BASELINE</code> 调整），所以像 <code>-99</code>、<code>0</code>、<code>2</code>、<code>99</code> 都可以。
                             </p>
+                        </div>
+
+                        <div class="mt-3 rounded-xl border border-slate-200/70 bg-white/80 p-3 dark:border-slate-700/60 dark:bg-slate-900/40">
+                            <div class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+                                <div v-if="editingCommand.trigger.type === 'page_check'">
+                                    <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">页面命中触发模式</label>
+                                    <select v-model="editingCommand.trigger.fire_mode"
+                                            class="w-full px-2 py-1.5 border dark:border-gray-600 rounded bg-white dark:bg-gray-700 dark:text-white text-sm">
+                                        <option value="edge">边沿触发</option>
+                                        <option value="level">持续触发</option>
+                                    </select>
+                                </div>
+                                <div v-if="editingCommand.trigger.type === 'page_check'">
+                                    <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">冷却时间（秒）</label>
+                                    <input v-model.number="editingCommand.trigger.cooldown_sec"
+                                           type="number"
+                                           min="0"
+                                           step="0.5"
+                                           class="w-full px-2 py-1.5 border dark:border-gray-600 rounded bg-white dark:bg-gray-700 dark:text-white text-sm">
+                                </div>
+                                <div v-if="editingCommand.trigger.type === 'page_check'">
+                                    <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">页面稳定命中（秒）</label>
+                                    <input v-model.number="editingCommand.trigger.stable_for_sec"
+                                           type="number"
+                                           min="0"
+                                           step="0.5"
+                                           class="w-full px-2 py-1.5 border dark:border-gray-600 rounded bg-white dark:bg-gray-700 dark:text-white text-sm">
+                                </div>
+                                <div>
+                                    <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">工作流中断策略</label>
+                                    <select v-model="editingCommand.trigger.interrupt_policy"
+                                            class="w-full px-2 py-1.5 border dark:border-gray-600 rounded bg-white dark:bg-gray-700 dark:text-white text-sm">
+                                        <option value="auto">自动</option>
+                                        <option value="resume">恢复后继续</option>
+                                        <option value="abort">直接中止</option>
+                                    </select>
+                                </div>
+                                <label class="flex items-center gap-2 text-sm dark:text-gray-300 pt-5 md:pt-6">
+                                    <input type="checkbox" v-model="editingCommand.trigger.allow_during_workflow" class="rounded">
+                                    允许在工作流中插队
+                                </label>
+                                <label v-if="editingCommand.trigger.type === 'page_check'" class="flex items-center gap-2 text-sm dark:text-gray-300 pt-5 md:pt-6">
+                                    <input type="checkbox" v-model="editingCommand.trigger.check_while_busy_workflow" class="rounded">
+                                    工作流忙碌时仍参与页面检查
+                                </label>
+                            </div>
+                            <div class="mt-3">
+                                <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">工作流中断提示（可选）</label>
+                                <input v-model.trim="editingCommand.trigger.interrupt_message"
+                                       type="text"
+                                       placeholder="触发该命令时，后续工作流已打断，请重试"
+                                       class="w-full px-3 py-2 border dark:border-gray-600 rounded bg-white dark:bg-gray-700 dark:text-white text-sm">
+                            </div>
                         </div>
 
                         <div class="mt-3">
@@ -540,6 +689,11 @@ window.CommandsTabTemplate = `
                             <button @click="addAction" class="text-xs text-blue-500 hover:text-blue-700">+ 添加动作</button>
                         </div>
 
+                        <label class="mb-3 flex items-center gap-2 text-sm dark:text-gray-300">
+                            <input type="checkbox" v-model="editingCommand.stop_on_error" class="rounded">
+                            动作失败后立即停止后续步骤
+                        </label>
+
                         <div v-if="editingCommand.actions.length === 0" class="text-sm text-gray-400 dark:text-gray-500 text-center py-4">
                             暂无动作，点击上方添加
                         </div>
@@ -548,19 +702,29 @@ window.CommandsTabTemplate = `
                              class="flex flex-wrap items-start gap-2 mb-2 p-3 bg-gray-50 dark:bg-gray-900 rounded-lg">
                             <span class="text-xs text-gray-400 w-5">{{ i + 1 }}</span>
 
-                            <select v-model="action.type"
-                                    @change="handleActionTypeChange(action)"
-                                    class="flex-1 min-w-[180px] px-2 py-1.5 border dark:border-gray-600 rounded bg-white dark:bg-gray-700 dark:text-white text-sm">
-                                <option v-for="opt in actionTypeOptions" :key="opt.value" :value="opt.value">
-                                    {{ opt.label }}
-                                </option>
-                            </select>
+                                <select v-model="action.type"
+                                     @change="handleActionTypeChange(action)"
+                                     class="flex-1 min-w-[180px] px-2 py-1.5 border dark:border-gray-600 rounded bg-white dark:bg-gray-700 dark:text-white text-sm">
+                                    <optgroup v-for="group in actionTypeGroups" :key="group.label" :label="group.label">
+                                        <option v-for="opt in group.options" :key="opt.value" :value="opt.value">
+                                            {{ opt.label }}
+                                        </option>
+                                    </optgroup>
+                                </select>
 
                             <!-- 动作参数 -->
                             <input v-if="action.type === 'wait'" v-model.number="action.seconds" type="number" min="0" step="0.5" placeholder="秒"
                                    class="w-20 px-2 py-1.5 border dark:border-gray-600 rounded bg-white dark:bg-gray-700 dark:text-white text-sm">
                             <input v-if="action.type === 'run_js'" v-model="action.code" type="text" placeholder="JavaScript 代码"
                                    class="flex-1 px-2 py-1.5 border dark:border-gray-600 rounded bg-white dark:bg-gray-700 dark:text-white text-sm font-mono">
+                            <input v-if="action.type === 'click_element'" v-model.trim="action.selector" type="text" placeholder="CSS / XPath 选择器"
+                                   class="flex-1 px-2 py-1.5 border dark:border-gray-600 rounded bg-white dark:bg-gray-700 dark:text-white text-sm font-mono">
+                            <div v-if="action.type === 'click_coordinates'" class="flex flex-wrap items-center gap-2">
+                                <input v-model.number="action.x" type="number" step="1" placeholder="X"
+                                       class="w-24 px-2 py-1.5 border dark:border-gray-600 rounded bg-white dark:bg-gray-700 dark:text-white text-sm">
+                                <input v-model.number="action.y" type="number" step="1" placeholder="Y"
+                                       class="w-24 px-2 py-1.5 border dark:border-gray-600 rounded bg-white dark:bg-gray-700 dark:text-white text-sm">
+                            </div>
                             <div v-if="['execute_preset', 'execute_workflow'].includes(action.type)" class="flex-1 min-w-[220px]">
                                 <select v-model="action.preset_name"
                                         :disabled="availablePresets.length === 0"
@@ -591,11 +755,23 @@ window.CommandsTabTemplate = `
                                     <input type="checkbox" v-model="action.include_disabled" class="rounded">
                                     包含禁用命令
                                 </label>
+                                <div>
+                                    <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">占用策略</label>
+                                    <select v-model="action.acquire_policy"
+                                            class="w-full px-2 py-1.5 border dark:border-gray-600 rounded bg-white dark:bg-gray-700 dark:text-white text-sm">
+                                        <option value="inherit_session">沿用当前会话</option>
+                                        <option value="try_acquire">尝试重新占用</option>
+                                        <option value="require_acquire">必须重新占用</option>
+                                    </select>
+                                </div>
                             </div>
                             <input v-if="action.type === 'navigate'" v-model="action.url" type="text" placeholder="URL"
                                    class="flex-1 px-2 py-1.5 border dark:border-gray-600 rounded bg-white dark:bg-gray-700 dark:text-white text-sm">
                             <span v-if="action.type === 'send_webhook'" class="text-xs text-gray-500 dark:text-gray-400 flex-1 font-mono">
                                 {{ (action.method || 'POST').toUpperCase() }} · {{ action.url || '未配置 URL' }}
+                            </span>
+                            <span v-if="action.type === 'send_napcat'" class="text-xs text-gray-500 dark:text-gray-400 flex-1 font-mono">
+                                NapCat · {{ action.target_type === 'group' ? ('群 ' + (action.group_id || '未填写')) : ('QQ ' + (action.user_id || '未填写')) }}
                             </span>
                             <span v-if="action.type === 'abort_task'" class="text-xs text-gray-500 dark:text-gray-400 flex-1">
                                 触发后取消当前请求并停止后续动作
@@ -737,6 +913,88 @@ window.CommandsTabTemplate = `
 
                             <p class="mt-2 text-xs text-emerald-700 dark:text-emerald-300">
                                 可用变量：                                <span v-pre>{{tab_index}}</span>、                                <span v-pre>{{domain}}</span>、                                <span v-pre>{{network_status}}</span>、                                <span v-pre>{{network_url}}</span>、                                <span v-pre>{{timestamp}}</span>
+                            </p>
+                        </div>
+
+                        <div v-for="(action, i) in editingCommand.actions.filter(a => a.type === 'send_napcat')"
+                             :key="'napcat-' + i"
+                             class="mt-4 p-4 bg-cyan-50 dark:bg-cyan-900/20 rounded-lg border border-cyan-200 dark:border-cyan-800">
+                            <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+                                <h5 class="text-sm font-semibold text-cyan-800 dark:text-cyan-300">🐧 NapCat QQ 通知</h5>
+                                <div class="flex gap-2">
+                                    <button @click="useNapcatPreset(action, 'private')"
+                                            type="button"
+                                            class="rounded-lg border border-cyan-300 px-2 py-1 text-xs font-semibold text-cyan-700 hover:bg-cyan-100 dark:border-cyan-700 dark:text-cyan-300 dark:hover:bg-cyan-900/40">
+                                        私聊模板
+                                    </button>
+                                    <button @click="useNapcatPreset(action, 'group')"
+                                            type="button"
+                                            class="rounded-lg border border-cyan-300 px-2 py-1 text-xs font-semibold text-cyan-700 hover:bg-cyan-100 dark:border-cyan-700 dark:text-cyan-300 dark:hover:bg-cyan-900/40">
+                                        群聊模板
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                <div class="md:col-span-2">
+                                    <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">NapCat HTTP 地址</label>
+                                    <input v-model.trim="action.base_url" type="text"
+                                           placeholder="http://127.0.0.1:3000"
+                                           class="w-full px-2 py-1.5 border dark:border-gray-600 rounded bg-white dark:bg-gray-700 dark:text-white text-sm font-mono">
+                                </div>
+                                <div>
+                                    <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">发送目标</label>
+                                    <select v-model="action.target_type"
+                                            class="w-full px-2 py-1.5 border dark:border-gray-600 rounded bg-white dark:bg-gray-700 dark:text-white text-sm">
+                                        <option value="private">私聊</option>
+                                        <option value="group">群聊</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3">
+                                <div v-if="action.target_type !== 'group'">
+                                    <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">QQ 号</label>
+                                    <input v-model.trim="action.user_id" type="text"
+                                           placeholder="接收通知的 QQ 号"
+                                           class="w-full px-2 py-1.5 border dark:border-gray-600 rounded bg-white dark:bg-gray-700 dark:text-white text-sm font-mono">
+                                </div>
+                                <div v-else>
+                                    <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">群号</label>
+                                    <input v-model.trim="action.group_id" type="text"
+                                           placeholder="接收通知的群号"
+                                           class="w-full px-2 py-1.5 border dark:border-gray-600 rounded bg-white dark:bg-gray-700 dark:text-white text-sm font-mono">
+                                </div>
+                                <div>
+                                    <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">Access Token（可选）</label>
+                                    <input v-model.trim="action.access_token" type="text"
+                                           placeholder="留空表示不带鉴权头"
+                                           class="w-full px-2 py-1.5 border dark:border-gray-600 rounded bg-white dark:bg-gray-700 dark:text-white text-sm font-mono">
+                                </div>
+                            </div>
+
+                            <div class="mt-3">
+                                <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">消息内容（支持变量）</label>
+                                <textarea v-model="action.message"
+                                          rows="4"
+                                          class="w-full px-2 py-1.5 border dark:border-gray-600 rounded bg-white dark:bg-gray-700 dark:text-white text-sm font-mono resize-y"
+                                          placeholder="命令通知：{{source_command_name}}&#10;{{command_result_summary}}"></textarea>
+                            </div>
+
+                            <div class="mt-3 flex flex-wrap items-center gap-4">
+                                <div>
+                                    <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">超时（秒）</label>
+                                    <input v-model.number="action.timeout" type="number" min="1" step="1"
+                                           class="w-24 px-2 py-1.5 border dark:border-gray-600 rounded bg-white dark:bg-gray-700 dark:text-white text-sm">
+                                </div>
+                                <label class="flex items-center gap-2 cursor-pointer text-sm dark:text-gray-300 pt-5">
+                                    <input type="checkbox" v-model="action.raise_for_status" class="rounded">
+                                    HTTP 非 2xx 视为失败
+                                </label>
+                            </div>
+
+                            <p class="mt-2 text-xs text-cyan-700 dark:text-cyan-300">
+                                常用变量：<span v-pre>{{source_command_name}}</span>、<span v-pre>{{command_result_summary}}</span>、<span v-pre>{{command_result}}</span>、<span v-pre>{{domain}}</span>、<span v-pre>{{network_url}}</span>
                             </p>
                         </div>
 

@@ -434,6 +434,8 @@ async def test_selector(
 @router.get("/api/debug/request-status")
 async def request_status(authenticated: bool = Depends(verify_auth)):
     """查看请求管理器状态"""
+    if not AppConfig.DEBUG:
+        raise HTTPException(status_code=403, detail="调试功能未启用")
     return request_manager.get_status()
 
 
@@ -457,16 +459,29 @@ async def force_release(authenticated: bool = Depends(verify_auth)):
 
 
 @router.post("/api/debug/cancel-current")
-async def cancel_current(authenticated: bool = Depends(verify_auth)):
+async def cancel_current(
+    tab_id: Optional[str] = None,
+    authenticated: bool = Depends(verify_auth),
+):
     """取消当前正在执行的请求"""
-    current_id = request_manager.get_current_request_id()
+    if not AppConfig.DEBUG:
+        raise HTTPException(status_code=403, detail="调试功能未启用")
 
-    if not current_id:
-        return {"cancelled": False, "message": "没有正在执行的请求"}
+    running_requests = request_manager.get_running_requests(tab_id=tab_id)
+    if not running_requests:
+        return {"cancelled": False, "message": "没有正在执行的请求", "tab_id": tab_id}
 
-    success = request_manager.cancel_current("manual_cancel")
+    if not tab_id and len(running_requests) > 1:
+        raise HTTPException(
+            status_code=400,
+            detail="存在多个运行中的请求，请指定 tab_id",
+        )
+
+    current_id = running_requests[0].request_id
+    success = request_manager.cancel_current("manual_cancel", tab_id=tab_id)
 
     return {
         "cancelled": success,
-        "request_id": current_id
+        "request_id": current_id,
+        "tab_id": tab_id or running_requests[0].tab_id,
     }

@@ -247,6 +247,7 @@ window.ImportDialog = {
         show: { type: Boolean, default: false },
         fileName: { type: String, default: '' },
         importType: { type: String, default: 'full' },
+        suggestedDomain: { type: String, default: '' },
         importedConfig: { type: Object, default: null }
     },
     emits: ['close', 'confirm'],
@@ -260,8 +261,33 @@ window.ImportDialog = {
         show(val) {
             if (val) {
                 this.mode = 'merge';
-                this.singleDomain = '';
+                this.singleDomain = this.suggestedDomain || '';
             }
+        },
+        suggestedDomain(val) {
+            if (this.show && !this.singleDomain.trim()) {
+                this.singleDomain = val || '';
+            }
+        }
+    },
+    computed: {
+        singleImportHint() {
+            if (this.suggestedDomain) {
+                return '已从导入文件推断站点名，直接确认即可，也可以手动修改。';
+            }
+            return '未识别出站点名时，再手动补充即可。';
+        },
+        mergeDescription() {
+            if (this.importType === 'single') {
+                return '保留当前站点里未导入的预设；导入文件中的同名预设会被覆盖。';
+            }
+            return '只导入文件里的站点；同名站点整站覆盖，未出现在文件中的站点会保留。';
+        },
+        replaceDescription() {
+            if (this.importType === 'single') {
+                return '用导入文件完整替换这个站点，当前站点已有预设和设置都会被清掉。';
+            }
+            return '先清空当前全部站点配置，再写入导入文件中的站点。';
         }
     },
     template: `
@@ -287,11 +313,11 @@ window.ImportDialog = {
 
                 <!-- 单站点导入时需要输入域名 -->
                 <div v-if="importType === 'single'" class="mb-4">
-                    <label class="text-sm text-gray-600 dark:text-gray-400 mb-2 block">站点域名</label>
+                    <label class="text-sm text-gray-600 dark:text-gray-400 mb-2 block">站点名</label>
                     <input v-model="singleDomain"
                            placeholder="例如: chat.openai.com"
                            class="border dark:border-gray-700 px-3 py-2 rounded w-full text-sm bg-white dark:bg-gray-700 dark:text-white">
-                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">请输入此配置对应的站点域名</p>
+                    <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">{{ singleImportHint }}</p>
                 </div>
 
                 <div class="mb-4">
@@ -299,15 +325,13 @@ window.ImportDialog = {
                     <div class="space-y-2">
                         <label class="flex items-center cursor-pointer">
                             <input type="radio" v-model="mode" value="merge" class="mr-2">
-                            <span class="dark:text-gray-300">合并</span>
-                            <span class="text-xs text-gray-500 dark:text-gray-400 ml-2">（保留现有配置，相同域名会被覆盖）</span>
+                            <span class="dark:text-gray-300">合并导入</span>
+                            <span class="text-xs text-gray-500 dark:text-gray-400 ml-2">（{{ mergeDescription }}）</span>
                         </label>
                         <label class="flex items-center cursor-pointer">
                             <input type="radio" v-model="mode" value="replace" class="mr-2">
-                            <span class="dark:text-gray-300">替换</span>
-                            <span class="text-xs text-gray-500 dark:text-gray-400 ml-2">
-                                {{ importType === 'single' ? '（覆盖该站点配置）' : '（删除所有现有配置）' }}
-                            </span>
+                            <span class="dark:text-gray-300">完全替换</span>
+                            <span class="text-xs text-gray-500 dark:text-gray-400 ml-2">（{{ replaceDescription }}）</span>
                         </label>
                     </div>
                 </div>

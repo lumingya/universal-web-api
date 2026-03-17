@@ -37,15 +37,15 @@
         },
         {
           "type": "run_js",
-          "code": "(() => { try { const t = (document.body && document.body.innerText ? document.body.innerText : '').toLowerCase(); const hasVerify = t.includes('security verification') || t.includes('verify you are human') || t.includes('checking your browser') || t.includes('cloudflare'); if (hasVerify) return 'VERIFY'; const hasInput = !!document.querySelector('textarea, [contenteditable=\"true\"], input[placeholder*=\"ask\" i]'); const links = Array.from(document.querySelectorAll('a')).slice(0, 12); let blueLinks = 0; for (const a of links) { try { if (getComputedStyle(a).color === 'rgb(0, 0, 238)') blueLinks++; } catch (e) {} } const hasArenaHints = t.includes('new chat') || t.includes('leaderboard') || t.includes('battle mode'); if (blueLinks >= 3 && hasArenaHints) return 'BLACK'; if (hasInput) return 'READY'; return 'UNKNOWN'; } catch (e) { return 'UNKNOWN'; } })()",
+          "code": "(() => { try { const t = (document.body && document.body.innerText ? document.body.innerText : '').toLowerCase(); const hasVerify = t.includes('security verification') || t.includes('protected by cloudflare') || t.includes('verify you are human') || t.includes('checking your browser') || t.includes('确认您是真人') || t.includes('cloudflare'); if (hasVerify) return 'VERIFY'; const hasInput = !!document.querySelector('textarea, [contenteditable=\"true\"], input[placeholder*=\"ask\" i]'); const links = Array.from(document.querySelectorAll('a')).slice(0, 12); let blueLinks = 0; for (const a of links) { try { if (getComputedStyle(a).color === 'rgb(0, 0, 238)') blueLinks++; } catch (e) {} } const hasArenaHints = t.includes('new chat') || t.includes('leaderboard') || t.includes('battle mode'); if (blueLinks >= 3 && hasArenaHints) return 'BLACK'; if (hasInput) return 'READY'; return 'UNKNOWN'; } catch (e) { return 'UNKNOWN'; } })()",
           "action_id": "step_5_probe"
         }
       ],
       "script": "",
       "script_lang": "javascript",
       "id": "cmd_58625812",
-      "last_triggered": 1772704260.030908,
-      "trigger_count": 34,
+      "last_triggered": 1773570668.7475963,
+      "trigger_count": 54,
       "group_name": "命令组1"
     },
     {
@@ -120,7 +120,7 @@
         },
         {
           "type": "run_js",
-          "code": "(() => { try { const t = (document.body && document.body.innerText ? document.body.innerText : '').toLowerCase(); const hasVerify = t.includes('security verification') || t.includes('verify you are human') || t.includes('checking your browser') || t.includes('cloudflare'); if (hasVerify) return 'VERIFY'; const hasInput = !!document.querySelector('textarea, [contenteditable=\"true\"], input[placeholder*=\"ask\" i]'); const links = Array.from(document.querySelectorAll('a')).slice(0, 12); let blueLinks = 0; for (const a of links) { try { if (getComputedStyle(a).color === 'rgb(0, 0, 238)') blueLinks++; } catch (e) {} } const hasArenaHints = t.includes('new chat') || t.includes('leaderboard') || t.includes('battle mode'); if (blueLinks >= 3 && hasArenaHints) return 'BLACK'; if (hasInput) return 'READY'; return 'UNKNOWN'; } catch (e) { return 'UNKNOWN'; } })()",
+          "code": "(() => { try { const t = (document.body && document.body.innerText ? document.body.innerText : '').toLowerCase(); const hasVerify = t.includes('security verification') || t.includes('protected by cloudflare') || t.includes('verify you are human') || t.includes('checking your browser') || t.includes('确认您是真人') || t.includes('cloudflare'); if (hasVerify) return 'VERIFY'; const hasInput = !!document.querySelector('textarea, [contenteditable=\"true\"], input[placeholder*=\"ask\" i]'); const links = Array.from(document.querySelectorAll('a')).slice(0, 12); let blueLinks = 0; for (const a of links) { try { if (getComputedStyle(a).color === 'rgb(0, 0, 238)') blueLinks++; } catch (e) {} } const hasArenaHints = t.includes('new chat') || t.includes('leaderboard') || t.includes('battle mode'); if (blueLinks >= 3 && hasArenaHints) return 'BLACK'; if (hasInput) return 'READY'; return 'UNKNOWN'; } catch (e) { return 'UNKNOWN'; } })()",
           "action_id": "step_10_probe"
         }
       ],
@@ -132,7 +132,7 @@
       "group_name": "命令组1"
     },
     {
-      "name": "ARENA_SWITCH_MODEL_WHEN_READY",
+      "name": "清除cookie后恢复",
       "enabled": true,
       "mode": "simple",
       "trigger": {
@@ -147,14 +147,20 @@
         "expected_value": "READY",
         "priority": 3,
         "periodic_enabled": false,
-        "periodic_interval_sec": 8.0,
-        "periodic_jitter_sec": 2.0
+        "periodic_interval_sec": 8,
+        "periodic_jitter_sec": 2,
+        "command_ids": [],
+        "listen_all_commands": false,
+        "informative_only": true,
+        "match_mode": "keyword",
+        "status_codes": "403,429,500,502,503,504",
+        "abort_on_match": true
       },
       "actions": [
         {
           "type": "execute_workflow",
           "prompt": "",
-          "preset_name": "閫夋嫨妯″瀷",
+          "preset_name": "切换SideBySide",
           "action_id": "step_1_model"
         }
       ],
@@ -188,7 +194,7 @@
           "selector": "high_quality_round_robin",
           "mode": "round_robin",
           "node_name": "",
-          "exclude_keywords": "DIRECT,REJECT,GLOBAL,鑷姩閫夋嫨,鏁呴殰杞Щ",
+          "exclude_keywords": "DIRECT,REJECT,GLOBAL,自动选择,故障转移",
           "refresh_after": true
         }
       ],
@@ -198,7 +204,7 @@
       "group_name": "命令组1"
     },
     {
-      "name": "ARENA_RECOVER_BLACK_SCREEN_AFTER_COOKIE_CLEAR",
+      "name": "黑屏后恢复1",
       "enabled": true,
       "mode": "simple",
       "trigger": {
@@ -216,8 +222,11 @@
         "abort_on_match": true,
         "priority": 4,
         "periodic_enabled": false,
-        "periodic_interval_sec": 8.0,
-        "periodic_jitter_sec": 2.0
+        "periodic_interval_sec": 8,
+        "periodic_jitter_sec": 2,
+        "command_ids": [],
+        "listen_all_commands": false,
+        "informative_only": true
       },
       "actions": [
         {
@@ -231,7 +240,7 @@
         },
         {
           "type": "execute_workflow",
-          "preset_name": "verify",
+          "preset_name": "过cf盾",
           "prompt": "",
           "action_id": "step_3_verify"
         },
@@ -242,7 +251,7 @@
         },
         {
           "type": "run_js",
-          "code": "(() => { try { const t = (document.body && document.body.innerText ? document.body.innerText : '').toLowerCase(); const hasVerify = t.includes('security verification') || t.includes('verify you are human') || t.includes('checking your browser') || t.includes('cloudflare'); if (hasVerify) return 'VERIFY'; const hasInput = !!document.querySelector('textarea, [contenteditable=\"true\"], input[placeholder*=\"ask\" i]'); const links = Array.from(document.querySelectorAll('a')).slice(0, 12); let blueLinks = 0; for (const a of links) { try { if (getComputedStyle(a).color === 'rgb(0, 0, 238)') blueLinks++; } catch (e) {} } const hasArenaHints = t.includes('new chat') || t.includes('leaderboard') || t.includes('battle mode'); if (blueLinks >= 3 && hasArenaHints) return 'BLACK'; if (hasInput) return 'READY'; return 'UNKNOWN'; } catch (e) { return 'UNKNOWN'; } })()",
+          "code": "(() => { try { const t = (document.body && document.body.innerText ? document.body.innerText : '').toLowerCase(); const hasVerify = t.includes('security verification') || t.includes('protected by cloudflare') || t.includes('verify you are human') || t.includes('checking your browser') || t.includes('确认您是真人') || t.includes('cloudflare'); if (hasVerify) return 'VERIFY'; const hasInput = !!document.querySelector('textarea, [contenteditable=\"true\"], input[placeholder*=\"ask\" i]'); const links = Array.from(document.querySelectorAll('a')).slice(0, 12); let blueLinks = 0; for (const a of links) { try { if (getComputedStyle(a).color === 'rgb(0, 0, 238)') blueLinks++; } catch (e) {} } const hasArenaHints = t.includes('new chat') || t.includes('leaderboard') || t.includes('battle mode'); if (blueLinks >= 3 && hasArenaHints) return 'BLACK'; if (hasInput) return 'READY'; return 'UNKNOWN'; } catch (e) { return 'UNKNOWN'; } })()",
           "action_id": "step_5_probe"
         }
       ],
@@ -278,7 +287,7 @@
       "actions": [
         {
           "type": "execute_workflow",
-          "preset_name": "verify",
+          "preset_name": "过cf盾",
           "prompt": "",
           "action_id": "step_1_verify"
         },
@@ -289,7 +298,7 @@
         },
         {
           "type": "run_js",
-          "code": "(() => { try { const t = (document.body && document.body.innerText ? document.body.innerText : '').toLowerCase(); const hasVerify = t.includes('security verification') || t.includes('verify you are human') || t.includes('checking your browser') || t.includes('cloudflare'); if (hasVerify) return 'VERIFY'; const hasInput = !!document.querySelector('textarea, [contenteditable=\"true\"], input[placeholder*=\"ask\" i]'); const links = Array.from(document.querySelectorAll('a')).slice(0, 12); let blueLinks = 0; for (const a of links) { try { if (getComputedStyle(a).color === 'rgb(0, 0, 238)') blueLinks++; } catch (e) {} } const hasArenaHints = t.includes('new chat') || t.includes('leaderboard') || t.includes('battle mode'); if (blueLinks >= 3 && hasArenaHints) return 'BLACK'; if (hasInput) return 'READY'; return 'UNKNOWN'; } catch (e) { return 'UNKNOWN'; } })()",
+          "code": "(() => { try { const t = (document.body && document.body.innerText ? document.body.innerText : '').toLowerCase(); const hasVerify = t.includes('security verification') || t.includes('protected by cloudflare') || t.includes('verify you are human') || t.includes('checking your browser') || t.includes('确认您是真人') || t.includes('cloudflare'); if (hasVerify) return 'VERIFY'; const hasInput = !!document.querySelector('textarea, [contenteditable=\"true\"], input[placeholder*=\"ask\" i]'); const links = Array.from(document.querySelectorAll('a')).slice(0, 12); let blueLinks = 0; for (const a of links) { try { if (getComputedStyle(a).color === 'rgb(0, 0, 238)') blueLinks++; } catch (e) {} } const hasArenaHints = t.includes('new chat') || t.includes('leaderboard') || t.includes('battle mode'); if (blueLinks >= 3 && hasArenaHints) return 'BLACK'; if (hasInput) return 'READY'; return 'UNKNOWN'; } catch (e) { return 'UNKNOWN'; } })()",
           "action_id": "step_3_probe"
         }
       ],
@@ -301,7 +310,59 @@
       "trigger_count": 1
     },
     {
-      "name": "ARENA_SWITCH_MODEL_AFTER_BLACK_RECOVERY",
+      "id": "cmd_cf_pagecheck_arena_verify",
+      "name": "自动过cf盾",
+      "enabled": true,
+      "mode": "simple",
+      "trigger": {
+        "type": "page_check",
+        "value": "security verification || protected by cloudflare || verify you are human || checking your browser || 确认您是真人",
+        "command_id": "",
+        "action_ref": "",
+        "match_rule": "equals",
+        "expected_value": "",
+        "match_mode": "keyword",
+        "status_codes": "403,429,500,502,503,504",
+        "abort_on_match": true,
+        "scope": "domain",
+        "domain": "arena.ai",
+        "tab_index": null,
+        "priority": 4,
+        "periodic_enabled": true,
+        "periodic_interval_sec": 3,
+        "periodic_jitter_sec": 1,
+        "fire_mode": "edge",
+        "cooldown_sec": 10,
+        "command_ids": [],
+        "listen_all_commands": false,
+        "informative_only": true
+      },
+      "actions": [
+        {
+          "type": "execute_workflow",
+          "preset_name": "过cf盾",
+          "prompt": "",
+          "action_id": "step_1_verify"
+        },
+        {
+          "type": "wait",
+          "seconds": 1,
+          "action_id": "step_2_wait"
+        },
+        {
+          "type": "run_js",
+          "code": "(() => { try { const t = (document.body && document.body.innerText ? document.body.innerText : '').toLowerCase(); const hasVerify = t.includes('security verification') || t.includes('protected by cloudflare') || t.includes('verify you are human') || t.includes('checking your browser') || t.includes('确认您是真人') || t.includes('cloudflare'); if (hasVerify) return 'VERIFY'; const hasInput = !!document.querySelector('textarea, [contenteditable=\"true\"], input[placeholder*=\"ask\" i]'); const links = Array.from(document.querySelectorAll('a')).slice(0, 12); let blueLinks = 0; for (const a of links) { try { if (getComputedStyle(a).color === 'rgb(0, 0, 238)') blueLinks++; } catch (e) {} } const hasArenaHints = t.includes('new chat') || t.includes('leaderboard') || t.includes('battle mode'); if (blueLinks >= 3 && hasArenaHints) return 'BLACK'; if (hasInput) return 'READY'; return 'UNKNOWN'; } catch (e) { return 'UNKNOWN'; } })()",
+          "action_id": "step_3_probe"
+        }
+      ],
+      "group_name": "命令组1",
+      "script": "",
+      "script_lang": "javascript",
+      "last_triggered": 1773570675.6561358,
+      "trigger_count": 62
+    },
+    {
+      "name": "黑屏后恢复",
       "enabled": true,
       "mode": "simple",
       "trigger": {
@@ -316,13 +377,19 @@
         "expected_value": "READY",
         "priority": 3,
         "periodic_enabled": false,
-        "periodic_interval_sec": 8.0,
-        "periodic_jitter_sec": 2.0
+        "periodic_interval_sec": 8,
+        "periodic_jitter_sec": 2,
+        "command_ids": [],
+        "listen_all_commands": false,
+        "informative_only": true,
+        "match_mode": "keyword",
+        "status_codes": "403,429,500,502,503,504",
+        "abort_on_match": true
       },
       "actions": [
         {
           "type": "execute_workflow",
-          "preset_name": "閫夋嫨妯″瀷",
+          "preset_name": "切换SideBySide",
           "prompt": "",
           "action_id": "step_1_model"
         }
@@ -360,7 +427,7 @@
         {
           "type": "execute_workflow",
           "action_id": "step_2",
-          "preset_name": "閫夋嫨妯″瀷",
+          "preset_name": "切换SideBySide",
           "prompt": ""
         }
       ],
@@ -368,11 +435,11 @@
       "script": "",
       "script_lang": "javascript",
       "id": "cmd_69640733",
-      "last_triggered": 1773291742.7462838,
-      "trigger_count": 1489
+      "last_triggered": 1773584695.4938655,
+      "trigger_count": 1665
     },
     {
-      "name": "ARENA_SWITCH_MODEL_AFTER_VERIFY_RECOVERY",
+      "name": "人机验证后恢复",
       "enabled": true,
       "mode": "simple",
       "trigger": {
@@ -387,13 +454,19 @@
         "expected_value": "READY",
         "priority": 3,
         "periodic_enabled": false,
-        "periodic_interval_sec": 8.0,
-        "periodic_jitter_sec": 2.0
+        "periodic_interval_sec": 8,
+        "periodic_jitter_sec": 2,
+        "command_ids": [],
+        "listen_all_commands": false,
+        "informative_only": true,
+        "match_mode": "keyword",
+        "status_codes": "403,429,500,502,503,504",
+        "abort_on_match": true
       },
       "actions": [
         {
           "type": "execute_workflow",
-          "preset_name": "閫夋嫨妯″瀷",
+          "preset_name": "切换SideBySide",
           "prompt": "",
           "action_id": "step_1_model"
         }
@@ -404,7 +477,69 @@
       "group_name": "命令组1"
     },
     {
-      "name": "ARENA_SWITCH_MODEL_AFTER_NETWORK_RECOVERY",
+      "id": "cmd_arena_notify_qq",
+      "name": "ARENA关键恢复QQ通知",
+      "enabled": true,
+      "mode": "simple",
+      "trigger": {
+        "type": "command_result_event",
+        "value": "",
+        "command_id": "",
+        "command_ids": [
+          "cmd_b34a8efd",
+          "cmd_cf_pagecheck_arena_verify",
+          "cmd_9b1e4a02",
+          "cmd_9b1e4a01",
+          "cmd_arena_terms_refresh_abort",
+          "cmd_arena_terms_refresh_followup"
+        ],
+        "listen_all_commands": false,
+        "informative_only": true,
+        "dedupe_key_fields": [
+          "summary"
+        ],
+        "action_ref": "",
+        "match_rule": "equals",
+        "expected_value": "",
+        "match_mode": "keyword",
+        "status_codes": "403,429,500,502,503,504",
+        "abort_on_match": true,
+        "scope": "domain",
+        "domain": "arena.ai",
+        "tab_index": null,
+        "priority": 2,
+        "periodic_enabled": true,
+        "periodic_interval_sec": 3,
+        "periodic_jitter_sec": 1,
+        "fire_mode": "edge",
+        "cooldown_sec": 0,
+        "allow_during_workflow": false,
+        "interrupt_policy": "auto",
+        "interrupt_message": ""
+      },
+      "actions": [
+        {
+          "type": "send_napcat",
+          "action_id": "step_1_notify",
+          "base_url": "http://127.0.0.1:3000",
+          "target_type": "private",
+          "user_id": "#",
+          "group_id": "",
+          "message": "Arena 告警\\n命令：{{source_command_name}}\\n结果：{{command_result_summary}}\\n站点：{{domain}}\\n标签页：#{{tab_index}}\\n时间：{{iso_time}}",
+          "access_token": "qwe07931",
+          "timeout": 8,
+          "raise_for_status": true
+        }
+      ],
+      "group_name": "命令组1",
+      "script": "",
+      "script_lang": "javascript",
+      "last_triggered": 1773570844.6040304,
+      "trigger_count": 41,
+      "stop_on_error": false
+    },
+    {
+      "name": "网络错误后选择模型",
       "enabled": true,
       "mode": "simple",
       "trigger": {
@@ -419,13 +554,19 @@
         "expected_value": "READY",
         "priority": 3,
         "periodic_enabled": false,
-        "periodic_interval_sec": 8.0,
-        "periodic_jitter_sec": 2.0
+        "periodic_interval_sec": 8,
+        "periodic_jitter_sec": 2,
+        "command_ids": [],
+        "listen_all_commands": false,
+        "informative_only": true,
+        "match_mode": "keyword",
+        "status_codes": "403,429,500,502,503,504",
+        "abort_on_match": true
       },
       "actions": [
         {
           "type": "execute_workflow",
-          "preset_name": "閫夋嫨妯″瀷",
+          "preset_name": "切换SideBySide",
           "prompt": "",
           "action_id": "step_1_model"
         }
@@ -548,7 +689,7 @@
       "mode": "simple",
       "trigger": {
         "type": "page_check",
-        "value": "出了点问题",
+        "value": "出了点问题 || 重试",
         "command_id": "",
         "action_ref": "",
         "match_rule": "equals",
@@ -564,7 +705,13 @@
         "periodic_interval_sec": 3,
         "periodic_jitter_sec": 1,
         "fire_mode": "level",
-        "cooldown_sec": 6
+        "cooldown_sec": 6,
+        "command_ids": [],
+        "listen_all_commands": false,
+        "informative_only": true,
+        "allow_during_workflow": false,
+        "interrupt_policy": "auto",
+        "interrupt_message": ""
       },
       "actions": [
         {
@@ -573,21 +720,27 @@
         },
         {
           "type": "wait",
-          "seconds": 2,
+          "seconds": 5,
           "action_id": "step_2_wait"
         },
         {
           "type": "run_js",
-          "seconds": 1,
           "action_id": "step_3",
-          "code": "(() => {   const btn = document.querySelector('button.temp-chat-button');   if (!btn) return 'temp_chat_button_not_found';   btn.click();   return 'temp_chat_button_clicked'; })()"
+          "retry_on_results": [
+            "temp_chat_button_timeout"
+          ],
+          "retry_attempts": 1,
+          "retry_after_refresh": true,
+          "retry_wait_seconds": 2,
+          "code": "return (async () => { const findClickableButton = () => { const btn = document.querySelector('button.temp-chat-button'); if (!(btn instanceof HTMLButtonElement) || !btn.isConnected) return null; const style = window.getComputedStyle(btn); const hidden = btn.getClientRects().length === 0 || style.display === 'none' || style.visibility === 'hidden'; if (btn.disabled || hidden) return null; return btn; }; const deadline = Date.now() + 10000; while (Date.now() < deadline) { const btn = findClickableButton(); if (btn) { btn.click(); return 'temp_chat_button_clicked'; } await new Promise(resolve => setTimeout(resolve, 250)); } return 'temp_chat_button_timeout'; })()"
         }
       ],
       "group_name": "GEMINI_AUTO_RECOVERY",
       "script": "",
       "script_lang": "javascript",
-      "last_triggered": 1773327657.4198651,
-      "trigger_count": 6
+      "last_triggered": 1773677821.3752792,
+      "trigger_count": 1,
+      "stop_on_error": false
     },
     {
       "id": "cmd_gemsw001",
@@ -624,8 +777,8 @@
       "group_name": "GEMINI_AUTO_RECOVERY",
       "script": "",
       "script_lang": "javascript",
-      "last_triggered": 1773277820.3978999,
-      "trigger_count": 7
+      "last_triggered": 1773574989.9355445,
+      "trigger_count": 8
     },
     {
       "id": "cmd_cftmj001",
@@ -661,6 +814,158 @@
       "script_lang": "javascript",
       "last_triggered": 1772639508.7934961,
       "trigger_count": 2
+    },
+    {
+      "name": "新命令1",
+      "enabled": true,
+      "mode": "simple",
+      "trigger": {
+        "type": "page_check",
+        "value": "需要我为你做些什么",
+        "command_id": "",
+        "action_ref": "",
+        "match_rule": "equals",
+        "expected_value": "",
+        "match_mode": "keyword",
+        "status_codes": "403,429,500,502,503,504",
+        "abort_on_match": true,
+        "scope": "domain",
+        "domain": "gemini.google.com",
+        "tab_index": null,
+        "periodic_enabled": true,
+        "periodic_interval_sec": 8,
+        "periodic_jitter_sec": 2,
+        "priority": 1,
+        "fire_mode": "edge",
+        "cooldown_sec": 6,
+        "stable_for_sec": 1.5,
+        "check_while_busy_workflow": false
+      },
+      "actions": [
+        {
+          "type": "run_js",
+          "action_id": "step_2",
+          "code": "return (async () => { const findClickableButton = () => { const btn = document.querySelector('button.temp-chat-button'); if (!(btn instanceof HTMLButtonElement) || !btn.isConnected) return null; const style = window.getComputedStyle(btn); const hidden = btn.getClientRects().length === 0 || style.display === 'none' || style.visibility === 'hidden'; if (btn.disabled || hidden) return null; return btn; }; const deadline = Date.now() + 2000; while (Date.now() < deadline) { const btn = findClickableButton(); if (btn) { btn.click(); return 'temp_chat_button_clicked'; } await new Promise(resolve => setTimeout(resolve, 200)); } return 'temp_chat_button_timeout'; })()"
+        }
+      ],
+      "group_name": "GEMINI_AUTO_RECOVERY",
+      "script": "",
+      "script_lang": "javascript",
+      "id": "cmd_0020e346",
+      "last_triggered": 1773677931.102601,
+      "trigger_count": 2
+    },
+    {
+      "id": "cmd_arena_terms_refresh_abort",
+      "name": "ARENA_AGREE_POPUP_CLICK_FIRST",
+      "enabled": true,
+      "mode": "simple",
+      "trigger": {
+        "type": "page_check",
+        "value": "terms of use && privacy policy && agree",
+        "command_id": "",
+        "action_ref": "",
+        "match_rule": "equals",
+        "expected_value": "",
+        "match_mode": "keyword",
+        "status_codes": "403,429,500,502,503,504",
+        "abort_on_match": true,
+        "scope": "domain",
+        "domain": "arena.ai",
+        "tab_index": null,
+        "priority": 3,
+        "allow_during_workflow": true,
+        "interrupt_policy": "resume",
+        "periodic_enabled": true,
+        "periodic_interval_sec": 3,
+        "periodic_jitter_sec": 1,
+        "fire_mode": "level",
+        "cooldown_sec": 12
+      },
+      "actions": [
+        {
+          "type": "run_js",
+          "action_id": "step_1_try_click",
+          "fail_on_falsy": false,
+          "code": "return (() => { try { const candidates = Array.from(document.querySelectorAll('button, [role=\"button\"], input[type=\"button\"], input[type=\"submit\"]')); const target = candidates.find(el => { const text = (el.innerText || el.value || el.getAttribute('aria-label') || '').trim().toLowerCase(); if (!text) return false; if (text !== 'agree') return false; const rect = el.getBoundingClientRect(); const style = window.getComputedStyle(el); return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' && !el.disabled; }); let outcome = 'AGREE_BUTTON_NOT_FOUND'; if (target) { target.click(); outcome = 'AGREE_CLICKED'; } window.__arenaAgreePopupLastClick = outcome; return outcome; } catch (e) { const outcome = 'AGREE_CLICK_FAILED:' + e; window.__arenaAgreePopupLastClick = outcome; return outcome; } })()"
+        },
+        {
+          "type": "wait",
+          "seconds": 0.5,
+          "action_id": "step_2_wait"
+        },
+        {
+          "type": "run_js",
+          "action_id": "step_3_probe",
+          "fail_on_falsy": false,
+          "code": "return (() => { try { const clickOutcome = String(window.__arenaAgreePopupLastClick || '').trim(); const candidates = Array.from(document.querySelectorAll('button, [role=\"button\"], input[type=\"button\"], input[type=\"submit\"], [role=\"dialog\"], [data-radix-popper-content-wrapper]')); const hasVisiblePopup = candidates.some(el => { const text = (el.innerText || el.value || el.getAttribute('aria-label') || '').toLowerCase(); if (!(text.includes('terms of use') && text.includes('privacy policy') && text.includes('agree'))) return false; const rect = el.getBoundingClientRect(); const style = window.getComputedStyle(el); return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden'; }); if (!hasVisiblePopup) return 'AGREE_DISMISSED'; if (clickOutcome === 'AGREE_CLICKED') return 'AGREE_WAITING_AFTER_CLICK'; if (clickOutcome.startsWith('AGREE_CLICK_FAILED:') || clickOutcome === 'AGREE_BUTTON_NOT_FOUND') return 'AGREE_REFRESH_NEEDED'; return 'AGREE_STILL_VISIBLE'; } catch (e) { return 'AGREE_PROBE_FAILED:' + e; } })()"
+        },
+        {
+          "type": "wait",
+          "seconds": 1.8,
+          "action_id": "step_4_wait_after_click"
+        },
+        {
+          "type": "run_js",
+          "action_id": "step_5_final_probe",
+          "fail_on_falsy": false,
+          "code": "return (() => { try { const clickOutcome = String(window.__arenaAgreePopupLastClick || '').trim(); const candidates = Array.from(document.querySelectorAll('button, [role=\"button\"], input[type=\"button\"], input[type=\"submit\"], [role=\"dialog\"], [data-radix-popper-content-wrapper]')); const hasVisiblePopup = candidates.some(el => { const text = (el.innerText || el.value || el.getAttribute('aria-label') || '').toLowerCase(); if (!(text.includes('terms of use') && text.includes('privacy policy') && text.includes('agree'))) return false; const rect = el.getBoundingClientRect(); const style = window.getComputedStyle(el); return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden'; }); if (!hasVisiblePopup) return 'AGREE_DISMISSED'; if (clickOutcome === 'AGREE_CLICKED') return 'AGREE_REFRESH_NEEDED'; if (clickOutcome.startsWith('AGREE_CLICK_FAILED:') || clickOutcome === 'AGREE_BUTTON_NOT_FOUND') return 'AGREE_REFRESH_NEEDED'; return 'AGREE_STILL_VISIBLE'; } catch (e) { return 'AGREE_PROBE_FAILED:' + e; } })()"
+        }
+      ],
+      "group_name": "命令组1",
+      "script": "",
+      "script_lang": "javascript",
+      "last_triggered": 1773570842.040608,
+      "trigger_count": 66
+    },
+    {
+      "id": "cmd_arena_terms_refresh_followup",
+      "name": "ARENA_AGREE_POPUP_REFRESH_ABORT",
+      "enabled": true,
+      "mode": "simple",
+      "trigger": {
+        "type": "command_result_match",
+        "value": "",
+        "scope": "domain",
+        "domain": "arena.ai",
+        "tab_index": null,
+        "command_id": "cmd_arena_terms_refresh_abort",
+        "action_ref": "step_5_final_probe",
+        "match_rule": "equals",
+        "expected_value": "AGREE_REFRESH_NEEDED",
+        "match_mode": "keyword",
+        "status_codes": "403,429,500,502,503,504",
+        "abort_on_match": true,
+        "priority": 4,
+        "allow_during_workflow": true,
+        "interrupt_policy": "abort",
+        "interrupt_message": "触发 Arena 协议确认弹窗，点击未生效，页面已自动刷新，请重试",
+        "periodic_enabled": false,
+        "periodic_interval_sec": 8,
+        "periodic_jitter_sec": 2
+      },
+      "actions": [
+        {
+          "type": "refresh_page",
+          "action_id": "step_1_refresh"
+        },
+        {
+          "type": "wait",
+          "seconds": 1.5,
+          "action_id": "step_2_wait"
+        },
+        {
+          "type": "run_js",
+          "action_id": "step_3_result",
+          "fail_on_falsy": false,
+          "code": "return (() => 'ARENA_AGREE_POPUP_REFRESHED')()"
+        }
+      ],
+      "group_name": "命令组1",
+      "script": "",
+      "script_lang": "javascript",
+      "last_triggered": 1773570518.4972394,
+      "trigger_count": 9
     }
   ]
 }

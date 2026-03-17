@@ -8,6 +8,7 @@ app/core/workflow/executor.py - 工作流执行器
 - 与 StreamMonitor 协同
 """
 
+import copy
 import json
 import time
 import random
@@ -199,16 +200,33 @@ class WorkflowExecutor:
         # 正常网络流式：使用 parser 解析增量
         if self._stream_mode == "network" and network_config and network_config.get("parser"):
             try:
+                effective_stream_config = stream_config
+                if interception_enabled:
+                    network_listen_pattern = str(network_config.get("listen_pattern") or "").strip()
+                    merged_pattern = self._merge_network_listen_patterns(
+                        network_listen_pattern,
+                        interception_pattern,
+                    )
+                    effective_stream_config = copy.deepcopy(stream_config or {})
+                    effective_network_config = dict(effective_stream_config.get("network") or {})
+                    effective_network_config["listen_pattern"] = merged_pattern
+                    effective_network_config["stream_match_pattern"] = (
+                        network_listen_pattern or merged_pattern
+                    )
+                    effective_network_config["stream_match_mode"] = "keyword"
+                    effective_stream_config["network"] = effective_network_config
+
                 self._network_monitor = create_network_monitor(
                     tab=tab,
                     formatter=self.formatter,
-                    stream_config=stream_config,
+                    stream_config=effective_stream_config,
                     stop_checker=should_stop_checker,
                     event_handler=self._handle_network_event
                 )
                 logger.debug(
                     f"[Executor] 网络监听器已启用 "
-                    f"(parser={network_config.get('parser')})"
+                    f"(parser={network_config.get('parser')}, "
+                    f"listen_pattern={effective_stream_config.get('network', {}).get('listen_pattern')!r})"
                 )
             except Exception as e:
                 logger.warning(f"[Executor] 网络监听器创建失败: {e}")
@@ -294,7 +312,7 @@ class WorkflowExecutor:
                 # 让 DOM/STREAM 流程也能立即停下来（与 stream_mode 无关）
                 try:
                     from app.services.request_manager import request_manager
-                    request_manager.cancel_current("network_intercepted")
+                    request_manager.cancel_current("network_intercepted", tab_id=self.session.id)
                 except Exception:
                     pass
                 try:
@@ -307,6 +325,28 @@ class WorkflowExecutor:
         except Exception as e:
             logger.debug(f"[Executor] 网络事件上报失败（忽略）: {e}")
             return False
+
+    @staticmethod
+    def _merge_network_listen_patterns(primary: str, secondary: str) -> str:
+        first = str(primary or "").strip()
+        second = str(secondary or "").strip()
+
+        if not first:
+            return second or "http"
+        if not second:
+            return first
+
+        first_lower = first.lower()
+        second_lower = second.lower()
+        if first_lower == "http" or second_lower == "http":
+            return "http"
+        if first_lower == second_lower:
+            return first
+        if first_lower in second_lower:
+            return first
+        if second_lower in first_lower:
+            return second
+        return "http"
 
     def _prepare_kimi_page_capture(self) -> None:
         if not self._use_kimi_page_capture:

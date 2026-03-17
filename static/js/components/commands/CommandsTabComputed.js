@@ -8,11 +8,112 @@ window.CommandsTabComputed = {
                 .filter(([k]) => k !== 'switch_preset')
                 .map(([k, v]) => ({ value: k, label: v }));
         },
+        actionTypeGroups() {
+            const categoryOrder = ['页面操作', '预设与流程', '通知与集成', '任务控制'];
+            const categoryMap = {
+                clear_cookies: '页面操作',
+                refresh_page: '页面操作',
+                new_chat: '页面操作',
+                run_js: '页面操作',
+                wait: '页面操作',
+                navigate: '页面操作',
+                click_element: '页面操作',
+                click_coordinates: '页面操作',
+                execute_preset: '预设与流程',
+                execute_workflow: '预设与流程',
+                execute_command_group: '预设与流程',
+                switch_proxy: '通知与集成',
+                send_webhook: '通知与集成',
+                send_napcat: '通知与集成',
+                abort_task: '任务控制',
+                release_tab_lock: '任务控制'
+            };
+            const grouped = new Map();
+            for (const option of (this.actionTypeOptions || [])) {
+                const category = categoryMap[option.value] || '其他';
+                if (!grouped.has(category)) grouped.set(category, []);
+                grouped.get(category).push(option);
+            }
+            const dynamicOrder = Array.from(grouped.keys()).filter(name => !categoryOrder.includes(name));
+            return [...categoryOrder, ...dynamicOrder]
+                .filter(name => grouped.has(name))
+                .map(name => ({ label: name, options: grouped.get(name) }));
+        },
         sourceCommandOptions() {
             const currentId = this.editingCommand?.id;
             return (this.commands || [])
                 .filter(cmd => cmd?.id && cmd.id !== currentId)
-                .map(cmd => ({ value: cmd.id, label: cmd.name || cmd.id }));
+                .map(cmd => ({
+                    value: cmd.id,
+                    label: cmd.name || cmd.id,
+                    groupName: String(cmd.group_name || '').trim(),
+                    enabled: cmd.enabled !== false,
+                    searchText: [
+                        cmd.name || '',
+                        cmd.id || '',
+                        String(cmd.group_name || '').trim()
+                    ].join(' ').toLowerCase()
+                }))
+                .sort((a, b) => {
+                    const aGrouped = a.groupName ? 0 : 1;
+                    const bGrouped = b.groupName ? 0 : 1;
+                    if (aGrouped !== bGrouped) return aGrouped - bGrouped;
+                    if (a.groupName !== b.groupName) {
+                        return a.groupName.localeCompare(b.groupName, 'zh-CN');
+                    }
+                    return a.label.localeCompare(b.label, 'zh-CN');
+                });
+        },
+        selectedSourceCommandOptions() {
+            const ids = new Set(
+                Array.isArray(this.editingCommand?.trigger?.command_ids)
+                    ? this.editingCommand.trigger.command_ids.map(id => String(id || '').trim()).filter(Boolean)
+                    : []
+            );
+            return (this.sourceCommandOptions || []).filter(opt => ids.has(opt.value));
+        },
+        selectedSourceCommandOption() {
+            const selectedId = String(this.editingCommand?.trigger?.command_id || '').trim();
+            if (!selectedId) return null;
+            return this.sourceCommandOptions.find(opt => opt.value === selectedId) || null;
+        },
+        filteredSourceCommandSections() {
+            const keyword = String(this.sourceCommandSearch || '').trim().toLowerCase();
+            const groupedMap = new Map();
+            const ungrouped = [];
+
+            for (const option of (this.sourceCommandOptions || [])) {
+                if (keyword && !option.searchText.includes(keyword)) {
+                    continue;
+                }
+                if (option.groupName) {
+                    if (!groupedMap.has(option.groupName)) {
+                        groupedMap.set(option.groupName, []);
+                    }
+                    groupedMap.get(option.groupName).push(option);
+                } else {
+                    ungrouped.push(option);
+                }
+            }
+
+            const groupedSections = Array.from(groupedMap.entries())
+                .sort((a, b) => a[0].localeCompare(b[0], 'zh-CN'))
+                .map(([name, commands]) => ({
+                    key: 'group:' + name,
+                    name,
+                    commands
+                }));
+
+            if (ungrouped.length > 0) {
+                groupedSections.push({
+                    key: 'group:__ungrouped__',
+                    name: '未分组命令',
+                    commands: ungrouped,
+                    isUngrouped: true
+                });
+            }
+
+            return groupedSections;
         },
         resultSourceActionOptions() {
             const sourceId = this.editingCommand?.trigger?.command_id;

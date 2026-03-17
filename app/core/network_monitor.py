@@ -10,6 +10,7 @@ app/core/network_monitor.py - 网络响应拦截监听器
 
 import time
 import json
+import re
 from typing import Generator, Optional, Dict, Callable, Any
 
 from app.core.config import logger, SSEFormatter, BrowserConstants
@@ -109,6 +110,13 @@ class NetworkMonitor:
         network_config = self._stream_config.get("network", {})
         
         self._listen_pattern = network_config.get("listen_pattern", "")
+        self._stream_match_pattern = network_config.get(
+            "stream_match_pattern",
+            self._listen_pattern,
+        )
+        self._stream_match_mode = str(
+            network_config.get("stream_match_mode", "keyword") or "keyword"
+        ).strip().lower()
         self._first_response_timeout = network_config.get(
             "first_response_timeout",
             self.DEFAULT_FIRST_RESPONSE_TIMEOUT
@@ -219,6 +227,22 @@ class NetworkMonitor:
         except Exception as e:
             logger.debug(f"[NetworkMonitor] 事件回调异常（忽略）: {e}")
             return False
+
+    def _matches_stream_target(self, event: Dict[str, Any]) -> bool:
+        pattern = str(self._stream_match_pattern or "").strip()
+        if not pattern:
+            return True
+
+        url = str(event.get("url", "") or "")
+        if self._stream_match_mode == "regex":
+            try:
+                return bool(re.search(pattern, url, flags=re.IGNORECASE))
+            except re.error:
+                logger.debug(
+                    f"[NetworkMonitor] 无效 stream_match_pattern 正则，回退关键字匹配: {pattern}"
+                )
+
+        return pattern.lower() in url.lower()
 
     @staticmethod
     def _nested_get(container: Any, *path: str) -> Any:
@@ -419,9 +443,9 @@ class NetworkMonitor:
 
             # 标记已收到响应（在读取 body 之前！）
             if not has_received_response:
-                has_received_response = True
+                has_received_response = has_received_response
                 logger.debug("[NetworkMonitor] 已捕获到首次响应")
-            last_activity_time = time.time()
+            last_activity_time = last_activity_time
 
             event = self._extract_event(response)
             if self._dispatch_event(event):
@@ -430,6 +454,25 @@ class NetworkMonitor:
                     f"(status={event.get('status')}, url={event.get('url', '')[:100]})"
                 )
                 raise NetworkInterceptionTriggered("network_intercepted")
+
+            if self.parser.get_id() == "event_only":
+                if not has_received_response:
+                    has_received_response = True
+                    logger.debug("[NetworkMonitor] event-only 已捕获到首个网络事件")
+                last_activity_time = time.time()
+                continue
+
+            if not self._matches_stream_target(event):
+                logger.debug(
+                    f"[NetworkMonitor] 非流式目标响应，跳过解析 "
+                    f"(url={event.get('url', '')[:100]})"
+                )
+                continue
+
+            if not has_received_response:
+                has_received_response = True
+                logger.debug("[NetworkMonitor] 已捕获到首个有效响应")
+            last_activity_time = time.time()
 
             # 检查响应对象结构
             if not hasattr(response, 'response'):

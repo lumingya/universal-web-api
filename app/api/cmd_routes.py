@@ -7,6 +7,7 @@ app/api/cmd_routes.py - 命令系统 API 路由
 - 手动触发（调试用）
 """
 
+import json
 from typing import Optional, List
 
 from fastapi import APIRouter, HTTPException, Depends, Header
@@ -18,6 +19,76 @@ from app.services.command_engine import command_engine
 logger = get_logger("API.CMD")
 
 router = APIRouter(tags=["commands"])
+
+
+SECRET_PLACEHOLDER = "__SECRET_REDACTED__"
+SENSITIVE_KEYS = {
+    "access_token",
+    "authorization",
+    "auth_token",
+    "api_key",
+    "x_api_key",
+}
+
+
+def _normalize_secret_key(key: object) -> str:
+    return str(key or "").strip().lower().replace("-", "_")
+
+
+def _try_parse_json_text(value: object):
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    if not stripped or stripped[:1] not in "{[":
+        return None
+    try:
+        return json.loads(stripped)
+    except Exception:
+        return None
+
+
+def _redact_command_secrets(data):
+    if isinstance(data, dict):
+        result = {}
+        for key, value in data.items():
+            normalized = _normalize_secret_key(key)
+            if normalized in SENSITIVE_KEYS and value not in (None, ""):
+                result[key] = SECRET_PLACEHOLDER
+            else:
+                result[key] = _redact_command_secrets(value)
+        return result
+    if isinstance(data, list):
+        return [_redact_command_secrets(item) for item in data]
+    parsed = _try_parse_json_text(data)
+    if isinstance(parsed, (dict, list)):
+        redacted = _redact_command_secrets(parsed)
+        return json.dumps(redacted, ensure_ascii=False, indent=2)
+    return data
+
+
+def _restore_secret_placeholders(updates, existing):
+    if isinstance(updates, dict) and isinstance(existing, dict):
+        result = {}
+        for key, value in updates.items():
+            normalized = _normalize_secret_key(key)
+            existing_value = existing.get(key)
+            if normalized in SENSITIVE_KEYS and value == SECRET_PLACEHOLDER:
+                result[key] = existing_value
+            else:
+                result[key] = _restore_secret_placeholders(value, existing_value)
+        return result
+    if isinstance(updates, list) and isinstance(existing, list):
+        result = []
+        for idx, value in enumerate(updates):
+            existing_value = existing[idx] if idx < len(existing) else None
+            result.append(_restore_secret_placeholders(value, existing_value))
+        return result
+    parsed_updates = _try_parse_json_text(updates)
+    parsed_existing = _try_parse_json_text(existing)
+    if isinstance(parsed_updates, (dict, list)) and isinstance(parsed_existing, type(parsed_updates)):
+        restored = _restore_secret_placeholders(parsed_updates, parsed_existing)
+        return json.dumps(restored, ensure_ascii=False, indent=2)
+    return updates
 
 
 # ================= 认证依赖 =================
@@ -41,6 +112,7 @@ class CommandCreateRequest(BaseModel):
     name: str = Field(default="新命令", max_length=100)
     enabled: bool = Field(default=True)
     mode: str = Field(default="simple")
+    stop_on_error: bool = Field(default=False)
     trigger: dict = Field(default_factory=lambda: {
         "type": "request_count", "value": 10,
         "command_id": "",
@@ -51,7 +123,9 @@ class CommandCreateRequest(BaseModel):
         "status_codes": "403,429,500,502,503,504",
         "abort_on_match": True,
         "scope": "all", "domain": "", "tab_index": None,
-        "priority": 2
+        "priority": 2,
+        "stable_for_sec": 0,
+        "check_while_busy_workflow": True
     })
     actions: list = Field(default_factory=lambda: [
         {"type": "clear_cookies"},
@@ -66,6 +140,7 @@ class CommandUpdateRequest(BaseModel):
     name: Optional[str] = None
     enabled: Optional[bool] = None
     mode: Optional[str] = None
+    stop_on_error: Optional[bool] = None
     trigger: Optional[dict] = None
     actions: Optional[list] = None
     group_name: Optional[str] = None
@@ -84,6 +159,7 @@ class CommandGroupAssignRequest(BaseModel):
 
 class CommandGroupExecuteRequest(BaseModel):
     include_disabled: bool = Field(default=False)
+    acquire_policy: str = Field(default="inherit_session")
 
 
 # ================= 路由 =================
@@ -91,7 +167,7 @@ class CommandGroupExecuteRequest(BaseModel):
 @router.get("/api/commands")
 async def list_commands(authenticated: bool = Depends(verify_auth)):
     commands = command_engine.list_commands()
-    return {"commands": commands, "count": len(commands)}
+    return {"commands": _redact_command_secrets(commands), "count": len(commands)}
 
 
 @router.get("/api/commands/meta")
@@ -112,7 +188,7 @@ async def get_command(command_id: str, authenticated: bool = Depends(verify_auth
     cmd = command_engine.get_command(command_id)
     if not cmd:
         raise HTTPException(status_code=404, detail="命令不存在")
-    return cmd
+    return _redact_command_secrets(cmd)
 
 
 @router.post("/api/commands")
@@ -122,7 +198,7 @@ async def create_command(
 ):
     cmd_data = body.model_dump()
     cmd = command_engine.add_command(cmd_data)
-    return {"success": True, "command": cmd}
+    return {"success": True, "command": _redact_command_secrets(cmd)}
 
 
 @router.put("/api/commands/reorder")
@@ -165,10 +241,14 @@ async def update_command(
     authenticated: bool = Depends(verify_auth)
 ):
     updates = body.model_dump(exclude_none=True)
+    existing = command_engine.get_command(command_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="命令不存在")
+    updates = _restore_secret_placeholders(updates, existing)
     cmd = command_engine.update_command(command_id, updates)
     if not cmd:
         raise HTTPException(status_code=404, detail="命令不存在")
-    return {"success": True, "command": cmd}
+    return {"success": True, "command": _redact_command_secrets(cmd)}
 
 
 @router.delete("/api/commands/{command_id}")
@@ -264,6 +344,7 @@ async def execute_command_group(
         raise HTTPException(status_code=400, detail="命令组名称不能为空")
 
     include_disabled = bool(body.include_disabled) if body else False
+    acquire_policy = str(body.acquire_policy or "inherit_session").strip() if body else "inherit_session"
 
     try:
         from app.core.browser import get_browser
@@ -272,32 +353,58 @@ async def execute_command_group(
 
         status = pool.get_status()
         idle_tabs = [t for t in status.get("tabs", []) if t["status"] == "idle"]
+        idle_tabs.sort(key=lambda t: t.get("persistent_index", 0))
 
         if not idle_tabs:
             raise HTTPException(status_code=409, detail="没有空闲标签页可用于执行命令组")
 
-        tab_index = idle_tabs[0]["persistent_index"]
-        session = pool.acquire_by_index(tab_index, f"group_test_{normalized_name}", timeout=5)
+        skipped_tabs: List[dict] = []
+        acquire_failures: List[int] = []
 
-        if not session:
-            raise HTTPException(status_code=409, detail="获取标签页失败")
+        for tab_info in idle_tabs:
+            tab_index = tab_info["persistent_index"]
+            session = pool.acquire_by_index(tab_index, f"group_test_{normalized_name}_{tab_index}", timeout=5)
+            if not session:
+                acquire_failures.append(tab_index)
+                continue
 
-        try:
-            result = command_engine.execute_command_group(
-                group_name=normalized_name,
-                session=session,
-                include_disabled=include_disabled,
-            )
-            if not result.get("ok"):
-                raise HTTPException(status_code=400, detail=result.get("error", "命令组执行失败"))
-            return {
-                "success": True,
-                "message": f"命令组已在标签页 #{tab_index} 执行",
-                "tab_index": tab_index,
-                **result,
-            }
-        finally:
-            pool.release(session.id, check_triggers=False)
+            try:
+                plan = command_engine.preview_command_group(
+                    group_name=normalized_name,
+                    session=session,
+                    include_disabled=include_disabled,
+                )
+                if not plan.get("fully_runnable", False):
+                    skipped_tabs.append({
+                        "tab_index": tab_index,
+                        "runnable_count": plan.get("runnable_count", 0),
+                        "scope_skipped": plan.get("scope_skipped", 0),
+                    })
+                    continue
+
+                result = command_engine.execute_command_group(
+                    group_name=normalized_name,
+                    session=session,
+                    include_disabled=include_disabled,
+                    acquire_policy=acquire_policy,
+                )
+                if not result.get("ok"):
+                    raise HTTPException(status_code=400, detail=result.get("error", "命令组执行失败"))
+                return {
+                    "success": True,
+                    "message": f"命令组已在标签页 #{tab_index} 执行",
+                    "tab_index": tab_index,
+                    **result,
+                }
+            finally:
+                pool.release(session.id, check_triggers=False)
+
+        detail = {
+            "error": "no_idle_tabs_match_group_scope",
+            "skipped_tabs": skipped_tabs,
+            "acquire_failures": acquire_failures,
+        }
+        raise HTTPException(status_code=409, detail=detail)
 
     except HTTPException:
         raise

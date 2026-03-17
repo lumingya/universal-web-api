@@ -14,7 +14,6 @@ import json
 import base64
 import random
 import mimetypes
-from typing import Optional
 import pyperclip
 from app.core.config import logger, BrowserConstants, WorkflowError
 from app.core.tab_pool import get_clipboard_lock
@@ -1348,9 +1347,11 @@ class TextInputHandler:
             else:
                 logger.debug("[STEALTH] 跳过粘贴验证")
         
+        except WorkflowError:
+            raise
         except Exception as e:
-            logger.error(f"[STEALTH] 剪贴板粘贴失败: {e}，降级到 JS 方式")
-            self.fill_via_js(ele, text)
+            logger.error(f"[STEALTH] 剪贴板粘贴失败: {e}，停止本次隐身输入")
+            raise WorkflowError("clipboard_paste_failed") from e
     # ================= 剪贴板模式输入 =================
     
     def fill_via_clipboard(self, ele, text: str):
@@ -1428,9 +1429,11 @@ class TextInputHandler:
             else:
                 logger.debug("[STEALTH] 跳过粘贴验证（STEALTH_SKIP_PASTE_VERIFY=true）")
     
+        except WorkflowError:
+            raise
         except Exception as e:
-            logger.error(f"[STEALTH] 剪贴板粘贴失败: {e}，降级到 JS 方式")
-            self.fill_via_js(ele, text)
+            logger.error(f"[STEALTH] 剪贴板粘贴失败: {e}，停止本次隐身输入")
+            raise WorkflowError("clipboard_paste_failed") from e
     
     def verify_clipboard_result(self, ele, expected_text: str):
         """验证剪贴板粘贴结果"""
