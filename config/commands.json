@@ -2,7 +2,7 @@
   "commands": [
     {
       "name": "自动清除 Cookie",
-      "enabled": true,
+      "enabled": false,
       "mode": "simple",
       "trigger": {
         "type": "request_count",
@@ -50,7 +50,7 @@
     },
     {
       "name": "网络错误闭环恢复",
-      "enabled": true,
+      "enabled": false,
       "mode": "simple",
       "trigger": {
         "type": "network_request_error",
@@ -133,7 +133,7 @@
     },
     {
       "name": "清除cookie后恢复",
-      "enabled": true,
+      "enabled": false,
       "mode": "simple",
       "trigger": {
         "type": "command_result_match",
@@ -173,7 +173,7 @@
     },
     {
       "name": "黑屏后恢复1",
-      "enabled": true,
+      "enabled": false,
       "mode": "simple",
       "trigger": {
         "type": "command_result_match",
@@ -232,7 +232,7 @@
     },
     {
       "name": "ARENA_RECOVER_VERIFY_AFTER_COOKIE_CLEAR",
-      "enabled": true,
+      "enabled": false,
       "mode": "simple",
       "trigger": {
         "type": "command_result_match",
@@ -280,7 +280,7 @@
     {
       "id": "cmd_cf_pagecheck_arena_verify",
       "name": "自动过cf盾",
-      "enabled": true,
+      "enabled": false,
       "mode": "simple",
       "trigger": {
         "type": "page_check",
@@ -331,7 +331,7 @@
     },
     {
       "name": "黑屏后恢复",
-      "enabled": true,
+      "enabled": false,
       "mode": "simple",
       "trigger": {
         "type": "command_result_match",
@@ -369,7 +369,7 @@
     },
     {
       "name": "切换模型中",
-      "enabled": true,
+      "enabled": false,
       "mode": "simple",
       "trigger": {
         "type": "page_check",
@@ -408,7 +408,7 @@
     },
     {
       "name": "人机验证后恢复",
-      "enabled": true,
+      "enabled": false,
       "mode": "simple",
       "trigger": {
         "type": "command_result_match",
@@ -447,7 +447,7 @@
     {
       "id": "cmd_arena_notify_qq",
       "name": "ARENA关键恢复QQ通知",
-      "enabled": true,
+      "enabled": false,
       "mode": "simple",
       "trigger": {
         "type": "command_result_event",
@@ -508,7 +508,7 @@
     },
     {
       "name": "网络错误后选择模型",
-      "enabled": true,
+      "enabled": false,
       "mode": "simple",
       "trigger": {
         "type": "command_result_match",
@@ -653,7 +653,7 @@
     {
       "id": "cmd_gemrf001",
       "name": "自动刷新页面",
-      "enabled": true,
+      "enabled": false,
       "mode": "simple",
       "trigger": {
         "type": "page_check",
@@ -708,14 +708,14 @@
       "group_name": "gemini命令",
       "script": "",
       "script_lang": "javascript",
-      "last_triggered": 1773824923.1050122,
-      "trigger_count": 6,
+      "last_triggered": 1773890883.1215134,
+      "trigger_count": 4,
       "stop_on_error": false
     },
     {
       "id": "cmd_gemsw001",
       "name": "自动切换预设",
-      "enabled": true,
+      "enabled": false,
       "mode": "simple",
       "trigger": {
         "type": "page_check",
@@ -747,8 +747,8 @@
       "group_name": "gemini命令",
       "script": "",
       "script_lang": "javascript",
-      "last_triggered": 1773574989.9355445,
-      "trigger_count": 8
+      "last_triggered": 1773883775.3839626,
+      "trigger_count": 1
     },
     {
       "id": "cmd_cftmj001",
@@ -787,7 +787,7 @@
     },
     {
       "name": "新命令1",
-      "enabled": true,
+      "enabled": false,
       "mode": "simple",
       "trigger": {
         "type": "page_check",
@@ -822,13 +822,13 @@
       "script": "",
       "script_lang": "javascript",
       "id": "cmd_0020e346",
-      "last_triggered": 1773824733.0409708,
-      "trigger_count": 1
+      "last_triggered": 1773888150.3882074,
+      "trigger_count": 2
     },
     {
       "id": "cmd_arena_terms_refresh_abort",
       "name": "ARENA_AGREE_POPUP_CLICK_FIRST",
-      "enabled": true,
+      "enabled": false,
       "mode": "simple",
       "trigger": {
         "type": "page_check",
@@ -891,7 +891,7 @@
     {
       "id": "cmd_arena_terms_refresh_followup",
       "name": "ARENA_AGREE_POPUP_REFRESH_ABORT",
-      "enabled": true,
+      "enabled": false,
       "mode": "simple",
       "trigger": {
         "type": "command_result_match",
