@@ -785,8 +785,12 @@ class MessageValidator:
         if len(messages) == 0:
             return False, "messages 不能为空列表", None
         
-        if len(messages) > BrowserConstants.MAX_MESSAGES_COUNT:
-            return False, f"消息数量超过限制", None
+        message_count = len(messages)
+        max_messages = int(BrowserConstants.MAX_MESSAGES_COUNT)
+        if message_count > max_messages:
+            return False, (
+                f"消息数量超过限制（当前 {message_count} 条，最大允许 {max_messages} 条）"
+            ), None
         
         sanitized = []
         for i, msg in enumerate(messages):
@@ -801,8 +805,13 @@ class MessageValidator:
             if not isinstance(content, str):
                 content = str(content) if content is not None else ''
             
-            if len(content) > BrowserConstants.MAX_MESSAGE_LENGTH:
-                return False, f"messages[{i}].content 超过长度限制", None
+            content_length = len(content)
+            max_length = int(BrowserConstants.MAX_MESSAGE_LENGTH)
+            if content_length > max_length:
+                return False, (
+                    f"messages[{i}].content 超过长度限制"
+                    f"（当前 {content_length} 字符，最大允许 {max_length} 字符）"
+                ), None
             
             sanitized.append({'role': role, 'content': content})
         

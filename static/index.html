@@ -26,8 +26,7 @@
 
         <!-- 隐藏的文件输入框 -->
         <input type="file" ref="importFileInput" accept=".json" class="hidden" @change="handleImportFile">
-        <!-- 提取器配置导入文件输入框 -->
-        <input type="file" ref="extractorImportInput" accept=".json" class="hidden" @change="handleExtractorImportFile">
+        <input type="file" ref="backupImportInput" accept=".json" class="hidden" @change="handleSettingsBackupImportFile">
 
         <!-- Toast 通知 -->
         <div class="fixed top-4 right-4 z-50 max-w-sm">
@@ -67,7 +66,7 @@
         <main class="flex-1 flex flex-col overflow-x-hidden overflow-y-auto bg-gray-50 dark:bg-gray-900">
 
             <!-- 头部（配置/日志 Tab） -->
-            <header v-if="activeTab !== 'settings' && activeTab !== 'extractors' && currentDomain && currentConfig"
+            <header v-if="activeTab !== 'settings' && currentDomain && currentConfig"
                     class="bg-white dark:bg-gray-800 border-b dark:border-gray-700 p-4">
                 <div class="flex justify-between items-center">
                     <div class="flex items-center gap-4">
@@ -109,23 +108,6 @@
                 </div>
             </header>
 
-            <!-- 提取器页头部 -->
-            <header v-if="activeTab === 'extractors'"
-                    class="bg-white dark:bg-gray-800 border-b dark:border-gray-700 p-4">
-                <div class="flex justify-between items-center">
-                    <div class="flex items-center gap-3">
-                        <span v-html="$icons.puzzle" class="text-gray-600 dark:text-gray-400"></span>
-                        <h2 class="text-xl font-bold dark:text-white">内容提取器</h2>
-                    </div>
-                    <div class="flex gap-2">
-                        <button @click="loadExtractors"
-                                class="border dark:border-gray-700 rounded hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-white transition-colors px-2 py-0.5 text-sm">
-                            <span v-html="$icons.arrowPath"></span> 刷新
-                        </button>
-                    </div>
-                </div>
-            </header>
-
             <!-- 设置页头部 -->
             <header v-if="activeTab === 'settings'"
                     class="bg-white dark:bg-gray-800 border-b dark:border-gray-700 p-4">
@@ -135,7 +117,15 @@
                         <h2 class="text-xl font-bold dark:text-white">系统设置</h2>
                     </div>
                     <div class="flex gap-2">
-                        <button @click="loadEnvConfig(); loadBrowserConstants(); loadSelectorDefinitions()"
+                        <button @click="triggerSettingsBackupImport"
+                                class="border dark:border-gray-700 rounded hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-white transition-colors px-2 py-0.5 text-sm">
+                            <span v-html="$icons.documentArrowDown"></span> 完整导入
+                        </button>
+                        <button @click="exportSettingsBackup"
+                                class="border dark:border-gray-700 rounded hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-white transition-colors px-2 py-0.5 text-sm">
+                            <span v-html="$icons.arrowUpTray"></span> 完整导出
+                        </button>
+                        <button @click="loadEnvConfig(); loadBrowserConstants(); loadUpdatePreserveSettings(); loadSelectorDefinitions()"
                                 class="border dark:border-gray-700 rounded hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-white transition-colors px-2 py-0.5 text-sm">
                             <span v-html="$icons.arrowPath"></span> 刷新
                         </button>
@@ -159,13 +149,6 @@
                                  : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300']">
                     🗂️ 标签页
                 </button>
-                <button @click="activeTab = 'extractors'"
-                        :class="['px-4 py-2 text-sm font-medium border-b-2 transition-colors',
-                                 activeTab === 'extractors'
-                                 ? 'border-blue-500 text-blue-600 dark:text-blue-400'
-                                 : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300']">
-                    <span v-html="$icons.puzzle"></span> 提取器
-                </button>
                 <button @click="activeTab = 'logs'"
                         :class="['px-4 py-2 text-sm font-medium border-b-2 transition-colors',
                                  activeTab === 'logs'
@@ -187,7 +170,7 @@
                                  ? 'border-blue-500 text-blue-600 dark:text-blue-400'
                                  : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300']">
                     <span v-html="$icons.cog"></span> 设置
-                    <span v-if="envConfigChanged || browserConstantsChanged || selectorDefinitionsChanged"
+                    <span v-if="envConfigChanged || browserConstantsChanged || updatePreserveChanged || selectorDefinitionsChanged"
                           class="ml-1 w-2 h-2 bg-orange-500 rounded-full inline-block"></span>
                 </button>
             </div>
@@ -217,19 +200,6 @@
                              @notify="notify($event.message, $event.type)">
                 </tabpool-tab>
 
-                <!-- 提取器 Tab -->
-                <extractor-tab v-show="activeTab === 'extractors'"
-                               :extractors="extractors"
-                               :default-extractor-id="defaultExtractorId"
-                               :sites="sites"
-                               :is-loading="isLoadingExtractors"
-                               @set-default="setDefaultExtractor"
-                               @export-config="exportExtractorConfig"
-                               @import-config="importExtractorConfig"
-                               @set-site-extractor="setSiteExtractor"
-                               @open-verify-dialog="openVerifyDialog"
-                               @refresh="loadExtractors">
-                </extractor-tab>
                 <!-- 命令 Tab -->
                 <commands-tab v-show="activeTab === 'commands'"
                               :dark-mode="darkMode"
@@ -327,14 +297,6 @@
                            @save="saveDefinition">
         </definition-dialog>
 
-        <!-- 提取器验证弹窗 -->
-        <extractor-verify-dialog :show="showVerifyDialog"
-                                 :domain="verifyDialogDomain"
-                                 :extractor-name="verifyDialogExtractorName"
-                                 @close="showVerifyDialog = false"
-                                 @verify="handleVerifyResult">
-        </extractor-verify-dialog>
-
     </div>
 
     <!-- 加载组件 JS -->
@@ -348,7 +310,6 @@
     <script src="/static/js/components/Sidebar.js?v=2.6.1"></script>
     <!-- 子组件（在 ConfigTab 之前） -->
     <script src="static/js/components/panels/SelectorPanel.js?v=2.6.1"></script>
-    <script src="static/js/components/panels/ExtractorPanel.js?v=2.6.1"></script>
     <script src="static/js/components/panels/ImageConfigPanel.js?v=2.6.1"></script>
     <script src="static/js/components/panels/StreamConfigPanel.js?v=2.6.1"></script>
     <script src="static/js/components/panels/WorkflowPanel.js?v=2.6.1"></script>
@@ -358,7 +319,6 @@
     <script src="static/js/components/ConfigTab.js?v=2.6.1"></script>
     <script src="/static/js/components/LogsTab.js?v=2.6.1"></script>
     <script src="/static/js/components/SettingsTab.js?v=2.6.1"></script>
-    <script src="/static/js/components/ExtractorTab.js?v=2.6.1"></script>
     <script src="/static/js/components/Dialogs.js?v=2.6.1"></script>
     <script src="/static/js/components/TabPoolTab.js?v=2.6.1"></script>
     <script src="/static/js/components/commands/CommandsTabComputed.js?v=2.6.1"></script>

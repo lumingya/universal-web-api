@@ -42,6 +42,7 @@ if not defined GITHUB_REPO set "GITHUB_REPO=lumingya/universal-web-api"
 if not defined PROXY_ENABLED set "PROXY_ENABLED=false"
 if not defined PROXY_ADDRESS set "PROXY_ADDRESS="
 if not defined PROXY_BYPASS set "PROXY_BYPASS=localhost,127.0.0.1"
+if not defined PIP_MIRROR_URL set "PIP_MIRROR_URL=https://pypi.tuna.tsinghua.edu.cn/simple"
 if not defined BROWSER_PROFILE_DIR set "BROWSER_PROFILE_DIR="
 if not defined BROWSER_PROFILE_NAME set "BROWSER_PROFILE_NAME="
 if not defined PROFILE_CLEAN_ENABLED set "PROFILE_CLEAN_ENABLED=true"
@@ -385,10 +386,18 @@ if "!NEED_INSTALL!"=="0" (
 if "!NEED_INSTALL!"=="1" (
     echo [INFO] 安装 Python 依赖包...
     echo.
+    set "REQ_INSTALL_SOURCE=PyPI"
     venv\Scripts\python.exe -m pip install -r requirements.txt
     if !errorlevel! neq 0 (
+        echo [WARN] 默认 PyPI 源安装失败，尝试使用国内镜像重试...
+        echo [INFO] 镜像地址: !PIP_MIRROR_URL!
         echo.
-        echo [ERROR] 依赖安装失败
+        set "REQ_INSTALL_SOURCE=!PIP_MIRROR_URL!"
+        venv\Scripts\python.exe -m pip install -r requirements.txt -i !PIP_MIRROR_URL!
+    )
+    if !errorlevel! neq 0 (
+        echo.
+        echo [ERROR] 依赖安装失败（已尝试 PyPI 和国内镜像）
         echo.
         echo   可能的原因:
         echo     1. 网络连接问题（无法访问 PyPI）
@@ -398,8 +407,8 @@ if "!NEED_INSTALL!"=="1" (
         echo   解决方案:
         echo     1. 检查网络连接，尝试访问 https://pypi.org
         echo     2. 升级 pip: python -m pip install --upgrade pip
-        echo     3. 使用国内镜像:
-        echo        pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+        echo     3. 手动重试国内镜像:
+        echo        pip install -r requirements.txt -i !PIP_MIRROR_URL!
         echo.
         REM 安装失败时删除哈希，确保下次重试
         if exist "!REQ_HASH_FILE!" del "!REQ_HASH_FILE!"
@@ -418,6 +427,7 @@ if "!NEED_INSTALL!"=="1" (
     echo !CURRENT_HASH!> "!REQ_HASH_FILE!"
     echo.
     echo [OK] 依赖安装完成
+    echo [INFO] 安装来源: !REQ_INSTALL_SOURCE!
 ) else (
     echo [OK] 依赖已是最新
 )

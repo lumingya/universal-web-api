@@ -105,8 +105,8 @@ def smooth_move_mouse(
         duration = max(0.12, min(duration, 0.8))
     
     # 步数：模拟 55-75Hz 采样率
-    sample_rate = random.uniform(55, 75)
-    steps = max(8, int(duration * sample_rate))
+    sample_rate = random.uniform(18, 28)
+    steps = max(6, min(24, int(duration * sample_rate)))
     step_interval = duration / steps
     
     # 噪声幅度：与距离成正比，上限 12px
@@ -119,6 +119,7 @@ def smooth_move_mouse(
     arc_offset = random.gauss(0, dist * 0.06)
     ctrl_x = (x0 + x1) / 2 + perp_x * arc_offset
     ctrl_y = (y0 + y1) / 2 + perp_y * arc_offset
+    start_time = time.perf_counter()
     
     # 逐步移动
     for i in range(1, steps + 1):
@@ -144,7 +145,10 @@ def smooth_move_mouse(
         _dispatch_mouse_move(tab, fx, fy)
         
         # 步间延迟（带微随机）
-        time.sleep(step_interval * random.uniform(0.7, 1.3))
+        target_time = start_time + (step_interval * i)
+        remaining = target_time - time.perf_counter()
+        if remaining > 0:
+            time.sleep(remaining * random.uniform(0.7, 1.0))
     
     # 最终精确到达目标
     _dispatch_mouse_move(tab, x1, y1)
@@ -195,9 +199,9 @@ def idle_drift(
     cur_x, cur_y = float(cx), float(cy)
     
     base_interval = 1.0 / freq_hz
-    elapsed = 0.0
+    deadline = time.perf_counter() + max(0.0, float(duration or 0.0))
     
-    while elapsed < duration:
+    while time.perf_counter() < deadline:
         if check_cancelled and check_cancelled():
             break
         
@@ -206,18 +210,17 @@ def idle_drift(
             # 连续微动模式：快速连续 2-4 次小移动
             burst_count = random.randint(2, 4)
             for _ in range(burst_count):
-                if elapsed >= duration:
+                if time.perf_counter() >= deadline:
                     break
                 if check_cancelled and check_cancelled():
                     break
                 
                 burst_sleep = random.uniform(0.08, 0.25)
-                burst_sleep = min(burst_sleep, duration - elapsed)
+                burst_sleep = min(burst_sleep, max(0.0, deadline - time.perf_counter()))
                 if burst_sleep <= 0:
                     break
                 
                 time.sleep(burst_sleep)
-                elapsed += burst_sleep
                 
                 # 微小移动（0.3-1.5px）
                 angle = random.uniform(0, 2 * math.pi)
@@ -236,13 +239,12 @@ def idle_drift(
         else:
             # 静止模式：较长时间不动
             sleep_time = base_interval * random.uniform(0.8, 2.5)
-            sleep_time = min(sleep_time, duration - elapsed)
+            sleep_time = min(sleep_time, max(0.0, deadline - time.perf_counter()))
             
             if sleep_time <= 0:
                 break
             
             time.sleep(sleep_time)
-            elapsed += sleep_time
             
             # 单次微移（0.5-2px）
             angle = random.uniform(0, 2 * math.pi)

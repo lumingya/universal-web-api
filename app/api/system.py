@@ -14,7 +14,7 @@ import re
 import time
 import asyncio
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Any, Dict
 
 from app import __version__ as APP_VERSION
 from fastapi import APIRouter, Request, HTTPException, Header, Depends
@@ -22,7 +22,8 @@ from fastapi.responses import JSONResponse
 
 from app.core.config import AppConfig, get_logger, log_collector
 from app.core import get_browser, BrowserConnectionError
-from app.services.config_engine import config_engine
+from app.services.config_engine import config_engine, ConfigConstants
+from app.services.command_engine import command_engine
 from app.services.request_manager import request_manager
 from update_preserve import load_update_preserve_settings, save_update_preserve_settings
 
@@ -58,6 +59,200 @@ async def verify_auth(authorization: Optional[str] = Header(None)) -> bool:
         )
 
     return True
+
+
+def _load_env_config_from_file() -> Dict[str, Any]:
+    """读取 .env 文件配置。"""
+    env_path = Path(".env")
+    config: Dict[str, Any] = {}
+
+    if not env_path.exists():
+        return config
+
+    with open(env_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip()
+
+            if value.lower() == "true":
+                value = True
+            elif value.lower() == "false":
+                value = False
+            elif value.isdigit():
+                value = int(value)
+            elif re.match(r"^\d+\.\d+$", value):
+                value = float(value)
+
+            config[key] = value
+
+    return config
+
+
+def _serialize_env_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if value is None:
+        return ""
+    return str(value)
+
+
+def _write_env_config_file(new_config: Dict[str, Any]) -> None:
+    """写入 .env 文件，尽量保留注释和现有顺序。"""
+    env_path = Path(".env")
+    lines = []
+
+    if env_path.exists():
+        with open(env_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+
+    new_lines = []
+    existing_keys = set()
+
+    for line in lines:
+        stripped = line.strip()
+
+        if not stripped or stripped.startswith("#"):
+            new_lines.append(line)
+            continue
+
+        if "=" in stripped:
+            key = stripped.split("=", 1)[0].strip()
+            existing_keys.add(key)
+
+            if key in new_config:
+                value = _serialize_env_value(new_config[key])
+                new_lines.append(f"{key}={value}\n")
+            else:
+                new_lines.append(line)
+        else:
+            new_lines.append(line)
+
+    missing_items = []
+    for key, value in (new_config or {}).items():
+        if key in existing_keys:
+            continue
+
+        serialized = _serialize_env_value(value)
+        if serialized == "":
+            continue
+
+        missing_items.append((key, serialized))
+
+    if missing_items:
+        if new_lines and not new_lines[-1].endswith("\n"):
+            new_lines[-1] = new_lines[-1] + "\n"
+        if new_lines and new_lines[-1].strip():
+            new_lines.append("\n")
+
+        for key, value in missing_items:
+            new_lines.append(f"{key}={value}\n")
+
+    with open(env_path, "w", encoding="utf-8") as f:
+        f.writelines(new_lines)
+
+
+def _read_json_file(path: Path, default: Any) -> Any:
+    if not path.exists():
+        return default
+    with open(path, "r", encoding="utf-8-sig") as f:
+        return json.load(f)
+
+
+def _write_json_file(path: Path, payload: Any) -> None:
+    tmp_path = Path(str(path) + ".tmp")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, ensure_ascii=False)
+        f.flush()
+    tmp_path.replace(path)
+
+
+def _schedule_service_restart(delay_seconds: float = 1.0) -> None:
+    async def trigger_restart():
+        await asyncio.sleep(max(0.1, float(delay_seconds or 1.0)))
+        logger.warning("=" * 60)
+        logger.warning("配置已更新，服务即将重启...")
+        logger.warning("=" * 60)
+
+        import os
+        os._exit(3)
+
+    asyncio.create_task(trigger_restart())
+
+
+def _build_settings_backup_bundle() -> Dict[str, Any]:
+    sites_file = Path(config_engine.config_file)
+    sites_local_file = Path(config_engine.local_sites_file)
+    commands_file = Path(ConfigConstants.COMMANDS_FILE)
+    commands_local_file = Path(ConfigConstants.COMMANDS_LOCAL_FILE)
+    browser_config_file = Path("config/browser_config.json")
+
+    return {
+        "bundle_version": 1,
+        "exported_at": int(time.time()),
+        "app_version": APP_VERSION,
+        "files": {
+            "sites": _read_json_file(sites_file, {}),
+            "sites_local": _read_json_file(sites_local_file, {"default_presets": {}}),
+            "commands": _read_json_file(commands_file, {"commands": []}),
+            "commands_local": _read_json_file(commands_local_file, {"commands": []}),
+            "browser_constants": _read_json_file(browser_config_file, {}),
+            "update_preserve": load_update_preserve_settings(),
+            "env": _load_env_config_from_file(),
+        },
+    }
+
+
+DEFAULT_BROWSER_CONSTANTS: Dict[str, Any] = {
+    "DEFAULT_PORT": 9222,
+    "CONNECTION_TIMEOUT": 10,
+    "STEALTH_DELAY_MIN": 0.1,
+    "STEALTH_DELAY_MAX": 0.3,
+    "ACTION_DELAY_MIN": 0.15,
+    "ACTION_DELAY_MAX": 0.3,
+    "DEFAULT_ELEMENT_TIMEOUT": 3,
+    "FALLBACK_ELEMENT_TIMEOUT": 1,
+    "ELEMENT_CACHE_MAX_AGE": 5.0,
+    "STREAM_CHECK_INTERVAL_MIN": 0.1,
+    "STREAM_CHECK_INTERVAL_MAX": 1.0,
+    "STREAM_CHECK_INTERVAL_DEFAULT": 0.3,
+    "STREAM_SILENCE_THRESHOLD": 8.0,
+    "STREAM_MAX_TIMEOUT": 600,
+    "STREAM_INITIAL_WAIT": 180,
+    "STREAM_RERENDER_WAIT": 0.5,
+    "STREAM_CONTENT_SHRINK_TOLERANCE": 3,
+    "STREAM_MIN_VALID_LENGTH": 10,
+    "STREAM_STABLE_COUNT_THRESHOLD": 8,
+    "STREAM_SILENCE_THRESHOLD_FALLBACK": 12,
+    "MAX_MESSAGE_LENGTH": 100000,
+    "MAX_MESSAGES_COUNT": 100,
+    "STREAM_INITIAL_ELEMENT_WAIT": 10,
+    "STREAM_MAX_ABNORMAL_COUNT": 5,
+    "STREAM_MAX_ELEMENT_MISSING": 10,
+    "STREAM_CONTENT_SHRINK_THRESHOLD": 0.3,
+    "GLOBAL_NETWORK_INTERCEPTION_ENABLED": False,
+    "GLOBAL_NETWORK_INTERCEPTION_LISTEN_PATTERN": "http",
+    "GLOBAL_NETWORK_INTERCEPTION_WAIT_TIMEOUT": 0.5,
+    "GLOBAL_NETWORK_INTERCEPTION_RETRY_DELAY": 1.0,
+    "COMMAND_PERIODIC_CHECK_ENABLED": True,
+    "COMMAND_PERIODIC_CHECK_INTERVAL_SEC": 8.0,
+    "COMMAND_PERIODIC_CHECK_JITTER_SEC": 2.0,
+    "UPLOAD_HISTORY_IMAGES": False,
+    "tab_pool": {
+        "max_tabs": 5,
+        "min_tabs": 1,
+        "idle_timeout": 300,
+        "acquire_timeout": 60,
+    },
+}
 
 
 # ================= 健康检查 =================
@@ -111,37 +306,7 @@ async def clear_logs(authenticated: bool = Depends(verify_auth)):
 async def get_env_config(authenticated: bool = Depends(verify_auth)):
     """读取 .env 文件配置"""
     try:
-        env_path = Path(".env")
-        config = {}
-
-        if env_path.exists():
-            with open(env_path, 'r', encoding='utf-8') as f:
-                for line in f:
-                    line = line.strip()
-
-                    if not line or line.startswith('#'):
-                        continue
-
-                    if '=' not in line:
-                        continue
-
-                    key, value = line.split('=', 1)
-                    key = key.strip()
-                    value = value.strip()
-
-                    if value.lower() == 'true':
-                        value = True
-                    elif value.lower() == 'false':
-                        value = False
-                    elif value.isdigit():
-                        value = int(value)
-                    elif re.match(r'^\d+\.\d+$', value):
-                        value = float(value)
-
-                    config[key] = value
-
-        return {"config": config}
-
+        return {"config": _load_env_config_from_file()}
     except Exception as e:
         logger.error(f"读取环境配置失败: {e}")
         raise HTTPException(status_code=500, detail=f"读取失败: {str(e)}")
@@ -156,80 +321,10 @@ async def save_env_config(
     try:
         data = await request.json()
         new_config = data.get("config", {})
-
-        def serialize_env_value(value) -> str:
-            if isinstance(value, bool):
-                return 'true' if value else 'false'
-            if isinstance(value, (int, float)):
-                return str(value)
-            if value is None:
-                return ''
-            return str(value)
-
-        env_path = Path(".env")
-        lines = []
-
-        if env_path.exists():
-            with open(env_path, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-
-        new_lines = []
-        existing_keys = set()
-
-        for line in lines:
-            stripped = line.strip()
-
-            if not stripped or stripped.startswith('#'):
-                new_lines.append(line)
-                continue
-
-            if '=' in stripped:
-                key = stripped.split('=', 1)[0].strip()
-                existing_keys.add(key)
-
-                if key in new_config:
-                    value = serialize_env_value(new_config[key])
-                    new_lines.append(f"{key}={value}\n")
-                else:
-                    new_lines.append(line)
-            else:
-                new_lines.append(line)
-
-        missing_items = []
-        for key, value in new_config.items():
-            if key in existing_keys:
-                continue
-
-            serialized = serialize_env_value(value)
-            if serialized == '':
-                continue
-
-            missing_items.append((key, serialized))
-
-        if missing_items:
-            if new_lines and not new_lines[-1].endswith('\n'):
-                new_lines[-1] = new_lines[-1] + '\n'
-            if new_lines and new_lines[-1].strip():
-                new_lines.append('\n')
-
-            for key, value in missing_items:
-                new_lines.append(f"{key}={value}\n")
-
-        with open(env_path, 'w', encoding='utf-8') as f:
-            f.writelines(new_lines)
+        _write_env_config_file(new_config)
 
         logger.info(f"环境配置已保存: {len(new_config)} 项，准备触发重启...")
-
-        async def trigger_restart():
-            await asyncio.sleep(1.0)
-            logger.warning("=" * 60)
-            logger.warning("配置已更新，服务即将重启...")
-            logger.warning("=" * 60)
-            
-            import os
-            os._exit(3)
-        
-        asyncio.create_task(trigger_restart())
+        _schedule_service_restart(1.0)
 
         return {
             "status": "success",
@@ -243,49 +338,132 @@ async def save_env_config(
         raise HTTPException(status_code=500, detail=f"保存失败: {str(e)}")
 
 
+@router.get("/api/settings/backup")
+async def export_settings_backup(authenticated: bool = Depends(verify_auth)):
+    """导出完整配置备份。"""
+    try:
+        return _build_settings_backup_bundle()
+    except Exception as e:
+        logger.error(f"导出配置备份失败: {e}")
+        raise HTTPException(status_code=500, detail=f"导出失败: {str(e)}")
+
+
+@router.post("/api/settings/backup")
+async def import_settings_backup(
+    request: Request,
+    authenticated: bool = Depends(verify_auth)
+):
+    """导入完整配置备份。"""
+    try:
+        data = await request.json()
+        allowed_sections = {
+            "sites",
+            "sites_local",
+            "commands",
+            "commands_local",
+            "browser_constants",
+            "update_preserve",
+            "env",
+        }
+
+        raw_files = data.get("files") if isinstance(data, dict) else None
+        if isinstance(raw_files, dict):
+            files = {key: value for key, value in raw_files.items() if key in allowed_sections}
+        elif isinstance(data, dict):
+            files = {key: value for key, value in data.items() if key in allowed_sections}
+        else:
+            files = {}
+
+        if not files:
+            raise HTTPException(status_code=400, detail="备份文件格式无效")
+
+        imported_sections = []
+        restart_required = False
+
+        if "sites" in files:
+            if not isinstance(files["sites"], dict):
+                raise HTTPException(status_code=400, detail="sites 配置格式无效")
+            _write_json_file(Path(config_engine.config_file), files["sites"])
+            imported_sections.append("sites")
+
+        if "sites_local" in files:
+            if not isinstance(files["sites_local"], dict):
+                raise HTTPException(status_code=400, detail="sites_local 配置格式无效")
+            _write_json_file(Path(config_engine.local_sites_file), files["sites_local"])
+            imported_sections.append("sites_local")
+
+        if "commands" in files:
+            commands_payload = files["commands"]
+            if not isinstance(commands_payload, (dict, list)):
+                raise HTTPException(status_code=400, detail="commands 配置格式无效")
+            _write_json_file(Path(ConfigConstants.COMMANDS_FILE), commands_payload)
+            imported_sections.append("commands")
+
+        if "commands_local" in files:
+            commands_local_payload = files["commands_local"]
+            if not isinstance(commands_local_payload, dict):
+                raise HTTPException(status_code=400, detail="commands_local 配置格式无效")
+            _write_json_file(Path(ConfigConstants.COMMANDS_LOCAL_FILE), commands_local_payload)
+            imported_sections.append("commands_local")
+
+        if "browser_constants" in files:
+            if not isinstance(files["browser_constants"], dict):
+                raise HTTPException(status_code=400, detail="browser_constants 配置格式无效")
+            _write_json_file(Path("config/browser_config.json"), files["browser_constants"])
+            imported_sections.append("browser_constants")
+            try:
+                from app.core.config import BrowserConstants
+                if hasattr(BrowserConstants, "reload"):
+                    BrowserConstants.reload()
+            except Exception as reload_error:
+                logger.warning(f"导入后热重载浏览器常量失败: {reload_error}")
+
+        if "update_preserve" in files:
+            preserve_payload = files["update_preserve"]
+            if isinstance(preserve_payload, dict):
+                selected_patterns = preserve_payload.get("selected_patterns", [])
+            else:
+                selected_patterns = preserve_payload
+            save_update_preserve_settings(selected_patterns or [])
+            imported_sections.append("update_preserve")
+
+        if "env" in files:
+            if not isinstance(files["env"], dict):
+                raise HTTPException(status_code=400, detail="env 配置格式无效")
+            _write_env_config_file(files["env"])
+            imported_sections.append("env")
+            restart_required = True
+
+        if "sites" in files or "sites_local" in files:
+            config_engine.reload_config()
+
+        if "commands" in files or "commands_local" in files:
+            command_engine._refresh_commands_if_changed(force=True)
+
+        logger.info(f"完整配置备份已导入: {', '.join(imported_sections)}")
+
+        if restart_required:
+            _schedule_service_restart(1.0)
+
+        return {
+            "success": True,
+            "message": "完整配置备份已导入",
+            "imported_sections": imported_sections,
+            "will_restart": restart_required,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"导入配置备份失败: {e}")
+        raise HTTPException(status_code=500, detail=f"导入失败: {str(e)}")
+
+
 @router.get("/api/settings/browser-constants")
 async def get_browser_constants(authenticated: bool = Depends(verify_auth)):
     """读取浏览器常量配置"""
     try:
         config_path = Path("config/browser_config.json")
-
-        if config_path.exists():
-            with open(config_path, 'r', encoding='utf-8') as f:
-                config = json.load(f)
-        else:
-            config = {
-                'DEFAULT_PORT': 9222,
-                'CONNECTION_TIMEOUT': 10,
-                'STEALTH_DELAY_MIN': 0.1,
-                'STEALTH_DELAY_MAX': 0.3,
-                'ACTION_DELAY_MIN': 0.15,
-                'ACTION_DELAY_MAX': 0.3,
-                'DEFAULT_ELEMENT_TIMEOUT': 3,
-                'FALLBACK_ELEMENT_TIMEOUT': 1,
-                'ELEMENT_CACHE_MAX_AGE': 5.0,
-                'STREAM_CHECK_INTERVAL_MIN': 0.1,
-                'STREAM_CHECK_INTERVAL_MAX': 1.0,
-                'STREAM_CHECK_INTERVAL_DEFAULT': 0.3,
-                'STREAM_SILENCE_THRESHOLD': 8.0,
-                'STREAM_MAX_TIMEOUT': 600,
-                'STREAM_INITIAL_WAIT': 180,
-                'STREAM_RERENDER_WAIT': 0.5,
-                'STREAM_CONTENT_SHRINK_TOLERANCE': 3,
-                'STREAM_MIN_VALID_LENGTH': 10,
-                'STREAM_STABLE_COUNT_THRESHOLD': 8,
-                'STREAM_SILENCE_THRESHOLD_FALLBACK': 12,
-                'MAX_MESSAGE_LENGTH': 100000,
-                'MAX_MESSAGES_COUNT': 100,
-                'STREAM_INITIAL_ELEMENT_WAIT': 10,
-                'STREAM_MAX_ABNORMAL_COUNT': 5,
-                'STREAM_MAX_ELEMENT_MISSING': 10,
-                'STREAM_CONTENT_SHRINK_THRESHOLD': 0.3,
-                'GLOBAL_NETWORK_INTERCEPTION_ENABLED': False,
-                'GLOBAL_NETWORK_INTERCEPTION_LISTEN_PATTERN': 'http',
-                'GLOBAL_NETWORK_INTERCEPTION_WAIT_TIMEOUT': 0.5,
-                'GLOBAL_NETWORK_INTERCEPTION_RETRY_DELAY': 1.0,
-            }
-
+        config = _read_json_file(config_path, DEFAULT_BROWSER_CONSTANTS)
         return {"config": config}
 
     except Exception as e:
@@ -302,14 +480,10 @@ async def save_browser_constants(
     try:
         data = await request.json()
         config = data.get("config", {})
-
-        config_path = Path("config/browser_config.json")
-
-        with open(config_path, 'w', encoding='utf-8') as f:
-            json.dump(config, f, indent=2, ensure_ascii=False)
+        _write_json_file(Path("config/browser_config.json"), config)
 
         try:
-            from app.core import BrowserConstants
+            from app.core.config import BrowserConstants
             if hasattr(BrowserConstants, 'reload'):
                 BrowserConstants.reload()
                 logger.info("浏览器常量已热重载")

@@ -1,4 +1,4 @@
-﻿// ==================== CommandsTab Template ====================
+// ==================== CommandsTab Template ====================
 window.CommandsTabTemplate = `
     <div class="p-4 space-y-4">
         <!-- 标题栏 -->
@@ -803,9 +803,10 @@ window.CommandsTabTemplate = `
                             </div>
                             <div v-if="['execute_preset', 'execute_workflow'].includes(action.type)" class="flex-1 min-w-[220px]">
                                 <select v-model="action.preset_name"
-                                        :disabled="availablePresets.length === 0"
                                         class="w-full px-2 py-1.5 border dark:border-gray-600 rounded bg-white dark:bg-gray-700 dark:text-white text-sm">
-                                    <option value="" disabled>{{ getPresetSelectPlaceholder() }}</option>
+                                    <option :value="getFollowDefaultPresetValue()">
+                                        {{ getFollowDefaultPresetLabel() }}
+                                    </option>
                                     <option v-for="preset in availablePresets" :key="preset" :value="preset">
                                         {{ preset }}
                                     </option>

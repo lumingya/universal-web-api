@@ -1,11 +1,11 @@
 """
-site_url.py - URL helpers for identifying real remote sites.
+site_url.py - URL helpers for identifying real remote sites and route domains.
 """
 
 from __future__ import annotations
 
 import ipaddress
-from typing import Optional
+from typing import Optional, List
 from urllib.parse import urlparse
 
 
@@ -19,6 +19,10 @@ _LOCAL_SUFFIXES = (
     ".example",
     ".invalid",
     ".home.arpa",
+)
+
+_ROUTE_DOMAIN_GROUPS = (
+    ("gemini.com", "gemini.google.com"),
 )
 
 
@@ -68,4 +72,93 @@ def is_remote_site_url(url: str) -> bool:
     return extract_remote_site_domain(url) is not None
 
 
-__all__ = ["extract_remote_site_domain", "is_remote_site_url"]
+def normalize_route_domain(value: str) -> str:
+    """Normalize a route-domain-like input into a lowercase hostname."""
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return ""
+
+    candidate = raw
+    if "://" not in candidate:
+        candidate = f"https://{candidate.lstrip('/')}"
+
+    try:
+        parsed = urlparse(candidate)
+        hostname = (parsed.hostname or "").strip().lower().rstrip(".")
+        if hostname:
+            return hostname
+    except Exception:
+        pass
+
+    return raw.strip().strip("/").split("/", 1)[0].strip().strip(".")
+
+
+def build_route_domain_aliases(value: str) -> List[str]:
+    """Build compatible route-domain aliases for a hostname-like value."""
+    normalized = normalize_route_domain(value)
+    if not normalized:
+        return []
+
+    aliases: List[str] = []
+    seen = set()
+
+    def _add(item: str):
+        host = normalize_route_domain(item)
+        if host and host not in seen:
+            seen.add(host)
+            aliases.append(host)
+
+    _add(normalized)
+
+    if normalized.startswith("www."):
+        _add(normalized[4:])
+    else:
+        _add(f"www.{normalized}")
+
+    for group in _ROUTE_DOMAIN_GROUPS:
+        if normalized in group:
+            for alias in group:
+                _add(alias)
+
+    return aliases
+
+
+def get_preferred_route_domain(value: str) -> str:
+    """Return the preferred public route-domain alias for a site."""
+    normalized = normalize_route_domain(value)
+    if not normalized:
+        return ""
+
+    for group in _ROUTE_DOMAIN_GROUPS:
+        if normalized in group:
+            return group[0]
+
+    if normalized.startswith("www."):
+        return normalized[4:]
+    return normalized
+
+
+def route_domain_matches(target_domain: str, actual_domain: str) -> bool:
+    """Whether the route-domain target can represent the actual page domain."""
+    target_aliases = build_route_domain_aliases(target_domain)
+    actual_aliases = build_route_domain_aliases(actual_domain)
+    if not target_aliases or not actual_aliases:
+        return False
+
+    for target in target_aliases:
+        for actual in actual_aliases:
+            if actual == target:
+                return True
+            if actual.endswith(f".{target}") or target.endswith(f".{actual}"):
+                return True
+    return False
+
+
+__all__ = [
+    "build_route_domain_aliases",
+    "extract_remote_site_domain",
+    "get_preferred_route_domain",
+    "is_remote_site_url",
+    "normalize_route_domain",
+    "route_domain_matches",
+]

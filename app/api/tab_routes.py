@@ -4,6 +4,7 @@ app/api/tab_routes.py - 标签页路由
 职责：
 - /api/tab-pool/tabs - 获取标签页列表
 - /tab/{index}/v1/chat/completions - 指定标签页的聊天接口
+- /url/{domain}/v1/chat/completions - 按域名路由选择标签页的聊天接口
 """
 
 import json
@@ -123,7 +124,9 @@ async def get_tab_pool_tabs(authenticated: bool = Depends(verify_auth)):
                 "id": "gpt_1",
                 "url": "https://chatgpt.com/",
                 "status": "idle",
-                "route_prefix": "/tab/1",
+                "route_prefix": "/url/chatgpt.com",
+                "tab_route_prefix": "/tab/1",
+                "domain_route_prefix": "/url/chatgpt.com",
                 "preset_name": null,
                 "available_presets": ["主预设", "无临时聊天"]
             },
@@ -207,6 +210,44 @@ async def list_models_with_tab(
         ]
     }
 
+
+@router.get("/url/{route_domain}/v1/models")
+async def list_models_with_route_domain(
+    route_domain: str,
+    authenticated: bool = Depends(verify_auth)
+):
+    """为域名路由提供 OpenAI 兼容模型列表接口。"""
+    route_key = str(route_domain or "").strip()
+    if not route_key:
+        raise HTTPException(status_code=400, detail="域名路由不能为空")
+
+    try:
+        browser = get_browser(auto_connect=False)
+        session = browser.tab_pool.acquire_by_route_domain(
+            route_key,
+            task_id=f"models_url_{route_key}_{int(time.time() * 1000)}",
+            timeout=0.1,
+        )
+        if session is None:
+            raise HTTPException(status_code=404, detail=f"域名路由 '{route_key}' 没有可用标签页")
+        browser.tab_pool.release(session.id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.debug(f"域名路由模型列表校验失败（忽略）: {e}")
+
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": "web-browser",
+                "object": "model",
+                "created": int(time.time()),
+                "owned_by": "universal-web-api"
+            }
+        ]
+    }
+
 @router.post("/tab/{tab_index}/v1/chat/completions")
 async def chat_with_tab(
     tab_index: int,
@@ -259,6 +300,54 @@ async def chat_with_tab(
             return await _non_stream_with_tab_index(request, body, ctx, tab_index)
 
 
+@router.post("/url/{route_domain}/v1/chat/completions")
+async def chat_with_route_domain(
+    route_domain: str,
+    request: Request,
+    body: ChatRequest,
+    authenticated: bool = Depends(verify_auth)
+):
+    """使用指定域名路由匹配的标签页进行聊天。"""
+    route_key = str(route_domain or "").strip()
+    if not route_key:
+        raise HTTPException(status_code=400, detail="域名路由不能为空")
+
+    ctx = request_manager.create_request()
+    with logger.context(ctx.request_id):
+        logger.info(f"开始 (域名路由 {route_key})")
+
+        if has_tool_calling_request(
+            messages=body.messages,
+            tools=body.tools,
+            functions=body.functions,
+        ):
+            if body.stream:
+                return StreamingResponse(
+                    _stream_tool_calling_with_route_domain(request, body, ctx, route_key),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no"
+                    }
+                )
+            else:
+                return await _non_stream_tool_calling_with_route_domain(request, body, ctx, route_key)
+
+        if body.stream:
+            return StreamingResponse(
+                _stream_with_route_domain(request, body, ctx, route_key),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no"
+                }
+            )
+        else:
+            return await _non_stream_with_route_domain(request, body, ctx, route_key)
+
+
 async def _stream_with_tab_index(
     request: Request,
     body: ChatRequest,
@@ -268,6 +357,7 @@ async def _stream_with_tab_index(
     """使用指定标签页的流式响应"""
     disconnect_task = None
     worker_thread = None
+    chunk_queue = None
 
     try:
         disconnect_task = asyncio.create_task(
@@ -359,11 +449,12 @@ async def _stream_with_tab_index(
             ctx.request_cancel("cleanup")
             worker_thread.join(timeout=2.0)
 
-        try:
-            while not chunk_queue.empty():
-                chunk_queue.get_nowait()
-        except:
-            pass
+        if chunk_queue is not None:
+            try:
+                while not chunk_queue.empty():
+                    chunk_queue.get_nowait()
+            except:
+                pass
 
         if disconnect_task:
             disconnect_task.cancel()
@@ -386,6 +477,178 @@ async def _non_stream_with_tab_index(
     error_data = None
 
     async for chunk in _stream_with_tab_index(request, body, ctx, tab_index):
+        if isinstance(chunk, str):
+            if chunk.startswith("data: [DONE]"):
+                continue
+
+            if chunk.startswith("data: "):
+                try:
+                    data_str = chunk[6:].strip()
+                    if not data_str:
+                        continue
+                    data = json.loads(data_str)
+
+                    if "error" in data:
+                        error_data = data
+                        break
+
+                    if "choices" in data and data["choices"]:
+                        delta = data["choices"][0].get("delta", {})
+                        content = delta.get("content", "")
+                        if content:
+                            collected_content.append(content)
+
+                except json.JSONDecodeError:
+                    continue
+
+    if error_data:
+        return JSONResponse(content=error_data, status_code=500)
+
+    full_content = "".join(collected_content)
+    response = {
+        "id": f"chatcmpl-{int(time.time() * 1000)}",
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": body.model,
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": full_content},
+            "finish_reason": "stop"
+        }],
+        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    }
+
+    return JSONResponse(content=response)
+
+
+async def _stream_with_route_domain(
+    request: Request,
+    body: ChatRequest,
+    ctx: RequestContext,
+    route_domain: str
+):
+    """使用指定域名路由的流式响应"""
+    disconnect_task = None
+    worker_thread = None
+    chunk_queue = None
+
+    try:
+        disconnect_task = asyncio.create_task(
+            watch_client_disconnect(request, ctx, check_interval=0.3)
+        )
+
+        browser = get_browser(auto_connect=False)
+
+        request_manager.start_request(ctx)
+
+        chunk_queue = queue.Queue(maxsize=100)
+
+        def worker():
+            gen = None
+            try:
+                gen = browser.execute_workflow_for_route_domain(
+                    route_domain,
+                    body.messages,
+                    stream=True,
+                    task_id=ctx.request_id,
+                    stop_checker=ctx.should_stop,
+                )
+
+                for chunk in gen:
+                    if ctx.should_stop():
+                        cancel_reason = str(ctx.cancel_reason or "unknown")
+                        if cancel_reason in {"cleanup", "client_disconnected", "coroutine_cancelled"}:
+                            logger.debug(f"工作线程检测到停止: {cancel_reason}")
+                        else:
+                            logger.info(f"工作线程检测到取消: {cancel_reason}")
+                        break
+                    chunk_queue.put(chunk)
+
+            except Exception as e:
+                logger.error(f"工作线程异常: {e}")
+                chunk_queue.put(("ERROR", str(e)))
+            finally:
+                if gen is not None:
+                    try:
+                        gen.close()
+                    except Exception as e:
+                        logger.debug(f"关闭工作流生成器失败（忽略）: {e}")
+                chunk_queue.put(None)
+
+        worker_thread = threading.Thread(target=worker, daemon=True)
+        worker_thread.start()
+
+        while True:
+            if await request.is_disconnected():
+                ctx.request_cancel("client_disconnected")
+                break
+
+            try:
+                chunk = await asyncio.to_thread(chunk_queue.get, timeout=0.5)
+            except queue.Empty:
+                continue
+
+            if chunk is None:
+                break
+
+            if isinstance(chunk, tuple) and chunk[0] == "ERROR":
+                ctx.mark_failed(chunk[1])
+                yield _pack_error(f"执行错误: {chunk[1]}", "internal_error")
+                break
+
+            yield chunk
+            error_message = _extract_stream_error_message(chunk)
+            if error_message:
+                logger.warning(f"流式响应返回错误事件(route_domain={route_domain}): {error_message}")
+                ctx.mark_failed(error_message)
+                break
+            await asyncio.sleep(0)
+
+        if not ctx.should_stop() and ctx.status == RequestStatus.RUNNING:
+            ctx.mark_completed()
+
+    except asyncio.CancelledError:
+        ctx.request_cancel("coroutine_cancelled")
+        raise
+
+    except Exception as e:
+        logger.error(f"异常: {e}")
+        ctx.mark_failed(str(e))
+        yield _pack_error(f"执行错误: {str(e)}", "internal_error")
+
+    finally:
+        if worker_thread and worker_thread.is_alive():
+            ctx.request_cancel("cleanup")
+            worker_thread.join(timeout=2.0)
+
+        if chunk_queue is not None:
+            try:
+                while not chunk_queue.empty():
+                    chunk_queue.get_nowait()
+            except:
+                pass
+
+        if disconnect_task:
+            disconnect_task.cancel()
+            try:
+                await disconnect_task
+            except asyncio.CancelledError:
+                pass
+
+        request_manager.finish_request(ctx, success=(ctx.status == RequestStatus.COMPLETED))
+
+
+async def _non_stream_with_route_domain(
+    request: Request,
+    body: ChatRequest,
+    ctx: RequestContext,
+    route_domain: str
+) -> JSONResponse:
+    """使用指定域名路由的非流式响应"""
+    collected_content = []
+    error_data = None
+
+    async for chunk in _stream_with_route_domain(request, body, ctx, route_domain):
         if isinstance(chunk, str):
             if chunk.startswith("data: [DONE]"):
                 continue
@@ -457,6 +720,33 @@ def _execute_browser_non_stream_for_tab(
     return data
 
 
+def _execute_browser_non_stream_for_route_domain(
+    browser,
+    route_domain: str,
+    messages: List[Dict[str, Any]],
+    request_id: str,
+    stop_checker=None,
+) -> Dict[str, Any]:
+    payload = None
+    for chunk in browser.execute_workflow_for_route_domain(
+        route_domain,
+        messages,
+        stream=False,
+        task_id=request_id,
+        stop_checker=stop_checker,
+    ):
+        payload = chunk
+
+    if not payload:
+        raise RuntimeError("empty_browser_response")
+
+    data = json.loads(payload)
+    if "error" in data:
+        error = data.get("error") or {}
+        raise RuntimeError(str(error.get("message") or "browser_execution_failed"))
+    return data
+
+
 def _extract_assistant_content(response: Dict[str, Any]) -> str:
     try:
         return str(
@@ -493,6 +783,46 @@ def _run_tool_calling_sync_for_tab(
     browser_response = _execute_browser_non_stream_for_tab(
         browser=browser,
         tab_index=tab_index,
+        messages=browser_messages,
+        request_id=request_id,
+        stop_checker=stop_checker,
+    )
+    assistant_text = _extract_assistant_content(browser_response)
+    logger.debug(f"tool_calling assistant_text={_debug_preview(assistant_text)}")
+    parsed = parse_tool_response(assistant_text, tools)
+    logger.debug(
+        "tool_calling parsed result "
+        f"mode={parsed.get('mode')} "
+        f"tool_calls={len(parsed.get('tool_calls') or [])} "
+        f"content={_debug_preview(parsed.get('content'))}"
+    )
+    return build_tool_completion_response(body.model, parsed)
+
+
+def _run_tool_calling_sync_for_route_domain(
+    browser,
+    route_domain: str,
+    body: ChatRequest,
+    request_id: str,
+    stop_checker=None,
+) -> Dict[str, Any]:
+    tools, tool_choice = normalize_tool_request(
+        tools=body.tools,
+        tool_choice=body.tool_choice,
+        functions=body.functions,
+        function_call=body.function_call,
+    )
+
+    browser_messages = build_browser_messages_for_tools(
+        messages=body.messages,
+        tools=tools,
+        tool_choice=tool_choice,
+        parallel_tool_calls=body.parallel_tool_calls,
+    )
+
+    browser_response = _execute_browser_non_stream_for_route_domain(
+        browser=browser,
+        route_domain=route_domain,
         messages=browser_messages,
         request_id=request_id,
         stop_checker=stop_checker,
@@ -555,6 +885,52 @@ async def _complete_tool_calling_with_tab_index(
         request_manager.finish_request(ctx, success=(ctx.status == RequestStatus.COMPLETED))
 
 
+async def _complete_tool_calling_with_route_domain(
+    request: Request,
+    body: ChatRequest,
+    ctx: RequestContext,
+    route_domain: str,
+) -> Dict[str, Any]:
+    disconnect_task = None
+    try:
+        disconnect_task = asyncio.create_task(
+            watch_client_disconnect(request, ctx, check_interval=0.3)
+        )
+
+        browser = get_browser(auto_connect=False)
+        request_manager.start_request(ctx)
+
+        response = await asyncio.to_thread(
+            _run_tool_calling_sync_for_route_domain,
+            browser,
+            route_domain,
+            body,
+            ctx.request_id,
+            ctx.should_stop,
+        )
+
+        if not ctx.should_stop() and ctx.status == RequestStatus.RUNNING:
+            ctx.mark_completed()
+
+        return response
+
+    except asyncio.CancelledError:
+        ctx.request_cancel("coroutine_cancelled")
+        raise
+    except Exception as e:
+        logger.error(f"tool_calling_failed(route_domain={route_domain}): {e}")
+        ctx.mark_failed(str(e))
+        raise
+    finally:
+        if disconnect_task:
+            disconnect_task.cancel()
+            try:
+                await disconnect_task
+            except asyncio.CancelledError:
+                pass
+        request_manager.finish_request(ctx, success=(ctx.status == RequestStatus.COMPLETED))
+
+
 async def _non_stream_tool_calling_with_tab_index(
     request: Request,
     body: ChatRequest,
@@ -577,6 +953,28 @@ async def _non_stream_tool_calling_with_tab_index(
         )
 
 
+async def _non_stream_tool_calling_with_route_domain(
+    request: Request,
+    body: ChatRequest,
+    ctx: RequestContext,
+    route_domain: str,
+) -> JSONResponse:
+    try:
+        response = await _complete_tool_calling_with_route_domain(request, body, ctx, route_domain)
+        return JSONResponse(content=response)
+    except Exception as e:
+        return JSONResponse(
+            content={
+                "error": {
+                    "message": f"执行错误: {e}",
+                    "type": "execution_error",
+                    "code": "tool_calling_failed",
+                }
+            },
+            status_code=500,
+        )
+
+
 async def _stream_tool_calling_with_tab_index(
     request: Request,
     body: ChatRequest,
@@ -585,6 +983,29 @@ async def _stream_tool_calling_with_tab_index(
 ):
     try:
         response = await _complete_tool_calling_with_tab_index(request, body, ctx, tab_index)
+        message = response.get("choices", [{}])[0].get("message", {}) or {}
+        parsed = {
+            "content": message.get("content"),
+            "tool_calls": message.get("tool_calls") or [],
+        }
+        for chunk in iter_tool_stream_chunks(body.model, parsed):
+            if await request.is_disconnected():
+                ctx.request_cancel("client_disconnected")
+                break
+            yield chunk
+            await asyncio.sleep(0)
+    except Exception as e:
+        yield _pack_error(f"执行错误: {str(e)}", "tool_calling_failed")
+
+
+async def _stream_tool_calling_with_route_domain(
+    request: Request,
+    body: ChatRequest,
+    ctx: RequestContext,
+    route_domain: str,
+):
+    try:
+        response = await _complete_tool_calling_with_route_domain(request, body, ctx, route_domain)
         message = response.get("choices", [{}])[0].get("message", {}) or {}
         parsed = {
             "content": message.get("content"),
@@ -753,7 +1174,7 @@ async def set_site_default_preset(
     body: SetDefaultPresetRequest,
     authenticated: bool = Depends(verify_auth)
 ):
-    """设置站点默认预设"""
+    """设置站点默认预设（本地覆盖）"""
     try:
         from app.services.config_engine import config_engine
         success = config_engine.set_default_preset(domain, body.preset_name)
@@ -761,7 +1182,7 @@ async def set_site_default_preset(
         if success:
             return {
                 "success": True,
-                "message": f"默认预设已设置为 '{body.preset_name}'",
+                "message": f"默认预设已设置为 '{body.preset_name}'（本地覆盖）",
                 "domain": domain,
                 "default_preset": body.preset_name
             }

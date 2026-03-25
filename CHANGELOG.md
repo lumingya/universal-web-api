@@ -1,8 +1,20 @@
-# Changelog
+# 更新日志
+
+## 2.6.6 - 2026-03-24
+
+- 将全局站点默认配置与本地默认预设覆盖分离，使 `sites.local.json` 不再污染 `sites.json`，同时在通用配置保存后仍能保留本地覆盖项。
+- 新增完整的设置备份导入/导出功能，覆盖 env 配置、浏览器常量、update-preserve 设置、选择器定义以及本地仪表盘偏好。
+- 在前端设置页加载、编辑、重置和保存时，保留 `tab_pool` 等嵌套浏览器常量以及命令的周期检查设置。
+- 新增基于域名的标签页路由，支持 `/url/{domain}/v1/...` 端点，并包含 `gemini.google.com -> gemini.com` 别名支持；同时继续保留固定的 `/tab/{index}/v1/...` 路由作为第二种策略。
+- 更新标签页池 UI，展示实时的 `current_domain`、`domain_url`、域名路由端点和固定标签页路由端点，并为两类端点分别提供复制操作。
+- 修复命令引擎的域名解析和预设执行行为，包括安全的“跟随站点默认预设”支持，以及修正 `click_element` 的站点配置查找逻辑。
+- 移除过时的提取器前端入口点，并从仪表盘中删除未被引用的提取器 UI 文件。
+- 改进请求校验错误信息，在请求被拒绝时同时报告当前消息数量/长度与配置的限制值。
+- 修复 stealth 工作流的延迟暴涨问题：根据真实墙钟时间为 CDP 鼠标移动和空闲漂移进行节奏控制，并限制事件密度；在保持常规网络和 DOM 流程正常的同时，将一次可复现的 Gemini stealth 运行从约 233 秒降至约 27 秒。
 
 ## 2.6.5 - 2026-03-20
 
-- Fixed `start.bat` browser startup flow so a dedicated Chrome profile directory can be launched and detected reliably.
-- Forced UTF-8 Python output in `start.bat` to avoid `patch_drissionpage.py` encoding failures under different launch modes.
-- Normalized `start.bat` to consistent `CRLF` line endings to prevent `cmd` parse errors caused by mixed newlines.
-- Verified end-to-end startup with `BROWSER_PROFILE_DIR=C:\Users\QIU\AppData\Local\UniversalWebApiProfile`, including Chrome DevTools on `9222` and service health on `8199`.
+- 修复 `start.bat` 的浏览器启动流程，使专用 Chrome 配置目录能够被可靠启动和检测。
+- 在 `start.bat` 中强制使用 UTF-8 Python 输出，避免不同启动模式下 `patch_drissionpage.py` 出现编码失败。
+- 将 `start.bat` 统一为一致的 `CRLF` 行尾，防止混合换行导致 `cmd` 解析错误。
+- 已验证在 `BROWSER_PROFILE_DIR=C:\Users\QIU\AppData\Local\UniversalWebApiProfile` 下可端到端启动成功，包括 `9222` 上的 Chrome DevTools 和 `8199` 上的服务健康检查。

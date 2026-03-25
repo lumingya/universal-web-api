@@ -105,6 +105,7 @@ async def save_config(
             if not k.startswith('_')
         }
         config_engine.sites = new_sites
+        config_engine._apply_local_site_overrides()
         
         # 通过引擎保存（自动包含 _global）
         success = config_engine.save_config()

@@ -1,14 +1,3 @@
 {
-  "default_presets": {
-    "aistudio.google.com": "主预设",
-    "grok.com": "主预设",
-    "chatgpt.com": "主预设",
-    "gemini.google.com": "主预设",
-    "chat.deepseek.com": "主预设",
-    "www.doubao.com": "主预设",
-    "claude.ai": "主预设",
-    "arena.ai": "主预设-side",
-    "chat.qwen.ai": "主预设",
-    "www.kimi.com": "主预设"
-  }
+  "default_presets": {}
 }

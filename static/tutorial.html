@@ -142,7 +142,6 @@
             align-items: center;
             justify-content: center;
             gap: 8px;
-            margin-bottom: 15px;
             padding: 8px 12px;
             background: var(--site-card-bg);
             border: 1px solid var(--border-color);
@@ -159,6 +158,13 @@
             background: var(--info-bg);
         }
 
+        .sidebar-controls {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            margin-bottom: 18px;
+        }
+
         .main-content {
             margin-left: var(--sidebar-width);
             padding: 40px 60px;
@@ -170,8 +176,113 @@
             margin-bottom: 24px;
         }
 
+        .page-header-top {
+            display: flex;
+            justify-content: flex-end;
+            margin-bottom: 14px;
+        }
+
         .page-header h1 {
             margin-bottom: 12px;
+        }
+
+        .language-dropdown {
+            position: relative;
+        }
+
+        .language-trigger {
+            min-width: 190px;
+            padding: 14px 18px;
+            border: 1px solid rgba(148, 163, 184, 0.24);
+            border-radius: 16px;
+            background: rgba(15, 23, 42, 0.9);
+            color: #e5e7eb;
+            display: inline-flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 14px;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 600;
+            box-shadow: 0 18px 36px rgba(15, 23, 42, 0.22);
+            transition: border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .language-trigger:hover {
+            border-color: rgba(96, 165, 250, 0.6);
+            transform: translateY(-1px);
+            box-shadow: 0 20px 40px rgba(15, 23, 42, 0.28);
+        }
+
+        .language-trigger:focus-visible {
+            outline: 2px solid rgba(96, 165, 250, 0.9);
+            outline-offset: 2px;
+        }
+
+        .language-current {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .language-chevron {
+            width: 10px;
+            height: 10px;
+            border-right: 2px solid currentColor;
+            border-bottom: 2px solid currentColor;
+            transform: rotate(45deg) translateY(-1px);
+            transition: transform 0.2s ease;
+            flex-shrink: 0;
+            opacity: 0.9;
+        }
+
+        .language-dropdown.open .language-chevron {
+            transform: rotate(-135deg) translateY(-1px);
+        }
+
+        .language-menu {
+            position: absolute;
+            top: calc(100% + 10px);
+            right: 0;
+            min-width: 100%;
+            padding: 8px;
+            border: 1px solid rgba(148, 163, 184, 0.22);
+            border-radius: 14px;
+            background: rgba(17, 24, 39, 0.98);
+            box-shadow: 0 20px 48px rgba(15, 23, 42, 0.3);
+            opacity: 0;
+            visibility: hidden;
+            transform: translateY(-8px);
+            transition: opacity 0.18s ease, transform 0.18s ease, visibility 0.18s ease;
+            z-index: 140;
+        }
+
+        .language-dropdown.open .language-menu {
+            opacity: 1;
+            visibility: visible;
+            transform: translateY(0);
+        }
+
+        .language-option {
+            width: 100%;
+            border: 0;
+            border-radius: 10px;
+            background: transparent;
+            color: #e5e7eb;
+            text-align: left;
+            font-size: 1rem;
+            padding: 12px 16px;
+            cursor: pointer;
+            transition: background-color 0.18s ease, color 0.18s ease;
+        }
+
+        .language-option:hover {
+            background: rgba(148, 163, 184, 0.14);
+        }
+
+        .language-option.active {
+            background: #93c5fd;
+            color: #0f4c81;
         }
 
         .project-link-banner {
@@ -561,6 +672,26 @@
                 width: 100%;
             }
 
+            .page-header-top {
+                justify-content: flex-end;
+                margin-right: 0;
+            }
+
+            .language-dropdown {
+                width: min(220px, 100%);
+            }
+
+            .language-trigger {
+                width: 100%;
+                min-width: 0;
+                padding: 12px 16px;
+                font-size: 0.95rem;
+            }
+
+            .language-menu {
+                min-width: 100%;
+            }
+
             h1 {
                 font-size: 1.4rem;
             }
@@ -639,13 +770,14 @@
     <div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
 
     <div class="sidebar" id="sidebar">
-        <h2>📑 目录导航</h2>
-        <button class="theme-toggle" onclick="toggleTheme()">
-            <span id="themeIcon">🌙</span>
-            <span id="themeText">夜间模式</span>
-        </button>
+        <h2 id="navTitle">📑 目录导航</h2>
+        <div class="sidebar-controls">
+            <button class="theme-toggle" onclick="toggleTheme()">
+                <span id="themeIcon">🌙</span>
+                <span id="themeText">夜间模式</span>
+            </button>
+        </div>
         <nav>
-            <a href="#author-note" class="nav-link">⚠️ 作者的话（必看）</a>
             <a href="#quick-start" class="nav-link">🚀 快速开始</a>
             <a href="#dashboard-tour" class="nav-link">🖥️ 控制台导览</a>
             <a href="#add-site-guide" class="nav-link">🆕 新增站点</a>
@@ -666,33 +798,49 @@
             <a href="#browser-config" class="nav-link">🌐 浏览器常量</a>
             <a href="#config-manage" class="nav-link">💾 配置管理</a>
             <a href="#faq" class="nav-link">❓ 常见问题</a>
+            <a href="#author-note" class="nav-link">⚠️ 作者的话（必看）</a>
         </nav>
     </div>
 
     <div class="main-content">
         <div class="page-header">
-            <h1>Universal Web-to-API 使用手册 (v2.6.5)</h1>
+            <div class="page-header-top">
+                <div class="language-dropdown" id="languageDropdown">
+                    <button type="button"
+                            class="language-trigger"
+                            id="languageTrigger"
+                            aria-haspopup="true"
+                            aria-expanded="false"
+                            aria-label="切换语言">
+                        <span class="language-current" id="languageCurrentText">简体中文</span>
+                        <span class="language-chevron" aria-hidden="true"></span>
+                    </button>
+                    <div class="language-menu" id="languageMenu" role="menu" aria-label="语言选择">
+                        <button type="button" class="language-option active" data-lang-option="zh" role="menuitemradio" aria-checked="true">简体中文</button>
+                        <button type="button" class="language-option" data-lang-option="en" role="menuitemradio" aria-checked="false">English</button>
+                    </div>
+                </div>
+            </div>
+            <h1 id="pageTitle">Universal Web-to-API 使用手册 (v2.6.5)</h1>
             <div class="project-link-banner">
                 <div class="project-link-copy">
                     <div class="project-link-label">
                         <svg height="18" width="18" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path></svg>
-                        项目链接
+                        <span id="projectLinkLabelText">项目链接</span>
                     </div>
-                    <p>需要查看源码、更新说明或提 Issue 时，直接从这里进入仓库。</p>
+                    <p id="projectLinkDescription">需要查看源码、更新说明或提 Issue 时，直接从这里进入仓库。</p>
                     <code class="project-link-url">https://github.com/lumingya/universal-web-api</code>
                 </div>
                 <a class="project-link-button" href="https://github.com/lumingya/universal-web-api" target="_blank" rel="noopener noreferrer">
                     <svg height="18" width="18" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path></svg>
-                    打开项目链接
+                    <span id="projectLinkButtonText">打开项目链接</span>
                 </a>
             </div>
         </div>
 
         <!-- ==================== 作者的话 ==================== -->
         <section id="author-note">
-            <h2>⚠️ 作者的话（必看）</h2>
-            <p><strong>想商业化的可以洗洗睡了，本项目不会也无法提供商业化，并发存在硬上限。</strong></p>
-
+            <h2>⚠️ 作者的话</h2>
             <div class="config-group">
                 <h4><span class="icon">1️⃣</span> 函数调用目前问题很多</h4>
                 <p><code>Function Calling</code> 这块目前还有不少问题，<strong>极其依赖 AI 本身的理解能力</strong>。换句话说，它不是一个已经完全收敛、可以闭眼依赖的稳定功能，用的时候请降低预期，多做实测。</p>
@@ -752,7 +900,7 @@
             <p>欢迎使用 Web-to-API。本项目将网页版 AI 对话界面转换为标准 OpenAI 兼容 API。</p>
 
             <div class="highlight-box">
-                <p><strong>第一次使用建议：</strong>先看完上面的「作者的话（必看）」再继续。它能帮你快速判断哪些问题该先自己排查，哪些反馈方式作者更容易看到。</p>
+                <p><strong>第一次使用建议：</strong>先把这页主体流程看完；文末的「作者的话」再补读一遍，会更容易理解项目的维护范围、反馈方式和使用预期。</p>
             </div>
 
             <div class="info-box">
@@ -900,6 +1048,7 @@
                     <li><strong>API 接口地址 (Base URL)</strong>：
                         <ul>
                             <li>默认（自动分配标签页）：<code>http://127.0.0.1:8199/v1</code></li>
+                            <li>指定站点域名：<code>http://127.0.0.1:8199/url/gemini.com/v1</code>（自动匹配该站点的标签页）</li>
                             <li>指定标签页：<code>http://127.0.0.1:8199/tab/1/v1</code>（编号见标签页池）</li>
                             <li>部分软件需完整路径：<code>http://127.0.0.1:8199/v1/chat/completions</code></li>
                         </ul>
@@ -999,6 +1148,11 @@
                     <td>自动选择一个空闲标签页处理请求</td>
                 </tr>
                 <tr>
+                    <td><strong>指定站点域名</strong></td>
+                    <td><code>/url/{域名}/v1/chat/completions</code></td>
+                    <td>自动匹配该域名对应的标签页，例如 <code>/url/gemini.com/v1/chat/completions</code></td>
+                </tr>
+                <tr>
                     <td><strong>指定标签页</strong></td>
                     <td><code>/tab/{编号}/v1/chat/completions</code></td>
                     <td>使用特定编号的标签页，如果该标签页忙碌则排队等待</td>
@@ -1078,13 +1232,13 @@
                 <li>选择想要使用的预设即可</li>
             </ol>
 
-            <p><strong>3. 通过 API 使用指定预设的标签页</strong></p>
-            <pre><code># 假设标签页 #1 使用"Pro 模型对话"预设，标签页 #2 使用"快速识图"预设
+            <p><strong>3. 通过 API 使用站点域名路由或指定标签页</strong></p>
+            <pre><code># 假设当前已有一个 Gemini 站点标签页，标签页 #2 使用"快速识图"预设
 
-# 使用 Pro 模型对话
-curl http://127.0.0.1:8199/tab/1/v1/chat/completions
+# 使用 Gemini 站点标签页
+curl http://127.0.0.1:8199/url/gemini.com/v1/chat/completions
 
-# 使用快速识图
+# 使用固定编号的快速识图标签页
 curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
 
             <div class="info-box">
@@ -2137,6 +2291,7 @@ BROWSER_PROFILE_NAME=Default</code></pre>
             <p>A: 脚本使用<strong>标签页池</strong>自动管理所有打开的标签页：</p>
             <ul>
                 <li><strong>默认路由</strong>（<code>/v1/chat/completions</code>）：自动选择一个空闲标签页处理请求</li>
+                <li><strong>指定站点域名</strong>（<code>/url/gemini.com/v1/chat/completions</code>）：自动匹配该站点的标签页</li>
                 <li><strong>指定标签页</strong>（<code>/tab/1/v1/chat/completions</code>）：使用编号为 1 的标签页</li>
                 <li>你可以为不同标签页分配不同的<strong>预设</strong>，实现同一站点的多种用途（如对话 + 识图）</li>
                 <li>当同时有多个请求时，空闲标签页会被依次分配；如果所有标签页都忙碌，新请求会排队等待</li>
@@ -2200,6 +2355,7 @@ BROWSER_PROFILE_NAME=Default</code></pre>
         </section>
     </div>
 
+    <script src="/static/js/tutorial-i18n.js"></script>
     <script>
         // 站点配置数据（域名已更新）
         const sites = [
@@ -2215,15 +2371,167 @@ BROWSER_PROFILE_NAME=Default</code></pre>
             { url: "https://arena.ai", name: "arena.ai", id: "arena" }
         ];
 
+        const tutorialState = {
+            currentLanguage: 'zh'
+        };
+
+        const tutorialTranslations = {
+            zh: null,
+            en: window.TUTORIAL_I18N_EN || null
+        };
+
+        const navTitleEl = document.getElementById('navTitle');
+        const pageTitleEl = document.getElementById('pageTitle');
+        const projectLinkLabelTextEl = document.getElementById('projectLinkLabelText');
+        const projectLinkDescriptionEl = document.getElementById('projectLinkDescription');
+        const projectLinkButtonTextEl = document.getElementById('projectLinkButtonText');
+        const hamburgerBtn = document.getElementById('hamburgerBtn');
+        const languageDropdownEl = document.getElementById('languageDropdown');
+        const languageTriggerEl = document.getElementById('languageTrigger');
+        const languageMenuEl = document.getElementById('languageMenu');
+        const languageCurrentTextEl = document.getElementById('languageCurrentText');
+        const languageButtons = document.querySelectorAll('[data-lang-option]');
+        const languageNames = {
+            zh: '简体中文',
+            en: 'English'
+        };
+
+        function normalizeLanguage(language) {
+            return String(language || '').toLowerCase().startsWith('en') ? 'en' : 'zh';
+        }
+
+        function moveAuthorNoteSection() {
+            const authorNote = document.getElementById('author-note');
+            const faq = document.getElementById('faq');
+            if (!authorNote || !faq || faq.nextElementSibling === authorNote) {
+                return;
+            }
+            faq.insertAdjacentElement('afterend', authorNote);
+        }
+
+        function captureChineseBundle() {
+            if (tutorialTranslations.zh) {
+                return;
+            }
+
+            const sectionContent = {};
+            document.querySelectorAll('section').forEach(section => {
+                sectionContent[section.id] = section.innerHTML;
+            });
+
+            const navContent = {};
+            document.querySelectorAll('.nav-link').forEach(link => {
+                navContent[link.getAttribute('href').slice(1)] = link.textContent.trim();
+            });
+
+            tutorialTranslations.zh = {
+                meta: {
+                    htmlLang: 'zh-CN',
+                    pageTitle: document.title
+                },
+                ui: {
+                    navTitle: navTitleEl.textContent.trim(),
+                    pageHeaderTitle: pageTitleEl.textContent.trim(),
+                    projectLinkLabel: projectLinkLabelTextEl.textContent.trim(),
+                    projectLinkDescription: projectLinkDescriptionEl.textContent.trim(),
+                    projectLinkButton: projectLinkButtonTextEl.textContent.trim(),
+                    languageLabel: languageTriggerEl.getAttribute('aria-label') || '切换语言',
+                    themeLight: '日间模式',
+                    themeDark: '夜间模式',
+                    hamburgerOpenLabel: '打开导航菜单',
+                    hamburgerCloseLabel: '关闭导航菜单'
+                },
+                nav: navContent,
+                sections: sectionContent
+            };
+        }
+
+        function getCurrentBundle() {
+            return tutorialTranslations[tutorialState.currentLanguage] || tutorialTranslations.zh;
+        }
+
         // 渲染站点卡片
         function renderSiteGrid() {
             const grid = document.getElementById('siteGrid');
+            if (!grid) {
+                return;
+            }
             grid.innerHTML = sites.map(site => `
                 <a href="${site.url}" target="_blank" class="site-card">
                     ${site.name}
                     <span class="model-id">${site.id}</span>
                 </a>
             `).join('');
+        }
+
+        function updateLanguageButtons() {
+            languageButtons.forEach(button => {
+                const isActive = button.dataset.langOption === tutorialState.currentLanguage;
+                button.classList.toggle('active', isActive);
+                button.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+                button.setAttribute('aria-checked', isActive ? 'true' : 'false');
+            });
+            languageCurrentTextEl.textContent = languageNames[tutorialState.currentLanguage] || languageNames.zh;
+        }
+
+        function setLanguageDropdownOpen(isOpen) {
+            languageDropdownEl.classList.toggle('open', isOpen);
+            languageTriggerEl.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+        }
+
+        function toggleLanguageDropdown() {
+            setLanguageDropdownOpen(!languageDropdownEl.classList.contains('open'));
+        }
+
+        function updateHamburgerLabel(isOpen = document.getElementById('sidebar').classList.contains('open')) {
+            const bundle = getCurrentBundle();
+            hamburgerBtn.setAttribute(
+                'aria-label',
+                isOpen ? bundle.ui.hamburgerCloseLabel : bundle.ui.hamburgerOpenLabel
+            );
+        }
+
+        function applyLanguage(language) {
+            const normalized = normalizeLanguage(language);
+            const fallback = tutorialTranslations.zh;
+            const bundle = tutorialTranslations[normalized] || fallback;
+
+            tutorialState.currentLanguage = normalized;
+
+            document.documentElement.lang = bundle.meta?.htmlLang || fallback.meta.htmlLang;
+            document.title = bundle.meta?.pageTitle || fallback.meta.pageTitle;
+
+            navTitleEl.textContent = bundle.ui?.navTitle || fallback.ui.navTitle;
+            pageTitleEl.textContent = bundle.ui?.pageHeaderTitle || fallback.ui.pageHeaderTitle;
+            projectLinkLabelTextEl.textContent = bundle.ui?.projectLinkLabel || fallback.ui.projectLinkLabel;
+            projectLinkDescriptionEl.textContent = bundle.ui?.projectLinkDescription || fallback.ui.projectLinkDescription;
+            projectLinkButtonTextEl.textContent = bundle.ui?.projectLinkButton || fallback.ui.projectLinkButton;
+            languageTriggerEl.setAttribute('aria-label', bundle.ui?.languageLabel || fallback.ui.languageLabel);
+            languageMenuEl.setAttribute('aria-label', bundle.ui?.languageLabel || fallback.ui.languageLabel);
+
+            navLinks.forEach(link => {
+                const sectionId = link.getAttribute('href').slice(1);
+                link.textContent = bundle.nav?.[sectionId] || fallback.nav?.[sectionId] || link.textContent;
+            });
+
+            sections.forEach(section => {
+                const translatedHtml = bundle.sections?.[section.id] || fallback.sections?.[section.id];
+                if (typeof translatedHtml === 'string') {
+                    section.innerHTML = translatedHtml;
+                }
+            });
+
+            renderSiteGrid();
+            updateLanguageButtons();
+            updateThemeButton(document.documentElement.getAttribute('data-theme') || 'light');
+            updateHamburgerLabel();
+            updateActiveNavLink();
+        }
+
+        function setLanguage(language) {
+            const normalized = normalizeLanguage(language);
+            localStorage.setItem('tutorial-language', normalized);
+            applyLanguage(normalized);
         }
 
         // 夜间模式
@@ -2238,31 +2546,35 @@ BROWSER_PROFILE_NAME=Default</code></pre>
         function updateThemeButton(theme) {
             const icon = document.getElementById('themeIcon');
             const text = document.getElementById('themeText');
+            const bundle = getCurrentBundle();
             if (theme === 'dark') {
                 icon.textContent = '☀️';
-                text.textContent = '日间模式';
+                text.textContent = bundle.ui.themeLight;
             } else {
                 icon.textContent = '🌙';
-                text.textContent = '夜间模式';
+                text.textContent = bundle.ui.themeDark;
             }
         }
 
         function initTheme() {
             const saved = localStorage.getItem('tutorial-theme');
+            let theme = 'light';
             if (saved) {
-                document.documentElement.setAttribute('data-theme', saved);
-                updateThemeButton(saved);
+                theme = saved;
             } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
-                document.documentElement.setAttribute('data-theme', 'dark');
-                updateThemeButton('dark');
+                theme = 'dark';
             }
+            document.documentElement.setAttribute('data-theme', theme);
+            updateThemeButton(theme);
         }
+
+        moveAuthorNoteSection();
 
         // 滚动高亮逻辑
         const sections = document.querySelectorAll('section');
         const navLinks = document.querySelectorAll('.nav-link');
 
-        window.addEventListener('scroll', () => {
+        function updateActiveNavLink() {
             let current = '';
             sections.forEach(section => {
                 const sectionTop = section.offsetTop;
@@ -2277,17 +2589,18 @@ BROWSER_PROFILE_NAME=Default</code></pre>
                     link.classList.add('active');
                 }
             });
-        });
+        }
+
+        window.addEventListener('scroll', updateActiveNavLink);
 
         // 侧边栏开关
         function toggleSidebar() {
             const sidebar = document.getElementById('sidebar');
             const overlay = document.getElementById('sidebarOverlay');
-            const btn = document.getElementById('hamburgerBtn');
             const isOpen = sidebar.classList.contains('open');
 
             sidebar.classList.toggle('open');
-            btn.classList.toggle('active');
+            hamburgerBtn.classList.toggle('active');
 
             if (!isOpen) {
                 overlay.style.display = 'block';
@@ -2296,6 +2609,8 @@ BROWSER_PROFILE_NAME=Default</code></pre>
                 overlay.classList.remove('active');
                 setTimeout(() => { overlay.style.display = 'none'; }, 300);
             }
+
+            updateHamburgerLabel(!isOpen);
         }
 
         // 手机端点击导航链接后自动关闭侧边栏
@@ -2307,9 +2622,38 @@ BROWSER_PROFILE_NAME=Default</code></pre>
             });
         });
 
+        languageButtons.forEach(button => {
+            button.addEventListener('click', () => {
+                setLanguage(button.dataset.langOption);
+                setLanguageDropdownOpen(false);
+            });
+        });
+
+        languageTriggerEl.addEventListener('click', (event) => {
+            event.stopPropagation();
+            toggleLanguageDropdown();
+        });
+
+        languageMenuEl.addEventListener('click', (event) => {
+            event.stopPropagation();
+        });
+
+        document.addEventListener('click', (event) => {
+            if (!languageDropdownEl.contains(event.target)) {
+                setLanguageDropdownOpen(false);
+            }
+        });
+
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape') {
+                setLanguageDropdownOpen(false);
+            }
+        });
+
         // 页面加载时初始化
+        captureChineseBundle();
         initTheme();
-        renderSiteGrid();
+        applyLanguage(normalizeLanguage(localStorage.getItem('tutorial-language') || 'zh'));
     </script>
 </body>
 </html>

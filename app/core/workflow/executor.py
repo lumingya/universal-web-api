@@ -848,11 +848,17 @@ class WorkflowExecutor:
                 logger.debug(f"未知动作: {action}")
         
         except ElementNotFoundError as e:
+            if self._check_cancelled():
+                logger.info(f"[Executor] step cancelled after element lookup failure [{action}]: {e}")
+                return
             if not optional:
                 yield self.formatter.pack_error(f"元素未找到: {str(e)}")
                 raise
         
         except Exception as e:
+            if self._check_cancelled():
+                logger.info(f"[Executor] step cancelled; suppressing exception [{action}]: {e}")
+                return
             logger.error(f"步骤执行失败 [{action}]: {e}")
             if not optional:
                 yield self.formatter.pack_error(f"执行失败: {str(e)}")

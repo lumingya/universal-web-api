@@ -258,6 +258,111 @@ class TextInputHandler:
         except Exception:
             return False
     
+    def _probe_focus_state(self, ele) -> dict:
+        """检查当前焦点/选区是否仍落在目标输入元素内。"""
+        try:
+            state = ele.run_js("""
+                return (function(){
+                    try {
+                        const el = this;
+                        const active = document.activeElement;
+                        const activeWithin = !!active && (
+                            active === el
+                            || (el.contains && el.contains(active))
+                            || (active.contains && active.contains(el))
+                        );
+
+                        const sel = window.getSelection ? window.getSelection() : null;
+                        const anchor = sel ? sel.anchorNode : null;
+                        const focus = sel ? sel.focusNode : null;
+                        const selectionWithin = !!(
+                            anchor && (anchor === el || (el.contains && el.contains(anchor)))
+                        ) || !!(
+                            focus && (focus === el || (el.contains && el.contains(focus)))
+                        );
+
+                        return {
+                            activeWithin,
+                            selectionWithin,
+                            activeTag: active ? String(active.tagName || '').toLowerCase() : '',
+                            selectionTextLen: sel ? String(sel).length : 0
+                        };
+                    } catch (e) {
+                        return {
+                            activeWithin: false,
+                            selectionWithin: false,
+                            activeTag: '',
+                            selectionTextLen: 0,
+                            error: String(e && e.message ? e.message : e)
+                        };
+                    }
+                }).call(this);
+            """) or {}
+            return state if isinstance(state, dict) else {}
+        except Exception:
+            return {}
+
+    def ensure_input_focus(self, ele, attempts: int = 2) -> bool:
+        """尽量确保后续 Ctrl+A / Ctrl+V 作用在目标输入框上。"""
+        for attempt in range(max(1, attempts) + 1):
+            state = self._probe_focus_state(ele)
+            active_within = bool(state.get("activeWithin"))
+            selection_within = bool(state.get("selectionWithin"))
+            if active_within or selection_within:
+                return True
+
+            self.focus_to_end(ele)
+            time.sleep(0.05)
+
+            state = self._probe_focus_state(ele)
+            active_within = bool(state.get("activeWithin"))
+            selection_within = bool(state.get("selectionWithin"))
+            if active_within or selection_within:
+                return True
+
+            if attempt < attempts:
+                self.physical_activate(ele)
+                time.sleep(0.08)
+
+        final_state = self._probe_focus_state(ele)
+        logger.warning(
+            "[INPUT_FOCUS] 输入框焦点校验失败 "
+            f"(active_within={bool(final_state.get('activeWithin'))}, "
+            f"selection_within={bool(final_state.get('selectionWithin'))}, "
+            f"active_tag={final_state.get('activeTag')!r}, "
+            f"selection_len={final_state.get('selectionTextLen', 0)})"
+        )
+        return False
+
+    def verify_paste_result_minimal(self, ele, expected_text: str) -> bool:
+        """最小化校验粘贴结果，避免整页全选后脚本误判成功。"""
+        expected = self.normalize_for_compare(expected_text)
+        if not expected:
+            return True
+
+        actual = self.read_input_full_text(ele)
+        actual_normalized = self.normalize_for_compare(actual)
+        if actual_normalized == expected:
+            return True
+
+        expected_core = re.sub(r'\s+', '', expected_text)
+        actual_core = re.sub(r'\s+', '', actual)
+        if actual_core == expected_core:
+            return True
+
+        expected_len = len(expected_core)
+        actual_len = len(actual_core)
+        ratio = (actual_len / expected_len) if expected_len > 0 else 1.0
+
+        if actual_len == 0 or ratio < 0.5:
+            logger.warning(
+                "[PASTE_VERIFY] 检测到异常粘贴结果 "
+                f"(actual={actual_len}, expected={expected_len}, ratio={ratio:.2f})"
+            )
+            return False
+
+        return True
+    
     # ================= JS 模式输入 =================
     
     def set_input_atomic(self, ele, text: str, mode: str = "append") -> bool:
@@ -1228,6 +1333,9 @@ class TextInputHandler:
             # 1. 聚焦输入框
             ele.click()
             self._smart_delay(0.15, 0.35)
+
+            if not self.ensure_input_focus(ele):
+                raise WorkflowError("input_focus_failed")
             
             if self._check_cancelled():
                 return False
@@ -1341,6 +1449,9 @@ class TextInputHandler:
         try:
             if self._check_cancelled():
                 return
+
+            if not self.ensure_input_focus(ele):
+                raise WorkflowError("clipboard_focus_failed")
             
             # 全选（人类化时序）
             self._human_key_combo('Control', 'A')
@@ -1378,6 +1489,9 @@ class TextInputHandler:
             if self._check_cancelled():
                 return
             
+            if not self.verify_paste_result_minimal(ele, text):
+                raise WorkflowError("clipboard_paste_failed")
+
             if not skip_verify:
                 self._stealth_verify_paste_light(ele, text)
             else:
@@ -1419,6 +1533,9 @@ class TextInputHandler:
             # 1. 聚焦输入框（原生点击）
             ele.click()
             self._smart_delay(0.15, 0.35)
+
+            if not self.ensure_input_focus(ele):
+                raise WorkflowError("clipboard_focus_failed")
         
             if self._check_cancelled():
                 return
@@ -1459,6 +1576,9 @@ class TextInputHandler:
             if self._check_cancelled():
                 return
         
+            if not self.verify_paste_result_minimal(ele, text):
+                raise WorkflowError("clipboard_paste_failed")
+
             # 5. 验证（可配置跳过，默认跳过以避免 JS 注入）
             if not skip_verify:
                 self._stealth_verify_paste_light(ele, text)

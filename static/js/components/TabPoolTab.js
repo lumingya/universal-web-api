@@ -75,16 +75,28 @@ window.TabPoolTabComponent = {
             }
         },
         
-        copyEndpoint(tab) {
-            const endpoint = `${this.baseUrl}/tab/${tab.persistent_index}/v1/chat/completions`;
+        copyEndpoint(routePrefix, successMessage = '已复制端点地址') {
+            const endpoint = `${this.baseUrl}${routePrefix}/v1/chat/completions`;
             navigator.clipboard.writeText(endpoint).then(() => {
-                this.$emit('notify', { type: 'success', message: '已复制端点地址' });
+                this.$emit('notify', { type: 'success', message: successMessage });
             });
+        },
+
+        getDomainRoutePrefix(tab) {
+            return tab.domain_route_prefix || '';
+        },
+
+        getFixedTabRoutePrefix(tab) {
+            return tab.tab_route_prefix || `/tab/${tab.persistent_index}`;
         },
         
         truncateUrl(url, maxLen = 50) {
             if (!url) return '(空)';
             return url.length > maxLen ? url.substring(0, maxLen) + '...' : url;
+        },
+
+        getDomainLabel(tab) {
+            return tab.current_domain || '未识别域名';
         },
 
         getDefaultPresetOptionValue() {
@@ -224,6 +236,7 @@ window.TabPoolTabComponent = {
                 <h3 class="font-semibold text-blue-800 dark:text-blue-300 mb-2">💡 使用方式</h3>
                 <ul class="text-sm text-blue-700 dark:text-blue-200 space-y-1">
                     <li>• <strong>默认路由</strong>：<code class="bg-blue-100 dark:bg-blue-800 px-1 rounded">/v1/chat/completions</code> - 自动选择空闲标签页</li>
+                    <li>• <strong>指定站点域名</strong>：<code class="bg-blue-100 dark:bg-blue-800 px-1 rounded">/url/gemini.com/v1/chat/completions</code> - 自动匹配该站点的标签页</li>
                     <li>• <strong>指定标签页</strong>：<code class="bg-blue-100 dark:bg-blue-800 px-1 rounded">/tab/{编号}/v1/chat/completions</code> - 使用特定标签页</li>
                     <li>• 标签页编号在脚本运行期间保持不变，关闭标签页不会影响其他编号</li>
                 </ul>
@@ -261,20 +274,45 @@ window.TabPoolTabComponent = {
                                 </span>
                             </div>
                             
+                            <div class="flex flex-wrap items-center gap-2 mb-1 text-sm">
+                                <span class="text-gray-500 dark:text-gray-400">🏷️</span>
+                                <span class="font-medium text-gray-800 dark:text-gray-100">{{ getDomainLabel(tab) }}</span>
+                                <a v-if="tab.domain_url"
+                                   :href="tab.domain_url"
+                                   target="_blank"
+                                   rel="noreferrer"
+                                   class="text-xs text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 font-mono">
+                                    {{ tab.domain_url }}
+                                </a>
+                            </div>
+
                             <!-- URL -->
                             <div class="text-sm text-gray-600 dark:text-gray-300 truncate mb-2" :title="tab.url">
-                                🌐 {{ truncateUrl(tab.url, 60) }}
+                                🌐 {{ truncateUrl(tab.url, 72) }}
                             </div>
                             
                             <!-- 路由端点 -->
-                            <div class="flex items-center gap-2">
-                                <code class="text-xs bg-gray-100 dark:bg-gray-700 px-2 py-1 rounded text-gray-700 dark:text-gray-300">
-                                    {{ tab.route_prefix }}/v1/chat/completions
-                                </code>
-                                <button @click="copyEndpoint(tab)"
-                                        class="text-xs text-blue-500 hover:text-blue-700 dark:text-blue-400">
-                                    📋 复制
-                                </button>
+                            <div class="space-y-2">
+                                <div v-if="getDomainRoutePrefix(tab)" class="flex flex-wrap items-center gap-2">
+                                    <span class="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">站点域名路由</span>
+                                    <code class="text-xs bg-gray-100 dark:bg-gray-700 px-2 py-1 rounded text-gray-700 dark:text-gray-300">
+                                        {{ getDomainRoutePrefix(tab) }}/v1/chat/completions
+                                    </code>
+                                    <button @click="copyEndpoint(getDomainRoutePrefix(tab), '已复制站点域名路由')"
+                                            class="text-xs text-blue-500 hover:text-blue-700 dark:text-blue-400">
+                                        📋 复制
+                                    </button>
+                                </div>
+                                <div class="flex flex-wrap items-center gap-2">
+                                    <span class="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">固定标签页路由</span>
+                                    <code class="text-xs bg-gray-100 dark:bg-gray-700 px-2 py-1 rounded text-gray-700 dark:text-gray-300">
+                                        {{ getFixedTabRoutePrefix(tab) }}/v1/chat/completions
+                                    </code>
+                                    <button @click="copyEndpoint(getFixedTabRoutePrefix(tab), '已复制固定标签页路由')"
+                                            class="text-xs text-blue-500 hover:text-blue-700 dark:text-blue-400">
+                                        📋 复制
+                                    </button>
+                                </div>
                             </div>
 
                             <!-- 🆕 预设选择器 -->

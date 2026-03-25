@@ -336,6 +336,74 @@ const BROWSER_CONSTANTS_SCHEMA = {
                 default: 1.0
             }
         }
+    },
+    commandPeriodic: {
+        label: '命令调度',
+        icon: '⚡',
+        collapsed: true,
+        items: {
+            COMMAND_PERIODIC_CHECK_ENABLED: {
+                label: '启用全局周期检测',
+                desc: '控制命令系统的空闲标签页周期扫描开关',
+                type: 'switch',
+                default: true
+            },
+            COMMAND_PERIODIC_CHECK_INTERVAL_SEC: {
+                label: '全局检测间隔',
+                unit: '秒',
+                desc: '命令系统的默认周期检测间隔',
+                type: 'number',
+                step: 0.5,
+                min: 1,
+                default: 8.0
+            },
+            COMMAND_PERIODIC_CHECK_JITTER_SEC: {
+                label: '全局检测抖动',
+                unit: '秒',
+                desc: '为周期检测增加少量随机抖动，避免固定节奏碰撞',
+                type: 'number',
+                step: 0.2,
+                min: 0,
+                default: 2.0
+            }
+        }
+    },
+    tabPool: {
+        label: '标签页池',
+        icon: '🗂️',
+        collapsed: true,
+        items: {
+            TAB_POOL_MAX_TABS: {
+                label: '最大标签页数',
+                desc: '超过后不再自动纳入新的标签页',
+                type: 'number',
+                min: 1,
+                default: 5
+            },
+            TAB_POOL_MIN_TABS: {
+                label: '最小保留标签页数',
+                desc: '标签页池尽量维持的最小可用数量',
+                type: 'number',
+                min: 1,
+                default: 1
+            },
+            TAB_POOL_IDLE_TIMEOUT: {
+                label: '空闲超时',
+                unit: '秒',
+                desc: '标签页空闲多久后允许被回收或重置',
+                type: 'number',
+                min: 10,
+                default: 300
+            },
+            TAB_POOL_ACQUIRE_TIMEOUT: {
+                label: '占用等待超时',
+                unit: '秒',
+                desc: '获取标签页会话的最大等待时间',
+                type: 'number',
+                min: 1,
+                default: 60
+            }
+        }
     }
 };
 
@@ -634,6 +702,7 @@ const app = createApp({
             // 浏览器常量
             browserConstants: {},
             browserConstantsOriginal: {},
+            browserConstantsRaw: {},
             browserConstantsCollapsed: {},
             isSavingConstants: false,
             isLoadingConstants: false,
@@ -663,13 +732,6 @@ const app = createApp({
             },
             editingDefinitionIndex: null,
 
-            // ========== 提取器管理 ==========
-            extractors: [],
-            defaultExtractorId: 'deep_mode_v1',
-            isLoadingExtractors: false,
-            showVerifyDialog: false,
-            verifyDialogDomain: '',
-            verifyDialogExtractorName: ''
         }
     },
 
@@ -1526,6 +1588,119 @@ const app = createApp({
             this.exportSingleSite(this.currentDomain);
         },
 
+        triggerSettingsBackupImport() {
+            if (this.$refs.backupImportInput) {
+                this.$refs.backupImportInput.click();
+            }
+        },
+
+        handleSettingsBackupImportFile(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = async (e) => {
+                try {
+                    const payload = JSON.parse(e.target.result);
+                    await this.importSettingsBackup(payload);
+                } catch (error) {
+                    this.notify('完整备份导入失败: ' + error.message, 'error');
+                }
+            };
+            reader.readAsText(file, 'utf-8');
+
+            event.target.value = '';
+        },
+
+        getDashboardPreferencesBackup() {
+            let apiToken = '';
+            try {
+                apiToken = localStorage.getItem('api_token') || '';
+            } catch (e) {
+                apiToken = '';
+            }
+
+            return {
+                dark_mode: !!this.darkMode,
+                api_token: apiToken
+            };
+        },
+
+        applyDashboardPreferencesBackup(preferences) {
+            if (!preferences || typeof preferences !== 'object') return;
+
+            if (typeof preferences.dark_mode === 'boolean') {
+                this.darkMode = preferences.dark_mode;
+            }
+
+            if (typeof preferences.api_token === 'string') {
+                const token = preferences.api_token.trim();
+                try {
+                    if (token) {
+                        localStorage.setItem('api_token', token);
+                    } else {
+                        localStorage.removeItem('api_token');
+                    }
+                } catch (e) { }
+                this.tempToken = token;
+            }
+        },
+
+        async exportSettingsBackup() {
+            try {
+                const payload = await this.apiRequest('/api/settings/backup');
+                const exportPayload = {
+                    ...payload,
+                    dashboard_preferences: this.getDashboardPreferencesBackup()
+                };
+                const dataStr = JSON.stringify(exportPayload, null, 2);
+                const blob = new Blob([dataStr], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'settings-backup-' + Date.now() + '.json';
+                a.click();
+                URL.revokeObjectURL(url);
+
+                this.notify('完整配置备份已导出', 'success');
+            } catch (error) {
+                this.notify('完整备份导出失败: ' + error.message, 'error');
+            }
+        },
+
+        async importSettingsBackup(payload) {
+            if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+                throw new Error('备份文件格式无效');
+            }
+
+            const result = await this.apiRequest('/api/settings/backup', {
+                method: 'POST',
+                body: JSON.stringify(payload)
+            });
+
+            this.applyDashboardPreferencesBackup(payload.dashboard_preferences);
+
+            if (!result.will_restart) {
+                await Promise.all([
+                    this.loadConfig(true),
+                    this.loadEnvConfig(),
+                    this.loadBrowserConstants(),
+                    this.loadUpdatePreserveSettings(),
+                    this.loadSelectorDefinitions()
+                ]);
+            }
+
+            const sections = Array.isArray(result.imported_sections)
+                ? result.imported_sections.join('、')
+                : '';
+            this.notify(
+                result.will_restart
+                    ? '完整备份已导入，服务将自动重启' + (sections ? '：' + sections : '')
+                    : '完整备份已导入' + (sections ? '：' + sections : ''),
+                result.will_restart ? 'warning' : 'success'
+            );
+        },
+
         // ========== 环境配置 ==========
 
         async loadEnvConfig() {
@@ -1633,15 +1808,70 @@ const app = createApp({
 
         // ========== 浏览器常量 ==========
 
+        normalizeBrowserConstantsForEditor(rawConfig = {}) {
+            const raw = rawConfig && typeof rawConfig === 'object' ? rawConfig : {};
+            const normalized = {};
+
+            for (const group of Object.values(BROWSER_CONSTANTS_SCHEMA)) {
+                for (const [key, field] of Object.entries(group.items || {})) {
+                    normalized[key] = field.default;
+                }
+            }
+
+            for (const key of Object.keys(normalized)) {
+                if (key.startsWith('TAB_POOL_')) {
+                    continue;
+                }
+                if (Object.prototype.hasOwnProperty.call(raw, key)) {
+                    normalized[key] = raw[key];
+                }
+            }
+
+            const tabPool = raw.tab_pool && typeof raw.tab_pool === 'object' ? raw.tab_pool : {};
+            normalized.TAB_POOL_MAX_TABS = tabPool.max_tabs ?? normalized.TAB_POOL_MAX_TABS;
+            normalized.TAB_POOL_MIN_TABS = tabPool.min_tabs ?? normalized.TAB_POOL_MIN_TABS;
+            normalized.TAB_POOL_IDLE_TIMEOUT = tabPool.idle_timeout ?? normalized.TAB_POOL_IDLE_TIMEOUT;
+            normalized.TAB_POOL_ACQUIRE_TIMEOUT = tabPool.acquire_timeout ?? normalized.TAB_POOL_ACQUIRE_TIMEOUT;
+
+            return normalized;
+        },
+
+        serializeBrowserConstants(editorConfig = {}, rawBase = {}) {
+            const base = rawBase && typeof rawBase === 'object'
+                ? JSON.parse(JSON.stringify(rawBase))
+                : {};
+            const merged = this.normalizeBrowserConstantsForEditor(editorConfig);
+
+            for (const key of Object.keys(merged)) {
+                if (key.startsWith('TAB_POOL_')) {
+                    continue;
+                }
+                base[key] = merged[key];
+            }
+
+            const existingTabPool = base.tab_pool && typeof base.tab_pool === 'object' ? base.tab_pool : {};
+            base.tab_pool = {
+                ...existingTabPool,
+                max_tabs: merged.TAB_POOL_MAX_TABS,
+                min_tabs: merged.TAB_POOL_MIN_TABS,
+                idle_timeout: merged.TAB_POOL_IDLE_TIMEOUT,
+                acquire_timeout: merged.TAB_POOL_ACQUIRE_TIMEOUT
+            };
+
+            return base;
+        },
+
         async loadBrowserConstants() {
             this.isLoadingConstants = true;
             try {
                 const data = await this.apiRequest('/api/settings/browser-constants');
-                this.browserConstants = data.config || {};
+                this.browserConstantsRaw = JSON.parse(JSON.stringify(data.config || {}));
+                this.browserConstants = this.normalizeBrowserConstantsForEditor(this.browserConstantsRaw);
                 this.browserConstantsOriginal = JSON.parse(JSON.stringify(this.browserConstants));
             } catch (error) {
                 console.error('加载浏览器常量失败:', error);
                 this.browserConstants = this.getBrowserConstantsDefaults();
+                this.browserConstantsRaw = this.serializeBrowserConstants(this.browserConstants, {});
                 this.browserConstantsOriginal = JSON.parse(JSON.stringify(this.browserConstants));
             } finally {
                 this.isLoadingConstants = false;
@@ -1649,23 +1879,20 @@ const app = createApp({
         },
 
         getBrowserConstantsDefaults() {
-            const defaults = {};
-            for (const group of Object.values(BROWSER_CONSTANTS_SCHEMA)) {
-                for (const [key, field] of Object.entries(group.items)) {
-                    defaults[key] = field.default;
-                }
-            }
-            return defaults;
+            return this.normalizeBrowserConstantsForEditor({});
         },
 
         async saveBrowserConstants() {
             this.isSavingConstants = true;
             try {
+                const payload = this.serializeBrowserConstants(this.browserConstants, this.browserConstantsRaw);
                 await this.apiRequest('/api/settings/browser-constants', {
                     method: 'POST',
-                    body: JSON.stringify({ config: this.browserConstants })
+                    body: JSON.stringify({ config: payload })
                 });
 
+                this.browserConstantsRaw = JSON.parse(JSON.stringify(payload));
+                this.browserConstants = this.normalizeBrowserConstantsForEditor(payload);
                 this.browserConstantsOriginal = JSON.parse(JSON.stringify(this.browserConstants));
                 this.notify('浏览器常量已保存', 'success');
             } catch (error) {
@@ -1887,120 +2114,10 @@ const app = createApp({
             this.selectorDefinitions[newIndex] = temp;
         },
 
-        // ========== 提取器管理方法 ==========
-
-        async loadExtractors() {
-            this.isLoadingExtractors = true;
-            try {
-                const data = await this.apiRequest('/api/extractors');
-                this.extractors = data.extractors || [];
-                this.defaultExtractorId = data.default || 'deep_mode_v1';
-            } catch (error) {
-                console.error('加载提取器列表失败:', error);
-                this.extractors = [];
-            } finally {
-                this.isLoadingExtractors = false;
-            }
-        },
-
-        async setDefaultExtractor(extractorId) {
-            try {
-                await this.apiRequest('/api/extractors/default', {
-                    method: 'PUT',
-                    body: JSON.stringify({ extractor_id: extractorId })
-                });
-                this.defaultExtractorId = extractorId;
-                this.notify('默认提取器已设置为: ' + extractorId, 'success');
-            } catch (error) {
-                this.notify('设置失败: ' + error.message, 'error');
-            }
-        },
-
-        async exportExtractorConfig() {
-            try {
-                const response = await fetch('/api/extractors/export');
-                const config = await response.json();
-                
-                const dataStr = JSON.stringify(config, null, 2);
-                const blob = new Blob([dataStr], { type: 'application/json' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = 'extractors-config-' + Date.now() + '.json';
-                a.click();
-                URL.revokeObjectURL(url);
-                
-                this.notify('提取器配置已导出', 'success');
-            } catch (error) {
-                this.notify('导出失败: ' + error.message, 'error');
-            }
-        },
-
-        async importExtractorConfig(config) {
-            try {
-                await this.apiRequest('/api/extractors/import', {
-                    method: 'POST',
-                    body: JSON.stringify(config)
-                });
-                await this.loadExtractors();
-                this.notify('提取器配置导入成功', 'success');
-            } catch (error) {
-                this.notify('导入失败: ' + error.message, 'error');
-            }
-        },
-
-        async setSiteExtractor(domain, extractorId) {
-            try {
-                const presetName = this.getActivePresetName()
-                await this.apiRequest('/api/sites/' + encodeURIComponent(domain) + '/extractor', {
-                    method: 'PUT',
-                    body: JSON.stringify({ extractor_id: extractorId, preset_name: presetName })
-                });
-
-                // 更新当前预设的本地状态
-                const pc = this.getActivePresetConfig()
-                if (pc) {
-                    pc.extractor_id = extractorId;
-                    pc.extractor_verified = false;
-                }
-
-                this.notify('站点 ' + domain + ' 已绑定提取器: ' + extractorId, 'success');
-            } catch (error) {
-                this.notify('设置失败: ' + error.message, 'error');
-            }
-        },
-
-        openVerifyDialog(domain) {
-            const pc = this.getActivePresetConfig()
-            const extractorId = pc?.extractor_id || this.defaultExtractorId;
-            const extractor = this.extractors.find(e => e.id === extractorId);
-            
-            this.verifyDialogDomain = domain;
-            this.verifyDialogExtractorName = extractor?.name || extractorId;
-            this.showVerifyDialog = true;
-        },
-
-        async handleVerifyResult({ domain, passed }) {
-            if (passed) {
-                try {
-                    await this.apiRequest('/api/sites/' + encodeURIComponent(domain) + '/extractor/verify', {
-                        method: 'POST',
-                        body: JSON.stringify({ verified: true })
-                    });
-                    
-                    const pc = this.getActivePresetConfig()
-                    if (pc) {
-                        pc.extractor_verified = true;
-                    }
-                    
-                    this.notify('验证状态已更新', 'success');
-                } catch (error) {
-                    console.error('更新验证状态失败:', error);
-                }
-            }
-        },
-
         changeTab(tab) {
+            if (tab === 'extractors') {
+                tab = 'config';
+            }
             this.activeTab = tab;
         },
 
@@ -2014,11 +2131,6 @@ const app = createApp({
                     this.loadSelectorDefinitions()
                 ]);
                 return;
-            }
-
-            if (tab === 'extractors' && !this.hasLoadedExtractors) {
-                this.hasLoadedExtractors = true;
-                await this.loadExtractors();
             }
         },
 
@@ -2357,22 +2469,6 @@ const app = createApp({
             this.showStepTemplates = true
         },
 
-        handleExtractorImportFile(event) {
-            const file = event.target.files[0];
-            if (!file) return;
-
-            const reader = new FileReader();
-            reader.onload = (e) => {
-                try {
-                    const config = JSON.parse(e.target.result);
-                    this.importExtractorConfig(config);
-                } catch (error) {
-                    this.notify('JSON 解析失败: ' + error.message, 'error');
-                }
-            };
-            reader.readAsText(file);
-            event.target.value = '';
-        },
         applyTemplate(type) {
             const templates = {
                 'default': [
@@ -2548,8 +2644,6 @@ app.component('step-templates-dialog', window.StepTemplatesDialog);
 app.component('test-dialog', window.TestDialog);
 app.component('import-dialog', window.ImportDialog);
 app.component('definition-dialog', window.DefinitionDialog);
-app.component('extractor-tab', window.ExtractorTab);
-app.component('extractor-verify-dialog', window.ExtractorVerifyDialog);
 
 // ========== 全局 Mixin (修复图标访问问题) ==========
 app.mixin({

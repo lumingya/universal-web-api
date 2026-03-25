@@ -14,7 +14,6 @@ window.ConfigTab = {
         // 注册子组件（确保模板可解析）
     components: {
         'selector-panel': window.SelectorPanel,
-        'extractor-panel': window.ExtractorPanel,
         'image-config-panel': window.ImageConfigPanel,
         'stream-config-panel': window.StreamConfigPanel,
         'workflow-panel': window.WorkflowPanel,
@@ -34,7 +33,6 @@ window.ConfigTab = {
 
             // 折叠状态
             selectorCollapsed: true,
-            extractorCollapsed: true,
             workflowCollapsed: true,
             imageConfigCollapsed: true,
             streamConfigCollapsed: true,
@@ -167,7 +165,7 @@ window.ConfigTab = {
                 if (response.ok) {
                     this.defaultPreset = this.selectedPreset;
                     this.$emit('reload-config');
-                    alert('✅ 默认预设已设置为 "' + this.selectedPreset + '"');
+                    alert('✅ 默认预设已设置为 "' + this.selectedPreset + '"（仅本地覆盖）');
                 } else {
                     const err = await response.json();
                     alert('❌ 设置默认预设失败: ' + (err.detail || '未知错误'));
@@ -411,14 +409,6 @@ window.ConfigTab = {
                     @update-selector-key="(oldKey, newKey) => $emit('update-selector-key', oldKey, newKey)"
                     @update-selector-value="updateSelectorValue"
                     @test-selector="(key, val) => $emit('test-selector', key, val)"
-                />
-
-                <!-- 提取器面板 -->
-                <extractor-panel v-if="presetConfig"
-                    :extractor-id="presetConfig.extractor_id"
-                    :extractor-verified="presetConfig.extractor_verified"
-                    :collapsed="extractorCollapsed"
-                    @update:collapsed="extractorCollapsed = $event"
                 />
 
                 <!-- 图片配置面板 -->

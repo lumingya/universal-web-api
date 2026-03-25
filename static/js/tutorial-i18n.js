@@ -1,0 +1,1142 @@
+(function () {
+    const translations = {
+        meta: {
+            htmlLang: 'en',
+            pageTitle: 'Universal Web-to-API Guide'
+        },
+        ui: {
+            navTitle: '📑 Navigation',
+            pageHeaderTitle: 'Universal Web-to-API Guide (v2.6.5)',
+            projectLinkLabel: 'Project Link',
+            projectLinkDescription: 'Need the source code, release notes, or the issue tracker? Start here.',
+            projectLinkButton: 'Open Repository',
+            languageLabel: 'Language',
+            themeLight: 'Light Mode',
+            themeDark: 'Dark Mode',
+            hamburgerOpenLabel: 'Open navigation menu',
+            hamburgerCloseLabel: 'Close navigation menu'
+        },
+        nav: {
+            'quick-start': '🚀 Quick Start',
+            'dashboard-tour': '🖥️ Dashboard Tour',
+            'add-site-guide': '🆕 Adding a Site',
+            'connect-api': '🔌 Connect API',
+            'function-calling': '🧰 Function Calling',
+            'tab-pool': '🗂️ Tab Pool',
+            'presets': '🎛️ Presets',
+            'selectors': '🔍 Selectors',
+            'extractors': '🧩 Extractors',
+            'image-extraction': '🖼️ Image Extraction',
+            'response-detection': '🌊 Response Detection',
+            'workflow': '🎬 Workflow',
+            'file-paste': '📄 File Attach',
+            'stealth-mode': '🛡️ Stealth Mode',
+            'commands': '⚡ Automation Commands',
+            'ai-recognition': '🎯 AI Recognition',
+            'env-config': '⚙️ Environment Settings',
+            'browser-config': '🌐 Browser Constants',
+            'config-manage': '💾 Config Management',
+            'faq': '❓ FAQ',
+            'author-note': '⚠️ Notes From the Author'
+        },
+        sections: {}
+    };
+
+    translations.sections['quick-start'] = `
+        <h2>🚀 Quick Start</h2>
+        <p>Welcome to Web-to-API. This project turns AI chat websites into an OpenAI-compatible API that you can run locally.</p>
+
+        <div class="highlight-box">
+            <p><strong>Recommended reading order:</strong> read the main workflow of this page first, then come back to the author note at the end. That section explains the maintenance scope, support expectations, and the most effective feedback channels.</p>
+        </div>
+
+        <div class="info-box">
+            <p><strong>📌 Core reminder:</strong> after startup the script opens a controlled browser window automatically. <strong style="color: var(--highlight-border);">Keep that browser window open</strong>, because it is the foundation of the service. The tutorial can stay open in your normal browser, while the controlled browser should be kept focused on supported AI sites.</p>
+        </div>
+
+        <div class="note">
+            <p><strong>Dashboard entry:</strong></p>
+            <a href="/" class="btn" target="_blank">Open Dashboard</a>
+            <p style="margin-top: 10px;">Dashboard URL: <code>http://127.0.0.1:8199/</code>. You can edit configs and inspect logs there.</p>
+        </div>
+
+        <h3>✅ Supported sites</h3>
+        <p>The following sites already have built-in adaptation and can usually be used directly:</p>
+
+        <div class="site-grid" id="siteGrid"></div>
+
+        <div class="note">
+            <p><strong>Sites highlighted in the current docs:</strong> ChatGPT, DeepSeek, Gemini, Claude, Kimi, Qwen, Grok, Doubao, AI Studio, and Arena AI.</p>
+            <p style="margin-bottom: 0;">This page matches the current <code>config/sites.json</code>: Kimi uses <code>www.kimi.com</code>, Doubao uses <code>www.doubao.com</code>, and Qwen uses <code>chat.qwen.ai</code>.</p>
+        </div>
+
+        <div class="highlight-box">
+            <p><strong>⚠️ About arena.ai:</strong> this site is highly sensitive to IP quality. A good IP can keep chatting for a long time, while a poor IP may get blocked immediately. The most important factors are not just IP purity, but also traffic history and sharing level. If your IP quality is weak, Cloudflare challenges can still appear even with network interception disabled. That behavior comes from the site itself, not from this project.</p>
+        </div>
+
+        <h3>🆕 For unsupported sites</h3>
+        <p>If your target site is not listed above, the system can analyze the page automatically with a helper AI. See the <strong>AI Recognition</strong> section below.</p>
+    `;
+
+    translations.sections['dashboard-tour'] = `
+        <h2>🖥️ Dashboard Tour</h2>
+        <p>The dashboard is not just a settings page. It is the visual control center of the whole project.</p>
+
+        <div class="config-group">
+            <h4><span class="icon">📚</span> Sidebar</h4>
+            <ul>
+                <li>Check browser status, auth status, and total site count.</li>
+                <li>Search sites and switch between them quickly.</li>
+                <li>Add sites, import configs, and export configs.</li>
+                <li>Switch between Sites, Tabs, Logs, Commands, and Settings.</li>
+            </ul>
+        </div>
+
+        <div class="config-group">
+            <h4><span class="icon">🧭</span> Site Configuration</h4>
+            <ul>
+                <li><strong>Selectors</strong>: where the input box, send button, and result container are.</li>
+                <li><strong>Workflow</strong>: the order of actions, such as opening a new chat, filling text, or pressing Enter.</li>
+                <li><strong>Response Detection</strong>: how the system decides the reply is finished.</li>
+                <li><strong>Image Extraction / File Attach</strong>: useful for image sites and long-text scenarios.</li>
+                <li><strong>Presets</strong>: split one site into different configs for chat, vision, long text, code, and more.</li>
+            </ul>
+        </div>
+
+        <div class="config-group">
+            <h4><span class="icon">🗂️</span> Tabs, Extractors, Logs, and Settings</h4>
+            <ul>
+                <li><strong>Tab Pool</strong>: manage tab indexes, states, routes, and assigned presets.</li>
+                <li><strong>Extractors</strong>: fix cases where the page clearly has an answer but extraction is wrong.</li>
+                <li><strong>Logs</strong>: locate whether a problem happened before sending, during waiting, or during extraction.</li>
+                <li><strong>Settings</strong>: manage environment values, browser constants, AI recognition, and update rules.</li>
+            </ul>
+        </div>
+
+        <div class="info-box">
+            <p><strong>Suggested reading order:</strong> for first-time use, start with the site config page and the tab pool. When debugging failures, go to logs first. When adapting a new site, read <strong>Settings → AI Recognition</strong>.</p>
+        </div>
+
+        <div class="note">
+            <p><strong>📸 Dashboard overview:</strong> <code>static/tutorial-dashboard-overview.png</code></p>
+            <p style="margin-bottom: 0;">This screenshot works well as a visual map of the control panel.</p>
+            <img class="doc-image" src="/static/tutorial-dashboard-overview.png" alt="Dashboard overview screenshot">
+        </div>
+    `;
+
+    translations.sections['add-site-guide'] = `
+        <h2>🆕 Adding a Site</h2>
+        <p>There are two main paths: <strong>automatic recognition</strong> and <strong>manual configuration</strong>. For a first attempt, automatic recognition is usually the fastest path.</p>
+
+        <h3>Path A: AI-based automatic recognition</h3>
+        <ol>
+            <li>Open the <a href="/">dashboard</a> → Settings → Environment, then fill in <code>HELPER_API_KEY</code>, <code>HELPER_BASE_URL</code>, and <code>HELPER_MODEL</code>.</li>
+            <li>Open the target site in the controlled browser and stay on the real chat page.</li>
+            <li>Send the <strong>first real API request</strong> to that site.</li>
+            <li>If the domain is still missing from <code>config/sites.json</code>, the backend reads the page HTML, asks the helper AI to analyze it, and writes a generated preset into the site config.</li>
+        </ol>
+
+        <div class="highlight-box">
+            <p><strong>Key point:</strong> automatic recognition is not triggered by the <strong>Add Site</strong> button. It is triggered by the <strong>first real request to an unknown domain</strong>.</p>
+        </div>
+
+        <h3>Path B: manual configuration</h3>
+        <ol>
+            <li>Click <strong>Add Site</strong>.</li>
+            <li>Enter a domain such as <code>chat.example.com</code>.</li>
+            <li>Open the main preset and fill in the three core selectors first.</li>
+            <li>Create the shortest possible workflow and test it step by step.</li>
+            <li>Save the config and make one real API call.</li>
+        </ol>
+
+        <h3>Minimum working configuration</h3>
+        <table>
+            <tr><th>Key</th><th>Purpose</th><th>Priority</th></tr>
+            <tr><td><code>input_box</code></td><td>Chat input field</td><td>✅</td></tr>
+            <tr><td><code>send_btn</code></td><td>Send button</td><td>✅</td></tr>
+            <tr><td><code>result_container</code></td><td>Container that holds the AI reply</td><td>✅</td></tr>
+            <tr><td><code>new_chat_btn</code></td><td>New-chat button</td><td>Optional</td></tr>
+            <tr><td><code>message_wrapper</code></td><td>Outer container for one message</td><td>Optional</td></tr>
+        </table>
+
+        <pre><code>[
+  { "action": "CLICK", "target": "new_chat_btn", "optional": true, "value": null },
+  { "action": "WAIT", "target": "", "optional": false, "value": 0.5 },
+  { "action": "FILL_INPUT", "target": "input_box", "optional": false, "value": null },
+  { "action": "CLICK", "target": "send_btn", "optional": true, "value": null },
+  { "action": "KEY_PRESS", "target": "Enter", "optional": true, "value": null },
+  { "action": "STREAM_WAIT", "target": "result_container", "optional": false, "value": null }
+]</code></pre>
+
+        <h3>Recommended debug order</h3>
+        <ol>
+            <li>Test <code>input_box</code></li>
+            <li>Test <code>send_btn</code></li>
+            <li>Test <code>result_container</code></li>
+            <li>Run the shortest workflow</li>
+            <li>Only then tune stream thresholds, extractors, image extraction, and file attach</li>
+        </ol>
+    `;
+
+    translations.sections['connect-api'] = `
+        <h2>🔌 Connect API</h2>
+        <p>This project exposes an <strong>OpenAI-compatible</strong> API.</p>
+
+        <div class="config-box">
+            <p><strong>⚙️ Common client settings:</strong></p>
+            <ul>
+                <li><strong>Provider</strong>: choose <code>OpenAI</code>, <code>OpenAI Compatible</code>, or <code>Custom</code>.</li>
+                <li><strong>Base URL</strong>:
+                    <ul>
+                        <li>Default automatic routing: <code>http://127.0.0.1:8199/v1</code></li>
+                        <li>Fixed domain route: <code>http://127.0.0.1:8199/url/gemini.com/v1</code></li>
+                        <li>Fixed tab route: <code>http://127.0.0.1:8199/tab/1/v1</code></li>
+                        <li>Some clients need the full path: <code>http://127.0.0.1:8199/v1/chat/completions</code></li>
+                    </ul>
+                </li>
+                <li><strong>API Key</strong>: any value is fine, for example <code>sk-any</code>.</li>
+                <li><strong>Model</strong>: the real model depends on the website you opened, so this field can usually be any placeholder value.</li>
+            </ul>
+        </div>
+
+        <div class="success-box">
+            <p><strong>✅ Test flow:</strong> once the site is open and logged in, enter the URL and provider settings in your client and you can start testing immediately.</p>
+        </div>
+
+        <h3>💡 About login state</h3>
+        <ul>
+            <li><strong>Recommended</strong>: log into the website so the API can inherit your account permissions, such as Plus benefits or history.</li>
+            <li><strong>Optional</strong>: if the site allows chatting without login, you can use it directly.</li>
+        </ul>
+
+        <div class="note">
+            <p><strong>⚠️ About SillyTavern:</strong> the built-in API test can be unreliable. It is better to send a real conversation instead of using the test button.</p>
+        </div>
+
+        <div class="highlight-box">
+            <p><strong>⚠️ Context-length limit:</strong> websites still limit how much text can fit into one input box. For very long input, enable the <strong>File Attach</strong> feature to bypass part of that limit.</p>
+        </div>
+
+        <h3>Observed single-send limits</h3>
+        <ul>
+            <li><strong>ChatGPT</strong>: about 200k.</li>
+            <li><strong>Gemini web</strong>: about 30k on free accounts; no clear limit observed on Pro.</li>
+            <li><strong>Arena AI</strong>: about 120k.</li>
+        </ul>
+    `;
+
+    translations.sections['function-calling'] = `
+        <h2>🧰 Function Calling Compatibility</h2>
+        <p>The project now supports the <strong>OpenAI standard tool-calling format</strong>. It can accept <code>tools</code> / <code>tool_choice</code> and also the legacy <code>functions</code> / <code>function_call</code> fields.</p>
+
+        <div class="info-box">
+            <p><strong>How it works:</strong> your client still sends a normal OpenAI-style request. The backend reformats tool definitions, tool history, and constraints into prompts that the website model can understand, then tries to parse the model output back into <code>tool_calls</code>.</p>
+        </div>
+
+        <div class="highlight-box">
+            <p><strong>Important boundary:</strong> this is not native tool calling provided by the original website. It still depends heavily on prompt engineering and the model's own ability to follow formatting rules.</p>
+        </div>
+
+        <h3>When it tends to work better</h3>
+        <ul>
+            <li>The model is strong and follows formatting instructions well.</li>
+            <li>The number of tools is small and each tool has a clear purpose.</li>
+            <li>The parameter schema is simple and relatively flat.</li>
+            <li>The system prompt stays focused and does not contain too many unrelated requirements.</li>
+        </ul>
+
+        <h3>When it tends to fail</h3>
+        <ul>
+            <li>The model cannot consistently understand that the output must stay structured.</li>
+            <li>Function names are too similar or schemas are too complex.</li>
+            <li>The prompt is too long and the model loses focus.</li>
+            <li>The response mixes normal text with malformed JSON, which the backend cannot parse cleanly.</li>
+        </ul>
+
+        <div class="note">
+            <p><strong>Expectation management:</strong> if you see cases like wrong function names, missing arguments, plain chat replies instead of tool calls, or backend parse failures, the problem is usually not your client library. It is usually the website model failing to produce a stable structured result.</p>
+        </div>
+
+        <h3>Practical advice</h3>
+        <ol>
+            <li>Start with only 1 to 3 tools.</li>
+            <li>Use short and distinct function names.</li>
+            <li>Keep schemas flat before introducing deep nesting.</li>
+            <li>Prefer stronger models whenever possible.</li>
+            <li>If parsing keeps failing, simplify tools and arguments before adding more rules.</li>
+        </ol>
+    `;
+
+    translations.sections['tab-pool'] = `
+        <h2>🗂️ Tab Pool</h2>
+        <p>The tab pool is the project's main scheduling mechanism. The script scans supported AI-site tabs in the browser and gives each recognized tab a <strong>persistent index</strong>.</p>
+
+        <h3>How it works</h3>
+        <ol>
+            <li>You open one or more AI-site tabs in the browser.</li>
+            <li>The script detects them and assigns indexes such as 1, 2, and 3.</li>
+            <li>When an API request arrives, the system chooses one idle tab to handle it.</li>
+            <li>After the request finishes, that tab goes back to the pool.</li>
+        </ol>
+
+        <h3>Routing options</h3>
+        <table>
+            <tr><th>Route</th><th>Path format</th><th>Description</th></tr>
+            <tr>
+                <td><strong>Default route</strong></td>
+                <td><code>/v1/chat/completions</code></td>
+                <td>Automatically uses one idle tab</td>
+            </tr>
+            <tr>
+                <td><strong>Fixed domain route</strong></td>
+                <td><code>/url/{domain}/v1/chat/completions</code></td>
+                <td>Matches a tab from the specified domain, such as <code>/url/gemini.com/v1/chat/completions</code></td>
+            </tr>
+            <tr>
+                <td><strong>Fixed tab route</strong></td>
+                <td><code>/tab/{index}/v1/chat/completions</code></td>
+                <td>Uses a specific tab index and queues if that tab is busy</td>
+            </tr>
+        </table>
+
+        <div class="info-box">
+            <p><strong>💡 When to use a fixed tab:</strong></p>
+            <ul style="margin-bottom: 0;">
+                <li>When one client should always use a specific website tab</li>
+                <li>When different tabs use different presets</li>
+                <li>When you want to preserve continuity in a specific tab</li>
+            </ul>
+        </div>
+
+        <h3>Managing tabs in the dashboard</h3>
+        <p>In the <strong>Tabs</strong> panel you can:</p>
+        <ul>
+            <li>view real-time state of every tab</li>
+            <li>inspect current URL and request count</li>
+            <li>copy the dedicated endpoint of a tab</li>
+            <li>assign different presets to different tabs</li>
+        </ul>
+
+        <div class="note">
+            <p><strong>⚠️ Notes:</strong></p>
+            <ul style="margin-bottom: 0;">
+                <li>Tab indexes remain stable during one script session and are reassigned after restart.</li>
+                <li>Closing a browser tab releases its index automatically.</li>
+                <li>New tabs are usually detected within a few seconds.</li>
+                <li>Blank pages such as <code>chrome://newtab</code> are not added to the pool.</li>
+            </ul>
+        </div>
+    `;
+
+    translations.sections['presets'] = `
+        <h2>🎛️ Presets</h2>
+        <p>Presets let you create <strong>multiple independent configurations for the same site</strong> and assign different presets to different tabs.</p>
+
+        <h3>Typical use cases</h3>
+        <table>
+            <tr><th>Tab</th><th>Preset</th><th>Difference</th></tr>
+            <tr>
+                <td>Tab #1</td>
+                <td>Pro chat</td>
+                <td>Full workflow, longer timeout, deep extractor</td>
+            </tr>
+            <tr>
+                <td>Tab #2</td>
+                <td>Fast vision</td>
+                <td>Simpler workflow, image extraction enabled, shorter timeout</td>
+            </tr>
+            <tr>
+                <td>Tab #3</td>
+                <td>Coding assistant</td>
+                <td>File attach enabled, higher thresholds, network interception mode</td>
+            </tr>
+        </table>
+
+        <h3>How to use presets</h3>
+
+        <p><strong>1. Create a preset</strong></p>
+        <ol>
+            <li>Select a site in the dashboard.</li>
+            <li>Use the preset selector at the top of the config panel.</li>
+            <li>Click <strong>+ New Preset</strong> and enter a name.</li>
+            <li>The new preset clones the current preset as a starting point.</li>
+            <li>Edit selectors, workflow, extractors, and other settings independently.</li>
+            <li>If needed, click the star action to make it the default preset.</li>
+        </ol>
+
+        <p><strong>2. Assign a preset to a tab</strong></p>
+        <ol>
+            <li>Open the <strong>Tabs</strong> page.</li>
+            <li>Find the target tab row.</li>
+            <li>Choose the preset from the preset dropdown.</li>
+        </ol>
+
+        <p><strong>3. Call the site by domain or fixed tab</strong></p>
+        <pre><code># Assume one Gemini tab already exists and tab #2 uses the "Fast vision" preset
+
+# Use the Gemini domain route
+curl http://127.0.0.1:8199/url/gemini.com/v1/chat/completions
+
+# Use the fixed vision tab
+curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
+
+        <div class="info-box">
+            <p><strong>💡 Tip:</strong> every preset contains its own selectors, workflow, stream config, image extraction, and file-attach settings. Editing one preset does not affect the others.</p>
+        </div>
+
+        <h3>Example structure</h3>
+<pre><code>{
+  "gemini.google.com": {
+    "default_preset": "Fast vision",
+    "presets": {
+      "Main": {
+        "selectors": { ... },
+        "workflow": [ ... ],
+        "stream_config": { ... },
+        "image_extraction": { "enabled": false },
+        "file_paste": { "threshold": 50000 }
+      },
+      "Fast vision": {
+        "selectors": { ... },
+        "workflow": [ ... ],
+        "image_extraction": { "enabled": true, "mode": "first" },
+        "file_paste": { "threshold": 10000 }
+      }
+    }
+  }
+}</code></pre>
+
+        <div class="note">
+            <p><strong>⚠️ Warning:</strong> deleting a preset cannot be undone, and at least one preset must remain.</p>
+        </div>
+    `;
+
+    translations.sections['selectors'] = `
+        <h2>🔍 Selector Configuration</h2>
+        <p>Each site and each preset needs a set of CSS selectors so the program knows where to type and where to click.</p>
+        <pre><code>"selectors": {
+  "input_box": "textarea[id='prompt']",
+  "send_btn": "button.send-btn",
+  "result_container": ".markdown-body",
+  "new_chat_btn": "button.new-chat",
+  "temp_chat_btn": "button.temp-chat"
+}</code></pre>
+        <ul>
+            <li><strong>input_box</strong>: required. The chat input field.</li>
+            <li><strong>send_btn</strong>: required. The send button.</li>
+            <li><strong>result_container</strong>: required. The container that holds the AI reply.</li>
+            <li><strong>new_chat_btn</strong>: optional. Used to start a fresh conversation.</li>
+        </ul>
+
+        <div class="info-box">
+            <p><strong>💡 Custom selectors:</strong> you can define extra selectors such as a temporary-chat button and then reference them inside the workflow.</p>
+        </div>
+
+        <div class="success-box">
+            <p><strong>🧪 Test selectors:</strong> use the <strong>Test</strong> button in the dashboard to confirm whether a selector really works.</p>
+        </div>
+    `;
+
+    translations.sections['extractors'] = `
+        <h2>🧩 Extractor Configuration</h2>
+        <p>Extractors decide how clean Markdown text is parsed from the page HTML.</p>
+        <pre><code>{
+  "extractor_id": "deep_mode_v1",
+  ...
+}</code></pre>
+        <ul>
+            <li><strong>Default mode</strong>: extracts text from <code>result_container</code>.</li>
+            <li><strong>deep_mode</strong>: adds special handling for complex LaTeX and code blocks.</li>
+        </ul>
+
+        <div class="note">
+            <p><strong>⚠️ Current recommendation:</strong> right now <strong>deep_mode</strong> is the most optimized option. Other modes are still incomplete.</p>
+        </div>
+
+        <div class="info-box">
+            <p><strong>💡 Complex output:</strong> even deep mode can still struggle with some complicated code blocks. In those cases, adapted sites may work better with network interception mode.</p>
+        </div>
+    `;
+
+    translations.sections['image-extraction'] = `
+        <h2>🖼️ Image Extraction</h2>
+        <p>This section controls how generated images are found and downloaded from the page.</p>
+        <pre><code>"image_extraction": {
+  "enabled": true,
+  "selector": "img",
+  "container_selector": ".img-grid",
+  "download_blobs": true,
+  "mode": "all",
+  "max_size_mb": 10
+}</code></pre>
+        <p><strong>Saved locations:</strong></p>
+        <ul>
+            <li><strong>Images you send</strong>: stored in <code>image/</code>.</li>
+            <li><strong>Images captured from the website</strong>: stored in <code>download_images/</code>.</li>
+        </ul>
+    `;
+
+    translations.sections['response-detection'] = `
+        <h2>🌊 Response Detection</h2>
+        <p>This section defines how the project decides whether the AI is still generating and when a response should be considered finished.</p>
+
+        <table>
+            <tr><th>Mode</th><th>Streaming</th><th>Description</th></tr>
+            <tr>
+                <td><strong>DOM mode</strong> (default)</td>
+                <td>✅ Yes</td>
+                <td>Polls DOM changes and streams page updates in real time</td>
+            </tr>
+            <tr>
+                <td><strong>Network interception mode</strong></td>
+                <td>✅ Yes, site-dependent</td>
+                <td>Intercepts browser requests and parses incremental responses, usually faster on adapted sites</td>
+            </tr>
+        </table>
+
+        <h3>DOM mode</h3>
+        <p>DOM mode is the default and works for most text-based use cases. It polls the page repeatedly and checks whether the content has changed. Code blocks are the most common weak point because their HTML structure is often more complex.</p>
+
+        <h4>Decision rule</h4>
+        <pre><code>Finished = (stable checks ≥ target count) AND (silence duration &gt; silence timeout)</code></pre>
+        <p><strong>How it works:</strong></p>
+        <ol>
+            <li>The script checks the page at the configured interval.</li>
+            <li>If content changes, the counters are reset.</li>
+            <li>If content stays the same, the stability count goes up and silence time accumulates.</li>
+            <li>Once both thresholds are satisfied, the reply is considered complete.</li>
+            <li>If nothing appears before the initial wait expires, the request is considered failed.</li>
+        </ol>
+
+        <h4>Tuning suggestions</h4>
+        <table>
+            <tr><th>Scenario</th><th>Silence timeout</th><th>Stable checks</th><th>Initial wait</th></tr>
+            <tr><td>Fast models</td><td>3-5 s</td><td>3-5</td><td>60 s</td></tr>
+            <tr><td>Slow reasoning models</td><td>10-15 s</td><td>8-12</td><td>300 s</td></tr>
+            <tr><td>Code generation</td><td>8-10 s</td><td>6-8</td><td>180 s</td></tr>
+            <tr><td>Long-form writing</td><td>12-15 s</td><td>10</td><td>300 s</td></tr>
+        </table>
+
+        <h3>Network interception mode</h3>
+        <div class="highlight-box">
+            <p><strong>⚠️ Important:</strong> network interception is only adapted for some sites. If a site does not enable it by default, do not turn it on casually. It may be unsupported or increase Cloudflare detection risk.</p>
+        </div>
+
+        <div class="note">
+            <p><strong>General timeout fields:</strong> common values include global hard timeout, silence timeout, initial wait, and several advanced guardrails. In most cases, keep the defaults unless you already know the site's behavior.</p>
+        </div>
+
+        <div class="highlight-box">
+            <p><strong>⚠️ arena.ai:</strong> for this site, keep the default DOM mode. Network monitoring creates extra browser connections and can raise the chance of being challenged.</p>
+        </div>
+    `;
+
+    translations.sections['workflow'] = `
+        <h2>🎬 Workflow</h2>
+        <p>The workflow defines a sequence of actions. Each preset can have its own independent workflow.</p>
+        <pre><code>"workflow": [
+  { "action": "CLICK", "target": "new_chat_btn" },
+  { "action": "WAIT", "value": 0.5 },
+  { "action": "FILL_INPUT", "target": "input_box" },
+  { "action": "CLICK", "target": "send_btn" },
+  { "action": "STREAM_WAIT" }
+]</code></pre>
+        <table>
+            <tr><th>Action</th><th>Description</th></tr>
+            <tr><td><code>CLICK</code></td><td>Click an element, where <code>target</code> is a selector key</td></tr>
+            <tr><td><code>FILL_INPUT</code></td><td>Fill the input box with the user prompt</td></tr>
+            <tr><td><code>WAIT</code></td><td>Wait for a fixed number of seconds</td></tr>
+            <tr><td><code>KEY_PRESS</code></td><td>Simulate a key press such as Enter</td></tr>
+            <tr><td><code>STREAM_WAIT</code></td><td>Wait until the reply is finished</td></tr>
+        </table>
+
+        <div class="note">
+            <p><strong>📸 Workflow visualization:</strong> <code>static/workflow-visualization.png</code></p>
+            <p style="margin-bottom: 0;">This screenshot shows how the visual workflow mode helps locate page elements and action steps.</p>
+            <img class="doc-image" src="/static/workflow-visualization.png" alt="Workflow visualization screenshot">
+        </div>
+    `;
+
+    translations.sections['file-paste'] = `
+        <h2>📄 File Attach</h2>
+        <p>When the input text is too long, the system can create a temporary <code>.txt</code> file and try to upload that file to the website instead of pasting all text into the input box.</p>
+
+        <h3>Settings</h3>
+        <table>
+            <tr><th>Field</th><th>Default</th><th>Description</th></tr>
+            <tr><td>Enabled</td><td>Depends on site preset</td><td>Whether file-attach mode is enabled</td></tr>
+            <tr><td>Threshold</td><td><code>50000</code> chars</td><td>Global default threshold; site presets can override it</td></tr>
+            <tr><td>Hint text</td><td><code>Focus entirely on the file content</code></td><td>Extra instruction appended after the file is attached</td></tr>
+        </table>
+
+        <div class="info-box">
+            <p><strong>💡 Current upload order:</strong> the system first tries site-specific <code>file_input</code>, then generic <code>input[type=file]</code>, then optionally <code>upload_btn</code> and <code>drop_zone</code>. Only if all of those fail does it fall back to the Windows clipboard file-paste path.</p>
+        </div>
+
+        <h3>What to configure</h3>
+        <p>In practice, do not look only at <code>enabled</code> and <code>threshold</code>. For new sites, also check whether <code>upload_btn</code>, <code>file_input</code>, and <code>drop_zone</code> are configured correctly.</p>
+
+        <div class="note">
+            <p><strong>⚠️ Validation after upload:</strong> the system now checks whether the page really shows that a file was attached. If the website does not truly accept the file, the system falls back to normal text input.</p>
+        </div>
+
+        <h3>Enabled by default in built-in presets</h3>
+        <ul>
+            <li><code>aistudio.google.com</code></li>
+            <li><code>chatgpt.com</code></li>
+            <li><code>chat.deepseek.com</code></li>
+            <li><code>www.doubao.com</code></li>
+            <li><code>chat.qwen.ai</code></li>
+        </ul>
+
+        <div class="highlight-box">
+            <p><strong>Practical advice:</strong> before enabling file attach on a new site, confirm that the site itself really supports uploading files. Then make sure at least one reliable upload entry exists before testing long prompts.</p>
+        </div>
+    `;
+
+    translations.sections['stealth-mode'] = `
+        <h2>🛡️ Stealth Mode</h2>
+        <p>Stealth mode is used to reduce automation detection risk on websites protected by systems such as Cloudflare.</p>
+
+        <h3>When to enable it</h3>
+        <ul>
+            <li><strong>Enable it</strong>: for sites with strong anti-bot protection, such as <code>arena.ai</code> and <code>chatgpt.com</code>.</li>
+            <li><strong>Usually keep it off</strong>: for lower-protection sites such as AI Studio or DeepSeek, where speed matters more.</li>
+        </ul>
+
+        <div class="info-box">
+            <p><strong>💡 Where to enable it:</strong> select a site in the dashboard and check the <strong>Stealth Mode</strong> box at the top. This setting is stored per preset.</p>
+        </div>
+
+        <h3>What stealth mode changes</h3>
+        <table>
+            <tr><th>Behavior</th><th>Normal mode</th><th>Stealth mode</th></tr>
+            <tr><td>Mouse click</td><td>Direct CDP command</td><td>Human-like press and release with micro-offset</td></tr>
+            <tr><td>Mouse movement</td><td>Instant jump</td><td>Curved human-like movement</td></tr>
+            <tr><td>Idle state</td><td>No action</td><td>Small random drift</td></tr>
+            <tr><td>Scroll</td><td>Direct call</td><td>Wheel-event based interaction</td></tr>
+            <tr><td>Action interval</td><td>Minimal delay</td><td>Randomized delay around 0.1-0.3 seconds</td></tr>
+        </table>
+
+        <h3>DrissionPage patch</h3>
+        <p>To reduce detection risk further, this project applies a small patch to DrissionPage so network monitoring can reuse the browser's main connection instead of creating extra ones.</p>
+        <ul>
+            <li><strong>Automatic</strong>: <code>start.bat</code> applies the patch after dependency installation.</li>
+            <li><strong>Manual</strong>: <code>python patch_drissionpage.py</code></li>
+            <li><strong>Restore</strong>: <code>python patch_drissionpage.py --restore</code></li>
+        </ul>
+
+        <div class="note">
+            <p><strong>⚠️ Note:</strong> re-apply the patch after every DrissionPage upgrade. The patch is idempotent, so repeated runs are safe.</p>
+        </div>
+
+        <div class="highlight-box">
+            <p><strong>⚠️ Special note for arena.ai:</strong> even with stealth mode enabled and network monitoring disabled, repeated chatting can still trigger Cloudflare after around ten messages within half an hour. That is the site's own policy rather than a script bug.</p>
+        </div>
+    `;
+
+    translations.sections['commands'] = `
+        <h2>⚡ Automation Commands</h2>
+        <p>The command system lets you define <strong>triggers</strong> and <strong>actions</strong> so tabs can recover automatically, switch routes, or send alerts.</p>
+
+        <div class="info-box">
+            <p><strong>📍 Where to configure it:</strong> open the <a href="/">dashboard</a> → <strong>Commands</strong>.</p>
+        </div>
+
+        <div class="highlight-box">
+            <p><strong>⚠️ Built-in commands:</strong> the project ships with several predefined commands, most of them disabled by default. Many of them are highly tailored to Gemini and Arena workflows. If you do not understand what a command does yet, leave it disabled.</p>
+        </div>
+
+        <h3>Two modes</h3>
+        <table>
+            <tr><th>Mode</th><th>Description</th><th>Best for</th></tr>
+            <tr><td><strong>Simple mode</strong></td><td>Pick a trigger and configure an action chain</td><td>Common automation needs</td></tr>
+            <tr><td><strong>Advanced mode</strong></td><td>Write JavaScript or Python code directly</td><td>Complex custom logic</td></tr>
+        </table>
+
+        <h3>Main trigger types</h3>
+        <table>
+            <tr><th>Trigger</th><th>Description</th><th>Example</th></tr>
+            <tr><td><code>request_count</code></td><td>Total requests hit a threshold</td><td>Run once every 10 turns</td></tr>
+            <tr><td><code>error_count</code></td><td>Consecutive errors hit a threshold</td><td>Recover after 3 failures</td></tr>
+            <tr><td><code>idle_timeout</code></td><td>A tab stays idle for too long</td><td>Reclaim a tab after 5 minutes</td></tr>
+            <tr><td><code>page_check</code></td><td>Specific text appears on the page</td><td>React to Cloudflare prompts</td></tr>
+            <tr><td><code>command_triggered</code></td><td>Fire after another command fires</td><td>Chain recovery steps</td></tr>
+            <tr><td><code>command_result_match</code></td><td>Match the result of an upstream command</td><td>Branch on <code>CSS_FAILED</code></td></tr>
+            <tr><td><code>network_request_error</code></td><td>Intercept bad network status codes by URL rule</td><td>React to <code>429</code> or <code>5xx</code></td></tr>
+        </table>
+
+        <div class="note">
+            <p><strong>💡 page_check matching:</strong> it checks <code>document.body.innerText</code> first and falls back to <code>document.title</code> only when necessary. As of 2.5.9, you can also use <code>||</code> for OR and <code>&amp;&amp;</code> for AND inside the match text field.</p>
+        </div>
+
+        <h3>Scope and priority</h3>
+        <ul>
+            <li><strong>All tabs</strong>: apply to every tab.</li>
+            <li><strong>Specific domain</strong>: apply only to tabs from a domain such as <code>chatgpt.com</code>.</li>
+            <li><strong>Specific tab</strong>: apply only to one tab index.</li>
+            <li>Each command can set a numeric <code>priority</code>; larger numbers win.</li>
+            <li>The request baseline is controlled by <code>CMD_REQUEST_PRIORITY_BASELINE</code> in <code>.env</code>.</li>
+        </ul>
+
+        <h3>Built-in actions</h3>
+        <table>
+            <tr><th>Action</th><th>Description</th></tr>
+            <tr><td><code>clear_cookies</code></td><td>Clear cookies for the current tab</td></tr>
+            <tr><td><code>refresh_page</code></td><td>Refresh the page</td></tr>
+            <tr><td><code>new_chat</code></td><td>Click the new-chat button</td></tr>
+            <tr><td><code>run_js</code></td><td>Execute JavaScript in the page</td></tr>
+            <tr><td><code>wait</code></td><td>Wait for a number of seconds</td></tr>
+            <tr><td><code>execute_preset</code></td><td>Switch to a preset</td></tr>
+            <tr><td><code>execute_workflow</code></td><td>Run a preset workflow immediately</td></tr>
+            <tr><td><code>navigate</code></td><td>Open a target URL</td></tr>
+            <tr><td><code>switch_proxy</code></td><td>Switch proxy node through Clash</td></tr>
+            <tr><td><code>send_webhook</code></td><td>Send an external alert</td></tr>
+            <tr><td><code>execute_command_group</code></td><td>Run a grouped command set in sequence</td></tr>
+            <tr><td><code>abort_task</code></td><td>Stop the current task and optionally stop following actions</td></tr>
+        </table>
+
+        <h3>Branching and alerts</h3>
+        <p>You can use <code>command_result_match</code> as a branch controller. It watches the result of another command and triggers only when the expected value is matched.</p>
+        <table>
+            <tr><th>Field</th><th>Meaning</th><th>Suggested usage</th></tr>
+            <tr><td>Observed command</td><td>The upstream command to watch</td><td>Choose one with stable outputs</td></tr>
+            <tr><td>Action ref</td><td>Optional specific step inside that command</td><td>Useful for JS probe steps</td></tr>
+            <tr><td>Rule</td><td><code>equals</code>, <code>contains</code>, or <code>not_equals</code></td><td>Prefer <code>equals</code> for status strings</td></tr>
+            <tr><td>Expected value</td><td>The result you want to match</td><td>Examples: <code>SUCCESS</code>, <code>CSS_FAILED</code></td></tr>
+        </table>
+        <p><code>send_webhook</code> supports alert templates such as <code>{{tab_index}}</code>, <code>{{domain}}</code>, <code>{{network_status}}</code>, and <code>{{network_url}}</code>.</p>
+        <pre><code>{"msg":"Tab #{{tab_index}} on {{domain}} hit {{network_status}}, URL={{network_url}}"}</code></pre>
+
+        <h3>Proxy switching</h3>
+        <div class="note">
+            <p><strong>Prerequisite:</strong> Clash must be running with External Controller enabled, for example:</p>
+            <pre><code>external-controller: 127.0.0.1:9090
+secret: ""</code></pre>
+        </div>
+        <table>
+            <tr><th>Setting</th><th>Default</th><th>Description</th></tr>
+            <tr><td>Clash API URL</td><td><code>http://127.0.0.1:9090</code></td><td>External Controller address</td></tr>
+            <tr><td>Proxy group</td><td><code>Proxy</code></td><td>Proxy group name in Clash</td></tr>
+            <tr><td>Switch mode</td><td>Random</td><td>Random, round-robin, or fixed node</td></tr>
+            <tr><td>Refresh after switching</td><td>Enabled</td><td>Refresh the page after the node changes</td></tr>
+        </table>
+
+        <h3>Typical patterns</h3>
+        <div class="config-box">
+            <ul style="margin-bottom: 0;">
+                <li><strong>Every 10 requests:</strong> clear cookies → refresh page.</li>
+                <li><strong>Cloudflare detected:</strong> switch proxy → wait 2 s → refresh page.</li>
+                <li><strong>429 or 5xx:</strong> switch proxy → wait 1 s → refresh page → optional webhook.</li>
+                <li><strong>Probe fails:</strong> match <code>CSS_FAILED</code> → clear cookies → refresh → execute a recovery preset.</li>
+            </ul>
+        </div>
+
+        <h3>Advanced mode</h3>
+        <pre><code>// JavaScript example
+document.cookie.split(";").forEach(c => {
+    document.cookie = c.trim().split("=")[0] +
+        "=;expires=Thu, 01 Jan 1970 00:00:00 UTC;path=/";
+});
+location.reload();</code></pre>
+        <pre><code># Python example
+logger.info(f"Current URL: {tab.url}")
+if session.error_count > 2:
+    tab.run_js("location.reload()")
+    logger.info("Page refreshed after repeated errors")</code></pre>
+
+        <div class="highlight-box">
+            <p><strong>⚠️ Safety:</strong> advanced mode can execute arbitrary code. Python scripts run on the backend and have full system access, so only use trusted code.</p>
+        </div>
+    `;
+
+    translations.sections['ai-recognition'] = `
+        <h2>🎯 AI Recognition</h2>
+        <p>If a site is not in the supported list, the system can call a helper AI to analyze the page and identify key elements such as the input box and send button.</p>
+
+        <div class="info-box">
+            <p><strong>📍 Where to configure it:</strong> open the <a href="/">dashboard</a> → Settings → <strong>AI Recognition</strong>.</p>
+        </div>
+
+        <h3>Fields</h3>
+        <table>
+            <tr><th>Field</th><th>Description</th></tr>
+            <tr><td><strong>Order</strong></td><td>Controls recognition priority</td></tr>
+            <tr><td><strong>Key</strong></td><td>The element identifier to search for, such as <code>input_box</code> or <code>send_btn</code></td></tr>
+            <tr><td><strong>Description</strong></td><td>Plain-language guidance that helps the AI find the element accurately</td></tr>
+            <tr><td><strong>Enabled</strong></td><td>Whether the recognition item is active</td></tr>
+            <tr><td><strong>Actions</strong></td><td>Edit or remove the item</td></tr>
+        </table>
+
+        <h3>Default recognition targets</h3>
+        <table>
+            <tr><th>Key</th><th>Description</th><th>Required</th></tr>
+            <tr><td><code>input_box</code></td><td>User input field</td><td>✅</td></tr>
+            <tr><td><code>send_btn</code></td><td>Send button</td><td>✅</td></tr>
+            <tr><td><code>result_container</code></td><td>Container that holds AI output only</td><td>✅</td></tr>
+            <tr><td><code>new_chat_btn</code></td><td>Button that starts a new chat</td><td>❌</td></tr>
+            <tr><td><code>message_wrapper</code></td><td>Outer container for one full message</td><td>❌</td></tr>
+            <tr><td><code>generating_indicator</code></td><td>Visible indicator shown while generating</td><td>❌</td></tr>
+        </table>
+
+        <h3>Automatic flow</h3>
+        <ol>
+            <li>Configure your own OpenAI-style helper API in the dashboard.</li>
+            <li>Open the unsupported site and stay on the real chat page.</li>
+            <li>Send the first real API request to that unknown domain.</li>
+            <li>The system spends about <strong>8000 tokens</strong> to analyze the page and writes the generated config into <code>config/sites.json</code>.</li>
+        </ol>
+
+        <div class="note">
+            <p><strong>💡 Tip:</strong> if you only use already supported sites, you can ignore this feature completely.</p>
+        </div>
+
+        <div class="note">
+            <p><strong>💡 Manual fallback:</strong> if you prefer not to configure a helper API, you can still create the site manually and use the selector tester and workflow visualizer yourself.</p>
+        </div>
+    `;
+
+    translations.sections['env-config'] = `
+        <h2>⚙️ Environment Settings</h2>
+        <p>Edit these in <strong>Dashboard → Settings → Environment</strong>. Changes here <strong>require a restart</strong>.</p>
+
+        <div class="config-group">
+            <h4><span class="icon">🖥️</span> Service</h4>
+            <table>
+                <tr><th>Setting</th><th>Default</th><th>Description</th></tr>
+                <tr><td>Listen host</td><td><code>127.0.0.1</code></td><td>Use <code>0.0.0.0</code> to allow external access</td></tr>
+                <tr><td>Listen port</td><td><code>8199</code></td><td>HTTP service port</td></tr>
+                <tr><td>Debug mode</td><td>On</td><td>Enables <code>/docs</code> and detailed error output</td></tr>
+                <tr><td>Log level</td><td><code>INFO</code></td><td><code>DEBUG</code>, <code>INFO</code>, <code>WARNING</code>, or <code>ERROR</code></td></tr>
+            </table>
+        </div>
+
+        <div class="config-group">
+            <h4><span class="icon">🔐</span> Authentication</h4>
+            <table>
+                <tr><th>Setting</th><th>Default</th><th>Description</th></tr>
+                <tr><td>Enable auth</td><td>Off</td><td>Require a Bearer token for API calls</td></tr>
+                <tr><td>Bearer token</td><td>Empty</td><td>Must be set when auth is enabled</td></tr>
+            </table>
+        </div>
+
+        <div class="config-group">
+            <h4><span class="icon">🌐</span> CORS</h4>
+            <table>
+                <tr><th>Setting</th><th>Default</th><th>Description</th></tr>
+                <tr><td>Enable CORS</td><td>On</td><td>Allow cross-origin requests or not</td></tr>
+                <tr><td>Allowed origins</td><td><code>*</code></td><td>Comma-separated list, or <code>*</code> for all origins</td></tr>
+            </table>
+        </div>
+
+        <div class="config-group">
+            <h4><span class="icon">🔀</span> Proxy</h4>
+            <table>
+                <tr><th>Setting</th><th>Default</th><th>Description</th></tr>
+                <tr><td>Enable proxy</td><td>Off</td><td>Route browser traffic through a proxy</td></tr>
+                <tr><td>Proxy URL</td><td><code>socks5://127.0.0.1:1080</code></td><td>Supports <code>socks5://</code> and <code>http://</code></td></tr>
+                <tr><td>Bypass list</td><td><code>localhost,127.0.0.1</code></td><td>Addresses that should skip the proxy</td></tr>
+            </table>
+        </div>
+
+        <div class="config-group">
+            <h4><span class="icon">🌍</span> Browser</h4>
+            <table>
+                <tr><th>Setting</th><th>Default</th><th>Description</th></tr>
+                <tr><td>Chrome debug port</td><td><code>9222</code></td><td>Remote debugging port used by the browser</td></tr>
+            </table>
+        </div>
+
+        <div class="config-group">
+            <h4><span class="icon">🧳</span> Reuse your own browser profile</h4>
+            <p>If you want the script to inherit your existing login state, cookies, and extensions, point it to a <strong>copied user-data directory</strong> rather than your live system Chrome profile.</p>
+
+            <div class="highlight-box">
+                <p><strong>⚠️ Important:</strong> starting from <strong>Chrome 136</strong>, Chrome tightened remote-debugging behavior. If you point <code>BROWSER_PROFILE_DIR</code> to the live system <code>User Data</code> folder, Chrome may open while the debugging port never becomes usable.</p>
+            </div>
+
+            <h5>Recommended approach</h5>
+            <ol>
+                <li>Close every Chrome window completely.</li>
+                <li>Create a dedicated directory such as <code>C:\\Users\\YourName\\AppData\\Local\\UniversalWebApiProfile</code>.</li>
+                <li>Copy at least <code>Local State</code> and the profile folder you want into that new directory.</li>
+                <li>Point the script to that copy in <code>.env</code> and restart <code>start.bat</code>.</li>
+            </ol>
+
+            <pre><code>BROWSER_PATH=C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe
+BROWSER_PROFILE_DIR=C:\\Users\\YourName\\AppData\\Local\\UniversalWebApiProfile
+BROWSER_PROFILE_NAME=Default</code></pre>
+
+            <div class="note">
+                <p><strong>Field meaning:</strong></p>
+                <ul>
+                    <li><code>BROWSER_PATH</code>: browser executable path.</li>
+                    <li><code>BROWSER_PROFILE_DIR</code>: the root user-data directory.</li>
+                    <li><code>BROWSER_PROFILE_NAME</code>: a profile name such as <code>Default</code> or <code>Profile 1</code>.</li>
+                </ul>
+            </div>
+
+            <div class="highlight-box">
+                <p><strong>Common mistake:</strong> do <strong>not</strong> set <code>BROWSER_PROFILE_DIR</code> to <code>...\\User Data\\Default</code>. The directory should point to the root, while the exact profile name belongs in <code>BROWSER_PROFILE_NAME</code>.</p>
+            </div>
+
+            <div class="info-box">
+                <p><strong>If you do not need your own login state:</strong> the simplest option is to leave <code>BROWSER_PROFILE_DIR</code> empty and keep using the project's built-in <code>chrome_profile/</code> directory.</p>
+            </div>
+        </div>
+
+        <div class="config-group">
+            <h4><span class="icon">🤖</span> Helper AI</h4>
+            <table>
+                <tr><th>Setting</th><th>Default</th><th>Description</th></tr>
+                <tr><td>API Key</td><td>Empty</td><td>API key for the helper AI</td></tr>
+                <tr><td>Base URL</td><td><code>http://127.0.0.1:5104/v1</code></td><td>Base URL of the helper API</td></tr>
+                <tr><td>Model</td><td><code>gemini-3.0-pro</code></td><td>Model used for page analysis</td></tr>
+                <tr><td>Max HTML length</td><td><code>120000</code></td><td>Longer HTML is truncated to save tokens</td></tr>
+            </table>
+        </div>
+    `;
+
+    translations.sections['browser-config'] = `
+        <h2>🌐 Browser Constants</h2>
+        <p>Edit these in <strong>Dashboard → Settings → Browser Constants</strong>. Changes here take effect <strong>immediately</strong>.</p>
+
+        <div class="config-group">
+            <h4><span class="icon">🔌</span> Connection</h4>
+            <table>
+                <tr><th>Setting</th><th>Default</th><th>Description</th></tr>
+                <tr><td>Debug port</td><td><code>9222</code></td><td>Chrome DevTools remote debugging port</td></tr>
+                <tr><td>Connection timeout</td><td><code>10</code> s</td><td>Timeout for connecting to the browser</td></tr>
+            </table>
+        </div>
+
+        <div class="config-group">
+            <h4><span class="icon">⏱️</span> Interaction delays</h4>
+            <p style="color: var(--desc-color); font-size: 0.9rem; margin-bottom: 10px;">Randomized delays that help the automation behave more like a human user</p>
+            <table>
+                <tr><th>Setting</th><th>Default</th><th>Description</th></tr>
+                <tr><td>Stealth delay min</td><td><code>0.1</code> s</td><td>Minimum stealth-mode delay</td></tr>
+                <tr><td>Stealth delay max</td><td><code>0.3</code> s</td><td>Maximum stealth-mode delay</td></tr>
+                <tr><td>Action delay min</td><td><code>0.15</code> s</td><td>Minimum delay for clicks and inputs</td></tr>
+                <tr><td>Action delay max</td><td><code>0.3</code> s</td><td>Maximum delay for clicks and inputs</td></tr>
+            </table>
+        </div>
+
+        <div class="config-group">
+            <h4><span class="icon">🔍</span> Element lookup</h4>
+            <table>
+                <tr><th>Setting</th><th>Default</th><th>Description</th></tr>
+                <tr><td>Default wait</td><td><code>3</code> s</td><td>Default timeout when searching for an element</td></tr>
+                <tr><td>Fallback wait</td><td><code>1</code> s</td><td>Retry timeout after the first failure</td></tr>
+                <tr><td>Cache lifetime</td><td><code>5</code> s</td><td>How long cached element positions stay valid</td></tr>
+            </table>
+        </div>
+
+        <div class="config-group">
+            <h4><span class="icon">📡</span> Response detection</h4>
+            <p style="color: var(--desc-color); font-size: 0.9rem; margin-bottom: 10px;">Controls polling frequency and timeout thresholds while waiting for replies</p>
+            <table>
+                <tr><th>Setting</th><th>Default</th><th>Description</th></tr>
+                <tr><td>Check interval min</td><td><code>0.1</code> s</td><td>Fastest polling interval</td></tr>
+                <tr><td>Check interval max</td><td><code>1.0</code> s</td><td>Slowest polling interval</td></tr>
+                <tr><td>Default interval</td><td><code>0.3</code> s</td><td>Initial polling interval</td></tr>
+                <tr><td><strong>Silence timeout</strong></td><td><code>8.0</code> s</td><td>Main finish condition when content stops changing</td></tr>
+                <tr><td>Silence fallback</td><td><code>12</code> s</td><td>Extra patience for slower models</td></tr>
+                <tr><td>Max timeout</td><td><code>600</code> s</td><td>Absolute timeout for one request</td></tr>
+                <tr><td>Initial wait</td><td><code>180</code> s</td><td>Max wait before any response appears</td></tr>
+                <tr><td><strong>Stable checks</strong></td><td><code>8</code></td><td>How many unchanged checks are needed to finish</td></tr>
+            </table>
+        </div>
+
+        <div class="config-group">
+            <h4><span class="icon">⚙️</span> Advanced response detection</h4>
+            <p style="color: var(--desc-color); font-size: 0.9rem; margin-bottom: 10px;">Usually you do not need to change these values</p>
+            <table>
+                <tr><th>Setting</th><th>Default</th><th>Description</th></tr>
+                <tr><td>Re-render wait</td><td><code>0.5</code> s</td><td>Extra wait after page re-rendering</td></tr>
+                <tr><td>Shrink tolerance</td><td><code>3</code></td><td>Allowed number of content-shrink events</td></tr>
+                <tr><td>Minimum valid length</td><td><code>10</code></td><td>Shortest response considered valid</td></tr>
+                <tr><td>Initial element wait</td><td><code>10</code> s</td><td>How long to wait for the response element to appear</td></tr>
+                <tr><td>Max anomaly count</td><td><code>5</code></td><td>Abort after too many anomalies</td></tr>
+                <tr><td>Max missing-element count</td><td><code>10</code></td><td>Abort after repeated missing-element checks</td></tr>
+            </table>
+        </div>
+    `;
+
+    translations.sections['config-manage'] = `
+        <h2>💾 Config Management</h2>
+        <ul>
+            <li><strong>Save</strong>: click the <strong>Save</strong> button after editing the config in the dashboard.</li>
+            <li><strong>Hot reload</strong>: most config changes take effect immediately, except environment settings.</li>
+            <li><strong>Import / export</strong>: you can export the full config or a single site as JSON and import it again later.</li>
+            <li><strong>Preset management</strong>: each site's presets can be created, deleted, and switched independently.</li>
+            <li><strong>Backups</strong>: it is a good habit to back up the <code>config/</code> directory regularly.</li>
+        </ul>
+
+        <div class="config-group">
+            <h4><span class="icon">🛠️</span> Update whitelist</h4>
+            <p>Edit this in <strong>Dashboard → Settings → Update Whitelist</strong>. After you save it, the settings are written into <code>config/update_settings.json</code> and take effect during the <strong>next automatic update</strong>.</p>
+            <ul>
+                <li><strong>Purpose</strong>: it controls what should stay untouched during updates, not a runtime on/off switch.</li>
+                <li><strong>Directories</strong>: if you whitelist directories such as <code>config/</code>, <code>app/</code>, or <code>static/</code>, the whole directory is preserved.</li>
+                <li><strong>Merge behavior</strong>: when <code>config/sites.json</code> and <code>config/commands.json</code> are not whitelisted, the updater tries to merge release updates while preserving local changes.</li>
+                <li><strong>Internal preserve</strong>: <code>config/update_settings.json</code> itself is always preserved automatically.</li>
+            </ul>
+        </div>
+
+        <div class="note">
+            <p><strong>Default preserved items:</strong></p>
+            <ul>
+                <li><code>config/sites.local.json</code></li>
+                <li><code>config/commands.local.json</code></li>
+                <li><code>chrome_profile/</code></li>
+                <li><code>venv/</code></li>
+                <li><code>logs/</code></li>
+                <li><code>image/</code></li>
+                <li><code>updater.py</code></li>
+                <li><code>.git/</code></li>
+                <li><code>__pycache__/</code></li>
+                <li><code>*.pyc</code></li>
+                <li><code>backup_*/</code></li>
+            </ul>
+            <p style="margin-bottom: 0;">If all you want is to preserve login state and your own configuration, the default selection is usually enough.</p>
+        </div>
+
+        <div class="highlight-box">
+            <p><strong>⚠️ Warning:</strong> the visual editor currently has <strong>no undo feature</strong>. After saving, you cannot quickly revert changes unless you already have a backup.</p>
+        </div>
+    `;
+
+    translations.sections['faq'] = `
+        <h2>❓ FAQ</h2>
+
+        <h3>Q1: Why does SillyTavern say the connection failed?</h3>
+        <p>A: The built-in API test often sends a request that is too short. This is especially common with AI Studio. In practice, it is better to send a real chat message instead of using the test button.</p>
+
+        <h3>Q2: What should I check if failures happen frequently?</h3>
+        <div class="troubleshoot-list">
+            <ol>
+                <li><strong>Manual interference:</strong> do not click or switch things inside the controlled browser while the workflow is running.</li>
+                <li><strong>Collapsed UI or layout changes:</strong> if elements are hidden or folded, selectors may stop working.</li>
+                <li><strong>Website-side issues:</strong> captcha, blocked content, or messages that are too long can all cause failures.</li>
+                <li><strong>Network instability:</strong> proxy changes or unstable networking can cause deadlocks or partial sends.</li>
+                <li><strong>Extra unrelated tabs:</strong> avoid opening random pages in the controlled browser.</li>
+                <li><strong>Outdated site config:</strong> website UI changes can invalidate selectors.</li>
+            </ol>
+        </div>
+
+        <h3>Q3: How does the script behave when I open multiple pages?</h3>
+        <ul>
+            <li><strong>Default route</strong> (<code>/v1/chat/completions</code>): uses one idle tab automatically.</li>
+            <li><strong>Fixed domain route</strong> (<code>/url/gemini.com/v1/chat/completions</code>): matches one tab from that site.</li>
+            <li><strong>Fixed tab route</strong> (<code>/tab/1/v1/chat/completions</code>): always uses tab #1.</li>
+            <li>You can assign different presets to different tabs.</li>
+            <li>If all tabs are busy, new requests wait in line.</li>
+        </ul>
+
+        <h3>Q4: Why is a newly opened tab missing from the tab pool?</h3>
+        <ul>
+            <li>Make sure the page fully loaded.</li>
+            <li>Wait 2 to 3 seconds and click refresh.</li>
+            <li>If it still does not appear, restart the script.</li>
+        </ul>
+
+        <h3>Q5: Do I need to tune dashboard parameters?</h3>
+        <p>A: Usually not. Most defaults are already tuned for common usage.</p>
+
+        <h3>Q6: What are the known issues?</h3>
+        <ul>
+            <li>The VSCode <strong>Codex</strong> plugin is currently incompatible.</li>
+            <li>The DrissionPage patch must be re-applied after every upgrade.</li>
+        </ul>
+
+        <h3>Q7: Why is proxy switching not working?</h3>
+        <div class="troubleshoot-list">
+            <ol>
+                <li>Make sure Clash is running and External Controller is enabled.</li>
+                <li>Check whether the API URL is correct.</li>
+                <li>Confirm the proxy-group name by visiting <code>http://127.0.0.1:9090/proxies</code>.</li>
+                <li>If Clash uses a secret, fill it in inside the command config.</li>
+                <li>Check <code>[CMD]</code> logs in the dashboard for exact failures.</li>
+            </ol>
+        </div>
+
+        <h3>Q8: Why does reusing my own Chrome login state still fail?</h3>
+        <ul>
+            <li><strong>You pointed directly at the live system <code>User Data</code> directory</strong>, which often breaks remote debugging on Chrome 136+.</li>
+            <li><strong><code>BROWSER_PROFILE_DIR</code> points to the wrong level</strong>; it should point to the root user-data directory, not <code>...\\User Data\\Default</code>.</li>
+            <li><strong>You forgot to restart the startup script</strong> after changing browser settings.</li>
+        </ul>
+
+        <h3>Q9: What is this project useful for?</h3>
+        <ul>
+            <li>Turning free web AI access into an OpenAI-style API</li>
+            <li>Inspecting how websites build context</li>
+            <li>Running multiple tabs and presets in parallel</li>
+            <li>Bypassing some long-input limits through file attach</li>
+        </ul>
+
+        <div class="info-box">
+            <p><strong>📬 Feedback channels:</strong></p>
+            <ul style="margin-bottom: 0;">
+                <li>GitHub Issues for bug reports and suggestions</li>
+                <li>QQ group: <strong>1073037753</strong></li>
+            </ul>
+        </div>
+    `;
+
+    translations.sections['author-note'] = `
+        <h2>⚠️ Notes From the Author</h2>
+
+        <div class="config-group">
+            <h4><span class="icon">1️⃣</span> Function calling is still fragile</h4>
+            <p>Function calling still has plenty of rough edges and depends heavily on the model's own ability to understand instructions. Treat it as a feature that needs testing, not as something you can trust blindly.</p>
+        </div>
+
+        <div class="config-group">
+            <h4><span class="icon">2️⃣</span> Gemini is the main maintenance target</h4>
+            <p>The author mainly uses <strong>Gemini</strong>, so other sites may not receive timely updates. For problems, the QQ group is a better feedback channel than GitHub Issues or Discord.</p>
+        </div>
+
+        <div class="config-group">
+            <h4><span class="icon">3️⃣</span> Ask AI first when something breaks</h4>
+            <p>Many issues do not require waiting for the author. Selector failures, wrong configs, and broken workflow order are often faster to diagnose by giving logs and element trees to another AI first.</p>
+        </div>
+
+        <div class="config-group">
+            <h4><span class="icon">4️⃣</span> Suspect selectors before parsers</h4>
+            <p>When a site suddenly stops working, parser bugs are possible, but selector failures are more common.</p>
+            <div class="note">
+                <p><strong>Updating selectors is usually simple:</strong></p>
+                <ol>
+                    <li>Inspect the target element in the browser.</li>
+                    <li>Capture or copy the element tree.</li>
+                    <li>Ask an AI to suggest a new selector based on that structure.</li>
+                </ol>
+            </div>
+            <div class="note">
+                <p><strong>Parser issues are harder:</strong> they often require network interception, response analysis, and reverse engineering.</p>
+            </div>
+            <div class="info-box">
+                <p><strong>If you can fix it yourself, please do:</strong> if you already solved the problem, sending the updated config or code back to the author is very helpful.</p>
+            </div>
+        </div>
+
+        <div class="config-group">
+            <h4><span class="icon">5️⃣</span> Clear bug reports are much easier to act on</h4>
+            <p>If you report a bug, describe the issue clearly and attach <strong>DEBUG-level logs</strong> whenever possible. If wording is difficult, ask another AI to help organize the report first.</p>
+        </div>
+
+        <div class="config-group">
+            <h4><span class="icon">6️⃣</span> The tutorial is broad, not always deep</h4>
+            <p>This tutorial tries to cover the major features, but some details are still brief. Contributions to improve the docs are welcome.</p>
+        </div>
+
+        <div class="config-group">
+            <h4><span class="icon">7️⃣</span> Many features were built for RP-style usage</h4>
+            <p>A lot of this project's design comes from roleplay-oriented use cases. Features outside that core workflow may exist in a more lightly maintained state.</p>
+        </div>
+    `;
+
+    window.TUTORIAL_I18N_EN = translations;
+})();

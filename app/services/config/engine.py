@@ -107,6 +107,8 @@ class ConfigEngine:
         self.last_mtime = 0.0
         self.last_local_mtime = 0.0
         self.sites: Dict[str, SiteConfig] = {}
+        self._global_default_presets: Dict[str, str] = {}
+        self._local_default_presets: Dict[str, str] = {}
         
         # 子管理器
         self.global_config = GlobalConfigManager()
@@ -157,6 +159,7 @@ class ConfigEngine:
                     k: v for k, v in data.items() 
                     if not k.startswith('_')
                 }
+                self._refresh_global_default_presets_from_sites()
                 self._apply_local_site_overrides()
                 logger.debug(f"已加载配置文件: {self.config_file} (mtime: {self.last_mtime})")
         
@@ -206,6 +209,7 @@ class ConfigEngine:
                 if not k.startswith('_')
             }
             self.last_mtime = mtime
+            self._refresh_global_default_presets_from_sites()
             self._apply_local_site_overrides()
             logger.debug(f"✅ 配置已热重载 (Sites: {len(self.sites)})")
             
@@ -223,10 +227,24 @@ class ConfigEngine:
         tmp_file = self.config_file + ".tmp"
         
         try:
+            self._prune_default_preset_maps()
+            persisted_sites = {}
+            for domain, site in self.sites.items():
+                if domain.startswith('_') or not isinstance(site, dict):
+                    continue
+
+                site_copy = copy.deepcopy(site)
+                persisted_default = self._get_persisted_default_preset(domain, site_copy)
+                if persisted_default:
+                    site_copy["default_preset"] = persisted_default
+                else:
+                    site_copy.pop("default_preset", None)
+                persisted_sites[domain] = site_copy
+
             # 构建完整配置（包含 _global）
             full_config = {
                 "_global": self.global_config.to_dict(),
-                **self.sites
+                **persisted_sites
             }
             
             # 步骤 1：写入临时文件
@@ -284,22 +302,96 @@ class ConfigEngine:
             logger.error(f"加载本地站点覆盖配置失败: {e}")
             return {}
 
+    def _prune_default_preset_maps(self) -> None:
+        active_domains = {
+            domain for domain, site in self.sites.items()
+            if not domain.startswith('_') and isinstance(site, dict)
+        }
+        self._global_default_presets = {
+            domain: preset
+            for domain, preset in self._global_default_presets.items()
+            if domain in active_domains and str(preset or "").strip()
+        }
+        self._local_default_presets = {
+            domain: preset
+            for domain, preset in self._local_default_presets.items()
+            if domain in active_domains and str(preset or "").strip()
+        }
+
+    def _refresh_global_default_presets_from_sites(self) -> None:
+        next_defaults: Dict[str, str] = {}
+        for domain, site in self.sites.items():
+            if domain.startswith('_') or not isinstance(site, dict):
+                continue
+            resolved = self._resolve_default_preset_name(site)
+            if resolved:
+                next_defaults[domain] = resolved
+        self._global_default_presets = next_defaults
+
+    def _get_persisted_default_preset(self, domain: str, site: Dict[str, Any]) -> Optional[str]:
+        presets = site.get("presets", {})
+        if not isinstance(presets, dict) or not presets:
+            self._global_default_presets.pop(domain, None)
+            return None
+
+        candidate = str(self._global_default_presets.get(domain, "") or "").strip()
+        if candidate and candidate in presets:
+            return candidate
+
+        resolved = self._resolve_default_preset_name(site)
+        if resolved:
+            self._global_default_presets[domain] = resolved
+            return resolved
+
+        self._global_default_presets.pop(domain, None)
+        return None
+
+    def _sync_site_default_preset_state(self, domain: str, site: Dict[str, Any]) -> bool:
+        presets = site.get("presets", {})
+        if not isinstance(presets, dict) or not presets:
+            self._global_default_presets.pop(domain, None)
+            self._local_default_presets.pop(domain, None)
+            if "default_preset" in site:
+                del site["default_preset"]
+                return True
+            return False
+
+        persisted_default = self._get_persisted_default_preset(domain, site)
+
+        local_default = str(self._local_default_presets.get(domain, "") or "").strip()
+        if local_default and local_default not in presets:
+            self._local_default_presets.pop(domain, None)
+            local_default = ""
+
+        if local_default and persisted_default and local_default == persisted_default:
+            self._local_default_presets.pop(domain, None)
+            local_default = ""
+
+        effective_default = local_default or persisted_default
+        if not effective_default:
+            effective_default = self._resolve_default_preset_name(site)
+
+        if effective_default and site.get("default_preset") != effective_default:
+            site["default_preset"] = effective_default
+            return True
+
+        if not effective_default and "default_preset" in site:
+            del site["default_preset"]
+            return True
+
+        return False
+
     def _apply_local_site_overrides(self):
         """将本地默认预设选择覆盖到当前站点配置。"""
-        overrides = self._load_local_site_overrides()
-        if not overrides:
-            return
-
+        self._local_default_presets = self._load_local_site_overrides()
         applied = 0
-        for domain, preset_name in overrides.items():
-            site = self.sites.get(domain)
+        for domain, site in self.sites.items():
             if not isinstance(site, dict):
                 continue
-            presets = site.get("presets", {})
-            if not isinstance(presets, dict) or preset_name not in presets:
-                continue
-            site["default_preset"] = preset_name
-            applied += 1
+            self._sync_site_default_preset_state(domain, site)
+            local_default = self._local_default_presets.get(domain)
+            if local_default and site.get("default_preset") == local_default:
+                applied += 1
 
         if applied > 0:
             logger.debug(f"已应用 {applied} 个本地默认预设覆盖")
@@ -307,13 +399,16 @@ class ConfigEngine:
     def _save_local_site_overrides(self) -> bool:
         """保存本地站点覆盖配置。"""
         tmp_file = self.local_sites_file + ".tmp"
+        self._prune_default_preset_maps()
         defaults = {}
-        for domain, site in self.sites.items():
-            if domain.startswith('_') or not isinstance(site, dict):
+        for domain, preset_name in self._local_default_presets.items():
+            site = self.sites.get(domain)
+            if not isinstance(site, dict):
                 continue
-            preset_name = self._resolve_default_preset_name(site)
-            if preset_name:
-                defaults[domain] = preset_name
+            presets = site.get("presets", {})
+            preset_value = str(preset_name or "").strip()
+            if isinstance(presets, dict) and preset_value and preset_value in presets:
+                defaults[domain] = preset_value
 
         payload = {
             "default_presets": defaults
@@ -559,19 +654,7 @@ class ConfigEngine:
         Returns:
             是否发生修改
         """
-        resolved = self._resolve_default_preset_name(site)
-
-        if resolved is None:
-            if "default_preset" in site:
-                del site["default_preset"]
-                return True
-            return False
-
-        if site.get("default_preset") != resolved:
-            site["default_preset"] = resolved
-            return True
-
-        return False
+        return self._sync_site_default_preset_state(domain, site)
     
     def _get_site_data(self, domain: str, preset_name: str = None) -> Optional[Dict]:
         """
@@ -661,12 +744,15 @@ class ConfigEngine:
             logger.warning(f"默认预设设置失败，预设不存在: {domain}/{preset_name}")
             return False
 
-        if site.get("default_preset") == preset_name:
-            return True
-
+        persisted_default = self._get_persisted_default_preset(domain, site)
+        if persisted_default == preset_name:
+            self._local_default_presets.pop(domain, None)
+        else:
+            self._local_default_presets[domain] = preset_name
         site["default_preset"] = preset_name
-        self._save_config()
-        logger.info(f"✅ 站点 {domain} 默认预设已设置为: '{preset_name}'")
+        if not self._save_local_site_overrides():
+            return False
+        logger.info(f"✅ 站点 {domain} 默认预设已设置为: '{preset_name}'（仅本地覆盖）")
         return True
     
     def create_preset(self, domain: str, new_name: str, 

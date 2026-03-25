@@ -413,7 +413,7 @@ class CommandEngineActionsMixin:
         elif action_type == "new_chat":
             try:
                 engine = self._get_config_engine()
-                domain = session.current_domain or ""
+                domain = self._get_session_domain(session)
                 site_data = engine._get_site_data(domain, session.preset_name)
                 if site_data:
                     selector = site_data.get("selectors", {}).get("new_chat_btn", "")
@@ -508,7 +508,10 @@ class CommandEngineActionsMixin:
                     if ele:
                         # 获取当前站点的 stealth 配置
                         config_engine = self._get_config_engine()
-                        site_cfg = config_engine.get_site_config(session.current_domain or "", session.preset_name)
+                        site_cfg = config_engine._get_site_data(
+                            self._get_session_domain(session),
+                            session.preset_name
+                        )
                         is_stealth = site_cfg.get("stealth", False) if site_cfg else False
                         
                         if is_stealth:
@@ -614,6 +617,21 @@ class CommandEngineActionsMixin:
 
     def _execute_preset_action(self, action: Dict, session: 'TabSession') -> Dict[str, Any]:
         """执行预设动作，兼容旧版 switch_preset。"""
+        raw_preset_name = action.get("preset_name", "")
+        if self._should_follow_default_preset(raw_preset_name):
+            try:
+                browser = self._get_browser()
+                success = browser.tab_pool.set_tab_preset(session.persistent_index, None)
+                if not success:
+                    return {"ok": False, "error": "set_default_preset_failed"}
+                domain = self._get_session_domain(session)
+                effective_preset = self._get_config_engine().get_default_preset(domain) or "主预设"
+                logger.debug(f"[CMD] 预设已切换为跟随站点默认: {effective_preset}")
+                return {"ok": True, "preset": effective_preset, "follow_default": True}
+            except Exception as e:
+                logger.warning(f"[CMD] 切换为默认预设失败: {e}")
+                return {"ok": False, "error": str(e)}
+
         preset_name = self._resolve_preset_name(action.get("preset_name", ""), session)
         if not preset_name:
             logger.warning("[CMD] 预设名称为空，跳过执行")
@@ -621,9 +639,11 @@ class CommandEngineActionsMixin:
 
         try:
             browser = self._get_browser()
-            browser.tab_pool.set_tab_preset(
+            success = browser.tab_pool.set_tab_preset(
                 session.persistent_index, preset_name
             )
+            if not success:
+                return {"ok": False, "error": "set_preset_failed"}
             logger.debug(f"[CMD] 预设已切换: {preset_name}")
             return {"ok": True, "preset": preset_name}
         except Exception as e:
@@ -634,7 +654,11 @@ class CommandEngineActionsMixin:
         """在当前标签页上立即执行目标预设的工作流。"""
         try:
             browser = self._get_browser()
-            preset_name = self._resolve_preset_name(action.get("preset_name", ""), session)
+            raw_preset_name = action.get("preset_name", "")
+            preset_name = self._resolve_preset_name(raw_preset_name, session)
+            if self._should_follow_default_preset(raw_preset_name):
+                domain = self._get_session_domain(session)
+                preset_name = self._get_config_engine().get_default_preset(domain) or ""
             prompt = str(action.get("prompt", ""))
             inherited_workflow_priority = self._normalize_priority(
                 action.get("workflow_priority", getattr(session, "_current_command_priority", None)),
@@ -759,11 +783,13 @@ class CommandEngineActionsMixin:
         current_context = getattr(session, "_current_command_context", None) or {}
         latest_event = copy.deepcopy(current_context.get("network_event") or {})
         latest_result_event = copy.deepcopy(current_context.get("command_result_event") or {})
+        domain = self._get_session_domain(session)
+        effective_preset = session.preset_name or self._get_config_engine().get_default_preset(domain) or "主预设"
         return {
             "tab_id": session.id,
             "tab_index": session.persistent_index,
-            "domain": session.current_domain or "",
-            "preset": session.preset_name or "主预设",
+            "domain": domain,
+            "preset": effective_preset,
             "request_count": session.request_count,
             "error_count": session.error_count,
             "task_id": session.current_task_id or "",

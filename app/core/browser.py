@@ -616,6 +616,91 @@ class BrowserCore:
                 except Exception:
                     pass
 
+    def execute_workflow_for_route_domain(
+        self,
+        route_domain: str,
+        messages: List[Dict],
+        stream: bool = True,
+        task_id: str = None,
+        stop_checker: Optional[Callable[[], bool]] = None,
+        workflow_priority: Optional[int] = None,
+    ) -> Generator[str, None, None]:
+        """
+        使用指定域名路由匹配的标签页执行工作流。
+
+        Args:
+            route_domain: 域名路由（例如 gemini.com）
+            messages: 消息列表
+            stream: 是否流式输出
+            task_id: 任务 ID
+        """
+        is_valid, error_msg, sanitized_messages = MessageValidator.validate(messages)
+
+        if not is_valid:
+            yield self.formatter.pack_error(
+                f"无效请求: {error_msg}",
+                error_type="invalid_request_error",
+                code="invalid_messages"
+            )
+            return
+
+        normalized_route_domain = str(route_domain or "").strip()
+        if not normalized_route_domain:
+            yield self.formatter.pack_error(
+                "域名路由不能为空",
+                error_type="invalid_request_error",
+                code="invalid_route_domain"
+            )
+            return
+
+        if task_id is None:
+            safe_route_key = normalized_route_domain.replace(".", "_")
+            task_id = f"url_{safe_route_key}_{int(time.time() * 1000)}"
+        effective_stop_checker = stop_checker or self._should_stop_checker
+
+        session = None
+        try:
+            session = self.tab_pool.acquire_by_route_domain(normalized_route_domain, task_id, timeout=60)
+
+            if session is None:
+                yield self.formatter.pack_error(
+                    f"域名路由 '{normalized_route_domain}' 没有可用标签页",
+                    error_type="not_found_error",
+                    code="route_domain_not_found"
+                )
+                yield self.formatter.pack_finish()
+                return
+
+            self._bind_request_tab_id(task_id, session)
+
+            if stream:
+                yield from self._execute_workflow_stream(
+                    session,
+                    sanitized_messages,
+                    stop_checker=effective_stop_checker,
+                    workflow_priority=workflow_priority,
+                )
+            else:
+                yield from self._execute_workflow_non_stream(
+                    session,
+                    sanitized_messages,
+                    stop_checker=effective_stop_checker,
+                    workflow_priority=workflow_priority,
+                )
+
+        finally:
+            if session:
+                self._release_workflow_session(
+                    session,
+                    effective_stop_checker=effective_stop_checker,
+                    task_id=task_id,
+                )
+                try:
+                    from app.services.command_engine import command_engine
+                    command_engine.schedule_deferred_workflow_commands(session, delay_sec=0.25)
+                except Exception:
+                    pass
+
     def _bind_request_tab_id(self, task_id: str, session: Optional[TabSession]):
         if not session:
             return
@@ -908,6 +993,10 @@ class BrowserCore:
                     )
                     
                     logger.debug(f"[PROBE] execute_step 完成: action={action}, target={target_key}")
+
+                    if effective_stop_checker():
+                        logger.info(f"[{session.id}] 步骤完成后检测到取消，提前结束工作流")
+                        break
                     
                     if action in ("STREAM_WAIT", "STREAM_OUTPUT"):
                         result_container_selector = selector
@@ -916,6 +1005,9 @@ class BrowserCore:
                 except (ElementNotFoundError, WorkflowError):
                     break
                 except Exception as e:
+                    if effective_stop_checker():
+                        logger.info(f"[{session.id}] 取消后忽略步骤异常: {e}")
+                        break
                     if not optional:
                         yield self.formatter.pack_error(f"执行中断: {str(e)}")
                         break

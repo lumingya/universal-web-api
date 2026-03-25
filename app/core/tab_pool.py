@@ -16,9 +16,15 @@ from dataclasses import dataclass, field
 from typing import Optional, Dict, List, Any
 from enum import Enum
 from contextlib import asynccontextmanager
+from urllib.parse import urlsplit
 
 from app.core.config import logger, BrowserConstants
-from app.utils.site_url import extract_remote_site_domain
+from app.utils.site_url import (
+    extract_remote_site_domain,
+    get_preferred_route_domain,
+    normalize_route_domain,
+    route_domain_matches,
+)
 
 
 class TabStatus(Enum):
@@ -200,19 +206,66 @@ class TabSession:
         busy_duration = None
         if self.status == TabStatus.BUSY:
             busy_duration = round(time.time() - self.last_used_at, 1)
+
+        current_url = self._safe_get_url()
+        current_domain = self._refresh_current_domain(current_url)
         
         return {
             "id": self.id,
             "persistent_index": self.persistent_index,
             "status": self.status.value,
             "current_task": self.current_task_id,
-            "current_domain": self.current_domain,
-            "url": self._safe_get_url(),
+            "current_domain": current_domain,
+            "route_domain": get_preferred_route_domain(current_domain),
+            "domain_url": self._build_domain_url(current_url, current_domain),
+            "url": current_url,
             "request_count": self.request_count,
             "busy_duration": busy_duration,
             "preset_name": self.preset_name,  # 🆕
         }
     
+    def _refresh_current_domain(self, url: str = "") -> str:
+        current_url = str(url or "").strip()
+        try:
+            resolved = extract_remote_site_domain(current_url) or ""
+        except Exception:
+            resolved = ""
+
+        if resolved:
+            self.current_domain = resolved
+            return resolved
+
+        fallback = str(self.current_domain or "").strip()
+        if current_url.startswith((
+            "about:",
+            "chrome://",
+            "chrome-error://",
+            "devtools://",
+            "edge://",
+            "brave://",
+            "javascript:",
+            "data:",
+            "blob:",
+        )):
+            self.current_domain = None
+            return ""
+        return fallback
+
+    @staticmethod
+    def _build_domain_url(url: str, current_domain: str) -> str:
+        source_url = str(url or "").strip()
+        domain = str(current_domain or "").strip()
+        if not source_url or not domain:
+            return ""
+
+        try:
+            parsed = urlsplit(source_url)
+        except Exception:
+            return ""
+
+        scheme = parsed.scheme if parsed.scheme in {"http", "https", "ws", "wss"} else "https"
+        return f"{scheme}://{domain}/"
+
     def _safe_get_url(self) -> str:
         try:
             return self.tab.url or ""
@@ -1056,6 +1109,88 @@ class TabPoolManager:
         """异步版本的按编号获取"""
         return await asyncio.to_thread(self.acquire_by_index, persistent_index, task_id, timeout)
 
+    def _get_sessions_for_route_domain(self, route_domain: str) -> List[TabSession]:
+        target = normalize_route_domain(route_domain)
+        if not target:
+            return []
+
+        matches: List[TabSession] = []
+        for session in self._tabs.values():
+            current_url = session._safe_get_url()
+            actual_domain = session._refresh_current_domain(current_url)
+            if route_domain_matches(target, actual_domain):
+                matches.append(session)
+
+        matches.sort(key=lambda item: item.persistent_index or 0)
+        return matches
+
+    def acquire_by_route_domain(self, route_domain: str, task_id: str, timeout: float = None) -> Optional[TabSession]:
+        """根据域名路由获取匹配的标签页。"""
+        target = normalize_route_domain(route_domain)
+        if not target:
+            logger.warning("域名路由为空，无法获取标签页")
+            return None
+
+        timeout = timeout or self.acquire_timeout
+        deadline = time.time() + timeout
+
+        with self._condition:
+            while True:
+                if self._shutdown:
+                    return None
+
+                if self._should_scan():
+                    self._scan_new_tabs()
+
+                self._check_stuck_tabs()
+                self._cleanup_unhealthy_tabs()
+
+                matching_sessions = self._get_sessions_for_route_domain(target)
+                if not matching_sessions:
+                    logger.warning(f"域名路由 '{target}' 没有匹配的标签页")
+                    return None
+
+                for session in matching_sessions:
+                    if not session.is_healthy():
+                        continue
+
+                    if self._should_defer_to_command(session, task_id):
+                        logger.debug(f"[{session.id}] defer by route-domain acquire to high-priority command")
+                        continue
+
+                    if session.status == TabStatus.IDLE and session.acquire(task_id):
+                        self._stop_global_monitor_for_session(session.id, reason="acquire_by_route_domain")
+                        if self._auto_activate_on_acquire and session.id != self._active_session_id:
+                            session.activate()
+                            self._active_session_id = session.id
+                        logger.debug(
+                            f"TabPool → {session.id} (route_domain={target}, idx=#{session.persistent_index})"
+                        )
+                        return session
+
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    busy_info = [
+                        f"{session.id}(#{session.persistent_index}:{session.status.value})"
+                        for session in matching_sessions
+                    ]
+                    logger.warning(
+                        f"获取域名路由 '{target}' 超时（匹配标签页: {', '.join(busy_info) or 'none'}）"
+                    )
+                    return None
+
+                logger.debug(f"等待域名路由 '{target}' 的标签页释放...")
+                self._condition.wait(timeout=min(remaining, 1.0))
+
+    async def acquire_by_route_domain_async(
+        self,
+        route_domain: str,
+        task_id: str,
+        timeout: float = None
+    ) -> Optional[TabSession]:
+        """异步版本的按域名路由获取。"""
+        return await asyncio.to_thread(self.acquire_by_route_domain, route_domain, task_id, timeout)
+
     def terminate_by_index(
         self,
         persistent_index: int,
@@ -1138,8 +1273,12 @@ class TabPoolManager:
             result = []
             for session in self._tabs.values():
                 info = session.get_info()
-                # 构建路由前缀
-                info["route_prefix"] = f"/tab/{session.persistent_index}"
+                tab_route_prefix = f"/tab/{session.persistent_index}"
+                route_domain = str(info.get("route_domain") or "").strip()
+                domain_route_prefix = f"/url/{route_domain}" if route_domain else ""
+                info["tab_route_prefix"] = tab_route_prefix
+                info["domain_route_prefix"] = domain_route_prefix
+                info["route_prefix"] = domain_route_prefix or tab_route_prefix
                 result.append(info)
             
             # 按编号排序

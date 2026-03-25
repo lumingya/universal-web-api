@@ -1,4 +1,4 @@
-﻿// ==================== CommandsTab Methods ====================
+// ==================== CommandsTab Methods ====================
 window.CommandsTabMethods = {
         async apiRequest(url, options) {
             const token = localStorage.getItem('api_token');
@@ -56,6 +56,9 @@ window.CommandsTabMethods = {
             if (next.type === 'execute_workflow' && next.prompt === undefined) {
                 next.prompt = '';
             }
+            if (['execute_preset', 'execute_workflow'].includes(next.type)) {
+                next.preset_name = this.normalizePresetActionValue(next.preset_name);
+            }
             this.initClickAction(next);
             this.initProxyAction(next);
             this.initWebhookAction(next);
@@ -63,6 +66,19 @@ window.CommandsTabMethods = {
             this.initCommandGroupAction(next);
             this.initReleaseLockAction(next);
             return next;
+        },
+
+        getFollowDefaultPresetValue() {
+            return '__DEFAULT__';
+        },
+
+        normalizePresetActionValue(value) {
+            const normalized = String(value || '').trim();
+            return normalized || this.getFollowDefaultPresetValue();
+        },
+
+        getFollowDefaultPresetLabel() {
+            return '跟随站点默认预设';
         },
 
         normalizeCommand(command) {
@@ -212,18 +228,18 @@ window.CommandsTabMethods = {
             if (!this.editingCommand) return '先选择绑定域名或标签页，再选择要执行的预设。';
             const scope = this.editingCommand.trigger?.scope;
             if (scope === 'all') {
-                return '切换预设/执行工作流仅建议用于“指定域名”或“指定标签页”。';
+                return '切换预设/执行工作流仅建议用于“指定域名”或“指定标签页”，也可以直接保持“跟随站点默认预设”。';
             }
             if (this.presetLoading) {
                 return '正在加载预设列表...';
             }
             if (this.resolvedPresetDomain) {
-                return '当前目标域名: ' + this.resolvedPresetDomain;
+                return '当前目标域名: ' + this.resolvedPresetDomain + '，也可保持“跟随站点默认预设”。';
             }
             if (scope === 'tab') {
-                return '所选标签页当前没有可识别域名，暂时无法列出预设。';
+                return '所选标签页当前没有可识别域名，暂时无法列出预设，但仍可保持“跟随站点默认预设”。';
             }
-            return '请输入已配置的域名后再选择预设。';
+            return '请输入已配置的域名后再选择预设，或保持“跟随站点默认预设”。';
         },
 
         getPresetSelectPlaceholder() {
@@ -433,12 +449,12 @@ window.CommandsTabMethods = {
 
                 for (const action of this.editingCommand.actions) {
                     if (!['execute_preset', 'execute_workflow'].includes(action.type)) continue;
-                    if (this.availablePresets.length === 0) {
-                        action.preset_name = '';
-                        continue;
-                    }
-                    if (!this.availablePresets.includes(action.preset_name)) {
-                        action.preset_name = this.availablePresets[0];
+                    action.preset_name = this.normalizePresetActionValue(action.preset_name);
+                    if (
+                        action.preset_name !== this.getFollowDefaultPresetValue()
+                        && !this.availablePresets.includes(action.preset_name)
+                    ) {
+                        action.preset_name = this.getFollowDefaultPresetValue();
                     }
                 }
             } catch (e) {
@@ -446,7 +462,7 @@ window.CommandsTabMethods = {
                 this.availablePresets = [];
                 for (const action of this.editingCommand.actions || []) {
                     if (['execute_preset', 'execute_workflow'].includes(action.type)) {
-                        action.preset_name = '';
+                        action.preset_name = this.getFollowDefaultPresetValue();
                     }
                 }
             } finally {
@@ -636,9 +652,7 @@ window.CommandsTabMethods = {
             }
             if (['execute_preset', 'execute_workflow'].includes(action.type)) {
                 await this.loadPresetOptions();
-                if (!action.preset_name && this.availablePresets.length > 0) {
-                    action.preset_name = this.availablePresets[0];
-                }
+                action.preset_name = this.normalizePresetActionValue(action.preset_name);
             }
         },
 
@@ -842,6 +856,9 @@ window.CommandsTabMethods = {
             trigger.check_while_busy_workflow = !!trigger.check_while_busy_workflow;
             trigger.priority = priority;
             const presetActions = (this.editingCommand.actions || []).filter(action => ['execute_preset', 'execute_workflow'].includes(action.type));
+            for (const action of presetActions) {
+                action.preset_name = this.normalizePresetActionValue(action.preset_name);
+            }
             const missingPreset = presetActions.some(action => !String(action.preset_name || '').trim());
             if (missingPreset) {
                 this.$emit('notify', { type: 'error', message: '“切换预设/执行工作流”动作必须从预设列表中选择一个预设。' });

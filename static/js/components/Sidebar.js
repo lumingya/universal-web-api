@@ -86,13 +86,6 @@ window.SidebarComponent = {
                                      : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50']">
                         🗂️ 标签页
                     </button>
-                    <button @click="$emit('change-tab', 'extractors')"
-                            :class="['flex-1 py-2 text-xs font-medium transition-colors border-b-2',
-                                     activeTab === 'extractors' 
-                                     ? 'border-blue-500 text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20' 
-                                     : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50']">
-                        🧩 提取器
-                    </button>
                     <button @click="$emit('change-tab', 'logs')"
                             :class="['flex-1 py-2 text-xs font-medium transition-colors border-b-2',
                                      activeTab === 'logs' 

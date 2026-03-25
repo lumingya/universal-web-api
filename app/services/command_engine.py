@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     from app.core.tab_pool import TabSession
 
 logger = get_logger("CMD_ENG")
+FOLLOW_DEFAULT_PRESET = "__DEFAULT__"
 
 
 # ================= 常量 =================
@@ -901,7 +902,14 @@ return (function() {
                 candidates.append(repaired)
         return candidates[-1]
 
+    def _should_follow_default_preset(self, preset_name: Any) -> bool:
+        value = str(preset_name or "").strip()
+        return value in {"", FOLLOW_DEFAULT_PRESET}
+
     def _resolve_preset_name(self, preset_name: Any, session: Optional['TabSession'] = None) -> str:
+        if self._should_follow_default_preset(preset_name):
+            return ""
+
         raw_name = str(preset_name or "").strip()
         if not raw_name:
             return ""
@@ -1639,17 +1647,17 @@ return (function() {
 
 
     def _get_session_domain(self, session: 'TabSession') -> str:
-        domain = str(getattr(session, "current_domain", "") or "").strip().lower()
-        if domain:
-            return domain
         try:
             url = str(getattr(session.tab, "url", "") or "")
-            domain = extract_remote_site_domain(url) or ""
+            domain = str(extract_remote_site_domain(url) or "").strip().lower()
             if domain:
                 session.current_domain = domain
                 return domain
         except Exception:
             pass
+        domain = str(getattr(session, "current_domain", "") or "").strip().lower()
+        if domain:
+            return domain
         return ""
 
     def _get_active_workflow_runtime(self, session: 'TabSession') -> Optional[Dict[str, Any]]:
