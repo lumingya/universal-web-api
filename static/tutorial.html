@@ -454,6 +454,35 @@
             font-weight: 500;
         }
 
+        .site-card-button {
+            width: 100%;
+            display: block;
+            cursor: pointer;
+            font-family: inherit;
+            text-align: left;
+            appearance: none;
+        }
+
+        .site-card-main {
+            display: flex;
+            align-items: center;
+            width: 100%;
+            gap: 12px;
+        }
+
+        .site-card-button::before {
+            content: none;
+        }
+
+        .site-card-icon {
+            flex: 0 0 auto;
+            font-size: 0.95rem;
+        }
+
+        .site-card-name {
+            min-width: 0;
+        }
+
         .site-card:hover {
             border-color: var(--primary-color);
             background: var(--site-card-hover-bg);
@@ -461,10 +490,14 @@
             box-shadow: 0 4px 12px rgba(37, 99, 235, 0.15);
         }
 
-        .site-card::before {
-            content: "🔗";
-            margin-right: 10px;
-            font-size: 0.9rem;
+        .site-card-hint {
+            display: block;
+            width: 100%;
+            margin-top: 8px;
+            margin-left: 0;
+            font-size: 0.78rem;
+            color: var(--desc-color);
+            line-height: 1.5;
         }
 
         .site-card .model-id {
@@ -474,6 +507,34 @@
             background: var(--site-card-model-bg);
             padding: 2px 8px;
             border-radius: 4px;
+        }
+
+        .site-copy-toast {
+            position: fixed;
+            right: 20px;
+            bottom: 20px;
+            max-width: min(420px, calc(100vw - 32px));
+            padding: 12px 14px;
+            border-radius: 10px;
+            background: rgba(15, 23, 42, 0.94);
+            color: #f8fafc;
+            box-shadow: 0 18px 40px rgba(15, 23, 42, 0.28);
+            font-size: 0.88rem;
+            line-height: 1.5;
+            opacity: 0;
+            transform: translateY(14px);
+            pointer-events: none;
+            transition: opacity 0.2s ease, transform 0.2s ease;
+            z-index: 1200;
+        }
+
+        .site-copy-toast.visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .site-copy-toast.error {
+            background: rgba(153, 27, 27, 0.96);
         }
 
         table {
@@ -907,6 +968,22 @@
                 <p><strong>📌 核心提示：</strong> 脚本启动后会自动打开一个受控浏览器窗口，<strong style="color: var(--highlight-border);">请保持该浏览器窗口处于开启状态</strong>，它是服务运行的基础。系统浏览器会自动打开这份教程页，你可以边看边配；而受控浏览器仍然只负责跑站点，不建议拿来手动乱点。</p>
             </div>
 
+            <div class="config-group">
+                <h4><span class="icon">1️⃣</span> 第一次使用建议按这个顺序操作</h4>
+                <ol>
+                    <li>运行 <code>start.bat</code> 后，先分清两个浏览器窗口：<strong>脚本控制的受控浏览器</strong>，以及<strong>显示教程页或你自己平时使用的普通浏览器</strong>。</li>
+                    <li>默认情况下，脚本控制浏览器会使用项目里的 <code>chrome_profile/</code>。第一次启动时它通常是一个空白、未登录的浏览器环境；如果你之前没有预先打开浏览器，脚本还可能另外打开一个显示本教程的浏览器窗口，所以看起来会像是“同时打开了两个浏览器”。</li>
+                    <li>后续真正要操作的是<strong>受控浏览器</strong>。请在这个窗口里访问你要接入的网站；以 Gemini 为例，可以先打开 <code>https://gemini.google.com/</code>。</li>
+                    <li>在受控浏览器里按网站的正常流程登录，确认已经进入可对话页面。</li>
+                    <li>以 Gemini 为例，请确保左侧侧边栏处于展开状态，不要折叠；这样后面参考站点配置和 API 连接步骤时更容易对应页面元素。</li>
+                    <li>站点已经能正常打开并登录后，再回到这份教程，继续看下方「连接 API」章节，按里面的 <code>Base URL</code>、<code>API Key</code> 和模型名示例去填写客户端。</li>
+                </ol>
+            </div>
+
+            <div class="note">
+                <p><strong>💡 不想重新登录？</strong>如果你希望直接复用自己原本已经登录好的浏览器用户目录，可以先关闭 Chrome，再把你想用的那份用户目录复制一份到项目内的 <code>chrome_profile/</code>，或者在 <code>.env</code> 里把 <code>BROWSER_PROFILE_DIR</code> 指向这份副本。至少建议带上 <code>Local State</code> 和你要用的 <code>Default</code> / <code>Profile 1</code> 等目录，并确保目录名与 <code>BROWSER_PROFILE_NAME</code> 对应正确；这样脚本下次启动后就会直接使用你原有的登录态。更完整的说明可继续参考后文「浏览器配置」。</p>
+            </div>
+
             <div class="note">
                 <p><strong>控制面板入口：</strong></p>
                 <a href="/" class="btn" target="_blank">打开控制面板</a>
@@ -915,6 +992,7 @@
 
             <h3>✅ 已适配的站点列表</h3>
             <p>以下网站已做好适配，可以直接访问并连接 API：</p>
+            <p style="margin-top: -6px; color: var(--desc-color);"><strong>提示：</strong>下方站点卡片现在会<strong>复制网址到剪贴板</strong>，不会直接在当前教程浏览器里打开。请把复制出来的网址粘贴到<strong>受控浏览器</strong>里访问。</p>
 
             <div class="site-grid" id="siteGrid"></div>
 
@@ -2367,7 +2445,7 @@ BROWSER_PROFILE_NAME=Default</code></pre>
         </section>
     </div>
 
-    <script src="/static/js/tutorial-i18n.js"></script>
+    <script src="/static/js/tutorial-i18n.js?v=2.6.9"></script>
     <script>
         // 站点配置数据（域名已更新）
         const sites = [
@@ -2451,7 +2529,10 @@ BROWSER_PROFILE_NAME=Default</code></pre>
                     themeLight: '日间模式',
                     themeDark: '夜间模式',
                     hamburgerOpenLabel: '打开导航菜单',
-                    hamburgerCloseLabel: '关闭导航菜单'
+                    hamburgerCloseLabel: '关闭导航菜单',
+                    siteCardHint: '点击复制网址，去受控浏览器打开',
+                    siteCardCopied: '已复制网址，请到受控浏览器粘贴打开',
+                    siteCardCopyFailed: '复制失败，请手动复制并到受控浏览器打开'
                 },
                 nav: navContent,
                 sections: sectionContent
@@ -2462,18 +2543,98 @@ BROWSER_PROFILE_NAME=Default</code></pre>
             return tutorialTranslations[tutorialState.currentLanguage] || tutorialTranslations.zh;
         }
 
+        function getSiteCardTexts() {
+            const bundle = getCurrentBundle() || {};
+            const fallback = tutorialTranslations.zh || {};
+            const bundleUi = bundle.ui || {};
+            const fallbackUi = fallback.ui || {};
+            return {
+                hint: bundleUi.siteCardHint || fallbackUi.siteCardHint || '点击复制网址，去受控浏览器打开',
+                copied: bundleUi.siteCardCopied || fallbackUi.siteCardCopied || '已复制网址，请到受控浏览器粘贴打开',
+                copyFailed: bundleUi.siteCardCopyFailed || fallbackUi.siteCardCopyFailed || '复制失败，请手动复制并到受控浏览器打开'
+            };
+        }
+
+        function showSiteCopyToast(message, isError = false) {
+            let toast = document.getElementById('siteCopyToast');
+            if (!toast) {
+                toast = document.createElement('div');
+                toast.id = 'siteCopyToast';
+                toast.className = 'site-copy-toast';
+                toast.setAttribute('role', 'status');
+                toast.setAttribute('aria-live', 'polite');
+                document.body.appendChild(toast);
+            }
+
+            toast.textContent = message;
+            toast.classList.toggle('error', isError);
+            toast.classList.add('visible');
+
+            clearTimeout(showSiteCopyToast.timer);
+            showSiteCopyToast.timer = setTimeout(() => {
+                toast.classList.remove('visible');
+            }, 2600);
+        }
+
+        async function copyTextToClipboard(text) {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                await navigator.clipboard.writeText(text);
+                return;
+            }
+
+            const helper = document.createElement('textarea');
+            helper.value = text;
+            helper.setAttribute('readonly', 'readonly');
+            helper.style.position = 'fixed';
+            helper.style.opacity = '0';
+            helper.style.pointerEvents = 'none';
+            document.body.appendChild(helper);
+            helper.focus();
+            helper.select();
+
+            try {
+                const copied = document.execCommand('copy');
+                if (!copied) {
+                    throw new Error('copy_failed');
+                }
+            } finally {
+                document.body.removeChild(helper);
+            }
+        }
+
+        async function handleSiteCardClick(url) {
+            const texts = getSiteCardTexts();
+            try {
+                await copyTextToClipboard(url);
+                showSiteCopyToast(`${texts.copied}：${url}`);
+            } catch (error) {
+                showSiteCopyToast(`${texts.copyFailed}：${url}`, true);
+            }
+        }
+
         // 渲染站点卡片
         function renderSiteGrid() {
             const grid = document.getElementById('siteGrid');
             if (!grid) {
                 return;
             }
+            const texts = getSiteCardTexts();
             grid.innerHTML = sites.map(site => `
-                <a href="${site.url}" target="_blank" class="site-card">
-                    ${site.name}
-                    <span class="model-id">${site.id}</span>
-                </a>
+                <button type="button" class="site-card site-card-button" data-site-url="${site.url}">
+                    <span class="site-card-main">
+                        <span class="site-card-icon" aria-hidden="true">📋</span>
+                        <span class="site-card-name">${site.name}</span>
+                        <span class="model-id">${site.id}</span>
+                    </span>
+                    <span class="site-card-hint">${texts.hint}</span>
+                </button>
             `).join('');
+
+            grid.querySelectorAll('.site-card-button').forEach(button => {
+                button.addEventListener('click', () => {
+                    handleSiteCardClick(button.dataset.siteUrl || '');
+                });
+            });
         }
 
         function updateLanguageButtons() {

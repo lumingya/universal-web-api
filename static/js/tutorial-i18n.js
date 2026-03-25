@@ -14,7 +14,10 @@
             themeLight: 'Light Mode',
             themeDark: 'Dark Mode',
             hamburgerOpenLabel: 'Open navigation menu',
-            hamburgerCloseLabel: 'Close navigation menu'
+            hamburgerCloseLabel: 'Close navigation menu',
+            siteCardHint: 'Click to copy the URL, then open it in the controlled browser',
+            siteCardCopied: 'URL copied. Paste it into the controlled browser',
+            siteCardCopyFailed: 'Copy failed. Please copy it manually and open it in the controlled browser'
         },
         nav: {
             'quick-start': '🚀 Quick Start',
@@ -54,6 +57,22 @@
             <p><strong>📌 Core reminder:</strong> after startup the script opens a controlled browser window automatically. <strong style="color: var(--highlight-border);">Keep that browser window open</strong>, because it is the foundation of the service. The tutorial can stay open in your normal browser, while the controlled browser should be kept focused on supported AI sites.</p>
         </div>
 
+        <div class="config-group">
+            <h4><span class="icon">1️⃣</span> Recommended first-time flow</h4>
+            <ol>
+                <li>After you run <code>start.bat</code>, first tell the two browser windows apart: the <strong>controlled browser used by the script</strong>, and the <strong>regular browser that shows this tutorial or that you use every day</strong>.</li>
+                <li>By default the controlled browser uses the project's <code>chrome_profile/</code>. On a first launch it is usually a blank, signed-out browser profile. If you did not already have a browser open, the script may also open a separate browser window for this tutorial, so it can look like two browsers appeared at once.</li>
+                <li>The window you should actually operate next is the <strong>controlled browser</strong>. Open the site you want to use there. For Gemini, a good starting URL is <code>https://gemini.google.com/</code>.</li>
+                <li>Sign in on that site normally inside the controlled browser, and make sure you have reached the chat page.</li>
+                <li>For Gemini, make sure the left sidebar is expanded instead of collapsed. That makes it easier to match the later site configuration and API connection steps.</li>
+                <li>Once the site is open and signed in, come back to this tutorial and continue with the <strong>Connect API</strong> section below. Fill your client using the <code>Base URL</code>, <code>API Key</code>, and model examples there.</li>
+            </ol>
+        </div>
+
+        <div class="note">
+            <p><strong>💡 Want to reuse an existing login state?</strong> Close Chrome first, then copy the browser user directory you want to reuse into the project's <code>chrome_profile/</code>, or point <code>BROWSER_PROFILE_DIR</code> in <code>.env</code> to a copied profile directory. At minimum, bring over <code>Local State</code> and the profile folder you want, such as <code>Default</code> or <code>Profile 1</code>, and keep the folder name aligned with <code>BROWSER_PROFILE_NAME</code>. After that, the next launch will use your existing login state directly. The full explanation is in the <strong>Browser Configuration</strong> section later in this page.</p>
+        </div>
+
         <div class="note">
             <p><strong>Dashboard entry:</strong></p>
             <a href="/" class="btn" target="_blank">Open Dashboard</a>
@@ -62,6 +81,7 @@
 
         <h3>✅ Supported sites</h3>
         <p>The following sites already have built-in adaptation and can usually be used directly:</p>
+        <p style="margin-top: -6px; color: var(--desc-color);"><strong>Tip:</strong> the site cards below now <strong>copy the URL to your clipboard</strong> instead of opening in the current tutorial browser. Paste the copied URL into the <strong>controlled browser</strong>.</p>
 
         <div class="site-grid" id="siteGrid"></div>
 
