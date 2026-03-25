@@ -402,6 +402,14 @@ const BROWSER_CONSTANTS_SCHEMA = {
                 type: 'number',
                 min: 1,
                 default: 60
+            },
+            TAB_POOL_STUCK_TIMEOUT: {
+                label: '卡死强制释放超时',
+                unit: '秒',
+                desc: '标签页忙碌超过该时长后，系统会尝试取消任务并强制释放',
+                type: 'number',
+                min: 10,
+                default: 180
             }
         }
     }
@@ -1828,10 +1836,11 @@ const app = createApp({
             }
 
             const tabPool = raw.tab_pool && typeof raw.tab_pool === 'object' ? raw.tab_pool : {};
-            normalized.TAB_POOL_MAX_TABS = tabPool.max_tabs ?? normalized.TAB_POOL_MAX_TABS;
-            normalized.TAB_POOL_MIN_TABS = tabPool.min_tabs ?? normalized.TAB_POOL_MIN_TABS;
-            normalized.TAB_POOL_IDLE_TIMEOUT = tabPool.idle_timeout ?? normalized.TAB_POOL_IDLE_TIMEOUT;
-            normalized.TAB_POOL_ACQUIRE_TIMEOUT = tabPool.acquire_timeout ?? normalized.TAB_POOL_ACQUIRE_TIMEOUT;
+            normalized.TAB_POOL_MAX_TABS = raw.TAB_POOL_MAX_TABS ?? tabPool.max_tabs ?? normalized.TAB_POOL_MAX_TABS;
+            normalized.TAB_POOL_MIN_TABS = raw.TAB_POOL_MIN_TABS ?? tabPool.min_tabs ?? normalized.TAB_POOL_MIN_TABS;
+            normalized.TAB_POOL_IDLE_TIMEOUT = raw.TAB_POOL_IDLE_TIMEOUT ?? tabPool.idle_timeout ?? normalized.TAB_POOL_IDLE_TIMEOUT;
+            normalized.TAB_POOL_ACQUIRE_TIMEOUT = raw.TAB_POOL_ACQUIRE_TIMEOUT ?? tabPool.acquire_timeout ?? normalized.TAB_POOL_ACQUIRE_TIMEOUT;
+            normalized.TAB_POOL_STUCK_TIMEOUT = raw.TAB_POOL_STUCK_TIMEOUT ?? tabPool.stuck_timeout ?? normalized.TAB_POOL_STUCK_TIMEOUT;
 
             return normalized;
         },
@@ -1855,7 +1864,8 @@ const app = createApp({
                 max_tabs: merged.TAB_POOL_MAX_TABS,
                 min_tabs: merged.TAB_POOL_MIN_TABS,
                 idle_timeout: merged.TAB_POOL_IDLE_TIMEOUT,
-                acquire_timeout: merged.TAB_POOL_ACQUIRE_TIMEOUT
+                acquire_timeout: merged.TAB_POOL_ACQUIRE_TIMEOUT,
+                stuck_timeout: merged.TAB_POOL_STUCK_TIMEOUT
             };
 
             return base;

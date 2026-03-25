@@ -2219,6 +2219,18 @@ BROWSER_PROFILE_NAME=Default</code></pre>
                     <tr><td>上传历史对话中的图片</td><td>开启</td><td>是否把历史消息里的图片也一起上传</td></tr>
                 </table>
             </div>
+
+            <div class="config-group">
+                <h4><span class="icon">🗂️</span> 标签页池</h4>
+                <table>
+                    <tr><th>配置项</th><th>默认值</th><th>说明</th></tr>
+                    <tr><td>最大标签页数</td><td><code>5</code></td><td>标签页池最多纳入多少个可用标签页</td></tr>
+                    <tr><td>最小保留标签页数</td><td><code>1</code></td><td>标签页池尽量维持的最小可用标签页数量</td></tr>
+                    <tr><td>空闲超时</td><td><code>300</code> 秒</td><td>标签页空闲多久后允许被回收或重置</td></tr>
+                    <tr><td>占用等待超时</td><td><code>60</code> 秒</td><td>获取标签页会话时的最大等待时间</td></tr>
+                    <tr><td><strong>卡死强制释放超时</strong></td><td><code>180</code> 秒</td><td>🔑 标签页忙碌超过该时长后，系统会尝试取消当前任务并强制释放；当日志出现 <code>stuck for ... force release</code> 时，调整的就是这个参数</td></tr>
+                </table>
+            </div>
         </section>
 
         <!-- ==================== 配置管理 ==================== -->

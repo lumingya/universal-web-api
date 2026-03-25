@@ -45,7 +45,8 @@ def _load_tab_pool_config() -> Dict:
         "max_tabs": 5,
         "min_tabs": 1,
         "idle_timeout": 300,
-        "acquire_timeout": 60
+        "acquire_timeout": 60,
+        "stuck_timeout": 180,
     }
     
     # 从 browser_config.json 加载

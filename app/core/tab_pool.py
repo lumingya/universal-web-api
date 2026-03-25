@@ -506,12 +506,14 @@ class TabPoolManager:
         min_tabs: int = 1,
         idle_timeout: float = 300,
         acquire_timeout: float = 60,
+        stuck_timeout: float = STUCK_TIMEOUT,
     ):
         self.page = browser_page
         self.max_tabs = max_tabs
         self.min_tabs = min_tabs
         self.idle_timeout = idle_timeout
         self.acquire_timeout = acquire_timeout
+        self.stuck_timeout = max(1.0, float(stuck_timeout))
         
         self._tabs: Dict[str, TabSession] = {}
         self._lock = threading.RLock()
@@ -561,7 +563,51 @@ class TabPoolManager:
                 retry_delay=self._global_network_retry_delay,
             )
 
-        logger.debug(f"TabPoolManager 初始化 (max={max_tabs})")
+        logger.debug(
+            f"TabPoolManager 初始化 (max={max_tabs}, stuck_timeout={self.stuck_timeout}s)"
+        )
+
+    def apply_runtime_config(
+        self,
+        *,
+        max_tabs: Optional[int] = None,
+        min_tabs: Optional[int] = None,
+        idle_timeout: Optional[float] = None,
+        acquire_timeout: Optional[float] = None,
+        stuck_timeout: Optional[float] = None,
+    ) -> Dict[str, float]:
+        """同步更新运行中的标签页池参数。"""
+        with self._lock:
+            new_max_tabs = self.max_tabs if max_tabs is None else max(1, int(max_tabs))
+            new_min_tabs = self.min_tabs if min_tabs is None else max(1, int(min_tabs))
+            if new_min_tabs > new_max_tabs:
+                new_min_tabs = new_max_tabs
+
+            self.max_tabs = new_max_tabs
+            self.min_tabs = new_min_tabs
+
+            if idle_timeout is not None:
+                self.idle_timeout = max(1.0, float(idle_timeout))
+            if acquire_timeout is not None:
+                self.acquire_timeout = max(1.0, float(acquire_timeout))
+            if stuck_timeout is not None:
+                self.stuck_timeout = max(1.0, float(stuck_timeout))
+
+            updated = {
+                "max_tabs": self.max_tabs,
+                "min_tabs": self.min_tabs,
+                "idle_timeout": self.idle_timeout,
+                "acquire_timeout": self.acquire_timeout,
+                "stuck_timeout": self.stuck_timeout,
+            }
+
+            logger.info(
+                "[TabPool] 运行时配置已更新: "
+                f"max_tabs={self.max_tabs}, min_tabs={self.min_tabs}, "
+                f"idle_timeout={self.idle_timeout}, acquire_timeout={self.acquire_timeout}, "
+                f"stuck_timeout={self.stuck_timeout}"
+            )
+            return updated
 
     def _get_session_for_monitor(self, session_id: str) -> Optional[TabSession]:
         with self._lock:
@@ -818,7 +864,7 @@ class TabPoolManager:
             if session.status == TabStatus.BUSY:
                 busy_duration = now - session.last_used_at
                 
-                if busy_duration > self.STUCK_TIMEOUT:
+                if busy_duration > self.stuck_timeout:
                     task_id = session.current_task_id or ""
                     cancelled = False
                     if task_id:
@@ -1342,6 +1388,10 @@ class TabPoolManager:
                 "idle": sum(1 for s in self._tabs.values() if s.status == TabStatus.IDLE),
                 "busy": sum(1 for s in self._tabs.values() if s.status == TabStatus.BUSY),
                 "max_tabs": self.max_tabs,
+                "min_tabs": self.min_tabs,
+                "idle_timeout": self.idle_timeout,
+                "acquire_timeout": self.acquire_timeout,
+                "stuck_timeout": self.stuck_timeout,
                 "global_network_enabled": self._global_network_enabled,
                 "known_raw_tabs": len(self._known_tab_ids),
                 "last_scan": round(time.time() - self._last_scan_time, 1),

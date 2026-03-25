@@ -251,6 +251,7 @@ DEFAULT_BROWSER_CONSTANTS: Dict[str, Any] = {
         "min_tabs": 1,
         "idle_timeout": 300,
         "acquire_timeout": 60,
+        "stuck_timeout": 180,
     },
 }
 
@@ -492,12 +493,34 @@ async def save_browser_constants(
         except Exception as reload_error:
             logger.warning(f"热重载失败: {reload_error}")
 
+        tab_pool_synced = False
+        try:
+            tab_pool_config = config.get("tab_pool") or {}
+            if isinstance(tab_pool_config, dict):
+                import app.core.browser as browser_module
+
+                browser_instance = getattr(browser_module, "_browser_instance", None)
+                live_tab_pool = getattr(browser_instance, "_tab_pool", None) if browser_instance else None
+                if live_tab_pool is not None:
+                    live_tab_pool.apply_runtime_config(
+                        max_tabs=tab_pool_config.get("max_tabs"),
+                        min_tabs=tab_pool_config.get("min_tabs"),
+                        idle_timeout=tab_pool_config.get("idle_timeout"),
+                        acquire_timeout=tab_pool_config.get("acquire_timeout"),
+                        stuck_timeout=tab_pool_config.get("stuck_timeout"),
+                    )
+                    tab_pool_synced = True
+                    logger.info("运行中的标签页池配置已同步")
+        except Exception as sync_error:
+            logger.warning(f"同步标签页池运行时配置失败: {sync_error}")
+
         logger.info(f"浏览器常量已保存: {len(config)} 项")
 
         return {
             "status": "success",
             "message": "浏览器常量已保存",
-            "updated_count": len(config)
+            "updated_count": len(config),
+            "tab_pool_synced": tab_pool_synced,
         }
 
     except Exception as e:
