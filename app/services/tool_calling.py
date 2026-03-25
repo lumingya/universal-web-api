@@ -569,8 +569,11 @@ def _coerce_arguments_object(args: Any) -> Optional[Dict[str, Any]]:
 
 def _repair_json_like_argument_string(raw: str) -> str:
     text = str(raw or "")
-    if not text or not text.startswith("{"):
+    stripped = text.lstrip()
+    if not stripped or stripped[0] not in "{[":
         return text
+
+    text = _escape_control_chars_in_json_strings(text)
 
     # Best-effort fix for nested JSON strings carrying Windows paths like
     # {"path":"C:\Users\QIU\Desktop"} which are invalid inner JSON after the
@@ -587,13 +590,64 @@ def _repair_json_like_argument_string(raw: str) -> str:
         next_ch = text[i + 1] if i + 1 < len(text) else ""
         if next_ch in {'"', "\\", "/", "b", "f", "n", "r", "t"}:
             repaired_chars.append(ch)
+            repaired_chars.append(next_ch)
+            i += 2
+            continue
         elif next_ch == "u" and i + 5 < len(text):
-            repaired_chars.append(ch)
-        else:
-            repaired_chars.append("\\\\")
+            repaired_chars.append(text[i : i + 6])
+            i += 6
+            continue
+
+        repaired_chars.append("\\\\")
         i += 1
 
     return _repair_unescaped_inner_quotes("".join(repaired_chars))
+
+
+def _escape_control_chars_in_json_strings(text: str) -> str:
+    repaired: List[str] = []
+    in_string = False
+    escape = False
+
+    for ch in text:
+        if not in_string:
+            repaired.append(ch)
+            if ch == '"':
+                in_string = True
+            continue
+
+        if escape:
+            repaired.append(ch)
+            escape = False
+            continue
+
+        if ch == "\\":
+            repaired.append(ch)
+            escape = True
+            continue
+
+        if ch == '"':
+            repaired.append(ch)
+            in_string = False
+            continue
+
+        if ch == "\n":
+            repaired.append("\\n")
+            continue
+        if ch == "\r":
+            repaired.append("\\r")
+            continue
+        if ch == "\t":
+            repaired.append("\\t")
+            continue
+
+        if ord(ch) < 0x20:
+            repaired.append(f"\\u{ord(ch):04x}")
+            continue
+
+        repaired.append(ch)
+
+    return "".join(repaired)
 
 
 def _repair_unescaped_inner_quotes(text: str) -> str:

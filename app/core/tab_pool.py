@@ -22,9 +22,42 @@ from app.core.config import logger, BrowserConstants
 from app.utils.site_url import (
     extract_remote_site_domain,
     get_preferred_route_domain,
+    is_remote_site_url,
     normalize_route_domain,
     route_domain_matches,
 )
+
+
+_POOL_SKIP_URL_PREFIXES = (
+    "about:",
+    "chrome://",
+    "chrome-devtools://",
+    "devtools://",
+    "edge://",
+    "brave://",
+    "javascript:",
+    "data:",
+    "blob:",
+)
+
+_POOL_SKIP_URL_CONTAINS = (
+    "chrome-error://",
+    "about:neterror",
+)
+
+
+def _should_skip_pool_url(url: str) -> bool:
+    raw = str(url or "").strip()
+    if not raw:
+        return True
+
+    lowered = raw.lower()
+    if lowered.startswith(_POOL_SKIP_URL_PREFIXES):
+        return True
+    if any(marker in lowered for marker in _POOL_SKIP_URL_CONTAINS):
+        return True
+
+    return not is_remote_site_url(lowered)
 
 
 class TabStatus(Enum):
@@ -61,41 +94,7 @@ class TabSession:
     
         try:
             url = self.tab.url
-        
-            # 检查是否能获取 URL
-            if url is None:
-                return False
-        
-            # 检查 URL 是否有效
-            invalid_patterns = (
-                "about:blank", 
-                "chrome://newtab/",
-                "chrome://new-tab-page/",
-                "devtools://",
-                "chrome-devtools://",
-                "chrome-error://",
-                "about:neterror"
-            )
-            for pattern in invalid_patterns:
-                if pattern in url:
-                    return False
-        
-            # 🆕 检查无效协议
-            invalid_protocols = ("javascript:", "data:", "blob:about:")
-            for protocol in invalid_protocols:
-                if url.startswith(protocol):
-                    return False
-        
-            # 检查是否有有效协议
-            if "://" not in url:
-                return False
-            
-            # 🆕 只允许 http/https/ws/wss 协议
-            valid_protocols = ("http://", "https://", "ws://", "wss://")
-            if not any(url.startswith(p) for p in valid_protocols):
-                return False
-        
-            return True
+            return not _should_skip_pool_url(url)
         
         except Exception:
             return False
@@ -236,17 +235,7 @@ class TabSession:
             return resolved
 
         fallback = str(self.current_domain or "").strip()
-        if current_url.startswith((
-            "about:",
-            "chrome://",
-            "chrome-error://",
-            "devtools://",
-            "edge://",
-            "brave://",
-            "javascript:",
-            "data:",
-            "blob:",
-        )):
+        if _should_skip_pool_url(current_url) or "://" in current_url:
             self.current_domain = None
             return ""
         return fallback
@@ -737,7 +726,10 @@ class TabPoolManager:
                     self._persistent_to_session_id.pop(p_idx, None)
                 if self._active_session_id == session_id:
                     self._active_session_id = None
-            
+
+            # 顺手清理已切换到本地页/无效页的空闲标签，避免继续展示和参与调度。
+            self._cleanup_unhealthy()
+             
             # ===== 第二步：构建"已在池中的 tab 对象"集合 =====
             tabs_in_pool = set()
             for rid in self._raw_id_to_persistent:
@@ -747,12 +739,6 @@ class TabPoolManager:
                     tabs_in_pool.add(rid)
             
             # ===== 第三步：扫描新标签页 =====
-            skip_urls = [
-                "chrome://", "chrome-error://", "about:blank",
-                "devtools://", "chrome-devtools://",
-                "edge://", "brave://",
-            ]
-            
             new_count = 0
             for raw_tab in current_tabs:
                 if len(self._tabs) >= self.max_tabs:
@@ -773,8 +759,8 @@ class TabPoolManager:
                     except Exception:
                         pass
                     
-                    # 无效/空白页面 - 跳过，下次再检查
-                    if not url or any(url.startswith(p) or p in url for p in skip_urls):
+                    # 本地页、浏览器内部页、空白页都不纳入标签页池。
+                    if _should_skip_pool_url(url):
                         continue
                     
                     # 有效页面 - 添加到池
@@ -804,12 +790,6 @@ class TabPoolManager:
             if self._initialized:
                 return
             
-            skip_urls = [
-                "chrome://", "chrome-error://", "about:blank",
-                "devtools://", "chrome-devtools://",
-                "edge://", "brave://",
-            ]
-            
             try:
                 existing_tabs = self.page.get_tabs()
                 logger.debug(f"检测到 {len(existing_tabs)} 个标签页")
@@ -829,8 +809,8 @@ class TabPoolManager:
                         except Exception:
                             pass
                         
-                        # 无效/空白页面 - 跳过，后续扫描会重新检查
-                        if not url or any(url.startswith(p) or p in url for p in skip_urls):
+                        # 初始化时直接跳过本地页和浏览器内部页。
+                        if _should_skip_pool_url(url):
                             continue
                         
                         # 有效页面 - 添加到池
