@@ -882,7 +882,7 @@
                     </div>
                 </div>
             </div>
-            <h1 id="pageTitle">Universal Web-to-API 使用手册 (v2.6.5)</h1>
+            <h1 id="pageTitle">Universal Web-to-API 使用手册 (v2.6.9)</h1>
             <div class="project-link-banner">
                 <div class="project-link-copy">
                     <div class="project-link-label">
@@ -1584,13 +1584,13 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
             <p>在控制面板的「配置」选项卡中找到「文件粘贴」面板，可以针对每个站点（的每个预设）独立配置。真正需要一起看的不只是 <code>enabled</code> 和 <code>threshold</code>，还包括站点里的 <code>upload_btn</code>、<code>file_input</code>、<code>drop_zone</code> 这些上传入口选择器。</p>
 
             <div class="note">
-                <p><strong>⚠️ 注意：</strong>系统现在会在上传后检查页面上是否真的出现了“文件已挂载”的信号。若文件并没有真正被页面接受，就会放弃文件粘贴并回退到普通文本输入。引导文本的作用，则是让模型把注意力放回文件内容本身。</p>
+                <p><strong>⚠️ 注意：</strong>系统现在会在上传后持续观察附件节点、页面处理状态和发送按钮是否恢复可提交，而不是单纯硬等几秒。只有当附件状态稳定后才会继续发送；如果页面已经出现附件活动却始终无法确认，也会停止回退到普通文本输入，避免把文件和文本一起重复发出去。引导文本的作用，则是让模型把注意力放回文件内容本身。</p>
             </div>
 
             <h3>当前默认预设里已开启的站点</h3>
             <ul>
                 <li><code>aistudio.google.com</code></li>
-                <li><code>chatgpt.com</code></li>
+                <li><code>gemini.google.com</code></li>
                 <li><code>chat.deepseek.com</code></li>
                 <li><code>www.doubao.com</code></li>
                 <li><code>chat.qwen.ai</code></li>
@@ -2445,7 +2445,7 @@ BROWSER_PROFILE_NAME=Default</code></pre>
         </section>
     </div>
 
-    <script src="/static/js/tutorial-i18n.js?v=2.6.10"></script>
+    <script src="/static/js/tutorial-i18n.js?v=2.6.9"></script>
     <script>
         // 站点配置数据（域名已更新）
         const sites = [

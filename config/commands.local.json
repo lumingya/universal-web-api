@@ -67,24 +67,6 @@
       "group_name": "竞技场命令"
     },
     {
-      "id": "cmd_cfvis001",
-      "name": "CF_VISUAL_SCAN_EACH_REQUEST",
-      "enabled": false,
-      "group_name": "测试命令"
-    },
-    {
-      "id": "cmd_cftpg001",
-      "name": "CF_PAGECHECK_TRIGGER_POPUP",
-      "enabled": false,
-      "group_name": "测试命令"
-    },
-    {
-      "id": "cmd_cftnt001",
-      "name": "CF_NETWORK_429_TRIGGER_POPUP",
-      "enabled": false,
-      "group_name": "测试命令"
-    },
-    {
       "id": "cmd_gemrf001",
       "name": "自动刷新页面",
       "enabled": true,
@@ -95,12 +77,6 @@
       "name": "自动切换预设",
       "enabled": true,
       "group_name": "gemini命令"
-    },
-    {
-      "id": "cmd_cftmj001",
-      "name": "CF_MOCK_INJECTOR_MANUAL",
-      "enabled": false,
-      "group_name": "测试命令"
     },
     {
       "id": "cmd_0020e346",

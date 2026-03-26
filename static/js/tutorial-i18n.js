@@ -6,7 +6,7 @@
         },
         ui: {
             navTitle: '📑 Navigation',
-            pageHeaderTitle: 'Universal Web-to-API Guide (v2.6.5)',
+            pageHeaderTitle: 'Universal Web-to-API Guide (v2.6.9)',
             projectLinkLabel: 'Project Link',
             projectLinkDescription: 'Need the source code, release notes, or the issue tracker? Start here.',
             projectLinkButton: 'Open Repository',
@@ -597,13 +597,13 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
         <p>In practice, do not look only at <code>enabled</code> and <code>threshold</code>. For new sites, also check whether <code>upload_btn</code>, <code>file_input</code>, and <code>drop_zone</code> are configured correctly.</p>
 
         <div class="note">
-            <p><strong>⚠️ Validation after upload:</strong> the system now checks whether the page really shows that a file was attached. If the website does not truly accept the file, the system falls back to normal text input.</p>
+            <p><strong>⚠️ Validation after upload:</strong> the system now keeps watching attachment nodes, page-processing indicators, and whether the send button becomes submittable again, instead of mainly guessing with a fixed sleep. It only proceeds after the attachment state is stable; if the page shows attachment activity but never reaches a confirmable state, it will stop the text fallback to avoid sending both the file and the raw text together.</p>
         </div>
 
         <h3>Enabled by default in built-in presets</h3>
         <ul>
             <li><code>aistudio.google.com</code></li>
-            <li><code>chatgpt.com</code></li>
+            <li><code>gemini.google.com</code></li>
             <li><code>chat.deepseek.com</code></li>
             <li><code>www.doubao.com</code></li>
             <li><code>chat.qwen.ai</code></li>

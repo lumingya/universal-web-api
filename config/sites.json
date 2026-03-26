@@ -153,7 +153,7 @@
           "enabled": true,
           "threshold": 50000,
           "hint_text": "完全专注于文件内容",
-          "post_upload_settle": 5.0
+          "post_upload_settle": 5
         }
       }
     },
@@ -411,10 +411,10 @@
           "mode": "first"
         },
         "file_paste": {
-          "enabled": true,
-          "threshold": 50000,
+          "enabled": false,
+          "threshold": 30000,
           "hint_text": "完全专注于文件内容",
-          "post_upload_settle": 5.0,
+          "post_upload_settle": 5,
           "upload_signal_selectors": [
             "[class*=\"attachment\"]",
             "[class*=\"file\"]",
