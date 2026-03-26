@@ -965,7 +965,7 @@
             </div>
 
             <div class="info-box">
-                <p><strong>📌 核心提示：</strong> 脚本启动后会自动打开一个受控浏览器窗口，<strong style="color: var(--highlight-border);">请保持该浏览器窗口处于开启状态</strong>，它是服务运行的基础。系统浏览器会自动打开这份教程页，你可以边看边配；而受控浏览器仍然只负责跑站点，不建议拿来手动乱点。</p>
+                <p><strong>📌 核心提示：</strong> 脚本启动后会自动打开一个受控浏览器窗口，<strong style="color: var(--highlight-border);">请保持该浏览器窗口处于开启状态</strong>，它是服务运行的基础。系统浏览器会自动打开这份教程页，你可以边看边配；<strong style="color: var(--highlight-border);">当脚本将要运行时，受控浏览器中不要存在除了目标网站之外的任何网站或无关标签页。</strong></p>
             </div>
 
             <div class="config-group">
@@ -973,7 +973,7 @@
                 <ol>
                     <li>运行 <code>start.bat</code> 后，先分清两个浏览器窗口：<strong>脚本控制的受控浏览器</strong>，以及<strong>显示教程页或你自己平时使用的普通浏览器</strong>。</li>
                     <li>默认情况下，脚本控制浏览器会使用项目里的 <code>chrome_profile/</code>。第一次启动时它通常是一个空白、未登录的浏览器环境；如果你之前没有预先打开浏览器，脚本还可能另外打开一个显示本教程的浏览器窗口，所以看起来会像是“同时打开了两个浏览器”。</li>
-                    <li>后续真正要操作的是<strong>受控浏览器</strong>。请在这个窗口里访问你要接入的网站；以 Gemini 为例，可以先打开 <code>https://gemini.google.com/</code>。</li>
+                    <li>后续真正要操作的是<strong>受控浏览器</strong>。请在这个窗口里访问你要接入的网站；以 Gemini 为例，可以先打开 <code>https://gemini.google.com/</code>。在脚本真正开始跑请求前，请确认这个受控浏览器里只保留目标网站，不要留搜索页、教程页、邮箱或其它无关网页。</li>
                     <li>在受控浏览器里按网站的正常流程登录，确认已经进入可对话页面。</li>
                     <li>以 Gemini 为例，请确保左侧侧边栏处于展开状态，不要折叠；这样后面参考站点配置和 API 连接步骤时更容易对应页面元素。</li>
                     <li>站点已经能正常打开并登录后，再回到这份教程，继续看下方「连接 API」章节，按里面的 <code>Base URL</code>、<code>API Key</code> 和模型名示例去填写客户端。</li>
@@ -1065,7 +1065,7 @@
             <h3>路线 A：AI 自动识别</h3>
             <ol>
                 <li>进入 <a href="/">控制面板</a> → 设置 → 环境配置，填好 <code>HELPER_API_KEY</code>、<code>HELPER_BASE_URL</code>、<code>HELPER_MODEL</code>。</li>
-                <li>在脚本控制的浏览器里打开目标站点，并停留在真正可聊天的页面。</li>
+                <li>在脚本控制的浏览器里打开目标站点，并停留在真正可聊天的页面。准备发起请求前，请确认受控浏览器里没有除了目标网站之外的其它网站或无关标签页。</li>
                 <li>对该站点发起<strong>第一次真实 API 请求</strong>。</li>
                 <li>如果这个域名还不在 <code>config/sites.json</code> 中，后端会自动抓取 HTML 并调用辅助 AI 做页面分析。</li>
                 <li>分析成功后，会自动生成主预设并写入站点配置文件。</li>
@@ -2372,7 +2372,7 @@ BROWSER_PROFILE_NAME=Default</code></pre>
                     <li><strong>折叠边框</strong>：如果你手动把页面边框缩小，或折叠某些按钮，脚本可能无法操作元素。因此必须将折叠元素全部展开（浏览器可以最小化但不能缩小边框）。</li>
                     <li><strong>网站状态异常</strong>：查看一下脚本控制的浏览器状态，可能触发了人机验证，可能单次发送的信息太长被网站拒绝，也可能发送的内容包含违规信息被拦截。</li>
                     <li><strong>网络问题</strong>：网络波动或者代理切换了 IP，导致发送失败。这种情况可能引发脚本死锁，需要重启脚本或等待约 5 分钟。表现为：脚本后台显示发送成功，但浏览器中信息没有被实际发送或发送后又失败了。</li>
-                    <li><strong>不要在受控浏览器里乱开无关页</strong>：教程页现在不会再自动占用受控浏览器标签，但你仍然不应该手动在受控浏览器里打开搜索页、资讯页或其它普通网页。如果已经打开并出现异常，重启脚本即可。</li>
+                    <li><strong>不要在受控浏览器里保留无关页</strong>：当脚本将要运行时，受控浏览器里不要存在除了目标网站之外的任何网站或无关标签页。教程页现在不会再自动占用受控浏览器标签，但如果你手动开了搜索页、资讯页或其它普通网页，仍然可能干扰脚本；如果已经打开并出现异常，重启脚本即可。</li>
                     <li><strong>站点配置失效</strong>：如果以上问题都排除了，可能是该网站的配置已过期需要更新。你可以在 GitHub 上提 Issue 或加群反馈。如果你有一定基础，也可以手动更新选择器配置。</li>
                 </ol>
             </div>
@@ -2445,7 +2445,7 @@ BROWSER_PROFILE_NAME=Default</code></pre>
         </section>
     </div>
 
-    <script src="/static/js/tutorial-i18n.js?v=2.6.9"></script>
+    <script src="/static/js/tutorial-i18n.js?v=2.6.10"></script>
     <script>
         // 站点配置数据（域名已更新）
         const sites = [

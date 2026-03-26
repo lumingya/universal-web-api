@@ -34,6 +34,7 @@ from app.core.network_monitor import (
     NetworkInterceptionTriggered,
 )
 
+from .attachment_monitor import AttachmentMonitor
 from .text_input import TextInputHandler
 from .image_input import ImageInputHandler
 
@@ -274,6 +275,11 @@ class WorkflowExecutor:
                 
         # 🆕 隐身模式鼠标位置追踪（CDP 绝对坐标）
         self._mouse_pos = None
+        self._attachment_monitor = AttachmentMonitor(
+            tab=tab,
+            selectors=self._selectors,
+            check_cancelled_fn=self._check_cancelled,
+        )
         # 初始化输入处理器
         self._text_handler = TextInputHandler(
             tab=tab,
@@ -282,13 +288,15 @@ class WorkflowExecutor:
             check_cancelled_fn=self._check_cancelled,
             file_paste_config=file_paste_config,
             selectors=self._selectors,
+            attachment_monitor=self._attachment_monitor,
         )
         
         self._image_handler = ImageInputHandler(
             tab=tab,
             stealth_mode=stealth_mode,
             smart_delay_fn=self._smart_delay,
-            check_cancelled_fn=self._check_cancelled
+            check_cancelled_fn=self._check_cancelled,
+            attachment_monitor=self._attachment_monitor,
         )
         
         if extractor:
@@ -1259,6 +1267,29 @@ class WorkflowExecutor:
 
     def _probe_attachment_readiness(self, send_selector: str = "") -> Dict[str, Any]:
         """Inspect whether attachments are still uploading and whether send looks available."""
+        if self._attachment_monitor is not None:
+            try:
+                state = self._attachment_monitor.snapshot()
+                if not isinstance(state, dict):
+                    state = {}
+                state = dict(state)
+                state["ready"] = AttachmentMonitor._is_ready_state(
+                    state,
+                    require_send_enabled=True,
+                )
+                return state
+            except Exception as e:
+                logger.debug(f"[SEND] 闄勪欢鐘舵€佹帰娴嬪け璐? {e}")
+                return {
+                    "ok": False,
+                    "attachmentCount": 0,
+                    "pendingCount": 0,
+                    "pendingText": False,
+                    "sendFound": False,
+                    "sendDisabled": False,
+                    "sendBusy": False,
+                    "ready": True,
+                }
         selector_json = json.dumps((send_selector or "").strip(), ensure_ascii=False)
         js = f"""
         return (function() {{
@@ -1329,7 +1360,7 @@ class WorkflowExecutor:
                     pendingText,
                     sendFound: !!sendBtn,
                     sendDisabled,
-                    ready: attachmentCount === 0 || (!sendDisabled && pendingCount === 0 && !pendingText)
+                    ready: pendingCount === 0 && !pendingText && (!sendBtn || !sendDisabled)
                 }};
             }} catch (error) {{
                 return {{
@@ -1360,13 +1391,74 @@ class WorkflowExecutor:
                 "ready": True,
             }
 
+    def _recent_attachment_age_seconds(self) -> Optional[float]:
+        """Seconds since the newest attachment upload completed, if known."""
+        timestamps = []
+
+        for handler, attr in (
+            (getattr(self, "_text_handler", None), "_recent_file_upload_at"),
+            (getattr(self, "_image_handler", None), "_recent_image_upload_at"),
+        ):
+            try:
+                ts = float(getattr(handler, attr, 0.0) or 0.0)
+            except Exception:
+                ts = 0.0
+            if ts > 0:
+                timestamps.append(ts)
+
+        if not timestamps:
+            return None
+        return max(0.0, time.time() - max(timestamps))
+
     def _wait_for_attachments_ready_before_send(self, send_selector: str = ""):
         """Wait for file/image uploads to settle before attempting submit."""
         if not self._should_wait_for_attachments_before_send():
             return
 
+        if self._attachment_monitor is not None:
+            max_wait = getattr(BrowserConstants, "ATTACHMENT_READY_MAX_WAIT", 20.0)
+            check_interval = getattr(BrowserConstants, "ATTACHMENT_READY_CHECK_INTERVAL", 0.35)
+            stable_window = getattr(BrowserConstants, "ATTACHMENT_READY_STABLE_WINDOW", 0.8)
+            result = self._attachment_monitor.wait_until_ready(
+                require_observed=False,
+                require_send_enabled=True,
+                accept_existing=True,
+                max_wait=max_wait,
+                poll_interval=check_interval,
+                stable_window=stable_window,
+                label="send-gate",
+            )
+            if result.get("success"):
+                return
+
+            logger.warning(
+                "[SEND] Attachment readiness was not confirmed before submit; continuing once "
+                f"({AttachmentMonitor.summarize(result)})"
+            )
+            return
+
         max_wait = getattr(BrowserConstants, "ATTACHMENT_READY_MAX_WAIT", 20.0)
         check_interval = getattr(BrowserConstants, "ATTACHMENT_READY_CHECK_INTERVAL", 0.35)
+        settle_floor = getattr(BrowserConstants, "ATTACHMENT_POST_UPLOAD_SETTLE", 1.8)
+        try:
+            settle_floor = max(
+                settle_floor,
+                self._text_handler.get_post_upload_settle_seconds(settle_floor)
+            )
+        except Exception:
+            pass
+
+        upload_age = self._recent_attachment_age_seconds()
+        if upload_age is not None and upload_age < settle_floor:
+            remaining = settle_floor - upload_age
+            logger.debug(f"[SEND] 附件刚上传完成，额外等待解析稳定 {remaining:.1f}s")
+            elapsed = 0.0
+            while elapsed < remaining:
+                if self._check_cancelled():
+                    return
+                step = min(check_interval, remaining - elapsed)
+                time.sleep(step)
+                elapsed += step
 
         state = self._probe_attachment_readiness(send_selector)
         if state.get("ready", True):
@@ -1420,10 +1512,163 @@ class WorkflowExecutor:
         context = getattr(self, "_context", None) or {}
         return bool(context.get("images"))
 
+    def _has_recent_attachment_upload(self) -> bool:
+        """Whether the current turn recently attached files/images before sending."""
+        try:
+            if self._text_handler.has_recent_attachment_upload():
+                return True
+        except Exception:
+            pass
+
+        try:
+            if self._image_handler.has_recent_attachment_upload():
+                return True
+        except Exception:
+            pass
+
+        context = getattr(self, "_context", None) or {}
+        return bool(context.get("images"))
+
+    def _probe_send_post_click_state(self, send_selector: str = "") -> Dict[str, Any]:
+        """Passively inspect whether the page has transitioned into generating state."""
+        selector_json = json.dumps((send_selector or "").strip(), ensure_ascii=False)
+        js = f"""
+        return (function() {{
+            try {{
+                const sendSelector = {selector_json};
+                const indicators = [
+                    'button[aria-label*="Stop"]',
+                    'button[aria-label*="stop"]',
+                    'button[aria-label*="停止"]',
+                    '[data-state="streaming"]',
+                    '.stop-generating'
+                ];
+
+                function lowered(value) {{
+                    return String(value || '').toLowerCase();
+                }}
+
+                function isVisible(node) {{
+                    if (!node) return false;
+                    const style = window.getComputedStyle ? window.getComputedStyle(node) : null;
+                    if (style && (style.display === 'none' || style.visibility === 'hidden')) {{
+                        return false;
+                    }}
+                    const rect = node.getBoundingClientRect ? node.getBoundingClientRect() : null;
+                    return !rect || (rect.width > 0 && rect.height > 0);
+                }}
+
+                let sendBtn = null;
+                if (sendSelector) {{
+                    try {{
+                        sendBtn = document.querySelector(sendSelector);
+                    }} catch (e) {{}}
+                }}
+
+                const sendMeta = sendBtn ? [
+                    sendBtn.getAttribute('aria-label'),
+                    sendBtn.getAttribute('title'),
+                    sendBtn.getAttribute('data-testid'),
+                    sendBtn.className,
+                    sendBtn.innerText,
+                    sendBtn.textContent
+                ].map(lowered).join(' ') : '';
+
+                const generatingIndicator = indicators.some(selector => {{
+                    try {{
+                        const node = document.querySelector(selector);
+                        return isVisible(node);
+                    }} catch (e) {{
+                        return false;
+                    }}
+                }});
+
+                const sendLooksLikeStop = !!sendMeta && (
+                    /\\bstop\\b|\\bstopping\\b|\\bcancel\\b|\\babort\\b/.test(sendMeta)
+                    || /停止|中止|取消/.test(sendMeta)
+                );
+
+                const sendDisabled = !!sendBtn && (
+                    !!sendBtn.disabled
+                    || sendBtn.getAttribute('aria-disabled') === 'true'
+                    || /disabled|loading|uploading|sending/.test(sendMeta)
+                );
+
+                return {{
+                    ok: true,
+                    sendFound: !!sendBtn,
+                    sendDisabled,
+                    sendLooksLikeStop,
+                    generating: generatingIndicator || sendLooksLikeStop
+                }};
+            }} catch (error) {{
+                return {{
+                    ok: false,
+                    sendFound: false,
+                    sendDisabled: false,
+                    sendLooksLikeStop: false,
+                    generating: false,
+                    error: String(error && error.message ? error.message : error)
+                }};
+            }}
+        }})();
+        """
+
+        try:
+            return self.tab.run_js(js) or {}
+        except Exception as e:
+            logger.debug(f"[SEND] 发送后状态探测失败: {e}")
+            return {
+                "ok": False,
+                "sendFound": False,
+                "sendDisabled": False,
+                "sendLooksLikeStop": False,
+                "generating": False,
+            }
+
+    def _observe_send_without_retry(self, send_selector: str, before_len: int) -> bool:
+        """Attachment/file-paste scenario: observe state changes but avoid a second click."""
+        observe_window = getattr(BrowserConstants, "ATTACHMENT_SEND_OBSERVE_WINDOW", 6.0)
+        poll_interval = 0.25
+        elapsed = 0.0
+        last_len = before_len
+
+        while elapsed < observe_window:
+            if self._check_cancelled():
+                return True
+
+            step = min(poll_interval, observe_window - elapsed)
+            network_state = {"matched": False}
+            if self._network_monitor is not None:
+                try:
+                    network_state = self._network_monitor.poll_send_activity(timeout=step) or {"matched": False}
+                except Exception as e:
+                    logger.debug(f"[SEND] 网络活动预读失败: {e}")
+                    time.sleep(step)
+            else:
+                time.sleep(step)
+            elapsed += step
+
+            if network_state.get("matched"):
+                logger.debug("[SEND] 已通过网络监听捕获到发送后的目标流事件")
+                return True
+
+            current_len = self._safe_get_input_len_by_key("input_box")
+            if self._is_send_success(before_len, current_len) or self._is_send_success(last_len, current_len):
+                return True
+
+            state = self._probe_send_post_click_state(send_selector)
+            if state.get("generating") or (state.get("sendDisabled") and current_len < before_len):
+                return True
+
+            last_len = current_len
+
+        return False
+
     def _execute_click_send_reliably(self, selector: str, target_key: str, optional: bool):
         """
         可靠发送（v5.6 隐身模式增强版）
-        
+
         - 隐身模式：零 JS 注入，盲等待+重试
         - 普通模式：保持 JS 检查逻辑
         """
@@ -1438,6 +1683,7 @@ class WorkflowExecutor:
         # ===== 普通模式：原有逻辑 =====
         max_wait = getattr(BrowserConstants, "IMAGE_SEND_MAX_WAIT", 12.0)
         retry_interval = getattr(BrowserConstants, "IMAGE_SEND_RETRY_INTERVAL", 0.6)
+        avoid_repeat_click = self._has_recent_attachment_upload()
 
         before_len = self._safe_get_input_len_by_key("input_box")
         self._execute_click(selector, target_key, optional)
@@ -1447,6 +1693,13 @@ class WorkflowExecutor:
 
         if self._is_send_success(before_len, after_len):
             logger.info("发送成功")
+            return
+
+        if avoid_repeat_click:
+            if self._observe_send_without_retry(selector, before_len):
+                logger.info("发送成功（附件场景，已避免重复点击发送按钮）")
+            else:
+                logger.warning("[SEND] 附件发送场景未观察到明确成功信号，跳过自动补点以避免误点停止按钮")
             return
 
         logger.warning(f"[SEND] 发送未成功，进入重试窗口 max_wait={max_wait}s")

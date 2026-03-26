@@ -32,7 +32,8 @@ class TextInputHandler:
     
     def __init__(self, tab, stealth_mode: bool, smart_delay_fn, check_cancelled_fn,
                  file_paste_config: dict = None,
-                 selectors: dict = None):
+                 selectors: dict = None,
+                 attachment_monitor = None):
         """
         Args:
             tab: 浏览器标签页
@@ -47,12 +48,50 @@ class TextInputHandler:
         self._check_cancelled = check_cancelled_fn
         self._file_paste_config = file_paste_config or {}
         self._selectors = selectors or {}
+        self._attachment_monitor = attachment_monitor
         self._recent_file_upload_at = 0.0
+        self._last_file_upload_path = ""
 
     def has_recent_attachment_upload(self, window: float = 45.0) -> bool:
         """Whether this request recently attached a file via file-paste/upload."""
         ts = float(getattr(self, "_recent_file_upload_at", 0.0) or 0.0)
         return ts > 0 and (time.time() - ts) <= window
+
+    def get_post_upload_settle_seconds(self, default: float = 0.0) -> float:
+        """Per-site extra settle wait after a file upload finishes."""
+        try:
+            value = float(self._file_paste_config.get("post_upload_settle", default))
+        except Exception:
+            value = float(default or 0.0)
+        return max(0.0, value)
+
+    def get_upload_signal_timeout(self, default: float = 2.5) -> float:
+        """Maximum time to wait for a strong upload signal."""
+        try:
+            value = float(self._file_paste_config.get("upload_signal_timeout", default))
+        except Exception:
+            value = float(default or 0.0)
+        return max(0.5, value)
+
+    def get_upload_signal_grace(self, default: float = 3.0) -> float:
+        """Extra grace window when the page shows weak/pending upload hints."""
+        try:
+            value = float(self._file_paste_config.get("upload_signal_grace", default))
+        except Exception:
+            value = float(default or 0.0)
+        return max(0.0, value)
+
+    def probe_recent_upload_signal(self) -> dict:
+        """Probe the latest file-upload signal for the most recent temp file."""
+        filepath = str(getattr(self, "_last_file_upload_path", "") or "").strip()
+        if not filepath:
+            return {}
+        return self._probe_upload_signal(filepath)
+
+    def has_strong_upload_signal(self, state: dict = None) -> bool:
+        """Whether the current upload state is strong enough to trust as attached."""
+        signal_state = state or self.probe_recent_upload_signal()
+        return self._has_upload_signal(signal_state)
     
     # ================= 工具方法 =================
     
@@ -362,6 +401,71 @@ class TextInputHandler:
             return False
 
         return True
+
+    def _input_contains_text_loose(self, ele, expected_text: str) -> bool:
+        """宽松检查输入框中是否已包含指定文本。"""
+        expected_core = re.sub(r'\s+', '', expected_text or '')
+        if not expected_core:
+            return True
+
+        actual = self.read_input_full_text(ele)
+        actual_core = re.sub(r'\s+', '', actual or '')
+        return expected_core in actual_core
+
+    def _append_file_paste_hint(self, ele, hint_text: str) -> bool:
+        """文件上传后追加提示词，并尽量确认提示词真的进入输入框。"""
+        hint_text = str(hint_text or "")
+        if not hint_text.strip():
+            return True
+
+        # 上传控件经常会抢走焦点，先显式把焦点拉回真实输入框末尾。
+        self.focus_to_end(ele)
+        time.sleep(0.06)
+
+        if not self.ensure_input_focus(ele):
+            logger.warning("[FILE_PASTE] 追加引导文本前重新聚焦失败，尝试直接回退追加")
+        else:
+            clipboard_lock = get_clipboard_lock()
+            with clipboard_lock:
+                original_cb = ""
+                try:
+                    original_cb = pyperclip.paste()
+                except Exception:
+                    pass
+
+                try:
+                    pyperclip.copy(hint_text)
+                    time.sleep(random.uniform(0.06, 0.12))
+
+                    if self.stealth_mode:
+                        self._human_key_combo('Control', 'V')
+                    else:
+                        self.tab.actions.key_down('Control').key_down('V').key_up('V').key_up('Control')
+
+                    time.sleep(random.uniform(0.2, 0.4))
+                finally:
+                    try:
+                        pyperclip.copy(original_cb)
+                    except Exception:
+                        pass
+
+            self._smart_delay(0.15, 0.3)
+            if self._input_contains_text_loose(ele, hint_text):
+                return True
+
+            logger.warning("[FILE_PASTE] 剪贴板追加引导文本未生效，回退到原子追加")
+
+        if self.stealth_mode:
+            logger.warning("[FILE_PASTE] 隐身模式下跳过 JS 回退追加，避免增加风控风险")
+            return False
+
+        if self.set_input_atomic(ele, hint_text, mode="append"):
+            self._smart_delay(0.12, 0.25)
+            if self._input_contains_text_loose(ele, hint_text):
+                return True
+
+        logger.warning("[FILE_PASTE] 引导文本追加失败，发送内容可能缺少附带说明")
+        return False
     
     # ================= JS 模式输入 =================
     
@@ -901,44 +1005,107 @@ class TextInputHandler:
         stem = os.path.splitext(filename)[0].strip()
         needles = [item.lower() for item in (filename, stem) if item]
         expected_names_js = json.dumps(needles, ensure_ascii=False)
+        send_selector_js = json.dumps(self._get_selector_value("send_btn"), ensure_ascii=False)
+        configured_upload_signal_selectors = self._file_paste_config.get("upload_signal_selectors") or []
+        if not isinstance(configured_upload_signal_selectors, list):
+            configured_upload_signal_selectors = [configured_upload_signal_selectors]
+
+        upload_signal_selectors = [
+            ".file-card-list",
+            ".fileitem-btn",
+            ".fileitem-file-name",
+            ".fileitem-file-name-text",
+            ".message-input-column-file",
+            "[class*='attachment']",
+            "[class*='upload-preview']",
+            "[class*='uploaded-file']",
+            "[class*='file-preview']",
+            "[class*='preview-file']",
+            "[data-testid*='attachment']",
+            "[data-testid*='file']",
+            "[data-test-id*='attachment']",
+            "[data-test-id*='file']",
+        ]
+        for selector in configured_upload_signal_selectors:
+            selector = str(selector or "").strip()
+            if selector and selector not in upload_signal_selectors:
+                upload_signal_selectors.append(selector)
+
+        upload_selectors_js = json.dumps(upload_signal_selectors, ensure_ascii=False)
 
         js = """
         return (function() {
             try {
                 const expectedNames = __EXPECTED_NAMES__;
+                const uploadSelectors = __UPLOAD_SIGNAL_SELECTORS__;
+                const sendSelector = __SEND_SELECTOR__;
                 const inputs = Array.from(document.querySelectorAll('input[type="file"]'));
                 const fileCount = inputs.reduce((sum, input) => {
                     return sum + ((input.files && input.files.length) || 0);
                 }, 0);
 
-                const text = (document.body && document.body.innerText)
-                    ? String(document.body.innerText).toLowerCase()
+                const root = document.querySelector(
+                    '.message-input-wrapper, .message-input-container, .chat-layout-input-container, '
+                    + '#dropzone-container, form:has(button[type=\"submit\"]), rich-textarea, '
+                    + '[class*=\"message-input\"], [class*=\"input-container\"], [class*=\"input-wrapper\"]'
+                ) || document.body;
+
+                const text = (root && root.innerText)
+                    ? String(root.innerText).toLowerCase()
                     : '';
                 const matchedName = Array.isArray(expectedNames)
                     && expectedNames.some(name => name && text.includes(name));
 
-                const fileText = Array.from(
-                    document.querySelectorAll(
-                        '.file-card-list, .fileitem-file-name, .fileitem-file-name-text, .message-input-column-file'
-                    )
-                )
+                const uploadNodes = Array.from(
+                    root.querySelectorAll(Array.isArray(uploadSelectors) ? uploadSelectors.join(',') : '')
+                );
+                const fileText = uploadNodes
                     .map(el => String(el.textContent || '').toLowerCase())
                     .join('\\n');
                 const matchedFileNode = Array.isArray(expectedNames)
                     && expectedNames.some(name => name && fileText.includes(name));
+                const fileNodeCount = uploadNodes.length;
+                const pendingSelectors = [
+                    'progress',
+                    '[role="progressbar"]',
+                    '[aria-busy="true"]',
+                    '[class*="uploading"]',
+                    '[class*="pending"]',
+                    '[class*="loading"]',
+                    '[class*="progress"]',
+                    '[class*="processing"]'
+                ].join(',');
+                const pendingCount = root.querySelectorAll(pendingSelectors).length;
+                const pendingText = /上传中|处理中|解析中|分析中|loading|uploading|processing|preparing|analyzing|reading/.test(text);
 
-                return { ok: true, fileCount, matchedName, matchedFileNode };
+                let sendBtn = null;
+                if (sendSelector) {
+                    try {
+                        sendBtn = document.querySelector(sendSelector);
+                    } catch (e) {}
+                }
+                const sendDisabled = !!sendBtn && (
+                    !!sendBtn.disabled
+                    || sendBtn.getAttribute('aria-disabled') === 'true'
+                    || /disabled|loading|uploading|sending|processing/.test(String(sendBtn.className || '').toLowerCase())
+                );
+
+                return { ok: true, fileCount, matchedName, matchedFileNode, fileNodeCount, pendingCount, pendingText, sendDisabled };
             } catch (error) {
                 return {
                     ok: false,
                     fileCount: 0,
                     matchedName: false,
                     matchedFileNode: false,
+                    fileNodeCount: 0,
+                    pendingCount: 0,
+                    pendingText: false,
+                    sendDisabled: false,
                     error: String(error && error.message ? error.message : error)
                 };
             }
         })();
-        """.replace("__EXPECTED_NAMES__", expected_names_js)
+        """.replace("__EXPECTED_NAMES__", expected_names_js).replace("__UPLOAD_SIGNAL_SELECTORS__", upload_selectors_js).replace("__SEND_SELECTOR__", send_selector_js)
 
         try:
             result = self.tab.run_js(js) or {}
@@ -950,6 +1117,10 @@ class TextInputHandler:
             "fileCount": int(result.get("fileCount", 0) or 0),
             "matchedName": bool(result.get("matchedName")),
             "matchedFileNode": bool(result.get("matchedFileNode")),
+            "fileNodeCount": int(result.get("fileNodeCount", 0) or 0),
+            "pendingCount": int(result.get("pendingCount", 0) or 0),
+            "pendingText": bool(result.get("pendingText")),
+            "sendDisabled": bool(result.get("sendDisabled")),
             "filename": filename or filepath,
         }
 
@@ -960,27 +1131,40 @@ class TextInputHandler:
         baseline_file_count = int(baseline.get("fileCount", 0) or 0)
         matched_name = bool(state.get("matchedName"))
         matched_file_node = bool(state.get("matchedFileNode"))
+        file_node_count = int(state.get("fileNodeCount", 0) or 0)
+        baseline_file_node_count = int(baseline.get("fileNodeCount", 0) or 0)
+        allow_name_only = bool(self._file_paste_config.get("allow_name_only_signal", False))
 
         if not baseline:
-            return file_count > 0 or matched_name or matched_file_node
+            return (
+                file_count > 0
+                or matched_file_node
+                or file_node_count > 0
+                or (allow_name_only and matched_name)
+            )
 
         return (
             file_count > baseline_file_count
             or (matched_file_node and not bool(baseline.get("matchedFileNode")))
-            or (matched_name and not bool(baseline.get("matchedName")))
+            or file_node_count > baseline_file_node_count
+            or (allow_name_only and matched_name and not bool(baseline.get("matchedName")))
         )
 
-    def _wait_for_upload_signal(self, filepath: str, timeout: float = 2.5, baseline: dict = None) -> bool:
+    def _wait_for_upload_signal(self, filepath: str, timeout: float = None, baseline: dict = None) -> bool:
         """
         Wait for page-level evidence that a file was actually attached.
 
         Without this check, silent upload failures can be misclassified as success
         and only the hint text gets submitted to the model.
         """
+        timeout = self.get_upload_signal_timeout(2.5) if timeout is None else timeout
+        grace_timeout = self.get_upload_signal_grace(3.0)
         deadline = time.time() + max(0.2, timeout)
+        extended_deadline = deadline
         last_state = baseline or self._probe_upload_signal(filepath)
+        saw_weak_signal = False
 
-        while time.time() < deadline:
+        while time.time() < extended_deadline:
             if self._check_cancelled():
                 return False
 
@@ -991,13 +1175,39 @@ class TextInputHandler:
                     f"[FILE_PASTE] 检测到文件上传信号 "
                     f"(file_count={state.get('fileCount', 0)}, "
                     f"matched_name={bool(state.get('matchedName'))}, "
-                    f"matched_file_node={bool(state.get('matchedFileNode'))})"
+                    f"matched_file_node={bool(state.get('matchedFileNode'))}, "
+                    f"file_node_count={state.get('fileNodeCount', 0)})"
                 )
                 return True
 
+            weak_signal = (
+                bool(state.get("matchedName"))
+                or int(state.get("fileNodeCount", 0) or 0) > 0
+                or int(state.get("pendingCount", 0) or 0) > 0
+                or bool(state.get("pendingText"))
+            )
+            if weak_signal and not saw_weak_signal:
+                saw_weak_signal = True
+                extended_deadline = max(extended_deadline, time.time() + max(0.5, grace_timeout))
+                logger.debug(
+                    "[FILE_PASTE] 检测到弱上传信号，继续等待强信号 "
+                    f"(matched_name={bool(state.get('matchedName'))}, "
+                    f"file_node_count={state.get('fileNodeCount', 0)}, "
+                    f"pending={state.get('pendingCount', 0)}, "
+                    f"pending_text={bool(state.get('pendingText'))})"
+                )
+
             time.sleep(0.2)
 
-        logger.warning(f"[FILE_PASTE] 未检测到文件上传信号: {last_state.get('filename', filepath)}")
+        logger.warning(
+            "[FILE_PASTE] 未检测到文件上传信号: "
+            f"{last_state.get('filename', filepath)} "
+            f"(matched_name={bool(last_state.get('matchedName'))}, "
+            f"matched_file_node={bool(last_state.get('matchedFileNode'))}, "
+            f"file_node_count={last_state.get('fileNodeCount', 0)}, "
+            f"pending={last_state.get('pendingCount', 0)}, "
+            f"pending_text={bool(last_state.get('pendingText'))})"
+        )
         return False
 
     def _click_upload_button_if_configured(self) -> bool:
@@ -1026,7 +1236,7 @@ class TextInputHandler:
             return self._find_elements(selector, timeout=1.5)
 
         try:
-            return list(self.tab.eles('css:input[type="file"]') or [])
+            return list(self.tab.eles('css:input[type="file"]', timeout=0.8) or [])
         except Exception as e:
             logger.debug(f"[FILE_PASTE] 查找通用 file input 失败: {e}")
             return []
@@ -1358,6 +1568,13 @@ class TextInputHandler:
                 return False
 
             logger.debug(f"[FILE_PASTE] 临时文件: {filepath}")
+            self._last_file_upload_path = filepath
+            expected_names = [
+                os.path.basename(filepath),
+                os.path.splitext(os.path.basename(filepath))[0],
+            ]
+            if self._attachment_monitor is not None:
+                self._attachment_monitor.begin_tracking(expected_names=expected_names)
             upload_baseline = self._probe_upload_signal(filepath)
 
             # 4. 优先尝试站点专配上传入口，再回退到通用 file input
@@ -1377,48 +1594,50 @@ class TextInputHandler:
                     else:
                         self.tab.actions.key_down('Control').key_down('V').key_up('V').key_up('Control')
             
-            # 6. 等待文件处理完成
-            time.sleep(random.uniform(0.5, 1.0))
-            self._smart_delay(0.3, 0.6)
-            
             if self._check_cancelled():
                 return True
 
-            if not self._wait_for_upload_signal(filepath, baseline=upload_baseline):
-                logger.warning("[FILE_PASTE] 文件上传未生效，放弃文件粘贴模式")
-                return False
+            if self._attachment_monitor is not None:
+                upload_timeout = self.get_upload_signal_timeout(
+                    getattr(BrowserConstants, "ATTACHMENT_READY_MAX_WAIT", 20.0)
+                )
+                upload_grace = self.get_upload_signal_grace(4.0)
+                check_interval = getattr(BrowserConstants, "ATTACHMENT_READY_CHECK_INTERVAL", 0.25)
+                stable_window = getattr(BrowserConstants, "ATTACHMENT_READY_STABLE_WINDOW", 0.8)
+                attachment_state = self._attachment_monitor.wait_until_ready(
+                    expected_names=expected_names,
+                    require_observed=True,
+                    require_send_enabled=False,
+                    accept_existing=False,
+                    start_new_tracking=False,
+                    max_wait=max(upload_timeout, 0.5) + max(upload_grace, 0.0),
+                    poll_interval=check_interval,
+                    stable_window=stable_window,
+                    label="file-paste",
+                )
+                if not attachment_state.get("success"):
+                    if attachment_state.get("activitySeen") or attachment_state.get("attachmentObserved"):
+                        logger.error(
+                            "[FILE_PASTE] Attachment activity was observed but never confirmed; aborting text fallback to avoid duplicate send"
+                        )
+                        raise WorkflowError("file_paste_upload_unconfirmed")
+                    logger.warning("[FILE_PASTE] 文件上传未生效，放弃文件粘贴模式")
+                    return False
+            else:
+                # Legacy fallback when the shared monitor is unavailable.
+                time.sleep(random.uniform(0.5, 1.0))
+                self._smart_delay(0.3, 0.6)
+                if not self._wait_for_upload_signal(filepath, baseline=upload_baseline):
+                    logger.warning("[FILE_PASTE] 文件上传未生效，放弃文件粘贴模式")
+                    return False
             self._recent_file_upload_at = time.time()
             
             # 7. 追加引导文本（确保输入框有文字内容，否则某些网站无法发送）
             hint_text = self._file_paste_config.get("hint_text", "完全专注于文件内容")
             if hint_text:
                 logger.debug(f"[FILE_PASTE] 追加引导文本: {hint_text}")
-                
-                clipboard_lock_inner = get_clipboard_lock()
-                with clipboard_lock_inner:
-                    original_cb = ""
-                    try:
-                        original_cb = pyperclip.paste()
-                    except Exception:
-                        pass
-                        
-                    pyperclip.copy(hint_text)
-                    time.sleep(random.uniform(0.06, 0.12))
-                    
-                    if self.stealth_mode:
-                        self._human_key_combo('Control', 'V')
-                    else:
-                        self.tab.actions.key_down('Control').key_down('V').key_up('V').key_up('Control')
-                    
-                    time.sleep(random.uniform(0.2, 0.4))
-                    
-                    try:
-                        pyperclip.copy(original_cb)
-                    except Exception:
-                        pass
-                
-                self._smart_delay(0.2, 0.4)
-            
+                self._append_file_paste_hint(ele, hint_text)
+
             logger.info(f"[FILE_PASTE] 文件粘贴完成 ({len(text)} 字符)")
             return True
         

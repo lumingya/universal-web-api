@@ -140,6 +140,7 @@ class NetworkMonitor:
         # 状态追踪
         self._is_listening = False
         self._total_chunks = 0
+        self._prefetched_responses = []
         
         logger.debug(
             f"[NetworkMonitor] 初始化完成 "
@@ -175,10 +176,52 @@ class NetworkMonitor:
         if not self._listen_pattern:
             raise NetworkMonitorError("listen_pattern 未配置")
 
+        self._prefetched_responses = []
         self.tab.listen._reuse_driver = True
         self.tab.listen.start(self._listen_pattern)
         self._pre_started = True
         self._is_listening = True
+
+    def poll_send_activity(self, timeout: float = 0.25) -> Dict[str, Any]:
+        """
+        发送后短窗口里轻量探测一次网络活动。
+
+        如果拿到了响应对象，会先缓存起来，避免后续 monitor() 丢掉首个事件。
+        """
+        if not self._listen_pattern:
+            return {"seen": False, "matched": False}
+
+        try:
+            if not self._listen_is_active():
+                self._ensure_listening("poll_send_activity")
+
+            response = self.tab.listen.wait(timeout=max(0.01, float(timeout or 0.01)))
+        except Exception as e:
+            err_text = str(e)
+            if self._is_restartable_listen_error(err_text):
+                try:
+                    self._ensure_listening("poll_send_activity_restart")
+                except Exception:
+                    return {"seen": False, "matched": False, "error": err_text}
+                return {"seen": False, "matched": False, "error": err_text}
+            return {"seen": False, "matched": False, "error": err_text}
+
+        if response in (None, False):
+            return {"seen": False, "matched": False}
+
+        self._prefetched_responses.append(response)
+        event = self._extract_event(response)
+        matched = False
+        try:
+            matched = self.parser.get_id() != "event_only" and self._matches_stream_target(event)
+        except Exception:
+            matched = False
+
+        return {
+            "seen": True,
+            "matched": matched,
+            "event": event,
+        }
 
     def _ensure_listening(self, reason: str):
         if self._is_listening and self._listen_is_active():
@@ -615,12 +658,15 @@ class NetworkMonitor:
 
             # 设置超时时间
             timeout = self._first_response_timeout if not has_seen_stream_target else self._response_interval
-            
+
             # 等待响应
             try:
-                if not self._listen_is_active():
-                    self._ensure_listening("wait_inactive")
-                response = self.tab.listen.wait(timeout=timeout)
+                if self._prefetched_responses:
+                    response = self._prefetched_responses.pop(0)
+                else:
+                    if not self._listen_is_active():
+                        self._ensure_listening("wait_inactive")
+                    response = self.tab.listen.wait(timeout=timeout)
             except Exception as e:
                 err_text = str(e)
                 if self._is_restartable_listen_error(err_text):
@@ -802,6 +848,7 @@ class NetworkMonitor:
                 self._safe_stop_listen()
                 self._is_listening = False
                 self._pre_started = False
+                self._prefetched_responses = []
                 logger.debug("[NetworkMonitor] 已停止监听（CDP session 已释放）")
             except Exception as e:
                 logger.debug(f"[NetworkMonitor] 停止监听失败: {e}")

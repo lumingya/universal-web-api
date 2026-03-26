@@ -152,7 +152,8 @@
         "file_paste": {
           "enabled": true,
           "threshold": 50000,
-          "hint_text": "完全专注于文件内容"
+          "hint_text": "完全专注于文件内容",
+          "post_upload_settle": 5.0
         }
       }
     },
@@ -410,9 +411,20 @@
           "mode": "first"
         },
         "file_paste": {
-          "enabled": false,
+          "enabled": true,
           "threshold": 50000,
-          "hint_text": "完全专注于文件内容"
+          "hint_text": "完全专注于文件内容",
+          "post_upload_settle": 5.0,
+          "upload_signal_selectors": [
+            "[class*=\"attachment\"]",
+            "[class*=\"file\"]",
+            "[class*=\"preview\"]",
+            "[class*=\"chip\"]",
+            "mat-chip",
+            "mat-chip-row",
+            ".mat-mdc-chip",
+            ".mat-mdc-chip-row"
+          ]
         }
       },
       "快速模型": {

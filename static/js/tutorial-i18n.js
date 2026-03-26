@@ -54,7 +54,7 @@
         </div>
 
         <div class="info-box">
-            <p><strong>📌 Core reminder:</strong> after startup the script opens a controlled browser window automatically. <strong style="color: var(--highlight-border);">Keep that browser window open</strong>, because it is the foundation of the service. The tutorial can stay open in your normal browser, while the controlled browser should be kept focused on supported AI sites.</p>
+            <p><strong>📌 Core reminder:</strong> after startup the script opens a controlled browser window automatically. <strong style="color: var(--highlight-border);">Keep that browser window open</strong>, because it is the foundation of the service. The tutorial can stay open in your normal browser; <strong style="color: var(--highlight-border);">when the script is about to run, the controlled browser should contain nothing except the target site.</strong></p>
         </div>
 
         <div class="config-group">
@@ -62,7 +62,7 @@
             <ol>
                 <li>After you run <code>start.bat</code>, first tell the two browser windows apart: the <strong>controlled browser used by the script</strong>, and the <strong>regular browser that shows this tutorial or that you use every day</strong>.</li>
                 <li>By default the controlled browser uses the project's <code>chrome_profile/</code>. On a first launch it is usually a blank, signed-out browser profile. If you did not already have a browser open, the script may also open a separate browser window for this tutorial, so it can look like two browsers appeared at once.</li>
-                <li>The window you should actually operate next is the <strong>controlled browser</strong>. Open the site you want to use there. For Gemini, a good starting URL is <code>https://gemini.google.com/</code>.</li>
+                <li>The window you should actually operate next is the <strong>controlled browser</strong>. Open the site you want to use there. For Gemini, a good starting URL is <code>https://gemini.google.com/</code>. Before the script starts handling requests, make sure that controlled browser contains only the target site, not search pages, tutorial pages, mail, or any unrelated tabs.</li>
                 <li>Sign in on that site normally inside the controlled browser, and make sure you have reached the chat page.</li>
                 <li>For Gemini, make sure the left sidebar is expanded instead of collapsed. That makes it easier to match the later site configuration and API connection steps.</li>
                 <li>Once the site is open and signed in, come back to this tutorial and continue with the <strong>Connect API</strong> section below. Fill your client using the <code>Base URL</code>, <code>API Key</code>, and model examples there.</li>
@@ -151,7 +151,7 @@
         <h3>Path A: AI-based automatic recognition</h3>
         <ol>
             <li>Open the <a href="/">dashboard</a> → Settings → Environment, then fill in <code>HELPER_API_KEY</code>, <code>HELPER_BASE_URL</code>, and <code>HELPER_MODEL</code>.</li>
-            <li>Open the target site in the controlled browser and stay on the real chat page.</li>
+            <li>Open the target site in the controlled browser and stay on the real chat page. Before sending the request, make sure the controlled browser contains nothing except the target site.</li>
             <li>Send the <strong>first real API request</strong> to that site.</li>
             <li>If the domain is still missing from <code>config/sites.json</code>, the backend reads the page HTML, asks the helper AI to analyze it, and writes a generated preset into the site config.</li>
         </ol>
@@ -1040,7 +1040,7 @@ BROWSER_PROFILE_NAME=Default</code></pre>
                 <li><strong>Collapsed UI or layout changes:</strong> if elements are hidden or folded, selectors may stop working.</li>
                 <li><strong>Website-side issues:</strong> captcha, blocked content, or messages that are too long can all cause failures.</li>
                 <li><strong>Network instability:</strong> proxy changes or unstable networking can cause deadlocks or partial sends.</li>
-                <li><strong>Extra unrelated tabs:</strong> avoid opening random pages in the controlled browser.</li>
+                <li><strong>Extra unrelated tabs:</strong> when the script is about to run, the controlled browser should contain nothing except the target site.</li>
                 <li><strong>Outdated site config:</strong> website UI changes can invalidate selectors.</li>
             </ol>
         </div>

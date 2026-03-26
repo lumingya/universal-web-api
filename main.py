@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 import webbrowser
+from typing import Any, Dict
 from urllib.request import urlopen
 print(f"[DEBUG] Python: {sys.executable}")
 from pathlib import Path
@@ -36,6 +37,21 @@ logging.basicConfig(
 
 # 使用统一的 SecureLogger
 logger = get_logger("MAIN")
+
+
+_STARTUP_EMPTY_URLS = ("", "about:blank", "chrome://newtab/", "chrome://new-tab-page/")
+_GUIDE_SITE_ORDER = [
+    "chatgpt.com",
+    "chat.deepseek.com",
+    "gemini.google.com",
+    "claude.ai",
+    "www.kimi.com",
+    "chat.qwen.ai",
+    "grok.com",
+    "www.doubao.com",
+    "aistudio.google.com",
+    "arena.ai",
+]
 
 
 def _setup_windows_event_loop_policy():
@@ -94,18 +110,7 @@ def _open_startup_page_non_blocking(page_url: str, page_name: str, initial_delay
             time.sleep(max(0.0, float(initial_delay_sec)))
 
             # 等待本地 HTTP 服务可达，避免 lifespan 内部自访问卡住。
-            ready = False
-            for _ in range(12):
-                try:
-                    with urlopen(page_url, timeout=1.2) as resp:
-                        status_code = int(getattr(resp, "status", 200) or 200)
-                        if 200 <= status_code < 500:
-                            ready = True
-                            break
-                except Exception:
-                    time.sleep(0.5)
-
-            if not ready:
+            if not _wait_for_local_page(page_url):
                 logger.warning(f"[startup] {page_name}未就绪，跳过自动打开: {page_url}")
                 return
 
@@ -121,6 +126,117 @@ def _open_startup_page_non_blocking(page_url: str, page_name: str, initial_delay
     ).start()
 
 
+def _wait_for_local_page(page_url: str, attempts: int = 12, interval_sec: float = 0.5) -> bool:
+    for _ in range(max(1, int(attempts))):
+        try:
+            with urlopen(page_url, timeout=1.2) as resp:
+                status_code = int(getattr(resp, "status", 200) or 200)
+                if 200 <= status_code < 500:
+                    return True
+        except Exception:
+            time.sleep(max(0.0, float(interval_sec)))
+    return False
+
+
+def _resolve_local_startup_host() -> str:
+    host = str(AppConfig.get_host() or "").strip()
+    if host in ("", "0.0.0.0", "::", "[::]", "::0"):
+        return "127.0.0.1"
+    return host
+
+
+def _get_local_startup_base_url() -> str:
+    return f"http://{_resolve_local_startup_host()}:{AppConfig.get_port()}"
+
+
+def _should_open_startup_pages(browser) -> bool:
+    try:
+        tab_ids = browser.page.get_tabs()
+        if len(tab_ids) == 0:
+            return True
+        if len(tab_ids) == 1:
+            url = ""
+            try:
+                url = browser.page.url or ""
+            except Exception:
+                pass
+            return url in _STARTUP_EMPTY_URLS
+    except Exception as e:
+        logger.debug(f"检查标签页状态失败: {e}")
+    return False
+
+
+def _open_controlled_browser_page_non_blocking(
+    browser,
+    page_url: str,
+    page_name: str,
+    initial_delay_sec: float = 1.0,
+):
+    """Navigate the controlled browser only if it still stays on the initial blank page."""
+
+    def _worker():
+        try:
+            time.sleep(max(0.0, float(initial_delay_sec)))
+
+            if not _wait_for_local_page(page_url):
+                logger.warning(f"[startup] {page_name}未就绪，跳过自动打开: {page_url}")
+                return
+
+            if not _should_open_startup_pages(browser):
+                logger.info(f"[startup] 受控浏览器已离开空白页，跳过打开{page_name}")
+                return
+
+            target_tab = None
+            try:
+                target_tab = browser.page.latest_tab
+            except Exception:
+                target_tab = None
+            if target_tab is None:
+                target_tab = browser.page
+
+            target_tab.get(page_url)
+            logger.info(f"[startup] {page_name}已在受控浏览器打开: {page_url}")
+        except Exception as e:
+            logger.warning(f"[startup] 打开{page_name}失败: {e}")
+
+    threading.Thread(
+        target=_worker,
+        daemon=True,
+        name="open-controlled-browser-page-non-blocking",
+    ).start()
+
+
+def _build_controlled_browser_guide_data() -> Dict[str, Any]:
+    from app.services.config_engine import config_engine
+
+    all_sites = config_engine.list_sites()
+    local_patterns = ("127.0.0.1", "localhost", "0.0.0.0", "::1")
+    priority = {domain: index for index, domain in enumerate(_GUIDE_SITE_ORDER)}
+
+    domains = []
+    for domain in all_sites.keys():
+        normalized = str(domain or "").strip()
+        lowered = normalized.lower()
+        if not normalized or normalized.startswith("_"):
+            continue
+        if any(pattern in lowered for pattern in local_patterns):
+            continue
+        domains.append(normalized)
+
+    domains.sort(key=lambda item: (priority.get(item, len(priority)), item))
+    base_url = _get_local_startup_base_url()
+
+    return {
+        "dashboard_url": f"{base_url}/",
+        "guide_url": f"{base_url}/static/controlled-browser-guide.html",
+        "sites": [
+            {
+                "domain": domain,
+                "url": f"https://{domain}",
+            }
+            for domain in domains
+        ],
+    }
 def _resolve_dashboard_path():
     configured = (AppConfig.get_dashboard_file() or "").strip()
     candidates = []
@@ -181,42 +297,33 @@ async def lifespan(app: FastAPI):
         health = browser.health_check()
     
         if health["connected"]:
-            # 检查是否需要自动打开教程页（仅当浏览器刚启动、没有实际内容时）
-            should_open_tutorial = False
-            
-            try:
-                tab_ids = browser.page.get_tabs()
-                
-                if len(tab_ids) == 0:
-                    # 没有任何标签页
-                    should_open_tutorial = True
-                elif len(tab_ids) == 1:
-                    # 只有一个标签页，检查是否是空白页
-                    url = browser.page.url or ""
-                    blank_patterns = ("about:blank", "chrome://newtab/", "chrome://new-tab-page/", "")
-                    if url in blank_patterns:
-                        should_open_tutorial = True
-                # 多个标签页 = 用户已在使用，不自动打开教程
-                
-            except Exception as e:
-                logger.debug(f"检查标签页状态失败: {e}")
-            
-            if should_open_tutorial:
+            if _should_open_startup_pages(browser):
                 try:
-                    tutorial_url = f"http://{AppConfig.get_host()}:{AppConfig.get_port()}/static/tutorial.html"
+                    base_url = _get_local_startup_base_url()
+                    tutorial_url = f"{base_url}/static/tutorial.html"
+                    guide_url = f"{base_url}/static/controlled-browser-guide.html"
                     logger.info(f"[startup] 首次启动，使用系统浏览器打开教程页: {tutorial_url}")
                     _open_startup_page_non_blocking(
                         tutorial_url,
                         page_name="教程页",
                         initial_delay_sec=1.2,
                     )
+                    logger.info(f"[startup] 首次启动，准备在受控浏览器打开引导页: {guide_url}")
+                    _open_controlled_browser_page_non_blocking(
+                        browser,
+                        guide_url,
+                        page_name="受控浏览器引导页",
+                        initial_delay_sec=0.8,
+                    )
                 except Exception as e:
                     logger.warning(f"⚠️ 无法打开教程页: {e}")
             else:
                 # 显示已连接状态
-                pool_info = health.get("tab_pool", {})
-                tab_count = pool_info.get('total', 0) if pool_info else 0
-                logger.info(f"✅ 浏览器已连接 (检测到 {len(tab_ids) if 'tab_ids' in dir() else '?'} 个现有页面，跳过教程)")
+                try:
+                    existing_tab_count = len(browser.page.get_tabs())
+                except Exception:
+                    existing_tab_count = "?"
+                logger.info(f"✅ 浏览器已连接 (检测到 {existing_tab_count} 个现有页面，跳过教程)")
         else:
             logger.warning(f"⚠️ 浏览器未连接: {health.get('error', '未知')}")
         
@@ -326,6 +433,16 @@ async def dashboard():
     )
 
 
+@app.get("/api/startup/controlled-browser-guide-data", include_in_schema=False)
+async def controlled_browser_guide_data():
+    try:
+        return JSONResponse(_build_controlled_browser_guide_data())
+    except Exception as e:
+        logger.warning(f"[startup] 生成受控浏览器引导页数据失败: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": {"message": "无法加载受控浏览器引导页数据"}}
+        )
 # ================= 注册 API 路由（在 Dashboard 之后）=================
 
 from app.api import router as api_router

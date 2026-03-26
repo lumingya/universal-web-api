@@ -10,7 +10,7 @@ app/core/workflow/image_input.py - 图片粘贴处理
 import time
 from typing import List
 
-from app.core.config import logger
+from app.core.config import logger, BrowserConstants
 from app.core.tab_pool import get_clipboard_lock
 
 
@@ -19,7 +19,8 @@ from app.core.tab_pool import get_clipboard_lock
 class ImageInputHandler:
     """图片输入处理器"""
     
-    def __init__(self, tab, stealth_mode: bool, smart_delay_fn, check_cancelled_fn):
+    def __init__(self, tab, stealth_mode: bool, smart_delay_fn, check_cancelled_fn,
+                 attachment_monitor=None):
         """
         Args:
             tab: 浏览器标签页
@@ -31,6 +32,7 @@ class ImageInputHandler:
         self.stealth_mode = stealth_mode
         self._smart_delay = smart_delay_fn
         self._check_cancelled = check_cancelled_fn
+        self._attachment_monitor = attachment_monitor
         self._recent_image_upload_at = 0.0
 
     def has_recent_attachment_upload(self, window: float = 45.0) -> bool:
@@ -103,22 +105,40 @@ class ImageInputHandler:
                 # 等待剪贴板数据就绪
                 time.sleep(0.1)
                 
+                if self._attachment_monitor is not None:
+                    self._attachment_monitor.begin_tracking()
+
                 # Ctrl+V 粘贴
                 logger.debug(f"[IMAGE] 执行 Ctrl+V (图片 {index})")
                 self.tab.actions.key_down('Control').key_down('V').key_up('V').key_up('Control')
-                
+
                 # 等待粘贴完成
                 time.sleep(0.3)
-            
-            # 额外等待网站处理上传
-            upload_wait = 0.8 if self.stealth_mode else 0.5
-            elapsed = 0
-            step = 0.1
-            while elapsed < upload_wait:
-                if self._check_cancelled():
+
+            if self._attachment_monitor is not None:
+                result = self._attachment_monitor.wait_until_ready(
+                    require_observed=True,
+                    require_send_enabled=False,
+                    accept_existing=False,
+                    start_new_tracking=False,
+                    max_wait=getattr(BrowserConstants, "ATTACHMENT_READY_MAX_WAIT", 20.0),
+                    poll_interval=getattr(BrowserConstants, "ATTACHMENT_READY_CHECK_INTERVAL", 0.25),
+                    stable_window=getattr(BrowserConstants, "ATTACHMENT_READY_STABLE_WINDOW", 0.8),
+                    label=f"image-paste-{index}",
+                )
+                if not result.get("success"):
+                    logger.warning(f"[IMAGE] Image #{index} upload was not confirmed: {result}")
                     return False
-                time.sleep(step)
-                elapsed += step
+            else:
+                # Legacy fallback when the shared monitor is unavailable.
+                upload_wait = 0.8 if self.stealth_mode else 0.5
+                elapsed = 0
+                step = 0.1
+                while elapsed < upload_wait:
+                    if self._check_cancelled():
+                        return False
+                    time.sleep(step)
+                    elapsed += step
             
             logger.debug(f"[IMAGE] 第 {index} 张粘贴完成")
             return True

@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>受控浏览器引导</title>
+    <style>
+        :root {
+            --bg-top: #09111d;
+            --bg-bottom: #13253e;
+            --guide-bg-image: none;
+            --panel: rgba(9, 18, 34, 0.46);
+            --panel-soft: rgba(13, 26, 47, 0.28);
+            --border: rgba(219, 234, 254, 0.18);
+            --text: #f8fafc;
+            --body: #d9e4f5;
+            --muted: #9fb0c9;
+            --accent: #7dd3fc;
+            --success: #34d399;
+            --warm: #fbbf24;
+        }
+        * { box-sizing: border-box; }
+        html, body { margin: 0; min-height: 100%; }
+        body {
+            font-family: "Microsoft YaHei UI", "Segoe UI Variable", "PingFang SC", sans-serif;
+            color: var(--text);
+            background: linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bottom) 100%);
+            position: relative;
+        }
+        body::before,
+        body::after {
+            content: "";
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+        }
+        body::before {
+            background:
+                linear-gradient(180deg, rgba(8, 15, 30, 0.05), rgba(8, 15, 30, 0.1)),
+                var(--guide-bg-image, none) 78% center / cover no-repeat;
+            transform: scale(1.02);
+            z-index: -2;
+        }
+        body::after {
+            background:
+                radial-gradient(circle at 14% 14%, rgba(56, 189, 248, 0.14), transparent 28%),
+                linear-gradient(180deg, rgba(9, 17, 29, 0.42), rgba(19, 37, 62, 0.5));
+            z-index: -1;
+        }
+        .guide-shell {
+            width: min(1100px, calc(100vw - 28px));
+            margin: 0 auto;
+            padding: 24px 0 40px;
+        }
+        .card {
+            border: 1px solid var(--border);
+            border-radius: 26px;
+            background: linear-gradient(180deg, var(--panel), rgba(11, 22, 41, 0.3));
+            box-shadow: 0 24px 72px rgba(2, 6, 23, 0.2);
+        }
+        .hero { padding: 24px 28px 30px; }
+        .hero-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 10px 16px;
+            border-radius: 999px;
+            background: rgba(125, 211, 252, 0.08);
+            border: 1px solid rgba(125, 211, 252, 0.16);
+            color: var(--accent);
+            font-size: 0.92rem;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+        .lang-switch {
+            display: inline-flex;
+            gap: 6px;
+            padding: 6px;
+            border-radius: 999px;
+            background: rgba(15, 23, 42, 0.76);
+            border: 1px solid rgba(148, 163, 184, 0.18);
+        }
+        .lang-btn, .action-btn {
+            border: 0;
+            font: inherit;
+            cursor: pointer;
+            transition: transform 0.18s ease, background 0.18s ease, opacity 0.18s ease;
+        }
+        .lang-btn {
+            min-width: 92px;
+            padding: 10px 16px;
+            border-radius: 999px;
+            background: transparent;
+            color: var(--body);
+            font-size: 0.95rem;
+            font-weight: 700;
+        }
+        .lang-btn.active {
+            background: rgba(125, 211, 252, 0.96);
+            color: #0f2942;
+        }
+        .lang-btn:hover, .action-btn:hover { transform: translateY(-1px); }
+        .lang-btn:focus-visible, .action-btn:focus-visible {
+            outline: 3px solid rgba(248, 250, 252, 0.92);
+            outline-offset: 3px;
+        }
+        .hero-title {
+            margin: 0;
+            max-width: 860px;
+            font-size: clamp(2.3rem, 4.8vw, 4rem);
+            line-height: 1.02;
+            letter-spacing: 0.01em;
+            white-space: nowrap;
+        }
+        .hero-copy, .section-copy, .note-copy, .utility-copy {
+            color: var(--body);
+            line-height: 1.76;
+            font-weight: 600;
+        }
+        .hero-copy {
+            max-width: 860px;
+            margin: 22px 0 0;
+            font-size: clamp(1.06rem, 1.55vw, 1.24rem);
+        }
+        .hero-copy strong, .section-copy strong, .note-copy strong, .utility-copy strong { color: #fff; }
+        .action-row { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 24px; }
+        .action-btn {
+            min-height: 56px;
+            padding: 16px 24px;
+            border-radius: 18px;
+            font-size: 1rem;
+            font-weight: 800;
+            letter-spacing: 0.01em;
+        }
+        .action-btn.primary {
+            background: linear-gradient(135deg, #f4c84f 0%, #e7b93e 100%);
+            color: #111827;
+            box-shadow: 0 14px 34px rgba(231, 185, 62, 0.22);
+        }
+        .action-btn.secondary {
+            background: rgba(125, 211, 252, 0.1);
+            border: 1px solid rgba(125, 211, 252, 0.22);
+            color: var(--text);
+        }
+        .status {
+            margin-top: 16px;
+            color: var(--success);
+            font-size: 0.96rem;
+            line-height: 1.65;
+            font-weight: 700;
+        }
+        .stack { display: grid; gap: 18px; margin-top: 18px; }
+        .reveal {
+            opacity: 0;
+            pointer-events: none;
+            transform: translateY(20px);
+            max-height: 0;
+            overflow: hidden;
+            padding: 0 26px;
+            transition: opacity 0.35s ease, transform 0.35s ease, max-height 0.45s ease, padding 0.35s ease;
+        }
+        .reveal.visible {
+            opacity: 1;
+            pointer-events: auto;
+            transform: translateY(0);
+            max-height: 4000px;
+            padding-top: 24px;
+            padding-bottom: 26px;
+        }
+        .kicker {
+            margin: 0;
+            color: var(--warm);
+            font-size: 0.9rem;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+        .section-title {
+            margin: 14px 0 0;
+            font-size: clamp(1.72rem, 2.9vw, 2.4rem);
+            line-height: 1.24;
+        }
+        .section-subtitle, .summary {
+            margin: 10px 0 0;
+            color: var(--muted);
+            font-size: 0.98rem;
+            line-height: 1.7;
+        }
+        .section-copy { margin: 16px 0 0; font-size: 1rem; }
+        .note {
+            margin-top: 18px;
+            padding: 18px 20px;
+            border-radius: 20px;
+            background: linear-gradient(135deg, rgba(125, 211, 252, 0.08), rgba(52, 211, 153, 0.06));
+            border: 1px solid rgba(125, 211, 252, 0.14);
+        }
+        .note-title, .utility-title {
+            margin: 0;
+            font-size: 1.3rem;
+            line-height: 1.4;
+        }
+        .note-copy, .utility-copy { margin: 12px 0 0; font-size: 0.98rem; }
+        .site-grid, .utility-grid {
+            display: grid;
+            gap: 14px;
+            margin-top: 20px;
+        }
+        .site-grid { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+        .utility-grid { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+        .site-card, .utility {
+            padding: 18px;
+            border-radius: 20px;
+            border: 1px solid rgba(219, 234, 254, 0.14);
+            background: var(--panel-soft);
+        }
+        .site-title { margin: 0; font-size: 1.06rem; line-height: 1.45; word-break: break-word; }
+        .site-url {
+            margin: 10px 0 0;
+            color: var(--muted);
+            font-size: 0.92rem;
+            line-height: 1.65;
+            word-break: break-all;
+        }
+        .site-card .action-btn { width: 100%; margin-top: 14px; min-height: 50px; padding: 13px 16px; font-size: 0.94rem; }
+        .utility-kicker {
+            display: inline-block;
+            color: var(--accent);
+            font-size: 0.86rem;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+        .url-pill {
+            display: inline-flex;
+            align-items: center;
+            min-height: 48px;
+            margin-top: 16px;
+            padding: 12px 14px;
+            border-radius: 16px;
+            background: rgba(8, 15, 30, 0.42);
+            border: 1px solid rgba(148, 163, 184, 0.12);
+            color: var(--accent);
+            font-size: 0.94rem;
+            line-height: 1.6;
+            word-break: break-all;
+        }
+        .feedback {
+            min-height: 1.5em;
+            margin-top: 12px;
+            color: var(--success);
+            font-size: 0.94rem;
+            line-height: 1.6;
+            font-weight: 700;
+        }
+        .empty-state {
+            padding: 22px 20px;
+            border-radius: 18px;
+            border: 1px dashed rgba(148, 163, 184, 0.18);
+            background: rgba(8, 15, 30, 0.28);
+            color: var(--body);
+            font-size: 0.98rem;
+            line-height: 1.72;
+            font-weight: 600;
+        }
+        @media (max-width: 860px) {
+            .guide-shell { width: min(100vw - 20px, 1100px); padding: 12px 0 28px; }
+            .hero { padding: 18px 18px 22px; }
+            .hero-top { flex-direction: column; align-items: stretch; }
+            .lang-switch { width: 100%; }
+            .lang-btn { flex: 1 1 0; min-width: 0; }
+            .hero-title { font-size: clamp(1.75rem, 7vw, 2.5rem); }
+            .reveal.visible { padding-left: 18px; padding-right: 18px; }
+            .action-btn { width: 100%; }
+        }
+    </style>
+</head>
+<body>
+    <main class="guide-shell">
+        <section class="card hero">
+            <div class="hero-top">
+                <div id="heroBadge" class="badge">受控浏览器</div>
+                <div id="languageSwitch" class="lang-switch" role="group" aria-label="切换语言">
+                    <button type="button" class="lang-btn" data-lang-option="zh">中文</button>
+                    <button type="button" class="lang-btn" data-lang-option="en">English</button>
+                </div>
+            </div>
+            <h1 id="heroTitle" class="hero-title">此浏览器为受控浏览器</h1>
+            <p id="heroCopy" class="hero-copy">请把这个窗口留给你要接入的 AI 网站。<strong>教程页、搜索页、邮箱、资讯页都不要在这里打开。</strong></p>
+            <div class="action-row">
+                <button id="confirmControlledBtn" type="button" class="action-btn primary">我知道了</button>
+            </div>
+            <p id="stepOneStatus" class="status" hidden>已确认：这是受控浏览器。</p>
+        </section>
+
+        <div class="stack">
+            <section id="stepTwo" class="card reveal">
+                <p id="stepTwoKicker" class="kicker">第二步</p>
+                <h2 id="stepTwoTitle" class="section-title">不要在这里打开除目标 AI 站点之外的任何网站</h2>
+                <p id="stepTwoSubtitle" class="section-subtitle">只把这个浏览器留给你真正要访问的 AI 站点。</p>
+                <p id="stepTwoCopy" class="section-copy">这个浏览器主要是给脚本调度和识别页面用的。你之后想访问哪个 AI，就在这里打开哪个 AI；其它无关网站请继续放在普通浏览器里。</p>
+                <div class="action-row">
+                    <button id="confirmDisciplineBtn" type="button" class="action-btn primary">只在这里打开 AI 站点</button>
+                </div>
+                <p id="stepTwoStatus" class="status" hidden>已确认：受控浏览器只用于目标 AI 站点。</p>
+            </section>
+
+            <section id="finalStage" class="card reveal">
+                <p id="finalKicker" class="kicker">开始使用</p>
+                <h2 id="finalTitle" class="section-title">现在就从下方站点里选一个打开</h2>
+                <p id="finalSubtitle" class="section-subtitle">下方按钮会直接在这个受控浏览器里打开目标站点。</p>
+
+                <div class="note">
+                    <h3 id="noteTitle" class="note-title">这是引导页，之后可以直接关闭，没有任何影响</h3>
+                    <p id="noteCopy" class="note-copy">这个标签页只是启动时的说明页。看完后你可以直接关闭，不会影响服务、标签页池、登录态和后续 API 调用。</p>
+                </div>
+
+                <p id="siteSummary" class="summary">正在加载当前已适配站点...</p>
+                <div id="siteGrid" class="site-grid" aria-live="polite"></div>
+
+                <div class="utility-grid">
+                    <article class="utility">
+                        <span id="dashboardKicker" class="utility-kicker">控制面板</span>
+                        <h3 id="dashboardTitle" class="utility-title">控制面板建议在普通浏览器打开</h3>
+                        <p id="dashboardBody" class="utility-copy">如果你要复制 Base URL、改设置、看日志，请在普通浏览器使用控制面板，别把这个受控浏览器拿去做普通浏览。</p>
+                        <div id="dashboardUrl" class="url-pill">正在加载控制面板地址...</div>
+                        <div class="action-row">
+                            <button id="copyDashboardBtn" type="button" class="action-btn secondary">复制控制面板地址</button>
+                        </div>
+                        <p id="dashboardCopyFeedback" class="feedback" aria-live="polite"></p>
+                    </article>
+
+                    <article class="utility">
+                        <span id="closingKicker" class="utility-kicker">关闭提示</span>
+                        <h3 id="closingTitle" class="utility-title">看完这页就可以关掉</h3>
+                        <p id="closingBody" class="utility-copy">关闭这个引导页不会影响登录态、站点访问、标签页池或后续 API 调用。你真正要操作的是后面打开的 AI 网站标签页。</p>
+                    </article>
+                </div>
+            </section>
+        </div>
+    </main>
+    <script>
+        const backgroundStamp = Date.now();
+        const guideBackgroundCandidates = ['jpg', 'jpeg', 'png', 'webp']
+            .map(ext => `/static/images/controlled-browser-guide-bg.${ext}?v=${backgroundStamp}`);
+
+        const fallbackSites = [
+            { domain: 'chatgpt.com', url: 'https://chatgpt.com' },
+            { domain: 'chat.deepseek.com', url: 'https://chat.deepseek.com' },
+            { domain: 'gemini.google.com', url: 'https://gemini.google.com' },
+            { domain: 'claude.ai', url: 'https://claude.ai' },
+            { domain: 'www.kimi.com', url: 'https://www.kimi.com' },
+            { domain: 'chat.qwen.ai', url: 'https://chat.qwen.ai' },
+            { domain: 'grok.com', url: 'https://grok.com' },
+            { domain: 'www.doubao.com', url: 'https://www.doubao.com' },
+            { domain: 'aistudio.google.com', url: 'https://aistudio.google.com' },
+            { domain: 'arena.ai', url: 'https://arena.ai' }
+        ];
+
+        const translations = {
+            zh: {
+                lang: 'zh-CN',
+                title: '受控浏览器引导',
+                languageLabel: '切换语言',
+                heroBadge: '受控浏览器',
+                heroTitle: '此浏览器为受控浏览器',
+                heroCopy: '请把这个窗口留给你要接入的 AI 网站。<strong>教程页、搜索页、邮箱、资讯页都不要在这里打开。</strong>',
+                confirmControlled: '我知道了',
+                stepOneStatus: '已确认：这是受控浏览器。',
+                stepTwoKicker: '第二步',
+                stepTwoTitle: '不要在这里打开除目标 AI 站点之外的任何网站',
+                stepTwoSubtitle: '只把这个浏览器留给你真正要访问的 AI 站点。',
+                stepTwoCopy: '这个浏览器主要是给脚本调度和识别页面用的。你之后想访问哪个 AI，就在这里打开哪个 AI；其它无关网站请继续放在普通浏览器里。',
+                confirmDiscipline: '只在这里打开 AI 站点',
+                stepTwoStatus: '已确认：受控浏览器只用于目标 AI 站点。',
+                finalKicker: '开始使用',
+                finalTitle: '现在就从下方站点里选一个打开',
+                finalSubtitle: '下方按钮会直接在这个受控浏览器里打开目标站点。',
+                noteTitle: '这是引导页，之后可以直接关闭，没有任何影响',
+                noteCopy: '这个标签页只是启动时的说明页。看完后你可以直接关闭，不会影响服务、标签页池、登录态和后续 API 调用。',
+                dashboardKicker: '控制面板',
+                dashboardTitle: '控制面板建议在普通浏览器打开',
+                dashboardBody: '如果你要复制 Base URL、改设置、看日志，请在普通浏览器使用控制面板，别把这个受控浏览器拿去做普通浏览。',
+                copyDashboard: '复制控制面板地址',
+                dashboardLoading: '正在加载控制面板地址...',
+                dashboardCopied: '已复制控制面板地址，请到普通浏览器打开。',
+                dashboardCopyFailed: '复制失败，请手动复制上面的地址。',
+                closingKicker: '关闭提示',
+                closingTitle: '看完这页就可以关掉',
+                closingBody: '关闭这个引导页不会影响登录态、站点访问、标签页池或后续 API 调用。你真正要操作的是后面打开的 AI 网站标签页。',
+                siteOpen: '在此浏览器打开',
+                siteSummaryLoaded: count => `当前已适配 ${count} 个站点。你可以直接点下方按钮在此受控浏览器打开。`,
+                siteSummaryEmpty: '暂时没有读到已适配站点，你仍然可以手动在这个受控浏览器里打开目标 AI 网站。',
+                emptySites: '当前没有读取到站点列表。你仍然可以手动在这个受控浏览器里打开目标 AI 网站。'
+            },
+            en: {
+                lang: 'en',
+                title: 'Controlled Browser Guide',
+                languageLabel: 'Switch language',
+                heroBadge: 'Controlled Browser',
+                heroTitle: 'This browser is controlled by the script.',
+                heroCopy: 'Keep this window dedicated to the AI site you want to automate. <strong>Do not use it for tutorial pages, search, mail, news, or general browsing.</strong>',
+                confirmControlled: 'I understand',
+                stepOneStatus: 'Confirmed: this is the controlled browser.',
+                stepTwoKicker: 'Second Step',
+                stepTwoTitle: 'Do not open anything here except the AI site you actually want to use',
+                stepTwoSubtitle: 'Keep this browser dedicated to the target AI site only.',
+                stepTwoCopy: 'This browser is mainly reserved for the script. Open only the AI site you want to automate here, and keep unrelated browsing in your regular browser.',
+                confirmDiscipline: 'I will only open AI sites here',
+                stepTwoStatus: 'Confirmed: only target AI sites will be opened here.',
+                finalKicker: 'Start Here',
+                finalTitle: 'Choose one supported site below and open it now',
+                finalSubtitle: 'The buttons below will open the target site directly in this controlled browser.',
+                noteTitle: 'This is only a guide page. You can close it later with no impact.',
+                noteCopy: 'This tab is only a startup guide. After reading it, you can close it at any time without affecting the service, tab pool, login state, or later API calls.',
+                dashboardKicker: 'Dashboard',
+                dashboardTitle: 'Open the dashboard in your regular browser',
+                dashboardBody: 'If you need the Base URL, settings, or logs, use the dashboard in your regular browser and keep this controlled browser focused on AI sites only.',
+                copyDashboard: 'Copy dashboard URL',
+                dashboardLoading: 'Loading dashboard URL...',
+                dashboardCopied: 'Dashboard URL copied. Open it in your regular browser.',
+                dashboardCopyFailed: 'Copy failed. Please copy the URL above manually.',
+                closingKicker: 'Closing Note',
+                closingTitle: 'You can close this page after reading',
+                closingBody: 'Closing this guide will not affect login state, site access, the tab pool, or later API calls. The AI site tab you open next is what really matters.',
+                siteOpen: 'Open here',
+                siteSummaryLoaded: count => `${count} supported sites are available below. Click a button to open one in this controlled browser.`,
+                siteSummaryEmpty: 'No supported site list was loaded right now, but you can still open your target AI site manually in this controlled browser.',
+                emptySites: 'No supported site list was loaded right now. You can still open your target AI site manually in this controlled browser.'
+            }
+        };
+
+        const state = {
+            currentLanguage: normalizeLanguage(localStorage.getItem('controlled-browser-guide-language') || 'zh'),
+            sites: fallbackSites.slice(),
+            dashboardUrl: `${window.location.origin}/`,
+            dashboardCopyStatus: ''
+        };
+
+        function loadGuideBackground(index = 0) {
+            if (index >= guideBackgroundCandidates.length) return;
+
+            const url = guideBackgroundCandidates[index];
+            const img = new Image();
+            img.onload = () => {
+                document.documentElement.style.setProperty('--guide-bg-image', `url("${url}")`);
+            };
+            img.onerror = () => loadGuideBackground(index + 1);
+            img.src = url;
+        }
+
+        const els = {
+            languageSwitch: document.getElementById('languageSwitch'),
+            languageButtons: document.querySelectorAll('[data-lang-option]'),
+            heroBadge: document.getElementById('heroBadge'),
+            heroTitle: document.getElementById('heroTitle'),
+            heroCopy: document.getElementById('heroCopy'),
+            confirmControlledBtn: document.getElementById('confirmControlledBtn'),
+            stepOneStatus: document.getElementById('stepOneStatus'),
+            stepTwo: document.getElementById('stepTwo'),
+            stepTwoKicker: document.getElementById('stepTwoKicker'),
+            stepTwoTitle: document.getElementById('stepTwoTitle'),
+            stepTwoSubtitle: document.getElementById('stepTwoSubtitle'),
+            stepTwoCopy: document.getElementById('stepTwoCopy'),
+            confirmDisciplineBtn: document.getElementById('confirmDisciplineBtn'),
+            stepTwoStatus: document.getElementById('stepTwoStatus'),
+            finalStage: document.getElementById('finalStage'),
+            finalKicker: document.getElementById('finalKicker'),
+            finalTitle: document.getElementById('finalTitle'),
+            finalSubtitle: document.getElementById('finalSubtitle'),
+            noteTitle: document.getElementById('noteTitle'),
+            noteCopy: document.getElementById('noteCopy'),
+            siteSummary: document.getElementById('siteSummary'),
+            siteGrid: document.getElementById('siteGrid'),
+            dashboardKicker: document.getElementById('dashboardKicker'),
+            dashboardTitle: document.getElementById('dashboardTitle'),
+            dashboardBody: document.getElementById('dashboardBody'),
+            dashboardUrl: document.getElementById('dashboardUrl'),
+            copyDashboardBtn: document.getElementById('copyDashboardBtn'),
+            dashboardCopyFeedback: document.getElementById('dashboardCopyFeedback'),
+            closingKicker: document.getElementById('closingKicker'),
+            closingTitle: document.getElementById('closingTitle'),
+            closingBody: document.getElementById('closingBody')
+        };
+
+        function normalizeLanguage(language) {
+            return String(language || '').toLowerCase().startsWith('en') ? 'en' : 'zh';
+        }
+
+        function bundle() {
+            return translations[state.currentLanguage] || translations.zh;
+        }
+
+        function escapeHtml(value) {
+            return String(value || '')
+                .replaceAll('&', '&amp;')
+                .replaceAll('<', '&lt;')
+                .replaceAll('>', '&gt;')
+                .replaceAll('"', '&quot;')
+                .replaceAll("'", '&#39;');
+        }
+
+        function setRevealVisible(element) {
+            if (!element || element.classList.contains('visible')) return;
+            element.classList.add('visible');
+            element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+
+        function updateLanguageButtons() {
+            els.languageButtons.forEach(button => {
+                const active = button.dataset.langOption === state.currentLanguage;
+                button.classList.toggle('active', active);
+                button.setAttribute('aria-pressed', active ? 'true' : 'false');
+            });
+        }
+
+        function renderDashboardUrl() {
+            els.dashboardUrl.textContent = state.dashboardUrl || bundle().dashboardLoading;
+        }
+
+        function renderDashboardFeedback() {
+            if (state.dashboardCopyStatus === 'success') {
+                els.dashboardCopyFeedback.textContent = bundle().dashboardCopied;
+            } else if (state.dashboardCopyStatus === 'error') {
+                els.dashboardCopyFeedback.textContent = bundle().dashboardCopyFailed;
+            } else {
+                els.dashboardCopyFeedback.textContent = '';
+            }
+        }
+
+        function renderSites() {
+            const texts = bundle();
+            const sites = Array.isArray(state.sites) ? state.sites : [];
+            els.siteSummary.textContent = sites.length ? texts.siteSummaryLoaded(sites.length) : texts.siteSummaryEmpty;
+
+            if (!sites.length) {
+                els.siteGrid.innerHTML = `<div class="empty-state">${texts.emptySites}</div>`;
+                return;
+            }
+
+            els.siteGrid.innerHTML = sites.map(site => `
+                <article class="site-card">
+                    <h3 class="site-title">${escapeHtml(site.domain)}</h3>
+                    <p class="site-url">${escapeHtml(site.url)}</p>
+                    <button type="button" class="action-btn secondary" data-site-url="${escapeHtml(site.url)}">${escapeHtml(texts.siteOpen)}</button>
+                </article>
+            `).join('');
+
+            els.siteGrid.querySelectorAll('[data-site-url]').forEach(button => {
+                button.addEventListener('click', () => {
+                    const url = button.getAttribute('data-site-url') || '';
+                    if (url) window.location.assign(url);
+                });
+            });
+        }
+
+        function applyLanguage(language) {
+            state.currentLanguage = normalizeLanguage(language);
+            localStorage.setItem('controlled-browser-guide-language', state.currentLanguage);
+            const texts = bundle();
+
+            document.documentElement.lang = texts.lang;
+            document.title = texts.title;
+            els.languageSwitch.setAttribute('aria-label', texts.languageLabel);
+            els.heroBadge.textContent = texts.heroBadge;
+            els.heroTitle.textContent = texts.heroTitle;
+            els.heroCopy.innerHTML = texts.heroCopy;
+            els.confirmControlledBtn.textContent = texts.confirmControlled;
+            els.stepOneStatus.textContent = texts.stepOneStatus;
+            els.stepTwoKicker.textContent = texts.stepTwoKicker;
+            els.stepTwoTitle.textContent = texts.stepTwoTitle;
+            els.stepTwoSubtitle.textContent = texts.stepTwoSubtitle;
+            els.stepTwoCopy.textContent = texts.stepTwoCopy;
+            els.confirmDisciplineBtn.textContent = texts.confirmDiscipline;
+            els.stepTwoStatus.textContent = texts.stepTwoStatus;
+            els.finalKicker.textContent = texts.finalKicker;
+            els.finalTitle.textContent = texts.finalTitle;
+            els.finalSubtitle.textContent = texts.finalSubtitle;
+            els.noteTitle.textContent = texts.noteTitle;
+            els.noteCopy.textContent = texts.noteCopy;
+            els.dashboardKicker.textContent = texts.dashboardKicker;
+            els.dashboardTitle.textContent = texts.dashboardTitle;
+            els.dashboardBody.textContent = texts.dashboardBody;
+            els.copyDashboardBtn.textContent = texts.copyDashboard;
+            els.closingKicker.textContent = texts.closingKicker;
+            els.closingTitle.textContent = texts.closingTitle;
+            els.closingBody.textContent = texts.closingBody;
+
+            updateLanguageButtons();
+            renderSites();
+            renderDashboardUrl();
+            renderDashboardFeedback();
+        }
+
+        async function copyToClipboard(text) {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                await navigator.clipboard.writeText(text);
+                return;
+            }
+            const helper = document.createElement('textarea');
+            helper.value = text;
+            helper.setAttribute('readonly', 'readonly');
+            helper.style.position = 'fixed';
+            helper.style.opacity = '0';
+            helper.style.pointerEvents = 'none';
+            document.body.appendChild(helper);
+            helper.focus();
+            helper.select();
+            try {
+                const copied = document.execCommand('copy');
+                if (!copied) throw new Error('copy_failed');
+            } finally {
+                document.body.removeChild(helper);
+            }
+        }
+
+        async function loadGuideData() {
+            try {
+                const response = await fetch('/api/startup/controlled-browser-guide-data', { cache: 'no-store' });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const payload = await response.json();
+                state.sites = Array.isArray(payload.sites) ? payload.sites : state.sites;
+                if (payload.dashboard_url) state.dashboardUrl = payload.dashboard_url;
+            } catch (error) {
+                console.warn('loadGuideData failed:', error);
+            }
+            renderSites();
+            renderDashboardUrl();
+        }
+
+        els.confirmControlledBtn.addEventListener('click', () => {
+            els.confirmControlledBtn.disabled = true;
+            els.confirmControlledBtn.style.opacity = '0.78';
+            els.stepOneStatus.hidden = false;
+            setRevealVisible(els.stepTwo);
+        });
+
+        els.confirmDisciplineBtn.addEventListener('click', () => {
+            els.confirmDisciplineBtn.disabled = true;
+            els.confirmDisciplineBtn.style.opacity = '0.78';
+            els.stepTwoStatus.hidden = false;
+            setRevealVisible(els.finalStage);
+            loadGuideData();
+        });
+
+        els.copyDashboardBtn.addEventListener('click', async () => {
+            state.dashboardCopyStatus = '';
+            renderDashboardFeedback();
+            try {
+                await copyToClipboard(state.dashboardUrl || `${window.location.origin}/`);
+                state.dashboardCopyStatus = 'success';
+            } catch (error) {
+                state.dashboardCopyStatus = 'error';
+            }
+            renderDashboardFeedback();
+        });
+
+        els.languageButtons.forEach(button => {
+            button.addEventListener('click', () => applyLanguage(button.dataset.langOption || 'zh'));
+        });
+
+        applyLanguage(state.currentLanguage);
+        loadGuideBackground();
+    </script>
+</body>
+</html>

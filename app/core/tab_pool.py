@@ -728,7 +728,7 @@ class TabPoolManager:
                     self._active_session_id = None
 
             # 顺手清理已切换到本地页/无效页的空闲标签，避免继续展示和参与调度。
-            self._cleanup_unhealthy()
+            self._cleanup_unhealthy_tabs()
              
             # ===== 第二步：构建"已在池中的 tab 对象"集合 =====
             tabs_in_pool = set()
