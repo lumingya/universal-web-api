@@ -10,15 +10,18 @@ responses by:
 
 from __future__ import annotations
 
+import copy
 import json
+import os
 import re
 import time
 import uuid
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from app.core.config import get_logger
 
 logger = get_logger("TOOL_CALLING")
+ToolRoundExecutor = Callable[[List[Dict[str, str]]], str]
 
 
 def _debug_preview(value: Any, limit: int = 240) -> str:
@@ -380,6 +383,8 @@ def _build_tool_system_prompt(
         "You must decide whether to answer normally or request one or more tools.\n"
         "Tool use may require multiple rounds. After you receive a [Tool Result] block, "
         "either request another tool if you still need more information or return the final answer.\n"
+        "Invalid tool calls may be rejected before execution. If that happens, "
+        "carefully fix the tool name, missing fields, argument types, or tool-choice constraint and try again.\n"
         "Return exactly one JSON object and nothing else.\n"
         "Preferred schema when calling tools (OpenAI-compatible assistant message):\n"
         '{"role":"assistant","content":null,"tool_calls":[{"type":"function","function":{"name":"tool_name","arguments":{"arg":"value"}}}]}\n'
@@ -424,6 +429,67 @@ def _describe_tool_choice(tool_choice: Any) -> str:
         if name:
             return f'You must call the tool named "{name}".'
     return "If tools are useful, call them. Otherwise answer normally."
+
+
+def complete_tool_calling_roundtrip(
+    messages: List[Dict[str, Any]],
+    tools: List[Dict[str, Any]],
+    tool_choice: Any,
+    parallel_tool_calls: Optional[bool],
+    round_executor: ToolRoundExecutor,
+    stop_checker=None,
+) -> Dict[str, Any]:
+    conversation = copy.deepcopy(messages or [])
+    retry_limit = _get_tool_validation_retry_limit()
+    total_attempts = retry_limit + 1
+    last_summary = "tool_call_validation_failed"
+
+    for attempt in range(1, total_attempts + 1):
+        if stop_checker and stop_checker():
+            raise RuntimeError("tool_calling_cancelled")
+
+        browser_messages = build_browser_messages_for_tools(
+            messages=conversation,
+            tools=tools,
+            tool_choice=tool_choice,
+            parallel_tool_calls=parallel_tool_calls,
+        )
+        assistant_text = str(round_executor(browser_messages) or "")
+        parsed = parse_tool_response(assistant_text, tools)
+        errors = _collect_tool_response_errors(
+            raw_text=assistant_text,
+            parsed=parsed,
+            tools=tools,
+            tool_choice=tool_choice,
+            parallel_tool_calls=parallel_tool_calls,
+        )
+        if not errors:
+            if attempt > 1:
+                logger.info(
+                    f"[tool_calling] accepted candidate after retry "
+                    f"attempt={attempt}/{total_attempts}"
+                )
+            return parsed
+
+        last_summary = _summarize_tool_response_errors(errors)
+        logger.warning(
+            f"[tool_calling] rejected candidate attempt={attempt}/{total_attempts}: "
+            f"{last_summary}"
+        )
+        if attempt >= total_attempts:
+            raise RuntimeError(f"tool_call_validation_exhausted: {last_summary}")
+
+        conversation.extend(
+            _build_tool_retry_messages(
+                raw_text=assistant_text,
+                parsed=parsed,
+                errors=errors,
+                attempt=attempt,
+                total_attempts=total_attempts,
+            )
+        )
+
+    raise RuntimeError(f"tool_call_validation_exhausted: {last_summary}")
 
 
 def _serialize_content(content: Any) -> str:
@@ -623,8 +689,491 @@ def _coerce_arguments_object(args: Any) -> Optional[Dict[str, Any]]:
                         return parsed
                 except Exception:
                     pass
-            return {"value": stripped}
+            return None
     return None
+
+
+def _get_tool_validation_retry_limit() -> int:
+    raw_value = str(os.getenv("TOOL_CALLING_INTERNAL_RETRY_MAX", "2") or "2").strip()
+    try:
+        value = int(raw_value)
+    except Exception:
+        value = 2
+    return max(0, min(5, value))
+
+
+def _collect_tool_response_errors(
+    raw_text: str,
+    parsed: Dict[str, Any],
+    tools: List[Dict[str, Any]],
+    tool_choice: Any,
+    parallel_tool_calls: Optional[bool],
+) -> List[Dict[str, Any]]:
+    errors: List[Dict[str, Any]] = []
+    allowed_tools = {
+        str(item.get("function", {}).get("name", "") or "").strip(): item
+        for item in tools or []
+        if isinstance(item, dict)
+    }
+    tool_calls = parsed.get("tool_calls") or []
+    required_tool_name = _get_required_tool_name(tool_choice)
+
+    if tool_choice == "none" and tool_calls:
+        errors.append(
+            {
+                "code": "tool_choice_none",
+                "message": "tool_choice is 'none', but the assistant still returned tool_calls.",
+            }
+        )
+
+    if parallel_tool_calls is False and len(tool_calls) > 1:
+        errors.append(
+            {
+                "code": "parallel_tool_calls_disabled",
+                "message": "Only one tool call is allowed in this response, but multiple tool_calls were returned.",
+            }
+        )
+
+    if required_tool_name:
+        if not tool_calls:
+            errors.append(
+                {
+                    "code": "required_tool_missing",
+                    "message": f'The tool "{required_tool_name}" was required but the assistant did not call it.',
+                }
+            )
+        else:
+            wrong_names = sorted(
+                {
+                    str(item.get("function", {}).get("name", "") or "").strip()
+                    for item in tool_calls
+                    if str(item.get("function", {}).get("name", "") or "").strip() != required_tool_name
+                }
+            )
+            if wrong_names:
+                errors.append(
+                    {
+                        "code": "wrong_required_tool",
+                        "message": (
+                            f'The tool "{required_tool_name}" was required, but the assistant returned '
+                            f"{', '.join(wrong_names)}."
+                        ),
+                    }
+                )
+
+    if not tool_calls:
+        if tool_choice == "required":
+            errors.append(
+                {
+                    "code": "tool_required_but_missing",
+                    "message": "At least one tool call was required, but the assistant answered without any tool_calls.",
+                }
+            )
+        malformed_reason = _detect_malformed_tool_payload(raw_text)
+        if malformed_reason:
+            errors.append(
+                {
+                    "code": "malformed_tool_payload",
+                    "message": malformed_reason,
+                }
+            )
+        return errors
+
+    for index, tool_call in enumerate(tool_calls):
+        function_data = tool_call.get("function") if isinstance(tool_call.get("function"), dict) else {}
+        tool_name = str(function_data.get("name", "") or "").strip()
+        tool_call_id = str(tool_call.get("id", "") or "").strip()
+        tool_def = allowed_tools.get(tool_name)
+        if not tool_def:
+            errors.append(
+                {
+                    "code": "unknown_tool",
+                    "message": f'Tool "{tool_name or "(missing)"}" is not declared in AVAILABLE_TOOLS.',
+                    "tool_call_id": tool_call_id,
+                    "tool_name": tool_name,
+                    "tool_call_index": index,
+                }
+            )
+            continue
+
+        args = _decode_tool_arguments(tool_call)
+        if args is None:
+            errors.append(
+                {
+                    "code": "invalid_arguments_json",
+                    "message": f'Tool "{tool_name}" returned arguments that are not a valid JSON object.',
+                    "tool_call_id": tool_call_id,
+                    "tool_name": tool_name,
+                    "tool_call_index": index,
+                }
+            )
+            continue
+
+        schema = tool_def.get("function", {}).get("parameters")
+        schema_errors = _validate_tool_arguments_against_schema(
+            args=args,
+            schema=schema,
+            path="arguments",
+        )
+        for message in schema_errors:
+            errors.append(
+                {
+                    "code": "schema_validation_failed",
+                    "message": f'Tool "{tool_name}" {message}',
+                    "tool_call_id": tool_call_id,
+                    "tool_name": tool_name,
+                    "tool_call_index": index,
+                }
+            )
+
+    return errors
+
+
+def _get_required_tool_name(tool_choice: Any) -> str:
+    if isinstance(tool_choice, dict):
+        function_data = (
+            tool_choice.get("function")
+            if isinstance(tool_choice.get("function"), dict)
+            else {}
+        )
+        return str(function_data.get("name", "") or "").strip()
+    return ""
+
+
+def _detect_malformed_tool_payload(raw_text: str) -> str:
+    stripped = str(raw_text or "").strip()
+    if not stripped:
+        return ""
+
+    lowered = stripped.lower()
+    if stripped[:1] in {"{", "["}:
+        if any(
+            marker in lowered
+            for marker in ('"tool_calls"', '"function"', '"arguments"', '"tool_name"')
+        ):
+            return (
+                "The reply looked like a structured tool payload, but it could not be parsed "
+                "into valid tool_calls."
+            )
+
+    if stripped.startswith("<") and re.search(r"<[A-Za-z0-9_.:-]+\s+[^<>]*/>", stripped):
+        return (
+            "The reply looked like an XML-style tool call, but it could not be parsed "
+            "into a valid declared tool."
+        )
+
+    return ""
+
+
+def _decode_tool_arguments(tool_call: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    function_data = tool_call.get("function") if isinstance(tool_call.get("function"), dict) else {}
+    raw_arguments = function_data.get("arguments")
+    if isinstance(raw_arguments, dict):
+        return raw_arguments
+    if isinstance(raw_arguments, str):
+        try:
+            parsed = json.loads(raw_arguments)
+        except Exception:
+            return None
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+def _validate_tool_arguments_against_schema(
+    args: Dict[str, Any],
+    schema: Any,
+    path: str,
+) -> List[str]:
+    if not isinstance(schema, dict):
+        return []
+    return _validate_json_schema_value(args, schema, path=path)
+
+
+def _validate_json_schema_value(value: Any, schema: Dict[str, Any], path: str) -> List[str]:
+    errors: List[str] = []
+
+    any_of = schema.get("anyOf")
+    if isinstance(any_of, list) and any_of:
+        if not any(not _validate_json_schema_value(value, item, path) for item in any_of if isinstance(item, dict)):
+            errors.append(f"{path} does not satisfy any allowed schema branch.")
+        return errors
+
+    one_of = schema.get("oneOf")
+    if isinstance(one_of, list) and one_of:
+        valid_count = sum(
+            1
+            for item in one_of
+            if isinstance(item, dict) and not _validate_json_schema_value(value, item, path)
+        )
+        if valid_count != 1:
+            errors.append(f"{path} must satisfy exactly one schema branch.")
+        return errors
+
+    all_of = schema.get("allOf")
+    if isinstance(all_of, list) and all_of:
+        for item in all_of:
+            if isinstance(item, dict):
+                errors.extend(_validate_json_schema_value(value, item, path))
+
+    expected_types = _extract_schema_types(schema)
+    if expected_types and not any(_value_matches_schema_type(value, item) for item in expected_types):
+        errors.append(
+            f"{path} must be {_describe_schema_types(expected_types)}, got {_describe_runtime_type(value)}."
+        )
+        return errors
+
+    if "const" in schema and value != schema.get("const"):
+        errors.append(f"{path} must equal {schema.get('const')!r}.")
+
+    enum_values = schema.get("enum")
+    if isinstance(enum_values, list) and enum_values and value not in enum_values:
+        errors.append(f"{path} must be one of {enum_values!r}.")
+
+    if isinstance(value, str):
+        min_length = schema.get("minLength")
+        if isinstance(min_length, int) and len(value) < min_length:
+            errors.append(f"{path} must be at least {min_length} characters long.")
+        max_length = schema.get("maxLength")
+        if isinstance(max_length, int) and len(value) > max_length:
+            errors.append(f"{path} must be at most {max_length} characters long.")
+        pattern = schema.get("pattern")
+        if isinstance(pattern, str):
+            try:
+                if re.search(pattern, value) is None:
+                    errors.append(f"{path} must match pattern {pattern!r}.")
+            except re.error:
+                pass
+
+    if _is_number_like(value):
+        minimum = schema.get("minimum")
+        if isinstance(minimum, (int, float)) and value < minimum:
+            errors.append(f"{path} must be >= {minimum}.")
+        maximum = schema.get("maximum")
+        if isinstance(maximum, (int, float)) and value > maximum:
+            errors.append(f"{path} must be <= {maximum}.")
+        exclusive_minimum = schema.get("exclusiveMinimum")
+        if isinstance(exclusive_minimum, (int, float)) and value <= exclusive_minimum:
+            errors.append(f"{path} must be > {exclusive_minimum}.")
+        exclusive_maximum = schema.get("exclusiveMaximum")
+        if isinstance(exclusive_maximum, (int, float)) and value >= exclusive_maximum:
+            errors.append(f"{path} must be < {exclusive_maximum}.")
+
+    if isinstance(value, list):
+        min_items = schema.get("minItems")
+        if isinstance(min_items, int) and len(value) < min_items:
+            errors.append(f"{path} must contain at least {min_items} items.")
+        max_items = schema.get("maxItems")
+        if isinstance(max_items, int) and len(value) > max_items:
+            errors.append(f"{path} must contain at most {max_items} items.")
+        item_schema = schema.get("items")
+        if isinstance(item_schema, dict):
+            for index, item in enumerate(value):
+                errors.extend(
+                    _validate_json_schema_value(item, item_schema, path=f"{path}[{index}]")
+                )
+
+    if isinstance(value, dict):
+        required_fields = schema.get("required")
+        if isinstance(required_fields, list):
+            for field_name in required_fields:
+                if field_name not in value:
+                    errors.append(f"{path}.{field_name} is required.")
+
+        properties = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
+        for field_name, field_schema in properties.items():
+            if field_name in value and isinstance(field_schema, dict):
+                errors.extend(
+                    _validate_json_schema_value(
+                        value[field_name],
+                        field_schema,
+                        path=f"{path}.{field_name}",
+                    )
+                )
+
+        additional_properties = schema.get("additionalProperties", True)
+        extra_keys = [field_name for field_name in value.keys() if field_name not in properties]
+        if additional_properties is False:
+            for field_name in extra_keys:
+                errors.append(f"{path}.{field_name} is not allowed.")
+        elif isinstance(additional_properties, dict):
+            for field_name in extra_keys:
+                errors.extend(
+                    _validate_json_schema_value(
+                        value[field_name],
+                        additional_properties,
+                        path=f"{path}.{field_name}",
+                    )
+                )
+
+    return errors
+
+
+def _extract_schema_types(schema: Dict[str, Any]) -> List[str]:
+    raw_type = schema.get("type")
+    if isinstance(raw_type, str):
+        return [raw_type]
+    if isinstance(raw_type, list):
+        return [item for item in raw_type if isinstance(item, str)]
+    if any(key in schema for key in ("properties", "required", "additionalProperties")):
+        return ["object"]
+    if any(key in schema for key in ("items", "minItems", "maxItems")):
+        return ["array"]
+    return []
+
+
+def _value_matches_schema_type(value: Any, schema_type: str) -> bool:
+    normalized = str(schema_type or "").strip().lower()
+    if normalized == "object":
+        return isinstance(value, dict)
+    if normalized == "array":
+        return isinstance(value, list)
+    if normalized == "string":
+        return isinstance(value, str)
+    if normalized == "boolean":
+        return isinstance(value, bool)
+    if normalized == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if normalized == "number":
+        return _is_number_like(value)
+    if normalized == "null":
+        return value is None
+    return True
+
+
+def _describe_schema_types(schema_types: List[str]) -> str:
+    normalized = [str(item or "").strip().lower() for item in schema_types if str(item or "").strip()]
+    if not normalized:
+        return "a valid value"
+    if len(normalized) == 1:
+        return normalized[0]
+    return " or ".join(normalized)
+
+
+def _describe_runtime_type(value: Any) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, int):
+        return "integer"
+    if isinstance(value, float):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, dict):
+        return "object"
+    return type(value).__name__
+
+
+def _is_number_like(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _build_tool_retry_messages(
+    raw_text: str,
+    parsed: Dict[str, Any],
+    errors: List[Dict[str, Any]],
+    attempt: int,
+    total_attempts: int,
+) -> List[Dict[str, Any]]:
+    messages: List[Dict[str, Any]] = []
+    assistant_message = _build_rejected_assistant_message(raw_text, parsed)
+    if assistant_message:
+        messages.append(assistant_message)
+    messages.append(
+        {
+            "role": "user",
+            "content": _format_tool_retry_feedback(errors, parsed, raw_text, attempt, total_attempts),
+        }
+    )
+    return messages
+
+
+def _build_rejected_assistant_message(
+    raw_text: str,
+    parsed: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    tool_calls = parsed.get("tool_calls") or []
+    if tool_calls:
+        content = parsed.get("content")
+        return {
+            "role": "assistant",
+            "content": content if content not in ("", None) else None,
+            "tool_calls": copy.deepcopy(tool_calls),
+        }
+
+    preview = str(raw_text or "").strip()
+    if preview:
+        return {"role": "assistant", "content": preview}
+
+    content = parsed.get("content")
+    if content not in ("", None):
+        return {"role": "assistant", "content": str(content)}
+    return None
+
+
+def _format_tool_retry_feedback(
+    errors: List[Dict[str, Any]],
+    parsed: Dict[str, Any],
+    raw_text: str,
+    attempt: int,
+    total_attempts: int,
+) -> str:
+    lines = [
+        "[Tool Execution Feedback]",
+        "Your previous assistant response was rejected before execution and was not forwarded to the user.",
+        f"Attempt: {attempt}/{total_attempts}",
+        "Problems:",
+    ]
+    for index, item in enumerate(errors, start=1):
+        lines.append(f"{index}. {item.get('message')}")
+
+    rejected_tool_calls = _summarize_tool_calls_for_feedback(parsed)
+    if rejected_tool_calls:
+        lines.append("Rejected tool calls:")
+        lines.append(json.dumps(rejected_tool_calls, ensure_ascii=False, indent=2))
+    else:
+        preview = str(raw_text or "").strip()
+        if preview:
+            if len(preview) > 1200:
+                preview = preview[:1197] + "..."
+            lines.append("Rejected assistant reply:")
+            lines.append(preview)
+
+    lines.extend(
+        [
+            "Return a corrected assistant JSON response now.",
+            "Do not repeat the same invalid tool call unchanged.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _summarize_tool_calls_for_feedback(parsed: Dict[str, Any]) -> List[Dict[str, Any]]:
+    summary: List[Dict[str, Any]] = []
+    for item in parsed.get("tool_calls") or []:
+        if not isinstance(item, dict):
+            continue
+        function_data = item.get("function") if isinstance(item.get("function"), dict) else {}
+        arguments = _decode_tool_arguments(item)
+        summary.append(
+            {
+                "id": str(item.get("id", "") or ""),
+                "name": str(function_data.get("name", "") or ""),
+                "arguments": arguments if arguments is not None else function_data.get("arguments"),
+            }
+        )
+    return summary
+
+
+def _summarize_tool_response_errors(errors: List[Dict[str, Any]]) -> str:
+    messages = [str(item.get("message") or "").strip() for item in errors if str(item.get("message") or "").strip()]
+    if not messages:
+        return "tool_call_validation_failed"
+    return "; ".join(messages[:3])
 
 
 def _repair_json_like_argument_string(raw: str) -> str:
@@ -1001,6 +1550,7 @@ def _pack_sse_chunk(data: Dict[str, Any]) -> str:
 __all__ = [
     "build_browser_messages_for_tools",
     "build_tool_completion_response",
+    "complete_tool_calling_roundtrip",
     "has_tool_calling_request",
     "iter_tool_stream_chunks",
     "normalize_tool_request",

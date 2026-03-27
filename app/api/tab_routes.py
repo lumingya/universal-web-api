@@ -27,12 +27,11 @@ from app.services.request_manager import (
     watch_client_disconnect
 )
 from app.services.tool_calling import (
-    build_browser_messages_for_tools,
     build_tool_completion_response,
+    complete_tool_calling_roundtrip,
     has_tool_calling_request,
     iter_tool_stream_chunks,
     normalize_tool_request,
-    parse_tool_response,
     summarize_messages_for_debug,
 )
 
@@ -766,12 +765,6 @@ def _run_tool_calling_sync_for_tab(
         function_call=body.function_call,
     )
 
-    browser_messages = build_browser_messages_for_tools(
-        messages=body.messages,
-        tools=tools,
-        tool_choice=tool_choice,
-        parallel_tool_calls=body.parallel_tool_calls,
-    )
     try:
         logger.debug(
             "[tab] 请求消息摘要: "
@@ -780,15 +773,22 @@ def _run_tool_calling_sync_for_tab(
     except Exception as e:
         logger.debug(f"[tab] 请求消息摘要生成失败: {e}")
 
-    browser_response = _execute_browser_non_stream_for_tab(
-        browser=browser,
-        tab_index=tab_index,
-        messages=browser_messages,
-        request_id=request_id,
+    parsed = complete_tool_calling_roundtrip(
+        messages=body.messages,
+        tools=tools,
+        tool_choice=tool_choice,
+        parallel_tool_calls=body.parallel_tool_calls,
+        round_executor=lambda browser_messages: _extract_assistant_content(
+            _execute_browser_non_stream_for_tab(
+                browser=browser,
+                tab_index=tab_index,
+                messages=browser_messages,
+                request_id=request_id,
+                stop_checker=stop_checker,
+            )
+        ),
         stop_checker=stop_checker,
     )
-    assistant_text = _extract_assistant_content(browser_response)
-    parsed = parse_tool_response(assistant_text, tools)
     return build_tool_completion_response(body.model, parsed)
 
 
@@ -806,12 +806,6 @@ def _run_tool_calling_sync_for_route_domain(
         function_call=body.function_call,
     )
 
-    browser_messages = build_browser_messages_for_tools(
-        messages=body.messages,
-        tools=tools,
-        tool_choice=tool_choice,
-        parallel_tool_calls=body.parallel_tool_calls,
-    )
     try:
         logger.debug(
             "[route] 请求消息摘要: "
@@ -820,15 +814,22 @@ def _run_tool_calling_sync_for_route_domain(
     except Exception as e:
         logger.debug(f"[route] 请求消息摘要生成失败: {e}")
 
-    browser_response = _execute_browser_non_stream_for_route_domain(
-        browser=browser,
-        route_domain=route_domain,
-        messages=browser_messages,
-        request_id=request_id,
+    parsed = complete_tool_calling_roundtrip(
+        messages=body.messages,
+        tools=tools,
+        tool_choice=tool_choice,
+        parallel_tool_calls=body.parallel_tool_calls,
+        round_executor=lambda browser_messages: _extract_assistant_content(
+            _execute_browser_non_stream_for_route_domain(
+                browser=browser,
+                route_domain=route_domain,
+                messages=browser_messages,
+                request_id=request_id,
+                stop_checker=stop_checker,
+            )
+        ),
         stop_checker=stop_checker,
     )
-    assistant_text = _extract_assistant_content(browser_response)
-    parsed = parse_tool_response(assistant_text, tools)
     return build_tool_completion_response(body.model, parsed)
 
 
