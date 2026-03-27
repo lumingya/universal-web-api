@@ -116,3 +116,19 @@ async def reject_marketplace_issue(
     except Exception as exc:
         logger.error(f"拒绝市场投稿失败: issue={issue_number}, error={exc}")
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/api/marketplace/review/items/{item_id}/remove")
+async def remove_marketplace_item(
+    item_id: str,
+    body: MarketplaceReviewRequest,
+    x_github_token: Optional[str] = Header(None),
+    authenticated: bool = Depends(verify_auth),
+):
+    try:
+        return marketplace_service.remove_item(item_id, x_github_token or "")
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        logger.error(f"下架市场项目失败: item={item_id}, error={exc}")
+        raise HTTPException(status_code=400, detail=str(exc))

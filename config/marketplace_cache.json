@@ -3,6 +3,151 @@
   "source_url": "https://raw.githubusercontent.com/lumingya/universal-web-api/main/config/marketplace.json",
   "repo_url": "https://github.com/lumingya/universal-web-api",
   "upload_url": "https://github.com/lumingya/universal-web-api/issues/new?template=marketplace_submission.md",
-  "cached_at": "2026-03-27T10:50:44Z",
-  "items": []
+  "cached_at": "2026-03-27T11:14:36Z",
+  "items": [
+    {
+      "id": "site_config-gemini.google.com",
+      "item_type": "site_config",
+      "name": "gemini最新预设",
+      "summary": "当原有预设报错后可更新",
+      "author": "lumingya",
+      "submitted_by": "lumingya",
+      "category": "gemini.google.com",
+      "site_domain": "gemini.google.com",
+      "domain": "gemini.google.com",
+      "preset_name": "主预设",
+      "downloads": 0,
+      "stars": 0,
+      "updated_at": "2026-03-27T10:55:06Z",
+      "version": "1.0.0",
+      "compatibility": "",
+      "repo_url": "https://github.com/lumingya/universal-web-api/issues/6",
+      "package_url": "",
+      "review_status": "",
+      "review_label": "",
+      "issue_number": 6,
+      "issue_url": "https://github.com/lumingya/universal-web-api/issues/6",
+      "issue_title": "[市场投稿] gemini最新预设",
+      "import_disabled": false,
+      "tags": [],
+      "site_config": {
+        "gemini.google.com": {
+          "default_preset": "主预设",
+          "presets": {
+            "主预设": {
+              "selectors": {
+                "input_box": "rich-textarea .ql-editor[contenteditable=\"true\"][role=\"textbox\"]",
+                "send_btn": "button.send-button",
+                "result_container": ".markdown-main-panel",
+                "new_chat_btn": "[data-test-id=\"expanded-button\"]",
+                "message_wrapper": null,
+                "generating_indicator": "",
+                "点击模型选择": "[data-test-id=\"logo-pill-label-container\"]",
+                "选择模型": "//button[.//span[contains(text(), \"Pro\")]]",
+                "临时对话按钮": "button.temp-chat-button"
+              },
+              "stream_config": {
+                "mode": "network",
+                "hard_timeout": 600,
+                "silence_threshold": 2.5,
+                "initial_wait": 30,
+                "enable_wrapper_search": true,
+                "network": {
+                  "listen_pattern": "StreamGenerate",
+                  "parser": "gemini",
+                  "first_response_timeout": 300,
+                  "silence_threshold": 3,
+                  "response_interval": 1
+                }
+              },
+              "workflow": [
+                {
+                  "action": "KEY_PRESS",
+                  "target": "Ctrl+Shift+O",
+                  "optional": true,
+                  "value": null
+                },
+                {
+                  "action": "WAIT",
+                  "target": "",
+                  "optional": false,
+                  "value": 0.5
+                },
+                {
+                  "action": "CLICK",
+                  "target": "临时对话按钮",
+                  "optional": true,
+                  "value": null
+                },
+                {
+                  "action": "CLICK",
+                  "target": "点击模型选择",
+                  "optional": true,
+                  "value": null
+                },
+                {
+                  "action": "CLICK",
+                  "target": "选择模型",
+                  "optional": true,
+                  "value": null
+                },
+                {
+                  "action": "WAIT",
+                  "target": "",
+                  "optional": false,
+                  "value": 0.5
+                },
+                {
+                  "action": "FILL_INPUT",
+                  "target": "input_box",
+                  "optional": false,
+                  "value": null
+                },
+                {
+                  "action": "CLICK",
+                  "target": "send_btn",
+                  "optional": false,
+                  "value": null
+                },
+                {
+                  "action": "STREAM_WAIT",
+                  "target": "result_container",
+                  "optional": false,
+                  "value": null
+                }
+              ],
+              "stealth": false,
+              "image_extraction": {
+                "enabled": true,
+                "selector": "img",
+                "container_selector": ".image-button img",
+                "debounce_seconds": 1,
+                "wait_for_load": true,
+                "load_timeout_seconds": 10,
+                "download_blobs": true,
+                "max_size_mb": 10,
+                "mode": "first"
+              },
+              "file_paste": {
+                "enabled": false,
+                "threshold": 30000,
+                "hint_text": "完全专注于文件内容",
+                "post_upload_settle": 5,
+                "upload_signal_selectors": [
+                  "[class*=\"attachment\"]",
+                  "[class*=\"file\"]",
+                  "[class*=\"preview\"]",
+                  "[class*=\"chip\"]",
+                  "mat-chip",
+                  "mat-chip-row",
+                  ".mat-mdc-chip",
+                  ".mat-mdc-chip-row"
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
 }

@@ -74,10 +74,11 @@
 
             <div v-if="submitHelpText" class="mp-banner mp-banner--info">{{ submitHelpText }}</div>
             <div v-if="reviewSession.connected" class="mp-banner mp-banner--success">
-                GitHub 审核已连接
+                GitHub 身份已连接
                 <template v-if="reviewSession.login"> · {{ reviewSession.login }}</template>
-                <template v-if="reviewSession.permission_label"> · {{ reviewSession.permission_label }}</template>
-                <template v-if="!reviewSession.can_review"> · 当前 token 没有仓库维护权限，无法执行通过/拒绝</template>
+                <template v-if="reviewSession.can_review && reviewSession.permission_label"> · {{ reviewSession.permission_label }}</template>
+                <template v-if="reviewSession.can_review"> · 可审核、拒绝和下架项目</template>
+                <template v-else> · 可管理你自己的投稿</template>
             </div>
             <div v-if="catalog.warning" class="mp-banner mp-banner--warning">{{ catalog.warning }}</div>
             <div v-if="error" class="mp-banner mp-banner--error">{{ error }}</div>
@@ -106,7 +107,8 @@
                         <h2 class="mp-item-title">{{ item.name }}</h2>
                         <p class="mp-item-summary">{{ item.summary || '暂无简介' }}</p>
                         <div class="mp-item-meta">
-                            <span>作者 {{ item.author || '社区贡献' }}</span>
+                            <span>作者 {{ displayAuthor(item) }}</span>
+                            <span v-if="showSubmitter(item)">GitHub {{ item.submitted_by }}</span>
                             <span v-if="item.version">版本 {{ item.version }}</span>
                             <span v-if="item.compatibility">兼容 {{ item.compatibility }}</span>
                             <span v-if="item.updated_at">更新 {{ item.updated_at }}</span>
@@ -157,6 +159,15 @@
                                 去补充
                             </button>
                             <button
+                                v-if="canRemoveItem(item)"
+                                type="button"
+                                class="mp-button mp-button--danger"
+                                :disabled="reviewBusyId === ('remove:' + item.id)"
+                                @click="removeItem(item)"
+                            >
+                                {{ reviewBusyId === ('remove:' + item.id) ? (removeItemLabel(item) + '中...') : removeItemLabel(item) }}
+                            </button>
+                            <button
                                 type="button"
                                 class="mp-button mp-button--primary"
                                 :disabled="busyId === item.id || !canImport(item)"
@@ -184,7 +195,7 @@
                 <div class="mp-modal__header">
                     <div>
                         <h3>GitHub 审核</h3>
-                        <p>只有对公共市场仓库拥有维护权限的 GitHub 账号，才会显示投稿的“通过 / 拒绝”按钮。</p>
+                        <p>有仓库维护权限的账号可以审核投稿；投稿作者本人也可以撤回自己的投稿或下架自己已收录的项目。</p>
                     </div>
                     <button type="button" class="mp-button mp-button--ghost" @click="closeReviewDialog">关闭</button>
                 </div>
@@ -197,14 +208,14 @@
                         v-model.trim="reviewToken"
                         type="password"
                         class="mp-control"
-                        placeholder="粘贴拥有仓库维护权限的 GitHub token"
+                        placeholder="粘贴 GitHub token，用于识别你的仓库权限或投稿作者身份"
                     >
                 </label>
                 <p class="mp-inline-tip">建议使用对当前公共仓库具备 `Contents` 与 `Issues` 写权限的 token。</p>
                 <div v-if="reviewSession.connected" class="mp-review-status">
                     <span class="mp-badge mp-badge--muted">仓库 {{ reviewSession.repo || '未配置' }}</span>
                     <span class="mp-badge" :class="reviewSession.can_review ? 'mp-badge--success' : 'mp-badge--muted'">
-                        {{ reviewSession.can_review ? '已获得审核权限' : '仅连接成功，暂无审核权限' }}
+                        {{ reviewSession.can_review ? '已获得审核权限' : '已连接，可管理自己的投稿' }}
                     </span>
                     <span v-if="reviewSession.login" class="mp-badge mp-badge--muted">账号 {{ reviewSession.login }}</span>
                     <span v-if="reviewSession.permission_label" class="mp-badge mp-badge--muted">角色 {{ reviewSession.permission_label }}</span>

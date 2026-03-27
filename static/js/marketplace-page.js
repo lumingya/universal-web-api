@@ -123,6 +123,7 @@
                         item.name,
                         item.summary,
                         item.author,
+                        item.submitted_by,
                         item.site_domain,
                         item.category,
                         ...(Array.isArray(item.tags) ? item.tags : [])
@@ -174,8 +175,8 @@
                         ? ('审核权限 · ' + this.reviewSession.login)
                         : '审核权限已连接';
                 }
-                if (this.reviewSession.connected) {
-                    return 'GitHub 审核';
+                if (this.reviewSession.connected && this.reviewSession.login) {
+                    return 'GitHub 身份 · ' + this.reviewSession.login;
                 }
                 return 'GitHub 审核';
             },
@@ -341,7 +342,7 @@
                         if (this.reviewSession.can_review) {
                             this.notify('GitHub 审核权限已连接', 'success');
                         } else {
-                            this.notify('GitHub 已连接，但当前账号没有仓库维护权限', 'warning');
+                            this.notify('GitHub 身份已连接，可管理你自己的投稿', 'success');
                         }
                     }
                 } catch (error) {
@@ -389,6 +390,38 @@
                 return this.isPending(item)
                     && !!this.reviewSession.can_review
                     && Number(item && item.issue_number) > 0;
+            },
+
+            displayAuthor(item) {
+                const author = safeString(item && item.author);
+                const submittedBy = safeString(item && item.submitted_by);
+                return author || submittedBy || '社区贡献';
+            },
+
+            showSubmitter(item) {
+                const author = this.displayAuthor(item).toLowerCase();
+                const submittedBy = safeString(item && item.submitted_by);
+                return !!submittedBy && submittedBy.toLowerCase() !== author;
+            },
+
+            isItemOwner(item) {
+                const login = safeString(this.reviewSession.login).toLowerCase();
+                const submittedBy = safeString(item && item.submitted_by).toLowerCase();
+                return !!login && !!submittedBy && login === submittedBy;
+            },
+
+            canRemoveItem(item) {
+                if (!item || !item.id || !this.reviewSession.connected) {
+                    return false;
+                }
+                if (this.isPending(item) && this.canReviewItem(item) && !this.isItemOwner(item)) {
+                    return false;
+                }
+                return !!this.reviewSession.can_review || this.isItemOwner(item);
+            },
+
+            removeItemLabel(item) {
+                return this.isPending(item) ? '撤回投稿' : '下架';
             },
 
             compareItems(left, right) {
@@ -470,6 +503,37 @@
                     await this.loadCatalog({ force: true });
                 } catch (error) {
                     this.notify(actionLabel + '投稿失败: ' + error.message, 'error');
+                } finally {
+                    this.reviewBusyId = '';
+                }
+            },
+
+            async removeItem(item) {
+                if (!this.canRemoveItem(item)) {
+                    this.notify('当前没有可用的下架权限', 'warning');
+                    return;
+                }
+
+                const actionLabel = this.removeItemLabel(item);
+                const confirmed = window.confirm(`确认要${actionLabel}这个项目吗？`);
+                if (!confirmed) {
+                    return;
+                }
+
+                this.reviewBusyId = 'remove:' + item.id;
+                try {
+                    const result = await this.apiRequest(
+                        '/api/marketplace/review/items/' + encodeURIComponent(item.id) + '/remove',
+                        {
+                            method: 'POST',
+                            headers: this.getReviewHeaders(),
+                            body: JSON.stringify({ note: '' })
+                        }
+                    );
+                    this.notify((result && result.message) || ('已' + actionLabel), 'success');
+                    await this.loadCatalog({ force: true });
+                } catch (error) {
+                    this.notify(actionLabel + '失败: ' + error.message, 'error');
                 } finally {
                     this.reviewBusyId = '';
                 }
