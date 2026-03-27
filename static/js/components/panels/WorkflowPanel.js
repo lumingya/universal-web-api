@@ -255,9 +255,13 @@ window.WorkflowPanel = {
                         </div>
 
                         <div class="pt-5">
-                            <label class="flex items-center text-xs cursor-pointer whitespace-nowrap text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white transition-colors">
-                                <input type="checkbox" v-model="step.optional" class="mr-1.5 rounded">
-                                <span>是否必要</span>
+                            <label class="flex items-center text-xs cursor-pointer whitespace-nowrap text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white transition-colors"
+                                   title="勾选后找不到元素会报错；不勾选则跳过该步骤">
+                                <input type="checkbox"
+                                       :checked="!step.optional"
+                                       @change="step.optional = !$event.target.checked"
+                                       class="mr-1.5 rounded">
+                                <span>必需步骤</span>
                             </label>
                         </div>
 

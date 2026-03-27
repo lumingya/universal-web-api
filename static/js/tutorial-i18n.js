@@ -128,7 +128,7 @@
             <ul>
                 <li><strong>Tab Pool</strong>: manage tab indexes, states, routes, and assigned presets.</li>
                 <li><strong>Extractors</strong>: fix cases where the page clearly has an answer but extraction is wrong.</li>
-                <li><strong>Logs</strong>: locate whether a problem happened before sending, during waiting, or during extraction.</li>
+                <li><strong>Logs</strong>: locate whether a problem happened before sending, during waiting, or during extraction. If raw DEBUG text feels too dense, you can enable cute <code>INFO / DEBUG</code> log phrasing in settings.</li>
                 <li><strong>Settings</strong>: manage environment values, browser constants, AI recognition, and update rules.</li>
             </ul>
         </div>
@@ -949,6 +949,16 @@ BROWSER_PROFILE_NAME=Default</code></pre>
                 <tr><td>Default wait</td><td><code>3</code> s</td><td>Default timeout when searching for an element</td></tr>
                 <tr><td>Fallback wait</td><td><code>1</code> s</td><td>Retry timeout after the first failure</td></tr>
                 <tr><td>Cache lifetime</td><td><code>5</code> s</td><td>How long cached element positions stay valid</td></tr>
+            </table>
+        </div>
+
+        <div class="config-group">
+            <h4><span class="icon">🪄</span> Log presentation</h4>
+            <p style="color: var(--desc-color); font-size: 0.9rem; margin-bottom: 10px;">These switches only change how logs read in the dashboard. They do not change runtime behavior, and the original log text is still preserved for troubleshooting.</p>
+            <table>
+                <tr><th>Setting</th><th>Default</th><th>Description</th></tr>
+                <tr><td>INFO cute mode</td><td>Off</td><td>Polishes common INFO logs into friendlier, easier-to-scan wording.</td></tr>
+                <tr><td>DEBUG cute mode</td><td>Off</td><td>Polishes the main DEBUG paths into more readable hints, such as “Xiaolu starts splitting the text now”; useful when you stare at logs for a long time.</td></tr>
             </table>
         </div>
 

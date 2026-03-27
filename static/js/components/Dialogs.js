@@ -154,6 +154,9 @@ window.TestDialog = {
     name: 'TestDialog',
     props: {
         show: { type: Boolean, default: false },
+        selector: { type: String, default: '' },
+        timeoutValue: { type: Number, default: 2 },
+        highlightEnabled: { type: Boolean, default: false },
         result: { type: Object, default: null },
         testing: { type: Boolean, default: false }
     },
@@ -164,6 +167,38 @@ window.TestDialog = {
             timeout: 3,
             highlight: false
         };
+    },
+    watch: {
+        show: {
+            handler(value) {
+                if (value) {
+                    this.syncFromProps();
+                }
+            },
+            immediate: true
+        },
+        selector(value) {
+            if (this.show) {
+                this.selectorInput = value || '';
+            }
+        },
+        timeoutValue(value) {
+            if (this.show && Number.isFinite(value)) {
+                this.timeout = value;
+            }
+        },
+        highlightEnabled(value) {
+            if (this.show) {
+                this.highlight = !!value;
+            }
+        }
+    },
+    methods: {
+        syncFromProps() {
+            this.selectorInput = this.selector || '';
+            this.timeout = Number.isFinite(this.timeoutValue) ? this.timeoutValue : 3;
+            this.highlight = !!this.highlightEnabled;
+        }
     },
     template: `
         <div v-if="show"
@@ -229,9 +264,9 @@ window.TestDialog = {
                         关闭
                     </button>
                     <button @click="$emit('test', { selector: selectorInput, timeout, highlight })"
-                            :disabled="!selectorInput || testing"
+                            :disabled="!selectorInput.trim() || testing"
                             class="border rounded transition-colors bg-blue-500 text-white hover:bg-blue-600 border-blue-500 px-2 py-0.5 text-sm"
-                            :class="{'opacity-50 cursor-not-allowed': !selectorInput || testing}">
+                            :class="{'opacity-50 cursor-not-allowed': !selectorInput.trim() || testing}">
                         {{ testing ? '测试中...' : '测试' }}
                     </button>
                 </div>

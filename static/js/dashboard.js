@@ -137,6 +137,24 @@ const BROWSER_CONSTANTS_SCHEMA = {
             }
         }
     },
+    logging: {
+        label: '日志',
+        icon: '🪄',
+        items: {
+            LOG_INFO_CUTE_MODE: {
+                label: 'INFO 日志可爱化',
+                desc: '开启后，日志列表会优先显示润色后的 INFO 文案；原始日志不会丢失，鼠标悬停日志正文仍可查看原文。',
+                type: 'switch',
+                default: false
+            },
+            LOG_DEBUG_CUTE_MODE: {
+                label: 'DEBUG 日志可爱化',
+                desc: '开启后，日志列表会优先显示润色后的主要 DEBUG 文案；原始日志不会丢失，鼠标悬停日志正文仍可查看原文。',
+                type: 'switch',
+                default: false
+            }
+        }
+    },
     stream: {
         label: '流式监控',
         icon: '📡',
@@ -649,6 +667,7 @@ const app = createApp({
             toasts: [],
             toastCounter: 0,
             hasLoadedSettings: false,
+            hasLoadedMarketplace: false,
             hasLoadedExtractors: false,
             isSaving: false,
             isLoading: false,
@@ -689,6 +708,7 @@ const app = createApp({
             logLevelFilter: 'ALL',
             pauseLogs: false,
             lastLogTimestamp: 0,
+            lastLogSeq: 0,
             logPollingTimer: null,
 
             // ========== 导入功能 ==========
@@ -739,6 +759,46 @@ const app = createApp({
                 required: false
             },
             editingDefinitionIndex: null,
+
+            // ========== 插件市场 ==========
+            marketplaceCatalog: {
+                items: [],
+                count: 0,
+                total_downloads: 0,
+                default_sort: 'downloads',
+                source_mode: 'local',
+                source_name: '配置市场',
+                source_url: '',
+                upload_url: '',
+                warning: ''
+            },
+            marketplaceLoading: false,
+            marketplaceError: '',
+            marketplaceImportingId: null,
+            showMarketplacePreview: false,
+            marketplacePreviewData: null,
+            marketplacePreviewTitle: '',
+            showMarketplaceImportDialog: false,
+            marketplacePendingImport: null,
+            marketplaceImportStrategy: 'overwrite',
+            marketplaceImportPresetName: '',
+            showMarketplaceSubmitDialog: false,
+            marketplaceSubmitSaving: false,
+            marketplaceCommandOptions: [],
+            marketplaceCommandLoading: false,
+            marketplaceSubmitForm: {
+                item_type: 'site_config',
+                title: '',
+                summary: '',
+                author: '本地投稿',
+                site_domain: '',
+                category: '',
+                preset_name: '',
+                compatibility: '',
+                version: '1.0.0',
+                tagsText: '',
+                selected_command_ids: []
+            },
 
         }
     },
@@ -1204,16 +1264,26 @@ const app = createApp({
             if (this.pauseLogs) return;
 
             try {
-                const result = await this.apiRequest('/api/logs?since=' + this.lastLogTimestamp);
+                const result = await this.apiRequest('/api/logs?after_seq=' + this.lastLogSeq);
 
                 if (result.logs && result.logs.length > 0) {
                     result.logs.forEach(log => {
+                        const messageText = log.message_text || log.display_message || log.message || '';
+                        const kind = log.kind || log.level;
                         this.logs.push({
-                            id: Date.now() + Math.random(),
+                            id: log.seq || (Date.now() + Math.random()),
+                            seq: log.seq || 0,
                             timestamp: new Date(log.timestamp * 1000).toLocaleTimeString() + '.' +
                                 String(Math.floor((log.timestamp % 1) * 1000)).padStart(3, '0'),
-                            level: this.normalizeLogLevel(log.level, log.message),
-                            message: log.message
+                            level: this.normalizeLogLevel(kind, messageText),
+                            rawLevel: String(log.level || '').toUpperCase(),
+                            kind: String(kind || '').toUpperCase(),
+                            logger: log.logger || '',
+                            requestId: log.request_id || 'SYSTEM',
+                            message: log.display_message || log.message || messageText,
+                            messageText,
+                            originalMessageText: log.original_message_text || messageText,
+                            messageAlias: log.message_alias || ''
                         });
                     });
 
@@ -1226,9 +1296,9 @@ const app = createApp({
                             this.$refs.logContainer.scrollTop = this.$refs.logContainer.scrollHeight;
                         }
                     });
-
-                    this.lastLogTimestamp = result.timestamp;
                 }
+                this.lastLogSeq = Number(result.next_seq || this.lastLogSeq || 0);
+                this.lastLogTimestamp = Number(result.timestamp || this.lastLogTimestamp || 0);
             } catch (error) {
                 console.debug('日志轮询失败:', error.message);
             }
@@ -1238,6 +1308,7 @@ const app = createApp({
             const normalized = String(level || '').toUpperCase();
             if (normalized === 'WARNING') return 'WARN';
             if (normalized === 'CRITICAL') return 'ERROR';
+            if (normalized === 'SUCCESS') return 'OK';
             if (normalized === 'DEBUG' || normalized === 'WARN' || normalized === 'ERROR') {
                 return normalized;
             }
@@ -1282,7 +1353,6 @@ const app = createApp({
         clearLogs() {
             if (confirm('确定清除所有日志吗？')) {
                 this.logs = [];
-                this.lastLogTimestamp = Date.now() / 1000;
 
                 this.apiRequest('/api/logs', { method: 'DELETE' })
                     .catch(() => { });
@@ -2132,6 +2202,11 @@ const app = createApp({
         },
 
         async ensureTabDataLoaded(tab) {
+            if (tab === 'marketplace' && !this.hasLoadedMarketplace) {
+                this.hasLoadedMarketplace = true;
+                await this.loadMarketplaceCatalog({ silent: true });
+                return;
+            }
             if (tab === 'settings' && !this.hasLoadedSettings) {
                 this.hasLoadedSettings = true;
                 await Promise.all([
@@ -2142,6 +2217,434 @@ const app = createApp({
                 ]);
                 return;
             }
+        },
+
+        async loadMarketplaceCatalog({ silent = false, force = false } = {}) {
+            this.marketplaceLoading = true;
+            this.marketplaceError = '';
+            try {
+                const suffix = force ? '?refresh=true' : '';
+                const data = await this.apiRequest('/api/marketplace' + suffix);
+                this.marketplaceCatalog = {
+                    items: [],
+                    count: 0,
+                    total_downloads: 0,
+                    default_sort: 'downloads',
+                    source_mode: 'local',
+                    source_name: '配置市场',
+                    source_url: '',
+                    upload_url: '',
+                    warning: '',
+                    ...(data || {})
+                };
+                if (!silent) {
+                    this.notify('插件市场已刷新', 'success');
+                }
+                return true;
+            } catch (error) {
+                this.marketplaceError = error.message;
+                if (!silent) {
+                    this.notify('加载插件市场失败: ' + error.message, 'error');
+                }
+                return false;
+            } finally {
+                this.marketplaceLoading = false;
+            }
+        },
+
+        openMarketplace() {
+            window.location.href = '/static/marketplace.html';
+        },
+
+        openExternalLink(url) {
+            const target = String(url || '').trim();
+            if (!target) {
+                this.notify('当前项目没有可打开的外部链接', 'warning');
+                return;
+            }
+            window.open(target, '_blank', 'noopener,noreferrer');
+        },
+
+        async previewMarketplaceItem(item) {
+            if (!item || !item.id) {
+                return;
+            }
+            try {
+                const detail = await this.apiRequest('/api/marketplace/items/' + encodeURIComponent(item.id));
+                this.marketplacePreviewTitle = '市场预览 · ' + (detail.name || item.name || item.id);
+                this.marketplacePreviewData = detail;
+                this.showMarketplacePreview = true;
+            } catch (error) {
+                this.notify('加载预览失败: ' + error.message, 'error');
+            }
+        },
+
+        copyMarketplacePreview() {
+            const payload = JSON.stringify(this.marketplacePreviewData || {}, null, 2);
+            navigator.clipboard.writeText(payload)
+                .then(() => this.notify('预览内容已复制', 'success'))
+                .catch(() => this.notify('复制失败', 'error'));
+        },
+
+        saveMarketplacePreview() {
+            const payload = JSON.stringify(this.marketplacePreviewData || {}, null, 2);
+            this.downloadDataAsJson('marketplace-preview-' + Date.now() + '.json', payload);
+            this.notify('预览文件已导出', 'success');
+        },
+
+        openMarketplaceSubmitDialog() {
+            this.resetMarketplaceSubmitForm();
+            this.showMarketplaceSubmitDialog = true;
+        },
+
+        resetMarketplaceSubmitForm() {
+            this.marketplaceSubmitForm = {
+                item_type: 'site_config',
+                title: this.currentDomain ? (this.currentDomain + ' 配置投稿') : '',
+                summary: '',
+                author: '本地投稿',
+                site_domain: this.currentDomain || '',
+                category: this.currentDomain || '',
+                preset_name: this.getActivePresetName(),
+                compatibility: '',
+                version: '1.0.0',
+                tagsText: '',
+                selected_command_ids: []
+            };
+        },
+
+        async setMarketplaceSubmitType(itemType) {
+            this.marketplaceSubmitForm.item_type = itemType;
+            if (itemType === 'command_bundle') {
+                if (!this.marketplaceCommandOptions.length) {
+                    await this.loadMarketplaceCommandOptions();
+                }
+                this.marketplaceSubmitForm.title = this.marketplaceSubmitForm.title || '命令包投稿';
+                this.marketplaceSubmitForm.category = '命令系统';
+            } else {
+                this.marketplaceSubmitForm.site_domain = this.marketplaceSubmitForm.site_domain || this.currentDomain || '';
+                this.marketplaceSubmitForm.category = this.marketplaceSubmitForm.category || this.marketplaceSubmitForm.site_domain;
+                this.marketplaceSubmitForm.preset_name = this.marketplaceSubmitForm.preset_name || this.getActivePresetName();
+            }
+        },
+
+        async loadMarketplaceCommandOptions() {
+            this.marketplaceCommandLoading = true;
+            try {
+                const data = await this.apiRequest('/api/commands');
+                const commands = Array.isArray(data.commands) ? data.commands : [];
+                commands.sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'zh-CN'));
+                this.marketplaceCommandOptions = commands;
+                return commands;
+            } catch (error) {
+                this.notify('加载命令列表失败: ' + error.message, 'error');
+                return [];
+            } finally {
+                this.marketplaceCommandLoading = false;
+            }
+        },
+
+        parseMarketplaceTags(text) {
+            return String(text || '')
+                .split(/[,\n，]/)
+                .map(item => item.trim())
+                .filter(Boolean);
+        },
+
+        sanitizeCommandForBundle(command) {
+            const cloned = JSON.parse(JSON.stringify(command || {}));
+            delete cloned.last_triggered;
+            delete cloned.trigger_count;
+            return cloned;
+        },
+
+        getMarketplaceSelectedCommands() {
+            const selectedIds = new Set(this.marketplaceSubmitForm.selected_command_ids || []);
+            return (this.marketplaceCommandOptions || [])
+                .filter(command => selectedIds.has(command.id))
+                .map(command => this.sanitizeCommandForBundle(command));
+        },
+
+        buildMarketplaceSubmissionPayload() {
+            const form = this.marketplaceSubmitForm || {};
+            const title = String(form.title || '').trim();
+            const summary = String(form.summary || '').trim();
+            const author = String(form.author || '本地投稿').trim() || '本地投稿';
+            const category = String(form.category || '').trim();
+            const presetName = String(form.preset_name || this.getActivePresetName() || '主预设').trim() || '主预设';
+            const compatibility = String(form.compatibility || '').trim();
+            const version = String(form.version || '1.0.0').trim() || '1.0.0';
+            const tags = this.parseMarketplaceTags(form.tagsText);
+
+            if (!title) {
+                throw new Error('请填写标题');
+            }
+            if (!summary) {
+                throw new Error('请填写简介');
+            }
+
+            if (form.item_type === 'command_bundle') {
+                const commands = this.getMarketplaceSelectedCommands();
+                if (!commands.length) {
+                    throw new Error('请至少选择一个命令');
+                }
+                return {
+                    item_type: 'command_bundle',
+                    title,
+                    summary,
+                    author,
+                    category: category || '命令系统',
+                    compatibility,
+                    version,
+                    tags,
+                    command_bundle: {
+                        group_name: '',
+                        commands
+                    }
+                };
+            }
+
+            const siteDomain = String(form.site_domain || this.currentDomain || '').trim();
+            if (!siteDomain) {
+                throw new Error('请填写站点域名');
+            }
+            const presetConfig = this.getActivePresetConfig();
+            if (!presetConfig) {
+                throw new Error('当前没有可上传的站点配置');
+            }
+
+            return {
+                item_type: 'site_config',
+                title,
+                summary,
+                author,
+                category: category || siteDomain,
+                site_domain: siteDomain,
+                preset_name: presetName,
+                compatibility,
+                version,
+                tags,
+                site_config: {
+                    [siteDomain]: {
+                        default_preset: presetName,
+                        presets: {
+                            [presetName]: JSON.parse(JSON.stringify(presetConfig))
+                        }
+                    }
+                }
+            };
+        },
+
+        getMarketplaceSubmissionPreviewText() {
+            try {
+                return JSON.stringify(this.buildMarketplaceSubmissionPayload(), null, 2);
+            } catch (error) {
+                return '// 预览暂不可用: ' + error.message;
+            }
+        },
+
+        async submitMarketplaceItem() {
+            let payload = null;
+            try {
+                payload = this.buildMarketplaceSubmissionPayload();
+            } catch (error) {
+                this.notify(error.message, 'warning');
+                return;
+            }
+
+            this.marketplaceSubmitSaving = true;
+            try {
+                await this.apiRequest('/api/marketplace/items', {
+                    method: 'POST',
+                    body: JSON.stringify(payload)
+                });
+                this.showMarketplaceSubmitDialog = false;
+                this.activeTab = 'marketplace';
+                this.hasLoadedMarketplace = true;
+                await this.loadMarketplaceCatalog({ silent: true, force: true });
+                this.notify('投稿已加入本地市场', 'success');
+            } catch (error) {
+                this.notify('投稿失败: ' + error.message, 'error');
+            } finally {
+                this.marketplaceSubmitSaving = false;
+            }
+        },
+
+        async startMarketplaceImport(item) {
+            if (!item || !item.id) {
+                return;
+            }
+
+            this.marketplaceImportingId = item.id;
+            try {
+                const detail = await this.apiRequest('/api/marketplace/items/' + encodeURIComponent(item.id));
+                if (detail.item_type === 'command_bundle') {
+                    await this.importMarketplaceCommandBundle(detail);
+                    return;
+                }
+
+                this.marketplacePendingImport = detail;
+                this.marketplaceImportStrategy = 'overwrite';
+                this.marketplaceImportPresetName = (detail.name || detail.preset_name || '市场预设').trim();
+                this.showMarketplaceImportDialog = true;
+            } catch (error) {
+                this.notify('加载导入内容失败: ' + error.message, 'error');
+            } finally {
+                this.marketplaceImportingId = null;
+            }
+        },
+
+        async confirmMarketplaceImport() {
+            if (!this.marketplacePendingImport) {
+                return;
+            }
+
+            try {
+                if (this.marketplaceImportStrategy === 'save_as_preset') {
+                    await this.applyMarketplaceSiteSaveAsPreset();
+                } else {
+                    await this.applyMarketplaceSiteOverwrite();
+                }
+                this.showMarketplaceImportDialog = false;
+                this.marketplacePendingImport = null;
+                this.activeTab = 'config';
+            } catch (error) {
+                this.notify('导入失败: ' + error.message, 'error');
+            }
+        },
+
+        getSingleImportedSite(detail) {
+            const siteConfig = detail && detail.site_config;
+            if (!this.validateImportedConfig(siteConfig)) {
+                throw new Error('市场配置格式无效');
+            }
+
+            const domains = Object.keys(siteConfig || {});
+            if (domains.length !== 1) {
+                throw new Error('当前仅支持单站点配置导入');
+            }
+
+            const domain = domains[0];
+            const normalizedMap = this.normalizeConfig(siteConfig);
+            const normalizedSite = normalizedMap[domain];
+            if (!normalizedSite) {
+                throw new Error('站点配置解析失败');
+            }
+
+            return { domain, site: normalizedSite };
+        },
+
+        async applyMarketplaceSiteOverwrite() {
+            const imported = this.getSingleImportedSite(this.marketplacePendingImport);
+            this.sites[imported.domain] = imported.site;
+            this.currentDomain = imported.domain;
+            await this.apiRequest('/api/config', {
+                method: 'POST',
+                body: JSON.stringify({ config: this.sites })
+            });
+            this.notify('站点配置已覆盖导入: ' + imported.domain, 'success');
+        },
+
+        async applyMarketplaceSiteSaveAsPreset() {
+            const imported = this.getSingleImportedSite(this.marketplacePendingImport);
+            const newPresetName = String(this.marketplaceImportPresetName || '').trim();
+            if (!newPresetName) {
+                throw new Error('请填写另存为预设名称');
+            }
+
+            const targetSite = this.sites[imported.domain]
+                ? JSON.parse(JSON.stringify(this.sites[imported.domain]))
+                : { default_preset: newPresetName, presets: {} };
+
+            if (targetSite.presets && targetSite.presets[newPresetName]) {
+                throw new Error('该预设名已存在，请换一个名字');
+            }
+
+            const importedPresets = imported.site.presets || {};
+            const sourcePresetName = imported.site.default_preset && importedPresets[imported.site.default_preset]
+                ? imported.site.default_preset
+                : Object.keys(importedPresets)[0];
+            if (!sourcePresetName) {
+                throw new Error('导入内容缺少预设');
+            }
+
+            targetSite.presets = targetSite.presets || {};
+            targetSite.presets[newPresetName] = JSON.parse(JSON.stringify(importedPresets[sourcePresetName]));
+            targetSite.default_preset = targetSite.default_preset || newPresetName;
+            this.sites[imported.domain] = targetSite;
+            this.currentDomain = imported.domain;
+
+            await this.apiRequest('/api/config', {
+                method: 'POST',
+                body: JSON.stringify({ config: this.sites })
+            });
+            this.notify('站点配置已另存为预设: ' + newPresetName, 'success');
+        },
+
+        prepareCommandImportPayload(command) {
+            const cloned = JSON.parse(JSON.stringify(command || {}));
+            delete cloned.id;
+            delete cloned.last_triggered;
+            delete cloned.trigger_count;
+            return cloned;
+        },
+
+        async importMarketplaceCommandBundle(detail) {
+            const bundle = detail && detail.command_bundle;
+            const commands = Array.isArray(bundle && bundle.commands) ? bundle.commands : [];
+            if (!commands.length) {
+                throw new Error('命令包为空');
+            }
+
+            const idMap = {};
+            const importedCommands = [];
+
+            for (const command of commands) {
+                const oldId = command.id;
+                const payload = this.prepareCommandImportPayload(command);
+                const response = await this.apiRequest('/api/commands', {
+                    method: 'POST',
+                    body: JSON.stringify(payload)
+                });
+                const created = response.command;
+                importedCommands.push(created);
+                if (oldId && created && created.id) {
+                    idMap[oldId] = created.id;
+                }
+            }
+
+            for (let index = 0; index < commands.length; index++) {
+                const original = commands[index];
+                const created = importedCommands[index];
+                if (!original || !created || !original.trigger) {
+                    continue;
+                }
+
+                const trigger = JSON.parse(JSON.stringify(original.trigger));
+                if (trigger.command_id && idMap[trigger.command_id]) {
+                    trigger.command_id = idMap[trigger.command_id];
+                }
+                if (Array.isArray(trigger.command_ids)) {
+                    trigger.command_ids = trigger.command_ids.map(commandId => idMap[commandId] || commandId);
+                }
+
+                await this.apiRequest('/api/commands/' + encodeURIComponent(created.id), {
+                    method: 'PUT',
+                    body: JSON.stringify({ trigger })
+                });
+            }
+
+            this.notify('命令包已导入，共 ' + importedCommands.length + ' 条命令', 'success');
+        },
+
+        downloadDataAsJson(filename, payloadText) {
+            const blob = new Blob([payloadText], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = filename;
+            link.click();
+            URL.revokeObjectURL(url);
         },
 
         // ========== 预设辅助方法 ==========
@@ -2644,6 +3147,7 @@ const app = createApp({
 // ========== 组件注册 ==========
 app.component('sidebar-component', window.SidebarComponent);
 app.component('config-tab', window.ConfigTab);
+app.component('marketplace-tab', window.MarketplaceTab);
 app.component('tabpool-tab', window.TabPoolTabComponent);
 app.component('commands-tab', window.CommandsTabComponent);  // 🆕 命令系统
 app.component('logs-tab', window.LogsTab);
@@ -2659,7 +3163,7 @@ app.component('definition-dialog', window.DefinitionDialog);
 app.mixin({
     computed: {
         $icons() {
-            return window.icons || {}; 
+            return window.$icons || window.icons || {};
         }
     }
 });

@@ -651,6 +651,7 @@ class TextInputHandler:
     def chunked_input(self, ele, text: str, chunk_size: int = CHUNK_SIZE_THRESHOLD) -> bool:
         """分块写入逻辑（普通模式用）"""
         total_len = len(text)
+        total_chunks = max(1, (total_len + max(1, chunk_size) - 1) // max(1, chunk_size))
         
         # 情况1：短文本直接一次写入
         if total_len <= chunk_size:
@@ -658,7 +659,10 @@ class TextInputHandler:
             return self.set_input_atomic(ele, text, mode="overwrite")
 
         # 情况2：长文本分块写入
-        logger.info(f"[CHUNKED_INPUT] 长文本模式: {total_len} 字符，分块大小 {chunk_size}")
+        logger.info(
+            f"[CHUNKED_INPUT] 长文本模式: {total_len} 字符，分块大小 {chunk_size}，"
+            f"预计 {total_chunks} 块"
+        )
         
         # 首块：覆盖写入
         first_chunk = text[:chunk_size]
@@ -669,12 +673,16 @@ class TextInputHandler:
                 logger.error("[CHUNKED_INPUT] 首块写入彻底失败")
                 return False
         
-        logger.debug(f"[CHUNKED_INPUT] 首块完成: 0-{chunk_size}")
+        logger.debug(
+            f"[CHUNKED_INPUT] 首块完成: 1/{total_chunks} "
+            f"(chars=0-{len(first_chunk)})"
+        )
         time.sleep(0.1)
         
         # 后续块：追加写入
         current_pos = chunk_size
         chunk_index = 1
+        next_progress_pct = 25
         
         while current_pos < total_len:
             if self._check_cancelled():
@@ -690,7 +698,19 @@ class TextInputHandler:
                     logger.error(f"[CHUNKED_INPUT] 备用方案也失败")
                     return False
             
-            logger.debug(f"[CHUNKED_INPUT] 第 {chunk_index} 块完成: {current_pos}-{end_pos}")
+            completed_chunks = chunk_index + 1
+            progress_pct = int(end_pos * 100 / max(1, total_len))
+            if (
+                completed_chunks <= 3
+                or completed_chunks == total_chunks
+                or progress_pct >= next_progress_pct
+            ):
+                logger.debug(
+                    f"[CHUNKED_INPUT] 进度 {completed_chunks}/{total_chunks} "
+                    f"({progress_pct}%, chars={current_pos}-{end_pos})"
+                )
+                while progress_pct >= next_progress_pct:
+                    next_progress_pct += 25
             current_pos = end_pos
             chunk_index += 1
             time.sleep(0.08)
@@ -1714,7 +1734,11 @@ class TextInputHandler:
             if not skip_verify:
                 self._stealth_verify_paste_light(ele, text)
             else:
-                logger.debug("[STEALTH] 跳过粘贴验证")
+                logger.debug_throttled(
+                    "stealth.skip_paste_verify",
+                    "[STEALTH] 跳过粘贴验证",
+                    interval_sec=15.0,
+                )
         
         except WorkflowError:
             raise
@@ -1802,7 +1826,11 @@ class TextInputHandler:
             if not skip_verify:
                 self._stealth_verify_paste_light(ele, text)
             else:
-                logger.debug("[STEALTH] 跳过粘贴验证（STEALTH_SKIP_PASTE_VERIFY=true）")
+                logger.debug_throttled(
+                    "stealth.skip_paste_verify",
+                    "[STEALTH] 跳过粘贴验证（STEALTH_SKIP_PASTE_VERIFY=true）",
+                    interval_sec=15.0,
+                )
     
         except WorkflowError:
             raise

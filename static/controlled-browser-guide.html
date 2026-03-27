@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-guide-lang="zh">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -117,7 +117,17 @@
             font-size: clamp(2.3rem, 4.8vw, 4rem);
             line-height: 1.02;
             letter-spacing: 0.01em;
+            overflow-wrap: anywhere;
+        }
+        html[data-guide-lang="zh"] .hero-title {
             white-space: nowrap;
+        }
+        html[data-guide-lang="en"] .hero-title {
+            max-width: 100%;
+            font-size: clamp(1.95rem, 4vw, 3.35rem);
+            line-height: 1.08;
+            white-space: normal;
+            text-wrap: balance;
         }
         .hero-copy, .section-copy, .note-copy, .utility-copy {
             color: var(--body);
@@ -276,6 +286,10 @@
             .lang-switch { width: 100%; }
             .lang-btn { flex: 1 1 0; min-width: 0; }
             .hero-title { font-size: clamp(1.75rem, 7vw, 2.5rem); }
+            html[data-guide-lang="en"] .hero-title {
+                font-size: clamp(1.55rem, 5.8vw, 2.3rem);
+                line-height: 1.1;
+            }
             .reveal.visible { padding-left: 18px; padding-right: 18px; }
             .action-btn { width: 100%; }
         }
@@ -566,6 +580,7 @@
             const texts = bundle();
 
             document.documentElement.lang = texts.lang;
+            document.documentElement.dataset.guideLang = state.currentLanguage;
             document.title = texts.title;
             els.languageSwitch.setAttribute('aria-label', texts.languageLabel);
             els.heroBadge.textContent = texts.heroBadge;

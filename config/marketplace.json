@@ -1,0 +1,7 @@
+{
+  "source_name": "公共插件市场",
+  "source_url": "https://raw.githubusercontent.com/lumingya/universal-web-api/main/config/marketplace.json",
+  "repo_url": "https://github.com/lumingya/universal-web-api",
+  "upload_url": "https://github.com/lumingya/universal-web-api/issues/new?template=marketplace_submission.md",
+  "items": []
+}

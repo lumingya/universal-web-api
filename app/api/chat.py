@@ -9,6 +9,7 @@ app/api/chat.py - 核心聊天 API
 
 import json
 import os
+import re
 import time
 import asyncio
 import queue
@@ -34,19 +35,12 @@ from app.services.tool_calling import (
     iter_tool_stream_chunks,
     normalize_tool_request,
     parse_tool_response,
+    summarize_messages_for_debug,
 )
 
 logger = get_logger("API.CHAT")
 
 router = APIRouter()
-
-
-def _debug_preview(value: Any, limit: int = 240) -> str:
-    text = repr(value)
-    if len(text) <= limit:
-        return text
-    return text[: limit - 3] + "..."
-
 
 def _extract_stream_error_message(chunk: Any) -> str:
     if not isinstance(chunk, str) or not chunk.startswith("data: "):
@@ -248,12 +242,13 @@ async def chat_completions(
                 logger.debug(f"检测到 response_format.type={format_type}，转化为提示词")
                 body.messages = _apply_response_format(body.messages, body.response_format)
         
-        # 调试日志
         try:
-            raw = json.dumps(body.messages, ensure_ascii=False)
-            logger.debug(f"messages_preview={raw[:3000]}")
+            logger.debug(
+                "[chat] 请求消息摘要: "
+                f"{summarize_messages_for_debug(body.messages)}"
+            )
         except Exception as e:
-            logger.debug(f"messages_preview_failed: {e}")
+            logger.debug(f"[chat] 请求消息摘要生成失败: {e}")
 
         if has_tool_calling_request(
             messages=body.messages,
@@ -456,14 +451,31 @@ async def _non_stream_with_lifecycle(
         return JSONResponse(content=error_data, status_code=500)
 
     full_content = "".join(collected_content)
-    
-    # 将图片 base64 转为 Markdown 格式嵌入 content
+
     if collected_images:
-        for idx, img_b64 in enumerate(collected_images):
-            if img_b64.startswith("data:"):
-                full_content += f"\n![image_{idx}]({img_b64})"
+        normalized_images = []
+        for ref in collected_images:
+            value = str(ref or "").strip()
+            if value and value not in normalized_images:
+                normalized_images.append(value)
+        collected_images = normalized_images
+
+        placeholder_pattern = re.compile(
+            r"^\s*https?://(?:[\w.-]+\.)?googleusercontent\.com/image_generation_content/\d+\s*$",
+            re.IGNORECASE | re.MULTILINE,
+        )
+        full_content = placeholder_pattern.sub("", full_content)
+        full_content = re.sub(r"\n{3,}", "\n\n", full_content).strip()
+
+        if "![image_" not in full_content and collected_images:
+            markdown = "\n".join(
+                f"![image_{idx}]({ref})"
+                for idx, ref in enumerate(collected_images)
+            )
+            if full_content:
+                full_content = f"{full_content}\n\n{markdown}"
             else:
-                full_content += f"\n![image_{idx}](data:image/png;base64,{img_b64})"
+                full_content = markdown
     
     message = {
         "role": "assistant",
@@ -558,14 +570,7 @@ def _run_tool_calling_sync(
         stop_checker=stop_checker,
     )
     assistant_text = _extract_assistant_content(browser_response)
-    logger.debug(f"tool_calling assistant_text={_debug_preview(assistant_text)}")
     parsed = parse_tool_response(assistant_text, tools)
-    logger.debug(
-        "tool_calling parsed result "
-        f"mode={parsed.get('mode')} "
-        f"tool_calls={len(parsed.get('tool_calls') or [])} "
-        f"content={_debug_preview(parsed.get('content'))}"
-    )
     return build_tool_completion_response(body.model, parsed)
 
 

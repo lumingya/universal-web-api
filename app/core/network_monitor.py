@@ -140,6 +140,7 @@ class NetworkMonitor:
         # 状态追踪
         self._is_listening = False
         self._total_chunks = 0
+        self._total_content_chars = 0
         self._prefetched_responses = []
         
         logger.debug(
@@ -619,6 +620,7 @@ class NetworkMonitor:
         # 重置解析器状态
         self.parser.reset()
         self._total_chunks = 0
+        self._total_content_chars = 0
         
         # 兜底：如果 pre_start 未被调用，在此启动（可能错过首包）
         if not self._is_listening or not self._listen_is_active():
@@ -644,6 +646,10 @@ class NetworkMonitor:
         has_seen_stream_target = False
         last_activity_time = time.time()
         listen_restart_attempts = 0
+        total_responses = 0
+        non_target_skips = 0
+        empty_body_skips = 0
+        stream_target_hits = 0
 
         while True:
             # 检查全局超时
@@ -701,6 +707,7 @@ class NetworkMonitor:
             if not has_received_response:
                 has_received_response = True
                 logger.debug("[NetworkMonitor] 已捕获到首次响应")
+            total_responses += 1
             last_activity_time = time.time()
             listen_restart_attempts = 0
 
@@ -713,32 +720,36 @@ class NetworkMonitor:
                 raise NetworkInterceptionTriggered("network_intercepted")
 
             if self.parser.get_id() == "event_only":
-                if not has_received_response:
-                    has_received_response = True
+                if total_responses == 1:
                     logger.debug("[NetworkMonitor] event-only 已捕获到首个网络事件")
                 last_activity_time = time.time()
                 continue
 
             if not self._matches_stream_target(event):
-                logger.debug(
+                non_target_skips += 1
+                logger.debug_throttled(
+                    "network.non_target_response",
                     f"[NetworkMonitor] 非流式目标响应，跳过解析 "
-                    f"(url={event.get('url', '')[:100]})"
+                    f"(count={non_target_skips}, url={event.get('url', '')[:100]})",
+                    interval_sec=5.0,
                 )
                 continue
 
             if not has_seen_stream_target:
                 has_seen_stream_target = True
                 logger.debug("[NetworkMonitor] 已捕获到首个流目标响应")
+            stream_target_hits += 1
 
-            logger.debug(
+            logger.debug_throttled(
+                "network.stream_target_hit",
                 "[NetworkMonitor] 命中流目标 "
                 f"(status={event.get('status')}, method={event.get('method')}, "
-                f"url={event.get('url', '')[:120]})"
+                f"url={event.get('url', '')[:120]}, count={stream_target_hits})",
+                interval_sec=3.0,
             )
 
-            if not has_received_response:
-                has_received_response = True
-                logger.debug("[NetworkMonitor] 已捕获到首个有效响应")
+            if stream_target_hits == 1:
+                logger.debug("[NetworkMonitor] 已捕获到首个有效流响应")
             last_activity_time = time.time()
 
             # 检查响应对象结构
@@ -774,15 +785,21 @@ class NetworkMonitor:
                 )
 
             if not raw_body:
-                logger.debug(
+                empty_body_skips += 1
+                logger.debug_throttled(
+                    "network.empty_body",
                     "[NetworkMonitor] 响应体为空，跳过 "
-                    f"(stream={is_event_stream}, source={raw_body_source})"
+                    f"(count={empty_body_skips}, stream={is_event_stream}, source={raw_body_source})",
+                    interval_sec=5.0,
                 )
                 continue
 
-            logger.debug(
+            logger.debug_throttled(
+                "network.body_captured",
                 f"[NetworkMonitor] 捕获响应 "
-                f"(source={raw_body_source}, size={len(raw_body)} chars)"
+                f"(responses={total_responses}, targets={stream_target_hits}, "
+                f"source={raw_body_source}, size={len(raw_body)} chars)",
+                interval_sec=3.0,
             )
 
             # 解析响应
@@ -821,16 +838,32 @@ class NetworkMonitor:
             done = parse_result.get("done", False)
 
             if content:
-                logger.debug(f"[NetworkMonitor] parsed content={_debug_preview(content)}")
                 last_activity_time = time.time()
                 self._total_chunks += 1
+                self._total_content_chars += len(content)
+                if (
+                    self._total_chunks <= 3
+                    or self._total_chunks % 10 == 0
+                    or done
+                ):
+                    logger.debug(
+                        f"[NetworkMonitor] 输出片段 #{self._total_chunks} "
+                        f"(len={len(content)}, total_chars={self._total_content_chars}, "
+                        f"preview={_debug_preview(content)})"
+                    )
                 yield self.formatter.pack_chunk(content, completion_id=completion_id)
 
             if done:
                 logger.debug("[NetworkMonitor] 检测到结束标志，完成监听")
                 break
 
-        logger.debug(f"[NetworkMonitor] 监听结束 (chunks={self._total_chunks}, duration={time.time() - phase_start:.1f}s)")
+        logger.debug(
+            "[NetworkMonitor] 监听结束 "
+            f"(responses={total_responses}, targets={stream_target_hits}, "
+            f"chunks={self._total_chunks}, chars={self._total_content_chars}, "
+            f"non_target={non_target_skips}, empty_body={empty_body_skips}, "
+            f"duration={time.time() - phase_start:.1f}s)"
+        )
         
     def _cleanup(self):
         """

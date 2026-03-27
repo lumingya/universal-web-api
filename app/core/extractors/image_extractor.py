@@ -124,9 +124,84 @@ class ImageExtractor:
         }
 
         // ===== 4. 收集基础信息 =====
+        function stripRuntimeFields(item) {
+            const { _node, ...rest } = item || {};
+            return rest;
+        }
+
+        function estimateByteSizeFromDataUri(dataUri) {
+            try {
+                const base64 = String(dataUri || "").split(",", 2)[1] || "";
+                const paddingMatch = base64.match(/=*$/);
+                const padding = paddingMatch ? paddingMatch[0].length : 0;
+                return Math.max(0, Math.floor(base64.length * 3 / 4) - padding);
+            } catch {
+                return null;
+            }
+        }
+
+        async function blobToDataUri(blob) {
+            const dataUri = await new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onerror = () => reject(new Error("read_failed"));
+                reader.onload = () => resolve(reader.result);
+                reader.readAsDataURL(blob);
+            });
+            return {
+                dataUri: dataUri,
+                mime: blob.type || null,
+                byteSize: Number(blob.size) || null,
+                source: "blob"
+            };
+        }
+
+        async function imageElementToDataUri(img) {
+            if (!img) {
+                throw new Error("img_missing");
+            }
+
+            if (typeof img.decode === "function") {
+                try {
+                    await img.decode();
+                } catch {}
+            }
+
+            const width = img.naturalWidth || img.width || 0;
+            const height = img.naturalHeight || img.height || 0;
+            if (!img.complete || width <= 0 || height <= 0) {
+                throw new Error("img_not_ready");
+            }
+
+            const canvas = document.createElement("canvas");
+            canvas.width = width;
+            canvas.height = height;
+
+            const ctx = canvas.getContext("2d");
+            if (!ctx) {
+                throw new Error("canvas_ctx_unavailable");
+            }
+
+            ctx.drawImage(img, 0, 0, width, height);
+
+            let dataUri;
+            try {
+                dataUri = canvas.toDataURL("image/png");
+            } catch (e) {
+                throw new Error("canvas_export_failed:" + String(e).slice(0, 80));
+            }
+
+            return {
+                dataUri: dataUri,
+                mime: "image/png",
+                byteSize: estimateByteSizeFromDataUri(dataUri),
+                source: "blob_canvas"
+            };
+        }
+
         let items = nodes.map((img, i) => {
             const src = pickSrc(img);
             return {
+                _node: img,
                 index: i,
                 src: src,
                 alt: img.getAttribute("alt") || "",
@@ -167,11 +242,14 @@ class ImageExtractor:
 
             // 先添加非 blob 项
             for (const x of nonBlobItems) {
-                out.push({ ...x });
+                out.push(stripRuntimeFields(x));
             }
 
-            // 逐个处理 blob（fetch + FileReader）
+            // 逐个处理 blob（优先 fetch，失败时回退到 canvas）
             for (const x of blobItems) {
+                let converted = null;
+                let fetchError = null;
+
                 try {
                     const res = await fetch(x.src);
                     const blob = await res.blob();
@@ -188,29 +266,34 @@ class ImageExtractor:
                         continue;
                     }
 
-                    // 转换为 data uri
-                    const dataUri = await new Promise((resolve, reject) => {
-                        const reader = new FileReader();
-                        reader.onerror = () => reject(new Error("read_failed"));
-                        reader.onload = () => resolve(reader.result);
-                        reader.readAsDataURL(blob);
-                    });
-
-                    out.push({
-                        ...x,
-                        data_uri: dataUri,
-                        mime: blob.type,
-                        byte_size: blob.size,
-                        _source: "blob"
-                    });
+                    converted = await blobToDataUri(blob);
                 } catch (e) {
-                    warnings.push("blob_fetch_failed:" + String(e).slice(0, 100));
+                    fetchError = e;
                 }
+
+                if (!converted) {
+                    try {
+                        converted = await imageElementToDataUri(x._node);
+                    } catch (canvasError) {
+                        const fetchMsg = fetchError ? String(fetchError).slice(0, 60) : "n/a";
+                        const canvasMsg = String(canvasError).slice(0, 60);
+                        warnings.push("blob_convert_failed:fetch=" + fetchMsg + ";canvas=" + canvasMsg);
+                        continue;
+                    }
+                }
+
+                out.push({
+                    ...stripRuntimeFields(x),
+                    data_uri: converted.dataUri,
+                    mime: converted.mime,
+                    byte_size: converted.byteSize,
+                    _source: converted.source
+                });
             }
         } else {
             // 不下载 blob，直接返回所有项（blob URL 可能会失效）
             for (const x of items) {
-                out.push({ ...x });
+                out.push(stripRuntimeFields(x));
             }
         }
 

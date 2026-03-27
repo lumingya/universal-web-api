@@ -11,6 +11,7 @@ from fastapi import APIRouter
 # 导入子路由
 from app.api.chat import router as chat_router
 from app.api.config_routes import router as config_router
+from app.api.marketplace_routes import router as marketplace_router
 from app.api.system import router as system_router
 from app.api.tab_routes import router as tab_router
 from app.api.cmd_routes import router as cmd_router  # 🆕 命令系统
@@ -21,6 +22,7 @@ router = APIRouter()
 # 聚合所有子路由
 router.include_router(chat_router)
 router.include_router(config_router)
+router.include_router(marketplace_router)
 router.include_router(system_router)
 router.include_router(tab_router)
 router.include_router(cmd_router)  # 🆕

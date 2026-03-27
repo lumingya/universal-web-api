@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>插件市场</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="/static/css/marketplace.css?v=2.7.0">
+</head>
+<body>
+    <div id="marketplace-app" v-cloak class="mp-page">
+        <div class="mp-topbar">
+            <div class="mp-topbar__left">
+                <button type="button" class="mp-button mp-button--ghost" @click="goDashboard">返回控制台</button>
+                <div class="mp-heading">
+                    <h1>插件市场</h1>
+                    <p>站点配置与命令系统，默认按下载量排序</p>
+                </div>
+            </div>
+            <div class="mp-topbar__actions">
+                <button type="button" class="mp-button mp-button--ghost" @click="toggleDarkMode">
+                    {{ darkMode ? '浅色模式' : '深色模式' }}
+                </button>
+                <button type="button" class="mp-button mp-button--primary" @click="openSubmitDialog">{{ submitEntryLabel }}</button>
+            </div>
+        </div>
+
+        <section class="mp-panel mp-panel--toolbar">
+            <div class="mp-toolbar">
+                <div class="mp-toolbar__title">
+                    <div class="mp-list-title">
+                        全部插件
+                        <span>({{ filteredItems.length }})</span>
+                    </div>
+                    <div class="mp-inline-meta">
+                        <span>{{ catalog.source_name || '本地插件市场' }}</span>
+                        <span>{{ catalog.count || 0 }} 项</span>
+                        <span>累计下载 {{ formatNumber(catalog.total_downloads || 0) }}</span>
+                        <span>默认按下载量</span>
+                    </div>
+                    <div class="mp-inline-links" v-if="catalog.source_url || catalog.repo_url || (submitIsExternal && catalog.upload_url)">
+                        <span class="mp-source-pill">{{ sourceBadgeLabel }}</span>
+                        <button v-if="catalog.source_url" type="button" class="mp-inline-link" @click="openLink(catalog.source_url)">查看目录 JSON</button>
+                        <button v-if="catalog.repo_url" type="button" class="mp-inline-link" @click="openLink(catalog.repo_url)">查看 GitHub 仓库</button>
+                        <button v-if="submitIsExternal && catalog.upload_url" type="button" class="mp-inline-link" @click="openLink(catalog.upload_url)">打开公共投稿页</button>
+                    </div>
+                </div>
+                <div class="mp-toolbar__actions">
+                    <button type="button" class="mp-button mp-button--ghost" @click="loadCatalog({ force: true })">刷新</button>
+                    <select v-model="sortBy" class="mp-control mp-control--select">
+                        <option value="downloads_desc">按下载量</option>
+                        <option value="updated_desc">按更新时间</option>
+                        <option value="stars_desc">按收藏数</option>
+                        <option value="name_asc">按名称</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="mp-filter-row">
+                <input
+                    v-model.trim="searchQuery"
+                    type="search"
+                    class="mp-control mp-control--search"
+                    placeholder="搜索标题、简介、站点或作者"
+                >
+                <div class="mp-segmented">
+                    <button
+                        v-for="option in typeOptions"
+                        :key="option.value"
+                        type="button"
+                        :class="['mp-chip', { 'is-active': selectedType === option.value }]"
+                        @click="selectedType = option.value"
+                    >
+                        {{ option.label }}
+                    </button>
+                </div>
+                <select v-if="siteOptions.length > 1 && selectedType !== 'command_bundle'" v-model="selectedSite" class="mp-control mp-control--select">
+                    <option value="all">全部站点</option>
+                    <option v-for="site in siteOptions" :key="site" :value="site">{{ site }}</option>
+                </select>
+            </div>
+
+            <div v-if="submitHelpText" class="mp-banner mp-banner--info">{{ submitHelpText }}</div>
+            <div v-if="catalog.warning" class="mp-banner mp-banner--warning">{{ catalog.warning }}</div>
+            <div v-if="error" class="mp-banner mp-banner--error">{{ error }}</div>
+        </section>
+
+        <section class="mp-panel mp-panel--list">
+            <div v-if="loading" class="mp-empty">
+                <h3>正在加载插件市场</h3>
+                <p>稍等一下，列表马上就好。</p>
+            </div>
+
+            <div v-else-if="filteredItems.length === 0" class="mp-empty">
+                <h3>还没有可显示的项目</h3>
+                <p>{{ emptyStateDescription }}</p>
+            </div>
+
+            <div v-else class="mp-list">
+                <article v-for="item in filteredItems" :key="item.id" class="mp-list-item">
+                    <div class="mp-list-item__main">
+                        <div class="mp-list-item__badges">
+                            <span class="mp-badge">{{ typeLabel(item.item_type) }}</span>
+                            <span v-if="item.site_domain" class="mp-badge mp-badge--muted">{{ item.site_domain }}</span>
+                            <span v-else-if="item.category" class="mp-badge mp-badge--muted">{{ item.category }}</span>
+                        </div>
+                        <h2 class="mp-item-title">{{ item.name }}</h2>
+                        <p class="mp-item-summary">{{ item.summary || '暂无简介' }}</p>
+                        <div class="mp-item-meta">
+                            <span>作者 {{ item.author || '社区贡献' }}</span>
+                            <span v-if="item.version">版本 {{ item.version }}</span>
+                            <span v-if="item.compatibility">兼容 {{ item.compatibility }}</span>
+                            <span v-if="item.updated_at">更新 {{ item.updated_at }}</span>
+                        </div>
+                        <div v-if="Array.isArray(item.tags) && item.tags.length" class="mp-tags">
+                            <span v-for="tag in item.tags" :key="item.id + '-' + tag" class="mp-tag">{{ tag }}</span>
+                        </div>
+                    </div>
+
+                    <div class="mp-list-item__side">
+                        <div class="mp-stats">
+                            <div class="mp-stat">
+                                <span>下载</span>
+                                <strong>{{ formatNumber(item.downloads || 0) }}</strong>
+                            </div>
+                            <div class="mp-stat">
+                                <span>收藏</span>
+                                <strong>{{ formatNumber(item.stars || 0) }}</strong>
+                            </div>
+                        </div>
+                        <div class="mp-actions">
+                            <button type="button" class="mp-button mp-button--ghost" @click="previewItem(item)">预览</button>
+                            <button
+                                type="button"
+                                class="mp-button mp-button--primary"
+                                :disabled="busyId === item.id"
+                                @click="startImport(item)"
+                            >
+                                {{ busyId === item.id ? '处理中...' : (item.item_type === 'command_bundle' ? '导入命令' : '导入配置') }}
+                            </button>
+                        </div>
+                    </div>
+                </article>
+            </div>
+        </section>
+
+        <div v-if="showPreviewDialog" class="mp-modal" @click.self="closePreviewDialog">
+            <div class="mp-modal__card mp-modal__card--wide">
+                <div class="mp-modal__header">
+                    <div>
+                        <h3>{{ previewDetail?.name || '项目预览' }}</h3>
+                        <p>{{ previewDetail?.summary || '查看项目详情与导入内容。' }}</p>
+                    </div>
+                    <button type="button" class="mp-button mp-button--ghost" @click="closePreviewDialog">关闭</button>
+                </div>
+                <div class="mp-modal__meta" v-if="previewDetail">
+                    <span>{{ typeLabel(previewDetail.item_type) }}</span>
+                    <span v-if="previewDetail.site_domain">{{ previewDetail.site_domain }}</span>
+                    <span>下载 {{ formatNumber(previewDetail.downloads || 0) }}</span>
+                    <span v-if="previewDetail.updated_at">更新 {{ previewDetail.updated_at }}</span>
+                </div>
+                <pre class="mp-json-preview">{{ previewJsonText }}</pre>
+                <div class="mp-modal__footer">
+                    <button type="button" class="mp-button mp-button--ghost" @click="copyPreviewJson">复制 JSON</button>
+                    <button type="button" class="mp-button mp-button--primary" @click="startImportFromPreview">导入这个项目</button>
+                </div>
+            </div>
+        </div>
+
+        <div v-if="showImportDialog" class="mp-modal" @click.self="closeImportDialog">
+            <div class="mp-modal__card">
+                <div class="mp-modal__header">
+                    <div>
+                        <h3>导入站点配置</h3>
+                        <p>可以覆盖当前站点配置，或者另存为新预设。</p>
+                    </div>
+                    <button type="button" class="mp-button mp-button--ghost" @click="closeImportDialog">关闭</button>
+                </div>
+                <div class="mp-radio-list">
+                    <label class="mp-radio-card">
+                        <input v-model="importStrategy" type="radio" value="overwrite">
+                        <div>
+                            <strong>覆盖站点配置</strong>
+                            <p>直接用市场中的配置替换这个站点当前内容。</p>
+                        </div>
+                    </label>
+                    <label class="mp-radio-card">
+                        <input v-model="importStrategy" type="radio" value="save_as_preset">
+                        <div class="mp-radio-card__body">
+                            <strong>另存为新预设</strong>
+                            <p>保留当前站点配置，只把导入内容保存成新的预设。</p>
+                            <input
+                                v-if="importStrategy === 'save_as_preset'"
+                                v-model.trim="importPresetName"
+                                type="text"
+                                class="mp-control"
+                                placeholder="输入新的预设名称"
+                            >
+                        </div>
+                    </label>
+                </div>
+                <div class="mp-modal__footer">
+                    <button type="button" class="mp-button mp-button--ghost" @click="closeImportDialog">取消</button>
+                    <button type="button" class="mp-button mp-button--primary" :disabled="importSaving" @click="confirmImport">
+                        {{ importSaving ? '导入中...' : '确认导入' }}
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div v-if="showSubmitDialog" class="mp-modal" @click.self="closeSubmitDialog">
+            <div class="mp-modal__card mp-modal__card--wide">
+                <div class="mp-modal__header">
+                    <div>
+                        <h3>投稿上传</h3>
+                        <p>{{ submitIsExternal ? '标题和简介必填，提交后会打开 GitHub 公共投稿页。' : '标题和简介必填，提交前会实时生成预览。' }}</p>
+                    </div>
+                    <button type="button" class="mp-button mp-button--ghost" @click="closeSubmitDialog">关闭</button>
+                </div>
+
+                <div v-if="submitIsExternal" class="mp-banner mp-banner--info mp-banner--compact">
+                    完整预览 JSON 会在提交时自动复制到剪贴板，打开 GitHub 后直接粘贴即可。
+                </div>
+
+                <div class="mp-segmented mp-segmented--wide">
+                    <button
+                        type="button"
+                        :class="['mp-chip', { 'is-active': submitForm.item_type === 'site_config' }]"
+                        @click="setSubmitType('site_config')"
+                    >
+                        站点配置
+                    </button>
+                    <button
+                        type="button"
+                        :class="['mp-chip', { 'is-active': submitForm.item_type === 'command_bundle' }]"
+                        @click="setSubmitType('command_bundle')"
+                    >
+                        命令系统
+                    </button>
+                </div>
+
+                <div class="mp-form-grid">
+                    <label class="mp-field">
+                        <span>标题</span>
+                        <input v-model.trim="submitForm.title" type="text" class="mp-control">
+                    </label>
+                    <label class="mp-field">
+                        <span>作者</span>
+                        <input v-model.trim="submitForm.author" type="text" class="mp-control">
+                    </label>
+                    <label class="mp-field mp-field--full">
+                        <span>简介</span>
+                        <textarea v-model.trim="submitForm.summary" rows="3" class="mp-control"></textarea>
+                    </label>
+
+                    <template v-if="submitForm.item_type === 'site_config'">
+                        <label class="mp-field">
+                            <span>站点</span>
+                            <select v-model="submitForm.site_domain" class="mp-control mp-control--select" @change="syncPresetSelection">
+                                <option value="" disabled>选择站点</option>
+                                <option v-for="site in availableSites" :key="site" :value="site">{{ site }}</option>
+                            </select>
+                        </label>
+                        <label class="mp-field">
+                            <span>预设</span>
+                            <select v-model="submitForm.preset_name" class="mp-control mp-control--select">
+                                <option value="" disabled>选择预设</option>
+                                <option v-for="preset in availablePresets" :key="preset" :value="preset">{{ preset }}</option>
+                            </select>
+                        </label>
+                    </template>
+
+                    <label class="mp-field">
+                        <span>分类</span>
+                        <input v-model.trim="submitForm.category" type="text" class="mp-control" :placeholder="submitForm.item_type === 'site_config' ? '默认使用站点域名' : '默认命令系统'">
+                    </label>
+                    <label class="mp-field">
+                        <span>版本</span>
+                        <input v-model.trim="submitForm.version" type="text" class="mp-control">
+                    </label>
+                    <label class="mp-field">
+                        <span>兼容说明</span>
+                        <input v-model.trim="submitForm.compatibility" type="text" class="mp-control" placeholder="例如 2.6.x">
+                    </label>
+                    <label class="mp-field mp-field--full">
+                        <span>标签</span>
+                        <input v-model.trim="submitForm.tagsText" type="text" class="mp-control" placeholder="用逗号分隔，例如 中文, 稳定, 常用">
+                    </label>
+                </div>
+
+                <div v-if="submitForm.item_type === 'command_bundle'" class="mp-command-picker">
+                    <div class="mp-command-picker__header">
+                        <strong>选择命令</strong>
+                        <button type="button" class="mp-button mp-button--ghost" @click="loadCommands()">刷新命令</button>
+                    </div>
+                    <div v-if="commandLoading" class="mp-inline-tip">命令列表加载中...</div>
+                    <div v-else-if="commandOptions.length === 0" class="mp-inline-tip">当前没有可投稿的命令。</div>
+                    <div v-else class="mp-command-list">
+                        <label v-for="command in commandOptions" :key="command.id" class="mp-command-item">
+                            <input v-model="submitForm.selected_command_ids" type="checkbox" :value="command.id">
+                            <div>
+                                <strong>{{ command.name }}</strong>
+                                <span>{{ command.group_name || '未分组' }}</span>
+                            </div>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="mp-preview-box">
+                    <div class="mp-preview-box__header">
+                        <strong>投稿预览</strong>
+                        <button type="button" class="mp-button mp-button--ghost" @click="copySubmissionPreview">复制 JSON</button>
+                    </div>
+                    <pre class="mp-json-preview mp-json-preview--short">{{ submissionPreviewText }}</pre>
+                </div>
+
+                <div class="mp-modal__footer">
+                    <button type="button" class="mp-button mp-button--ghost" @click="closeSubmitDialog">取消</button>
+                    <button type="button" class="mp-button mp-button--primary" :disabled="submitSaving" @click="submitItem">
+                        {{ submitSaving ? '提交中...' : submitEntryLabel }}
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="mp-toast-stack">
+            <div v-for="toast in toasts" :key="toast.id" :class="['mp-toast', 'is-' + toast.type]">
+                {{ toast.message }}
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/vendor/vue.global.prod.js?v=2.6.7"></script>
+    <script src="/static/js/marketplace-page.js?v=2.7.0"></script>
+</body>
+</html>

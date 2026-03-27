@@ -1279,7 +1279,7 @@ class WorkflowExecutor:
                 )
                 return state
             except Exception as e:
-                logger.debug(f"[SEND] 闄勪欢鐘舵€佹帰娴嬪け璐? {e}")
+                logger.debug(f"[SEND] 附件状态探测失败: {e}")
                 return {
                     "ok": False,
                     "attachmentCount": 0,
@@ -1643,7 +1643,11 @@ class WorkflowExecutor:
                 try:
                     network_state = self._network_monitor.poll_send_activity(timeout=step) or {"matched": False}
                 except Exception as e:
-                    logger.debug(f"[SEND] 网络活动预读失败: {e}")
+                    logger.debug_throttled(
+                        "send.network_pre_read_failed",
+                        f"[SEND] 网络活动预读失败: {e}",
+                        interval_sec=5.0,
+                    )
                     time.sleep(step)
             else:
                 time.sleep(step)
@@ -1765,7 +1769,10 @@ class WorkflowExecutor:
             retry_count += 1
             try:
                 self._execute_click(selector, target_key, True)
-                logger.debug(f"[STEALTH] 发送重试 #{retry_count} (elapsed={elapsed:.1f}s)")
+                if retry_count <= 3 or retry_count % 3 == 0 or elapsed >= max_wait:
+                    logger.debug(
+                        f"[STEALTH] 发送重试 #{retry_count} (elapsed={elapsed:.1f}s)"
+                    )
             except Exception:
                 pass
         

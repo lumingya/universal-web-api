@@ -1128,7 +1128,11 @@ class TabPoolManager:
                     logger.warning(f"获取标签页 #{persistent_index} 超时（当前状态: {session.status.value}）")
                     return None
                 
-                logger.debug(f"等待标签页 #{persistent_index} 释放...")
+                logger.debug_throttled(
+                    f"tab_pool.wait_index.{persistent_index}",
+                    f"等待标签页 #{persistent_index} 释放...",
+                    interval_sec=5.0,
+                )
                 self._condition.wait(timeout=min(remaining, 1.0))
     
     async def acquire_by_index_async(self, persistent_index: int, task_id: str, timeout: float = None) -> Optional[TabSession]:
@@ -1205,7 +1209,11 @@ class TabPoolManager:
                     )
                     return None
 
-                logger.debug(f"等待域名路由 '{target}' 的标签页释放...")
+                logger.debug_throttled(
+                    f"tab_pool.wait_route.{target}",
+                    f"等待域名路由 '{target}' 的标签页释放...",
+                    interval_sec=5.0,
+                )
                 self._condition.wait(timeout=min(remaining, 1.0))
 
     async def acquire_by_route_domain_async(

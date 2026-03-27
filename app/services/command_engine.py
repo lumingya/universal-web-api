@@ -1803,10 +1803,12 @@ return (function() {
                     state["req_prev"] = baseline
                     state["req_pending"] = True
                     state["req"] = current_count
-            logger.debug(
+            logger.debug_throttled(
+                f"cmd.request_count.{command.get('id')}:{session.id}:{self._format_scope_label(scope)}",
                 f"[CMD] 请求计数检查: {command.get('name')} "
                 f"(当前={current_count}, 基线={baseline}, 增量={delta}, 阈值={threshold}, "
-                f"标签页={session.id}, 范围={self._format_scope_label(scope)})"
+                f"标签页={session.id}, 范围={self._format_scope_label(scope)})",
+                interval_sec=10.0,
             )
             if should_fire:
                 logger.info(

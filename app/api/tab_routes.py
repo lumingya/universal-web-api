@@ -33,6 +33,7 @@ from app.services.tool_calling import (
     iter_tool_stream_chunks,
     normalize_tool_request,
     parse_tool_response,
+    summarize_messages_for_debug,
 )
 
 logger = get_logger("API.TAB")
@@ -55,14 +56,6 @@ def _extract_stream_error_message(chunk: Any) -> str:
         return str(error.get("message") or "").strip()
     except Exception:
         return ""
-
-
-def _debug_preview(value: Any, limit: int = 240) -> str:
-    text = repr(value)
-    if len(text) <= limit:
-        return text
-    return text[: limit - 3] + "..."
-
 
 # ================= 请求模型 =================
 
@@ -779,6 +772,13 @@ def _run_tool_calling_sync_for_tab(
         tool_choice=tool_choice,
         parallel_tool_calls=body.parallel_tool_calls,
     )
+    try:
+        logger.debug(
+            "[tab] 请求消息摘要: "
+            f"{summarize_messages_for_debug(body.messages)}"
+        )
+    except Exception as e:
+        logger.debug(f"[tab] 请求消息摘要生成失败: {e}")
 
     browser_response = _execute_browser_non_stream_for_tab(
         browser=browser,
@@ -788,14 +788,7 @@ def _run_tool_calling_sync_for_tab(
         stop_checker=stop_checker,
     )
     assistant_text = _extract_assistant_content(browser_response)
-    logger.debug(f"tool_calling assistant_text={_debug_preview(assistant_text)}")
     parsed = parse_tool_response(assistant_text, tools)
-    logger.debug(
-        "tool_calling parsed result "
-        f"mode={parsed.get('mode')} "
-        f"tool_calls={len(parsed.get('tool_calls') or [])} "
-        f"content={_debug_preview(parsed.get('content'))}"
-    )
     return build_tool_completion_response(body.model, parsed)
 
 
@@ -819,6 +812,13 @@ def _run_tool_calling_sync_for_route_domain(
         tool_choice=tool_choice,
         parallel_tool_calls=body.parallel_tool_calls,
     )
+    try:
+        logger.debug(
+            "[route] 请求消息摘要: "
+            f"{summarize_messages_for_debug(body.messages)}"
+        )
+    except Exception as e:
+        logger.debug(f"[route] 请求消息摘要生成失败: {e}")
 
     browser_response = _execute_browser_non_stream_for_route_domain(
         browser=browser,
@@ -828,14 +828,7 @@ def _run_tool_calling_sync_for_route_domain(
         stop_checker=stop_checker,
     )
     assistant_text = _extract_assistant_content(browser_response)
-    logger.debug(f"tool_calling assistant_text={_debug_preview(assistant_text)}")
     parsed = parse_tool_response(assistant_text, tools)
-    logger.debug(
-        "tool_calling parsed result "
-        f"mode={parsed.get('mode')} "
-        f"tool_calls={len(parsed.get('tool_calls') or [])} "
-        f"content={_debug_preview(parsed.get('content'))}"
-    )
     return build_tool_completion_response(body.model, parsed)
 
 

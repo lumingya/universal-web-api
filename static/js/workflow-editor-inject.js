@@ -532,12 +532,13 @@
 
     const optionalInput = el('input', {
       type: 'checkbox',
-      checked: !!ball.config.optional
+      checked: !ball.config.optional,
+      title: '勾选后找不到元素会报错；不勾选则跳过该步骤'
     });
-    optionalInput.addEventListener('change', () => ball.config.optional = optionalInput.checked);
+    optionalInput.addEventListener('change', () => ball.config.optional = !optionalInput.checked);
     optionalInput.addEventListener('click', e => e.stopPropagation());
     body.appendChild(el('div', { className: 'wfe-menu-item' }, [
-      el('span', { className: 'wfe-menu-label' }, ['是否必要']),
+      el('span', { className: 'wfe-menu-label' }, ['必需步骤']),
       optionalInput
     ]));
 

@@ -116,120 +116,143 @@ class BrowserCore:
         - JSON 字符串: '[{"type":"text",...}]' → 解析后处理
         - 类列表对象: tuple/其他可迭代 → 转换为 list 处理
         """
-        # 添加调试日志
         content_type = type(content).__name__
         content_preview = ""
         try:
             content_str_temp = str(content)
             content_len = len(content_str_temp)
-            # 只取前 100 字符作为预览，避免日志爆炸
-            content_preview = repr(content_str_temp[:100]) if content_len > 100 else repr(content_str_temp)
-        except:
+            content_preview = (
+                repr(content_str_temp[:120])
+                if content_len > 120
+                else repr(content_str_temp)
+            )
+        except Exception:
             content_len = -1
             content_preview = "[无法预览]"
         
-        logger.debug(f"[CONTENT_PARSE] 开始解析: 类型={content_type}, 长度={content_len}, 预览={content_preview}")
+        logger.debug(
+            f"[CONTENT_PARSE] 开始解析: type={content_type}, "
+            f"raw_len={content_len}, preview={content_preview}"
+        )
         
-        # 空值处理
         if content is None:
             logger.debug("[CONTENT_PARSE] 内容为 None，返回空字符串")
             return ""
         
-        # 情况1：纯字符串
         if isinstance(content, str):
-            # 尝试检测是否是多模态消息的字符串形式
             stripped = content.strip()
             if stripped.startswith('[') and stripped.endswith(']'):
                 parsed = None
+                parse_method = ""
                 
-                # 方法1：尝试标准 JSON 解析（双引号）
                 try:
                     parsed = json.loads(stripped)
-                    logger.debug(f"[CONTENT_PARSE] JSON 解析成功")
+                    parse_method = "json"
                 except (json.JSONDecodeError, TypeError):
                     pass
                 
-                # 方法2：尝试 Python 格式解析（单引号）
                 if parsed is None:
                     try:
                         import ast
                         parsed = ast.literal_eval(stripped)
-                        logger.debug(f"[CONTENT_PARSE] Python literal_eval 解析成功")
+                        parse_method = "literal_eval"
                     except (ValueError, SyntaxError):
                         pass
                 
-                # 如果解析成功且是多模态格式，递归处理
                 if parsed and isinstance(parsed, list) and len(parsed) > 0:
                     first_item = parsed[0] if parsed else {}
                     if isinstance(first_item, dict) and 'type' in first_item:
-                        logger.debug(f"[CONTENT_PARSE] 检测到多模态列表格式，递归解析（元素数={len(parsed)}）")
+                        logger.debug(
+                            "[CONTENT_PARSE] 识别为字符串化多模态内容，递归解析 "
+                            f"(parser={parse_method or 'unknown'}, items={len(parsed)})"
+                        )
                         return self._extract_text_from_content(parsed)
             
-            # 安全检查：防止真实 base64 图片数据泄露（排除代码中的字符串）
             if content.startswith('data:image') and 'base64,' in content and len(content) > 1000:
                 logger.warning(f"[CONTENT_PARSE] ⚠️ 检测到 base64 图片数据！长度={len(content)}，已替换为占位符")
                 return "[图片内容]"
             
-            # 普通字符串，直接返回
-            logger.debug(f"[CONTENT_PARSE] 纯字符串模式，长度={len(content)}")
+            logger.debug(f"[CONTENT_PARSE] 纯字符串返回: len={len(content)}")
             return content
         
-        # 情况2：列表或类列表对象（包括 tuple）
-        # 注意：字符串也是可迭代的，但已在上面处理
         is_list_like = isinstance(content, (list, tuple))
         if not is_list_like:
-            # 检查是否有 __iter__ 但不是字符串/bytes
             try:
                 is_list_like = hasattr(content, '__iter__') and not isinstance(content, (str, bytes))
-            except:
+            except Exception:
                 is_list_like = False
         
         if is_list_like:
-            # 统一转换为 list
             try:
                 if not isinstance(content, list):
                     content = list(content)
-                    logger.debug(f"[CONTENT_PARSE] 已转换为 list，元素数量={len(content)}")
+                    logger.debug(f"[CONTENT_PARSE] 已转换为 list: items={len(content)}")
             except Exception as e:
                 logger.warning(f"[CONTENT_PARSE] 转换为 list 失败: {e}")
                 return "[内容解析失败]"
             
             text_parts = []
+            text_item_count = 0
             image_count = 0
+            skipped_count = 0
+            unknown_types = []
+            samples = []
             
             for idx, item in enumerate(content):
-                # 跳过非字典项
                 if not isinstance(item, dict):
-                    logger.debug(f"[CONTENT_PARSE] 跳过非字典项 [{idx}]: 类型={type(item).__name__}")
+                    skipped_count += 1
+                    if len(samples) < 3:
+                        samples.append(f"skip[{idx}]={type(item).__name__}")
                     continue
                 
-                item_type = item.get("type", "")
+                item_type = str(item.get("type", "") or "").strip()
                 
                 if item_type == "text":
-                    text_content = item.get("text", "")
+                    text_content = str(item.get("text", "") or "")
                     text_parts.append(text_content)
-                    preview = repr(text_content[:50]) if len(text_content) > 50 else repr(text_content)
-                    logger.debug(f"[CONTENT_PARSE] ✓ 提取文本 [{idx}]: {preview}")
+                    text_item_count += 1
+                    if len(samples) < 3:
+                        preview = (
+                            repr(text_content[:40])
+                            if len(text_content) > 40
+                            else repr(text_content)
+                        )
+                        samples.append(f"text[{idx}]={preview}")
                 
                 elif item_type == "image_url":
                     image_count += 1
                     text_parts.append(f"[图片{image_count}]")
-                    # 记录图片信息但不记录 base64 内容
                     image_url_obj = item.get("image_url", {})
-                    url_preview = "[data_uri]" if isinstance(image_url_obj, dict) and "base64" in str(image_url_obj.get("url", ""))[:50] else str(image_url_obj)[:50]
-                    logger.debug(f"[CONTENT_PARSE] ✓ 图片占位符 [{idx}]: [图片{image_count}], url预览={url_preview}")
+                    url_text = (
+                        str(image_url_obj.get("url", ""))
+                        if isinstance(image_url_obj, dict)
+                        else str(image_url_obj)
+                    )
+                    url_preview = "[data_uri]" if "base64" in url_text[:50] else url_text[:50]
+                    if len(samples) < 3:
+                        samples.append(f"image[{idx}]={url_preview}")
                 
                 else:
-                    logger.debug(f"[CONTENT_PARSE] 未知类型 [{idx}]: type={item_type}")
+                    unknown_types.append(item_type or "<empty>")
+                    if len(samples) < 3:
+                        samples.append(f"unknown[{idx}]={item_type or '<empty>'}")
             
             result = " ".join(text_parts)
-            if image_count > 0:
-                logger.debug(f"[CONTENT_PARSE] ✅ 多模态解析完成: {len(text_parts)} 个文本部分, {image_count} 张图片, 结果长度={len(result)}")
-            else:
-                logger.debug(f"[CONTENT_PARSE] 多模态解析完成: {len(text_parts)} 个文本部分, {image_count} 张图片, 结果长度={len(result)}")
+            extras = []
+            if skipped_count:
+                extras.append(f"skipped={skipped_count}")
+            if unknown_types:
+                unknown_preview = ", ".join(sorted(set(unknown_types))[:3])
+                extras.append(f"unknown={len(unknown_types)}[{unknown_preview}]")
+            sample_summary = "; ".join(samples) if samples else "none"
+            extra_text = f", {', '.join(extras)}" if extras else ""
+            logger.debug(
+                "[CONTENT_PARSE] 多模态解析完成: "
+                f"text_items={text_item_count}, images={image_count}, "
+                f"result_len={len(result)}, samples={sample_summary}{extra_text}"
+            )
             return result
         
-        # 情况3：其他类型（兜底）
         logger.warning(f"[CONTENT_PARSE] ⚠️ 未知内容类型: {content_type}，返回占位符")
         return "[内容格式不支持]"
 
@@ -1057,19 +1080,30 @@ class BrowserCore:
                         logger.debug(f"[PROBE] 即将发送图片（Markdown），数量={len(images)}")
 
                         try:
-                            first_url = (images[0].get("url") or "").strip() if images else ""
-                            if first_url:
-                                public_base = os.getenv("PUBLIC_BASE_URL", "").strip()
-                                if public_base:
-                                    md_url = public_base.rstrip("/") + first_url
-                                else:
-                                    md_url = f"http://{AppConfig.get_host()}:{AppConfig.get_port()}{first_url}"
+                            public_base = os.getenv("PUBLIC_BASE_URL", "").strip()
+                            image_refs = []
+                            for img in images:
+                                ref = str(img.get("url") or img.get("data_uri") or "").strip()
+                                if not ref:
+                                    continue
+                                if ref.startswith("/") and not ref.startswith("//"):
+                                    if public_base:
+                                        ref = public_base.rstrip("/") + ref
+                                    else:
+                                        ref = f"http://{AppConfig.get_host()}:{AppConfig.get_port()}{ref}"
+                                image_refs.append(ref)
 
-                                md = f"\n\n![image]({md_url})\n\n"
-                                yield self.formatter.pack_chunk(md, completion_id=executor._completion_id)
-                                logger.debug(f"[MD_IMAGE] 已发送 Markdown 图片链接: {md_url}")
+                            if image_refs:
+                                md = "".join(f"\n\n![image_{idx}]({ref})" for idx, ref in enumerate(image_refs))
+                                md += "\n\n"
+                                yield self.formatter.pack_chunk(
+                                    md,
+                                    completion_id=executor._completion_id,
+                                    images=image_refs,
+                                )
+                                logger.debug(f"[MD_IMAGE] 已发送结构化图片，共 {len(image_refs)} 张")
                             else:
-                                logger.warning("[MD_IMAGE] images[0].url 为空，跳过 Markdown 输出")
+                                logger.warning("[MD_IMAGE] 未构建出任何图片引用，跳过 Markdown 输出")
                         except Exception as e:
                             logger.warning(f"[MD_IMAGE] 发送 Markdown 图片链接失败: {e}")            
                 except Exception as e:
@@ -1120,25 +1154,89 @@ class BrowserCore:
                 return []
             
             last_element = elements[-1]
-                
-            if hasattr(extractor, 'extract_images'):
-                images = extractor.extract_images(
-                    last_element,
+
+            def _extract_images_once(target_element):
+                if hasattr(extractor, 'extract_images'):
+                    return extractor.extract_images(
+                        target_element,
+                        config=image_config,
+                        container_selector_fallback=result_selector
+                    )
+                return image_extractor.extract(
+                    target_element,
                     config=image_config,
                     container_selector_fallback=result_selector
                 )
-            else:
-                images = image_extractor.extract(
-                    last_element,
-                    config=image_config,
-                    container_selector_fallback=result_selector
+
+            images = _extract_images_once(last_element)
+
+            if not images and not effective_stop_checker():
+                placeholder_text = ""
+                try:
+                    if hasattr(extractor, 'extract_text'):
+                        placeholder_text = str(extractor.extract_text(last_element) or "")
+                    else:
+                        placeholder_text = str(
+                            last_element.run_js("return this.innerText || this.textContent || ''") or ""
+                        )
+                except Exception:
+                    placeholder_text = ""
+
+                has_generated_image_hint = any(
+                    marker in placeholder_text.lower()
+                    for marker in (
+                        "image_generation_content/",
+                        "googleusercontent.com/image_generation_content/",
+                    )
                 )
+
+                if not has_generated_image_hint:
+                    try:
+                        has_generated_image_hint = bool(
+                            last_element.run_js(
+                                """
+                                return !!this.querySelector(
+                                    '.attachment-container.generated-images, '
+                                    + '.generated-images, generated-image, single-image, '
+                                    + '.image-button, img[src^="blob:"], img[src^="data:image"]'
+                                );
+                                """
+                            )
+                        )
+                    except Exception:
+                        has_generated_image_hint = False
+
+                if has_generated_image_hint:
+                    late_wait_timeout = float(
+                        image_config.get("late_render_timeout_seconds")
+                        or max(8.0, float(image_config.get("load_timeout_seconds", 5.0)))
+                    )
+                    deadline = time.time() + late_wait_timeout
+
+                    while time.time() < deadline and not effective_stop_checker():
+                        time.sleep(0.5)
+                        elements = finder.find_all(result_selector, timeout=0.5)
+                        if not elements:
+                            continue
+                        last_element = elements[-1]
+                        images = _extract_images_once(last_element)
+                        if images:
+                            logger.debug(
+                                f"图片延迟渲染已捕获: {len(images)} 张 "
+                                f"(late_wait={late_wait_timeout:.1f}s)"
+                            )
+                            break
             
             # 🆕 如果图片是不可直连的外链（如 googleusercontent），尝试截图落盘并替换为本地 URL
             try:
                 images = self._try_screenshot_images_to_local(tab, last_element, images, image_config)
             except Exception as e:
                 logger.warning(f"截图落盘失败（已忽略）: {e}")
+
+            try:
+                images = self._persist_data_uri_images_to_local(images)
+            except Exception as e:
+                logger.warning(f"data uri 落盘失败（已忽略）: {e}")
 
             return images
             
@@ -1284,6 +1382,73 @@ class BrowserCore:
         new_images = [new0] + images[1:]
         logger.debug(f"✅ 图片已保存: {local_url} ({new0['byte_size']} bytes)")
         return new_images
+
+    def _persist_data_uri_images_to_local(self, images: List[Dict]) -> List[Dict]:
+        """Persist extracted data-uri images so downstream Markdown can reuse the existing URL flow."""
+        import base64
+        import binascii
+        import uuid
+        from pathlib import Path
+        from datetime import datetime
+
+        if not images:
+            return images
+
+        save_dir = Path("download_images")
+        save_dir.mkdir(exist_ok=True)
+
+        ext_map = {
+            "image/jpeg": ".jpg",
+            "image/jpg": ".jpg",
+            "image/png": ".png",
+            "image/webp": ".webp",
+            "image/gif": ".gif",
+            "image/bmp": ".bmp",
+        }
+
+        result = []
+        for img in images:
+            if img.get("kind") != "data_uri":
+                result.append(img)
+                continue
+
+            data_uri = str(img.get("data_uri") or "").strip()
+            if not data_uri.startswith("data:image"):
+                result.append(img)
+                continue
+
+            try:
+                header, b64_data = data_uri.split(",", 1)
+                mime = header.split(";", 1)[0].split(":", 1)[1].lower()
+                ext = ext_map.get(mime, ".png")
+                image_bytes = base64.b64decode(b64_data)
+            except (ValueError, IndexError, binascii.Error) as e:
+                logger.warning(f"data uri 解析失败，保留原图数据: {e}")
+                result.append(img)
+                continue
+
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"{timestamp}_{uuid.uuid4().hex[:8]}{ext}"
+            filepath = save_dir / filename
+
+            try:
+                filepath.write_bytes(image_bytes)
+            except Exception as e:
+                logger.warning(f"data uri 保存失败，保留原图数据: {e}")
+                result.append(img)
+                continue
+
+            new_img = dict(img)
+            new_img["kind"] = "url"
+            new_img["url"] = f"/download_images/{filename}"
+            new_img["data_uri"] = None
+            new_img["mime"] = mime
+            new_img["byte_size"] = len(image_bytes)
+            new_img["source"] = "local_file"
+            new_img["local_path"] = str(filepath)
+            result.append(new_img)
+
+        return result
     
     def _execute_workflow_non_stream(
         self, 

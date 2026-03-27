@@ -221,6 +221,8 @@ DEFAULT_BROWSER_CONSTANTS: Dict[str, Any] = {
     "DEFAULT_ELEMENT_TIMEOUT": 3,
     "FALLBACK_ELEMENT_TIMEOUT": 1,
     "ELEMENT_CACHE_MAX_AGE": 5.0,
+    "LOG_INFO_CUTE_MODE": False,
+    "LOG_DEBUG_CUTE_MODE": False,
     "STREAM_CHECK_INTERVAL_MIN": 0.1,
     "STREAM_CHECK_INTERVAL_MAX": 1.0,
     "STREAM_CHECK_INTERVAL_DEFAULT": 0.3,
@@ -288,10 +290,14 @@ async def health_check():
 # ================= 日志 API =================
 
 @router.get("/api/logs")
-async def get_logs(since: float = 0, authenticated: bool = Depends(verify_auth)):
+async def get_logs(
+    since: float = 0,
+    after_seq: int = 0,
+    authenticated: bool = Depends(verify_auth),
+):
     """获取日志"""
-    logs = log_collector.get_recent(since)
-    return {"logs": logs, "timestamp": time.time()}
+    logs, next_seq = log_collector.get_recent(since=since, after_seq=after_seq)
+    return {"logs": logs, "timestamp": time.time(), "next_seq": next_seq}
 
 
 @router.delete("/api/logs")
@@ -611,6 +617,12 @@ async def test_selector(
             if not valid_elements:
                 return {"success": False, "count": 0, "message": "元素未找到或无效"}
 
+            if highlight:
+                try:
+                    tab.set.activate()
+                except Exception as e:
+                    logger.debug(f"激活调试标签页失败: {e}")
+
             result = {
                 "success": True,
                 "count": len(valid_elements),
@@ -647,25 +659,32 @@ async def test_selector(
 
                     if highlight:
                         try:
-                            css_selector = selector if not selector.startswith(('tag:', '@', 'xpath:', 'css:')) else selector.replace('css:', '')
-                            tab.run_js(f"""
-                                (function() {{
-                                    try {{
-                                        const elements = document.querySelectorAll('{css_selector}');
-                                        if (elements[{idx}]) {{
-                                            const el = elements[{idx}];
-                                            el.style.outline = '3px solid red';
-                                            el.style.outlineOffset = '2px';
-                                            el.scrollIntoView({{behavior: 'smooth', block: 'center'}});
-                                            setTimeout(() => {{
-                                                el.style.outline = '';
-                                                el.style.outlineOffset = '';
-                                            }}, 5000);
-                                        }}
-                                    }} catch(e) {{
-                                        console.error('高亮失败:', e);
-                                    }}
-                                }})();
+                            ele.run_js("""
+                                const token = `selector-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+                                const previous = {
+                                    outline: this.style.outline,
+                                    outlineOffset: this.style.outlineOffset,
+                                    boxShadow: this.style.boxShadow,
+                                    transition: this.style.transition,
+                                };
+
+                                this.dataset.selectorTestHighlightToken = token;
+                                this.style.transition = 'outline .15s ease, box-shadow .15s ease';
+                                this.style.outline = '3px solid rgba(239, 68, 68, 0.95)';
+                                this.style.outlineOffset = '2px';
+                                this.style.boxShadow = '0 0 0 6px rgba(251, 191, 36, 0.45)';
+                                this.scrollIntoView({behavior: 'smooth', block: 'center', inline: 'center'});
+
+                                setTimeout(() => {
+                                    if (this.dataset.selectorTestHighlightToken !== token) {
+                                        return;
+                                    }
+                                    this.style.outline = previous.outline;
+                                    this.style.outlineOffset = previous.outlineOffset;
+                                    this.style.boxShadow = previous.boxShadow;
+                                    this.style.transition = previous.transition;
+                                    delete this.dataset.selectorTestHighlightToken;
+                                }, 5000);
                             """)
                         except Exception as e:
                             logger.debug(f"高亮失败: {e}")

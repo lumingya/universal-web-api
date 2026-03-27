@@ -1,0 +1,950 @@
+(function () {
+    const MAIN_PRESET_NAME = '主预设';
+
+    function deepClone(value) {
+        return JSON.parse(JSON.stringify(value));
+    }
+
+    function safeString(value) {
+        return String(value || '').trim();
+    }
+
+    Vue.createApp({
+        data() {
+            return {
+                darkMode: true,
+                loading: false,
+                error: '',
+                busyId: '',
+                importSaving: false,
+                submitSaving: false,
+                commandLoading: false,
+                searchQuery: '',
+                selectedType: 'all',
+                selectedSite: 'all',
+                sortBy: 'downloads_desc',
+                catalog: {
+                    source_name: '本地插件市场',
+                    source_url: '',
+                    repo_url: '',
+                    upload_url: '',
+                    warning: '',
+                    submit_mode: 'local',
+                    submit_label: '投稿上传',
+                    submit_help: '',
+                    submit_target: '',
+                    count: 0,
+                    total_downloads: 0,
+                    items: []
+                },
+                previewDetail: null,
+                pendingImport: null,
+                showPreviewDialog: false,
+                showImportDialog: false,
+                showSubmitDialog: false,
+                importStrategy: 'overwrite',
+                importPresetName: '',
+                siteConfigs: {},
+                commandOptions: [],
+                submitForm: {
+                    item_type: 'site_config',
+                    title: '',
+                    summary: '',
+                    author: '本地投稿',
+                    site_domain: '',
+                    preset_name: '',
+                    category: '',
+                    version: '1.0.0',
+                    compatibility: '',
+                    tagsText: '',
+                    selected_command_ids: []
+                },
+                toasts: []
+            };
+        },
+
+        computed: {
+            typeOptions() {
+                return [
+                    { value: 'all', label: '全部' },
+                    { value: 'site_config', label: '站点配置' },
+                    { value: 'command_bundle', label: '命令系统' }
+                ];
+            },
+
+            siteOptions() {
+                const values = new Set();
+                for (const item of this.catalog.items || []) {
+                    const domain = safeString(item.site_domain || item.domain);
+                    if (domain) {
+                        values.add(domain);
+                    }
+                }
+                return Array.from(values).sort((a, b) => a.localeCompare(b, 'zh-CN'));
+            },
+
+            filteredItems() {
+                const search = this.searchQuery.toLowerCase();
+                const items = (this.catalog.items || []).filter((item) => {
+                    if (this.selectedType !== 'all' && item.item_type !== this.selectedType) {
+                        return false;
+                    }
+                    if (this.selectedType !== 'command_bundle'
+                        && this.selectedSite !== 'all'
+                        && safeString(item.site_domain) !== this.selectedSite) {
+                        return false;
+                    }
+                    if (!search) {
+                        return true;
+                    }
+
+                    const haystack = [
+                        item.name,
+                        item.summary,
+                        item.author,
+                        item.site_domain,
+                        item.category,
+                        ...(Array.isArray(item.tags) ? item.tags : [])
+                    ]
+                        .filter(Boolean)
+                        .join(' ')
+                        .toLowerCase();
+                    return haystack.includes(search);
+                });
+
+                items.sort((left, right) => this.compareItems(left, right));
+                return items;
+            },
+
+            availableSites() {
+                return Object.keys(this.siteConfigs || {}).sort((a, b) => a.localeCompare(b, 'zh-CN'));
+            },
+
+            availablePresets() {
+                const domain = safeString(this.submitForm.site_domain);
+                const site = domain ? this.siteConfigs[domain] : null;
+                const presets = site && site.presets ? Object.keys(site.presets) : [];
+                return presets.sort((a, b) => a.localeCompare(b, 'zh-CN'));
+            },
+
+            previewJsonText() {
+                return JSON.stringify(this.previewDetail || {}, null, 2);
+            },
+
+            submissionPreviewText() {
+                try {
+                    return JSON.stringify(this.buildSubmissionPayload(), null, 2);
+                } catch (error) {
+                    return '// 预览暂不可用: ' + error.message;
+                }
+            },
+
+            submitIsExternal() {
+                return this.catalog.submit_mode !== 'local' && !!safeString(this.catalog.upload_url);
+            },
+
+            submitEntryLabel() {
+                return safeString(this.catalog.submit_label) || (this.submitIsExternal ? '投稿到公共市场' : '投稿上传');
+            },
+
+            submitHelpText() {
+                return safeString(this.catalog.submit_help)
+                    || (this.submitIsExternal
+                        ? '投稿会打开 GitHub 公共页面，完整预览 JSON 会先复制到剪贴板。'
+                        : '投稿会直接写入当前实例的本地市场。');
+            },
+
+            sourceBadgeLabel() {
+                if (this.catalog.source_mode === 'hybrid') {
+                    return '公共索引 + 本地回退';
+                }
+                if (this.catalog.source_mode === 'remote') {
+                    return 'GitHub 公共索引';
+                }
+                return '本地市场';
+            },
+
+            emptyStateDescription() {
+                return this.submitIsExternal
+                    ? '可以先提交一个站点配置或命令系统到公共市场，审核收录后会显示在这里。'
+                    : '可以先上传一个站点配置或命令系统，列表会自动出现在这里。';
+            }
+        },
+
+        mounted() {
+            this.loadTheme();
+            this.loadCatalog();
+            window.addEventListener('keydown', this.handleKeydown);
+        },
+
+        beforeUnmount() {
+            window.removeEventListener('keydown', this.handleKeydown);
+        },
+
+        methods: {
+            async apiRequest(url, options = {}) {
+                const token = localStorage.getItem('api_token');
+                const headers = {
+                    'Content-Type': 'application/json',
+                    ...(options.headers || {})
+                };
+
+                if (token) {
+                    headers.Authorization = 'Bearer ' + token;
+                }
+
+                const response = await fetch(url, {
+                    ...options,
+                    headers
+                });
+
+                const rawText = await response.text();
+                let payload = null;
+
+                if (rawText) {
+                    try {
+                        payload = JSON.parse(rawText);
+                    } catch (error) {
+                        payload = rawText;
+                    }
+                }
+
+                if (!response.ok) {
+                    let message = '请求失败';
+                    if (payload && typeof payload === 'object') {
+                        if (typeof payload.detail === 'string') {
+                            message = payload.detail;
+                        } else if (payload.error && typeof payload.error.message === 'string') {
+                            message = payload.error.message;
+                        }
+                    } else if (typeof payload === 'string' && payload) {
+                        message = payload;
+                    }
+
+                    const error = new Error(message);
+                    error.status = response.status;
+                    throw error;
+                }
+
+                return payload;
+            },
+
+            loadTheme() {
+                const stored = localStorage.getItem('darkMode');
+                this.darkMode = stored !== 'false';
+                this.applyTheme();
+            },
+
+            applyTheme() {
+                document.body.classList.toggle('mp-light', !this.darkMode);
+            },
+
+            toggleDarkMode() {
+                this.darkMode = !this.darkMode;
+                localStorage.setItem('darkMode', String(this.darkMode));
+                this.applyTheme();
+            },
+
+            goDashboard() {
+                window.location.href = '/';
+            },
+
+            openLink(url) {
+                const target = safeString(url);
+                if (!target) {
+                    return;
+                }
+                window.open(target, '_blank', 'noopener,noreferrer');
+            },
+
+            formatNumber(value) {
+                const number = Number(value || 0);
+                return Number.isFinite(number) ? number.toLocaleString('en-US') : '0';
+            },
+
+            typeLabel(type) {
+                return type === 'command_bundle' ? '命令系统' : '站点配置';
+            },
+
+            compareItems(left, right) {
+                const leftName = safeString(left.name);
+                const rightName = safeString(right.name);
+
+                if (this.sortBy === 'updated_desc') {
+                    return safeString(right.updated_at).localeCompare(safeString(left.updated_at)) || leftName.localeCompare(rightName, 'zh-CN');
+                }
+                if (this.sortBy === 'stars_desc') {
+                    return Number(right.stars || 0) - Number(left.stars || 0) || leftName.localeCompare(rightName, 'zh-CN');
+                }
+                if (this.sortBy === 'name_asc') {
+                    return leftName.localeCompare(rightName, 'zh-CN');
+                }
+                return Number(right.downloads || 0) - Number(left.downloads || 0) || leftName.localeCompare(rightName, 'zh-CN');
+            },
+
+            async loadCatalog({ force = false } = {}) {
+                this.loading = true;
+                this.error = '';
+
+                try {
+                    const suffix = force ? '?refresh=true' : '';
+                    const data = await this.apiRequest('/api/marketplace' + suffix);
+                    this.catalog = {
+                        source_name: '本地插件市场',
+                        source_url: '',
+                        repo_url: '',
+                        upload_url: '',
+                        warning: '',
+                        submit_mode: 'local',
+                        submit_label: '投稿上传',
+                        submit_help: '',
+                        submit_target: '',
+                        count: 0,
+                        total_downloads: 0,
+                        items: [],
+                        ...(data || {})
+                    };
+                } catch (error) {
+                    this.error = error.status === 401
+                        ? '请先在控制台里配置 API Token，再打开插件市场。'
+                        : error.message;
+                } finally {
+                    this.loading = false;
+                }
+            },
+
+            async previewItem(item) {
+                if (!item || !item.id) {
+                    return;
+                }
+
+                try {
+                    this.previewDetail = await this.apiRequest('/api/marketplace/items/' + encodeURIComponent(item.id));
+                    this.showPreviewDialog = true;
+                } catch (error) {
+                    this.notify('加载预览失败: ' + error.message, 'error');
+                }
+            },
+
+            closePreviewDialog() {
+                this.showPreviewDialog = false;
+            },
+
+            async copyPreviewJson() {
+                await this.copyText(this.previewJsonText, '预览 JSON 已复制');
+            },
+
+            async startImportFromPreview() {
+                const detail = this.previewDetail;
+                if (!detail || !detail.id) {
+                    return;
+                }
+                this.closePreviewDialog();
+                await this.startImport(detail);
+            },
+
+            async startImport(item) {
+                if (!item || !item.id) {
+                    return;
+                }
+
+                this.busyId = item.id;
+                try {
+                    const detail = await this.apiRequest('/api/marketplace/items/' + encodeURIComponent(item.id));
+                    if (detail.item_type === 'command_bundle') {
+                        await this.importCommandBundle(detail);
+                        return;
+                    }
+
+                    this.pendingImport = detail;
+                    this.importStrategy = 'overwrite';
+                    this.importPresetName = safeString(detail.name || detail.preset_name || '市场预设');
+                    this.showImportDialog = true;
+                } catch (error) {
+                    this.notify('加载导入内容失败: ' + error.message, 'error');
+                } finally {
+                    this.busyId = '';
+                }
+            },
+
+            closeImportDialog() {
+                this.showImportDialog = false;
+                this.pendingImport = null;
+                this.importStrategy = 'overwrite';
+                this.importPresetName = '';
+            },
+
+            async confirmImport() {
+                if (!this.pendingImport) {
+                    return;
+                }
+
+                this.importSaving = true;
+                try {
+                    await this.loadSiteConfigs();
+                    if (this.importStrategy === 'save_as_preset') {
+                        await this.applySiteSaveAsPreset();
+                    } else {
+                        await this.applySiteOverwrite();
+                    }
+                    this.closeImportDialog();
+                } catch (error) {
+                    this.notify('导入失败: ' + error.message, 'error');
+                } finally {
+                    this.importSaving = false;
+                }
+            },
+
+            async loadSiteConfigs() {
+                const data = await this.apiRequest('/api/config');
+                this.siteConfigs = this.normalizeConfig(data);
+                return this.siteConfigs;
+            },
+
+            async saveSiteConfigs(config) {
+                await this.apiRequest('/api/config', {
+                    method: 'POST',
+                    body: JSON.stringify({ config })
+                });
+                this.siteConfigs = this.normalizeConfig(config);
+            },
+
+            validateSingleSiteConfig(config) {
+                if (typeof config !== 'object' || config === null || Array.isArray(config)) {
+                    return false;
+                }
+
+                if (config.presets !== undefined) {
+                    if (typeof config.presets !== 'object' || config.presets === null || Array.isArray(config.presets)) {
+                        return false;
+                    }
+
+                    for (const presetData of Object.values(config.presets)) {
+                        if (typeof presetData !== 'object' || presetData === null || Array.isArray(presetData)) {
+                            return false;
+                        }
+                    }
+                }
+
+                return true;
+            },
+
+            validateImportedConfig(config) {
+                if (typeof config !== 'object' || config === null || Array.isArray(config)) {
+                    return false;
+                }
+
+                for (const [domain, siteConfig] of Object.entries(config)) {
+                    if (!domain || typeof domain !== 'string') {
+                        return false;
+                    }
+                    if (!this.validateSingleSiteConfig(siteConfig)) {
+                        return false;
+                    }
+                }
+
+                return true;
+            },
+
+            normalizeConfig(raw) {
+                const normalized = {};
+                const presetFields = [
+                    'selectors',
+                    'workflow',
+                    'stealth',
+                    'stream_config',
+                    'image_extraction',
+                    'file_paste',
+                    'extractor_id',
+                    'extractor_verified'
+                ];
+
+                for (const [domain, value] of Object.entries(raw || {})) {
+                    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+                        continue;
+                    }
+
+                    if (value.presets && typeof value.presets === 'object' && !Array.isArray(value.presets)) {
+                        const presets = {};
+                        for (const [presetName, presetData] of Object.entries(value.presets)) {
+                            presets[presetName] = {
+                                ...deepClone(presetData),
+                                selectors: presetData && typeof presetData.selectors === 'object' && !Array.isArray(presetData.selectors)
+                                    ? deepClone(presetData.selectors)
+                                    : {},
+                                workflow: Array.isArray(presetData && presetData.workflow)
+                                    ? deepClone(presetData.workflow)
+                                    : [],
+                                stealth: !!(presetData && presetData.stealth)
+                            };
+                        }
+
+                        const presetKeys = Object.keys(presets);
+                        const configuredDefault = typeof value.default_preset === 'string' ? value.default_preset : '';
+                        const defaultPreset = configuredDefault && presets[configuredDefault]
+                            ? configuredDefault
+                            : (presets[MAIN_PRESET_NAME] ? MAIN_PRESET_NAME : (presetKeys[0] || MAIN_PRESET_NAME));
+
+                        const siteConfig = {
+                            presets,
+                            default_preset: defaultPreset
+                        };
+
+                        for (const [field, fieldValue] of Object.entries(value)) {
+                            if (field !== 'presets' && field !== 'default_preset' && !presetFields.includes(field)) {
+                                siteConfig[field] = deepClone(fieldValue);
+                            }
+                        }
+
+                        normalized[domain] = siteConfig;
+                        continue;
+                    }
+
+                    normalized[domain] = {
+                        default_preset: MAIN_PRESET_NAME,
+                        presets: {
+                            [MAIN_PRESET_NAME]: {
+                                ...deepClone(value),
+                                selectors: value && typeof value.selectors === 'object' && !Array.isArray(value.selectors)
+                                    ? deepClone(value.selectors)
+                                    : {},
+                                workflow: Array.isArray(value && value.workflow)
+                                    ? deepClone(value.workflow)
+                                    : [],
+                                stealth: !!value.stealth
+                            }
+                        }
+                    };
+                }
+
+                return normalized;
+            },
+
+            getSingleImportedSite(detail) {
+                const siteConfig = detail && detail.site_config;
+                if (!this.validateImportedConfig(siteConfig)) {
+                    throw new Error('市场配置格式无效');
+                }
+
+                const domains = Object.keys(siteConfig || {});
+                if (domains.length !== 1) {
+                    throw new Error('当前只支持单站点配置导入');
+                }
+
+                const domain = domains[0];
+                const normalized = this.normalizeConfig(siteConfig);
+                const site = normalized[domain];
+                if (!site) {
+                    throw new Error('站点配置解析失败');
+                }
+
+                return { domain, site };
+            },
+
+            async applySiteOverwrite() {
+                const imported = this.getSingleImportedSite(this.pendingImport);
+                const nextConfig = deepClone(this.siteConfigs);
+                nextConfig[imported.domain] = imported.site;
+                await this.saveSiteConfigs(nextConfig);
+                this.notify('站点配置已覆盖导入: ' + imported.domain, 'success');
+            },
+
+            async applySiteSaveAsPreset() {
+                const imported = this.getSingleImportedSite(this.pendingImport);
+                const newPresetName = safeString(this.importPresetName);
+                if (!newPresetName) {
+                    throw new Error('请填写另存为的预设名称');
+                }
+
+                const nextConfig = deepClone(this.siteConfigs);
+                const targetSite = nextConfig[imported.domain]
+                    ? deepClone(nextConfig[imported.domain])
+                    : { default_preset: newPresetName, presets: {} };
+
+                if (targetSite.presets && targetSite.presets[newPresetName]) {
+                    throw new Error('该预设名称已存在，请换一个名称');
+                }
+
+                const importedPresets = imported.site.presets || {};
+                const sourcePresetName = imported.site.default_preset && importedPresets[imported.site.default_preset]
+                    ? imported.site.default_preset
+                    : Object.keys(importedPresets)[0];
+
+                if (!sourcePresetName) {
+                    throw new Error('导入内容缺少预设');
+                }
+
+                targetSite.presets = targetSite.presets || {};
+                targetSite.presets[newPresetName] = deepClone(importedPresets[sourcePresetName]);
+                if (!targetSite.default_preset || !targetSite.presets[targetSite.default_preset]) {
+                    targetSite.default_preset = newPresetName;
+                }
+
+                nextConfig[imported.domain] = targetSite;
+                await this.saveSiteConfigs(nextConfig);
+                this.notify('站点配置已另存为预设: ' + newPresetName, 'success');
+            },
+
+            async loadCommands() {
+                this.commandLoading = true;
+                try {
+                    const data = await this.apiRequest('/api/commands');
+                    const commands = Array.isArray(data && data.commands) ? data.commands : [];
+                    commands.sort((a, b) => safeString(a.name).localeCompare(safeString(b.name), 'zh-CN'));
+                    this.commandOptions = commands;
+                    return commands;
+                } catch (error) {
+                    this.notify('加载命令列表失败: ' + error.message, 'error');
+                    return [];
+                } finally {
+                    this.commandLoading = false;
+                }
+            },
+
+            prepareCommandImportPayload(command) {
+                const payload = deepClone(command || {});
+                delete payload.id;
+                delete payload.last_triggered;
+                delete payload.trigger_count;
+                return payload;
+            },
+
+            async importCommandBundle(detail) {
+                const bundle = detail && detail.command_bundle;
+                const commands = Array.isArray(bundle && bundle.commands) ? bundle.commands : [];
+                if (!commands.length) {
+                    throw new Error('命令包内容为空');
+                }
+
+                const idMap = {};
+                const importedCommands = [];
+
+                for (const command of commands) {
+                    const originalId = command.id;
+                    const payload = this.prepareCommandImportPayload(command);
+                    const response = await this.apiRequest('/api/commands', {
+                        method: 'POST',
+                        body: JSON.stringify(payload)
+                    });
+                    const created = response.command;
+                    importedCommands.push(created);
+                    if (originalId && created && created.id) {
+                        idMap[originalId] = created.id;
+                    }
+                }
+
+                for (let index = 0; index < commands.length; index += 1) {
+                    const original = commands[index];
+                    const created = importedCommands[index];
+                    if (!original || !created || !original.trigger) {
+                        continue;
+                    }
+
+                    const trigger = deepClone(original.trigger);
+                    if (trigger.command_id && idMap[trigger.command_id]) {
+                        trigger.command_id = idMap[trigger.command_id];
+                    }
+                    if (Array.isArray(trigger.command_ids)) {
+                        trigger.command_ids = trigger.command_ids.map((commandId) => idMap[commandId] || commandId);
+                    }
+
+                    await this.apiRequest('/api/commands/' + encodeURIComponent(created.id), {
+                        method: 'PUT',
+                        body: JSON.stringify({ trigger })
+                    });
+                }
+
+                this.notify('命令系统已导入，共 ' + importedCommands.length + ' 条命令', 'success');
+            },
+
+            resetSubmitForm() {
+                this.submitForm = {
+                    item_type: 'site_config',
+                    title: '',
+                    summary: '',
+                    author: '本地投稿',
+                    site_domain: '',
+                    preset_name: '',
+                    category: '',
+                    version: '1.0.0',
+                    compatibility: '',
+                    tagsText: '',
+                    selected_command_ids: []
+                };
+            },
+
+            async openSubmitDialog() {
+                this.resetSubmitForm();
+                this.showSubmitDialog = true;
+                try {
+                    await this.loadSiteConfigs();
+                    if (this.availableSites.length > 0) {
+                        this.submitForm.site_domain = this.availableSites[0];
+                        this.syncPresetSelection();
+                    }
+                } catch (error) {
+                    this.notify('加载站点配置失败: ' + error.message, 'error');
+                }
+            },
+
+            closeSubmitDialog() {
+                this.showSubmitDialog = false;
+            },
+
+            async setSubmitType(type) {
+                this.submitForm.item_type = type;
+                if (type === 'command_bundle') {
+                    this.submitForm.category = '命令系统';
+                    if (!this.commandOptions.length) {
+                        await this.loadCommands();
+                    }
+                    return;
+                }
+
+                if (this.availableSites.length > 0 && !this.submitForm.site_domain) {
+                    this.submitForm.site_domain = this.availableSites[0];
+                }
+                this.syncPresetSelection();
+            },
+
+            syncPresetSelection() {
+                if (this.submitForm.item_type !== 'site_config') {
+                    return;
+                }
+
+                if (!this.submitForm.category
+                    || this.submitForm.category === '命令系统'
+                    || this.availableSites.includes(this.submitForm.category)) {
+                    this.submitForm.category = this.submitForm.site_domain || '';
+                }
+
+                const presets = this.availablePresets;
+                if (!presets.includes(this.submitForm.preset_name)) {
+                    this.submitForm.preset_name = presets[0] || '';
+                }
+            },
+
+            parseTags(text) {
+                return String(text || '')
+                    .split(/[,\n，]/)
+                    .map((item) => item.trim())
+                    .filter(Boolean);
+            },
+
+            sanitizeCommandForBundle(command) {
+                const payload = deepClone(command || {});
+                delete payload.last_triggered;
+                delete payload.trigger_count;
+                return payload;
+            },
+
+            getSelectedCommands() {
+                const selectedIds = new Set(this.submitForm.selected_command_ids || []);
+                return (this.commandOptions || [])
+                    .filter((command) => selectedIds.has(command.id))
+                    .map((command) => this.sanitizeCommandForBundle(command));
+            },
+
+            buildSubmissionPayload() {
+                const title = safeString(this.submitForm.title);
+                const summary = safeString(this.submitForm.summary);
+                const author = safeString(this.submitForm.author || '本地投稿') || '本地投稿';
+                const category = safeString(this.submitForm.category);
+                const compatibility = safeString(this.submitForm.compatibility);
+                const version = safeString(this.submitForm.version || '1.0.0') || '1.0.0';
+                const tags = this.parseTags(this.submitForm.tagsText);
+
+                if (!title) {
+                    throw new Error('请填写标题');
+                }
+                if (!summary) {
+                    throw new Error('请填写简介');
+                }
+
+                if (this.submitForm.item_type === 'command_bundle') {
+                    const commands = this.getSelectedCommands();
+                    if (!commands.length) {
+                        throw new Error('请至少选择一个命令');
+                    }
+
+                    return {
+                        item_type: 'command_bundle',
+                        title,
+                        summary,
+                        author,
+                        category: category || '命令系统',
+                        compatibility,
+                        version,
+                        tags,
+                        command_bundle: {
+                            group_name: '',
+                            commands
+                        }
+                    };
+                }
+
+                const siteDomain = safeString(this.submitForm.site_domain);
+                if (!siteDomain) {
+                    throw new Error('请选择站点');
+                }
+
+                const siteConfig = this.siteConfigs[siteDomain];
+                if (!siteConfig || !siteConfig.presets) {
+                    throw new Error('当前站点没有可投稿的配置');
+                }
+
+                const presetName = safeString(this.submitForm.preset_name || siteConfig.default_preset || MAIN_PRESET_NAME);
+                const presetConfig = siteConfig.presets[presetName];
+                if (!presetConfig) {
+                    throw new Error('请选择可用预设');
+                }
+
+                return {
+                    item_type: 'site_config',
+                    title,
+                    summary,
+                    author,
+                    category: category || siteDomain,
+                    site_domain: siteDomain,
+                    preset_name: presetName,
+                    compatibility,
+                    version,
+                    tags,
+                    site_config: {
+                        [siteDomain]: {
+                            default_preset: presetName,
+                            presets: {
+                                [presetName]: deepClone(presetConfig)
+                            }
+                        }
+                    }
+                };
+            },
+
+            async copySubmissionPreview() {
+                await this.copyText(this.submissionPreviewText, '投稿预览已复制');
+            },
+
+            buildSubmissionIssueText(payload, responseItem = null) {
+                const item = responseItem || {};
+                const tags = Array.isArray(payload && payload.tags) ? payload.tags.filter(Boolean) : [];
+                const lines = [
+                    '## 基本信息',
+                    `- 类型: ${this.typeLabel(payload.item_type)}`,
+                    `- 标题: ${safeString(payload.title)}`,
+                    `- 作者: ${safeString(payload.author) || '社区贡献'}`,
+                    `- 分类: ${safeString(payload.category) || (payload.item_type === 'site_config' ? safeString(payload.site_domain) : '命令系统')}`,
+                ];
+
+                if (payload.item_type === 'site_config') {
+                    lines.push(`- 站点: ${safeString(payload.site_domain)}`);
+                    lines.push(`- 预设: ${safeString(payload.preset_name) || MAIN_PRESET_NAME}`);
+                }
+                if (safeString(payload.version)) {
+                    lines.push(`- 版本: ${safeString(payload.version)}`);
+                }
+                if (safeString(payload.compatibility)) {
+                    lines.push(`- 兼容: ${safeString(payload.compatibility)}`);
+                }
+                if (tags.length) {
+                    lines.push(`- 标签: ${tags.join(', ')}`);
+                }
+                if (safeString(item.id)) {
+                    lines.push(`- 预览 ID: ${safeString(item.id)}`);
+                }
+
+                lines.push('');
+                lines.push('## 简介');
+                lines.push(safeString(payload.summary) || '请补充简介');
+                lines.push('');
+                lines.push('## JSON 预览');
+                lines.push('```json');
+                lines.push(JSON.stringify(payload, null, 2));
+                lines.push('```');
+                return lines.join('\n');
+            },
+
+            async submitItem() {
+                let payload = null;
+                try {
+                    payload = this.buildSubmissionPayload();
+                } catch (error) {
+                    this.notify(error.message, 'warning');
+                    return;
+                }
+
+                this.submitSaving = true;
+                try {
+                    const result = await this.apiRequest('/api/marketplace/items', {
+                        method: 'POST',
+                        body: JSON.stringify(payload)
+                    });
+
+                    if (result && result.mode === 'external' && safeString(result.submission_url)) {
+                        const copied = await this.tryCopyText(this.buildSubmissionIssueText(payload, result.item));
+                        this.openLink(result.submission_url);
+                        this.notify(
+                            copied
+                                ? (result.message || '已打开 GitHub 公共投稿页，请直接粘贴已复制的 JSON 预览')
+                                : '已打开 GitHub 公共投稿页，但剪贴板复制失败，请手动复制预览 JSON',
+                            copied ? 'success' : 'warning'
+                        );
+                        this.closeSubmitDialog();
+                        return;
+                    }
+
+                    this.notify((result && result.message) || '投稿已加入本地市场', 'success');
+                    this.closeSubmitDialog();
+                    await this.loadCatalog({ force: true });
+                } catch (error) {
+                    this.notify('投稿失败: ' + error.message, 'error');
+                } finally {
+                    this.submitSaving = false;
+                }
+            },
+
+            async tryCopyText(text) {
+                try {
+                    await navigator.clipboard.writeText(text);
+                    return true;
+                } catch (error) {
+                    return false;
+                }
+            },
+
+            async copyText(text, successMessage) {
+                const copied = await this.tryCopyText(text);
+                if (copied) {
+                    this.notify(successMessage, 'success');
+                } else {
+                    this.notify('复制失败，请检查浏览器权限', 'error');
+                }
+            },
+
+            handleKeydown(event) {
+                if (event.key !== 'Escape') {
+                    return;
+                }
+                if (this.showSubmitDialog) {
+                    this.closeSubmitDialog();
+                    return;
+                }
+                if (this.showImportDialog) {
+                    this.closeImportDialog();
+                    return;
+                }
+                if (this.showPreviewDialog) {
+                    this.closePreviewDialog();
+                }
+            },
+
+            notify(message, type = 'info') {
+                const id = Date.now() + Math.random();
+                this.toasts.push({ id, message, type });
+                window.setTimeout(() => {
+                    this.toasts = this.toasts.filter((toast) => toast.id !== id);
+                }, 3200);
+            }
+        }
+    }).mount('#marketplace-app');
+})();

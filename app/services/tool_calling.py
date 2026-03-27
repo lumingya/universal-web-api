@@ -193,12 +193,64 @@ def build_browser_messages_for_tools(
     return browser_messages
 
 
+def summarize_messages_for_debug(
+    messages: Optional[List[Dict[str, Any]]],
+    sample_limit: int = 3,
+) -> str:
+    items = messages or []
+    if not items:
+        return "count=0"
+
+    role_counts: Dict[str, int] = {}
+    tool_call_count = 0
+    image_like_messages = 0
+    total_chars = 0
+    samples: List[str] = []
+
+    for idx, msg in enumerate(items):
+        if not isinstance(msg, dict):
+            role_counts["invalid"] = role_counts.get("invalid", 0) + 1
+            if len(samples) < sample_limit:
+                samples.append(f"#{idx}:invalid/{type(msg).__name__}")
+            continue
+
+        role = str(msg.get("role", "user") or "user").strip().lower() or "user"
+        role_counts[role] = role_counts.get(role, 0) + 1
+
+        tool_calls = msg.get("tool_calls") or []
+        if isinstance(tool_calls, list):
+            tool_call_count += len(tool_calls)
+
+        serialized = _serialize_content(msg.get("content", ""))
+        total_chars += len(serialized)
+        if "image_url" in serialized or "data:image" in serialized:
+            image_like_messages += 1
+
+        if len(samples) < sample_limit:
+            samples.append(
+                f"#{idx}:{role}/len={len(serialized)}/preview={_debug_preview(serialized, 120)}"
+            )
+
+    role_summary = ", ".join(
+        f"{role}={count}" for role, count in sorted(role_counts.items())
+    ) or "none"
+    sample_summary = "; ".join(samples) if samples else "none"
+    return (
+        f"count={len(items)}, roles=[{role_summary}], "
+        f"tool_calls={tool_call_count}, image_like={image_like_messages}, "
+        f"total_chars={total_chars}, samples={sample_summary}"
+    )
+
+
 def parse_tool_response(
     text: str,
     tools: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
     raw = str(text or "")
-    logger.debug(f"[tool_calling] raw assistant text={_debug_preview(raw)}")
+    logger.debug(
+        f"[tool_calling] raw assistant text len={len(raw)} "
+        f"preview={_debug_preview(raw)}"
+    )
     allowed = {
         str(item.get("function", {}).get("name", "") or "").strip(): item
         for item in tools or []
@@ -207,11 +259,19 @@ def parse_tool_response(
 
     json_payload = _try_parse_json_payload(raw, allowed)
     if json_payload is not None:
+        tool_names = [
+            str(item.get("function", {}).get("name", "") or "").strip()
+            for item in json_payload.get("tool_calls") or []
+            if isinstance(item, dict)
+        ]
+        content_text = str(json_payload.get("content") or "")
         logger.debug(
             "[tool_calling] parsed JSON payload "
             f"mode={json_payload.get('mode')} "
             f"tool_calls={len(json_payload.get('tool_calls') or [])} "
-            f"content={_debug_preview(json_payload.get('content'))}"
+            f"tool_names={tool_names or ['none']} "
+            f"content_len={len(content_text)} "
+            f"content={_debug_preview(content_text)}"
         )
         return json_payload
 
@@ -223,7 +283,7 @@ def parse_tool_response(
         )
         return xml_payload
 
-    logger.debug("[tool_calling] falling back to final-text mode")
+    logger.debug(f"[tool_calling] falling back to final-text mode (len={len(raw)})")
     return {
         "mode": "final",
         "content": raw.strip(),
@@ -601,7 +661,8 @@ def _repair_json_like_argument_string(raw: str) -> str:
         repaired_chars.append("\\\\")
         i += 1
 
-    return _repair_unescaped_inner_quotes("".join(repaired_chars))
+    repaired_text = _repair_unescaped_inner_quotes("".join(repaired_chars))
+    return _repair_object_key_separators(repaired_text)
 
 
 def _escape_control_chars_in_json_strings(text: str) -> str:
@@ -693,9 +754,54 @@ def _repair_unescaped_inner_quotes(text: str) -> str:
     return "".join(repaired)
 
 
+def _repair_object_key_separators(text: str) -> str:
+    repaired: List[str] = []
+    in_string = False
+    escape = False
+    i = 0
+
+    while i < len(text):
+        ch = text[i]
+
+        if in_string:
+            repaired.append(ch)
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            i += 1
+            continue
+
+        if ch == '"' and _looks_like_quoted_key_start(text, i):
+            if _should_insert_missing_comma_before_key(repaired):
+                repaired.append(", ")
+            repaired.append(ch)
+            in_string = True
+            i += 1
+            continue
+
+        if _looks_like_bare_object_key(text, i):
+            if _should_insert_missing_comma_before_key(repaired):
+                repaired.append(", ")
+            key_end = _scan_identifier_end(text, i)
+            repaired.append(f'"{text[i:key_end]}"')
+            i = key_end
+            continue
+
+        repaired.append(ch)
+        i += 1
+
+    return "".join(repaired)
+
+
 def _looks_like_inner_quote(text: str, quote_index: int) -> bool:
     next_index, next_char = _next_non_whitespace(text, quote_index + 1)
     if next_char == "":
+        return False
+
+    if _looks_like_missing_comma_key_transition(text, quote_index):
         return False
 
     if next_char in {",", "}", "]", ":"}:
@@ -707,6 +813,102 @@ def _looks_like_inner_quote(text: str, quote_index: int) -> bool:
             return True
 
     return True
+
+
+def _looks_like_missing_comma_key_transition(text: str, quote_index: int) -> bool:
+    next_index, next_char = _next_non_whitespace(text, quote_index + 1)
+    if next_char == "":
+        return False
+
+    if next_char == '"' and _looks_like_quoted_key_start(text, next_index):
+        return True
+
+    if next_char.isalpha() or next_char == "_":
+        key_end = _scan_identifier_end(text, next_index)
+        return _looks_like_object_key_value_boundary(text, key_end)
+
+    return False
+
+
+def _looks_like_quoted_key_start(text: str, start: int) -> bool:
+    if start < 0 or start >= len(text) or text[start] != '"':
+        return False
+
+    end = _find_string_end(text, start)
+    if end == -1:
+        return False
+
+    _, next_char = _next_non_whitespace(text, end + 1)
+    return next_char == ":"
+
+
+def _looks_like_bare_object_key(text: str, start: int) -> bool:
+    if start < 0 or start >= len(text):
+        return False
+
+    ch = text[start]
+    if not (ch.isalpha() or ch == "_"):
+        return False
+
+    prev_char = text[start - 1] if start > 0 else ""
+    if _is_identifier_char(prev_char):
+        return False
+
+    key_end = _scan_identifier_end(text, start)
+    return _looks_like_object_key_value_boundary(text, key_end)
+
+
+def _scan_identifier_end(text: str, start: int) -> int:
+    i = start
+    while i < len(text) and _is_identifier_char(text[i]):
+        i += 1
+    return i
+
+
+def _looks_like_object_key_value_boundary(text: str, key_end: int) -> bool:
+    colon_index, next_char = _next_non_whitespace(text, key_end)
+    if next_char != ":":
+        return False
+
+    _, value_start = _next_non_whitespace(text, colon_index + 1)
+    if value_start == "":
+        return False
+
+    return value_start in {'"', "{", "[", "-", "t", "f", "n"} or value_start.isdigit()
+
+
+def _is_identifier_char(ch: str) -> bool:
+    return ch.isalnum() or ch == "_"
+
+
+def _find_string_end(text: str, start: int) -> int:
+    escape = False
+    i = start + 1
+    while i < len(text):
+        ch = text[i]
+        if escape:
+            escape = False
+        elif ch == "\\":
+            escape = True
+        elif ch == '"':
+            return i
+        i += 1
+    return -1
+
+
+def _should_insert_missing_comma_before_key(repaired: List[str]) -> bool:
+    i = len(repaired) - 1
+    while i >= 0:
+        token = repaired[i]
+        if not token:
+            i -= 1
+            continue
+        for ch in reversed(token):
+            if ch.isspace():
+                continue
+            return ch not in {"{", "[", ",", ":"}
+        i -= 1
+    return False
 
 
 def _next_non_whitespace(text: str, start: int) -> Tuple[int, str]:

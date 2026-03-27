@@ -16,6 +16,10 @@ window.LogsTab = {
         }
     },
     methods: {
+        getLogText(log) {
+            return log.messageText || log.message || '';
+        },
+
         isKeyCmdLog(message) {
             if (!message || !message.includes('[CMD]')) {
                 return false;
@@ -37,7 +41,7 @@ window.LogsTab = {
             if (log.level === 'WARN') return 'WARN';
             if (log.level === 'AI') return 'AI';
             if (log.level === 'OK') return 'OK';
-            if (log.level === 'INFO' && this.isKeyCmdLog(log.message)) return 'KEY';
+            if (log.level === 'INFO' && this.isKeyCmdLog(this.getLogText(log))) return 'KEY';
             return 'INFO';
         },
 
@@ -125,9 +129,20 @@ window.LogsTab = {
             <div ref="logContainer" class="flex-1 overflow-auto p-4 font-mono text-sm space-y-1">
                 <div v-for="log in filteredLogs" :key="log.id"
                      :class="['p-2 rounded', getLogColorClass(log)]">
-                    <span class="text-gray-500 dark:text-gray-300">{{ log.timestamp }}</span>
-                    <span :class="['font-bold mx-2', getLogLevelClass(log)]">[{{ log.level }}]</span>
-                    <span class="dark:text-gray-200">{{ log.message }}</span>
+                    <div class="flex flex-wrap items-center gap-2">
+                        <span class="text-gray-500 dark:text-gray-300">{{ log.timestamp }}</span>
+                        <span :class="['font-bold', getLogLevelClass(log)]">[{{ log.level }}]</span>
+                        <span v-if="log.logger" class="px-1.5 py-0.5 rounded bg-white/70 dark:bg-gray-900/40 text-gray-600 dark:text-gray-300">
+                            {{ log.logger }}
+                        </span>
+                        <span v-if="log.requestId" class="px-1.5 py-0.5 rounded bg-white/70 dark:bg-gray-900/40 text-gray-500 dark:text-gray-400">
+                            {{ log.requestId }}
+                        </span>
+                    </div>
+                    <div class="mt-1 dark:text-gray-200 break-all whitespace-pre-wrap"
+                         :title="log.messageAlias ? ('原文：' + (log.originalMessageText || '')) : ''">
+                        {{ getLogText(log) }}
+                    </div>
                 </div>
                 <div v-if="filteredLogs.length === 0" 
                      class="text-center text-gray-400 dark:text-gray-500 py-8">

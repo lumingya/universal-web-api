@@ -325,7 +325,7 @@
           "message_wrapper": null,
           "generating_indicator": "",
           "点击模型选择": "[data-test-id=\"logo-pill-label-container\"]",
-          "选择模型": ".mat-mdc-menu-item:nth-of-type(3)",
+          "选择模型": "//button[.//span[contains(text(), \"Pro\")]]",
           "临时对话按钮": "button.temp-chat-button"
         },
         "stream_config": {
@@ -364,13 +364,13 @@
           {
             "action": "CLICK",
             "target": "点击模型选择",
-            "optional": false,
+            "optional": true,
             "value": null
           },
           {
             "action": "CLICK",
             "target": "选择模型",
-            "optional": false,
+            "optional": true,
             "value": null
           },
           {
@@ -769,7 +769,7 @@
   },
   "arena.ai": {
     "presets": {
-      "主预设": {
+      "主预设-direct模式": {
         "selectors": {
           "input_box": "textarea[name=\"message\"]",
           "send_btn": "button[type=\"submit\"]",
@@ -850,7 +850,7 @@
           "hint_text": "完全专注于文件内容"
         }
       },
-      "选择模型": {
+      "预设_选择模型": {
         "selectors": {
           "点击battle": "xpath://button[@role='combobox' and .//*[contains(normalize-space(), 'Battle')]]",
           "切换direct": "xpath://div[@role='option' and .//p[normalize-space()='Direct']]",
@@ -952,7 +952,7 @@
           "hint_text": "完全专注于文件内容"
         }
       },
-      "切换SideBySide": {
+      "预设_切换SideBySide": {
         "selectors": {},
         "workflow": [
           {
@@ -996,7 +996,7 @@
           "hint_text": "完全专注于文件内容"
         }
       },
-      "过cf盾": {
+      "预设_过cf盾": {
         "selectors": {
           "input_box": "textarea[name=\"message\"]",
           "send_btn": "button[type=\"submit\"]",
@@ -1051,7 +1051,7 @@
           "hint_text": "完全专注于文件内容"
         }
       },
-      "主预设-side": {
+      "主预设-sidebyside模式": {
         "selectors": {
           "input_box": "textarea[name=\"message\"]",
           "send_btn": "button[type=\"submit\"]",
@@ -1133,7 +1133,7 @@
         }
       }
     },
-    "default_preset": "主预设-side"
+    "default_preset": "主预设-sidebyside模式"
   },
   "chat.qwen.ai": {
     "presets": {

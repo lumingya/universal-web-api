@@ -1041,7 +1041,7 @@
                 <ul>
                     <li><strong>标签页池</strong>：查看所有网页标签的编号、状态、路由和预设。</li>
                     <li><strong>提取器</strong>：解决“网页明明有回复，但抓出来不对”的问题。</li>
-                    <li><strong>日志</strong>：定位问题到底卡在发送前、等待中还是提取阶段。</li>
+                    <li><strong>日志</strong>：定位问题到底卡在发送前、等待中还是提取阶段；如果你觉得 DEBUG 原文太硬，也可以在设置里打开 <code>INFO / DEBUG</code> 日志可爱化。</li>
                     <li><strong>设置</strong>：管理环境配置、浏览器常量、AI 元素识别等全局参数。</li>
                 </ul>
             </div>
@@ -2247,6 +2247,16 @@ BROWSER_PROFILE_NAME=Default</code></pre>
                     <tr><td>默认等待时间</td><td><code>3</code> 秒</td><td>查找元素的默认超时</td></tr>
                     <tr><td>备用等待时间</td><td><code>1</code> 秒</td><td>首次失败后的重试超时</td></tr>
                     <tr><td>缓存有效期</td><td><code>5</code> 秒</td><td>元素位置缓存时间</td></tr>
+                </table>
+            </div>
+
+            <div class="config-group">
+                <h4><span class="icon">🪄</span> 日志显示</h4>
+                <p style="color: var(--desc-color); font-size: 0.9rem; margin-bottom: 10px;">这是“阅读体验”开关，不会改变真实执行流程；前端日志页仍会保留原始日志文本，方便排障时对照。</p>
+                <table>
+                    <tr><th>配置项</th><th>默认值</th><th>说明</th></tr>
+                    <tr><td>INFO 日志可爱化</td><td>关闭</td><td>把常见 INFO 日志润色成更顺口、更容易扫读的中文文案。</td></tr>
+                    <tr><td>DEBUG 日志可爱化</td><td>关闭</td><td>把主要 DEBUG 链路润色成更好读的提示，例如“小鹿开始分块啦”；适合长时间盯日志时减轻阅读压力。</td></tr>
                 </table>
             </div>
 
