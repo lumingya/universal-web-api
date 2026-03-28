@@ -70,6 +70,14 @@ class ResponseParser(ABC):
             return result.get("error") is None
         except Exception:
             return False
+
+    def should_abort_on_error(self) -> bool:
+        """
+        当 parse_chunk 返回 error 时，是否应立即终止当前工作流。
+
+        默认仅记录并继续，交给具体解析器按需升级为硬失败。
+        """
+        return False
     
     # ============ 元数据接口 ============
     

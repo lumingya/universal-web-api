@@ -41,6 +41,11 @@ class NetworkInterceptionTriggered(NetworkMonitorError):
     pass
 
 
+class NetworkMonitorTerminalError(NetworkMonitorError):
+    """解析器确认当前目标流已失败，应立即终止工作流而非回退 DOM。"""
+    pass
+
+
 class _EventOnlyParser(ResponseParser):
     """仅用于消费网络事件，不输出任何流式内容。"""
 
@@ -148,6 +153,35 @@ class NetworkMonitor:
             f"(pattern={self._listen_pattern!r}, "
             f"parser={parser.get_id()})"
         )
+
+    def _handle_parse_result(self, parse_result: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(parse_result, dict):
+            return {
+                "content": "",
+                "images": [],
+                "done": False,
+                "error": None,
+            }
+
+        error_text = str(parse_result.get("error") or "").strip()
+        if not error_text:
+            return parse_result
+
+        logger.warning(f"[NetworkMonitor] 解析失败: {error_text}")
+        should_abort = False
+        try:
+            should_abort = bool(self.parser.should_abort_on_error())
+        except Exception:
+            should_abort = False
+
+        if should_abort:
+            raise NetworkMonitorTerminalError(error_text)
+
+        return {
+            **parse_result,
+            "content": "",
+            "done": False,
+        }
 
     def _listen_is_active(self) -> bool:
         try:
@@ -829,8 +863,8 @@ class NetworkMonitor:
                         logger.warning(f"[NetworkMonitor] 二次解析异常: {e}")
                         continue
 
+            parse_result = self._handle_parse_result(parse_result)
             if parse_result.get("error"):
-                logger.warning(f"[NetworkMonitor] 解析失败: {parse_result['error']}")
                 continue
 
             # 提取内容
@@ -948,6 +982,7 @@ __all__ = [
     'NetworkMonitor',
     'NetworkMonitorTimeout',
     'NetworkMonitorError',
+    'NetworkMonitorTerminalError',
     'NetworkInterceptionTriggered',
     'create_network_monitor',
 ]

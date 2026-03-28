@@ -242,6 +242,61 @@ class CommandEngineResultsMixin:
         with self._lock:
             return copy.deepcopy(list(self._command_result_events.get(tab_id) or []))
 
+    def emit_external_command_result_event(
+        self,
+        session: 'TabSession',
+        *,
+        source_command_id: str,
+        source_command_name: str,
+        summary: Any,
+        result: Any = "",
+        informative: bool = True,
+        mode: str = "external",
+        group_name: Any = "",
+        trigger_commands: bool = True,
+    ) -> Optional[Dict[str, Any]]:
+        if session is None:
+            return None
+
+        normalized_command_id = str(source_command_id or "").strip()
+        normalized_name = str(source_command_name or "").strip()
+        normalized_summary = str(summary or "").strip()
+        if not normalized_command_id or not normalized_name or not normalized_summary:
+            return None
+
+        event = {
+            "token": f"{int(time.time() * 1000)}_{uuid.uuid4().hex[:6]}",
+            "timestamp": time.time(),
+            "source_command_id": normalized_command_id,
+            "source_command_name": normalized_name,
+            "source_group_name": self._normalize_group_name(group_name),
+            "result": self._stringify_result(result),
+            "summary": normalized_summary,
+            "informative": bool(informative),
+            "mode": str(mode or "external").strip() or "external",
+            "task_id": str(getattr(session, "current_task_id", "") or ""),
+        }
+
+        with self._lock:
+            queue = list(self._command_result_events.get(session.id) or [])
+            queue.append(copy.deepcopy(event))
+            self._command_result_events[session.id] = queue[-50:]
+
+        logger.info(
+            f"[CMD] 外部结果事件已记录: {normalized_name} "
+            f"(标签页={session.id}, 摘要={normalized_summary})"
+        )
+
+        if trigger_commands:
+            pseudo_command = {
+                "id": normalized_command_id,
+                "name": normalized_name,
+                "group_name": self._normalize_group_name(group_name),
+            }
+            self._trigger_result_event_commands(pseudo_command, session)
+
+        return copy.deepcopy(event)
+
     def _parse_result_event_source_ids(self, trigger: Dict[str, Any]) -> tuple[bool, set[str]]:
         listen_all = bool(trigger.get("listen_all_commands", False))
         raw = trigger.get("command_ids", [])

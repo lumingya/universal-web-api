@@ -2,7 +2,7 @@
 
 📖 文档 • [English](./README.md) • [简体中文](./README.zh-CN.md)
 
-> 当前文档对应版本：`v2.6.5`
+> 当前文档对应版本：`v2.7.1`
 >
 > 💡 **一句话介绍**：将任何你常用的 AI 网站（ChatGPT, DeepSeek, Claude, Gemini 等）转换为标准的 OpenAI 兼容 API 接口，完全免费，支持本地部署。
 

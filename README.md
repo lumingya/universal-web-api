@@ -2,7 +2,7 @@
 
 📖 Documentation • [English](./README.md) • [简体中文](./README.zh-CN.md)
 
-> Document version: `v2.6.5`
+> Document version: `v2.7.1`
 >
 > Turn any AI website you already use, such as ChatGPT, DeepSeek, Claude, or Gemini, into a standard OpenAI-compatible API for free, with full local deployment.
 

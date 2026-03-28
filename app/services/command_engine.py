@@ -304,6 +304,24 @@ class CommandEngine(CommandEngineRuntimeMixin, CommandEngineResultsMixin, Comman
         if (cfIndicators.length) {
             text += '\n' + cfIndicators.join('\n');
         }
+        var recaptchaIndicators = [];
+        if (text.indexOf('protected by recaptcha') !== -1) recaptchaIndicators.push('protected by recaptcha');
+        if (
+            hasSelector('iframe[src*="google.com/recaptcha"]') ||
+            hasSelector('iframe[src*="recaptcha"]') ||
+            hasSelector('.g-recaptcha') ||
+            hasSelector('[name="g-recaptcha-response"]') ||
+            hasSelector('[title*="recaptcha" i]') ||
+            hasSelector('[aria-label*="recaptcha" i]')
+        ) {
+            recaptchaIndicators.push('recaptcha');
+            recaptchaIndicators.push('\u4eba\u673a\u8eab\u4efd\u9a8c\u8bc1');
+        } else if (text.indexOf('recaptcha') !== -1) {
+            recaptchaIndicators.push('recaptcha');
+        }
+        if (recaptchaIndicators.length) {
+            text += '\n' + recaptchaIndicators.join('\n');
+        }
         return text;
     }
     if (window.__pcObserver && window.__pcKeywords) {
@@ -404,6 +422,24 @@ return (function() {
     }
     if (cfIndicators.length) {
         text += '\n' + cfIndicators.join('\n');
+    }
+    var recaptchaIndicators = [];
+    if (text.indexOf('protected by recaptcha') !== -1) recaptchaIndicators.push('protected by recaptcha');
+    if (
+        hasSelector('iframe[src*="google.com/recaptcha"]') ||
+        hasSelector('iframe[src*="recaptcha"]') ||
+        hasSelector('.g-recaptcha') ||
+        hasSelector('[name="g-recaptcha-response"]') ||
+        hasSelector('[title*="recaptcha" i]') ||
+        hasSelector('[aria-label*="recaptcha" i]')
+    ) {
+        recaptchaIndicators.push('recaptcha');
+        recaptchaIndicators.push('\u4eba\u673a\u8eab\u4efd\u9a8c\u8bc1');
+    } else if (text.indexOf('recaptcha') !== -1) {
+        recaptchaIndicators.push('recaptcha');
+    }
+    if (recaptchaIndicators.length) {
+        text += '\n' + recaptchaIndicators.join('\n');
     }
     return text;
 })();
@@ -1844,7 +1880,11 @@ return (function() {
             check_text = str(trigger.get("value", ""))
             normalized_text = check_text.lower().strip()
             op, keywords = self._parse_page_check_expression(check_text)
-            current_hit = bool(keywords and self._check_page_content_expr(session, op, keywords))
+            match_info = (
+                self._evaluate_page_check_expr(session, op, keywords)
+                if keywords else {"hit": False, "matched_keywords": [], "snapshot_preview": ""}
+            )
+            current_hit = bool(match_info.get("hit"))
             fire_mode = str(trigger.get("fire_mode", "edge") or "edge").strip().lower()
             cooldown_sec = max(0.0, self._coerce_float(trigger.get("cooldown_sec", 0), 0.0))
             stable_for_sec = max(0.0, self._coerce_float(trigger.get("stable_for_sec", 0), 0.0))
@@ -1875,6 +1915,7 @@ return (function() {
                             f"(页面检查命中, 模式=持续触发, 文本='{check_text[:30]}', "
                             f"冷却={cooldown_sec}秒)"
                         )
+                        self._log_page_check_hit_details(command, session, match_info)
                         return True
                 else:
                     if stable_hit and not prev_stable:
@@ -1883,6 +1924,7 @@ return (function() {
                             f"[CMD] 触发命令: {command.get('name')} "
                             f"(页面检查命中, 模式=边沿触发, 文本='{check_text[:30]}')"
                         )
+                        self._log_page_check_hit_details(command, session, match_info)
                         return True
 
         elif trigger_type == "command_result_match":
@@ -1968,6 +2010,110 @@ return (function() {
 
         return ned in hay
 
+    def _get_page_check_snapshot_text(self, session: 'TabSession') -> str:
+        self._try_wake_tab(session, reason="page_check")
+
+        try:
+            observer_ok = session.tab.run_js("return !!window.__pcObserver")
+            if observer_ok:
+                snapshot = str(session.tab.run_js("return String(window.__pcSnapshot || '')") or "")
+                if snapshot.strip():
+                    return snapshot
+        except Exception:
+            pass
+
+        try:
+            page_text = str(session.tab.run_js(self._PAGE_CHECK_SNAPSHOT_JS) or "")
+            if page_text.strip():
+                return page_text
+        except Exception:
+            pass
+
+        try:
+            return str(session.tab.run_js("return document.title || '';") or "")
+        except Exception:
+            return ""
+
+    def _build_page_check_snapshot_preview(
+        self,
+        snapshot: str,
+        matched_keywords: Optional[List[str]] = None,
+        limit: int = 180,
+    ) -> str:
+        normalized_snapshot = self._normalize_match_text(snapshot)
+        if not normalized_snapshot:
+            return ""
+
+        start = 0
+        for keyword in matched_keywords or []:
+            normalized_keyword = self._normalize_match_text(keyword)
+            if not normalized_keyword:
+                continue
+            index = normalized_snapshot.find(normalized_keyword)
+            if index != -1:
+                start = max(0, index - 60)
+                break
+
+        end = min(len(normalized_snapshot), start + max(40, limit))
+        preview = normalized_snapshot[start:end]
+        if start > 0:
+            preview = "..." + preview
+        if end < len(normalized_snapshot):
+            preview = preview + "..."
+        return preview.replace("'", '"')
+
+    def _evaluate_page_check_snapshot(
+        self,
+        snapshot: str,
+        op: str,
+        keywords: List[str],
+    ) -> Dict[str, Any]:
+        if not keywords:
+            return {
+                "hit": False,
+                "matched_keywords": [],
+                "snapshot_preview": "",
+            }
+
+        matched_keywords = [
+            keyword for keyword in keywords
+            if self._text_contains_needle(snapshot, keyword)
+        ]
+        if op == "or":
+            hit = bool(matched_keywords)
+        else:
+            hit = len(matched_keywords) == len(keywords)
+
+        return {
+            "hit": hit,
+            "matched_keywords": matched_keywords,
+            "snapshot_preview": self._build_page_check_snapshot_preview(snapshot, matched_keywords),
+        }
+
+    def _evaluate_page_check_expr(
+        self,
+        session: 'TabSession',
+        op: str,
+        keywords: List[str],
+    ) -> Dict[str, Any]:
+        snapshot = self._get_page_check_snapshot_text(session)
+        result = self._evaluate_page_check_snapshot(snapshot, op, keywords)
+        result["snapshot_text"] = snapshot
+        return result
+
+    def _log_page_check_hit_details(
+        self,
+        command: Dict,
+        session: 'TabSession',
+        match_info: Dict[str, Any],
+    ):
+        matched_keywords = match_info.get("matched_keywords") or []
+        preview = str(match_info.get("snapshot_preview") or "").strip()
+        logger.info(
+            f"[CMD] 页面检查命中详情: {command.get('name')} "
+            f"(标签页={session.id}, 命中关键词={matched_keywords}, 快照预览='{preview}')"
+        )
+
     def _check_page_content_expr(
         self, session: 'TabSession', op: str, keywords: list
     ) -> bool:
@@ -1977,48 +2123,14 @@ return (function() {
         - op="and"   所有关键词都命中才返回 True
         - op="single" 等同于 and（只有一个关键词）
         """
-        if not keywords:
-            return False
-        if op == "or":
-            return any(self._check_page_content(session, kw) for kw in keywords)
-        else:  # "and" / "single"
-            return all(self._check_page_content(session, kw) for kw in keywords)
+        return bool(self._evaluate_page_check_expr(session, op, keywords).get("hit"))
 
     def _check_page_content(self, session: 'TabSession', text: str) -> bool:
         needle = str(text or "").strip()
         if not needle:
             return False
-
-        self._try_wake_tab(session, reason="page_check")
-
-        # Fast path: read from MutationObserver cache (near-instant)
-        try:
-            observer_ok = session.tab.run_js("return !!window.__pcObserver")
-            if observer_ok:
-                snapshot = str(session.tab.run_js("return String(window.__pcSnapshot || '')") or "")
-                if snapshot.strip():
-                    return self._text_contains_needle(snapshot, needle)
-        except Exception:
-            pass
-
-        # Slow fallback: full page snapshot scan (observer not installed or broken)
-        page_text = ""
-        try:
-            page_text = str(
-                session.tab.run_js(self._PAGE_CHECK_SNAPSHOT_JS) or ""
-            )
-        except Exception:
-            page_text = ""
-
-        if page_text.strip():
-            return self._text_contains_needle(page_text, needle)
-
-        # Fallback to title only if page text is unavailable.
-        try:
-            title = str(session.tab.run_js("return document.title || '';") or "")
-            return self._text_contains_needle(title, needle)
-        except Exception:
-            return False
+        snapshot = self._get_page_check_snapshot_text(session)
+        return self._text_contains_needle(snapshot, needle)
 
     def _reset_page_check_latch(self, command: Dict, session: 'TabSession', reason: str = ""):
         """Allow page_check commands to retrigger when previous execution did not complete successfully."""

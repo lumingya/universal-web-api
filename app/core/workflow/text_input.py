@@ -341,7 +341,7 @@ class TextInputHandler:
         except Exception:
             return {}
 
-    def ensure_input_focus(self, ele, attempts: int = 2) -> bool:
+    def ensure_input_focus(self, ele, attempts: int = 2, log_failure: bool = True) -> bool:
         """尽量确保后续 Ctrl+A / Ctrl+V 作用在目标输入框上。"""
         for attempt in range(max(1, attempts) + 1):
             state = self._probe_focus_state(ele)
@@ -364,13 +364,14 @@ class TextInputHandler:
                 time.sleep(0.08)
 
         final_state = self._probe_focus_state(ele)
-        logger.warning(
-            "[INPUT_FOCUS] 输入框焦点校验失败 "
-            f"(active_within={bool(final_state.get('activeWithin'))}, "
-            f"selection_within={bool(final_state.get('selectionWithin'))}, "
-            f"active_tag={final_state.get('activeTag')!r}, "
-            f"selection_len={final_state.get('selectionTextLen', 0)})"
-        )
+        if log_failure:
+            logger.warning(
+                "[INPUT_FOCUS] 输入框焦点校验失败 "
+                f"(active_within={bool(final_state.get('activeWithin'))}, "
+                f"selection_within={bool(final_state.get('selectionWithin'))}, "
+                f"active_tag={final_state.get('activeTag')!r}, "
+                f"selection_len={final_state.get('selectionTextLen', 0)})"
+            )
         return False
 
     def verify_paste_result_minimal(self, ele, expected_text: str) -> bool:
@@ -1689,8 +1690,13 @@ class TextInputHandler:
             if self._check_cancelled():
                 return
 
-            if not self.ensure_input_focus(ele):
-                raise WorkflowError("clipboard_focus_failed")
+            if not self.ensure_input_focus(ele, log_failure=False):
+                self.physical_activate(ele)
+                time.sleep(0.08)
+                self.focus_to_end(ele)
+                time.sleep(0.05)
+                if not self.ensure_input_focus(ele):
+                    raise WorkflowError("clipboard_focus_failed")
             
             # 全选（人类化时序）
             self._human_key_combo('Control', 'A')
@@ -1777,8 +1783,13 @@ class TextInputHandler:
             ele.click()
             self._smart_delay(0.15, 0.35)
 
-            if not self.ensure_input_focus(ele):
-                raise WorkflowError("clipboard_focus_failed")
+            if not self.ensure_input_focus(ele, log_failure=False):
+                self.physical_activate(ele)
+                time.sleep(0.08)
+                self.focus_to_end(ele)
+                time.sleep(0.05)
+                if not self.ensure_input_focus(ele):
+                    raise WorkflowError("clipboard_focus_failed")
         
             if self._check_cancelled():
                 return

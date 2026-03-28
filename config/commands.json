@@ -284,7 +284,7 @@
       "mode": "simple",
       "trigger": {
         "type": "page_check",
-        "value": "security verification || protected by cloudflare || verify you are human || checking your browser || 确认您是真人",
+        "value": "protected by cloudflare || verify you are human || checking your browser || 确认您是真人 || cloudflare",
         "command_id": "",
         "action_ref": "",
         "match_rule": "equals",
@@ -328,6 +328,124 @@
       "script_lang": "javascript",
       "last_triggered": 1773823912.412253,
       "trigger_count": 2
+    },
+    {
+      "id": "cmd_arena_human_verify_clear_cookie",
+      "name": "人机验证即清Cookie",
+      "enabled": true,
+      "mode": "simple",
+      "trigger": {
+        "type": "page_check",
+        "value": "security verification && protected by recaptcha",
+        "command_id": "",
+        "action_ref": "",
+        "match_rule": "equals",
+        "expected_value": "",
+        "match_mode": "keyword",
+        "status_codes": "403,429,500,502,503,504",
+        "abort_on_match": true,
+        "scope": "domain",
+        "domain": "arena.ai",
+        "tab_index": null,
+        "priority": 6,
+        "periodic_enabled": true,
+        "periodic_interval_sec": 3,
+        "periodic_jitter_sec": 1,
+        "fire_mode": "edge",
+        "cooldown_sec": 10,
+        "command_ids": [],
+        "listen_all_commands": false,
+        "informative_only": true,
+        "stable_for_sec": 0,
+        "check_while_busy_workflow": true,
+        "allow_during_workflow": false,
+        "interrupt_policy": "auto",
+        "interrupt_message": ""
+      },
+      "actions": [
+        {
+          "type": "clear_cookies",
+          "action_id": "step_1_clear"
+        },
+        {
+          "type": "wait",
+          "seconds": 1.5,
+          "action_id": "step_2_wait"
+        },
+        {
+          "type": "refresh_page",
+          "action_id": "step_3_refresh"
+        },
+        {
+          "type": "wait",
+          "seconds": 1,
+          "action_id": "step_4_wait"
+        },
+        {
+          "type": "run_js",
+          "code": "(() => { try { const t = (document.body && document.body.innerText ? document.body.innerText : '').toLowerCase(); const hasVerify = t.includes('security verification') || t.includes('protected by cloudflare') || t.includes('verify you are human') || t.includes('checking your browser') || t.includes('确认您是真人') || t.includes('cloudflare'); if (hasVerify) return 'VERIFY'; const hasInput = !!document.querySelector('textarea, [contenteditable=\"true\"], input[placeholder*=\"ask\" i]'); const links = Array.from(document.querySelectorAll('a')).slice(0, 12); let blueLinks = 0; for (const a of links) { try { if (getComputedStyle(a).color === 'rgb(0, 0, 238)') blueLinks++; } catch (e) {} } const hasArenaHints = t.includes('new chat') || t.includes('leaderboard') || t.includes('battle mode'); if (blueLinks >= 3 && hasArenaHints) return 'BLACK'; if (hasInput) return 'READY'; return 'UNKNOWN'; } catch (e) { return 'UNKNOWN'; } })()",
+          "action_id": "step_5_probe"
+        }
+      ],
+      "group_name": "竞技场命令",
+      "script": "",
+      "script_lang": "javascript",
+      "stop_on_error": false
+    },
+    {
+      "id": "cmd_arena_cookie_accept",
+      "name": "自动接受Cookie弹窗",
+      "enabled": true,
+      "mode": "simple",
+      "trigger": {
+        "type": "page_check",
+        "value": "this website uses cookies && accept cookies",
+        "command_id": "",
+        "action_ref": "",
+        "match_rule": "equals",
+        "expected_value": "",
+        "match_mode": "keyword",
+        "status_codes": "403,429,500,502,503,504",
+        "abort_on_match": true,
+        "scope": "domain",
+        "domain": "arena.ai",
+        "tab_index": null,
+        "priority": 5,
+        "periodic_enabled": true,
+        "periodic_interval_sec": 3,
+        "periodic_jitter_sec": 1,
+        "fire_mode": "edge",
+        "cooldown_sec": 5,
+        "command_ids": [],
+        "listen_all_commands": false,
+        "informative_only": true,
+        "stable_for_sec": 0,
+        "check_while_busy_workflow": true,
+        "allow_during_workflow": false,
+        "interrupt_policy": "auto",
+        "interrupt_message": ""
+      },
+      "actions": [
+        {
+          "type": "run_js",
+          "action_id": "step_1_accept",
+          "code": "return (async () => { const norm = (value) => String(value || '').replace(/\\s+/g, ' ').trim().toLowerCase(); const isVisible = (el) => { if (!el || !el.isConnected) return false; try { const style = window.getComputedStyle(el); if (style.display === 'none' || style.visibility === 'hidden' || style.pointerEvents === 'none') return false; return el.getClientRects().length > 0; } catch (e) { return false; } }; const clickEl = (el) => { if (!isVisible(el)) return false; try { el.click(); return true; } catch (e) {} try { el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); return true; } catch (e) {} return false; }; const getLabel = (el) => norm(el.innerText || el.textContent || el.value || el.getAttribute('aria-label') || el.getAttribute('title') || ''); const allClickables = () => Array.from(document.querySelectorAll('button, [role=\"button\"], input[type=\"button\"], input[type=\"submit\"], a')); const findByTexts = (texts) => { for (const el of allClickables()) { const label = getLabel(el); if (!label) continue; if (texts.some((text) => label === text || label.includes(text))) return el; } return null; }; const findCloseButton = () => { const selectors = ['button[aria-label*=\"close\" i]', 'button[title*=\"close\" i]', '[role=\"button\"][aria-label*=\"close\" i]', '[aria-label*=\"dismiss\" i]']; for (const selector of selectors) { const el = document.querySelector(selector); if (isVisible(el)) return el; } return findByTexts(['×', 'close']); }; const hasBanner = () => { const text = norm(document.body && (document.body.innerText || document.body.textContent || '')); return text.includes('this website uses cookies') && text.includes('accept cookies'); }; const deadline = Date.now() + 8000; while (Date.now() < deadline) { const accept = findByTexts(['accept cookies', 'accept all cookies']); if (accept && clickEl(accept)) return { ok: true, result: 'cookie_accept_clicked' }; const close = findCloseButton(); if (close && clickEl(close)) return { ok: true, result: 'cookie_popup_closed' }; if (!hasBanner()) return { ok: true, result: 'cookie_banner_missing' }; await new Promise((resolve) => setTimeout(resolve, 250)); } return { ok: false, result: 'cookie_popup_not_ready' }; })()"
+        },
+        {
+          "type": "wait",
+          "seconds": 0.8,
+          "action_id": "step_2_wait"
+        },
+        {
+          "type": "run_js",
+          "action_id": "step_3_probe",
+          "code": "return (() => { const text = String((document.body && (document.body.innerText || document.body.textContent)) || '').replace(/\\s+/g, ' ').trim().toLowerCase(); const visible = text.includes('this website uses cookies') && text.includes('accept cookies'); return visible ? { ok: false, result: 'cookie_banner_still_visible' } : { ok: true, result: 'cookie_banner_cleared' }; })()"
+        }
+      ],
+      "group_name": "竞技场命令",
+      "script": "",
+      "script_lang": "javascript",
+      "stop_on_error": false
     },
     {
       "name": "黑屏后恢复",
@@ -389,7 +507,8 @@
         "periodic_interval_sec": 8.0,
         "periodic_jitter_sec": 2.0,
         "fire_mode": "level",
-        "cooldown_sec": 8.0
+        "cooldown_sec": 8.0,
+        "check_while_busy_workflow": false
       },
       "actions": [
         {
@@ -458,6 +577,7 @@
           "cmd_cf_pagecheck_arena_verify",
           "cmd_9b1e4a02",
           "cmd_9b1e4a01",
+          "evt_stream_terminal_error",
           "cmd_arena_terms_refresh_abort",
           "cmd_arena_terms_refresh_followup"
         ],

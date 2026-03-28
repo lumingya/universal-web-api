@@ -127,7 +127,7 @@ class LmarenaParser(ResponseParser):
                     if self._is_finish_signal(payload):
                         done = True
 
-                elif prefix == "ae":
+                elif prefix in {"ae", "a3"}:
                     error_msg = self._parse_error(payload)
                     if error_msg:
                         result["error"] = error_msg

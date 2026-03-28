@@ -683,6 +683,10 @@ class ConfigEngine:
         
         resolved_default = self._resolve_default_preset_name(site)
         target = preset_name or resolved_default
+        resolved_target = self._resolve_preset_alias_key(target, presets)
+        if resolved_target != target:
+            logger.debug(f"预设别名命中: '{target}' -> '{resolved_target}'")
+            target = resolved_target
 
         # 1. 尝试精确匹配
         if target and target in presets:
@@ -702,6 +706,30 @@ class ConfigEngine:
         first_key = next(iter(presets))
         logger.warning(f"默认预设不存在，使用第一个预设: '{first_key}'")
         return presets[first_key]
+
+    @staticmethod
+    def _resolve_preset_alias_key(target: Any, presets: Dict[str, Any]) -> str:
+        """兼容历史命名：允许不带“预设_”前缀的名字命中真实预设键。"""
+        normalized = str(target or "").strip()
+        if not normalized or not isinstance(presets, dict):
+            return normalized
+
+        if normalized in presets:
+            return normalized
+
+        candidates = []
+        if normalized.startswith("预设_"):
+            stripped = normalized[len("预设_"):].strip()
+            if stripped:
+                candidates.append(stripped)
+        else:
+            candidates.append(f"预设_{normalized}")
+
+        for candidate in candidates:
+            if candidate in presets:
+                return candidate
+
+        return normalized
     
     def _get_site_data_readonly(self, domain: str, preset_name: str = None) -> Optional[Dict]:
         """获取预设配置的深拷贝（只读用途）"""
@@ -801,6 +829,130 @@ class ConfigEngine:
         
         logger.info(f"✅ 站点 {domain} 创建预设: '{new_name}' (克隆自 '{source}')")
         return True
+
+    @staticmethod
+    def _build_preset_rename_map(old_name: Any, new_name: Any) -> Dict[str, str]:
+        old_raw = str(old_name or "").strip()
+        new_raw = str(new_name or "").strip()
+        if not old_raw or not new_raw:
+            return {}
+
+        def _strip_prefix(value: str) -> str:
+            if value.startswith("预设_"):
+                return value[len("预设_"):].strip()
+            return value
+
+        def _add_prefix(value: str) -> str:
+            return value if value.startswith("预设_") else f"预设_{value}"
+
+        mapping: Dict[str, str] = {}
+        old_plain = _strip_prefix(old_raw)
+        new_plain = _strip_prefix(new_raw)
+        old_prefixed = _add_prefix(old_raw)
+        new_prefixed = _add_prefix(new_raw)
+
+        for src, dst in (
+            (old_raw, new_raw),
+            (old_plain, new_plain),
+            (old_prefixed, new_prefixed),
+        ):
+            src_text = str(src or "").strip()
+            dst_text = str(dst or "").strip()
+            if src_text and dst_text:
+                mapping[src_text] = dst_text
+
+        return mapping
+
+    @staticmethod
+    def _command_targets_domain(command: Dict[str, Any], domain: str) -> bool:
+        normalized_domain = str(domain or "").strip().lower()
+        if not normalized_domain or not isinstance(command, dict):
+            return False
+
+        trigger = command.get("trigger", {}) or {}
+        command_domain = str(trigger.get("domain", "") or "").strip().lower()
+        if not command_domain:
+            return False
+
+        return (
+            command_domain == normalized_domain
+            or command_domain.endswith(f".{normalized_domain}")
+            or normalized_domain.endswith(f".{command_domain}")
+        )
+
+    def _rename_preset_references_in_commands(
+        self,
+        domain: str,
+        rename_map: Dict[str, str],
+    ) -> int:
+        if not rename_map:
+            return 0
+
+        commands = self._load_commands_file()
+        if not commands:
+            return 0
+
+        updated = 0
+        for command in commands:
+            if not self._command_targets_domain(command, domain):
+                continue
+
+            actions = command.get("actions", [])
+            if not isinstance(actions, list):
+                continue
+
+            for action in actions:
+                if not isinstance(action, dict):
+                    continue
+                current_preset = str(action.get("preset_name", "") or "").strip()
+                replacement = rename_map.get(current_preset)
+                if not replacement or replacement == current_preset:
+                    continue
+                action["preset_name"] = replacement
+                updated += 1
+
+        if updated > 0:
+            self._save_commands_file(commands)
+
+        return updated
+
+    def _rename_preset_references_in_active_tabs(
+        self,
+        domain: str,
+        rename_map: Dict[str, str],
+    ) -> int:
+        if not rename_map:
+            return 0
+
+        try:
+            from app.core import browser as browser_module
+
+            instance = getattr(browser_module, "_browser_instance", None)
+            if instance is None:
+                return 0
+
+            pool = getattr(instance, "_tab_pool", None)
+            if pool is None or not hasattr(pool, "get_sessions_snapshot"):
+                return 0
+
+            updated = 0
+            for session in pool.get_sessions_snapshot():
+                session_domain = str(getattr(session, "current_domain", "") or "").strip().lower()
+                if session_domain != str(domain or "").strip().lower():
+                    continue
+
+                current_preset = str(getattr(session, "preset_name", "") or "").strip()
+                replacement = rename_map.get(current_preset)
+                if not replacement or replacement == current_preset:
+                    continue
+
+                session.preset_name = replacement
+                updated += 1
+
+            return updated
+        except Exception as e:
+            logger.debug(f"同步活动标签页预设引用失败（忽略）: {e}")
+            return 0
     
     def delete_preset(self, domain: str, preset_name: str) -> bool:
         """
@@ -845,31 +997,45 @@ class ConfigEngine:
         
         site = self.sites[domain]
         presets = site.get("presets", {})
-        
-        if old_name not in presets:
+
+        resolved_old_name = self._resolve_preset_alias_key(old_name, presets)
+        if resolved_old_name not in presets:
             return False
         
         if new_name in presets:
             logger.warning(f"预设名已存在: {new_name}")
             return False
-        
+
+        rename_map = self._build_preset_rename_map(resolved_old_name, new_name)
         default_preset = site.get("default_preset")
+        local_default = str(self._local_default_presets.get(domain, "") or "").strip()
 
         # 保持顺序：创建有序副本
         new_presets = {}
         for key, value in presets.items():
-            if key == old_name:
+            if key == resolved_old_name:
                 new_presets[new_name] = value
             else:
                 new_presets[key] = value
 
         site["presets"] = new_presets
-        if default_preset == old_name:
+        if default_preset == resolved_old_name:
             site["default_preset"] = new_name
+        if local_default:
+            local_replacement = rename_map.get(local_default)
+            if local_replacement:
+                self._local_default_presets[domain] = local_replacement
         self._normalize_site_default_preset(domain, site)
-        self._save_config()
+        if not self._save_config():
+            return False
+
+        updated_command_refs = self._rename_preset_references_in_commands(domain, rename_map)
+        updated_tab_refs = self._rename_preset_references_in_active_tabs(domain, rename_map)
         
-        logger.info(f"✅ 站点 {domain} 重命名预设: '{old_name}' → '{new_name}'")
+        logger.info(
+            f"站点 {domain} 重命名预设: '{resolved_old_name}' → '{new_name}' "
+            f"(命令引用同步 {updated_command_refs} 处, 活动标签页同步 {updated_tab_refs} 处)"
+        )
         return True
 
     # ================= 预设级 Getter/Setter =================

@@ -30,6 +30,45 @@ class CommandEngineActionsMixin:
     def _is_action_soft_failure(action_result: Any) -> bool:
         return isinstance(action_result, dict) and action_result.get("ok") is False
 
+    @staticmethod
+    def _wrap_run_js_for_return(code: Any) -> Optional[str]:
+        stripped = str(code or "").strip()
+        if not stripped:
+            return None
+        if re.match(r"^return\b", stripped):
+            return None
+
+        normalized = stripped.rstrip(";").strip()
+        looks_like_iife = (
+            normalized.startswith("(()")
+            or normalized.startswith("((async")
+            or normalized.startswith("(function")
+            or normalized.startswith("(async function")
+        )
+        if not looks_like_iife:
+            return None
+        if not normalized.endswith(")()"):
+            return None
+
+        return f"return {normalized};"
+
+    def _run_command_js(self, tab: Any, code: Any) -> Any:
+        result = tab.run_js(code)
+        if result is not None:
+            return result
+
+        wrapped_code = self._wrap_run_js_for_return(code)
+        if not wrapped_code:
+            return result
+
+        try:
+            wrapped_result = tab.run_js(wrapped_code)
+            logger.debug("[CMD] JS 首次返回空，已自动补 return 重试一次")
+            return wrapped_result
+        except Exception as e:
+            logger.debug(f"[CMD] JS return 包装重试失败（忽略）: {e}")
+            return result
+
     def _execute_command_async(
         self,
         command: Dict,
@@ -438,7 +477,7 @@ class CommandEngineActionsMixin:
             code = action.get("code", "")
             if code:
                 try:
-                    result = tab.run_js(code)
+                    result = self._run_command_js(tab, code)
                     retry_on_results = action.get("retry_on_results", [])
                     if isinstance(retry_on_results, str):
                         retry_on_results = [
@@ -474,7 +513,7 @@ class CommandEngineActionsMixin:
                                 break
                         if retry_wait_seconds > 0:
                             time.sleep(retry_wait_seconds)
-                        result = tab.run_js(code)
+                        result = self._run_command_js(tab, code)
                     logger.debug(f"[CMD] JS 执行完成: {str(result)[:100]}")
 
                     # 当 JS 返回假值（None/""/False/0）时，视为执行未成功，
@@ -673,9 +712,16 @@ class CommandEngineActionsMixin:
             deadline = started_at + timeout_sec
             timed_out = False
             previous_stop_reason = str(getattr(session, "_workflow_stop_reason", "") or "").strip()
-            preserved_interrupt = previous_stop_reason in {"command_interrupt", "command_interrupt_abort"}
-            if not preserved_interrupt:
-                setattr(session, "_workflow_stop_reason", None)
+            # High-priority commands may launch a nested workflow while the parent workflow
+            # has already marked the session as interrupted. Clear that inherited stop flag
+            # before starting the nested workflow, otherwise the new workflow self-cancels
+            # immediately. Only restore it afterwards when there is still an active parent
+            # workflow that needs to observe the original interrupt.
+            preserved_interrupt = (
+                previous_stop_reason in {"command_interrupt", "command_interrupt_abort"}
+                and self._has_active_workflow(session)
+            )
+            setattr(session, "_workflow_stop_reason", None)
 
             def _action_stop_checker() -> bool:
                 nonlocal timed_out

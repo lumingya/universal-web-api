@@ -37,6 +37,18 @@
       "group_name": "竞技场命令"
     },
     {
+      "id": "cmd_arena_human_verify_clear_cookie",
+      "name": "人机验证即清Cookie",
+      "enabled": true,
+      "group_name": "竞技场命令"
+    },
+    {
+      "id": "cmd_arena_cookie_accept",
+      "name": "自动接受Cookie弹窗",
+      "enabled": true,
+      "group_name": "竞技场命令"
+    },
+    {
       "id": "cmd_9b1e4a03",
       "name": "黑屏后恢复",
       "enabled": true,

@@ -69,8 +69,8 @@ class LmarenaSideLeftParser(ResponseParser):
                 elif prefix == "ad":
                     if self._is_finish_signal(payload):
                         done = True
-                # left/global error
-                elif prefix == "ae":
+                # left/modelA error frames (observed formats: ae / a3)
+                elif prefix in {"ae", "a3"}:
                     error_msg = self._parse_error(payload)
                     if error_msg:
                         result["error"] = error_msg
@@ -97,6 +97,12 @@ class LmarenaSideLeftParser(ResponseParser):
 
     def reset(self):
         self._accumulated = ""
+
+    def should_abort_on_error(self) -> bool:
+        # Side-by-side left mode only trusts the left stream. If the left channel
+        # itself reports an error, we should fail fast instead of silently
+        # falling back to whole-page DOM heuristics.
+        return True
 
     @staticmethod
     def _fix_mojibake(text: str) -> str:
@@ -152,4 +158,3 @@ class LmarenaSideLeftParser(ResponseParser):
 
 
 __all__ = ["LmarenaSideLeftParser"]
-

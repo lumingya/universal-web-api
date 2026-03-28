@@ -1,4 +1,4 @@
-"""
+﻿"""
 app/core/browser.py - 浏览器核心连接和调度（v2.0 多标签页版）
 
 职责：
@@ -745,6 +745,214 @@ class BrowserCore:
         stop_checker: Optional[Callable[[], bool]] = None,
         workflow_priority: Optional[int] = None,
     ) -> Generator[str, None, None]:
+        max_terminal_retries = 1
+        attempt = 0
+
+        while True:
+            stream = self._execute_workflow_stream_once(
+                session,
+                messages,
+                preset_name=preset_name,
+                stop_checker=stop_checker,
+                workflow_priority=workflow_priority,
+            )
+            saw_content = False
+            retry_requested = False
+
+            try:
+                for chunk in stream:
+                    if self._chunk_has_stream_content(chunk):
+                        saw_content = True
+
+                    is_terminal_error = self._is_retriable_stream_terminal_error_chunk(chunk)
+                    if (
+                        not saw_content
+                        and attempt < max_terminal_retries
+                        and is_terminal_error
+                        and not (stop_checker or self._should_stop_checker)()
+                    ):
+                        retry_requested = True
+                        logger.warning(
+                            self._build_stream_terminal_alert_message(
+                                session.id,
+                                chunk,
+                                retrying=True,
+                                attempt=attempt + 1,
+                                max_attempts=max_terminal_retries,
+                            )
+                        )
+                        break
+
+                    if is_terminal_error:
+                        logger.error(
+                            self._build_stream_terminal_alert_message(
+                                session.id,
+                                chunk,
+                                retrying=False,
+                                saw_content=saw_content,
+                            )
+                        )
+                        self._emit_stream_terminal_alert_event(
+                            session,
+                            chunk,
+                            saw_content=saw_content,
+                        )
+
+                    yield chunk
+            finally:
+                with contextlib.suppress(Exception):
+                    stream.close()
+
+            if not retry_requested:
+                return
+
+            attempt += 1
+            setattr(session, "_workflow_stop_reason", None)
+            setattr(session, "_workflow_user_stop_logged", False)
+            time.sleep(0.5)
+
+    @staticmethod
+    def _extract_stream_error_payload(chunk: str) -> Optional[Dict]:
+        if not isinstance(chunk, str) or not chunk.startswith("data: "):
+            return None
+        data_str = chunk[6:].strip()
+        if not data_str or data_str == "[DONE]":
+            return None
+        try:
+            payload = json.loads(data_str)
+        except json.JSONDecodeError:
+            return None
+        error = payload.get("error")
+        return error if isinstance(error, dict) else None
+
+    @classmethod
+    def _is_retriable_stream_terminal_error_chunk(cls, chunk: str) -> bool:
+        error = cls._extract_stream_error_payload(chunk)
+        if not error:
+            return False
+        message = str(error.get("message") or "").strip().lower()
+        return "stream_terminal_error:" in message
+
+    @classmethod
+    def _get_stream_terminal_error_detail(cls, chunk: str) -> str:
+        error = cls._extract_stream_error_payload(chunk)
+        if not error:
+            return ""
+
+        message = " ".join(str(error.get("message") or "").split())
+        if not message:
+            return ""
+
+        marker = "stream_terminal_error:"
+        lowered = message.lower()
+        marker_index = lowered.find(marker)
+        if marker_index >= 0:
+            detail = message[marker_index + len(marker):].strip()
+            return detail or message
+
+        return message
+
+    @classmethod
+    def _summarize_stream_terminal_alert(
+        cls,
+        chunk: str,
+        *,
+        retrying: bool,
+        saw_content: bool = False,
+        attempt: int = 0,
+        max_attempts: int = 0,
+    ) -> str:
+        detail = cls._get_stream_terminal_error_detail(chunk) or "unknown stream terminal error"
+        lowered = detail.lower()
+        category = "限流终止" if ("too many requests" in lowered or "429" in lowered) else "异常终止"
+
+        if retrying:
+            return (
+                f"目标流告警：检测到{category}（{detail}），"
+                f"自动重试工作流 ({attempt}/{max_attempts})"
+            )
+
+        suffix = "当前工作流将报错结束（已有部分输出）" if saw_content else "当前工作流将报错结束"
+        return f"目标流告警：检测到{category}（{detail}），{suffix}"
+
+    @classmethod
+    def _build_stream_terminal_alert_message(
+        cls,
+        session_id: str,
+        chunk: str,
+        *,
+        retrying: bool,
+        saw_content: bool = False,
+        attempt: int = 0,
+        max_attempts: int = 0,
+    ) -> str:
+        summary = cls._summarize_stream_terminal_alert(
+            chunk,
+            retrying=retrying,
+            saw_content=saw_content,
+            attempt=attempt,
+            max_attempts=max_attempts,
+        )
+        return f"[ALERT][{session_id}] {summary}"
+
+    def _emit_stream_terminal_alert_event(
+        self,
+        session: TabSession,
+        chunk: str,
+        *,
+        saw_content: bool = False,
+    ) -> None:
+        summary = self._summarize_stream_terminal_alert(
+            chunk,
+            retrying=False,
+            saw_content=saw_content,
+        )
+        detail = self._get_stream_terminal_error_detail(chunk)
+        if not summary:
+            return
+
+        try:
+            from app.services.command_engine import command_engine
+
+            command_engine.emit_external_command_result_event(
+                session,
+                source_command_id="evt_stream_terminal_error",
+                source_command_name="ARENA_STREAM_TERMINAL_ALERT",
+                summary=summary,
+                result=detail or summary,
+                informative=True,
+                mode="external_alert",
+                group_name="arena_commands",
+            )
+        except Exception as e:
+            logger.debug(f"[{session.id}] stream terminal alert event skipped: {e}")
+
+    @staticmethod
+    def _chunk_has_stream_content(chunk: str) -> bool:
+        if not isinstance(chunk, str) or not chunk.startswith("data: "):
+            return False
+        data_str = chunk[6:].strip()
+        if not data_str or data_str == "[DONE]":
+            return False
+        try:
+            payload = json.loads(data_str)
+        except json.JSONDecodeError:
+            return False
+        choices = payload.get("choices")
+        if not isinstance(choices, list) or not choices:
+            return False
+        delta = choices[0].get("delta", {}) if isinstance(choices[0], dict) else {}
+        content = delta.get("content", "") if isinstance(delta, dict) else ""
+        return bool(content)
+
+    def _execute_workflow_stream_once(
+        self,
+        session: TabSession,
+        messages: List[Dict],
+        preset_name: Optional[str] = None,
+        stop_checker: Optional[Callable[[], bool]] = None,
+        workflow_priority: Optional[int] = None,
+    ) -> Generator[str, None, None]:
         """流式工作流执行（v2.0）"""
     
         tab = session.tab
@@ -1462,34 +1670,44 @@ class BrowserCore:
         collected_content = []
         error_data = None
         
-        for chunk in self._execute_workflow_stream(
+        stream = self._execute_workflow_stream(
             session,
             messages,
             preset_name=preset_name,
             stop_checker=stop_checker,
             workflow_priority=workflow_priority,
-        ):
-            if chunk.startswith("data: [DONE]"):
-                continue
-            
-            if chunk.startswith("data: "):
-                try:
-                    data_str = chunk[6:].strip()
-                    if not data_str:
-                        continue
-                    data = json.loads(data_str)
-                    
-                    if "error" in data:
-                        error_data = data
-                        break
-                    
-                    if "choices" in data and data["choices"]:
-                        delta = data["choices"][0].get("delta", {})
-                        content = delta.get("content", "")
-                        if content:
-                            collected_content.append(content)
-                except json.JSONDecodeError:
+        )
+
+        try:
+            for chunk in stream:
+                if chunk.startswith("data: [DONE]"):
                     continue
+                
+                if chunk.startswith("data: "):
+                    try:
+                        data_str = chunk[6:].strip()
+                        if not data_str:
+                            continue
+                        data = json.loads(data_str)
+                        
+                        if "error" in data:
+                            error_data = data
+                            break
+                        
+                        if "choices" in data and data["choices"]:
+                            delta = data["choices"][0].get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                collected_content.append(content)
+                    except json.JSONDecodeError:
+                        continue
+        except GeneratorExit:
+            with contextlib.suppress(Exception):
+                stream.close()
+            raise
+        finally:
+            with contextlib.suppress(Exception):
+                stream.close()
         
         if error_data:
             yield json.dumps(error_data, ensure_ascii=False)

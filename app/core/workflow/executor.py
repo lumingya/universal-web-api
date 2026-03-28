@@ -31,6 +31,7 @@ from app.core.network_monitor import (
     create_network_monitor,
     NetworkMonitorTimeout,
     NetworkMonitorError,
+    NetworkMonitorTerminalError,
     NetworkInterceptionTriggered,
 )
 
@@ -782,6 +783,10 @@ class WorkflowExecutor:
                     except NetworkInterceptionTriggered as e:
                         logger.warning(f"[Executor] 网络拦截已触发: {e}")
                         raise WorkflowError("network_intercepted")
+
+                    except NetworkMonitorTerminalError as e:
+                        logger.error(f"[Executor] 目标流已确认失败，终止工作流: {e}")
+                        raise WorkflowError(f"stream_terminal_error:{e}")
                     
                     except NetworkMonitorTimeout as e:
                         logger.warning(
@@ -821,7 +826,12 @@ class WorkflowExecutor:
                                 ):
                                     if self._check_cancelled():
                                         break
-                            except (NetworkInterceptionTriggered, NetworkMonitorTimeout, NetworkMonitorError):
+                            except (
+                                NetworkInterceptionTriggered,
+                                NetworkMonitorTimeout,
+                                NetworkMonitorTerminalError,
+                                NetworkMonitorError,
+                            ):
                                 pass
                             except Exception as e:
                                 logger.debug(f"[Executor] 后台网络事件监听结束: {e}")
