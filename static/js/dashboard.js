@@ -661,6 +661,32 @@ const ENV_CONFIG_SCHEMA = {
             }
         }
     },
+    toolCalling: {
+        apply: 'service',
+        label: '函数调用',
+        icon: '🧰',
+        desc: '控制函数调用的内部修复提示词与重试策略。',
+        items: {
+            TOOL_CALLING_RETRY_STRATEGY: {
+                label: '重试策略',
+                desc: '聚焦修复只发送必要的修复信息；完整上下文会把原对话和修复反馈一起发给模型。',
+                type: 'select',
+                options: [
+                    { label: '聚焦修复（推荐）', value: 'focused_repair' },
+                    { label: '完整上下文', value: 'full_context' }
+                ],
+                default: 'focused_repair'
+            },
+            TOOL_CALLING_INTERNAL_RETRY_MAX: {
+                label: '内部修复重试次数',
+                desc: '函数调用结果校验失败时，自动修复后再次重试的次数。0 表示关闭自动修复；默认 2；最大 5。',
+                type: 'number',
+                min: 0,
+                max: 5,
+                default: 2
+            }
+        }
+    },
     files: {
         apply: 'service',
         label: '配置文件',

@@ -267,7 +267,11 @@ window.SettingsTab = {
                                             </div>
                                             <select v-else-if="field.type === 'select'" v-model="envConfig[fieldKey]" 
                                                     class="settings-input w-full">
-                                                <option v-for="opt in field.options" :key="opt" :value="opt">{{ opt }}</option>
+                                                <option v-for="opt in field.options"
+                                                        :key="typeof opt === 'object' ? opt.value : opt"
+                                                        :value="typeof opt === 'object' ? opt.value : opt">
+                                                    {{ typeof opt === 'object' ? opt.label : opt }}
+                                                </option>
                                             </select>
                                             <input v-else-if="field.type === 'number'" type="number"
                                                    v-model.number="envConfig[fieldKey]"

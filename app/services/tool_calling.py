@@ -441,19 +441,24 @@ def complete_tool_calling_roundtrip(
 ) -> Dict[str, Any]:
     conversation = copy.deepcopy(messages or [])
     retry_limit = _get_tool_validation_retry_limit()
+    retry_strategy = _get_tool_retry_strategy()
     total_attempts = retry_limit + 1
     last_summary = "tool_call_validation_failed"
+    pending_retry_messages: Optional[List[Dict[str, str]]] = None
 
     for attempt in range(1, total_attempts + 1):
         if stop_checker and stop_checker():
             raise RuntimeError("tool_calling_cancelled")
 
-        browser_messages = build_browser_messages_for_tools(
-            messages=conversation,
-            tools=tools,
-            tool_choice=tool_choice,
-            parallel_tool_calls=parallel_tool_calls,
-        )
+        if pending_retry_messages is not None:
+            browser_messages = pending_retry_messages
+        else:
+            browser_messages = build_browser_messages_for_tools(
+                messages=conversation,
+                tools=tools,
+                tool_choice=tool_choice,
+                parallel_tool_calls=parallel_tool_calls,
+            )
         assistant_text = str(round_executor(browser_messages) or "")
         parsed = parse_tool_response(assistant_text, tools)
         errors = _collect_tool_response_errors(
@@ -465,29 +470,57 @@ def complete_tool_calling_roundtrip(
         )
         if not errors:
             if attempt > 1:
-                logger.info(
-                    f"[tool_calling] accepted candidate after retry "
-                    f"attempt={attempt}/{total_attempts}"
+                logger.warning(
+                    "[tool_calling] 函数调用候选已在内部修复后通过校验 "
+                    f"轮次={attempt}/{total_attempts} "
+                    f"已用修复重试={attempt - 1}/{retry_limit} "
+                    f"策略={_describe_tool_retry_strategy(retry_strategy)}"
                 )
             return parsed
 
         last_summary = _summarize_tool_response_errors(errors)
-        logger.warning(
-            f"[tool_calling] rejected candidate attempt={attempt}/{total_attempts}: "
-            f"{last_summary}"
-        )
         if attempt >= total_attempts:
+            logger.warning(
+                "[tool_calling] 函数调用内部修复次数已耗尽 "
+                f"轮次={attempt}/{total_attempts} "
+                f"配置上限={retry_limit} "
+                f"策略={_describe_tool_retry_strategy(retry_strategy)} "
+                f"最后错误={last_summary}"
+            )
             raise RuntimeError(f"tool_call_validation_exhausted: {last_summary}")
 
-        conversation.extend(
-            _build_tool_retry_messages(
+        remaining_retries = total_attempts - attempt
+        logger.warning(
+            "[tool_calling] 函数调用候选校验未通过，准备进行内部修复重试 "
+            f"轮次={attempt}/{total_attempts} "
+            f"配置上限={retry_limit} "
+            f"策略={_describe_tool_retry_strategy(retry_strategy)} "
+            f"剩余重试={remaining_retries} "
+            f"原因={last_summary}"
+        )
+        if retry_strategy == "focused_repair":
+            pending_retry_messages = _build_focused_tool_retry_messages(
+                original_messages=messages,
+                tools=tools,
+                tool_choice=tool_choice,
+                parallel_tool_calls=parallel_tool_calls,
                 raw_text=assistant_text,
                 parsed=parsed,
                 errors=errors,
                 attempt=attempt,
                 total_attempts=total_attempts,
             )
-        )
+        else:
+            conversation.extend(
+                _build_tool_retry_messages(
+                    raw_text=assistant_text,
+                    parsed=parsed,
+                    errors=errors,
+                    attempt=attempt,
+                    total_attempts=total_attempts,
+                )
+            )
+            pending_retry_messages = None
 
     raise RuntimeError(f"tool_call_validation_exhausted: {last_summary}")
 
@@ -700,6 +733,30 @@ def _get_tool_validation_retry_limit() -> int:
     except Exception:
         value = 2
     return max(0, min(5, value))
+
+
+def _get_tool_retry_strategy() -> str:
+    raw_value = str(os.getenv("TOOL_CALLING_RETRY_STRATEGY", "focused_repair") or "focused_repair").strip().lower()
+    aliases = {
+        "focused": "focused_repair",
+        "repair": "focused_repair",
+        "minimal": "focused_repair",
+        "compact": "focused_repair",
+        "focused_repair": "focused_repair",
+        "聚焦修复": "focused_repair",
+        "full": "full_context",
+        "legacy": "full_context",
+        "context": "full_context",
+        "full_context": "full_context",
+        "完整上下文": "full_context",
+    }
+    return aliases.get(raw_value, "focused_repair")
+
+
+def _describe_tool_retry_strategy(strategy: str) -> str:
+    if strategy == "full_context":
+        return "完整上下文"
+    return "聚焦修复"
 
 
 def _collect_tool_response_errors(
@@ -1092,6 +1149,40 @@ def _build_tool_retry_messages(
     return messages
 
 
+def _build_focused_tool_retry_messages(
+    original_messages: List[Dict[str, Any]],
+    tools: List[Dict[str, Any]],
+    tool_choice: Any,
+    parallel_tool_calls: Optional[bool],
+    raw_text: str,
+    parsed: Dict[str, Any],
+    errors: List[Dict[str, Any]],
+    attempt: int,
+    total_attempts: int,
+) -> List[Dict[str, str]]:
+    return [
+        {
+            "role": "system",
+            "content": _build_tool_repair_system_prompt(
+                tools=tools,
+                tool_choice=tool_choice,
+                parallel_tool_calls=parallel_tool_calls,
+            ),
+        },
+        {
+            "role": "user",
+            "content": _format_focused_tool_retry_feedback(
+                original_messages=original_messages,
+                errors=errors,
+                parsed=parsed,
+                raw_text=raw_text,
+                attempt=attempt,
+                total_attempts=total_attempts,
+            ),
+        },
+    ]
+
+
 def _build_rejected_assistant_message(
     raw_text: str,
     parsed: Dict[str, Any],
@@ -1123,10 +1214,11 @@ def _format_tool_retry_feedback(
     total_attempts: int,
 ) -> str:
     lines = [
-        "[Tool Execution Feedback]",
+        "[Tool Repair Feedback]",
         "Your previous assistant response was rejected before execution and was not forwarded to the user.",
+        "Keep the original intent and make the smallest possible valid fix.",
         f"Attempt: {attempt}/{total_attempts}",
-        "Problems:",
+        "Validation errors:",
     ]
     for index, item in enumerate(errors, start=1):
         lines.append(f"{index}. {item.get('message')}")
@@ -1145,11 +1237,189 @@ def _format_tool_retry_feedback(
 
     lines.extend(
         [
-            "Return a corrected assistant JSON response now.",
+            "Return only the corrected assistant JSON object now.",
+            "Prefer repairing the rejected response instead of rewriting from scratch.",
             "Do not repeat the same invalid tool call unchanged.",
         ]
     )
     return "\n".join(lines)
+
+
+def _build_tool_repair_system_prompt(
+    tools: List[Dict[str, Any]],
+    tool_choice: Any,
+    parallel_tool_calls: Optional[bool],
+) -> str:
+    choice_instruction = _describe_tool_choice(tool_choice)
+    parallel_instruction = (
+        "You may return more than one tool call in a single response."
+        if parallel_tool_calls is not False
+        else "Return at most one tool call in a single response."
+    )
+    tool_defs = json.dumps(tools or [], ensure_ascii=False, indent=2)
+    return (
+        "You are repairing a previously rejected assistant response for an OpenAI-compatible tool-calling adapter.\n"
+        "Do not solve the whole task again from scratch unless the rejected response is unusable.\n"
+        "Preserve the original intent and make the smallest valid correction.\n"
+        "Typical fixes include: wrong tool name, missing required tool, invalid argument JSON, schema mismatch, "
+        "tool-choice violation, or too many tool calls.\n"
+        "Return exactly one assistant JSON object and nothing else.\n"
+        "If tools are needed, prefer this schema:\n"
+        '{"role":"assistant","content":null,"tool_calls":[{"type":"function","function":{"name":"tool_name","arguments":{"arg":"value"}}}]}\n'
+        "If no tool is needed, use this schema:\n"
+        '{"role":"assistant","content":"your answer"}\n'
+        "Rules:\n"
+        "- Never use markdown code fences.\n"
+        "- Only use tools declared in AVAILABLE_TOOLS.\n"
+        "- arguments must be a JSON object, not a string.\n"
+        f"- {choice_instruction}\n"
+        f"- {parallel_instruction}\n"
+        "AVAILABLE_TOOLS:\n"
+        f"{tool_defs}"
+    )
+
+
+def _format_focused_tool_retry_feedback(
+    original_messages: List[Dict[str, Any]],
+    errors: List[Dict[str, Any]],
+    parsed: Dict[str, Any],
+    raw_text: str,
+    attempt: int,
+    total_attempts: int,
+) -> str:
+    lines = [
+        "[Focused Repair Task]",
+        "Repair the rejected assistant JSON response below.",
+        "Do not reconsider the full conversation. Keep the original intent and change as little as possible.",
+        f"Attempt: {attempt}/{total_attempts}",
+        "Validation errors:",
+    ]
+    for index, item in enumerate(errors, start=1):
+        lines.append(f"{index}. {item.get('message')}")
+
+    compact_context = _build_compact_tool_retry_context(original_messages)
+    if compact_context:
+        lines.append("Minimal context:")
+        lines.append(compact_context)
+
+    rejected_tool_calls = _summarize_tool_calls_for_feedback(parsed)
+    if rejected_tool_calls:
+        lines.append("Rejected tool calls:")
+        lines.append(json.dumps(rejected_tool_calls, ensure_ascii=False, indent=2))
+        rejected_content = parsed.get("content")
+        if rejected_content not in ("", None):
+            lines.append("Rejected assistant content:")
+            lines.append(_trim_retry_text(str(rejected_content), 1200))
+    else:
+        preview = str(raw_text or "").strip()
+        if preview:
+            lines.append("Rejected assistant reply:")
+            lines.append(_trim_retry_text(preview, 1200))
+
+    lines.extend(
+        [
+            "Return only the corrected assistant JSON object.",
+            "If the rejected response is almost correct, make the smallest possible fix.",
+            "Do not repeat the same invalid response unchanged.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _build_compact_tool_retry_context(
+    messages: List[Dict[str, Any]],
+    max_messages: int = 3,
+    max_chars: int = 2200,
+) -> str:
+    selected: List[str] = []
+    for msg in reversed(messages or []):
+        block = _format_message_for_retry_context(msg)
+        if not block:
+            continue
+        selected.append(block)
+        if len(selected) >= max_messages:
+            break
+
+    selected.reverse()
+    if not selected:
+        return ""
+
+    parts: List[str] = []
+    used = 0
+    for block in selected:
+        remaining = max_chars - used
+        if remaining <= 0:
+            break
+        trimmed = _trim_retry_text(block, remaining)
+        if not trimmed:
+            continue
+        parts.append(trimmed)
+        used += len(trimmed) + 2
+    return "\n\n".join(parts)
+
+
+def _format_message_for_retry_context(msg: Any) -> str:
+    if not isinstance(msg, dict):
+        return ""
+
+    role = str(msg.get("role", "") or "").strip().lower()
+    if role == "system":
+        return ""
+
+    if role == "tool":
+        payload = _format_tool_result_message(
+            name=str(msg.get("name", "") or "").strip() or "tool",
+            tool_call_id=str(msg.get("tool_call_id", "") or "").strip(),
+            content=_serialize_content(msg.get("content", "")),
+        )
+        return "[Recent Tool Result]\n" + _trim_retry_text(payload, 1200)
+
+    if role == "assistant" and msg.get("tool_calls"):
+        tool_calls_payload = []
+        for item in msg.get("tool_calls") or []:
+            if not isinstance(item, dict):
+                continue
+            function_data = item.get("function") if isinstance(item.get("function"), dict) else {}
+            tool_calls_payload.append(
+                {
+                    "id": item.get("id"),
+                    "type": item.get("type", "function"),
+                    "function": {
+                        "name": function_data.get("name"),
+                        "arguments": function_data.get("arguments"),
+                    },
+                }
+            )
+        body = json.dumps(tool_calls_payload, ensure_ascii=False, indent=2)
+        content = _serialize_content(msg.get("content", "")).strip()
+        if content:
+            body = content + "\n\n" + body
+        return "[Recent Assistant Tool Calls]\n" + _trim_retry_text(body, 1200)
+
+    content = _serialize_content(msg.get("content", "")).strip()
+    if not content:
+        return ""
+
+    role_title = {
+        "user": "Recent User Message",
+        "assistant": "Recent Assistant Message",
+    }.get(role, "Recent Message")
+    return f"[{role_title}]\n" + _trim_retry_text(content, 1200)
+
+
+def _trim_retry_text(text: str, limit: int) -> str:
+    value = str(text or "")
+    if limit <= 0:
+        return ""
+    if len(value) <= limit:
+        return value
+    if limit <= 9:
+        return value[:limit]
+
+    reserved = 5
+    head = max(1, int((limit - reserved) * 0.7))
+    tail = max(1, limit - reserved - head)
+    return value[:head] + "\n...\n" + value[-tail:]
 
 
 def _summarize_tool_calls_for_feedback(parsed: Dict[str, Any]) -> List[Dict[str, Any]]:
