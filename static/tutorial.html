@@ -565,6 +565,8 @@
             text-decoration: none;
             font-weight: 600;
             transition: all 0.2s;
+            border: none;
+            cursor: pointer;
         }
 
         .btn:hover {
@@ -606,6 +608,40 @@
             margin: 20px 0;
             border-radius: 0 8px 8px 0;
             color: var(--success-text);
+        }
+
+        .script-link-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin: 16px 0 0;
+        }
+
+        .inline-script-viewer {
+            margin-top: 16px;
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            background: var(--card-bg);
+            overflow: hidden;
+        }
+
+        .inline-script-viewer summary {
+            cursor: pointer;
+            padding: 14px 18px;
+            font-weight: 600;
+            background: var(--th-bg);
+        }
+
+        .inline-script-viewer[open] summary {
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .inline-script-frame {
+            width: 100%;
+            height: 420px;
+            border: 0;
+            display: block;
+            background: #fff;
         }
 
         .config-box {
@@ -1533,6 +1569,71 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
 
             <div class="highlight-box">
                 <p><strong>⚠️ 关于 arena.ai：</strong>该站点建议<strong>不要</strong>开启网络拦截模式。因为网络监听会创建额外的浏览器连接，增加被 Cloudflare 检测到的概率。请使用默认的 DOM 模式。</p>
+            </div>
+
+            <h4>给非流式站点配置网络拦截器（适合直接交给 AI）</h4>
+            <p>这里的“非流式”指 <strong>目标网站自己的响应不是 SSE 增量流，而是一次性返回完整 JSON / 文本</strong>。对本项目来说，它依然走 <code>stream_config.mode=network</code> 这一套监听；区别只在于解析器通常第一次拿到完整响应后就应该返回 <code>done=True</code>。如果你最终对外调用的是 <code>stream=false</code>，也<strong>不需要再写第二套逻辑</strong>，项目内部仍然会先走网络监听，再把结果拼成最终的非流式响应。</p>
+
+            <div class="success-box">
+                <p><strong>项目已内置脚本：</strong>项目里已经附带同内容文件 <code>static/拦截请求发生器.txt</code>。你现在不用回桌面找文件，直接在教程里展开就能看；也可以单独打开原始文本页。</p>
+                <div class="script-link-row">
+                    <button type="button" class="btn" id="copyRequestGeneratorBtn">复制脚本</button>
+                    <a class="btn" href="./%E6%8B%A6%E6%88%AA%E8%AF%B7%E6%B1%82%E5%8F%91%E7%94%9F%E5%99%A8.txt" target="_blank" rel="noopener">单独打开脚本</a>
+                </div>
+                <details class="inline-script-viewer">
+                    <summary>在教程中直接查看脚本内容</summary>
+                    <iframe
+                        id="requestGeneratorFrame"
+                        class="inline-script-frame"
+                        src="./%E6%8B%A6%E6%88%AA%E8%AF%B7%E6%B1%82%E5%8F%91%E7%94%9F%E5%99%A8.txt"
+                        title="拦截请求发生器脚本"
+                    ></iframe>
+                </details>
+            </div>
+
+            <h4>最省事的操作步骤</h4>
+            <ol>
+                <li>在脚本控制的浏览器里打开目标站点，并停在真正发消息的页面。</li>
+                <li>打开开发者工具的 <code>Console</code>。</li>
+                <li>优先直接展开上面的项目内置脚本，把内容全部复制后粘贴进去并回车；如果你习惯用桌面原文件，也可以继续用桌面的同名文件。</li>
+                <li>手动在网页上发送一条最简单的问题，让站点真实请求完整跑一遍。</li>
+                <li>请求结束后，在 Console 里执行 <code>exportRequests()</code>，浏览器会下载一个请求导出文件。</li>
+                <li>把这个导出文件发给 AI，并同时附上 <code>app/core/parsers</code> 里一两个最接近的现有解析器、<code>app/core/parsers/base.py</code>、<code>app/core/parsers/__init__.py</code>。</li>
+                <li>让 AI 新建 <code>app/core/parsers/xxx_parser.py</code>，并同步修改 <code>app/core/parsers/__init__.py</code> 完成导入与注册。</li>
+                <li>回到控制台，给对应站点/预设打开网络拦截模式，填好 <code>listen_pattern</code>，解析器选择你刚创建的那个。</li>
+                <li>开始测试；如果提取结果不对，把“导出的请求文件 + 当前错误结果 + 你新建的 parser 文件”继续发给 AI 迭代。</li>
+            </ol>
+
+            <div class="info-box">
+                <p><strong>💡 发给 AI 时最好明确这 4 点：</strong></p>
+                <ul>
+                    <li>这是“非流式网站响应”，优先从完整响应体里直接提取最终文本。</li>
+                    <li>解析器要继承 <code>ResponseParser</code>，返回格式保持 <code>content / images / done / error</code>。</li>
+                    <li>非流式场景第一次成功提取后通常就应该 <code>done=True</code>。</li>
+                    <li>同一份完整 body 重复进入时不要重复追加内容，避免重复输出。</li>
+                </ul>
+            </div>
+
+            <p>可以直接把下面这段提示词一起发给 AI：</p>
+            <pre><code>这是一个新站点的非流式网络请求导出文件。请参考 app/core/parsers 目录里现有解析器，帮我新增一个解析器。
+
+要求：
+1. 在 app/core/parsers/xxx_parser.py 新建解析器类，继承 ResponseParser
+2. 这个站点是非流式响应，请从完整响应体里提取最终文本
+3. 第一次成功解析后应返回 done=True
+4. 如果同一份完整 body 重复进入，不要重复输出内容
+5. 如有图片，填到 images
+6. 同步修改 app/core/parsers/__init__.py，完成导入和注册
+7. 告诉我站点配置里应该填什么 listen_pattern 和 parser
+
+附：
+- 导出的 requests json
+- 参考解析器文件
+- app/core/parsers/base.py
+- app/core/parsers/__init__.py</code></pre>
+
+            <div class="note">
+                <p><strong>💡 实战经验：</strong><code>listen_pattern</code> 先填最稳定的请求路径关键词，不要一上来写太宽。如果导出的请求太多，可以先用 <code>viewRequests()</code>、<code>searchRequests('chat')</code>，或者 <code>exportRequests({ minPriority: 'MEDIUM' })</code> 缩小范围。真正容易错的通常不是“注册解析器”这一步，而是“拿错请求”或“给 AI 的参考样本不够”。</p>
             </div>
         </section>
 
@@ -2622,6 +2723,45 @@ BROWSER_PROFILE_NAME=Default</code></pre>
             }
         }
 
+        async function getRequestGeneratorText() {
+            const scriptUrl = new URL('./%E6%8B%A6%E6%88%AA%E8%AF%B7%E6%B1%82%E5%8F%91%E7%94%9F%E5%99%A8.txt', window.location.href);
+
+            try {
+                const response = await fetch(scriptUrl.href, { cache: 'no-store' });
+                if (response.ok) {
+                    const text = await response.text();
+                    if (text && text.trim()) {
+                        return text;
+                    }
+                }
+            } catch (error) {
+                // file:// 场景下 fetch 可能被浏览器限制，继续尝试 iframe 回退
+            }
+
+            const frame = document.getElementById('requestGeneratorFrame');
+            try {
+                const doc = frame?.contentDocument || frame?.contentWindow?.document;
+                const text = doc?.body?.innerText || doc?.documentElement?.innerText || '';
+                if (text && text.trim()) {
+                    return text.replace(/\r\n/g, '\n');
+                }
+            } catch (error) {
+                // 某些浏览器对本地文件 iframe 访问更严格，继续走统一失败提示
+            }
+
+            throw new Error('request_generator_unavailable');
+        }
+
+        async function handleRequestGeneratorCopy() {
+            try {
+                const text = await getRequestGeneratorText();
+                await copyTextToClipboard(text);
+                showSiteCopyToast('已复制拦截请求发生器脚本，可直接粘贴到 Console');
+            } catch (error) {
+                showSiteCopyToast('复制脚本失败，请先展开下方内容后手动复制', true);
+            }
+        }
+
         // 渲染站点卡片
         function renderSiteGrid() {
             const grid = document.getElementById('siteGrid');
@@ -2830,6 +2970,13 @@ BROWSER_PROFILE_NAME=Default</code></pre>
         document.addEventListener('keydown', (event) => {
             if (event.key === 'Escape') {
                 setLanguageDropdownOpen(false);
+            }
+        });
+
+        document.addEventListener('click', (event) => {
+            const copyButton = event.target.closest('#copyRequestGeneratorBtn');
+            if (copyButton) {
+                handleRequestGeneratorCopy();
             }
         });
 

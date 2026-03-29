@@ -1,0 +1,965 @@
+(function() {
+    'use strict';
+    
+    // ==================== 配置区域 ====================
+    const CONFIG = {
+        // 捕获模式：'strict'(严格) 或 'loose'(宽松)
+        mode: 'loose',
+        
+        // 宽松模式：捕获这些方法
+        looseMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+        
+        // 严格模式：只捕获这些方法
+        strictMethods: ['POST', 'PUT', 'PATCH'],
+        
+        // 高优先级关键词（这些一定会被捕获）
+        highPriorityKeywords: [
+            // AI服务
+            'chat', 'message', 'conversation', 'completion', 'generate', 'stream',
+            'claude', 'anthropic', 'openai', 'gpt', 'gemini', 'bard', 'copilot',
+            'llama', 'mistral', 'perplexity',
+            // 文件相关
+            'upload', 'presign', 'signed-url', 'attachment', 'file', 'image',
+            'media', 'blob', 'asset', 's3', 'r2', 'storage', 'cloudflare',
+            // 评估相关
+            'evaluation', 'arena', 'vote', 'feedback'
+        ],
+        
+        // 中优先级关键词
+        mediumPriorityKeywords: [
+            'api', '/v1/', '/v2/', '/v3/', '/v4/',
+            'nextjs-api', 'graphql', 'query', 'mutation',
+            'session', 'auth', 'token'
+        ],
+        
+        // 一定排除的关键词（静态资源等）
+        alwaysExclude: [
+            '.css', '.js', '.woff', '.woff2', '.ttf', '.eot',
+            '.ico', 'favicon', 'manifest.json',
+            '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', // 静态图片
+            'google-analytics', 'googletagmanager', 'doubleclick',
+            'facebook.com/tr', 'analytics.js', 'gtag'
+        ],
+        
+        // 可选排除的关键词（宽松模式下也会捕获）
+        optionalExclude: [
+            'analytics', 'tracking', 'telemetry', 'beacon', 'pixel',
+            'logging', 'metrics', 'heartbeat', 'ping', 'health'
+        ],
+        
+        // 请求体中要清理的字段
+        cleanBodyFields: [
+            { pattern: /^recaptcha.*token$/i, replacement: '[RECAPTCHA]' },
+            { pattern: /^.*captcha.*$/i, replacement: '[CAPTCHA]' },
+            { pattern: /^g-recaptcha-response$/i, replacement: '[CAPTCHA]' },
+            { pattern: /^cf[_-]?turnstile$/i, replacement: '[TURNSTILE]' }
+        ],
+        
+        // 保留所有headers，但这些会被部分隐藏
+        hideHeaderPatterns: [
+            /^cookie$/i,
+            /^authorization$/i,
+            /^.*api[_-]?key.*$/i,
+            /^.*secret.*$/i
+        ],
+        
+        // 字符串处理
+        maxStringLength: 50000,  // 增加限制
+        tokenDetectLength: 1000,  // token检测阈值
+        base64PreviewLength: 100,  // base64预览长度
+        
+        // === 新增配置 ===
+        maxRequests: 1000,           // 最大保留请求数（防止内存溢出）
+        captureResponse: true,       // 是否捕获响应体
+        maxResponseLength: 100000,   // 响应体最大长度
+        recordTiming: true,          // 是否记录请求耗时
+        
+        // 响应体排除的 Content-Type（二进制文件等）
+        excludeResponseTypes: [
+            'image/', 'video/', 'audio/', 'font/',
+            'application/octet-stream', 'application/zip',
+            'application/pdf', 'application/wasm'
+        ]
+    };
+
+        // ==================== 预编译关键词（性能优化）====================
+    const COMPILED = {
+        highPriority: CONFIG.highPriorityKeywords.map(k => k.toLowerCase()),
+        mediumPriority: CONFIG.mediumPriorityKeywords.map(k => k.toLowerCase()),
+        alwaysExclude: CONFIG.alwaysExclude.map(k => k.toLowerCase()),
+        optionalExclude: CONFIG.optionalExclude.map(k => k.toLowerCase())
+    };
+    
+    // ==================== 存储 ====================
+    const capturedRequests = [];
+    let isCapturing = true;
+    let requestCounter = 0;
+    
+     // ==================== 统一捕获判断（合并优先级计算，避免重复遍历）====================
+    function analyzeRequest(url, method) {
+        if (!isCapturing) return { shouldCapture: false, priority: null };
+        
+        const urlLower = url.toLowerCase();
+        const methodUpper = method.toUpperCase();
+        
+        // 1. 一定排除的检查
+        for (const keyword of COMPILED.alwaysExclude) {
+            if (urlLower.includes(keyword)) {
+                return { shouldCapture: false, priority: null };
+            }
+        }
+        
+        // 2. 方法过滤
+        const methods = CONFIG.mode === 'loose' ? CONFIG.looseMethods : CONFIG.strictMethods;
+        if (!methods.includes(methodUpper)) {
+            return { shouldCapture: false, priority: null };
+        }
+        
+        // 3. 严格模式下检查可选排除
+        if (CONFIG.mode === 'strict') {
+            for (const keyword of COMPILED.optionalExclude) {
+                if (urlLower.includes(keyword)) {
+                    return { shouldCapture: false, priority: null };
+                }
+            }
+        }
+        
+        // 4. 检查高优先级
+        for (const keyword of COMPILED.highPriority) {
+            if (urlLower.includes(keyword)) {
+                return { shouldCapture: true, priority: 'HIGH' };
+            }
+        }
+        
+        // 5. 检查中优先级
+        for (const keyword of COMPILED.mediumPriority) {
+            if (urlLower.includes(keyword)) {
+                return { shouldCapture: true, priority: 'MEDIUM' };
+            }
+        }
+        
+        // 6. POST/PUT/PATCH 默认中优先级
+        if (['POST', 'PUT', 'PATCH'].includes(methodUpper)) {
+            return { shouldCapture: true, priority: 'MEDIUM' };
+        }
+        
+        // 7. 宽松模式额外规则
+        if (CONFIG.mode === 'loose') {
+            if (urlLower.includes('api') || urlLower.match(/\/v\d+\//)) {
+                return { shouldCapture: true, priority: 'LOW' };
+            }
+            if (methodUpper !== 'GET') {
+                return { shouldCapture: true, priority: 'LOW' };
+            }
+        }
+        
+        return { shouldCapture: false, priority: 'LOW' };
+    }
+    
+    // 兼容旧调用（保留原有函数名）
+    function shouldCapture(url, method) {
+        return analyzeRequest(url, method).shouldCapture;
+    }
+    
+    function getPriority(url, method) {
+        return analyzeRequest(url, method).priority || 'LOW';
+    }
+    
+        // ==================== 处理Headers ====================
+    function processHeaders(headers) {
+        if (!headers) return null;
+        
+        const result = {};
+        let headerObj;
+        
+        if (headers instanceof Headers) {
+            headerObj = Object.fromEntries(headers.entries());
+        } else if (typeof headers === 'object') {
+            headerObj = headers;
+        } else {
+            return null;
+        }
+        
+        for (const [key, value] of Object.entries(headerObj)) {
+            let shouldHide = false;
+            for (const pattern of CONFIG.hideHeaderPatterns) {
+                if (pattern.test(key)) {
+                    shouldHide = true;
+                    break;
+                }
+            }
+            
+            if (shouldHide) {
+                if (value.length > 30) {
+                    result[key] = value.substring(0, 15) + '...[HIDDEN]...' + value.substring(value.length - 10);
+                } else if (value.length > 10) {
+                    result[key] = value.substring(0, 5) + '...[HIDDEN]';
+                } else {
+                    result[key] = '[HIDDEN]';
+                }
+            } else {
+                result[key] = value;
+            }
+        }
+        
+        return Object.keys(result).length > 0 ? result : null;
+    }
+    
+    // ==================== 智能字符串处理 ====================
+    function smartProcessString(str, fieldName = '') {
+        if (typeof str !== 'string') return str;
+        
+        const fieldLower = fieldName.toLowerCase();
+        
+        // 检查是否应该清理该字段
+        for (const rule of CONFIG.cleanBodyFields) {
+            if (rule.pattern.test(fieldName)) {
+                return rule.replacement;
+            }
+        }
+        
+        // data:image base64
+        if (str.startsWith('data:image/')) {
+            const match = str.match(/^(data:image\/[^;]+;base64,)(.+)$/);
+            if (match) {
+                const [, prefix, data] = match;
+                const preview = data.substring(0, CONFIG.base64PreviewLength);
+                return `${prefix}${preview}...[BASE64_${data.length}_CHARS]`;
+            }
+        }
+        
+        // 纯base64 (长字符串)
+        if (str.length > CONFIG.tokenDetectLength && /^[A-Za-z0-9+/]+=*$/.test(str)) {
+            const preview = str.substring(0, CONFIG.base64PreviewLength);
+            return `${preview}...[BASE64_${str.length}_CHARS]`;
+        }
+        
+        // URL安全base64
+        if (str.length > CONFIG.tokenDetectLength && /^[A-Za-z0-9_-]+$/.test(str)) {
+            const preview = str.substring(0, CONFIG.base64PreviewLength);
+            return `${preview}...[TOKEN_${str.length}_CHARS]`;
+        }
+        
+        // 普通长字符串
+        if (str.length > CONFIG.maxStringLength) {
+            return str.substring(0, CONFIG.maxStringLength) + `...[TRUNCATED_${str.length - CONFIG.maxStringLength}_MORE]`;
+        }
+        
+        return str;
+    }
+    
+    // ==================== 处理Body ====================
+    function processBody(body, depth = 0) {
+        if (depth > 20) return '[MAX_DEPTH]';
+        if (body === null || body === undefined) return null;
+        
+        // FormData
+        if (body instanceof FormData) {
+            const result = { _type: 'FormData', fields: {} };
+            for (const [key, value] of body.entries()) {
+                if (value instanceof File) {
+                    result.fields[key] = {
+                        _type: 'File',
+                        name: value.name,
+                        size: value.size,
+                        sizeKB: (value.size / 1024).toFixed(2) + ' KB',
+                        mimeType: value.type,
+                        lastModified: new Date(value.lastModified).toISOString()
+                    };
+                } else if (value instanceof Blob) {
+                    result.fields[key] = {
+                        _type: 'Blob',
+                        size: value.size,
+                        sizeKB: (value.size / 1024).toFixed(2) + ' KB',
+                        mimeType: value.type
+                    };
+                } else {
+                    result.fields[key] = smartProcessString(value, key);
+                }
+            }
+            return result;
+        }
+        
+        // Blob
+        if (body instanceof Blob) {
+            return {
+                _type: 'Blob',
+                size: body.size,
+                sizeKB: (body.size / 1024).toFixed(2) + ' KB',
+                mimeType: body.type
+            };
+        }
+        
+        // ArrayBuffer
+        if (body instanceof ArrayBuffer) {
+            return {
+                _type: 'ArrayBuffer',
+                byteLength: body.byteLength
+            };
+        }
+        
+        // String
+        if (typeof body === 'string') {
+            try {
+                const parsed = JSON.parse(body);
+                return processBodyRecursive(parsed, depth + 1, '');  // 🔧 传递空字段名作为根
+            } catch {
+                return smartProcessString(body);
+            }
+        }
+        
+        // Object/Array
+        if (typeof body === 'object') {
+            return processBodyRecursive(body, depth);
+        }
+        
+        return body;
+    }
+    
+    function processBodyRecursive(obj, depth = 0, fieldName = '') {
+        if (depth > 20) return '[MAX_DEPTH]';
+        if (obj === null || obj === undefined) return obj;
+        
+        if (Array.isArray(obj)) {
+            return obj.map((item, index) => processBodyRecursive(item, depth + 1, `${fieldName}[${index}]`));
+        }
+        
+        if (typeof obj === 'string') {
+            return smartProcessString(obj, fieldName);  // 🔧 修复：传递字段名
+        }
+        
+        if (typeof obj === 'object') {
+            const result = {};
+            for (const [key, value] of Object.entries(obj)) {
+                result[key] = processBodyRecursive(value, depth + 1, key);  // 🔧 修复：传递字段名
+            }
+            return result;
+        }
+        
+        return obj;
+    }
+    
+    // ==================== 响应处理 ====================
+    function shouldCaptureResponse(contentType) {
+        if (!contentType) return true;
+        const typeLower = contentType.toLowerCase();
+        return !CONFIG.excludeResponseTypes.some(excluded => typeLower.includes(excluded));
+    }
+    
+    async function processResponse(response, requestId) {
+        if (!CONFIG.captureResponse) return null;
+        
+        const record = capturedRequests.find(r => r._id === requestId);
+        if (!record) return null;
+        
+        try {
+            const contentType = response.headers.get('content-type') || '';
+            
+            const responseData = {
+                status: response.status,
+                statusText: response.statusText,
+                headers: processHeaders(response.headers),
+                contentType: contentType,
+                body: null,
+                bodyTruncated: false
+            };
+            
+            // 检查是否应该捕获响应体
+            if (shouldCaptureResponse(contentType)) {
+                const cloned = response.clone();
+                let bodyText = await cloned.text();
+                
+                if (bodyText.length > CONFIG.maxResponseLength) {
+                    responseData.body = bodyText.substring(0, CONFIG.maxResponseLength);
+                    responseData.bodyTruncated = true;
+                    responseData.bodyOriginalLength = bodyText.length;
+                } else {
+                    // 尝试解析 JSON
+                    try {
+                        responseData.body = JSON.parse(bodyText);
+                        responseData.bodyType = 'json';
+                    } catch {
+                        responseData.body = bodyText;
+                        responseData.bodyType = 'text';
+                    }
+                }
+            } else {
+                responseData.body = `[BINARY: ${contentType}]`;
+                responseData.bodyType = 'binary';
+            }
+            
+            record._response = responseData;
+        } catch (e) {
+            record._response = { error: e.message };
+        }
+        
+        return record._response;
+    }
+    
+    function updateRequestTiming(requestId, error = null) {
+        const record = capturedRequests.find(r => r._id === requestId);
+        if (record && record._timing) {
+            record._timing.endTime = Date.now();
+            record._timing.duration = record._timing.endTime - record._timing.startTime;
+            if (error) {
+                record._error = {
+                    message: error.message || String(error),
+                    name: error.name,
+                    stack: error.stack?.split('\n').slice(0, 3).join('\n')
+                };
+            }
+        }
+    }
+    
+
+    // ==================== URL处理 ====================
+    function parseUrl(url) {
+        try {
+            const urlObj = new URL(url);
+            return {
+                full: url,
+                protocol: urlObj.protocol,
+                host: urlObj.host,
+                hostname: urlObj.hostname,
+                port: urlObj.port,
+                pathname: urlObj.pathname,
+                search: urlObj.search,
+                hash: urlObj.hash,
+                origin: urlObj.origin
+            };
+        } catch {
+            try {
+                const urlObj = new URL(url, window.location.origin);
+                return {
+                    full: url,
+                    protocol: urlObj.protocol,
+                    host: urlObj.host,
+                    hostname: urlObj.hostname,
+                    port: urlObj.port,
+                    pathname: urlObj.pathname,
+                    search: urlObj.search,
+                    hash: urlObj.hash,
+                    origin: urlObj.origin,
+                    _relative: true
+                };
+            } catch {
+                return { full: url, pathname: url };
+            }
+        }
+    }
+    
+    // ==================== 添加请求 ====================
+    function addCapturedRequest(data) {
+        requestCounter++;
+        
+        // 🔧 使用合并后的分析函数（避免重复计算）
+        const analysis = analyzeRequest(data.url.full || data.url.pathname, data.method);
+        const priority = analysis.priority || 'LOW';
+        
+        const record = {
+            _id: requestCounter,
+            _capturedAt: new Date().toISOString(),
+            _priority: priority,
+            _timing: {
+                startTime: Date.now(),
+                duration: null,
+                endTime: null
+            },
+            _response: null,  // 响应占位，稍后填充
+            _error: null,     // 错误占位
+            ...data
+        };
+        
+        capturedRequests.push(record);
+        
+        // 🔧 内存保护：超过最大限制时移除最旧的低优先级请求
+        if (capturedRequests.length > CONFIG.maxRequests) {
+            // 优先删除 LOW 优先级，其次 MEDIUM
+            const indexToRemove = capturedRequests.findIndex(r => r._priority === 'LOW') 
+                ?? capturedRequests.findIndex(r => r._priority === 'MEDIUM')
+                ?? 0;
+            const removed = capturedRequests.splice(indexToRemove, 1)[0];
+            console.warn(`%c⚠️ Memory limit reached, removed request #${removed._id}`, 'color: #FF9800;');
+        }
+        
+        const colors = {
+            HIGH: '#FF5722',
+            MEDIUM: '#4CAF50',
+            LOW: '#9E9E9E'
+        };
+        
+        const emoji = {
+            HIGH: '🔴',
+            MEDIUM: '🟢',
+            LOW: '⚪'
+        };
+        
+        console.log(
+            `%c${emoji[priority]} [#${requestCounter}] ${data.method} ${data.url.pathname || data.url.full}`,
+            `color: ${colors[priority]}; font-weight: ${priority === 'HIGH' ? 'bold' : 'normal'};`
+        );
+        
+        return record;
+    }
+    
+    // ==================== 拦截Fetch ====================
+    const originalFetch = window.fetch;
+    window.fetch = async function(input, init = {}) {
+        const url = input instanceof Request ? input.url : String(input);
+        const method = init.method || (input instanceof Request ? input.method : 'GET');
+        
+        const analysis = analyzeRequest(url, method);
+        
+        if (!analysis.shouldCapture) {
+            return originalFetch.apply(this, arguments);
+        }
+        
+        let capturedRecord = null;
+        
+        try {
+            let bodyData = init.body;
+            if (input instanceof Request && !init.body) {
+                try {
+                    bodyData = await input.clone().text();
+                } catch (e) {
+                    bodyData = { _error: 'Failed to read Request body', _reason: e.message };
+                }
+            }
+            
+            capturedRecord = addCapturedRequest({
+                type: 'fetch',
+                method: method.toUpperCase(),
+                url: parseUrl(url),
+                headers: processHeaders(init.headers || (input instanceof Request ? input.headers : null)),
+                body: processBody(bodyData),
+                credentials: init.credentials || 'same-origin',
+                mode: init.mode || 'cors'
+            });
+        } catch (e) {
+            console.warn('❌ Capture error:', e);
+        }
+        
+        try {
+            const response = await originalFetch.apply(this, arguments);
+            
+            // 捕获响应
+            if (capturedRecord) {
+                updateRequestTiming(capturedRecord._id);
+                await processResponse(response, capturedRecord._id);
+                
+                // 标记失败的请求
+                if (!response.ok) {
+                    capturedRecord._httpError = {
+                        status: response.status,
+                        statusText: response.statusText
+                    };
+                }
+            }
+            
+            return response;
+        } catch (e) {
+            // 网络错误等
+            if (capturedRecord) {
+                updateRequestTiming(capturedRecord._id, e);
+            }
+            throw e;
+        }
+    };
+    
+    // ==================== 拦截XHR ====================
+    const originalXHROpen = XMLHttpRequest.prototype.open;
+    const originalXHRSend = XMLHttpRequest.prototype.send;
+    const originalXHRSetHeader = XMLHttpRequest.prototype.setRequestHeader;
+    
+    XMLHttpRequest.prototype.open = function(method, url, ...args) {
+        this._captureInfo = {
+            method: method.toUpperCase(),
+            url: String(url),
+            headers: {}
+        };
+        return originalXHROpen.apply(this, [method, url, ...args]);
+    };
+    
+    XMLHttpRequest.prototype.setRequestHeader = function(name, value) {
+        if (this._captureInfo) {
+            this._captureInfo.headers[name] = value;
+        }
+        return originalXHRSetHeader.apply(this, arguments);
+    };
+    
+    XMLHttpRequest.prototype.send = function(body) {
+        const self = this;
+        let capturedRecord = null;
+        
+        if (this._captureInfo && shouldCapture(this._captureInfo.url, this._captureInfo.method)) {
+            try {
+                capturedRecord = addCapturedRequest({
+                    type: 'xhr',
+                    method: this._captureInfo.method,
+                    url: parseUrl(this._captureInfo.url),
+                    headers: processHeaders(this._captureInfo.headers),
+                    body: processBody(body)
+                });
+                
+                // 保存引用以便在回调中使用
+                this._capturedRecordId = capturedRecord._id;
+            } catch (e) {
+                console.warn('❌ XHR capture error:', e);
+            }
+        }
+        
+        // 监听响应
+        if (capturedRecord && CONFIG.captureResponse) {
+            const originalOnReadyStateChange = this.onreadystatechange;
+            
+            this.onreadystatechange = function() {
+                if (self.readyState === 4 && self._capturedRecordId) {
+                    const record = capturedRequests.find(r => r._id === self._capturedRecordId);
+                    if (record) {
+                        updateRequestTiming(record._id);
+                        
+                        const contentType = self.getResponseHeader('content-type') || '';
+                        
+                        record._response = {
+                            status: self.status,
+                            statusText: self.statusText,
+                            contentType: contentType,
+                            headers: null,  // XHR 无法方便获取所有响应头
+                            body: null
+                        };
+                        
+                        // 捕获响应体
+                        if (shouldCaptureResponse(contentType)) {
+                            try {
+                                let responseBody = self.responseText;
+                                
+                                if (responseBody.length > CONFIG.maxResponseLength) {
+                                    record._response.body = responseBody.substring(0, CONFIG.maxResponseLength);
+                                    record._response.bodyTruncated = true;
+                                    record._response.bodyOriginalLength = responseBody.length;
+                                } else {
+                                    try {
+                                        record._response.body = JSON.parse(responseBody);
+                                        record._response.bodyType = 'json';
+                                    } catch {
+                                        record._response.body = responseBody;
+                                        record._response.bodyType = 'text';
+                                    }
+                                }
+                            } catch (e) {
+                                record._response.body = { _error: 'Failed to read response', _reason: e.message };
+                            }
+                        } else {
+                            record._response.body = `[BINARY: ${contentType}]`;
+                            record._response.bodyType = 'binary';
+                        }
+                        
+                        // 标记失败
+                        if (self.status >= 400) {
+                            record._httpError = {
+                                status: self.status,
+                                statusText: self.statusText
+                            };
+                        }
+                    }
+                }
+                
+                if (originalOnReadyStateChange) {
+                    originalOnReadyStateChange.apply(self, arguments);
+                }
+            };
+            
+            // 监听错误
+            const originalOnError = this.onerror;
+            this.onerror = function(e) {
+                if (self._capturedRecordId) {
+                    updateRequestTiming(self._capturedRecordId, { message: 'Network error', name: 'NetworkError' });
+                }
+                if (originalOnError) {
+                    originalOnError.apply(self, arguments);
+                }
+            };
+        }
+        
+        return originalXHRSend.apply(this, arguments);
+    };
+    
+    // ==================== 导出命令 ====================
+    
+    // 导出（可选优先级过滤）
+    window.exportRequests = function(options = {}) {
+        const {
+            filename = `requests-${Date.now()}.json`,
+            priority = null,  // 'HIGH', 'MEDIUM', 'LOW' 或 null(全部)
+            minPriority = null  // 'MEDIUM'(包含HIGH和MEDIUM), 'LOW'(全部)
+        } = typeof options === 'string' ? { filename: options } : options;
+        
+        let filtered = capturedRequests;
+        
+        if (priority) {
+            filtered = filtered.filter(r => r._priority === priority);
+        } else if (minPriority === 'MEDIUM') {
+            filtered = filtered.filter(r => ['HIGH', 'MEDIUM'].includes(r._priority));
+        } else if (minPriority === 'HIGH') {
+            filtered = filtered.filter(r => r._priority === 'HIGH');
+        }
+        
+        if (filtered.length === 0) {
+            console.warn('⚠️ No requests to export!');
+            return;
+        }
+        
+        const exportData = {
+            _exportedAt: new Date().toISOString(),
+            _totalRequests: filtered.length,
+            _source: window.location.href,
+            _captureMode: CONFIG.mode,
+            requests: filtered
+        };
+        
+        const json = JSON.stringify(exportData, null, 2);
+        const blob = new Blob([json], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        
+        console.log(`%c✅ Exported ${filtered.length} requests to ${filename}`, 'color: #4CAF50; font-weight: bold;');
+        return exportData;
+    };
+    
+    // 查看列表
+    window.viewRequests = function(priority = null) {
+        let filtered = capturedRequests;
+        if (priority) {
+            filtered = filtered.filter(r => r._priority === priority);
+        }
+        
+        if (filtered.length === 0) {
+            console.log('📭 No requests');
+            return [];
+        }
+        
+        console.table(filtered.map(r => ({
+            ID: r._id,
+            Priority: r._priority,
+            Time: r._capturedAt.split('T')[1].split('.')[0],
+            Type: r.type,
+            Method: r.method,
+            Path: (r.url.pathname || r.url.full || '').substring(0, 60)
+        })));
+        
+        return filtered;
+    };
+    
+    // 查看单个
+    window.viewRequest = function(id) {
+        const r = capturedRequests.find(r => r._id === id);
+        if (!r) {
+            console.warn(`⚠️ Request #${id} not found`);
+            return null;
+        }
+        console.log(JSON.stringify(r, null, 2));
+        return r;
+    };
+    
+    // 搜索
+    window.searchRequests = function(keyword) {
+        const keywordLower = keyword.toLowerCase();
+        const results = capturedRequests.filter(r => {
+            const json = JSON.stringify(r).toLowerCase();
+            return json.includes(keywordLower);
+        });
+        
+        console.log(`%c🔍 Found ${results.length} requests containing "${keyword}"`, 'color: #2196F3;');
+        console.table(results.map(r => ({
+            ID: r._id,
+            Priority: r._priority,
+            Method: r.method,
+            Path: (r.url.pathname || r.url.full || '').substring(0, 60)
+        })));
+        
+        return results;
+    };
+    
+    // 统计
+    window.requestStats = function() {
+        const stats = {
+            total: capturedRequests.length,
+            byPriority: {},
+            byMethod: {},
+            byType: {},
+            isCapturing,
+            mode: CONFIG.mode
+        };
+        
+        capturedRequests.forEach(r => {
+            stats.byPriority[r._priority] = (stats.byPriority[r._priority] || 0) + 1;
+            stats.byMethod[r.method] = (stats.byMethod[r.method] || 0) + 1;
+            stats.byType[r.type] = (stats.byType[r.type] || 0) + 1;
+        });
+        
+        console.log('%c📊 Request Statistics', 'color: #2196F3; font-size: 14px; font-weight: bold;');
+        console.table(stats);
+        return stats;
+    };
+    
+    // 清空
+    window.clearRequests = function() {
+        const count = capturedRequests.length;
+        capturedRequests.length = 0;
+        requestCounter = 0;
+        console.log(`%c🗑️ Cleared ${count} requests`, 'color: #FF9800;');
+    };
+    
+    // 暂停/恢复
+    window.toggleCapture = function() {
+        isCapturing = !isCapturing;
+        console.log(
+            `%c${isCapturing ? '▶️ Capturing RESUMED' : '⏸️ Capturing PAUSED'}`,
+            `color: ${isCapturing ? '#4CAF50' : '#FF9800'}; font-weight: bold;`
+        );
+        return isCapturing;
+    };
+     // 复制到剪贴板
+    window.copyRequests = async function(options = {}) {
+        const {
+            priority = null,
+            minPriority = null,
+            format = 'json'  // 'json' 或 'curl'
+        } = typeof options === 'string' ? { priority: options } : options;
+        
+        let filtered = capturedRequests;
+        
+        if (priority) {
+            filtered = filtered.filter(r => r._priority === priority);
+        } else if (minPriority === 'MEDIUM') {
+            filtered = filtered.filter(r => ['HIGH', 'MEDIUM'].includes(r._priority));
+        } else if (minPriority === 'HIGH') {
+            filtered = filtered.filter(r => r._priority === 'HIGH');
+        }
+        
+        if (filtered.length === 0) {
+            console.warn('⚠️ No requests to copy!');
+            return;
+        }
+        
+        let text;
+        if (format === 'curl') {
+            text = filtered.map(r => {
+                let curl = `curl -X ${r.method} '${r.url.full}'`;
+                if (r.headers) {
+                    for (const [key, value] of Object.entries(r.headers)) {
+                        if (!value.includes('[HIDDEN]')) {
+                            curl += ` \\\n  -H '${key}: ${value}'`;
+                        }
+                    }
+                }
+                if (r.body && typeof r.body === 'object') {
+                    curl += ` \\\n  -d '${JSON.stringify(r.body)}'`;
+                } else if (r.body) {
+                    curl += ` \\\n  -d '${r.body}'`;
+                }
+                return curl;
+            }).join('\n\n---\n\n');
+        } else {
+            text = JSON.stringify(filtered, null, 2);
+        }
+        
+        try {
+            await navigator.clipboard.writeText(text);
+            console.log(`%c📋 Copied ${filtered.length} requests to clipboard (${format} format)`, 'color: #4CAF50; font-weight: bold;');
+        } catch (e) {
+            // 降级方案
+            console.log('📋 Clipboard API failed, printing to console:');
+            console.log(text);
+        }
+        
+        return text;
+    };
+    
+    // 查看失败的请求
+    window.viewErrors = function() {
+        const errors = capturedRequests.filter(r => r._error || r._httpError);
+        if (errors.length === 0) {
+            console.log('✅ No errors captured');
+            return [];
+        }
+        
+        console.log(`%c❌ Found ${errors.length} requests with errors`, 'color: #f44336; font-weight: bold;');
+        console.table(errors.map(r => ({
+            ID: r._id,
+            Method: r.method,
+            Path: (r.url.pathname || '').substring(0, 40),
+            Status: r._httpError?.status || 'N/A',
+            Error: r._error?.message || r._httpError?.statusText || 'Unknown'
+        })));
+        
+        return errors;
+    };
+    
+    // 查看慢请求
+    window.viewSlow = function(thresholdMs = 1000) {
+        const slow = capturedRequests.filter(r => r._timing?.duration > thresholdMs);
+        if (slow.length === 0) {
+            console.log(`✅ No requests slower than ${thresholdMs}ms`);
+            return [];
+        }
+        
+        slow.sort((a, b) => (b._timing?.duration || 0) - (a._timing?.duration || 0));
+        
+        console.log(`%c🐌 Found ${slow.length} requests slower than ${thresholdMs}ms`, 'color: #FF9800; font-weight: bold;');
+        console.table(slow.map(r => ({
+            ID: r._id,
+            Method: r.method,
+            Path: (r.url.pathname || '').substring(0, 40),
+            Duration: r._timing?.duration + 'ms',
+            Status: r._response?.status || 'N/A'
+        })));
+        
+        return slow;
+    };
+       
+    // 切换模式
+    window.setCaptureMode = function(mode) {
+        if (!['strict', 'loose'].includes(mode)) {
+            console.error('❌ Mode must be "strict" or "loose"');
+            return;
+        }
+        CONFIG.mode = mode;
+        console.log(`%c🔧 Capture mode set to: ${mode.toUpperCase()}`, 'color: #2196F3; font-weight: bold;');
+        return mode;
+    };
+    
+    // ==================== 启动信息 ====================
+    console.log(
+`%c🔍 AI Request Monitor Pro v4.0 (Enhanced)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Mode: ${CONFIG.mode.toUpperCase()} | Priority: 🔴HIGH 🟢MEDIUM ⚪LOW
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Commands:
+  exportRequests(options)     - Export all or filtered
+  viewRequests(priority)      - View list (optional filter)
+  viewRequest(id)             - View single request
+  searchRequests(keyword)     - Search in all requests
+  requestStats()              - Show statistics
+  clearRequests()             - Clear all
+  toggleCapture()             - Pause/Resume
+  setCaptureMode(mode)        - Switch 'strict'/'loose'
+
+📦 NEW in v4.0:
+  copyRequests(options)       - Copy to clipboard (format: 'json'/'curl')
+  viewErrors()                - View failed requests
+  viewSlow(ms)                - View slow requests (default: >1000ms)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
+        'color: #2196F3; font-size: 14px;'
+    );
+    
+})(); 

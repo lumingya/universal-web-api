@@ -51,6 +51,11 @@ class TextInputHandler:
         self._attachment_monitor = attachment_monitor
         self._recent_file_upload_at = 0.0
         self._last_file_upload_path = ""
+        self._last_upload_signal_wait = {
+            "confirmed": False,
+            "weak_signal_seen": False,
+            "last_state": {},
+        }
 
     def has_recent_attachment_upload(self, window: float = 45.0) -> bool:
         """Whether this request recently attached a file via file-paste/upload."""
@@ -1171,12 +1176,12 @@ class TextInputHandler:
             or (allow_name_only and matched_name and not bool(baseline.get("matchedName")))
         )
 
-    def _wait_for_upload_signal(self, filepath: str, timeout: float = None, baseline: dict = None) -> bool:
+    def _wait_for_upload_signal(self, filepath: str, timeout: float = None, baseline: dict = None) -> dict:
         """
         Wait for page-level evidence that a file was actually attached.
 
-        Without this check, silent upload failures can be misclassified as success
-        and only the hint text gets submitted to the model.
+        Returns structured state so callers can tell whether the page showed
+        a confirmed upload, only weak activity, or no signal at all.
         """
         timeout = self.get_upload_signal_timeout(2.5) if timeout is None else timeout
         grace_timeout = self.get_upload_signal_grace(3.0)
@@ -1184,22 +1189,33 @@ class TextInputHandler:
         extended_deadline = deadline
         last_state = baseline or self._probe_upload_signal(filepath)
         saw_weak_signal = False
+        wait_result = {
+            "confirmed": False,
+            "weak_signal_seen": False,
+            "last_state": dict(last_state or {}),
+        }
 
         while time.time() < extended_deadline:
             if self._check_cancelled():
-                return False
+                wait_result["last_state"] = dict(last_state or {})
+                self._last_upload_signal_wait = wait_result
+                return wait_result
 
             state = self._probe_upload_signal(filepath)
             last_state = state
+            wait_result["last_state"] = dict(last_state or {})
             if self._has_upload_signal(state, baseline):
+                wait_result["confirmed"] = True
+                wait_result["weak_signal_seen"] = saw_weak_signal
+                self._last_upload_signal_wait = wait_result
                 logger.debug(
-                    f"[FILE_PASTE] 检测到文件上传信号 "
+                    "[FILE_PASTE] detected upload signal "
                     f"(file_count={state.get('fileCount', 0)}, "
                     f"matched_name={bool(state.get('matchedName'))}, "
                     f"matched_file_node={bool(state.get('matchedFileNode'))}, "
                     f"file_node_count={state.get('fileNodeCount', 0)})"
                 )
-                return True
+                return wait_result
 
             weak_signal = (
                 bool(state.get("matchedName"))
@@ -1209,9 +1225,10 @@ class TextInputHandler:
             )
             if weak_signal and not saw_weak_signal:
                 saw_weak_signal = True
+                wait_result["weak_signal_seen"] = True
                 extended_deadline = max(extended_deadline, time.time() + max(0.5, grace_timeout))
                 logger.debug(
-                    "[FILE_PASTE] 检测到弱上传信号，继续等待强信号 "
+                    "[FILE_PASTE] detected weak upload signal, waiting for stronger confirmation "
                     f"(matched_name={bool(state.get('matchedName'))}, "
                     f"file_node_count={state.get('fileNodeCount', 0)}, "
                     f"pending={state.get('pendingCount', 0)}, "
@@ -1221,7 +1238,7 @@ class TextInputHandler:
             time.sleep(0.2)
 
         logger.warning(
-            "[FILE_PASTE] 未检测到文件上传信号: "
+            "[FILE_PASTE] no confirmed upload signal detected: "
             f"{last_state.get('filename', filepath)} "
             f"(matched_name={bool(last_state.get('matchedName'))}, "
             f"matched_file_node={bool(last_state.get('matchedFileNode'))}, "
@@ -1229,7 +1246,10 @@ class TextInputHandler:
             f"pending={last_state.get('pendingCount', 0)}, "
             f"pending_text={bool(last_state.get('pendingText'))})"
         )
-        return False
+        wait_result["weak_signal_seen"] = saw_weak_signal
+        wait_result["last_state"] = dict(last_state or {})
+        self._last_upload_signal_wait = wait_result
+        return wait_result
 
     def _click_upload_button_if_configured(self) -> bool:
         """点击站点配置里的上传按钮，常用于唤起动态 file input。"""
@@ -1263,10 +1283,10 @@ class TextInputHandler:
             return []
 
     def _upload_file_via_input(self, filepath: str, selector: str = "") -> bool:
-        """使用 file input 直接上传文件。"""
+        """Use file input elements to attach the temporary file directly."""
         candidates = self._list_file_inputs(selector)
         if not candidates:
-            logger.debug("[FILE_PASTE] 当前没有可用的 file input")
+            logger.debug("[FILE_PASTE] no usable file input is available on this page")
             return False
 
         for index, file_input in enumerate(candidates, 1):
@@ -1288,26 +1308,33 @@ class TextInputHandler:
 
                 selected_count = self._get_element_file_count(file_input)
                 if selected_count <= 0:
-                    if self._wait_for_upload_signal(filepath, timeout=1.2, baseline=baseline):
+                    wait_state = self._wait_for_upload_signal(filepath, timeout=1.2, baseline=baseline)
+                    if wait_state.get("confirmed"):
                         logger.debug(
-                            f"[FILE_PASTE] file input #{index} 已触发页面附件信号，"
-                            f"视为上传成功 (selector={selector or 'input[type=file]'})"
+                            f"[FILE_PASTE] file input #{index} triggered a confirmed attachment signal "
+                            f"(selector={selector or 'input[type=file]'})"
                         )
                         return True
 
+                    if wait_state.get("weak_signal_seen"):
+                        logger.warning(
+                            f"[FILE_PASTE] file input #{index} produced only a weak signal; "
+                            "clipboard fallback will be skipped for this attempt"
+                        )
+
                     logger.debug(
-                        f"[FILE_PASTE] file input #{index} 未真正挂载文件 "
+                        f"[FILE_PASTE] file input #{index} did not keep a selected file "
                         f"(selector={selector or 'input[type=file]'})"
                     )
                     continue
 
                 logger.debug(
-                    f"[FILE_PASTE] 已通过 file input 上传文件 "
+                    f"[FILE_PASTE] uploaded file via file input "
                     f"(candidate={index}, files={selected_count})"
                 )
                 return True
             except Exception as e:
-                logger.debug(f"[FILE_PASTE] file input #{index} 上传失败: {e}")
+                logger.debug(f"[FILE_PASTE] file input #{index} upload failed: {e}")
 
         return False
 
@@ -1535,60 +1562,54 @@ class TextInputHandler:
     
     def _fill_via_file_paste(self, ele, text: str) -> bool:
         """
-        通过临时 txt 文件上传内容
+        Upload large text by turning it into a temporary txt attachment.
 
-        流程：
-        1. 创建临时 txt 文件并写入文本
-        2. 优先尝试页面中的 input[type=file] 直接上传
-        3. 若无可用 file input，再回退到 Win32 CF_HDROP + Ctrl+V
-
-        Args:
-            ele: 输入框元素
-            text: 文本内容
-        
-        Returns:
-            是否成功
+        Flow:
+        1. Create a temporary txt file with the prompt content.
+        2. Prefer site-native upload entry points and file inputs.
+        3. Only fall back to clipboard file paste when there was no ambiguous upload activity.
         """
         from app.core.tab_pool import get_clipboard_lock
-        
+
         threshold = self._file_paste_config.get("threshold", 50000)
         logger.info(
-            f"[FILE_PASTE] 文本长度 {len(text)} 超过阈值 {threshold}，"
-            f"使用文件粘贴模式"
+            f"[FILE_PASTE] text length {len(text)} exceeds threshold {threshold}, using file-paste mode"
         )
-        
+
         clipboard_lock = get_clipboard_lock()
         self._recent_file_upload_at = 0.0
-        
+        self._last_upload_signal_wait = {
+            "confirmed": False,
+            "weak_signal_seen": False,
+            "last_state": {},
+        }
+
         try:
-            # 1. 聚焦输入框
             ele.click()
             self._smart_delay(0.15, 0.35)
 
             if not self.ensure_input_focus(ele):
                 raise WorkflowError("input_focus_failed")
-            
+
             if self._check_cancelled():
                 return False
-            
-            # 2. 全选现有内容（准备覆盖）
+
             if self.stealth_mode:
                 self._human_key_combo('Control', 'A')
                 self._smart_delay(0.08, 0.18)
             else:
                 self.tab.actions.key_down('Control').key_down('A').key_up('A').key_up('Control')
                 time.sleep(0.1)
-            
+
             if self._check_cancelled():
                 return False
-            
-            # 3. 创建临时文件
+
             filepath = create_temp_txt(text)
             if not filepath:
-                logger.error("[FILE_PASTE] 创建临时文件失败")
+                logger.error("[FILE_PASTE] failed to create temp file")
                 return False
 
-            logger.debug(f"[FILE_PASTE] 临时文件: {filepath}")
+            logger.debug(f"[FILE_PASTE] temp file: {filepath}")
             self._last_file_upload_path = filepath
             expected_names = [
                 os.path.basename(filepath),
@@ -1598,23 +1619,30 @@ class TextInputHandler:
                 self._attachment_monitor.begin_tracking(expected_names=expected_names)
             upload_baseline = self._probe_upload_signal(filepath)
 
-            # 4. 优先尝试站点专配上传入口，再回退到通用 file input
             uploaded = self._upload_file_via_site_targets(filepath)
 
-            # 5. 若站点没有可用上传入口，再退回剪贴板文件粘贴
             if not uploaded:
-                with clipboard_lock:
-                    if not copy_file_to_clipboard(filepath):
-                        logger.error("[FILE_PASTE] 复制文件到剪贴板失败")
-                        return False
+                ambiguous_input_signal = (
+                    bool(self._last_upload_signal_wait.get("weak_signal_seen"))
+                    and not bool(self._last_upload_signal_wait.get("confirmed"))
+                )
+                if ambiguous_input_signal:
+                    logger.warning(
+                        "[FILE_PASTE] ambiguous file-input signal detected; skip clipboard fallback to avoid duplicate attachments"
+                    )
+                else:
+                    with clipboard_lock:
+                        if not copy_file_to_clipboard(filepath):
+                            logger.error("[FILE_PASTE] copy file to clipboard failed")
+                            return False
 
-                    time.sleep(random.uniform(0.08, 0.15))
+                        time.sleep(random.uniform(0.08, 0.15))
 
-                    if self.stealth_mode:
-                        self._human_key_combo('Control', 'V')
-                    else:
-                        self.tab.actions.key_down('Control').key_down('V').key_up('V').key_up('Control')
-            
+                        if self.stealth_mode:
+                            self._human_key_combo('Control', 'V')
+                        else:
+                            self.tab.actions.key_down('Control').key_down('V').key_up('V').key_up('Control')
+
             if self._check_cancelled():
                 return True
 
@@ -1642,28 +1670,27 @@ class TextInputHandler:
                             "[FILE_PASTE] Attachment activity was observed but never confirmed; aborting text fallback to avoid duplicate send"
                         )
                         raise WorkflowError("file_paste_upload_unconfirmed")
-                    logger.warning("[FILE_PASTE] 文件上传未生效，放弃文件粘贴模式")
+                    logger.warning("[FILE_PASTE] file upload did not take effect; giving up file-paste mode")
                     return False
             else:
-                # Legacy fallback when the shared monitor is unavailable.
                 time.sleep(random.uniform(0.5, 1.0))
                 self._smart_delay(0.3, 0.6)
-                if not self._wait_for_upload_signal(filepath, baseline=upload_baseline):
-                    logger.warning("[FILE_PASTE] 文件上传未生效，放弃文件粘贴模式")
+                wait_state = self._wait_for_upload_signal(filepath, baseline=upload_baseline)
+                if not wait_state.get("confirmed"):
+                    logger.warning("[FILE_PASTE] file upload did not take effect; giving up file-paste mode")
                     return False
             self._recent_file_upload_at = time.time()
-            
-            # 7. 追加引导文本（确保输入框有文字内容，否则某些网站无法发送）
+
             hint_text = self._file_paste_config.get("hint_text", "完全专注于文件内容")
             if hint_text:
-                logger.debug(f"[FILE_PASTE] 追加引导文本: {hint_text}")
+                logger.debug(f"[FILE_PASTE] appending hint text: {hint_text}")
                 self._append_file_paste_hint(ele, hint_text)
 
-            logger.info(f"[FILE_PASTE] 文件粘贴完成 ({len(text)} 字符)")
+            logger.info(f"[FILE_PASTE] file paste completed ({len(text)} chars)")
             return True
-        
+
         except Exception as e:
-            logger.error(f"[FILE_PASTE] 文件粘贴失败: {e}")
+            logger.error(f"[FILE_PASTE] file paste failed: {e}")
             return False
 
     def fill_via_clipboard_no_click(self, ele, text: str):
