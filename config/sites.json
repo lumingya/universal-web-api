@@ -411,7 +411,7 @@
           "mode": "first"
         },
         "file_paste": {
-          "enabled": true,
+          "enabled": false,
           "threshold": 30000,
           "hint_text": "完全专注于文件内容",
           "post_upload_settle": 5,
