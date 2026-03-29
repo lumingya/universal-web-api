@@ -12,6 +12,7 @@ import asyncio
 import os
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Optional, Dict, List, Any
 from enum import Enum
@@ -521,6 +522,10 @@ class TabPoolManager:
         self._auto_activate_on_acquire = self._to_bool(
             os.getenv("TAB_AUTO_ACTIVATE_ON_ACQUIRE"), False
         )
+        self._acquire_waiters: deque[str] = deque()
+        self._index_waiters: Dict[int, deque[str]] = {}
+        self._route_waiters: Dict[str, deque[str]] = {}
+        self._waiter_counter = 0
         
         # 🆕 持久化编号系统
         self._next_persistent_index: int = 1  # 下一个可分配的编号
@@ -909,6 +914,44 @@ class TabPoolManager:
             return False
         return False
 
+    def _next_waiter_token(self, task_id: str) -> str:
+        self._waiter_counter += 1
+        base = str(task_id or "task").strip() or "task"
+        return f"{base}#{self._waiter_counter}"
+
+    @staticmethod
+    def _is_waiter_turn(waiters: deque[str], waiter_token: str) -> bool:
+        return not waiters or waiters[0] == waiter_token
+
+    @staticmethod
+    def _count_waiters_ahead(waiters: deque[str], waiter_token: str) -> int:
+        try:
+            return waiters.index(waiter_token)
+        except ValueError:
+            return 0
+
+    def _unregister_waiter(
+        self,
+        waiters: deque[str],
+        waiter_token: str,
+        *,
+        owner_map: Optional[Dict[Any, deque[str]]] = None,
+        owner_key: Optional[Any] = None,
+    ) -> bool:
+        removed = False
+        try:
+            waiters.remove(waiter_token)
+            removed = True
+        except ValueError:
+            removed = False
+
+        if owner_map is not None and owner_key is not None and not waiters:
+            owner_map.pop(owner_key, None)
+
+        if removed:
+            self._condition.notify_all()
+        return removed
+
     def acquire(self, task_id: str, timeout: float = None) -> Optional[TabSession]:
         """获取一个可用的标签页（增强版）"""
         timeout = timeout or self.acquire_timeout
@@ -1224,6 +1267,567 @@ class TabPoolManager:
     ) -> Optional[TabSession]:
         """异步版本的按域名路由获取。"""
         return await asyncio.to_thread(self.acquire_by_route_domain, route_domain, task_id, timeout)
+
+    def acquire(self, task_id: str, timeout: float = None) -> Optional[TabSession]:
+        """Fair queued acquire for generic request routing."""
+        timeout = timeout or self.acquire_timeout
+        deadline = time.time() + timeout
+        logged_waiting = False
+        first_iteration = True
+
+        with self._condition:
+            waiter_token = self._next_waiter_token(task_id)
+            self._acquire_waiters.append(waiter_token)
+            try:
+                while True:
+                    if self._shutdown:
+                        return None
+
+                    if first_iteration or self._should_scan():
+                        self._scan_new_tabs()
+                        first_iteration = False
+
+                    self._check_stuck_tabs()
+                    self._cleanup_unhealthy_tabs()
+
+                    if not self._is_waiter_turn(self._acquire_waiters, waiter_token):
+                        remaining = deadline - time.time()
+                        if remaining <= 0:
+                            busy_info = [
+                                f"{s.id}({s.current_task_id})"
+                                for s in self._tabs.values()
+                                if s.status == TabStatus.BUSY
+                            ]
+                            unhealthy_count = sum(
+                                1 for s in self._tabs.values()
+                                if s.status == TabStatus.IDLE and not s.is_healthy()
+                            )
+                            logger.warning(
+                                f"鑾峰彇鏍囩椤佃秴鏃?(蹇欑: {', '.join(busy_info) or 'none'}, "
+                                f"涓嶅仴搴? {unhealthy_count})"
+                            )
+                            return None
+
+                        if not logged_waiting:
+                            busy_tabs = [s.id for s in self._tabs.values() if s.status == TabStatus.BUSY]
+                            ahead = self._count_waiters_ahead(self._acquire_waiters, waiter_token)
+                            if busy_tabs:
+                                logger.debug(f"鎺掗槦绛夊緟 (蹇欑: {', '.join(busy_tabs)})")
+                            elif ahead > 0:
+                                logger.debug(f"鎺掗槦绛夊緟 (鍓嶉潰杩樻湁 {ahead} 涓姹?)")
+                            logged_waiting = True
+
+                        self._condition.wait(timeout=min(remaining, 1.0))
+                        continue
+
+                    for session in self._tabs.values():
+                        if session.status != TabStatus.IDLE:
+                            continue
+                        if not session.is_healthy():
+                            logger.warning(f"[{session.id}] 鏍囩椤典笉鍋ュ悍锛岃烦杩?")
+                            continue
+                        if self._should_defer_to_command(session, task_id):
+                            logger.debug(f"[{session.id}] defer acquire to high-priority command")
+                            continue
+                        if session.acquire(task_id):
+                            self._stop_global_monitor_for_session(session.id, reason="acquire")
+                            if self._auto_activate_on_acquire and session.id != self._active_session_id:
+                                session.activate()
+                                self._active_session_id = session.id
+
+                            self._unregister_waiter(self._acquire_waiters, waiter_token)
+
+                            if logged_waiting:
+                                logger.debug(f"绛夊緟缁撴潫 鈫?{session.id}")
+                            else:
+                                logger.debug(f"TabPool 鈫?{session.id}")
+                            return session
+
+                    remaining = deadline - time.time()
+                    if remaining <= 0:
+                        busy_info = [
+                            f"{s.id}({s.current_task_id})"
+                            for s in self._tabs.values()
+                            if s.status == TabStatus.BUSY
+                        ]
+                        unhealthy_count = sum(
+                            1 for s in self._tabs.values()
+                            if s.status == TabStatus.IDLE and not s.is_healthy()
+                        )
+                        logger.warning(
+                            f"鑾峰彇鏍囩椤佃秴鏃?(蹇欑: {', '.join(busy_info) or 'none'}, "
+                            f"涓嶅仴搴? {unhealthy_count})"
+                        )
+                        return None
+
+                    if not logged_waiting:
+                        busy_tabs = [s.id for s in self._tabs.values() if s.status == TabStatus.BUSY]
+                        if busy_tabs:
+                            logger.debug(f"鎺掗槦绛夊緟 (蹇欑: {', '.join(busy_tabs)})")
+                        logged_waiting = True
+
+                    self._condition.wait(timeout=min(remaining, 1.0))
+            finally:
+                self._unregister_waiter(self._acquire_waiters, waiter_token)
+
+    def acquire_by_index(self, persistent_index: int, task_id: str, timeout: float = None) -> Optional[TabSession]:
+        """Fair queued acquire for a fixed persistent tab index."""
+        timeout = timeout or self.acquire_timeout
+        deadline = time.time() + timeout
+
+        with self._condition:
+            waiters = self._index_waiters.setdefault(persistent_index, deque())
+            waiter_token = self._next_waiter_token(task_id)
+            waiters.append(waiter_token)
+            try:
+                while True:
+                    if self._shutdown:
+                        return None
+
+                    if self._should_scan():
+                        self._scan_new_tabs()
+
+                    if not self._is_waiter_turn(waiters, waiter_token):
+                        remaining = deadline - time.time()
+                        if remaining <= 0:
+                            logger.warning(f"鑾峰彇鏍囩椤?#{persistent_index} 瓒呮椂")
+                            return None
+                        logger.debug_throttled(
+                            f"tab_pool.wait_index.{persistent_index}",
+                            f"绛夊緟鏍囩椤?#{persistent_index} 閲婃斁...",
+                            interval_sec=5.0,
+                        )
+                        self._condition.wait(timeout=min(remaining, 1.0))
+                        continue
+
+                    session_id = self._persistent_to_session_id.get(persistent_index)
+                    if not session_id:
+                        logger.warning(f"鎸佷箙缂栧彿 #{persistent_index} 涓嶅瓨鍦?")
+                        return None
+
+                    session = self._tabs.get(session_id)
+                    if not session:
+                        logger.warning(f"鏍囩椤?{session_id} (#{persistent_index}) 宸茶绉婚櫎")
+                        return None
+
+                    if not session.is_healthy():
+                        logger.warning(f"[{session.id}] 鏍囩椤典笉鍋ュ悍")
+                        return None
+
+                    if self._should_defer_to_command(session, task_id):
+                        logger.debug(f"[{session.id}] defer by index acquire to high-priority command")
+                        remaining = deadline - time.time()
+                        if remaining <= 0:
+                            return None
+                        self._condition.wait(timeout=min(remaining, 0.5))
+                        continue
+
+                    if session.status == TabStatus.IDLE and session.acquire(task_id):
+                        self._stop_global_monitor_for_session(session.id, reason="acquire_by_index")
+                        if self._auto_activate_on_acquire and session.id != self._active_session_id:
+                            session.activate()
+                            self._active_session_id = session.id
+
+                        self._unregister_waiter(
+                            waiters,
+                            waiter_token,
+                            owner_map=self._index_waiters,
+                            owner_key=persistent_index,
+                        )
+                        logger.debug(f"TabPool 鈫?{session.id} (#{persistent_index})")
+                        return session
+
+                    remaining = deadline - time.time()
+                    if remaining <= 0:
+                        logger.warning(f"鑾峰彇鏍囩椤?#{persistent_index} 瓒呮椂锛堝綋鍓嶇姸鎬? {session.status.value}锛?")
+                        return None
+
+                    logger.debug_throttled(
+                        f"tab_pool.wait_index.{persistent_index}",
+                        f"绛夊緟鏍囩椤?#{persistent_index} 閲婃斁...",
+                        interval_sec=5.0,
+                    )
+                    self._condition.wait(timeout=min(remaining, 1.0))
+            finally:
+                self._unregister_waiter(
+                    waiters,
+                    waiter_token,
+                    owner_map=self._index_waiters,
+                    owner_key=persistent_index,
+                )
+
+    def acquire_by_route_domain(self, route_domain: str, task_id: str, timeout: float = None) -> Optional[TabSession]:
+        """Fair queued acquire for tabs matching the same route domain."""
+        target = normalize_route_domain(route_domain)
+        if not target:
+            logger.warning("鍩熷悕璺敱涓虹┖锛屾棤娉曡幏鍙栨爣绛鹃〉")
+            return None
+
+        timeout = timeout or self.acquire_timeout
+        deadline = time.time() + timeout
+
+        with self._condition:
+            waiters = self._route_waiters.setdefault(target, deque())
+            waiter_token = self._next_waiter_token(task_id)
+            waiters.append(waiter_token)
+            try:
+                while True:
+                    if self._shutdown:
+                        return None
+
+                    if self._should_scan():
+                        self._scan_new_tabs()
+
+                    self._check_stuck_tabs()
+                    self._cleanup_unhealthy_tabs()
+
+                    if not self._is_waiter_turn(waiters, waiter_token):
+                        remaining = deadline - time.time()
+                        if remaining <= 0:
+                            logger.warning(f"鑾峰彇鍩熷悕璺敱 '{target}' 瓒呮椂")
+                            return None
+                        logger.debug_throttled(
+                            f"tab_pool.wait_route.{target}",
+                            f"绛夊緟鍩熷悕璺敱 '{target}' 鐨勬爣绛鹃〉閲婃斁...",
+                            interval_sec=5.0,
+                        )
+                        self._condition.wait(timeout=min(remaining, 1.0))
+                        continue
+
+                    matching_sessions = self._get_sessions_for_route_domain(target)
+                    if not matching_sessions:
+                        logger.warning(f"鍩熷悕璺敱 '{target}' 娌℃湁鍖归厤鐨勬爣绛鹃〉")
+                        return None
+
+                    for session in matching_sessions:
+                        if not session.is_healthy():
+                            continue
+                        if self._should_defer_to_command(session, task_id):
+                            logger.debug(f"[{session.id}] defer by route-domain acquire to high-priority command")
+                            continue
+                        if session.status == TabStatus.IDLE and session.acquire(task_id):
+                            self._stop_global_monitor_for_session(session.id, reason="acquire_by_route_domain")
+                            if self._auto_activate_on_acquire and session.id != self._active_session_id:
+                                session.activate()
+                                self._active_session_id = session.id
+
+                            self._unregister_waiter(
+                                waiters,
+                                waiter_token,
+                                owner_map=self._route_waiters,
+                                owner_key=target,
+                            )
+                            logger.debug(
+                                f"TabPool 鈫?{session.id} (route_domain={target}, idx=#{session.persistent_index})"
+                            )
+                            return session
+
+                    remaining = deadline - time.time()
+                    if remaining <= 0:
+                        busy_info = [
+                            f"{session.id}(#{session.persistent_index}:{session.status.value})"
+                            for session in matching_sessions
+                        ]
+                        logger.warning(
+                            f"鑾峰彇鍩熷悕璺敱 '{target}' 瓒呮椂锛堝尮閰嶆爣绛鹃〉: {', '.join(busy_info) or 'none'}锛?"
+                        )
+                        return None
+
+                    logger.debug_throttled(
+                        f"tab_pool.wait_route.{target}",
+                        f"绛夊緟鍩熷悕璺敱 '{target}' 鐨勬爣绛鹃〉閲婃斁...",
+                        interval_sec=5.0,
+                    )
+                    self._condition.wait(timeout=min(remaining, 1.0))
+            finally:
+                self._unregister_waiter(
+                    waiters,
+                    waiter_token,
+                    owner_map=self._route_waiters,
+                    owner_key=target,
+                )
+
+    def acquire(self, task_id: str, timeout: float = None) -> Optional[TabSession]:
+        """ASCII-safe fair acquire for generic request routing."""
+        timeout = timeout or self.acquire_timeout
+        deadline = time.time() + timeout
+        logged_waiting = False
+        first_iteration = True
+
+        with self._condition:
+            waiter_token = self._next_waiter_token(task_id)
+            self._acquire_waiters.append(waiter_token)
+            try:
+                while True:
+                    if self._shutdown:
+                        return None
+
+                    if first_iteration or self._should_scan():
+                        self._scan_new_tabs()
+                        first_iteration = False
+
+                    self._check_stuck_tabs()
+                    self._cleanup_unhealthy_tabs()
+
+                    if not self._is_waiter_turn(self._acquire_waiters, waiter_token):
+                        remaining = deadline - time.time()
+                        if remaining <= 0:
+                            busy_info = [
+                                f"{s.id}({s.current_task_id})"
+                                for s in self._tabs.values()
+                                if s.status == TabStatus.BUSY
+                            ]
+                            unhealthy_count = sum(
+                                1 for s in self._tabs.values()
+                                if s.status == TabStatus.IDLE and not s.is_healthy()
+                            )
+                            logger.warning(
+                                f"Acquire tab timed out (busy: {', '.join(busy_info) or 'none'}, "
+                                f"unhealthy: {unhealthy_count})"
+                            )
+                            return None
+
+                        if not logged_waiting:
+                            busy_tabs = [s.id for s in self._tabs.values() if s.status == TabStatus.BUSY]
+                            ahead = self._count_waiters_ahead(self._acquire_waiters, waiter_token)
+                            if busy_tabs:
+                                logger.debug(f"Waiting for tab (busy: {', '.join(busy_tabs)})")
+                            elif ahead > 0:
+                                logger.debug(f"Waiting in queue (ahead: {ahead})")
+                            logged_waiting = True
+
+                        self._condition.wait(timeout=min(remaining, 1.0))
+                        continue
+
+                    for session in self._tabs.values():
+                        if session.status != TabStatus.IDLE:
+                            continue
+                        if not session.is_healthy():
+                            logger.warning(f"[{session.id}] skip unhealthy tab")
+                            continue
+                        if self._should_defer_to_command(session, task_id):
+                            logger.debug(f"[{session.id}] defer acquire to high-priority command")
+                            continue
+                        if session.acquire(task_id):
+                            self._stop_global_monitor_for_session(session.id, reason="acquire")
+                            if self._auto_activate_on_acquire and session.id != self._active_session_id:
+                                session.activate()
+                                self._active_session_id = session.id
+
+                            self._unregister_waiter(self._acquire_waiters, waiter_token)
+
+                            if logged_waiting:
+                                logger.debug(f"Acquire finished -> {session.id}")
+                            else:
+                                logger.debug(f"TabPool -> {session.id}")
+                            return session
+
+                    remaining = deadline - time.time()
+                    if remaining <= 0:
+                        busy_info = [
+                            f"{s.id}({s.current_task_id})"
+                            for s in self._tabs.values()
+                            if s.status == TabStatus.BUSY
+                        ]
+                        unhealthy_count = sum(
+                            1 for s in self._tabs.values()
+                            if s.status == TabStatus.IDLE and not s.is_healthy()
+                        )
+                        logger.warning(
+                            f"Acquire tab timed out (busy: {', '.join(busy_info) or 'none'}, "
+                            f"unhealthy: {unhealthy_count})"
+                        )
+                        return None
+
+                    if not logged_waiting:
+                        busy_tabs = [s.id for s in self._tabs.values() if s.status == TabStatus.BUSY]
+                        if busy_tabs:
+                            logger.debug(f"Waiting for tab (busy: {', '.join(busy_tabs)})")
+                        logged_waiting = True
+
+                    self._condition.wait(timeout=min(remaining, 1.0))
+            finally:
+                self._unregister_waiter(self._acquire_waiters, waiter_token)
+
+    def acquire_by_index(self, persistent_index: int, task_id: str, timeout: float = None) -> Optional[TabSession]:
+        """ASCII-safe fair acquire for a fixed persistent tab index."""
+        timeout = timeout or self.acquire_timeout
+        deadline = time.time() + timeout
+
+        with self._condition:
+            waiters = self._index_waiters.setdefault(persistent_index, deque())
+            waiter_token = self._next_waiter_token(task_id)
+            waiters.append(waiter_token)
+            try:
+                while True:
+                    if self._shutdown:
+                        return None
+
+                    if self._should_scan():
+                        self._scan_new_tabs()
+
+                    if not self._is_waiter_turn(waiters, waiter_token):
+                        remaining = deadline - time.time()
+                        if remaining <= 0:
+                            logger.warning(f"Timed out waiting for tab #{persistent_index}")
+                            return None
+                        logger.debug_throttled(
+                            f"tab_pool.wait_index.{persistent_index}",
+                            f"Waiting for tab #{persistent_index} release...",
+                            interval_sec=5.0,
+                        )
+                        self._condition.wait(timeout=min(remaining, 1.0))
+                        continue
+
+                    session_id = self._persistent_to_session_id.get(persistent_index)
+                    if not session_id:
+                        logger.warning(f"Persistent tab #{persistent_index} does not exist")
+                        return None
+
+                    session = self._tabs.get(session_id)
+                    if not session:
+                        logger.warning(f"Tab {session_id} (#{persistent_index}) was removed")
+                        return None
+
+                    if not session.is_healthy():
+                        logger.warning(f"[{session.id}] tab is unhealthy")
+                        return None
+
+                    if self._should_defer_to_command(session, task_id):
+                        logger.debug(f"[{session.id}] defer by index acquire to high-priority command")
+                        remaining = deadline - time.time()
+                        if remaining <= 0:
+                            return None
+                        self._condition.wait(timeout=min(remaining, 0.5))
+                        continue
+
+                    if session.status == TabStatus.IDLE and session.acquire(task_id):
+                        self._stop_global_monitor_for_session(session.id, reason="acquire_by_index")
+                        if self._auto_activate_on_acquire and session.id != self._active_session_id:
+                            session.activate()
+                            self._active_session_id = session.id
+
+                        self._unregister_waiter(
+                            waiters,
+                            waiter_token,
+                            owner_map=self._index_waiters,
+                            owner_key=persistent_index,
+                        )
+                        logger.debug(f"TabPool -> {session.id} (#{persistent_index})")
+                        return session
+
+                    remaining = deadline - time.time()
+                    if remaining <= 0:
+                        logger.warning(
+                            f"Timed out waiting for tab #{persistent_index} (status: {session.status.value})"
+                        )
+                        return None
+
+                    logger.debug_throttled(
+                        f"tab_pool.wait_index.{persistent_index}",
+                        f"Waiting for tab #{persistent_index} release...",
+                        interval_sec=5.0,
+                    )
+                    self._condition.wait(timeout=min(remaining, 1.0))
+            finally:
+                self._unregister_waiter(
+                    waiters,
+                    waiter_token,
+                    owner_map=self._index_waiters,
+                    owner_key=persistent_index,
+                )
+
+    def acquire_by_route_domain(self, route_domain: str, task_id: str, timeout: float = None) -> Optional[TabSession]:
+        """ASCII-safe fair acquire for tabs matching the same route domain."""
+        target = normalize_route_domain(route_domain)
+        if not target:
+            logger.warning("Route domain is empty; cannot acquire a tab")
+            return None
+
+        timeout = timeout or self.acquire_timeout
+        deadline = time.time() + timeout
+
+        with self._condition:
+            waiters = self._route_waiters.setdefault(target, deque())
+            waiter_token = self._next_waiter_token(task_id)
+            waiters.append(waiter_token)
+            try:
+                while True:
+                    if self._shutdown:
+                        return None
+
+                    if self._should_scan():
+                        self._scan_new_tabs()
+
+                    self._check_stuck_tabs()
+                    self._cleanup_unhealthy_tabs()
+
+                    if not self._is_waiter_turn(waiters, waiter_token):
+                        remaining = deadline - time.time()
+                        if remaining <= 0:
+                            logger.warning(f"Timed out waiting for route domain '{target}'")
+                            return None
+                        logger.debug_throttled(
+                            f"tab_pool.wait_route.{target}",
+                            f"Waiting for route domain '{target}' release...",
+                            interval_sec=5.0,
+                        )
+                        self._condition.wait(timeout=min(remaining, 1.0))
+                        continue
+
+                    matching_sessions = self._get_sessions_for_route_domain(target)
+                    if not matching_sessions:
+                        logger.warning(f"No tab matches route domain '{target}'")
+                        return None
+
+                    for session in matching_sessions:
+                        if not session.is_healthy():
+                            continue
+                        if self._should_defer_to_command(session, task_id):
+                            logger.debug(f"[{session.id}] defer by route-domain acquire to high-priority command")
+                            continue
+                        if session.status == TabStatus.IDLE and session.acquire(task_id):
+                            self._stop_global_monitor_for_session(session.id, reason="acquire_by_route_domain")
+                            if self._auto_activate_on_acquire and session.id != self._active_session_id:
+                                session.activate()
+                                self._active_session_id = session.id
+
+                            self._unregister_waiter(
+                                waiters,
+                                waiter_token,
+                                owner_map=self._route_waiters,
+                                owner_key=target,
+                            )
+                            logger.debug(
+                                f"TabPool -> {session.id} (route_domain={target}, idx=#{session.persistent_index})"
+                            )
+                            return session
+
+                    remaining = deadline - time.time()
+                    if remaining <= 0:
+                        busy_info = [
+                            f"{session.id}(#{session.persistent_index}:{session.status.value})"
+                            for session in matching_sessions
+                        ]
+                        logger.warning(
+                            f"Timed out waiting for route domain '{target}' "
+                            f"(matching tabs: {', '.join(busy_info) or 'none'})"
+                        )
+                        return None
+
+                    logger.debug_throttled(
+                        f"tab_pool.wait_route.{target}",
+                        f"Waiting for route domain '{target}' release...",
+                        interval_sec=5.0,
+                    )
+                    self._condition.wait(timeout=min(remaining, 1.0))
+            finally:
+                self._unregister_waiter(
+                    waiters,
+                    waiter_token,
+                    owner_map=self._route_waiters,
+                    owner_key=target,
+                )
 
     def terminate_by_index(
         self,
