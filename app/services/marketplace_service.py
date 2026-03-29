@@ -17,6 +17,7 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit, qu
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from app import __version__ as APP_VERSION
 from app.core.config import AppConfig, get_logger
 from app.services.config_engine import config_engine
 
@@ -29,6 +30,8 @@ class MarketplaceService:
     DEFAULT_AUTHOR = "社区贡献"
     DEFAULT_SITE_CATEGORY = "站点配置"
     DEFAULT_COMMAND_CATEGORY = "命令系统"
+    DEFAULT_PARSER_CATEGORY = "响应解析器"
+    RESPONSE_PARSER_MIN_VERSION = "2.7.1"
     ISSUE_MARKER = "<!-- marketplace-submission -->"
     ISSUE_TITLE_PREFIX = "[市场投稿]"
     ISSUE_ID_PREFIX = "pending-issue-"
@@ -37,9 +40,13 @@ class MarketplaceService:
         self._cached_manifest: Optional[Dict[str, Any]] = None
         self._cached_at = 0.0
 
-    def list_catalog(self, force_refresh: bool = False) -> Dict[str, Any]:
+    def list_catalog(self, force_refresh: bool = False, app_version: str = "") -> Dict[str, Any]:
         manifest = self._load_manifest(force_refresh=force_refresh)
-        items = [self._to_list_item(item) for item in manifest.get("items", [])]
+        visible_items = self._filter_items_for_client_version(
+            manifest.get("items", []),
+            client_version=app_version,
+        )
+        items = [self._to_list_item(item) for item in visible_items]
         items.sort(key=lambda item: (-int(item.get("downloads", 0) or 0), str(item.get("name") or "")))
         pending_count = sum(1 for item in items if str(item.get("review_status") or "") == "pending")
 
@@ -55,6 +62,8 @@ class MarketplaceService:
             "submit_help": manifest.get("submit_help", ""),
             "submit_target": manifest.get("submit_target", ""),
             "default_sort": "downloads",
+            "client_version": str(app_version or "").strip(),
+            "server_version": APP_VERSION,
             "count": len(items),
             "approved_count": max(0, len(items) - pending_count),
             "pending_count": pending_count,
@@ -62,7 +71,7 @@ class MarketplaceService:
             "items": items,
         }
 
-    def get_item(self, item_id: str, force_refresh: bool = False) -> Dict[str, Any]:
+    def get_item(self, item_id: str, force_refresh: bool = False, app_version: str = "") -> Dict[str, Any]:
         manifest = self._load_manifest(force_refresh=force_refresh)
         normalized_id = str(item_id or "").strip()
         if not normalized_id:
@@ -74,6 +83,8 @@ class MarketplaceService:
         )
         if not item:
             raise KeyError(f"未找到市场项目: {normalized_id}")
+        if not self._is_item_visible_for_client_version(item, client_version=app_version):
+            raise KeyError(f"当前版本不可用: {normalized_id}")
 
         if item.get("import_disabled"):
             return item
@@ -81,9 +92,58 @@ class MarketplaceService:
         item_type = item.get("item_type", self.DEFAULT_TYPE)
         if item_type == "command_bundle":
             item["command_bundle"] = self._resolve_command_bundle(item)
+        elif item_type == "response_parser":
+            item["parser_package"] = self._resolve_response_parser(item)
         else:
             item["site_config"] = self._resolve_site_config(item)
         return item
+
+    def _filter_items_for_client_version(self, items: Any, client_version: str) -> List[Dict[str, Any]]:
+        result: List[Dict[str, Any]] = []
+        for item in items or []:
+            if isinstance(item, dict) and self._is_item_visible_for_client_version(item, client_version):
+                result.append(copy.deepcopy(item))
+        return result
+
+    def _is_item_visible_for_client_version(self, item: Dict[str, Any], client_version: str) -> bool:
+        min_version = self._get_item_min_client_version(item)
+        normalized_client_version = self._normalize_semver_string(client_version)
+        if not min_version:
+            return True
+        if not normalized_client_version:
+            return False
+        return self._compare_semver(normalized_client_version, min_version) >= 0
+
+    def _get_item_min_client_version(self, item: Dict[str, Any]) -> str:
+        item_type = str((item or {}).get("item_type") or self.DEFAULT_TYPE).strip()
+        explicit = self._normalize_semver_string((item or {}).get("min_app_version"))
+        if explicit:
+            return explicit
+        if item_type == "response_parser":
+            return self.RESPONSE_PARSER_MIN_VERSION
+        return ""
+
+    @staticmethod
+    def _normalize_semver_string(value: Any) -> str:
+        text = str(value or "").strip()
+        match = re.search(r"(\d+)(?:\.(\d+))?(?:\.(\d+))?", text)
+        if not match:
+            return ""
+        parts = [int(part or 0) for part in match.groups(default="0")]
+        return ".".join(str(part) for part in parts)
+
+    @classmethod
+    def _compare_semver(cls, left: str, right: str) -> int:
+        left_parts = [int(part) for part in cls._normalize_semver_string(left).split(".") if part != ""]
+        right_parts = [int(part) for part in cls._normalize_semver_string(right).split(".") if part != ""]
+        max_len = max(len(left_parts), len(right_parts), 3)
+        left_parts.extend([0] * (max_len - len(left_parts)))
+        right_parts.extend([0] * (max_len - len(right_parts)))
+        if left_parts < right_parts:
+            return -1
+        if left_parts > right_parts:
+            return 1
+        return 0
 
     def submit_item(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         normalized = self._normalize_submission(payload)
@@ -1187,8 +1247,14 @@ class MarketplaceService:
         if summary_match:
             summary = str(summary_match.group(1)).strip()
 
-        item_type_text = metadata.get("类型", "站点配置")
-        item_type = "command_bundle" if "命令" in item_type_text else "site_config"
+        item_type_text = str(metadata.get("类型", "站点配置"))
+        item_type_text_lower = item_type_text.lower()
+        if "parser" in item_type_text_lower or "解析器" in item_type_text:
+            item_type = "response_parser"
+        elif "命令" in item_type_text or "command" in item_type_text_lower:
+            item_type = "command_bundle"
+        else:
+            item_type = "site_config"
         tags = [
             part.strip()
             for part in re.split(r"[，,]", metadata.get("标签", ""))
@@ -1201,7 +1267,9 @@ class MarketplaceService:
             "summary": summary,
             "author": metadata.get("作者") or self.DEFAULT_AUTHOR,
             "category": metadata.get("分类") or metadata.get("站点") or (
-                self.DEFAULT_COMMAND_CATEGORY if item_type == "command_bundle" else self.DEFAULT_SITE_CATEGORY
+                self.DEFAULT_COMMAND_CATEGORY
+                if item_type == "command_bundle"
+                else (self.DEFAULT_PARSER_CATEGORY if item_type == "response_parser" else self.DEFAULT_SITE_CATEGORY)
             ),
             "site_domain": metadata.get("站点", ""),
             "preset_name": metadata.get("预设", ""),
@@ -1216,10 +1284,13 @@ class MarketplaceService:
 
         item_type = str(raw_item.get("item_type") or self.DEFAULT_TYPE).strip() or self.DEFAULT_TYPE
         site_domain = str(raw_item.get("site_domain") or raw_item.get("domain") or "").strip()
-        preset_name = str(raw_item.get("preset_name") or "主预设").strip() or "主预设"
+        parser_package = raw_item.get("parser_package") if isinstance(raw_item.get("parser_package"), dict) else {}
+        parser_id = str(raw_item.get("parser_id") or parser_package.get("parser_id") or "").strip()
+        default_preset_name = "" if item_type in {"command_bundle", "response_parser"} else "主预设"
+        preset_name = str(raw_item.get("preset_name") or default_preset_name).strip() or default_preset_name
         base_id = str(raw_item.get("id") or "").strip()
         if not base_id:
-            suffix = site_domain or item_type
+            suffix = site_domain or parser_id or item_type
             base_id = f"{item_type}-{suffix}-{preset_name}"
         item_id = re.sub(r"[^a-zA-Z0-9._-\u4e00-\u9fff]+", "-", base_id).strip("-") or f"market-{int(time.time() * 1000)}"
 
@@ -1228,7 +1299,9 @@ class MarketplaceService:
         category = str(raw_item.get("category") or "").strip()
         if not category:
             category = site_domain if item_type == "site_config" and site_domain else (
-                self.DEFAULT_COMMAND_CATEGORY if item_type == "command_bundle" else self.DEFAULT_SITE_CATEGORY
+                self.DEFAULT_COMMAND_CATEGORY
+                if item_type == "command_bundle"
+                else (self.DEFAULT_PARSER_CATEGORY if item_type == "response_parser" else self.DEFAULT_SITE_CATEGORY)
             )
 
         item = {
@@ -1256,12 +1329,20 @@ class MarketplaceService:
             "issue_title": str(raw_item.get("issue_title") or ""),
             "import_disabled": bool(raw_item.get("import_disabled")),
             "tags": [str(tag).strip() for tag in tags if str(tag).strip()],
+            "parser_id": parser_id,
+            "parser_class_name": str(raw_item.get("parser_class_name") or parser_package.get("class_name") or "").strip(),
+            "parser_module_name": str(raw_item.get("parser_module_name") or parser_package.get("module_name") or "").strip(),
+            "min_app_version": self._normalize_semver_string(raw_item.get("min_app_version")) or (
+                self.RESPONSE_PARSER_MIN_VERSION if item_type == "response_parser" else ""
+            ),
         }
 
         if isinstance(raw_item.get("site_config"), dict):
             item["site_config"] = copy.deepcopy(raw_item["site_config"])
         if isinstance(raw_item.get("command_bundle"), dict):
             item["command_bundle"] = copy.deepcopy(raw_item["command_bundle"])
+        if isinstance(raw_item.get("parser_package"), dict):
+            item["parser_package"] = copy.deepcopy(raw_item["parser_package"])
 
         return item
 
@@ -1288,7 +1369,7 @@ class MarketplaceService:
 
     def _build_public_submission_body(self, item: Dict[str, Any]) -> str:
         item_type = str(item.get("item_type") or self.DEFAULT_TYPE).strip()
-        item_type_label = "命令系统" if item_type == "command_bundle" else "站点配置"
+        item_type_label = self._get_item_type_label(item_type)
         tags = item.get("tags") or []
 
         lines = [
@@ -1322,6 +1403,13 @@ class MarketplaceService:
         ])
         return "\n".join(lines)
 
+    def _get_item_type_label(self, item_type: str) -> str:
+        if item_type == "command_bundle":
+            return "命令系统"
+        if item_type == "response_parser":
+            return "响应解析器"
+        return "站点配置"
+
     @staticmethod
     def _append_query_params(url: str, params: Dict[str, Any]) -> str:
         parts = urlsplit(str(url or "").strip())
@@ -1342,6 +1430,7 @@ class MarketplaceService:
         result = copy.deepcopy(item)
         result.pop("site_config", None)
         result.pop("command_bundle", None)
+        result.pop("parser_package", None)
         result.pop("package_url", None)
         return result
 
@@ -1393,6 +1482,18 @@ class MarketplaceService:
             return self._normalize_command_bundle(payload)
 
         raise ValueError("命令包缺少可导入内容")
+
+    def _resolve_response_parser(self, item: Dict[str, Any]) -> Dict[str, Any]:
+        embedded = item.get("parser_package")
+        if isinstance(embedded, dict):
+            return self._normalize_response_parser_package(embedded)
+
+        package_url = str(item.get("package_url") or "").strip()
+        if package_url:
+            payload = self._fetch_json(package_url)
+            return self._normalize_response_parser_package(payload)
+
+        raise ValueError("解析器包缺少可导入内容")
 
     def _normalize_site_config_payload(
         self,
@@ -1457,6 +1558,55 @@ class MarketplaceService:
 
         raise ValueError("命令包必须包含 commands 数组")
 
+    def _normalize_response_parser_package(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(payload, dict):
+            raise ValueError("解析器包必须是对象")
+
+        nested = payload.get("parser_package")
+        if isinstance(nested, dict):
+            return self._normalize_response_parser_package(nested)
+
+        parser_id = str(payload.get("parser_id") or payload.get("id") or "").strip()
+        class_name = str(payload.get("class_name") or payload.get("class") or "").strip()
+        module_name = str(payload.get("module_name") or payload.get("module") or payload.get("filename") or "").strip()
+        source_code = str(payload.get("source_code") or payload.get("content") or payload.get("code") or "")
+        description = str(payload.get("description") or "").strip()
+        name = str(payload.get("name") or parser_id or class_name or "").strip()
+        supported_patterns = payload.get("supported_patterns") or payload.get("patterns") or []
+
+        if module_name.endswith(".py"):
+            module_name = module_name[:-3]
+
+        if not parser_id:
+            raise ValueError("解析器包缺少 parser_id")
+        if not class_name:
+            raise ValueError("解析器包缺少 class_name")
+        if not module_name:
+            raise ValueError("解析器包缺少 module_name")
+        if not source_code.strip():
+            raise ValueError("解析器包缺少源码")
+        if not re.match(r"^[A-Za-z0-9._-]+$", parser_id):
+            raise ValueError(f"解析器 ID 不合法: {parser_id}")
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", class_name):
+            raise ValueError(f"解析器类名不合法: {class_name}")
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", module_name.replace("-", "_")):
+            raise ValueError(f"解析器模块名不合法: {module_name}")
+
+        return {
+            "parser_id": parser_id,
+            "class_name": class_name,
+            "module_name": module_name.replace("-", "_"),
+            "filename": f"{module_name.replace('-', '_')}.py",
+            "name": name or parser_id,
+            "description": description,
+            "source_code": source_code,
+            "supported_patterns": [
+                str(pattern).strip()
+                for pattern in (supported_patterns if isinstance(supported_patterns, list) else [])
+                if str(pattern).strip()
+            ],
+        }
+
     def _normalize_submission(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(payload, dict):
             raise ValueError("投稿内容必须是对象")
@@ -1495,6 +1645,7 @@ class MarketplaceService:
             "tags": normalized_tags,
             "repo_url": "",
             "package_url": "",
+            "min_app_version": "",
         }
 
         if item_type == "command_bundle":
@@ -1504,6 +1655,19 @@ class MarketplaceService:
             item["domain"] = ""
             item["preset_name"] = ""
             item["command_bundle"] = bundle
+            return item
+
+        if item_type == "response_parser":
+            parser_package = self._normalize_response_parser_package(payload.get("parser_package"))
+            item["category"] = str(payload.get("category") or self.DEFAULT_PARSER_CATEGORY).strip() or self.DEFAULT_PARSER_CATEGORY
+            item["site_domain"] = ""
+            item["domain"] = ""
+            item["preset_name"] = ""
+            item["min_app_version"] = self.RESPONSE_PARSER_MIN_VERSION
+            item["parser_id"] = parser_package["parser_id"]
+            item["parser_class_name"] = parser_package["class_name"]
+            item["parser_module_name"] = parser_package["module_name"]
+            item["parser_package"] = parser_package
             return item
 
         site_domain = str(payload.get("site_domain") or payload.get("domain") or "").strip()

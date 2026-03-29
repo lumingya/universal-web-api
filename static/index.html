@@ -410,7 +410,7 @@
                 </div>
                 <div class="grid gap-6 px-6 py-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
                     <div class="space-y-4">
-                        <div class="grid gap-3 sm:grid-cols-2">
+                        <div class="grid gap-3 sm:grid-cols-3">
                             <button @click="setMarketplaceSubmitType('site_config')"
                                     :class="['rounded-xl border px-4 py-3 text-left transition',
                                              marketplaceSubmitForm.item_type === 'site_config'
@@ -426,6 +426,14 @@
                                              : 'border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800']">
                                 <div class="font-semibold">命令系统</div>
                                 <div class="mt-1 text-sm opacity-80">选择一个或多个命令，打包成命令系统投稿。</div>
+                            </button>
+                            <button @click="setMarketplaceSubmitType('response_parser')"
+                                    :class="['rounded-xl border px-4 py-3 text-left transition',
+                                             marketplaceSubmitForm.item_type === 'response_parser'
+                                             ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-300'
+                                             : 'border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800']">
+                                <div class="font-semibold">响应解析器</div>
+                                <div class="mt-1 text-sm opacity-80">上传解析器源码，导入时写入 <code>app/core/parsers</code> 并自动注册。</div>
                             </button>
                         </div>
 
@@ -463,7 +471,7 @@
                                 <div class="mb-1 text-sm font-medium text-slate-700 dark:text-slate-200">分类</div>
                                 <input v-model.trim="marketplaceSubmitForm.category"
                                        type="text"
-                                       :placeholder="marketplaceSubmitForm.item_type === 'site_config' ? '默认使用站点域名分类' : '默认命令系统'"
+                                       :placeholder="marketplaceSubmitForm.item_type === 'site_config' ? '默认使用站点域名分类' : (marketplaceSubmitForm.item_type === 'command_bundle' ? '默认命令系统' : '默认响应解析器')"
                                        class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200">
                             </label>
                         </div>
@@ -498,6 +506,55 @@
                                    class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200">
                         </label>
 
+                        <div v-if="marketplaceSubmitForm.item_type === 'response_parser'" class="grid gap-4 sm:grid-cols-2">
+                            <label class="block">
+                                <div class="mb-1 text-sm font-medium text-slate-700 dark:text-slate-200">解析器 ID</div>
+                                <input v-model.trim="marketplaceSubmitForm.parser_id"
+                                       type="text"
+                                       placeholder="例如 my_parser"
+                                       class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200">
+                            </label>
+                            <label class="block">
+                                <div class="mb-1 text-sm font-medium text-slate-700 dark:text-slate-200">类名</div>
+                                <input v-model.trim="marketplaceSubmitForm.parser_class_name"
+                                       type="text"
+                                       placeholder="例如 MyParser"
+                                       class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200">
+                            </label>
+                            <label class="block">
+                                <div class="mb-1 text-sm font-medium text-slate-700 dark:text-slate-200">模块名</div>
+                                <input v-model.trim="marketplaceSubmitForm.parser_module_name"
+                                       type="text"
+                                       placeholder="例如 my_parser"
+                                       class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200">
+                            </label>
+                            <label class="block">
+                                <div class="mb-1 text-sm font-medium text-slate-700 dark:text-slate-200">支持规则</div>
+                                <input v-model.trim="marketplaceSubmitForm.parser_patterns_text"
+                                       type="text"
+                                       placeholder="用逗号分隔 URL pattern"
+                                       class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200">
+                            </label>
+                            <label class="block sm:col-span-2">
+                                <div class="mb-1 text-sm font-medium text-slate-700 dark:text-slate-200">解析器文件</div>
+                                <input type="file"
+                                       accept=".py,text/x-python"
+                                       @change="handleMarketplaceParserFileChange"
+                                       class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 file:mr-4 file:rounded-lg file:border-0 file:bg-slate-100 file:px-3 file:py-2 file:text-sm file:font-medium file:text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:file:bg-slate-800 dark:file:text-slate-200">
+                                <div v-if="marketplaceSubmitForm.parser_filename"
+                                     class="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                                    {{ marketplaceSubmitForm.parser_filename }}
+                                </div>
+                            </label>
+                            <label class="block sm:col-span-2">
+                                <div class="mb-1 text-sm font-medium text-slate-700 dark:text-slate-200">源码</div>
+                                <textarea v-model="marketplaceSubmitForm.parser_source"
+                                          rows="12"
+                                          placeholder="粘贴或上传解析器源码"
+                                          class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 font-mono text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200"></textarea>
+                            </label>
+                        </div>
+
                         <div v-if="marketplaceSubmitForm.item_type === 'command_bundle'" class="rounded-2xl border border-slate-200 p-4 dark:border-slate-700">
                             <div class="mb-3 flex items-center justify-between">
                                 <div class="text-sm font-semibold text-slate-800 dark:text-slate-100">选择命令</div>
@@ -518,6 +575,11 @@
                                     </div>
                                 </label>
                             </div>
+                        </div>
+
+                        <div v-if="marketplaceSubmitForm.item_type === 'response_parser'"
+                             class="rounded-2xl border border-amber-200 bg-amber-50/80 p-4 text-sm text-amber-900 dark:border-amber-500/30 dark:bg-amber-900/10 dark:text-amber-200">
+                            导入解析器会把源码写入 <code>app/core/parsers</code>，并在当前应用里动态注册，请确认来源可信。
                         </div>
                     </div>
 

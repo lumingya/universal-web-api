@@ -17,7 +17,7 @@ router = APIRouter(tags=["marketplace"])
 
 
 class MarketplaceSubmissionRequest(BaseModel):
-    item_type: Literal["site_config", "command_bundle"] = Field(default="site_config")
+    item_type: Literal["site_config", "command_bundle", "response_parser"] = Field(default="site_config")
     title: str = Field(..., max_length=120)
     summary: str = Field(..., max_length=400)
     author: str = Field(default="本地投稿", max_length=80)
@@ -29,6 +29,7 @@ class MarketplaceSubmissionRequest(BaseModel):
     tags: List[str] = Field(default_factory=list)
     site_config: Optional[Dict[str, Any]] = None
     command_bundle: Optional[Dict[str, Any]] = None
+    parser_package: Optional[Dict[str, Any]] = None
 
 
 class MarketplaceReviewRequest(BaseModel):
@@ -38,10 +39,11 @@ class MarketplaceReviewRequest(BaseModel):
 @router.get("/api/marketplace")
 async def get_marketplace_catalog(
     refresh: bool = Query(False),
+    app_version: str = Query(""),
     authenticated: bool = Depends(verify_auth),
 ):
     try:
-        return marketplace_service.list_catalog(force_refresh=refresh)
+        return marketplace_service.list_catalog(force_refresh=refresh, app_version=app_version)
     except Exception as exc:
         logger.error(f"获取插件市场失败: {exc}")
         raise HTTPException(status_code=500, detail=str(exc))
@@ -51,10 +53,11 @@ async def get_marketplace_catalog(
 async def get_marketplace_item(
     item_id: str,
     refresh: bool = Query(False),
+    app_version: str = Query(""),
     authenticated: bool = Depends(verify_auth),
 ):
     try:
-        return marketplace_service.get_item(item_id, force_refresh=refresh)
+        return marketplace_service.get_item(item_id, force_refresh=refresh, app_version=app_version)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except Exception as exc:

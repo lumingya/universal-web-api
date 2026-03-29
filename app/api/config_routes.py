@@ -20,6 +20,7 @@ from app.core.config import AppConfig, get_logger
 from app.core import get_browser, BrowserConnectionError
 from app.services.config_engine import config_engine, ConfigConstants
 from app.services.extractor_manager import extractor_manager
+from app.services.parser_manager import parser_manager
 from app.utils.site_url import extract_remote_site_domain
 from app.utils.similarity import verify_extraction
 
@@ -33,6 +34,12 @@ router = APIRouter()
 class ConfigUpdateRequest(BaseModel):
     """配置更新请求"""
     config: Dict[str, Any] = Field(...)
+
+
+class ParserInstallRequest(BaseModel):
+    """Parser install request."""
+    parser_package: Dict[str, Any] = Field(...)
+    overwrite: bool = Field(default=False)
 
 
 # ================= 认证依赖 =================
@@ -991,6 +998,33 @@ async def list_parsers(authenticated: bool = Depends(verify_auth)):
     except Exception as e:
         logger.error(f"获取解析器列表失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/parsers/install")
+async def install_parser(
+    request: ParserInstallRequest,
+    authenticated: bool = Depends(verify_auth),
+):
+    """Install a runtime parser from marketplace payload."""
+    try:
+        parser_info = parser_manager.install_parser_package(
+            request.parser_package,
+            overwrite=bool(request.overwrite),
+        )
+        return {
+            "status": "success",
+            "message": f"解析器已安装: {parser_info['id']}",
+            "parser": parser_info,
+        }
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"安装解析器失败: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @router.get("/api/settings/stream-config-defaults")

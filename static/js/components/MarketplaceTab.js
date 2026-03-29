@@ -35,7 +35,8 @@ window.MarketplaceTab = {
             return [
                 { value: 'all', label: '全部类型' },
                 { value: 'site_config', label: '站点配置' },
-                { value: 'command_bundle', label: '命令系统' }
+                { value: 'command_bundle', label: '命令系统' },
+                { value: 'response_parser', label: '响应解析器' }
             ];
         },
         siteOptions() {
@@ -61,7 +62,7 @@ window.MarketplaceTab = {
                 items = items.filter(item => item.item_type === this.selectedType);
             }
 
-            if (this.selectedSite !== 'all') {
+            if (this.selectedSite !== 'all' && this.selectedType !== 'response_parser') {
                 items = items.filter(item => item.site_domain === this.selectedSite);
             }
 
@@ -128,7 +129,9 @@ window.MarketplaceTab = {
             });
         },
         typeLabel(itemType) {
-            return itemType === 'command_bundle' ? '命令系统' : '站点配置';
+            if (itemType === 'command_bundle') return '命令系统';
+            if (itemType === 'response_parser') return '响应解析器';
+            return '站点配置';
         },
         isImporting(itemId) {
             return this.importingId === itemId;

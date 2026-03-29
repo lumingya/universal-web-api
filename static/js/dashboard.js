@@ -1,4 +1,26 @@
 const { createApp } = Vue
+const MARKETPLACE_CLIENT_VERSION_STORAGE_KEY = 'marketplace_client_version'
+
+function loadStoredMarketplaceClientVersion() {
+    try {
+        return String(localStorage.getItem(MARKETPLACE_CLIENT_VERSION_STORAGE_KEY) || '').trim()
+    } catch (error) {
+        return ''
+    }
+}
+
+function saveStoredMarketplaceClientVersion(version) {
+    try {
+        const value = String(version || '').trim()
+        if (value) {
+            localStorage.setItem(MARKETPLACE_CLIENT_VERSION_STORAGE_KEY, value)
+        } else {
+            localStorage.removeItem(MARKETPLACE_CLIENT_VERSION_STORAGE_KEY)
+        }
+    } catch (error) {
+        // ignore storage failures and keep runtime data available
+    }
+}
 
 // ========== 元素定义 Schema ==========
 
@@ -786,6 +808,7 @@ const app = createApp({
             marketplaceSubmitSaving: false,
             marketplaceCommandOptions: [],
             marketplaceCommandLoading: false,
+            appVersion: loadStoredMarketplaceClientVersion(),
             marketplaceSubmitForm: {
                 item_type: 'site_config',
                 title: '',
@@ -797,7 +820,13 @@ const app = createApp({
                 compatibility: '',
                 version: '1.0.0',
                 tagsText: '',
-                selected_command_ids: []
+                selected_command_ids: [],
+                parser_id: '',
+                parser_class_name: '',
+                parser_module_name: '',
+                parser_source: '',
+                parser_patterns_text: '',
+                parser_filename: ''
             },
 
         }
@@ -1073,6 +1102,8 @@ const app = createApp({
         async loadHealthStatus({ silent = false } = {}) {
             try {
                 const health = await this.apiRequest('/health')
+                this.appVersion = String(health.version || '').trim()
+                saveStoredMarketplaceClientVersion(this.appVersion)
                 this.browserStatus = health.browser || {}
                 this.authEnabled = health.config?.auth_enabled || false
                 return true
@@ -1088,6 +1119,20 @@ const app = createApp({
                 }
                 return false
             }
+        },
+
+        getMarketplaceClientVersion() {
+            return String(this.appVersion || '').trim() || loadStoredMarketplaceClientVersion()
+        },
+
+        appendMarketplaceClientVersion(url) {
+            const target = String(url || '')
+            const version = this.getMarketplaceClientVersion()
+            if (!target || !version) {
+                return target
+            }
+            const separator = target.includes('?') ? '&' : '?'
+            return target + separator + 'app_version=' + encodeURIComponent(version)
         },
 
         async checkAuth() {
@@ -2224,7 +2269,8 @@ const app = createApp({
             this.marketplaceError = '';
             try {
                 const suffix = force ? '?refresh=true' : '';
-                const data = await this.apiRequest('/api/marketplace' + suffix);
+                const url = this.appendMarketplaceClientVersion('/api/marketplace' + suffix);
+                const data = await this.apiRequest(url);
                 this.marketplaceCatalog = {
                     items: [],
                     count: 0,
@@ -2270,7 +2316,8 @@ const app = createApp({
                 return;
             }
             try {
-                const detail = await this.apiRequest('/api/marketplace/items/' + encodeURIComponent(item.id));
+                const url = this.appendMarketplaceClientVersion('/api/marketplace/items/' + encodeURIComponent(item.id));
+                const detail = await this.apiRequest(url);
                 this.marketplacePreviewTitle = '市场预览 · ' + (detail.name || item.name || item.id);
                 this.marketplacePreviewData = detail;
                 this.showMarketplacePreview = true;
@@ -2309,7 +2356,13 @@ const app = createApp({
                 compatibility: '',
                 version: '1.0.0',
                 tagsText: '',
-                selected_command_ids: []
+                selected_command_ids: [],
+                parser_id: '',
+                parser_class_name: '',
+                parser_module_name: '',
+                parser_source: '',
+                parser_patterns_text: '',
+                parser_filename: ''
             };
         },
 
@@ -2321,6 +2374,13 @@ const app = createApp({
                 }
                 this.marketplaceSubmitForm.title = this.marketplaceSubmitForm.title || '命令包投稿';
                 this.marketplaceSubmitForm.category = '命令系统';
+            } else if (itemType === 'response_parser') {
+                if (!this.marketplaceSubmitForm.category
+                    || this.marketplaceSubmitForm.category === '命令系统'
+                    || this.marketplaceSubmitForm.category === this.marketplaceSubmitForm.site_domain
+                    || this.marketplaceSubmitForm.category === this.currentDomain) {
+                    this.marketplaceSubmitForm.category = '响应解析器';
+                }
             } else {
                 this.marketplaceSubmitForm.site_domain = this.marketplaceSubmitForm.site_domain || this.currentDomain || '';
                 this.marketplaceSubmitForm.category = this.marketplaceSubmitForm.category || this.marketplaceSubmitForm.site_domain;
@@ -2349,6 +2409,69 @@ const app = createApp({
                 .split(/[,\n，]/)
                 .map(item => item.trim())
                 .filter(Boolean);
+        },
+
+        normalizeMarketplaceParserModuleName(value) {
+            const normalized = String(value || '')
+                .replace(/\.py$/i, '')
+                .trim()
+                .replace(/[^A-Za-z0-9_]+/g, '_')
+                .replace(/^_+|_+$/g, '');
+            return normalized || '';
+        },
+
+        normalizeMarketplaceParserId(value) {
+            const normalized = String(value || '')
+                .trim()
+                .replace(/[^A-Za-z0-9._-]+/g, '_')
+                .replace(/^_+|_+$/g, '');
+            return normalized || '';
+        },
+
+        extractMarketplaceParserClassName(sourceText) {
+            const text = String(sourceText || '');
+            const parserMatch = text.match(/class\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*ResponseParser\b/);
+            if (parserMatch) {
+                return parserMatch[1];
+            }
+            const anyClassMatch = text.match(/class\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/);
+            return anyClassMatch ? anyClassMatch[1] : '';
+        },
+
+        async handleMarketplaceParserFileChange(event) {
+            const file = event && event.target && event.target.files && event.target.files[0];
+            if (!file) {
+                return;
+            }
+
+            try {
+                const source = await file.text();
+                const moduleName = this.normalizeMarketplaceParserModuleName(file.name);
+                const parserId = this.normalizeMarketplaceParserId(moduleName.replace(/_parser$/i, ''));
+                const className = this.extractMarketplaceParserClassName(source);
+                const defaultTitle = this.currentDomain ? (this.currentDomain + ' 配置投稿') : '';
+
+                this.marketplaceSubmitForm.parser_filename = file.name;
+                this.marketplaceSubmitForm.parser_source = source;
+                if (!this.marketplaceSubmitForm.parser_module_name) {
+                    this.marketplaceSubmitForm.parser_module_name = moduleName;
+                }
+                if (!this.marketplaceSubmitForm.parser_id) {
+                    this.marketplaceSubmitForm.parser_id = parserId;
+                }
+                if (!this.marketplaceSubmitForm.parser_class_name) {
+                    this.marketplaceSubmitForm.parser_class_name = className;
+                }
+                if (!this.marketplaceSubmitForm.title || this.marketplaceSubmitForm.title === defaultTitle) {
+                    this.marketplaceSubmitForm.title = className || parserId || moduleName || file.name.replace(/\.py$/i, '');
+                }
+            } catch (error) {
+                this.notify('读取解析器文件失败: ' + error.message, 'error');
+            } finally {
+                if (event && event.target) {
+                    event.target.value = '';
+                }
+            }
         },
 
         sanitizeCommandForBundle(command) {
@@ -2400,6 +2523,48 @@ const app = createApp({
                     command_bundle: {
                         group_name: '',
                         commands
+                    }
+                };
+            }
+
+            if (form.item_type === 'response_parser') {
+                const parserId = this.normalizeMarketplaceParserId(form.parser_id);
+                const className = String(form.parser_class_name || '').trim();
+                const moduleName = this.normalizeMarketplaceParserModuleName(form.parser_module_name);
+                const sourceCode = String(form.parser_source || '');
+                const supportedPatterns = this.parseMarketplaceTags(form.parser_patterns_text);
+
+                if (!parserId) {
+                    throw new Error('请填写解析器 ID');
+                }
+                if (!className) {
+                    throw new Error('请填写解析器类名');
+                }
+                if (!moduleName) {
+                    throw new Error('请填写解析器模块名');
+                }
+                if (!sourceCode.trim()) {
+                    throw new Error('请上传或粘贴解析器源码');
+                }
+
+                return {
+                    item_type: 'response_parser',
+                    title,
+                    summary,
+                    author,
+                    category: category || '响应解析器',
+                    compatibility,
+                    version,
+                    tags,
+                    parser_package: {
+                        parser_id: parserId,
+                        class_name: className,
+                        module_name: moduleName,
+                        filename: moduleName + '.py',
+                        name: title,
+                        description: summary,
+                        source_code: sourceCode,
+                        supported_patterns: supportedPatterns
                     }
                 };
             }
@@ -2477,9 +2642,14 @@ const app = createApp({
 
             this.marketplaceImportingId = item.id;
             try {
-                const detail = await this.apiRequest('/api/marketplace/items/' + encodeURIComponent(item.id));
+                const url = this.appendMarketplaceClientVersion('/api/marketplace/items/' + encodeURIComponent(item.id));
+                const detail = await this.apiRequest(url);
                 if (detail.item_type === 'command_bundle') {
                     await this.importMarketplaceCommandBundle(detail);
+                    return;
+                }
+                if (detail.item_type === 'response_parser') {
+                    await this.importMarketplaceParserPackage(detail);
                     return;
                 }
 
@@ -2635,6 +2805,50 @@ const app = createApp({
             }
 
             this.notify('命令包已导入，共 ' + importedCommands.length + ' 条命令', 'success');
+        },
+
+        async importMarketplaceParserPackage(detail) {
+            const parserPackage = detail && detail.parser_package;
+            const parserId = String((parserPackage && parserPackage.parser_id) || detail.parser_id || '').trim();
+            if (!parserPackage || !parserId) {
+                throw new Error('解析器包内容无效');
+            }
+
+            const confirmed = window.confirm(
+                '导入解析器会写入 app/core/parsers 并注册到当前应用，这会执行 Python 代码。确认继续吗？'
+            );
+            if (!confirmed) {
+                return;
+            }
+
+            try {
+                const result = await this.apiRequest('/api/parsers/install', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        parser_package: parserPackage,
+                        overwrite: false
+                    })
+                });
+                this.notify((result && result.message) || ('解析器已导入: ' + parserId), 'success');
+            } catch (error) {
+                if (error.status !== 409) {
+                    throw error;
+                }
+
+                const replace = window.confirm('同名解析器已存在。是否覆盖已安装的版本？');
+                if (!replace) {
+                    return;
+                }
+
+                const result = await this.apiRequest('/api/parsers/install', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        parser_package: parserPackage,
+                        overwrite: true
+                    })
+                });
+                this.notify((result && result.message) || ('解析器已覆盖安装: ' + parserId), 'success');
+            }
         },
 
         downloadDataAsJson(filename, payloadText) {

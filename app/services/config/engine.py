@@ -22,7 +22,7 @@ from app.models.schemas import (
     get_default_file_paste_config
 )
 from app.services.extractor_manager import extractor_manager
-from app.core.parsers import ParserRegistry
+from app.services.parser_manager import parser_manager
 from .managers import GlobalConfigManager, ImagePresetsManager
 from .processors import HTMLCleaner, SelectorValidator, AIAnalyzer
 
@@ -1657,11 +1657,15 @@ class ConfigEngine:
         Returns:
             解析器信息列表
         """
-        return ParserRegistry.list_all()
-    
+        return parser_manager.list_parsers()
+
     def get_extractor_manager(self):
         """获取提取器管理器实例"""
         return extractor_manager
+
+    def get_parser_manager(self):
+        """获取解析器管理器实例"""
+        return parser_manager
     
     # ================= 元素定义管理 =================
     

@@ -857,6 +857,1040 @@
                 font-size: 0.7rem;
             }
         }
+        :root {
+            --sidebar-width: 272px;
+            --toc-width: 244px;
+            --docs-radius: 26px;
+            --docs-shell-width: min(1540px, calc(100vw - 40px));
+            --docs-shadow: 0 20px 48px rgba(15, 23, 42, 0.08);
+            --docs-card-bg: rgba(255, 255, 255, 0.84);
+            --docs-card-strong: rgba(255, 255, 255, 0.95);
+            --docs-card-border: rgba(148, 163, 184, 0.22);
+            --docs-muted: #64748b;
+            --docs-title: #0f172a;
+            --docs-tab-bg: rgba(255, 255, 255, 0.75);
+            --docs-tab-active: #dfe4ff;
+            --docs-search-bg: rgba(248, 250, 252, 0.88);
+            --docs-search-border: rgba(148, 163, 184, 0.26);
+            --docs-mark-bg: #fef08a;
+            --docs-mark-text: #854d0e;
+        }
+
+        [data-theme="dark"] {
+            --docs-card-bg: rgba(15, 23, 42, 0.86);
+            --docs-card-strong: rgba(15, 23, 42, 0.94);
+            --docs-card-border: rgba(71, 85, 105, 0.7);
+            --docs-muted: #94a3b8;
+            --docs-title: #f8fafc;
+            --docs-tab-bg: rgba(15, 23, 42, 0.86);
+            --docs-tab-active: rgba(96, 165, 250, 0.22);
+            --docs-search-bg: rgba(15, 23, 42, 0.94);
+            --docs-search-border: rgba(71, 85, 105, 0.85);
+            --docs-mark-bg: rgba(250, 204, 21, 0.16);
+            --docs-mark-text: #fde68a;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            display: block;
+            min-height: 100vh;
+            font-family: "Segoe UI Variable", "PingFang SC", "Microsoft YaHei UI", sans-serif;
+            background:
+                radial-gradient(circle at top left, rgba(191, 219, 254, 0.4), transparent 34%),
+                linear-gradient(180deg, #f8fbff 0%, #f4f7fb 36%, #eef2f7 100%);
+        }
+
+        [data-theme="dark"] body,
+        html[data-theme="dark"] body {
+            background:
+                radial-gradient(circle at top left, rgba(37, 99, 235, 0.18), transparent 28%),
+                linear-gradient(180deg, #020617 0%, #0b1120 42%, #0f172a 100%);
+        }
+
+        body::before,
+        body::after {
+            content: "";
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            z-index: -2;
+        }
+
+        body::before {
+            background:
+                radial-gradient(circle at 80% 12%, rgba(224, 231, 255, 0.8), transparent 22%),
+                radial-gradient(circle at 14% 28%, rgba(191, 219, 254, 0.55), transparent 24%);
+        }
+
+        html[data-theme="dark"] body::before {
+            background:
+                radial-gradient(circle at 80% 12%, rgba(96, 165, 250, 0.15), transparent 24%),
+                radial-gradient(circle at 14% 28%, rgba(59, 130, 246, 0.12), transparent 26%);
+        }
+
+        .docs-topbar {
+            position: relative;
+            z-index: 320;
+            padding: 18px 20px 0;
+        }
+
+        .docs-topbar-inner {
+            width: var(--docs-shell-width);
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: auto minmax(0, 1fr) auto;
+            align-items: center;
+            gap: 18px;
+            padding: 14px 18px;
+            border-radius: 24px;
+            border: 1px solid var(--docs-card-border);
+            background: var(--docs-card-bg);
+            backdrop-filter: blur(18px);
+            box-shadow: var(--docs-shadow);
+        }
+
+        .docs-brand {
+            display: inline-flex;
+            align-items: center;
+            gap: 12px;
+            text-decoration: none;
+            color: inherit;
+            min-width: 0;
+        }
+
+        .docs-brand-mark {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 42px;
+            height: 42px;
+            border-radius: 14px;
+            background: linear-gradient(135deg, #c7d2fe 0%, #dbeafe 100%);
+            color: #1d4ed8;
+            font-weight: 800;
+            letter-spacing: 0.03em;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+        }
+
+        html[data-theme="dark"] .docs-brand-mark {
+            background: linear-gradient(135deg, rgba(37, 99, 235, 0.46) 0%, rgba(14, 165, 233, 0.38) 100%);
+            color: #dbeafe;
+        }
+
+        .docs-brand-copy {
+            min-width: 0;
+        }
+
+        .docs-brand-copy strong {
+            display: block;
+            color: var(--docs-title);
+            font-size: 1rem;
+            line-height: 1.2;
+        }
+
+        .docs-brand-copy span {
+            display: block;
+            margin-top: 2px;
+            color: var(--docs-muted);
+            font-size: 0.82rem;
+            line-height: 1.4;
+        }
+
+        .top-tabs {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-width: 0;
+            overflow-x: auto;
+            padding-bottom: 2px;
+            scrollbar-width: none;
+        }
+
+        .top-tabs::-webkit-scrollbar {
+            display: none;
+        }
+
+        .top-tab {
+            border: 1px solid transparent;
+            border-radius: 999px;
+            background: transparent;
+            color: var(--text-color);
+            padding: 10px 16px;
+            font-size: 0.96rem;
+            font-weight: 700;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: background-color 0.18s ease, border-color 0.18s ease, color 0.18s ease, transform 0.18s ease;
+        }
+
+        .top-tab:hover {
+            transform: translateY(-1px);
+            background: var(--docs-tab-bg);
+            border-color: var(--docs-card-border);
+        }
+
+        .top-tab.active {
+            background: var(--docs-tab-active);
+            border-color: rgba(99, 102, 241, 0.16);
+            color: #1d4ed8;
+        }
+
+        html[data-theme="dark"] .top-tab.active {
+            color: #bfdbfe;
+        }
+
+        .search-trigger {
+            display: inline-flex;
+            align-items: center;
+            gap: 12px;
+            min-width: 220px;
+            padding: 11px 14px;
+            border-radius: 16px;
+            border: 1px solid var(--docs-search-border);
+            background: var(--docs-search-bg);
+            color: var(--docs-muted);
+            cursor: pointer;
+            font-size: 0.94rem;
+            transition: border-color 0.18s ease, transform 0.18s ease, color 0.18s ease;
+        }
+
+        .search-trigger:hover {
+            transform: translateY(-1px);
+            border-color: rgba(59, 130, 246, 0.38);
+            color: var(--text-color);
+        }
+
+        .docs-actions {
+            display: inline-flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 12px;
+        }
+
+        .docs-actions .language-dropdown {
+            flex-shrink: 0;
+        }
+
+        .docs-actions .language-trigger {
+            min-width: 148px;
+            background: var(--docs-search-bg);
+            border-color: var(--docs-search-border);
+        }
+
+        .search-trigger-text {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            text-align: left;
+        }
+
+        .search-trigger kbd {
+            padding: 4px 8px;
+            border-radius: 999px;
+            border: 1px solid var(--docs-card-border);
+            background: rgba(255, 255, 255, 0.7);
+            color: var(--docs-muted);
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-size: 0.78rem;
+        }
+
+        html[data-theme="dark"] .search-trigger kbd {
+            background: rgba(15, 23, 42, 0.88);
+        }
+
+        .docs-shell {
+            width: var(--docs-shell-width);
+            margin: 18px auto 34px;
+            display: grid;
+            grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+            gap: 24px;
+            align-items: start;
+        }
+
+        .sidebar {
+            position: sticky;
+            top: 24px;
+            left: auto;
+            width: auto;
+            height: calc(100vh - 48px);
+            padding: 18px;
+            border-radius: var(--docs-radius);
+            border: 1px solid var(--docs-card-border);
+            background: var(--docs-card-bg);
+            box-shadow: var(--docs-shadow);
+            overflow-y: auto;
+        }
+
+        .sidebar h2 {
+            margin: 0;
+            padding: 0;
+            border: 0;
+            color: var(--docs-title);
+            font-size: 1.1rem;
+        }
+
+        .sidebar-controls {
+            margin: 18px 0 16px;
+            display: grid;
+            gap: 12px;
+        }
+
+        .theme-toggle,
+        .language-trigger {
+            width: 100%;
+            min-width: 0;
+            min-height: 48px;
+            border-radius: 16px;
+            background: var(--docs-search-bg);
+            border-color: var(--docs-search-border);
+            box-shadow: none;
+            color: var(--text-color);
+        }
+
+        .language-menu {
+            width: 100%;
+            min-width: 100%;
+            border-radius: 16px;
+            border: 1px solid var(--docs-card-border);
+            background: var(--docs-card-strong);
+            box-shadow: var(--docs-shadow);
+        }
+
+        .page-shell {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) var(--toc-width);
+            gap: 28px;
+            align-items: start;
+        }
+
+        .main-content {
+            margin-left: 0;
+            padding: 0;
+            width: 100%;
+            max-width: none;
+        }
+
+        .page-header {
+            position: relative;
+            overflow: hidden;
+            margin-bottom: 22px;
+            padding: 34px 38px 28px;
+            border-radius: 32px;
+            border: 1px solid var(--docs-card-border);
+            background: var(--docs-card-strong);
+            box-shadow: var(--docs-shadow);
+        }
+
+        .page-header::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background:
+                radial-gradient(circle at top right, rgba(224, 231, 255, 0.9), transparent 26%),
+                linear-gradient(135deg, rgba(255, 255, 255, 0.04), transparent 50%);
+            pointer-events: none;
+        }
+
+        html[data-theme="dark"] .page-header::before {
+            background:
+                radial-gradient(circle at top right, rgba(37, 99, 235, 0.18), transparent 28%),
+                linear-gradient(135deg, rgba(96, 165, 250, 0.05), transparent 48%);
+        }
+
+        .page-header-top:empty {
+            display: none;
+        }
+
+        .page-kicker {
+            position: relative;
+            z-index: 1;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 7px 12px;
+            border-radius: 999px;
+            background: rgba(224, 231, 255, 0.8);
+            color: #4338ca;
+            font-size: 0.82rem;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        html[data-theme="dark"] .page-kicker {
+            background: rgba(30, 41, 59, 0.86);
+            color: #bfdbfe;
+        }
+
+        .page-subtitle {
+            position: relative;
+            z-index: 1;
+            margin: 14px 0 0;
+            max-width: 860px;
+            color: var(--docs-muted);
+            font-size: 1.04rem;
+            line-height: 1.8;
+        }
+
+        .page-quick-links {
+            position: relative;
+            z-index: 1;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 12px;
+            margin-top: 22px;
+        }
+
+        .quick-link-card {
+            display: block;
+            padding: 16px 18px;
+            border-radius: 20px;
+            border: 1px solid var(--docs-card-border);
+            background: rgba(255, 255, 255, 0.68);
+            color: inherit;
+            text-decoration: none;
+            transition: transform 0.18s ease, border-color 0.18s ease, background-color 0.18s ease;
+        }
+
+        .quick-link-card:hover {
+            transform: translateY(-2px);
+            border-color: rgba(59, 130, 246, 0.35);
+            background: rgba(239, 246, 255, 0.9);
+        }
+
+        html[data-theme="dark"] .quick-link-card {
+            background: rgba(15, 23, 42, 0.56);
+        }
+
+        .quick-link-card strong {
+            display: block;
+            color: var(--docs-title);
+            font-size: 0.97rem;
+            margin-bottom: 6px;
+        }
+
+        .quick-link-card span {
+            display: block;
+            color: var(--docs-muted);
+            font-size: 0.86rem;
+            line-height: 1.6;
+        }
+
+        nav {
+            display: grid;
+            gap: 12px;
+            padding-top: 16px;
+            border-top: 1px solid var(--docs-card-border);
+        }
+
+        .nav-group {
+            border-radius: 18px;
+            border: 1px solid rgba(148, 163, 184, 0.14);
+            background: rgba(255, 255, 255, 0.42);
+            overflow: hidden;
+        }
+
+        html[data-theme="dark"] .nav-group {
+            background: rgba(15, 23, 42, 0.38);
+        }
+
+        .nav-group[open] {
+            border-color: rgba(99, 102, 241, 0.14);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+        }
+
+        .nav-group-summary {
+            list-style: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 14px 16px;
+            color: var(--docs-title);
+            font-weight: 700;
+        }
+
+        .nav-group-summary::-webkit-details-marker {
+            display: none;
+        }
+
+        .nav-group-summary::after {
+            content: "⌄";
+            color: var(--docs-muted);
+            font-size: 0.92rem;
+            transition: transform 0.18s ease;
+        }
+
+        .nav-group[open] .nav-group-summary::after {
+            transform: rotate(180deg);
+        }
+
+        .nav-group-links {
+            display: grid;
+            gap: 6px;
+            padding: 0 10px 10px;
+        }
+
+        .nav-link {
+            margin-bottom: 0;
+            border-radius: 14px;
+            padding: 11px 14px;
+            background: transparent;
+            color: var(--text-color);
+            font-weight: 600;
+        }
+
+        .nav-link:hover,
+        .nav-link.active {
+            background: rgba(224, 231, 255, 0.76);
+            color: #1d4ed8;
+            font-weight: 700;
+        }
+
+        html[data-theme="dark"] .nav-link:hover,
+        html[data-theme="dark"] .nav-link.active {
+            background: rgba(37, 99, 235, 0.2);
+            color: #bfdbfe;
+        }
+
+        .nav-link.search-hit {
+            border: 1px solid rgba(59, 130, 246, 0.32);
+        }
+
+        .nav-link.is-hidden-by-category {
+            display: none;
+        }
+
+        section {
+            margin-bottom: 20px;
+            padding: 34px 38px;
+            border-radius: 28px;
+            border: 1px solid var(--docs-card-border);
+            background: var(--docs-card-strong);
+            box-shadow: var(--docs-shadow);
+            scroll-margin-top: 120px;
+        }
+
+        section.is-hidden-by-category {
+            display: none;
+        }
+
+        h1, h2, h3, h4 {
+            color: var(--docs-title);
+        }
+
+        h1 {
+            border-bottom: 0;
+            padding-bottom: 0;
+            margin-top: 14px;
+            margin-bottom: 10px;
+            font-size: clamp(2.45rem, 4.6vw, 3.8rem);
+            line-height: 1.05;
+            letter-spacing: -0.04em;
+        }
+
+        h2 {
+            border-left: 0;
+            padding-left: 0;
+            margin: 0 0 18px;
+            font-size: clamp(1.85rem, 2.8vw, 2.4rem);
+            line-height: 1.18;
+        }
+
+        h2::after {
+            content: "";
+            display: block;
+            width: 78px;
+            height: 3px;
+            margin-top: 18px;
+            border-radius: 999px;
+            background: linear-gradient(90deg, #818cf8 0%, #60a5fa 100%);
+        }
+
+        h3 {
+            margin-top: 28px;
+            font-size: 1.28rem;
+            color: var(--docs-title);
+        }
+
+        h4 {
+            color: var(--h3-color);
+        }
+
+        p, li, td, th {
+            font-size: 0.99rem;
+            line-height: 1.82;
+        }
+
+        pre {
+            background: #f8fafc;
+            border: 1px solid rgba(226, 232, 240, 0.95);
+            border-radius: 20px;
+            box-shadow: none;
+        }
+
+        html[data-theme="dark"] pre {
+            background: #0f172a;
+            border-color: rgba(51, 65, 85, 0.9);
+        }
+
+        pre::before,
+        pre::after {
+            content: none;
+        }
+
+        pre code {
+            color: #0f172a;
+            padding: 22px 24px;
+            font-size: 0.9rem;
+            line-height: 1.72;
+            white-space: pre-wrap;
+        }
+
+        html[data-theme="dark"] pre code {
+            color: #e2e8f0;
+        }
+
+        code {
+            border-radius: 8px;
+        }
+
+        table {
+            border-radius: 16px;
+        }
+
+        th {
+            background: rgba(241, 245, 249, 0.96);
+        }
+
+        html[data-theme="dark"] th {
+            background: rgba(30, 41, 59, 0.95);
+        }
+
+        .project-link-banner,
+        .note,
+        .info-box,
+        .highlight-box,
+        .success-box,
+        .config-box,
+        .troubleshoot-list {
+            border-radius: 20px;
+            border-left: 0;
+        }
+
+        .project-link-banner {
+            position: relative;
+            z-index: 1;
+            margin-top: 20px;
+            padding: 20px 22px;
+            background: linear-gradient(135deg, rgba(224, 231, 255, 0.9) 0%, rgba(239, 246, 255, 0.92) 100%);
+            border-color: rgba(99, 102, 241, 0.18);
+            box-shadow: none;
+        }
+
+        html[data-theme="dark"] .project-link-banner {
+            background: linear-gradient(135deg, rgba(30, 41, 59, 0.95) 0%, rgba(15, 23, 42, 0.92) 100%);
+        }
+
+        .site-grid {
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 14px;
+        }
+
+        .site-card {
+            border-radius: 18px;
+            padding: 16px 18px;
+        }
+
+        .task-guide,
+        .clarity-note {
+            margin: 22px 0;
+            padding: 22px 24px;
+            border-radius: 22px;
+            border: 1px solid rgba(99, 102, 241, 0.18);
+            background: linear-gradient(135deg, rgba(238, 242, 255, 0.92), rgba(239, 246, 255, 0.94));
+        }
+
+        html[data-theme="dark"] .task-guide,
+        html[data-theme="dark"] .clarity-note {
+            background: linear-gradient(135deg, rgba(30, 41, 59, 0.92), rgba(15, 23, 42, 0.96));
+        }
+
+        .task-guide-title {
+            margin: 0 0 10px;
+            font-size: 1.24rem;
+        }
+
+        .task-guide-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 6px 10px;
+            border-radius: 999px;
+            background: rgba(99, 102, 241, 0.12);
+            color: #4338ca;
+            font-size: 0.78rem;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            margin-bottom: 10px;
+        }
+
+        html[data-theme="dark"] .task-guide-badge {
+            color: #c7d2fe;
+        }
+
+        .task-guide strong,
+        .clarity-note strong {
+            color: var(--docs-title);
+        }
+
+        .page-toc {
+            position: sticky;
+            top: 24px;
+        }
+
+        .page-toc-card {
+            padding: 22px;
+            border-radius: 24px;
+            border: 1px solid var(--docs-card-border);
+            background: var(--docs-card-bg);
+            box-shadow: var(--docs-shadow);
+        }
+
+        .page-toc-kicker {
+            margin: 0;
+            color: var(--docs-muted);
+            font-size: 0.78rem;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        .page-toc-title {
+            margin: 10px 0 16px;
+            font-size: 1.25rem;
+        }
+
+        .page-toc-links {
+            display: grid;
+            gap: 6px;
+        }
+
+        .toc-link {
+            display: block;
+            padding: 8px 10px;
+            border-radius: 12px;
+            color: var(--docs-muted);
+            text-decoration: none;
+            font-size: 0.92rem;
+            line-height: 1.6;
+            transition: background-color 0.18s ease, color 0.18s ease;
+        }
+
+        .toc-link:hover,
+        .toc-link.active {
+            background: rgba(224, 231, 255, 0.72);
+            color: #1d4ed8;
+        }
+
+        html[data-theme="dark"] .toc-link:hover,
+        html[data-theme="dark"] .toc-link.active {
+            background: rgba(37, 99, 235, 0.2);
+            color: #bfdbfe;
+        }
+
+        .toc-link.level-h4 {
+            padding-left: 18px;
+            font-size: 0.86rem;
+        }
+
+        .toc-empty {
+            color: var(--docs-muted);
+            font-size: 0.9rem;
+            line-height: 1.7;
+        }
+
+        .toc-share-btn {
+            width: 100%;
+            margin-top: 18px;
+            padding: 12px 16px;
+            border-radius: 16px;
+            border: 1px solid var(--docs-search-border);
+            background: var(--docs-search-bg);
+            color: var(--text-color);
+            font: inherit;
+            font-weight: 700;
+            cursor: pointer;
+            transition: transform 0.18s ease, border-color 0.18s ease;
+        }
+
+        .toc-share-btn:hover {
+            transform: translateY(-1px);
+            border-color: rgba(59, 130, 246, 0.35);
+        }
+
+        .search-overlay {
+            position: fixed;
+            inset: 0;
+            display: none;
+            align-items: flex-start;
+            justify-content: center;
+            padding: 84px 20px 20px;
+            background: rgba(15, 23, 42, 0.42);
+            backdrop-filter: blur(10px);
+            z-index: 520;
+        }
+
+        .search-overlay.open {
+            display: flex;
+        }
+
+        .search-modal {
+            width: min(840px, 100%);
+            max-height: min(78vh, 760px);
+            display: flex;
+            flex-direction: column;
+            border-radius: 28px;
+            border: 1px solid var(--docs-card-border);
+            background: var(--docs-card-strong);
+            box-shadow: 0 34px 88px rgba(15, 23, 42, 0.2);
+            overflow: hidden;
+        }
+
+        .search-modal-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 16px 20px 12px;
+            border-bottom: 1px solid var(--docs-card-border);
+            color: var(--docs-muted);
+            font-size: 0.88rem;
+            font-weight: 700;
+        }
+
+        .search-modal-close {
+            border: 1px solid var(--docs-card-border);
+            border-radius: 999px;
+            background: transparent;
+            color: var(--docs-muted);
+            padding: 7px 12px;
+            font: inherit;
+            font-weight: 700;
+            cursor: pointer;
+            transition: border-color 0.18s ease, color 0.18s ease, background-color 0.18s ease;
+        }
+
+        .search-modal-close:hover {
+            border-color: rgba(59, 130, 246, 0.35);
+            color: var(--text-color);
+            background: rgba(239, 246, 255, 0.92);
+        }
+
+        html[data-theme="dark"] .search-modal-close:hover {
+            background: rgba(30, 41, 59, 0.86);
+        }
+
+        .search-modal-input-wrap {
+            padding: 18px 20px 16px;
+            border-bottom: 1px solid var(--docs-card-border);
+        }
+
+        .search-modal-input {
+            width: 100%;
+            border: 1px solid var(--docs-search-border);
+            border-radius: 18px;
+            background: var(--docs-search-bg);
+            color: var(--text-color);
+            padding: 14px 16px;
+            font: inherit;
+            font-size: 1rem;
+        }
+
+        .search-modal-input:focus {
+            outline: none;
+            border-color: rgba(59, 130, 246, 0.45);
+            box-shadow: 0 0 0 3px rgba(191, 219, 254, 0.35);
+        }
+
+        .search-results {
+            padding: 10px;
+            overflow-y: auto;
+        }
+
+        .search-result,
+        .search-empty {
+            width: 100%;
+            text-align: left;
+            padding: 14px 16px;
+            border-radius: 18px;
+            border: 0;
+            background: transparent;
+            color: inherit;
+        }
+
+        .search-result {
+            cursor: pointer;
+            transition: background-color 0.18s ease, transform 0.18s ease;
+        }
+
+        .search-result:hover {
+            background: rgba(239, 246, 255, 0.92);
+            transform: translateY(-1px);
+        }
+
+        html[data-theme="dark"] .search-result:hover {
+            background: rgba(30, 41, 59, 0.86);
+        }
+
+        .search-result-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 6px;
+        }
+
+        .search-result-title {
+            color: var(--docs-title);
+            font-weight: 700;
+            font-size: 0.97rem;
+        }
+
+        .search-result-badge {
+            color: var(--docs-muted);
+            font-size: 0.76rem;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+        }
+
+        .search-result-snippet,
+        .search-empty {
+            color: var(--docs-muted);
+            font-size: 0.9rem;
+            line-height: 1.7;
+        }
+
+        mark {
+            background: var(--docs-mark-bg);
+            color: var(--docs-mark-text);
+            border-radius: 6px;
+            padding: 0 3px;
+        }
+
+        .search-flash {
+            animation: searchFlash 1.35s ease;
+        }
+
+        @keyframes searchFlash {
+            0% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.36); }
+            100% { box-shadow: 0 0 0 18px rgba(59, 130, 246, 0); }
+        }
+
+        @media (max-width: 1360px) {
+            .page-shell {
+                grid-template-columns: minmax(0, 1fr);
+            }
+
+            .page-toc {
+                display: none;
+            }
+        }
+
+        @media (max-width: 1080px) {
+            .docs-topbar-inner {
+                grid-template-columns: 1fr;
+                align-items: stretch;
+            }
+
+            .docs-actions {
+                width: 100%;
+                flex-wrap: wrap;
+                justify-content: stretch;
+            }
+
+            .docs-actions .language-dropdown {
+                width: 100%;
+            }
+
+            .search-trigger {
+                width: 100%;
+            }
+
+            .docs-shell {
+                grid-template-columns: 1fr;
+            }
+
+            .sidebar {
+                position: fixed;
+                top: 86px;
+                left: 16px;
+                width: min(340px, calc(100vw - 32px));
+                height: calc(100vh - 102px);
+                transform: translateX(calc(-100% - 18px));
+                transition: transform 0.3s ease;
+                z-index: 420;
+            }
+
+            .sidebar.open {
+                transform: translateX(0);
+            }
+
+            .main-content {
+                padding-top: 0;
+            }
+
+            .hamburger {
+                display: flex;
+                top: 28px;
+                left: 28px;
+                z-index: 460;
+                border-radius: 14px;
+                background: var(--docs-card-strong);
+                backdrop-filter: blur(16px);
+            }
+
+            .sidebar-overlay.active {
+                display: block;
+                z-index: 410;
+            }
+        }
+
+        @media (max-width: 760px) {
+            .docs-topbar {
+                padding: 12px 12px 0;
+            }
+
+            .docs-shell {
+                width: min(100vw - 24px, 100%);
+                margin-top: 16px;
+            }
+
+            .page-header,
+            section {
+                padding: 24px 20px;
+                border-radius: 24px;
+            }
+
+            .page-quick-links {
+                grid-template-columns: 1fr;
+            }
+
+            .project-link-banner {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .search-overlay {
+                padding: 72px 12px 12px;
+            }
+        }
     </style>
 </head>
 <body>
@@ -937,87 +1971,83 @@
 
         <!-- ==================== 作者的话 ==================== -->
         <section id="author-note">
-            <h2>⚠️ 作者的话</h2>
+            <h2>🔧 维护须知 &amp; 使用预期</h2>
             <div class="config-group">
-                <h4><span class="icon">1️⃣</span> 函数调用目前问题很多</h4>
-                <p><code>Function Calling</code> 这块目前还有不少问题，<strong>极其依赖 AI 本身的理解能力</strong>。换句话说，它不是一个已经完全收敛、可以闭眼依赖的稳定功能，用的时候请降低预期，多做实测。</p>
-            </div>
-
-            <div class="config-group">
-                <h4><span class="icon">2️⃣</span> 作者主要维护 Gemini，其它站点不保证及时跟进</h4>
-                <p>作者本人平时主要使用的是 <strong>Gemini</strong> 站点，因此其它站点并不能保证及时维护。出了问题更推荐<strong>加群反馈</strong>，<strong>不建议发 Issue，也不建议去 Discord 反馈</strong>，因为作者基本不看。</p>
-            </div>
-
-            <div class="config-group">
-                <h4><span class="icon">3️⃣</span> 有问题优先先问 AI</h4>
-                <p>很多问题其实不需要等作者处理，尤其是选择器失效、配置写错、工作流顺序不对这类问题。<strong>优先把现象、日志、元素树交给 AI 帮你分析</strong>，通常会比直接等回复更快。</p>
-            </div>
-
-            <div class="config-group">
-                <h4><span class="icon">4️⃣</span> 站点不能用时，优先怀疑选择器；其次才是解析器</h4>
-                <p>一般来说，一个站点突然不能用了，不是解析器出问题了，就是选择器出问题了，而<strong>更常见的是选择器失效</strong>。</p>
+                <h4><span class="icon">1️⃣</span> 站点突然不能用了？优先检查选择器</h4>
+                <p>网站改版后，最常失效的通常是<strong>选择器</strong>，也就是告诉脚本“输入框、发送按钮、结果容器分别在哪”的那组 CSS 规则。大多数站点突然不能用时，第一反应应该先检查选择器，而不是先怀疑解析器。</p>
 
                 <div class="note">
-                    <p><strong>选择器更新其实很简单：</strong></p>
+                    <p><strong>选择器更新的常见做法：</strong></p>
                     <ol>
-                        <li>在页面上对想点击或想读取的元素右键，选择“检查”。</li>
+                        <li>在受控浏览器里对你想点击或想读取的元素右键，选择“检查”。</li>
                         <li>把对应的元素树截图或复制出来。</li>
-                        <li>把这段元素树发给 AI，让 AI 告诉你新的选择器应该怎么写。</li>
+                        <li>把这段元素树发给 AI，让 AI 帮你写出新的选择器。</li>
+                        <li>回到控制台，把新的选择器粘贴替换进去后再测试。</li>
                     </ol>
                 </div>
 
                 <div class="note">
-                    <p><strong>解析器问题会麻烦一些：</strong>如果是解析器出问题，通常需要拦截网络请求、看响应结构，再做逆向分析。这比改选择器麻烦得多。</p>
-                </div>
-
-                <div class="info-box">
-                    <p><strong>能自己更新就尽量自己更新：</strong>如果你已经修好了，欢迎把更新后的配置文件或代码文件发给作者，作者会非常感谢你。</p>
+                    <p><strong>解析器问题会麻烦一些：</strong>如果不是选择器的问题，才更可能是提取器 / 解析器失效。这通常需要拦截网络请求、查看响应结构，再继续分析，难度会比改选择器高得多。</p>
                 </div>
             </div>
 
             <div class="config-group">
-                <h4><span class="icon">5️⃣</span> 反馈 Bug 请描述清楚，并尽量附上 DEBUG 日志</h4>
-                <p>如果要反馈 Bug，请尽量把问题描述清楚一点，并提供 <strong>DEBUG 级别日志</strong>。如果你觉得自己表达不清楚，<strong>先让 AI 帮你整理一下语言再发</strong>，因为作者有时候确实听不太懂对方到底想表达什么。</p>
+                <h4><span class="icon">2️⃣</span> 各站点的维护覆盖范围</h4>
+                <p><strong>Gemini</strong> 是作者日常使用最多、维护也最及时的站点。其它站点并不保证第一时间跟进；如果遇到问题，更推荐<strong>加 QQ 群反馈</strong>，通常会比单纯提 Issue 更快拿到回应。</p>
             </div>
 
             <div class="config-group">
-                <h4><span class="icon">6️⃣</span> 教程虽然覆盖很全，但细节不一定写透</h4>
-                <p>这个教程文件已经尽量把主要功能都覆盖了，但很多细节没有写到特别展开。你如果有能力，也欢迎一起补充和完善文档。</p>
+                <h4><span class="icon">3️⃣</span> Function Calling 目前还不稳定</h4>
+                <p><code>Function Calling</code> 这块目前依然<strong>极其依赖 AI 本身的理解能力</strong>。它不是一个已经完全收敛、可以闭眼依赖的稳定功能；如果你要用这块能力，请降低预期，多做实测。</p>
             </div>
 
             <div class="config-group">
-                <h4><span class="icon">7️⃣</span> 很多功能本质上是为酒馆 / RP 场景服务的</h4>
-                <p>作者本人主要玩的还是酒馆之类的 <strong>RP 场景</strong>，因此很多功能本来就是为这个目标服务的。换句话说，除此之外的一些功能，维护上基本属于“放养”状态，请理解这一点。</p>
+                <h4><span class="icon">4️⃣</span> 遇到问题，优先让 AI 帮你分析</h4>
+                <p>选择器失效、配置写错、工作流顺序不对，这类问题很多时候不需要等作者处理。把<strong>现象、日志截图、元素树</strong>交给 AI，通常会比单纯等人工回复更快。</p>
+            </div>
+
+            <div class="config-group">
+                <h4><span class="icon">5️⃣</span> 反馈 Bug 的正确姿势</h4>
+                <p>反馈时尽量描述清楚你<strong>做了什么、期望看到什么、实际看到了什么</strong>，并附上 <strong>DEBUG 级别日志</strong>。如果你觉得自己表述不够清晰，可以先让 AI 帮你整理一版再发。</p>
+            </div>
+
+            <div class="config-group">
+                <h4><span class="icon">6️⃣</span> 如果你自己修好了，也欢迎把配置分享回来</h4>
+                <p>如果你已经把某个站点修好了，不管是更新了选择器，还是补好了配置文件，都非常欢迎把改动分享给作者或群友。这样能让整个社区都少走一遍弯路。</p>
+            </div>
+
+            <div class="config-group">
+                <h4><span class="icon">7️⃣</span> 项目的核心场景</h4>
+                <p>本项目最初主要是围绕<strong>酒馆 / RP（角色扮演）</strong>场景设计和打磨的，作者的精力也主要投在这个方向。其它场景不是不能用，但维护上更偏向“能用就用，不保证持续深耕”。</p>
             </div>
         </section>
 
         <!-- ==================== 快速开始 ==================== -->
         <section id="quick-start">
             <h2>🚀 快速开始</h2>
-            <p>欢迎使用 Web-to-API。本项目将网页版 AI 对话界面转换为标准 OpenAI 兼容 API。</p>
+            <p><strong>Web-to-API</strong> 把你在浏览器里使用的 AI 对话网页（ChatGPT、Gemini、DeepSeek 等）转换成一个<strong>兼容 OpenAI 格式的本地 API</strong>。换句话说，你在网页上能聊的 AI，接入本项目后就能像调用 OpenAI API 一样被客户端或脚本直接调用。</p>
 
             <div class="highlight-box">
-                <p><strong>第一次使用建议：</strong>先把这页主体流程看完；文末的「作者的话」再补读一遍，会更容易理解项目的维护范围、反馈方式和使用预期。</p>
+                <p><strong>典型用途：</strong>把网页端的免费额度变成标准 API；同时维护多标签页、多预设并行使用；通过「文件粘贴」绕过部分站点的输入框长度限制；直接观察浏览器侧真实上下文和请求流程。</p>
             </div>
 
             <div class="info-box">
-                <p><strong>📌 核心提示：</strong> 脚本启动后会自动打开一个受控浏览器窗口，<strong style="color: var(--highlight-border);">请保持该浏览器窗口处于开启状态</strong>，它是服务运行的基础。系统浏览器会自动打开这份教程页，你可以边看边配；<strong style="color: var(--highlight-border);">当脚本将要运行时，受控浏览器中不要存在除了目标网站之外的任何网站或无关标签页。</strong></p>
+                <p><strong>📌 先搞清一件事：</strong>脚本启动后通常会出现两个浏览器窗口。<strong>受控浏览器</strong>由脚本自动启动，用来登录 AI 网站并真正收发消息；你自己的普通浏览器或教程页窗口只负责看文档、日常上网。脚本运行时请不要手动操作受控浏览器，窗口可以最小化，但不要缩小边框或折叠页面元素。</p>
             </div>
 
             <div class="config-group">
-                <h4><span class="icon">1️⃣</span> 第一次使用建议按这个顺序操作</h4>
+                <h4><span class="icon">1️⃣</span> 第一次使用，按这四步走</h4>
                 <ol>
-                    <li>运行 <code>start.bat</code> 后，先分清两个浏览器窗口：<strong>脚本控制的受控浏览器</strong>，以及<strong>显示教程页或你自己平时使用的普通浏览器</strong>。</li>
-                    <li>默认情况下，脚本控制浏览器会使用项目里的 <code>chrome_profile/</code>。第一次启动时它通常是一个空白、未登录的浏览器环境；如果你之前没有预先打开浏览器，脚本还可能另外打开一个显示本教程的浏览器窗口，所以看起来会像是“同时打开了两个浏览器”。</li>
-                    <li>后续真正要操作的是<strong>受控浏览器</strong>。请在这个窗口里访问你要接入的网站；以 Gemini 为例，可以先打开 <code>https://gemini.google.com/</code>。在脚本真正开始跑请求前，请确认这个受控浏览器里只保留目标网站，不要留搜索页、教程页、邮箱或其它无关网页。</li>
-                    <li>在受控浏览器里按网站的正常流程登录，确认已经进入可对话页面。</li>
-                    <li>以 Gemini 为例，请确保左侧侧边栏处于展开状态，不要折叠；这样后面参考站点配置和 API 连接步骤时更容易对应页面元素。</li>
-                    <li>站点已经能正常打开并登录后，再回到这份教程，继续看下方「连接 API」章节，按里面的 <code>Base URL</code>、<code>API Key</code> 和模型名示例去填写客户端。</li>
+                    <li>双击运行 <code>start.bat</code>。脚本会自动打开受控浏览器，默认使用项目内的 <code>chrome_profile/</code>；第一次启动通常是空白、未登录状态。</li>
+                    <li>在受控浏览器中打开目标 AI 网站并完成登录，直到进入真正可以对话的页面。以 Gemini 为例，建议打开 <code>https://gemini.google.com/</code>，并保持左侧侧边栏处于展开状态。</li>
+                    <li>正式发请求前，请确认受控浏览器里只保留目标 AI 网站，不要留下搜索页、邮箱、教程页等无关标签页，以免干扰脚本自动操作。</li>
+                    <li>回到客户端，按下方「连接 API」填写地址、密钥和模型名；随后再打开控制面板 <code>http://127.0.0.1:8199/</code> 查看日志和配置即可。</li>
                 </ol>
             </div>
 
             <div class="note">
-                <p><strong>💡 不想重新登录？</strong>如果你希望直接复用自己原本已经登录好的浏览器用户目录，可以先关闭 Chrome，再把你想用的那份用户目录复制一份到项目内的 <code>chrome_profile/</code>，或者在 <code>.env</code> 里把 <code>BROWSER_PROFILE_DIR</code> 指向这份副本。至少建议带上 <code>Local State</code> 和你要用的 <code>Default</code> / <code>Profile 1</code> 等目录，并确保目录名与 <code>BROWSER_PROFILE_NAME</code> 对应正确；这样脚本下次启动后就会直接使用你原有的登录态。更完整的说明可继续参考后文「浏览器配置」。</p>
+                <p><strong>💡 想跳过重新登录？</strong>如果你想直接复用自己 Chrome 里已经登录好的状态，先<strong>完全关闭 Chrome</strong>，再把对应的用户目录复制一份到项目内的 <code>chrome_profile/</code>，或者在 <code>.env</code> 中把 <code>BROWSER_PROFILE_DIR</code> 指向这份副本。至少保留 <code>Local State</code> 和你要使用的 <code>Default</code> / <code>Profile 1</code> 等子目录，并确保 <code>BROWSER_PROFILE_NAME</code> 与目录名一致。</p>
+                <p style="margin-top: 10px; margin-bottom: 0;"><strong>⚠️ 不要直接指向系统默认的 User Data：</strong>在 Chrome 136+ 上，这样做很可能导致远程调试端口起不来。一定要复制出一份副本再用。</p>
             </div>
 
             <div class="note">
@@ -1026,14 +2056,14 @@
                 <p style="margin-top: 10px;">控制面板地址：<code>http://127.0.0.1:8199/</code>，可在这里可视化地修改所有配置、查看实时日志。</p>
             </div>
 
-            <h3>✅ 已适配的站点列表</h3>
-            <p>以下网站已做好适配，可以直接访问并连接 API：</p>
-            <p style="margin-top: -6px; color: var(--desc-color);"><strong>提示：</strong>下方站点卡片现在会<strong>复制网址到剪贴板</strong>，不会直接在当前教程浏览器里打开。请把复制出来的网址粘贴到<strong>受控浏览器</strong>里访问。</p>
+            <h3>✅ 已适配的站点</h3>
+            <p>以下网站已经做好适配，可以直接在受控浏览器里打开并连接 API。</p>
+            <p style="margin-top: -6px; color: var(--desc-color);"><strong>提示：</strong>下方站点卡片会复制网址到剪贴板。请把复制出来的网址粘贴到<strong>受控浏览器</strong>的地址栏打开，不要在教程页所在的普通浏览器里测试。</p>
 
             <div class="site-grid" id="siteGrid"></div>
 
             <div class="note">
-                <p><strong>当前已适配并建议在文档中重点关注的站点：</strong> ChatGPT、DeepSeek、Gemini、Claude、Kimi、通义千问、Grok、豆包、AI Studio、Arena AI。</p>
+                <p><strong>当前文档重点覆盖的站点：</strong>ChatGPT、DeepSeek、Gemini、Claude、Kimi、通义千问、Grok、豆包、AI Studio、Arena AI。</p>
                 <p style="margin-bottom: 0;">本页内容按当前 <code>config/sites.json</code> 同步：Kimi 当前以 <code>www.kimi.com</code> 为准；豆包当前以 <code>www.doubao.com</code> 为主；通义千问站点为 <code>chat.qwen.ai</code>。</p>
             </div>
 
@@ -1041,15 +2071,15 @@
                 <p><strong>⚠️ 关于 arena.ai：</strong>该站点非常看重 IP 质量。<strong>IP 好的可以一直对话，IP 不好的一次就会被拦截</strong>。IP 好坏不仅取决于纯净度，更重要的是<strong>历史行为和共享人数</strong>——有时候机房 IP 会比原生双 ISP 更具优势。经测试，即便关闭网络监听模式，IP 质量不佳时仍会频繁触发 Cloudflare 人机验证。这是站点本身的安全策略，与脚本无关。<br><small style="opacity: 0.8;">（感谢测试者 @喵团子爱摸鱼 的反馈）</small></p>
             </div>
 
-            <h3>🆕 对于未收录的网站（自动适配）</h3>
-            <p>如果目标网站不在上述列表中，系统支持通过 AI 自动分析网页结构。详见下方「AI 元素识别配置」章节。</p>
+            <h3>🆕 网站不在列表里？</h3>
+            <p>如果目标网站没有出现在上面的列表中，系统也支持通过 AI 自动分析网页结构来适配新站点。相关入口在控制台的「设置 → AI 元素识别」。</p>
 
         </section>
 
         <!-- ==================== 控制台导览 ==================== -->
         <section id="dashboard-tour">
             <h2>🖥️ 控制台导览</h2>
-            <p>控制台不是一个单纯的配置页，而是整个项目的可视化中控台。理解每一页是干什么的，后面新增站点和排查问题会轻松很多。</p>
+            <p>控制台（<a href="http://127.0.0.1:8199/" target="_blank">http://127.0.0.1:8199/</a>）是整个项目的可视化中控台。理解它的结构，后续新增站点和排查问题都会轻松很多。</p>
 
             <div class="config-group">
                 <h4><span class="icon">📚</span> 左侧边栏</h4>
@@ -1062,28 +2092,28 @@
             </div>
 
             <div class="config-group">
-                <h4><span class="icon">🧭</span> 站点配置页</h4>
+                <h4><span class="icon">🧭</span> 站点配置</h4>
                 <ul>
                     <li><strong>选择器</strong>：告诉程序“输入框、发送按钮、结果容器”分别在哪。</li>
-                    <li><strong>工作流</strong>：决定操作顺序，是先新建对话、再填充、还是直接回车发送。</li>
+                    <li><strong>工作流</strong>：决定操作顺序，比如先新建对话、再填充输入，还是直接回车发送。</li>
                     <li><strong>响应检测</strong>：决定什么时候算回复结束。</li>
-                    <li><strong>图片提取 / 文件粘贴</strong>：对应图像站点和长文本场景。</li>
-                    <li><strong>预设</strong>：同一站点拆多套配置，适合“日常对话 / 识图 / 长文本 / 代码”等用途。</li>
+                    <li><strong>图片提取 / 文件粘贴</strong>：分别对应识图场景和长文本场景。</li>
+                    <li><strong>预设</strong>：同一站点可以拆多套配置，适合“日常对话 / 识图 / 长文本 / 代码”等不同用途。</li>
                 </ul>
             </div>
 
             <div class="config-group">
                 <h4><span class="icon">🗂️</span> 标签页池、提取器、日志、设置</h4>
                 <ul>
-                    <li><strong>标签页池</strong>：查看所有网页标签的编号、状态、路由和预设。</li>
-                    <li><strong>提取器</strong>：解决“网页明明有回复，但抓出来不对”的问题。</li>
+                    <li><strong>标签页池</strong>：查看所有标签页的编号、状态、当前 URL、请求计数；也可以复制指定标签页的 API 端点或切换预设。</li>
+                    <li><strong>提取器</strong>：解决“网页明明有回复，但抓出来内容不对”的问题。</li>
                     <li><strong>日志</strong>：定位问题到底卡在发送前、等待中还是提取阶段；如果你觉得 DEBUG 原文太硬，也可以在设置里打开 <code>INFO / DEBUG</code> 日志可爱化。</li>
                     <li><strong>设置</strong>：管理环境配置、浏览器常量、AI 元素识别等全局参数。</li>
                 </ul>
             </div>
 
             <div class="info-box">
-                <p><strong>建议的阅读顺序：</strong>第一次使用时，先看“站点配置页”与“标签页池”；排查失败时优先看“日志”；准备接新站点时再看“设置 → AI 元素识别”。</p>
+                <p><strong>建议的阅读顺序：</strong>第一次使用时先看“站点配置”和“标签页池”；排查失败时优先看“日志”；准备接新站点时再看“设置 → AI 元素识别”。</p>
             </div>
 
             <div class="note">
@@ -1109,6 +2139,16 @@
 
             <div class="highlight-box">
                 <p><strong>关键点：</strong>自动识别不是点“新增站点”按钮触发，而是<strong>未知域名第一次实际请求时</strong>触发。也就是说，只打开页面不发请求，后端不会自动写入配置。</p>
+            </div>
+
+            <div class="success-box">
+                <p><strong>✅ 如何确认识别成功：</strong></p>
+                <ul style="margin-bottom: 0;">
+                    <li>日志页会出现 <code>[AI分析]</code> 字样的条目，最终显示"分析完成"或"配置已写入"。</li>
+                    <li>刷新控制面板左侧站点列表，能看到该域名已被添加。</li>
+                    <li>进入该站点配置页，检查选择器是否已被自动填写——<strong>务必人工校对 <code>result_container</code></strong>，这是最容易识别偏差的字段。</li>
+                    <li>如果域名已出现但选择器全是空的，通常说明辅助 AI 无法解析该页面（可能是未登录、停在欢迎页，或页面 HTML 被混淆），需要手动配置选择器。</li>
+                </ul>
             </div>
 
             <h3>路线 B：手动新增并自己配置</h3>
@@ -1153,151 +2193,158 @@
         <!-- ==================== 连接 API ==================== -->
         <section id="connect-api">
             <h2>🔌 连接 API</h2>
-            <p>本项目提供兼容 <strong>OpenAI 格式</strong> 的接口。</p>
+            <p>本项目提供兼容 <strong>OpenAI 格式</strong> 的接口，绝大多数支持“自定义 OpenAI 端点”的客户端都能直接使用。</p>
 
             <div class="config-box">
                 <p><strong>⚙️ 客户端通用配置参数：</strong></p>
                 <ul>
-                    <li><strong>服务提供商 (Provider)</strong>：选择 <code>OpenAI</code>、<code>OpenAI 兼容</code> 或 <code>自定义</code>。</li>
+                    <li><strong>服务提供商 (Provider)</strong>：选择 <code>OpenAI</code>、<code>OpenAI 兼容</code> 或 <code>自定义</code>。不同客户端的叫法不完全一样，选那个能填写自定义地址的即可。</li>
                     <li><strong>API 接口地址 (Base URL)</strong>：
                         <ul>
                             <li>默认（自动分配标签页）：<code>http://127.0.0.1:8199/v1</code></li>
                             <li>指定站点域名：<code>http://127.0.0.1:8199/url/gemini.com/v1</code>（自动匹配该站点的标签页）</li>
-                            <li>指定标签页：<code>http://127.0.0.1:8199/tab/1/v1</code>（编号见标签页池）</li>
-                            <li>部分软件需完整路径：<code>http://127.0.0.1:8199/v1/chat/completions</code></li>
+                            <li>指定标签页：<code>http://127.0.0.1:8199/tab/1/v1</code>（编号见下方「标签页池」）</li>
+                            <li>部分客户端需要完整路径：在末尾补上 <code>/chat/completions</code></li>
                         </ul>
                     </li>
-                    <li><strong>API 密钥 (API Key)</strong>：任意填写即可（例如：<code>sk-any</code>）。</li>
-                    <li><strong>模型名称 (Model)</strong>：取决于你访问的网站。你访问什么网站，实际就是什么模型，所以该项可随意填写。</li>
+                    <li><strong>API 密钥 (API Key)</strong>：任意填写即可（例如：<code>sk-any</code>）。<br><small style="color: var(--desc-color);">本项目并不验证密钥有效性，这里只是满足客户端格式要求。唯一例外：如果你开启了「认证」功能（<code>AUTH_ENABLED=true</code>），则此处必须和 <code>.env</code> 中的 <code>AUTH_TOKEN</code> 保持一致。</small></li>
+                    <li><strong>模型名称 (Model)</strong>：可随意填写（例如填 <code>gpt-4o</code> 或 <code>any</code> 都行）。实际使用的模型由你在受控浏览器里打开的是哪个 AI 网站决定，和这里填的名字无关。</li>
                 </ul>
             </div>
 
             <div class="success-box">
-                <p><strong>✅ 测试步骤：</strong>当你按照第一步打开了站点并登录之后，填写了对应的 URL 和服务商内容，就可以直接进行测试了。</p>
+                <p><strong>✅ 测试步骤：</strong>把上面的地址、密钥和模型名填好后，直接发一句正常的话进行测试即可；不建议只点客户端里的“测试 API”按钮。</p>
             </div>
 
             <h3>💡 关于登录状态</h3>
             <ul>
                 <li><strong>推荐登录</strong>：建议在网页上登录你的账号，这样 API 也就拥有了你的账号权限（如 Plus 会员、历史记录等）。</li>
-                <li><strong>免登录</strong>：如果该网站在未登录状态下允许对话，则无需登录即可直接通过 API 调用。</li>
+                <li><strong>免登录也可以</strong>：如果该网站在未登录状态下允许对话，则无需登录也能直接通过 API 调用。</li>
             </ul>
 
             <div class="note">
-                <p><strong>⚠️ 关于 SillyTavern (酒馆):</strong> 在酒馆中使用 API 测试功能可能会出现 bug，<strong>建议直接发送对话进行测试</strong>，而非点击测试按钮。</p>
+                <p><strong>⚠️ 关于 SillyTavern（酒馆）：</strong>酒馆里的“测试 API”按钮发送的请求通常过短，部分站点不会正常响应。<strong>建议直接发送一句对话进行测试</strong>，而不是依赖测试按钮。</p>
             </div>
 
             <div class="highlight-box">
-                <p><strong>⚠️ 上下文长度限制：</strong>受限于网站输入框一次性所能容纳的字符上限，上下文不能太长，否则请求会直接失败。请根据实际情况控制对话长度。对于长文本场景，可以开启「文件粘贴」功能来绕过部分限制。</p>
+                <p><strong>⚠️ 上下文长度限制：</strong>受限于网站输入框一次性所能容纳的字符上限，上下文不能太长，否则请求会直接失败。对于长文本场景，可以开启「文件粘贴」功能来绕过部分限制。</p>
             </div>
 
             <h3>已测试站点单次最大发送长度：</h3>
             <ul>
-                <li><strong>ChatGPT</strong>：约 200k。</li>
-                <li><strong>Gemini 官网</strong>：无会员约 30k，Pro 会员尚未发现上限。</li>
-                <li><strong>Arena AI</strong>：120k。</li>
+                <li><strong>ChatGPT</strong>：约 200k 字符。</li>
+                <li><strong>Gemini 官网</strong>：无会员约 30k 字符；Pro 会员目前没有明确上限。</li>
+                <li><strong>Arena AI</strong>：约 120k 字符。</li>
             </ul>
         </section>
 
         <!-- ==================== 标签页池 ==================== -->
         <section id="function-calling">
-            <h2>🧰 函数调用兼容说明</h2>
-            <p>这是新增功能区域。项目现在兼容 <strong>OpenAI 标准函数调用格式</strong>，可以接收客户端传来的 <code>tools</code> / <code>tool_choice</code>，同时也兼容旧字段 <code>functions</code> / <code>function_call</code>。</p>
+            <h2>🧰 函数调用（Tool Calling）</h2>
 
             <div class="info-box">
-                <p><strong>工作方式：</strong>客户端还是按标准 OpenAI 方式发请求；后端会把工具定义、工具历史和调用约束整理成网页端模型更容易理解的提示内容；模型返回后，后端再尝试把结构化结果解析回 <code>tool_calls</code>。</p>
+                <p><strong>🎯 快速导航：我该看哪个功能？</strong></p>
+                <table>
+                    <tr><th>你的需求</th><th>推荐功能</th><th>跳转</th></tr>
+                    <tr><td>让模型自动调用工具（如搜索、计算器）</td><td>函数调用</td><td><a href="#function-calling">查看</a></td></tr>
+                    <tr><td>突破 Cloudflare 验证</td><td>隐身模式</td><td><a href="#stealth-mode">查看</a></td></tr>
+                    <tr><td>每 10 次对话自动清理 Cookie</td><td>自动化命令</td><td><a href="#commands">查看</a></td></tr>
+                    <tr><td>检测到验证码自动切换代理</td><td>命令 + 代理切换</td><td><a href="#proxy-switching">查看</a></td></tr>
+                    <tr><td>新站点不知道选择器怎么写</td><td>AI 元素识别</td><td><a href="#ai-recognition">查看</a></td></tr>
+                    <tr><td>修改端口、超时、代理等全局设置</td><td>环境配置</td><td><a href="#env-config">查看</a></td></tr>
+                </table>
+            </div>
+
+            <p>项目现在兼容 <strong>OpenAI 标准 <code>tools</code> 格式</strong>，也兼容旧字段 <code>functions</code> / <code>function_call</code>，所以大多数支持 OpenAI Tool Calling 的客户端都能直接接进来。</p>
+
+            <div class="info-box">
+                <p><strong>这是什么：</strong>兼容 OpenAI 标准的 <code>tools</code> 调用格式，让你继续用熟悉的方式定义工具。</p>
             </div>
 
             <div class="highlight-box">
-                <p><strong>边界要看清：</strong>这不是原生 Tool Calling。它本质上仍然依赖网页端提示词和模型自己的理解能力，不是官方 API 层直接执行的函数调用，所以整体稳定性通常不如原生接口。</p>
+                <p><strong>⚠️ 先看清边界：</strong>这<strong>不是原生 API 的函数调用</strong>。实际工作方式是：后端把工具定义、工具历史和调用约束整理成提示词 -> 网页端模型按格式输出 -> 后端再尝试把结果解析回 <code>tool_calls</code>。所以它的稳定性核心取决于<strong>模型自己的理解能力</strong>，而不是官方 API 层的强制执行。</p>
             </div>
 
-            <h3>什么时候更容易成功</h3>
-            <ul>
-                <li>模型本身指令遵循能力强，愿意严格按格式输出</li>
-                <li>工具数量不多，名称和职责区分清楚</li>
-                <li>参数结构比较简单，没有太多深层嵌套对象</li>
-                <li>系统提示词比较干净，没有塞入过多无关要求</li>
-            </ul>
+            <h3>成功率影响因素</h3>
+            <table>
+                <tr><th>因素</th><th>高成功率</th><th>低成功率</th></tr>
+                <tr><td><strong>模型能力</strong></td><td>GPT-5、Claude 4.5 等强模型</td><td>小模型、专用模型</td></tr>
+                <tr><td><strong>工具数量</strong></td><td>1 到 3 个工具</td><td>10+ 个工具</td></tr>
+                <tr><td><strong>参数复杂度</strong></td><td>扁平结构、简单类型</td><td>深层嵌套、复杂对象</td></tr>
+                <tr><td><strong>命名清晰度</strong></td><td><code>search_web</code>、<code>get_weather</code></td><td><code>func1</code>、<code>tool_x</code></td></tr>
+                <tr><td><strong>提示词长度</strong></td><td>简洁系统提示</td><td>超长角色设定、规则堆叠</td></tr>
+            </table>
 
-            <h3>什么时候更容易失败</h3>
+            <h3>典型失败表现</h3>
             <ul>
-                <li>模型智力不够，无法稳定理解“必须输出结构化工具调用”这件事</li>
-                <li>函数名相似、参数很多、schema 太复杂</li>
-                <li>提示词太长，模型注意力被正文内容冲散</li>
-                <li>模型输出里混入解释文字、自然语言总结或格式不完整的 JSON，导致后端无法解析</li>
+                <li>模型直接输出自然语言，而不是工具调用</li>
+                <li>JSON 格式不完整，后端无法解析</li>
+                <li>参数名对不上，或字段层级错位</li>
+                <li>混合输出：解释文字 + 半个工具调用</li>
             </ul>
 
             <div class="note">
-                <p><strong>最重要的预期管理：</strong>如果你遇到“命令写错了”“参数对不上”“明明该调工具却直接说了一段话”“后端提示无法解析 tool_calls”这类现象，通常不是你的客户端接错了，而是网页端模型没能稳定完成这次函数调用输出。</p>
+                <p><strong>最重要的预期管理：</strong>如果你遇到“明明该调工具却直接说了一段话”“参数对不上”“后端提示无法解析 <code>tool_calls</code>”这类现象，通常不是客户端接错了，而是网页端模型没能稳定完成这次工具调用输出。</p>
             </div>
 
             <h3>实战建议</h3>
             <ol>
-                <li>先只给 1 到 3 个工具，不要一上来塞十几个</li>
-                <li>函数名尽量短、清晰、不要相互撞名</li>
-                <li>参数 schema 尽量扁平，先避免深层对象和复杂数组</li>
-                <li>优先选择更强、更听话的模型；模型不够强时，规则写再多也可能失败</li>
-                <li>如果发现总是解析失败，先简化工具和参数，再考虑换模型</li>
+                <li>先只给 1 到 3 个工具测试，不要一上来塞十几个。</li>
+                <li>函数名尽量用清晰的英文动词，比如 <code>search</code>、<code>calculate</code>、<code>get</code>。</li>
+                <li>参数 schema 尽量扁平，先避免超过两层的深层嵌套。</li>
+                <li>优先选择更强、更听话的模型；模型不够强时，规则写再多也可能失败。</li>
+                <li>如果解析总是失败，先简化工具和参数，再考虑换模型。</li>
             </ol>
         </section>
 
         <section id="tab-pool">
             <h2>🗂️ 标签页池</h2>
-            <p>标签页池是本项目的核心调度机制。脚本会自动扫描浏览器中打开的所有 AI 网站标签页，并为每个标签页分配一个<strong>持久编号</strong>。</p>
+            <p>标签页池是本项目的核心调度机制，理解它就理解了多标签页并行的原理。</p>
 
-            <h3>工作原理</h3>
+            <h3>工作流程</h3>
             <ol>
-                <li>你在浏览器中打开一个或多个 AI 网站标签页（如 ChatGPT、Gemini 等）</li>
-                <li>脚本自动检测并将它们加入标签页池，分配编号（1, 2, 3...）</li>
-                <li>API 请求到达时，自动选择一个空闲的标签页来处理</li>
-                <li>处理完成后，标签页被释放回池中，等待下一个请求</li>
+                <li>你在受控浏览器中打开一个或多个 AI 网站标签页。</li>
+                <li>脚本自动检测并为它们分配编号（1、2、3……）。</li>
+                <li>API 请求到达时，自动挑一个空闲标签页处理。</li>
+                <li>处理完成后，标签页会释放回池中，等待下一个请求。</li>
             </ol>
 
-            <h3>两种路由方式</h3>
+            <h3>三种路由方式</h3>
             <table>
-                <tr><th>路由</th><th>地址格式</th><th>说明</th></tr>
+                <tr><th>方式</th><th>地址格式</th><th>适合场景</th></tr>
                 <tr>
-                    <td><strong>默认路由</strong></td>
+                    <td><strong>自动分配</strong></td>
                     <td><code>/v1/chat/completions</code></td>
-                    <td>自动选择一个空闲标签页处理请求</td>
+                    <td>不在意具体用哪个标签页，让系统自动挑空闲的</td>
                 </tr>
                 <tr>
-                    <td><strong>指定站点域名</strong></td>
-                    <td><code>/url/{域名}/v1/chat/completions</code></td>
-                    <td>自动匹配该域名对应的标签页，例如 <code>/url/gemini.com/v1/chat/completions</code></td>
+                    <td><strong>指定站点</strong></td>
+                    <td><code>/url/gemini.com/v1/chat/completions</code></td>
+                    <td>同时开了多个不同站点，想确保请求发到固定站点</td>
                 </tr>
                 <tr>
                     <td><strong>指定标签页</strong></td>
-                    <td><code>/tab/{编号}/v1/chat/completions</code></td>
-                    <td>使用特定编号的标签页，如果该标签页忙碌则排队等待</td>
+                    <td><code>/tab/1/v1/chat/completions</code></td>
+                    <td>为不同标签页配了不同预设，需要精确控制</td>
                 </tr>
             </table>
 
             <div class="info-box">
-                <p><strong>💡 何时使用指定标签页：</strong></p>
+                <p><strong>💡 在控制面板里你可以：</strong></p>
                 <ul style="margin-bottom: 0;">
-                    <li>当你想让某个客户端始终使用特定的 AI 站点时</li>
-                    <li>当你为不同标签页配置了不同的预设时（见下方「预设系统」）</li>
-                    <li>当你需要确保对话的连续性时</li>
+                    <li>查看所有标签页的编号、状态、当前 URL 和请求计数。</li>
+                    <li>复制指定标签页的 API 端点地址。</li>
+                    <li>为不同标签页切换不同的预设配置。</li>
                 </ul>
             </div>
-
-            <h3>在控制面板中管理</h3>
-            <p>在控制面板中点击「标签页」选项卡，可以：</p>
-            <ul>
-                <li>查看所有标签页的实时状态（空闲/忙碌/错误）</li>
-                <li>查看每个标签页的当前 URL 和请求计数</li>
-                <li>复制指定标签页的 API 端点地址</li>
-                <li>为标签页切换不同的预设配置</li>
-            </ul>
 
             <div class="note">
                 <p><strong>⚠️ 注意事项：</strong></p>
                 <ul style="margin-bottom: 0;">
-                    <li>标签页编号在脚本运行期间保持不变，重启后会重新分配</li>
-                    <li>关闭浏览器中的标签页后，对应的编号会自动释放</li>
-                    <li>新打开的标签页会在几秒内被自动检测到并加入池中</li>
-                    <li><code>chrome://newtab</code> 等空白页不会被加入池，页面加载完成后才会被识别</li>
+                    <li>标签页编号在单次运行期间保持不变，重启脚本后会重新分配。</li>
+                    <li>关闭某个标签页后，对应编号会自动释放；新开的标签页通常会在几秒内被检测到。</li>
+                    <li><code>chrome://newtab</code> 等空白页不会被识别，页面加载完成后才会纳入池中。</li>
+                    <li>如果所有标签页都在忙，新请求会自动排队等待。</li>
                 </ul>
             </div>
         </section>
@@ -1416,30 +2463,30 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
         <!-- ==================== 提取器配置 ==================== -->
         <section id="extractors">
             <h2>🧩 提取器配置 (Extractors)</h2>
-            <p>提取器决定了如何从网页 HTML 中解析出干净的 Markdown 文本。</p>
+            <p>当 AI 回复“抓回来不干净、缺内容、丢格式”时，通常先看提取器；如果问题不在网页 HTML，而在底层响应体，那就继续往下看解析器和网络拦截。</p>
             <pre><code>// 在站点配置中为预设配置提取器
 {
   "extractor_id": "deep_mode_v1",  // 使用深度模式
   ...
 }</code></pre>
             <ul>
-                <li><strong>默认模式</strong>: 自动提取 <code>result_container</code> 中的文本。</li>
-                <li><strong>deep_mode (深度模式)</strong>: 针对复杂的 LaTeX 公式、代码块进行特殊处理。</li>
+                <li><strong>默认模式</strong>: 直接从 <code>result_container</code> 中提取文本，适合大多数普通对话场景。</li>
+                <li><strong>deep_mode (深度模式)</strong>: 对复杂代码块、LaTeX 公式等内容做额外处理，适合对格式要求更高的场景。</li>
             </ul>
 
             <div class="note">
-                <p><strong>⚠️ 注意：</strong>目前只有<strong>深度模式 (deep_mode)</strong> 是经过深度优化的，其他模式都处于未完善状态。</p>
+                <p><strong>💡 配置建议：</strong>如果网页上已经有完整内容，只是提取结果比较乱，那就先留在提取器里排查。默认模式不够用时，再切到 <strong>deep_mode</strong>；如果问题在于“内容根本还没渲染出来”，或者你想直接读取底层 JSON / 文本，那就该去看解析器和网络拦截模式了。</p>
             </div>
 
             <div class="info-box">
-                <p><strong>💡 复杂内容处理：</strong>即使是深度模式，某些复杂的代码块也可能无法正确处理。这种情况下，可以在「响应检测配置」中开启<strong>网络拦截模式</strong>，它能处理所有情况，但目前只针对部分站点做了适配，且不支持流式输出。</p>
+                <p><strong>⚠️ 复杂内容提醒：</strong>即使是 <strong>deep_mode</strong>，某些复杂代码块也可能依然翻车。如果你追求更完整的代码块、公式或原始流式输出，可以继续看下方「响应检测配置」里的<strong>网络拦截模式</strong>。不过它需要站点已经有对应解析器，未适配的站点不要随意开启。</p>
             </div>
         </section>
 
         <!-- ==================== 图片提取配置 ==================== -->
         <section id="image-extraction">
             <h2>🖼️ 图片提取配置</h2>
-            <p>配置程序如何处理网页中生成的图片。</p>
+            <p>如果你希望系统能自动保存 AI 生成或返回的图片，就看这里。它负责从网页里找到图片节点，并决定是否下载到本地。</p>
             <pre><code>"image_extraction": {
   "enabled": true,                // 是否开启图片提取
   "selector": "img",              // 图片元素的选择器
@@ -1450,42 +2497,51 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
 }</code></pre>
             <p><strong>文件保存位置：</strong></p>
             <ul>
-                <li><strong>发送的图片</strong>: 保存在根目录 <code>image/</code>。</li>
-                <li><strong>捕获的图片</strong>: 保存在根目录 <code>download_images/</code>。</li>
+                <li><strong>你发送给 AI 的图片</strong>: 保存在根目录 <code>image/</code>。</li>
+                <li><strong>AI 生成 / 返回的图片</strong>: 保存在根目录 <code>download_images/</code>。</li>
             </ul>
+
+            <div class="note">
+                <p><strong>💡 使用建议：</strong>大多数站点先把 <code>enabled</code> 打开，再确认 <code>selector</code> 能正确命中图片节点就够了。只有在页面里图片很多、容易误抓时，才需要再补 <code>container_selector</code> 来缩小范围。</p>
+            </div>
         </section>
 
         <!-- ==================== 响应检测配置 ==================== -->
         <section id="response-detection">
             <h2>🌊 响应检测配置</h2>
-            <p>定义如何判断 AI 正在输出以及何时结束。支持两种检测模式：</p>
+            <p>系统需要知道 AI 什么时候开始输出、什么时候算真的说完。这里提供两种模式：默认的 DOM 模式，以及更进阶的网络拦截模式。</p>
 
             <table>
                 <tr><th>模式</th><th>是否流式</th><th>说明</th></tr>
                 <tr>
-                    <td><strong>DOM 模式</strong>（默认）</td>
+                    <td><strong>DOM 模式</strong>（默认推荐）</td>
                     <td>✅ 流式</td>
-                    <td>轮询检测页面 DOM 变化，实时输出内容。适用于绝大多数场景</td>
+                    <td>像“盯着网页看”一样检测页面变化，适合绝大多数普通对话场景</td>
                 </tr>
                 <tr>
                     <td><strong>网络拦截模式</strong></td>
                     <td>✅ 流式（按站点适配）</td>
-                    <td>拦截浏览器网络请求并解析增量响应，通常更快、更稳</td>
+                    <td>直接拦截浏览器网络请求并解析响应体，适合追求更稳的复杂内容提取</td>
                 </tr>
             </table>
 
-            <h3>DOM 模式（默认推荐）</h3>
-            <p>DOM 模式通过轮询页面内容变化来检测 AI 的输出，支持流式返回。对不同网站的兼容性有所差异，<strong>普遍存在代码块读取不完整的问题</strong>（因为代码块的 HTML 渲染结构较复杂）。如果你主要用于角色扮演等纯文本场景，DOM 模式完全够用；如果用于写代码，可能需要配合网络拦截模式。</p>
+            <h3>DOM 模式（默认推荐 👀）</h3>
+            <p>DOM 模式像“用眼睛盯着网页内容看”一样工作：只要页面内容还在变化，就说明 AI 还在继续输出。它最适合纯文本对话、角色扮演和大多数日常聊天场景。</p>
+            <ul>
+                <li><strong>适用场景</strong>：绝大多数普通文本对话。</li>
+                <li><strong>优势</strong>：通用性强，不需要针对每个站点单独写解析器。</li>
+                <li><strong>局限</strong>：依赖网页 HTML 结构，复杂代码块和公式有时会抓不全。</li>
+            </ul>
 
             <h4>检测逻辑</h4>
             <pre><code>生成结束判定 = (连续稳定次数 ≥ 稳定判定次数) AND (静默时间 > 静默超时阈值)</code></pre>
             <p><strong>工作原理：</strong></p>
             <ol>
-                <li>脚本每隔「默认检查间隔」秒检查一次页面内容</li>
-                <li>如果内容有变化，重置计数器</li>
-                <li>如果内容没变化，稳定次数 +1，静默时间累加</li>
-                <li>当两个条件同时满足时，判定 AI 生成完成</li>
-                <li>如果超过「初始等待」时间仍未检测到内容，判定失败</li>
+                <li>脚本按设定间隔反复检查页面内容。</li>
+                <li>如果内容还在变，说明 AI 仍在输出，系统会重置稳定计数并继续流式返回新增内容。</li>
+                <li>如果内容没再变化，稳定次数增加，静默时间继续累加。</li>
+                <li>当“稳定次数”和“静默时间”同时达到阈值时，系统判定这一轮回复结束。</li>
+                <li>如果超过「初始等待」仍完全没看到内容出现，通常说明 <code>result_container</code> 选错了，或 AI 还没真正开始回复。</li>
             </ol>
 
             <h4>调优建议</h4>
@@ -1493,20 +2549,24 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
                 <tr><th>场景</th><th>静默超时阈值</th><th>稳定判定次数</th><th>初始等待</th></tr>
                 <tr><td>快速模型 (GPT-4o)</td><td>3-5 秒</td><td>3-5 次</td><td>60 秒</td></tr>
                 <tr><td>慢速思考 (o1/Claude)</td><td>10-15 秒</td><td>8-12 次</td><td>300 秒</td></tr>
-                <tr><td>代码生成</td><td>8-10 秒</td><td>6-8 次</td><td>180 秒</td></tr>
-                <tr><td>长文生成</td><td>12-15 秒</td><td>10 次</td><td>300 秒</td></tr>
+                <tr><td>长文 / 代码生成</td><td>8-15 秒</td><td>6-10 次</td><td>180-300 秒</td></tr>
             </table>
 
-            <h3>网络拦截模式</h3>
+            <h3>网络拦截模式（进阶推荐 📡）</h3>
 
             <div class="highlight-box">
-                <p><strong>⚠️ 重要提醒：</strong>网络拦截模式目前仅针对部分站点做了适配。<strong>如果某个站点默认没有开启网络拦截，请不要手动开启</strong>——大概率是没有适配，或者开启后会产生副作用（如增加被 Cloudflare 检测的风险）。</p>
+                <p><strong>⚠️ 前提条件：</strong>网络拦截模式必须配合站点解析器使用。没有适配的站点不要随意开启，否则轻则报错，重则增加被风控或 Cloudflare 拦截的概率。</p>
             </div>
 
-            <p>网络拦截模式通过拦截浏览器的 XHR/Fetch 请求来获取 AI 的响应，并通过站点解析器提取增量内容。对于已适配站点，通常可实现稳定流式输出，且对复杂内容（如代码块）兼容性更好。</p>
+            <p>网络拦截模式像“直接读浏览器底层响应”一样工作：它会拦截 XHR / Fetch 请求，拿到最原始的 JSON 或文本，再把它转换成最终输出或增量流。对于已适配站点，它通常更快、更稳，对复杂代码块和公式的还原也更好。</p>
+            <ul>
+                <li><strong>适用场景</strong>：追求更完整的代码块 / 公式，或者网页本身不适合从 DOM 提取内容。</li>
+                <li><strong>优势</strong>：对已适配站点通常更稳，流式输出更接近原始响应。</li>
+                <li><strong>前提</strong>：必须有可用的 <code>parser</code>，并配好合适的 <code>listen_pattern</code>。</li>
+            </ul>
 
             <div class="info-box">
-                <p><strong>💡 启用方式：</strong>在控制面板的站点配置中，找到「流式配置」面板，将模式切换为「网络拦截」即可。</p>
+                <p><strong>💡 如何开启：</strong>在控制面板的站点配置 -> 「流式配置」中，把模式切换为「网络拦截」即可。</p>
             </div>
 
             <h4>网络拦截配置项</h4>
@@ -1514,17 +2574,17 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
                 <tr><th>配置项</th><th>说明</th><th>示例</th></tr>
                 <tr>
                     <td><strong>URL 匹配模式</strong></td>
-                    <td>网络请求 URL 中包含此字符串时拦截（必填）</td>
+                    <td>网络请求 URL 中包含此字符串时才拦截，建议先填最核心的路径关键词（必填）</td>
                     <td><code>GenerateContent</code></td>
                 </tr>
                 <tr>
                     <td><strong>响应解析器</strong></td>
-                    <td>用于解析拦截到的响应数据的解析器 ID（必填）</td>
-                    <td>根据站点自动匹配</td>
+                    <td>用于解析拦截响应的 parser ID（必填）</td>
+                    <td><code>lmarena</code> / 自定义 parser</td>
                 </tr>
                 <tr>
                     <td><strong>首次响应超时</strong></td>
-                    <td>等待首次有效网络响应的最长时间；超时后会根据模式回退或中止</td>
+                    <td>等待首个有效网络响应的最长时间；超时后会根据模式回退或中止</td>
                     <td><code>300</code> 秒</td>
                 </tr>
                 <tr>
@@ -1540,7 +2600,7 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
             </table>
 
             <div class="info-box">
-                <p><strong>💡 Arena 解析器说明：</strong><code>arena.ai</code> 目前内置了两个响应解析器。<code>lmarena</code> 用于 <strong>direct</strong> 模式，适合单栏直接对话；<code>lmarena_side_left</code> 用于 <strong>side by side</strong> 模式，会自动解析左侧内容（即左边模型的输出）。通常不需要手动填写，按站点默认配置即可；如果你自行改了网络拦截配置，请确保解析器和页面模式对应正确。</p>
+                <p><strong>💡 Arena 专属提示：</strong><code>arena.ai</code> 目前内置了两个解析器。<code>lmarena</code> 对应单栏 <strong>direct</strong> 模式；<code>lmarena_side_left</code> 对应左右对比的 <strong>side by side</strong> 模式，会自动读取左侧输出。通常保持默认即可；如果你手动改配置，请确保页面模式和解析器对应正确。</p>
             </div>
 
             <h4>通用配置项（两种模式共用）</h4>
@@ -1548,31 +2608,31 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
                 <tr><th>配置项</th><th>说明</th><th>默认值</th></tr>
                 <tr>
                     <td><strong>全局硬超时</strong></td>
-                    <td>单次请求的绝对超时上限，超过此时间无论如何都会结束。在现有情景下与首次超时并无绝对区别</td>
+                    <td>单次请求的绝对超时上限，超过这个时间无论如何都会结束</td>
                     <td><code>300</code> 秒</td>
                 </tr>
                 <tr>
-                    <td><strong>静默超时 (DOM)</strong></td>
-                    <td>网路监听模式下的静默超时阈值</td>
+                    <td><strong>静默超时</strong></td>
+                    <td>连续多久没有新内容时，判定回复已经结束</td>
                     <td><code>3</code> 秒</td>
                 </tr>
                 <tr>
                     <td><strong>初始等待</strong></td>
-                    <td>等待 AI 开始回复的最长时间</td>
+                    <td>等待 AI 开始出现第一段回复的最长时间</td>
                     <td><code>30</code> 秒</td>
                 </tr>
             </table>
 
             <div class="note">
-                <p><strong>💡 关于超时配置：</strong>慢速思考模型（如 o1/长推理）建议提高「首次响应超时」与「全局硬超时」。两者不必完全相同：前者控制“首包等待”，后者控制“整轮上限”。</p>
+                <p><strong>💡 关于超时配置：</strong>慢速思考模型（如 o1、Claude 长推理）建议把「首次响应超时」和「全局硬超时」一起调高。前者控制“等第一段回复多久”，后者控制“整轮最多跑多久”，两者不一定要完全相同。</p>
             </div>
 
             <div class="highlight-box">
-                <p><strong>⚠️ 关于 arena.ai：</strong>该站点建议<strong>不要</strong>开启网络拦截模式。因为网络监听会创建额外的浏览器连接，增加被 Cloudflare 检测到的概率。请使用默认的 DOM 模式。</p>
+                <p><strong>⚠️ 关于 arena.ai：</strong>这个站点更建议继续使用默认的 <strong>DOM 模式</strong>。因为网络监听会创建额外的浏览器连接，增加被 Cloudflare 检测到的概率。</p>
             </div>
 
-            <h4>给非流式站点配置网络拦截器（适合直接交给 AI）</h4>
-            <p>这里的“非流式”指 <strong>目标网站自己的响应不是 SSE 增量流，而是一次性返回完整 JSON / 文本</strong>。对本项目来说，它依然走 <code>stream_config.mode=network</code> 这一套监听；区别只在于解析器通常第一次拿到完整响应后就应该返回 <code>done=True</code>。如果你最终对外调用的是 <code>stream=false</code>，也<strong>不需要再写第二套逻辑</strong>，项目内部仍然会先走网络监听，再把结果拼成最终的非流式响应。</p>
+            <h4>实战：如何让 AI 帮你写一个新站点的解析器？</h4>
+            <p>如果目标网站不是 SSE 流式响应，而是一次性返回完整 JSON 或文本，你通常需要新增一个自定义解析器。别担心，这部分工作完全可以直接交给 AI 来做。</p>
 
             <div class="success-box">
                 <p><strong>项目已内置脚本：</strong>项目里已经附带同内容文件 <code>static/拦截请求发生器.txt</code>。你现在不用回桌面找文件，直接在教程里展开就能看；也可以单独打开原始文本页。</p>
@@ -1591,26 +2651,26 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
                 </details>
             </div>
 
-            <h4>最省事的操作步骤</h4>
+            <h4>保姆级操作步骤</h4>
             <ol>
-                <li>在脚本控制的浏览器里打开目标站点，并停在真正发消息的页面。</li>
+                <li>用受控浏览器打开目标站点，停在真正聊天的页面。</li>
                 <li>打开开发者工具的 <code>Console</code>。</li>
-                <li>优先直接展开上面的项目内置脚本，把内容全部复制后粘贴进去并回车；如果你习惯用桌面原文件，也可以继续用桌面的同名文件。</li>
-                <li>手动在网页上发送一条最简单的问题，让站点真实请求完整跑一遍。</li>
-                <li>请求结束后，在 Console 里执行 <code>exportRequests()</code>，浏览器会下载一个请求导出文件。</li>
-                <li>把这个导出文件发给 AI，并同时附上 <code>app/core/parsers</code> 里一两个最接近的现有解析器、<code>app/core/parsers/base.py</code>、<code>app/core/parsers/__init__.py</code>。</li>
-                <li>让 AI 新建 <code>app/core/parsers/xxx_parser.py</code>，并同步修改 <code>app/core/parsers/__init__.py</code> 完成导入与注册。</li>
-                <li>回到控制台，给对应站点/预设打开网络拦截模式，填好 <code>listen_pattern</code>，解析器选择你刚创建的那个。</li>
-                <li>开始测试；如果提取结果不对，把“导出的请求文件 + 当前错误结果 + 你新建的 parser 文件”继续发给 AI 迭代。</li>
+                <li>把项目附带的 <code>static/拦截请求发生器.txt</code> 脚本完整复制进去运行。</li>
+                <li>手动发一条最简单的消息，让站点真实请求完整跑一遍。</li>
+                <li>请求结束后，在 Console 里执行 <code>exportRequests()</code>，浏览器会下载导出的请求 JSON。</li>
+                <li>把这个 JSON 连同 <code>app/core/parsers/base.py</code>、<code>app/core/parsers/__init__.py</code> 和一两个相近解析器一起发给 AI。</li>
+                <li>让 AI 新建 <code>app/core/parsers/xxx_parser.py</code>，并告诉你 <code>__init__.py</code> 里需要怎么注册。</li>
+                <li>回到控制台，开启网络拦截模式，填上 AI 告诉你的 <code>listen_pattern</code> 和 parser ID。</li>
+                <li>开始测试；如果结果不对，把“导出文件 + 错误现象 + 新 parser 文件”继续发给 AI 微调。</li>
             </ol>
 
             <div class="info-box">
-                <p><strong>💡 发给 AI 时最好明确这 4 点：</strong></p>
+                <p><strong>💡 发给 AI 时最好明确这几件事：</strong></p>
                 <ul>
-                    <li>这是“非流式网站响应”，优先从完整响应体里直接提取最终文本。</li>
-                    <li>解析器要继承 <code>ResponseParser</code>，返回格式保持 <code>content / images / done / error</code>。</li>
-                    <li>非流式场景第一次成功提取后通常就应该 <code>done=True</code>。</li>
-                    <li>同一份完整 body 重复进入时不要重复追加内容，避免重复输出。</li>
+                    <li>这是“非流式响应”，请优先从完整响应体里直接提取最终文本。</li>
+                    <li>第一次成功解析后就应该返回 <code>done=True</code>，避免重复追加内容。</li>
+                    <li>如果包含图片，请填到 <code>images</code> 字段里。</li>
+                    <li>请告诉我需要修改 <code>app/core/parsers/__init__.py</code> 的哪些代码来完成注册。</li>
                 </ul>
             </div>
 
@@ -1619,12 +2679,11 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
 
 要求：
 1. 在 app/core/parsers/xxx_parser.py 新建解析器类，继承 ResponseParser
-2. 这个站点是非流式响应，请从完整响应体里提取最终文本
-3. 第一次成功解析后应返回 done=True
-4. 如果同一份完整 body 重复进入，不要重复输出内容
-5. 如有图片，填到 images
-6. 同步修改 app/core/parsers/__init__.py，完成导入和注册
-7. 告诉我站点配置里应该填什么 listen_pattern 和 parser
+2. 这个站点是非流式响应，请从完整响应体里直接提取最终文本
+3. 第一次成功解析后就应返回 done=True，避免重复追加内容
+4. 如果包含图片，请填入 images 字段
+5. 告诉我需要修改 app/core/parsers/__init__.py 的哪些代码来完成注册
+6. 告诉我站点配置里应该填什么 listen_pattern 和 parser
 
 附：
 - 导出的 requests json
@@ -1633,7 +2692,7 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
 - app/core/parsers/__init__.py</code></pre>
 
             <div class="note">
-                <p><strong>💡 实战经验：</strong><code>listen_pattern</code> 先填最稳定的请求路径关键词，不要一上来写太宽。如果导出的请求太多，可以先用 <code>viewRequests()</code>、<code>searchRequests('chat')</code>，或者 <code>exportRequests({ minPriority: 'MEDIUM' })</code> 缩小范围。真正容易错的通常不是“注册解析器”这一步，而是“拿错请求”或“给 AI 的参考样本不够”。</p>
+                <p><strong>💡 实战经验：</strong><code>listen_pattern</code> 先填最核心、最稳定的 URL 路径关键词，不要一上来写太宽。如果一次导出的请求太多，可以先用 <code>viewRequests()</code>、<code>searchRequests('chat')</code>，或者 <code>exportRequests({ minPriority: 'MEDIUM' })</code> 缩小范围。多数时候真正难的不是“注册解析器”，而是“抓错请求”或“给 AI 的参考样本不够”。</p>
             </div>
         </section>
 
@@ -1654,7 +2713,7 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
                 <tr><td><code>FILL_INPUT</code></td><td>在输入框填入用户问题</td></tr>
                 <tr><td><code>WAIT</code></td><td>等待固定时间 (value 为秒数)</td></tr>
                 <tr><td><code>KEY_PRESS</code></td><td>模拟按键 (如 Enter)</td></tr>
-                <tr><td><code>STREAM_WAIT</code></td><td>等待响应完成</td></tr>
+                <tr><td><code>STREAM_WAIT</code></td><td>等待 AI 回复完成。<code>target</code> 字段填选择器 key（如 <code>result_container</code>）可让系统优先监听该元素；留空则自动使用站点配置里的 <code>result_container</code>。这是每条工作流必须有的最后一步。</td></tr>
             </table>
 
             <div class="note">
@@ -1667,25 +2726,25 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
         <!-- ==================== 文件粘贴 ==================== -->
         <section id="file-paste">
             <h2>📄 文件粘贴</h2>
-            <p>当发送的文本长度超过阈值时，系统会先创建一个临时 <code>.txt</code> 文件，再尝试把这个文件作为真实附件送进网页。它的目标不是单纯往输入框里塞超长文字，而是尽量走站点自己的上传入口，从而绕过部分网站的输入长度限制。</p>
+            <p>当你的 Prompt 太长、超过网站输入框限制时，系统会先把文本写成一个临时 <code>.txt</code> 文件，再尽量走网页自己的上传入口，把它当成真实附件发给 AI，而不是硬塞进输入框里。</p>
 
             <h3>配置项说明</h3>
             <table>
                 <tr><th>配置项</th><th>默认值</th><th>说明</th></tr>
                 <tr><td>启用</td><td>站点预设决定</td><td>是否开启文件粘贴模式</td></tr>
                 <tr><td>阈值</td><td><code>50000</code> 字符</td><td>全局默认值；不同站点预设可以单独覆盖</td></tr>
-                <tr><td>引导文本</td><td><code>完全专注于文件内容</code></td><td>文件挂载成功后自动追加到输入框中的提示语</td></tr>
+                <tr><td>引导文本</td><td><code>完全专注于文件内容</code></td><td>附件上传成功后自动追加到输入框中的提示语，用来提醒 AI 优先读取文件内容</td></tr>
             </table>
 
             <div class="info-box">
-                <p><strong>💡 新版工作顺序：</strong>系统会先尝试站点配置里的 <code>file_input</code>，再试通用 <code>input[type=file]</code>，必要时点击 <code>upload_btn</code> 后重试，或者向 <code>drop_zone</code> 投递文件；这些入口都失败后，才会回退到 Windows 剪贴板文件粘贴。</p>
+                <p><strong>💡 工作逻辑：</strong>系统会依次尝试 <code>file_input</code> -> 通用 <code>input[type=file]</code> -> <code>upload_btn</code> -> <code>drop_zone</code>。这些入口都失败后，才会回退到 Windows 剪贴板文件粘贴；只有在附件状态稳定后，系统才会继续发送。</p>
             </div>
 
             <h3>配置方式</h3>
-            <p>在控制面板的「配置」选项卡中找到「文件粘贴」面板，可以针对每个站点（的每个预设）独立配置。真正需要一起看的不只是 <code>enabled</code> 和 <code>threshold</code>，还包括站点里的 <code>upload_btn</code>、<code>file_input</code>、<code>drop_zone</code> 这些上传入口选择器。</p>
+            <p>在控制面板的「配置」选项卡中找到「文件粘贴」面板，可以针对每个站点（的每个预设）独立配置。给新站点开这个功能时，不要只改一个 <code>enabled: true</code> 就结束，真正需要一起确认的，是该站点有没有可用的 <code>upload_btn</code>、<code>file_input</code> 或 <code>drop_zone</code> 选择器。</p>
 
             <div class="note">
-                <p><strong>⚠️ 注意：</strong>系统现在会在上传后持续观察附件节点、页面处理状态和发送按钮是否恢复可提交，而不是单纯硬等几秒。只有当附件状态稳定后才会继续发送；如果页面已经出现附件活动却始终无法确认，也会停止回退到普通文本输入，避免把文件和文本一起重复发出去。引导文本的作用，则是让模型把注意力放回文件内容本身。</p>
+                <p><strong>⚠️ 引导文本的作用：</strong>附件上传完成后，系统会自动在输入框补一段提示语，例如“请完全专注于文件内容”，避免模型忽略附件，只看输入框里那句很短的文字。</p>
             </div>
 
             <h3>当前默认预设里已开启的站点</h3>
@@ -1698,55 +2757,57 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
             </ul>
 
             <div class="highlight-box">
-                <p><strong>实战建议：</strong>如果你要给新站点开文件粘贴，不要只改一个开关。最稳的做法是先确认网页本身支持附件，再补齐 <code>upload_btn</code> / <code>file_input</code> / <code>drop_zone</code> 中至少一个可用入口，然后再测长文本发送。</p>
+                <p><strong>实战建议：</strong>先确认目标网站本身支持附件上传，再补齐至少一个稳定的上传入口选择器，然后再测试长文本发送。只打开开关、不补上传入口，通常不够稳。</p>
             </div>
         </section>
 
         <!-- ==================== 隐身模式 ==================== -->
         <section id="stealth-mode">
-            <h2>🛡️ 隐身模式</h2>
-            <p>隐身模式用于绕过网站的反自动化检测（如 Cloudflare 人机验证）。开启后，脚本的所有操作（点击、鼠标移动、滚动等）都会模拟真实人类行为。</p>
+            <h2>🛡️ 隐身模式（反检测）</h2>
+            <p>隐身模式通过模拟<strong>真实人类操作</strong>来降低自动化检测风险，主要用于 Cloudflare 或类似防护场景。</p>
 
-            <h3>何时需要开启</h3>
+            <h3>核心原理</h3>
+            <p>开启后，脚本的点击、鼠标移动、滚动和操作间隔都会尽量接近真人，而不是“瞬移 + 立即点击”的标准自动化轨迹。</p>
+            <table>
+                <tr><th>操作</th><th>普通模式</th><th>隐身模式</th></tr>
+                <tr><td>点击</td><td>直接 CDP 命令</td><td>模拟按压 -> 微移 -> 释放</td></tr>
+                <tr><td>移动</td><td>瞬间跳转</td><td>人类化曲线移动</td></tr>
+                <tr><td>空闲</td><td>无动作</td><td>随机微漂移（模拟手抖）</td></tr>
+                <tr><td>滚动</td><td>直接调用</td><td>滚轮事件驱动</td></tr>
+                <tr><td>操作间隔</td><td>最小延迟</td><td>随机 0.1-0.3 秒</td></tr>
+            </table>
+
+            <h3>何时开启</h3>
             <ul>
-                <li><strong>需要开启</strong>：访问有 Cloudflare 防护的站点（如 arena.ai、chatgpt.com 等）</li>
-                <li><strong>不需要开启</strong>：访问无防护或低防护的站点（如 AI Studio、DeepSeek 等）</li>
+                <li><strong>建议开启</strong>：有 Cloudflare 防护的站点（如 <code>arena.ai</code>、<code>chatgpt.com</code>）。</li>
+                <li><strong>建议开启</strong>：频繁触发人机验证，或页面已经提示检测到自动化。</li>
+                <li><strong>可以不开</strong>：AI Studio、DeepSeek 这类低防护或基本无防护站点。</li>
             </ul>
 
             <div class="info-box">
-                <p><strong>💡 如何开启：</strong>在控制面板中选择站点后，在页面顶部勾选「隐身模式」复选框即可。该设置是每个预设独立的。</p>
+                <p><strong>📍 配置方式：</strong>控制面板 -> 选择站点 -> 页面顶部勾选「隐身模式」。这个设置是<strong>按预设独立</strong>保存的。</p>
             </div>
 
-            <h3>隐身模式做了什么</h3>
-            <table>
-                <tr><th>行为</th><th>普通模式</th><th>隐身模式</th></tr>
-                <tr><td>鼠标点击</td><td>直接 CDP 命令</td><td>模拟真实鼠标按压（含 pressure、微移、释放偏移）</td></tr>
-                <tr><td>鼠标移动</td><td>瞬间跳转</td><td>人类化曲线移动</td></tr>
-                <tr><td>空闲时</td><td>无动作</td><td>随机微漂移（模拟手部抖动）</td></tr>
-                <tr><td>滚动</td><td>直接调用</td><td>纯 CDP 滚轮事件</td></tr>
-                <tr><td>操作间隔</td><td>最小延迟</td><td>随机化延迟（0.1-0.3 秒）</td></tr>
-            </table>
-
-            <h3>DrissionPage 补丁</h3>
-            <p>为了最大程度减少被检测的风险，本项目需要对 DrissionPage 库进行一个小补丁，让网络监听功能复用浏览器的主连接而非创建额外的连接。</p>
+            <h3>DrissionPage 补丁（必看）</h3>
+            <p>为了进一步降低被检测风险，本项目会给 DrissionPage 打一个小补丁，让网络监听尽量复用浏览器的主连接，而不是额外再建立新连接。</p>
             <ul>
-                <li><strong>自动执行</strong>：<code>start.bat</code> 启动脚本会在依赖安装后自动执行补丁</li>
+                <li><strong>自动执行</strong>：运行 <code>start.bat</code> 后会自动安装依赖并执行补丁。</li>
                 <li><strong>手动执行</strong>：<code>python patch_drissionpage.py</code></li>
                 <li><strong>恢复原文件</strong>：<code>python patch_drissionpage.py --restore</code></li>
             </ul>
 
             <div class="note">
-                <p><strong>⚠️ 注意：</strong>每次升级 DrissionPage 后需要重新执行补丁。补丁支持重复执行（幂等），不会重复打补丁。</p>
+                <p><strong>⚠️ 重要：</strong>每次升级 DrissionPage 后都需要重新执行补丁。补丁支持重复执行，所以不用担心重复打坏。</p>
             </div>
 
             <div class="highlight-box">
-                <p><strong>⚠️ 关于 arena.ai 的特别说明：</strong>即便开启了隐身模式并关闭了网络监听，在半小时内连续对话约 10 条也几乎一定会触发 Cloudflare 人机验证。这是该站点本身的安全策略，真人操作也同样会触发，并非脚本问题。</p>
+                <p><strong>⚠️ Arena.ai 特别说明：</strong>即便开启了隐身模式并关闭了网络监听，在半小时内连续对话约 10 条也依然很容易触发 Cloudflare 验证。这是站点本身的安全策略，真人操作也会遇到，并不是脚本问题。更现实的做法是降低频率，或配合代理切换一起用。</p>
             </div>
         </section>
         <!-- ==================== 自动化命令 ==================== -->
         <section id="commands">
-            <h2>⚡ 自动化命令</h2>
-            <p>命令系统允许你设置<strong>触发条件</strong>和<strong>执行动作</strong>，实现标签页的自动化管理。例如：每对话 10 次自动清除 Cookie 并刷新页面，或检测到 Cloudflare 验证时自动切换代理节点。</p>
+            <h2>⚡ 自动化命令系统</h2>
+            <p>命令系统的核心思路很简单：<strong>触发条件 + 执行动作</strong>。你可以用它来自动清理 Cookie、自动切代理、自动刷新页面，或者在检测到异常时走一整套恢复流程。</p>
 
             <div class="info-box">
                 <p><strong>📍 配置位置：</strong>进入 <a href="/">控制面板</a> → 命令</p>
@@ -1771,7 +2832,7 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
                 </tr>
             </table>
 
-            <h3>触发条件（与代码一致）</h3>
+            <h3>触发条件（完整列表）</h3>
             <table>
                 <tr><th>类型</th><th>说明</th><th>示例</th></tr>
                 <tr>
@@ -1817,17 +2878,18 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
             </div>
 
             <h3>作用范围</h3>
-            <ul>
-                <li><strong>所有标签页</strong>：命令对所有标签页生效</li>
-                <li><strong>指定域名</strong>：仅对包含特定域名的标签页生效（如 <code>chatgpt.com</code>）</li>
-                <li><strong>指定标签页</strong>：仅对特定编号的标签页生效（如 #1）</li>
-            </ul>
+            <table>
+                <tr><th>范围类型</th><th>说明</th><th>示例</th></tr>
+                <tr><td><strong>所有标签页</strong></td><td>对所有标签页生效</td><td>全局监控</td></tr>
+                <tr><td><strong>指定域名</strong></td><td>仅对匹配域名的标签页生效</td><td><code>chatgpt.com</code></td></tr>
+                <tr><td><strong>指定标签页</strong></td><td>仅对特定编号标签页生效</td><td><code>#1</code></td></tr>
+            </table>
 
             <div class="note">
                 <p><strong>💡 request_count 计数规则：</strong><code>all</code> 统计全部标签页请求总和；<code>domain</code> 统计匹配域名下所有标签页请求总和；<code>tab</code> 仅统计当前标签页。</p>
             </div>
 
-            <h3>命令优先级与基准点</h3>
+            <h3>📊 命令优先级与执行顺序</h3>
             <ul>
                 <li>每条命令可设置 <code>priority</code>（任意整数，默认 2），数字越大优先级越高。</li>
                 <li>系统请求基准优先级由 <code>CMD_REQUEST_PRIORITY_BASELINE</code> 控制（默认 2）。</li>
@@ -1972,7 +3034,7 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
                 <p><strong>💡 正则输入位置：</strong>当规则类型切到“正则表达式”时，正则内容就在上方的 URL 输入框中填写。示例：<code>.*/queue/join.*</code></p>
             </div>
 
-            <h3>🔀 代理切换功能</h3>
+            <h3 id="proxy-switching">🔀 代理切换功能</h3>
             <p>通过 Clash API 自动切换代理节点，适用于需要频繁更换 IP 的场景（如绕过频率限制）。</p>
 
             <div class="note">
@@ -2022,7 +3084,7 @@ secret: ""  # 如果设置了密钥，需要在命令配置中填写</code></pre
 
             <h3>典型使用示例</h3>
 
-            <h4>示例 1：每 10 次对话清理 Cookie 并刷新</h4>
+            <h4>示例 1：基础维护</h4>
             <div class="config-box">
                 <ul style="margin-bottom: 0;">
                     <li><strong>触发条件</strong>：对话次数 = 10</li>
@@ -2036,7 +3098,7 @@ secret: ""  # 如果设置了密钥，需要在命令配置中填写</code></pre
                 </ul>
             </div>
 
-            <h4>示例 2：检测到 Cloudflare 时切换 IP</h4>
+            <h4>示例 2：Cloudflare 自动恢复</h4>
             <div class="config-box">
                 <ul style="margin-bottom: 0;">
                     <li><strong>触发条件</strong>：页面检查 = <code>Cloudflare</code></li>
@@ -2064,7 +3126,7 @@ secret: ""  # 如果设置了密钥，需要在命令配置中填写</code></pre
                 </ul>
             </div>
 
-            <h4>示例 4：网络 429 立即换 IP + 告警</h4>
+            <h4>示例 4：网络异常应急</h4>
             <div class="config-box">
                 <ul style="margin-bottom: 0;">
                     <li><strong>触发条件</strong>：网络请求异常拦截</li>
@@ -2081,7 +3143,7 @@ secret: ""  # 如果设置了密钥，需要在命令配置中填写</code></pre
                 </ul>
             </div>
 
-            <h4>示例 5：CSS 探针失败走核弹重置</h4>
+            <h4>示例 5：智能分支恢复</h4>
             <div class="config-box">
                 <ul style="margin-bottom: 0;">
                     <li><strong>上游命令 A</strong>：运行 JS 探针，返回 <code>SUCCESS</code> 或 <code>CSS_FAILED</code></li>
@@ -2090,7 +3152,7 @@ secret: ""  # 如果设置了密钥，需要在命令配置中填写</code></pre
                 </ul>
             </div>
 
-            <h4>示例 6：先清 Cookie 再切模型（避免顺序抢占）</h4>
+            <h4>示例 6：安全的预设切换</h4>
             <div class="config-box">
                 <ul style="margin-bottom: 0;">
                     <li><strong>触发条件</strong>：对话次数 = 10（或你自己的阈值）</li>
@@ -2106,8 +3168,8 @@ secret: ""  # 如果设置了密钥，需要在命令配置中填写</code></pre
                 </ul>
             </div>
 
-            <h3>高级模式：自定义脚本</h3>
-            <p>高级模式允许你编写完整的 JavaScript 或 Python 脚本来实现复杂逻辑。</p>
+            <h3>🎓 高级模式（脚本编写）</h3>
+            <p>高级模式允许你直接编写 JavaScript 或 Python 脚本来实现复杂逻辑，适合需要探针、条件分支或外部联动的场景。</p>
 
             <h4>JavaScript 脚本</h4>
             <p>脚本在浏览器页面中执行（等同于 DevTools Console）：</p>
@@ -2142,12 +3204,32 @@ if session.error_count > 2:
         </section>
         <!-- ==================== AI 元素识别 ==================== -->
         <section id="ai-recognition">
-            <h2>🎯 AI 元素识别配置</h2>
-            <p>当你访问的站点不在已适配列表中时，系统可以调用 AI 自动分析网页结构，识别出输入框、发送按钮等关键元素。</p>
+            <h2>🎯 AI 元素识别（新站点适配）</h2>
+            <p>当目标站点不在已适配列表中时，系统可以调用辅助 AI 自动分析网页结构，尝试识别输入框、发送按钮、回复容器等关键元素。</p>
 
             <div class="info-box">
                 <p><strong>📍 配置位置：</strong>进入 <a href="/">控制面板</a> → 设置 → AI 元素识别</p>
             </div>
+
+            <h3>什么时候需要</h3>
+            <ul>
+                <li><strong>需要</strong>：你访问的是一个还没适配的新站点。</li>
+                <li><strong>不需要</strong>：你只使用已经配置好的站点。</li>
+            </ul>
+
+            <h3>工作原理</h3>
+            <p>整体流程就是：访问未知站点 -> 发起第一次真实请求 -> 系统调用辅助 AI 分析页面 -> 自动生成选择器并写入站点配置。</p>
+
+            <h3>默认识别项</h3>
+            <table>
+                <tr><th>关键词</th><th>描述</th><th>必需</th></tr>
+                <tr><td><code>input_box</code></td><td>用户输入框（textarea 或 contenteditable）</td><td>✅</td></tr>
+                <tr><td><code>send_btn</code></td><td>发送按钮</td><td>✅</td></tr>
+                <tr><td><code>result_container</code></td><td>AI 回复容器（只包含 AI 输出，不含用户消息）</td><td>✅</td></tr>
+                <tr><td><code>new_chat_btn</code></td><td>新建对话按钮</td><td>❌</td></tr>
+                <tr><td><code>message_wrapper</code></td><td>单条消息外层容器</td><td>❌</td></tr>
+                <tr><td><code>generating_indicator</code></td><td>生成中指示器（停止按钮 / 加载动画）</td><td>❌</td></tr>
+            </table>
 
             <h3>配置项说明</h3>
             <table>
@@ -2159,36 +3241,25 @@ if session.error_count > 2:
                 <tr><td><strong>操作</strong></td><td>编辑或删除该识别项</td></tr>
             </table>
 
-            <h3>默认识别项</h3>
-            <table>
-                <tr><th>关键词</th><th>描述</th><th>必需</th></tr>
-                <tr><td><code>input_box</code></td><td>用户输入文本的输入框（textarea 或 contenteditable 元素）</td><td>✅</td></tr>
-                <tr><td><code>send_btn</code></td><td>发送消息的按钮（通常是 type=submit 或带有发送图标的按钮）</td><td>✅</td></tr>
-                <tr><td><code>result_container</code></td><td>AI 回复内容的容器（仅包含 AI 的输出文本，不含用户消息）</td><td>✅</td></tr>
-                <tr><td><code>new_chat_btn</code></td><td>新建对话的按钮（点击后开始新的对话）</td><td>❌</td></tr>
-                <tr><td><code>message_wrapper</code></td><td>消息完整容器（包裹单条消息的外层元素）</td><td>❌</td></tr>
-                <tr><td><code>generating_indicator</code></td><td>生成中指示器（如停止按钮、加载动画）</td><td>❌</td></tr>
-            </table>
-
-            <h3>使用流程（AI 自动配置）</h3>
+            <h3>使用流程（自动模式）</h3>
             <ol>
-                <li><strong>配置 API</strong>：在控制面板 → 设置 → 环境配置 → AI 分析配置中，填写你自己的 OpenAI 格式 API 地址和 Key。</li>
-                <li><strong>访问新站点</strong>：在浏览器中打开一个未适配的网站，并停留在真正能聊天的页面。</li>
-                <li><strong>触发识别</strong>：第一次对该未知域名发起真实 API 请求。</li>
-                <li><strong>自动分析</strong>：系统会调用你配置的 API 分析网页，大约消耗 <strong>8000 tokens</strong>（一次性消耗），成功后自动写入 <code>config/sites.json</code>。</li>
+                <li><strong>配置 API</strong>：在控制面板 → 设置 → 环境配置 → AI 分析配置中，填写 OpenAI 格式的 API 地址和 Key。</li>
+                <li><strong>访问新站点</strong>：在受控浏览器里打开未适配站点，停在真正能聊天的页面。</li>
+                <li><strong>触发识别</strong>：对这个未知域名发起第一次真实 API 请求。</li>
+                <li><strong>自动完成</strong>：系统会调用辅助 AI 分析页面，大约消耗 <strong>8000 tokens</strong>，成功后自动写入 <code>config/sites.json</code>。</li>
             </ol>
 
             <div class="note">
-                <p><strong>💡 提示：</strong>如果你只使用已经配置好的站点，则不需要关注此功能。如果你想自己新增站点，可以利用此功能让 AI 帮你自动配置参数，配置效果取决于 AI 的能力。</p>
+                <p><strong>💡 提示：</strong>如果你只使用已经配置好的站点，这块可以完全不用看。只有准备新增站点时，才需要回来用它。</p>
             </div>
 
             <div class="note">
-                <p><strong>💡 手动配置流程：</strong>如果你有一定技术水平，也可以自行配置：</p>
+                <p><strong>💡 手动配置流程（进阶）：</strong>如果你有一定技术基础，也可以完全手动来：</p>
                 <ol>
-                    <li><strong>不配置 API</strong>：不填写 API，这样自动配置将会失效。</li>
-                    <li><strong>获取默认配置</strong>：失败后，系统会自动分配一个默认配置，需要刷新才能看到。</li>
-                    <li><strong>手动配置</strong>：到目标网站手动获取各个选择器名并填入对应框中。</li>
-                    <li><strong>进行测试</strong>：在工作流中点击可视化按钮查看配置是否正确，或直接点击测试按钮。</li>
+                    <li><strong>不配置 API</strong>：留空 API Key，这样自动分析不会执行。</li>
+                    <li><strong>获取空白配置</strong>：访问新站点后，系统会生成一个结构完整但选择器为空的站点配置。</li>
+                    <li><strong>手动填写选择器</strong>：到目标站点右键检查元素，把正确的选择器填进对应配置框。</li>
+                    <li><strong>进行测试</strong>：用工作流可视化或选择器测试按钮确认是否生效。</li>
                 </ol>
             </div>
         </section>
@@ -2196,7 +3267,7 @@ if session.error_count > 2:
         <!-- ==================== 环境配置 ==================== -->
         <section id="env-config">
             <h2>⚙️ 环境配置</h2>
-            <p>在控制面板 → 设置 → 环境配置中修改，<strong>需重启服务生效</strong>。</p>
+            <p>在控制面板 → 设置 → 环境配置中修改。这里主要放端口、认证、代理、辅助 AI 等<strong>全局设置</strong>，改完之后通常都需要<strong>重启服务</strong>才能生效。</p>
 
             <div class="config-group">
                 <h4><span class="icon">🖥️</span> 服务配置</h4>
@@ -2216,6 +3287,10 @@ if session.error_count > 2:
                     <tr><td>启用认证</td><td>关闭</td><td>是否要求 API 调用时提供 Bearer Token</td></tr>
                     <tr><td>Bearer Token</td><td>空</td><td>启用认证时必须设置</td></tr>
                 </table>
+                <div class="note">
+                    <p><strong>使用方式：</strong></p>
+                    <pre><code>curl -H "Authorization: Bearer YOUR_TOKEN" http://localhost:8199/v1/chat/completions</code></pre>
+                </div>
             </div>
 
             <div class="config-group">
@@ -2318,7 +3393,7 @@ BROWSER_PROFILE_NAME=Default</code></pre>
         <!-- ==================== 浏览器常量 ==================== -->
         <section id="browser-config">
             <h2>🌐 浏览器常量</h2>
-            <p>在控制面板 → 设置 → 浏览器常量中修改，<strong>即时生效</strong>。</p>
+            <p>在控制面板 → 设置 → 浏览器常量中修改，优势是<strong>即时生效、无需重启</strong>。这里更适合放“运行时调优”参数，比如响应检测、操作延迟、标签页池回收等。</p>
 
             <div class="config-group">
                 <h4><span class="icon">🔌</span> 连接配置</h4>
@@ -2375,6 +3450,10 @@ BROWSER_PROFILE_NAME=Default</code></pre>
                     <tr><td>初始等待</td><td><code>180</code> 秒</td><td>等待 AI 开始回复的最长时间</td></tr>
                     <tr><td><strong>稳定判定次数</strong></td><td><code>8</code> 次</td><td>🔑 连续多少次检查内容不变判定完成</td></tr>
                 </table>
+                <div class="note">
+                    <p><strong>🔑 最关键的两个参数：</strong><strong>静默超时阈值</strong> 决定“内容停多久算结束”；<strong>稳定判定次数</strong> 决定“要连续多少次都没变化才算结束”。真正的结束条件是：</p>
+                    <pre><code>(稳定次数 ≥ 稳定判定次数) AND (静默时间 &gt; 静默超时阈值)</code></pre>
+                </div>
             </div>
 
             <div class="config-group">
@@ -2388,8 +3467,11 @@ BROWSER_PROFILE_NAME=Default</code></pre>
                     <tr><td>初始元素等待</td><td><code>10</code> 秒</td><td>等待响应元素出现的时间</td></tr>
                     <tr><td>最大异常次数</td><td><code>5</code> 次</td><td>连续异常多少次后中止</td></tr>
                     <tr><td>最大元素丢失次数</td><td><code>10</code> 次</td><td>元素持续丢失多少次后退出</td></tr>
-                    <tr><td>内容收缩阈值</td><td><code>0.3</code></td><td>内容缩减超过 30% 视为异常</td></tr>
+                    <tr><td>内容收缩阈值</td><td><code>0.3</code></td><td>内容缩减超过 30% 视为异常（如思考模型在折叠"思考过程"时，<code>result_container</code> 中的可见文本会短暂大幅缩减，此参数可防止脚本误判为"内容消失"）</td></tr>
                 </table>
+                <div class="note">
+                    <p><strong>💡 内容收缩阈值：</strong>它主要是为了处理“思考模型折叠思维链”这种场景，防止页面文本突然变短时被误判成异常或内容消失。</p>
+                </div>
             </div>
 
             <div class="config-group">
@@ -2459,7 +3541,7 @@ BROWSER_PROFILE_NAME=Default</code></pre>
                     <li><code>*.pyc</code>：Python 编译缓存文件</li>
                     <li><code>backup_*/</code>：更新前备份目录</li>
                 </ul>
-                <p style="margin-bottom: 0;">可勾选范围覆盖核心配置、本地覆盖、运行数据、后端代码、前端资源、脚本与文档、开发文件。只是想保留登录态和个人配置时，通常保持默认勾选即可。</p>
+                <p style="margin-bottom: 0;">可勾选范围覆盖核心配置、本地覆盖、运行数据、后端代码、前端资源、脚本与文档、开发文件。只想保留登录态和个人配置时，通常保持默认勾选即可；需要保留自己改过的代码时，再额外勾上对应目录。</p>
             </div>
 
             <div class="highlight-box">
@@ -2472,91 +3554,85 @@ BROWSER_PROFILE_NAME=Default</code></pre>
         <section id="faq">
             <h2>❓ 常见问题</h2>
 
-            <h3>Q1: 为什么酒馆显示连接失败？</h3>
-            <p>A: 因为酒馆点击「测试 API」时发送的请求信息过短。特别是当你同时使用酒馆测试 API 功能并且目标站点是 AI Studio 时，容易出现这个问题。<strong>建议直接发送对话消息进行测试</strong>，而非使用测试按钮。</p>
+            <h3>Q1: 酒馆显示「连接失败」怎么办？</h3>
+            <p>A: 酒馆的「测试 API」按钮发送的请求通常太短，部分站点不会正常响应，尤其是 AI Studio 这类站点更容易误报失败。<strong>建议不要点测试按钮，直接发送一句真实对话来测试。</strong></p>
 
-            <h3>Q2: 使用时频繁失败怎么办？</h3>
-            <p>A: 请按以下几种情况进行排查：</p>
+            <h3>Q2: 请求频繁失败，怎么排查？</h3>
+            <p>A: 可以按下面这个顺序逐一排除：</p>
             <div class="troubleshoot-list">
                 <ol>
-                    <li><strong>人为干涉了工作流</strong>：在工作流执行时，你点击了脚本控制的浏览器页面的其他按钮，或者切换了页面。在脚本执行过程中，你不能操作脚本控制的浏览器，最多只能看着。</li>
-                    <li><strong>折叠边框</strong>：如果你手动把页面边框缩小，或折叠某些按钮，脚本可能无法操作元素。因此必须将折叠元素全部展开（浏览器可以最小化但不能缩小边框）。</li>
-                    <li><strong>网站状态异常</strong>：查看一下脚本控制的浏览器状态，可能触发了人机验证，可能单次发送的信息太长被网站拒绝，也可能发送的内容包含违规信息被拦截。</li>
-                    <li><strong>网络问题</strong>：网络波动或者代理切换了 IP，导致发送失败。这种情况可能引发脚本死锁，需要重启脚本或等待约 5 分钟。表现为：脚本后台显示发送成功，但浏览器中信息没有被实际发送或发送后又失败了。</li>
-                    <li><strong>不要在受控浏览器里保留无关页</strong>：当脚本将要运行时，受控浏览器里不要存在除了目标网站之外的任何网站或无关标签页。教程页现在不会再自动占用受控浏览器标签，但如果你手动开了搜索页、资讯页或其它普通网页，仍然可能干扰脚本；如果已经打开并出现异常，重启脚本即可。</li>
-                    <li><strong>站点配置失效</strong>：如果以上问题都排除了，可能是该网站的配置已过期需要更新。你可以在 GitHub 上提 Issue 或加群反馈。如果你有一定基础，也可以手动更新选择器配置。</li>
+                    <li><strong>脚本运行时操作了受控浏览器</strong>：工作流执行过程中不要点击、切换或操作受控浏览器页面，最多只能看着。</li>
+                    <li><strong>缩小了窗口或折叠了页面元素</strong>：浏览器可以最小化，但不要手动缩小窗口边框，也不要折叠脚本需要操作的页面区域，否则脚本可能找不到元素。</li>
+                    <li><strong>受控浏览器里保留了无关标签页</strong>：只保留目标 AI 网站。搜索页、邮箱、资讯页或其它普通网页都可能干扰自动化；如果已经开着并出现异常，重启脚本即可。</li>
+                    <li><strong>网站本身状态异常</strong>：切到受控浏览器看一下，是否触发了人机验证、被内容风控拦截，或者因为单次输入太长而被网站拒绝。</li>
+                    <li><strong>网络波动或代理切换了 IP</strong>：这类情况可能导致发送失败甚至卡死，表现为后台显示发送成功，但浏览器没有真正发出去或发出后又失败。可以等待约 5 分钟，或直接重启脚本。</li>
+                    <li><strong>站点配置已经过期</strong>：如果前面都排除了，可能是站点改版导致选择器或配置失效。可以去 GitHub 提 Issue、加群反馈，或者自己手动更新选择器配置。</li>
                 </ol>
             </div>
 
-            <h3>Q3: 我同时打开了多个页面，脚本会怎么操作？</h3>
-            <p>A: 脚本使用<strong>标签页池</strong>自动管理所有打开的标签页：</p>
+            <h3>Q3: 同时打开多个标签页，脚本会怎么处理？</h3>
+            <p>A: 脚本会通过<strong>标签页池</strong>自动调度这些标签页：</p>
             <ul>
-                <li><strong>默认路由</strong>（<code>/v1/chat/completions</code>）：自动选择一个空闲标签页处理请求</li>
-                <li><strong>指定站点域名</strong>（<code>/url/gemini.com/v1/chat/completions</code>）：自动匹配该站点的标签页</li>
-                <li><strong>指定标签页</strong>（<code>/tab/1/v1/chat/completions</code>）：使用编号为 1 的标签页</li>
-                <li>你可以为不同标签页分配不同的<strong>预设</strong>，实现同一站点的多种用途（如对话 + 识图）</li>
-                <li>当同时有多个请求时，空闲标签页会被依次分配；如果所有标签页都忙碌，新请求会排队等待</li>
+                <li><strong>默认路由</strong>：<code>/v1/chat/completions</code>，系统自动挑一个空闲标签页处理。</li>
+                <li><strong>指定站点</strong>：<code>/url/gemini.com/v1/chat/completions</code>，只把请求发到对应站点的标签页。</li>
+                <li><strong>指定标签页</strong>：<code>/tab/1/v1/chat/completions</code>，精确使用编号为 1 的标签页。</li>
+                <li>你也可以给不同标签页配置不同的<strong>预设</strong>，例如一个专门聊天，一个专门识图。</li>
+                <li>如果同时来了多个请求，空闲标签页会依次分配；全部忙碌时，新请求会排队等待。</li>
             </ul>
 
-            <h3>Q4: 标签页池中看不到新打开的标签页？</h3>
-            <p>A: 请检查以下几点：</p>
+            <h3>Q4: 标签页池里看不到新打开的标签页？</h3>
+            <p>A: 请先检查这几项：</p>
             <ul>
-                <li>新标签页的网页是否已经<strong>加载完成</strong>（`chrome://newtab` 等空白页不会被识别）</li>
-                <li>等待 2-3 秒后点击「立即刷新」按钮</li>
-                <li>如果仍然看不到，重启脚本即可</li>
+                <li>页面是否已经<strong>加载完成</strong>；<code>chrome://newtab</code> 这类空白页不会被识别。</li>
+                <li>等待 2 到 3 秒后，点击控制台里的「立即刷新」。</li>
+                <li>如果还是不出现，直接重启脚本。</li>
             </ul>
 
-            <h3>Q5: 控制面板的参数应该怎么调？需要调吗？</h3>
-            <p>A: <strong>大多数时候不需要调整</strong>，里面的参数都是配置好的默认值，可以满足绝大多数使用场景。</p>
+            <h3>Q5: 控制面板里的参数需要手动调整吗？</h3>
+            <p>A: 大多数时候<strong>不需要</strong>。默认值已经覆盖了最常见的使用场景，遇到具体问题时再针对性调整即可。</p>
 
-            <h3>Q6: 有什么已知问题？</h3>
-            <p>A: 目前已经有一些已知的问题：</p>
+            <h3>Q6: 目前有哪些已知问题？</h3>
+            <p>A: 目前确认过的已知问题主要有这两个：</p>
             <ul>
-                <li>VSCode 中已经发现 <strong>Codex</strong> 插件不适配，原因未知。</li>
-                <li>DrissionPage 补丁需在每次升级 DrissionPage 后重新执行。</li>
+                <li>VSCode 的 <strong>Codex</strong> 插件目前不适配，原因暂时未知。</li>
+                <li>DrissionPage 每次升级后，都需要重新执行对应补丁。</li>
             </ul>
 
             <h3>Q7: 代理切换命令不生效怎么办？</h3>
-            <p>A: 请检查以下几点：</p>
+            <p>A: 可以按下面这几项检查：</p>
             <div class="troubleshoot-list">
                 <ol>
-                    <li><strong>Clash 是否运行</strong>：确保 Clash 正在运行且 External Controller 已启用。</li>
-                    <li><strong>API 地址是否正确</strong>：默认是 <code>http://127.0.0.1:9090</code>，部分 Clash 客户端可能使用其他端口。</li>
-                    <li><strong>代理组名称是否正确</strong>：访问 <code>http://127.0.0.1:9090/proxies</code> 查看实际的代理组名称。</li>
-                    <li><strong>是否设置了 Secret</strong>：如果 Clash 配置了 <code>secret</code>，需要在命令配置中填写。</li>
-                    <li><strong>查看日志</strong>：在控制面板的「日志」选项卡中查看 <code>[CMD]</code> 开头的日志，会显示切换结果或错误原因。</li>
+                    <li><strong>确认 Clash 正在运行</strong>：并且已经启用了 External Controller。</li>
+                    <li><strong>确认 API 地址正确</strong>：默认一般是 <code>http://127.0.0.1:9090</code>，有些客户端会用别的端口。</li>
+                    <li><strong>确认代理组名称拼写正确</strong>：访问 <code>http://127.0.0.1:9090/proxies</code> 看实际名称。</li>
+                    <li><strong>确认 Secret 已填写</strong>：如果 Clash 配了 <code>secret</code>，命令配置里也要一起填。</li>
+                    <li><strong>查看日志</strong>：在控制台「日志」里搜索 <code>[CMD]</code> 开头的条目，能看到具体报错或切换结果。</li>
                 </ol>
             </div>
 
-            <h3>Q8: 我想直接使用自己原来的 Chrome 登录态，为什么配了还是不生效？</h3>
-            <p>A: 最常见的原因有三个：</p>
+            <h3>Q8: 想复用自己的 Chrome 登录态，为什么配了还是不生效？</h3>
+            <p>A: 最常见的原因有这三个：</p>
             <ul>
-                <li><strong>直接指向了系统默认 <code>User Data</code></strong>：在 Chrome 136+ 上，这通常会导致浏览器虽然打开了，但远程调试端口起不来。请改为复制出一份独立目录，再把脚本指向那份副本。</li>
-                <li><strong><code>BROWSER_PROFILE_DIR</code> 写错层级</strong>：它应该写到 <code>User Data</code> 这一层，而不是 <code>...\User Data\Default</code>。具体配置名请写在 <code>BROWSER_PROFILE_NAME</code>。</li>
-                <li><strong>配置改完没重启启动脚本</strong>：这类浏览器启动配置必须重新运行 <code>start.bat</code> 才会生效。</li>
+                <li><strong>直接指向了系统默认的 <code>User Data</code></strong>：Chrome 136+ 上这样做很容易导致远程调试端口起不来。请先复制一份独立目录，再让脚本使用那份副本。</li>
+                <li><strong><code>BROWSER_PROFILE_DIR</code> 层级写错了</strong>：它应该指向 <code>User Data</code> 这一层，而不是 <code>...\User Data\Default</code>。具体用哪个子配置文件夹，请写在 <code>BROWSER_PROFILE_NAME</code>。</li>
+                <li><strong>改完配置没有重启脚本</strong>：浏览器启动相关配置只有重新运行 <code>start.bat</code> 才会生效。</li>
             </ul>
-            <p>详细步骤请回看上方「环境配置 → 想沿用自己的浏览器登录态，应该怎么配？」这一节。</p>
+            <p>具体步骤可以回看前面的浏览器登录态复用说明。</p>
 
-            <h3>Q9: 这个项目有什么用？</h3>
-            <p>A: 这是一个「白嫖」项目，主要用途包括：</p>
-            <ul>
-                <li><strong>免费额度利用</strong>：很多 AI 厂商在网页端有相当多的免费额度（如 DeepSeek、AI Studio、Arena AI 等），本项目能将网页额度转化为 OpenAI 格式的 API，供前端调用。</li>
-                <li><strong>调试上下文</strong>：你可以便捷地查看前端是如何构造上下文的——只需打开浏览器复制一遍脚本发送的请求内容即可。</li>
-                <li><strong>多标签页 + 多预设</strong>：同时开多个标签页，为不同标签页配置不同预设（如主端口用于聊天，副端口用于识图），实现多用途并行。</li>
-                <li><strong>长文本绕过</strong>：通过文件粘贴功能，绕过部分网站输入框的字符限制。</li>
-            </ul>
+            <h3>Q9: 反馈渠道在哪里？</h3>
+            <p>A: 如果你想反馈 Bug、提建议，或者某个站点突然失效了，可以走下面这两个渠道：</p>
 
             <div class="info-box">
                 <p><strong>📬 反馈渠道：</strong></p>
                 <ul style="margin-bottom: 0;">
-                    <li>GitHub Issues：提交 bug 或建议</li>
-                    <li>QQ 群：<strong>1073037753</strong></li>
+                    <li>GitHub Issues：提交 Bug 或功能建议。</li>
+                    <li>QQ 群：<strong>1073037753</strong>，适合日常交流和快速反馈。</li>
                 </ul>
             </div>
         </section>
     </div>
 
-    <script src="/static/js/tutorial-i18n.js?v=2.6.9"></script>
+    <script src="./js/tutorial-i18n.js?v=2.6.9"></script>
     <script>
         // 站点配置数据（域名已更新）
         const sites = [
@@ -2573,7 +3649,9 @@ BROWSER_PROFILE_NAME=Default</code></pre>
         ];
 
         const tutorialState = {
-            currentLanguage: 'zh'
+            currentLanguage: 'zh',
+            currentCategory: localStorage.getItem('tutorial-category') || 'getting-started',
+            searchOpen: false
         };
 
         const tutorialTranslations = {
@@ -2817,9 +3895,11 @@ BROWSER_PROFILE_NAME=Default</code></pre>
         function applyLanguage(language) {
             const normalized = normalizeLanguage(language);
             const fallback = tutorialTranslations.zh;
-            const bundle = tutorialTranslations[normalized] || fallback;
+            const hasRequestedBundle = Boolean(tutorialTranslations[normalized]);
+            const effectiveLanguage = hasRequestedBundle ? normalized : 'zh';
+            const bundle = tutorialTranslations[effectiveLanguage] || fallback;
 
-            tutorialState.currentLanguage = normalized;
+            tutorialState.currentLanguage = effectiveLanguage;
 
             document.documentElement.lang = bundle.meta?.htmlLang || fallback.meta.htmlLang;
             document.title = bundle.meta?.pageTitle || fallback.meta.pageTitle;
@@ -2981,6 +4061,1268 @@ BROWSER_PROFILE_NAME=Default</code></pre>
         });
 
         // 页面加载时初始化
+        const docsCategories = [
+            {
+                id: 'getting-started',
+                label: { zh: '开始使用', en: 'Start Here' },
+                heroTitle: { zh: '开始使用', en: 'Start Here' },
+                subtitle: {
+                    zh: '先把受控浏览器、控制台和 API 连接跑通，再逐步深入更细的站点配置。',
+                    en: 'Get the controlled browser, dashboard, and API connection working first, then move into deeper site configuration.'
+                },
+                quickLinks: [
+                    {
+                        targetId: 'quick-start',
+                        title: { zh: '快速开始', en: 'Quick Start' },
+                        description: { zh: '先分清两个浏览器，再按顺序完成第一次接入。', en: 'Understand the two-browser setup and finish your first connection in order.' }
+                    },
+                    {
+                        targetId: 'connect-api',
+                        title: { zh: '连接 API', en: 'Connect API' },
+                        description: { zh: '直接看 Base URL、API Key 和模型填写方式。', en: 'Jump straight to the Base URL, API key, and model setup.' }
+                    },
+                    {
+                        targetId: 'dashboard-tour',
+                        title: { zh: '控制台导览', en: 'Dashboard Tour' },
+                        description: { zh: '搞清楚站点、标签页、日志和设置分别在哪里。', en: 'See where sites, tabs, logs, and settings live in the dashboard.' }
+                    },
+                    {
+                        targetId: 'faq',
+                        title: { zh: '常见问题', en: 'FAQ' },
+                        description: { zh: '连接失败、登录态失效、标签页异常先看这里。', en: 'Start here for connection failures, profile issues, or tab problems.' }
+                    }
+                ],
+                groups: [
+                    {
+                        title: { zh: '上手主线', en: 'Core Flow' },
+                        sectionIds: ['quick-start', 'connect-api']
+                    },
+                    {
+                        title: { zh: '控制台与调度', en: 'Dashboard and Routing' },
+                        sectionIds: ['dashboard-tour', 'tab-pool']
+                    },
+                    {
+                        title: { zh: '答疑与预期', en: 'FAQ and Expectations' },
+                        sectionIds: ['faq', 'author-note']
+                    }
+                ]
+            },
+            {
+                id: 'site-adaptation',
+                label: { zh: '接入站点', en: 'Add a Site' },
+                heroTitle: { zh: '接入站点', en: 'Add a Site' },
+                subtitle: {
+                    zh: '这一组负责把新站点真正跑起来，重点是新增站点、预设、选择器和工作流。',
+                    en: 'This track focuses on making a new site actually work: adding the site, presets, selectors, and workflow.'
+                },
+                quickLinks: [
+                    {
+                        targetId: 'add-site-guide',
+                        title: { zh: '新增站点', en: 'Add Site' },
+                        description: { zh: '先选自动识别还是手动配置，再按最小配置起步。', en: 'Choose auto-detection or manual setup, then start from the minimum viable config.' }
+                    },
+                    {
+                        targetId: 'presets',
+                        title: { zh: '预设系统', en: 'Presets' },
+                        description: { zh: '同一站点拆分不同用途时，优先用预设而不是复制站点。', en: 'Use presets, not duplicate sites, when one domain needs different behaviors.' }
+                    },
+                    {
+                        targetId: 'selectors',
+                        title: { zh: '选择器配置', en: 'Selectors' },
+                        description: { zh: '输入框、发送按钮和结果容器的定位都在这里。', en: 'Map the input, send button, and result container here.' }
+                    },
+                    {
+                        targetId: 'workflow',
+                        title: { zh: '工作流配置', en: 'Workflow' },
+                        description: { zh: '决定点击、等待、输入和发送的执行顺序。', en: 'Define the order of click, wait, fill, and send actions.' }
+                    }
+                ],
+                groups: [
+                    {
+                        title: { zh: '新增与拆分', en: 'Add and Split' },
+                        sectionIds: ['add-site-guide', 'presets']
+                    },
+                    {
+                        title: { zh: '交互动作', en: 'Interaction Flow' },
+                        sectionIds: ['selectors', 'workflow']
+                    }
+                ]
+            },
+            {
+                id: 'parsing-streaming',
+                label: { zh: '解析与流式', en: 'Parsing and Streaming' },
+                heroTitle: { zh: '解析与流式', en: 'Parsing and Streaming' },
+                subtitle: {
+                    zh: '如果你在找“怎么创建解析器”，或者想分清提取器和网络响应解析器的职责，这一组就是入口。',
+                    en: 'If you are looking for parser creation or want to separate extractor work from network-response parsing, this is the right entry point.'
+                },
+                quickLinks: [
+                    {
+                        targetId: 'extractor-vs-parser',
+                        title: { zh: '提取器还是解析器？', en: 'Extractor or Parser?' },
+                        description: { zh: '先判断问题属于 HTML 提取，还是网络响应解析。', en: 'Decide first whether the issue belongs to HTML extraction or network response parsing.' }
+                    },
+                    {
+                        targetId: 'response-detection-parser-guide',
+                        title: { zh: '创建解析器', en: 'Create a Parser' },
+                        description: { zh: '直接跳到“我想创建一个解析器”这段入口说明。', en: 'Jump directly to the “I want to create a parser” entry section.' }
+                    },
+                    {
+                        targetId: 'response-detection',
+                        title: { zh: '响应检测', en: 'Response Detection' },
+                        description: { zh: '看 DOM 模式、网络拦截模式和超时参数应该怎么配。', en: 'Review DOM mode, network interception, and timeout settings.' }
+                    },
+                    {
+                        targetId: 'image-extraction',
+                        title: { zh: '图片与附件', en: 'Images and Files' },
+                        description: { zh: '图片提取和文件粘贴都在这里串起来看。', en: 'Follow image extraction and file attach behavior together from here.' }
+                    }
+                ],
+                groups: [
+                    {
+                        title: { zh: '判断该改哪里', en: 'Choose the Right Layer' },
+                        sectionIds: ['extractors', 'response-detection']
+                    },
+                    {
+                        title: { zh: '特殊内容', en: 'Special Content' },
+                        sectionIds: ['image-extraction', 'file-paste']
+                    }
+                ]
+            },
+            {
+                id: 'advanced',
+                label: { zh: '高级能力', en: 'Advanced' },
+                heroTitle: { zh: '高级能力', en: 'Advanced' },
+                subtitle: {
+                    zh: '这里收拢函数调用、命令、AI 元素识别以及全局环境配置，适合已经跑通基础流程后再看。',
+                    en: 'This area collects function calling, commands, AI element recognition, and global environment settings once the basics already work.'
+                },
+                quickLinks: [
+                    {
+                        targetId: 'function-calling',
+                        title: { zh: '函数调用', en: 'Function Calling' },
+                        description: { zh: '先看边界，再决定要不要把工具调用接进来。', en: 'Review the boundaries before wiring tools into your workflow.' }
+                    },
+                    {
+                        targetId: 'commands',
+                        title: { zh: '自动化命令', en: 'Commands' },
+                        description: { zh: '切代理、执行脚本和命令编排都在这一节。', en: 'Proxy switching, scripts, and command orchestration live here.' }
+                    },
+                    {
+                        targetId: 'ai-recognition',
+                        title: { zh: 'AI 元素识别', en: 'AI Recognition' },
+                        description: { zh: '遇到结构复杂的新站点，可以先靠它起步。', en: 'Use it to bootstrap element discovery on unfamiliar sites.' }
+                    },
+                    {
+                        targetId: 'env-config',
+                        title: { zh: '环境配置', en: 'Environment' },
+                        description: { zh: '全局超时、端口、浏览器和保存策略统一在这里看。', en: 'Review ports, timeouts, browser settings, and persistence in one place.' }
+                    }
+                ],
+                groups: [
+                    {
+                        title: { zh: '扩展能力', en: 'Extended Capabilities' },
+                        sectionIds: ['function-calling', 'stealth-mode', 'commands']
+                    },
+                    {
+                        title: { zh: '识别与环境', en: 'Recognition and Environment' },
+                        sectionIds: ['ai-recognition', 'env-config', 'browser-config', 'config-manage']
+                    }
+                ]
+            }
+        ];
+
+        const docsSectionAliases = {
+            'quick-start': '入门 上手 第一次使用 双浏览器 controlled browser',
+            'add-site-guide': '新增站点 新网站 接入站点 自动识别 手动新增',
+            'selectors': '选择器 selector input_box send_btn result_container message_wrapper',
+            'extractors': '提取器 extractor html markdown dom 文本提取',
+            'response-detection': '解析器 parser 创建解析器 listen_pattern 网络拦截 stream streaming 响应检测',
+            'workflow': '工作流 workflow click wait fill_input key_press stream_wait',
+            'file-paste': '附件 上传 长文本 文件粘贴',
+            'commands': '命令 自动化 代理 切换命令',
+            'ai-recognition': 'AI识别 element detection 自动分析',
+            'env-config': '环境变量 helper api key base url model'
+        };
+
+        const docsUiCopy = {
+            zh: {
+                brandTitle: 'Universal Web-to-API',
+                brandSubtitle: '教程中心',
+                sidebarTitle: '本分类内容',
+                searchTrigger: '搜索章节、配置项、解析器或关键词',
+                searchHint: 'Ctrl + K',
+                searchPlaceholder: '试试搜索：解析器、选择器、工作流、代理、登录态...',
+                searchIdle: '输入关键词开始搜索。会自动跳到对应分类和章节。',
+                searchEmpty: '没有找到匹配内容，可以试试“解析器”“选择器”“工作流”“登录态”等关键词。',
+                badgeSection: '章节',
+                badgeHeading: '小节',
+                tocKicker: '目录',
+                tocTitle: '当前页导航',
+                tocEmpty: '当前章节没有更细的子标题，可以直接阅读正文。',
+                shareLink: '分享链接',
+                shareCopied: '已复制当前章节链接',
+                closeSearch: '关闭搜索'
+            },
+            en: {
+                brandTitle: 'Universal Web-to-API',
+                brandSubtitle: 'Docs Hub',
+                sidebarTitle: 'Current Category',
+                searchTrigger: 'Search sections, settings, parsers, or keywords',
+                searchHint: 'Ctrl + K',
+                searchPlaceholder: 'Try: parser, selector, workflow, proxy, login profile...',
+                searchIdle: 'Start typing to search. The page will switch to the matching category automatically.',
+                searchEmpty: 'No results found. Try terms like "parser", "selector", "workflow", or "profile".',
+                badgeSection: 'SECTION',
+                badgeHeading: 'TOPIC',
+                tocKicker: 'On This Page',
+                tocTitle: 'Current Page',
+                tocEmpty: 'This section has no deeper sub-headings, so you can read the body directly.',
+                shareLink: 'Copy Link',
+                shareCopied: 'Copied the current section link',
+                closeSearch: 'Close Search'
+            }
+        };
+
+        const docsSectionToCategory = docsCategories.reduce((map, category) => {
+            category.groups.forEach(group => {
+                group.sectionIds.forEach(sectionId => {
+                    map[sectionId] = category.id;
+                });
+            });
+            return map;
+        }, {});
+
+        const docsNavLinkMap = Array.from(navLinks).reduce((map, link) => {
+            const targetId = (link.getAttribute('href') || '').replace(/^#/, '');
+            if (targetId) {
+                map[targetId] = link;
+            }
+            return map;
+        }, {});
+
+        const docsRuntime = {
+            layoutReady: false,
+            eventsBound: false,
+            activeSectionId: '',
+            activeHeadingId: '',
+            searchIndex: []
+        };
+
+        function getDocsText(value) {
+            if (typeof value === 'string') {
+                return value;
+            }
+            if (!value || typeof value !== 'object') {
+                return '';
+            }
+            return value[tutorialState.currentLanguage] || value.zh || value.en || '';
+        }
+
+        function getDocsUi() {
+            return docsUiCopy[tutorialState.currentLanguage] || docsUiCopy.zh;
+        }
+
+        function normalizeDocsCategory(categoryId) {
+            return docsCategories.some(category => category.id === categoryId) ? categoryId : docsCategories[0].id;
+        }
+
+        function getDocsCategory(categoryId = tutorialState.currentCategory) {
+            const normalized = normalizeDocsCategory(categoryId);
+            return docsCategories.find(category => category.id === normalized) || docsCategories[0];
+        }
+
+        function escapeDocsHtml(value) {
+            return String(value || '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function escapeDocsRegExp(value) {
+            return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        }
+
+        function stripDocsText(value) {
+            return String(value || '').replace(/\s+/g, ' ').trim();
+        }
+
+        function getVisibleDocsSections() {
+            return Array.from(sections).filter(section => !section.classList.contains('is-hidden-by-category'));
+        }
+
+        function getDocsTargetMeta(targetId) {
+            const target = document.getElementById(targetId);
+            if (!target) {
+                return null;
+            }
+
+            const section = target.closest('section');
+            if (!section) {
+                return null;
+            }
+
+            return {
+                target,
+                section,
+                sectionId: section.id,
+                categoryId: section.dataset.docsCategory || docsSectionToCategory[section.id] || docsCategories[0].id
+            };
+        }
+
+        function assignDocsCategories() {
+            sections.forEach(section => {
+                const categoryId = docsSectionToCategory[section.id] || docsCategories[0].id;
+                section.dataset.docsCategory = categoryId;
+                section.dataset.searchAliases = docsSectionAliases[section.id] || '';
+            });
+
+            navLinks.forEach(link => {
+                const sectionId = (link.getAttribute('href') || '').replace(/^#/, '');
+                link.dataset.docsCategory = docsSectionToCategory[sectionId] || docsCategories[0].id;
+            });
+        }
+
+        function ensureDocsPageHeader() {
+            const header = document.querySelector('.page-header');
+            const projectBanner = header?.querySelector('.project-link-banner');
+            if (!header || !projectBanner) {
+                return;
+            }
+
+            if (!document.getElementById('pageKicker')) {
+                const kicker = document.createElement('div');
+                kicker.id = 'pageKicker';
+                kicker.className = 'page-kicker';
+                header.insertBefore(kicker, pageTitleEl);
+            }
+
+            if (!document.getElementById('pageSubtitle')) {
+                const subtitle = document.createElement('p');
+                subtitle.id = 'pageSubtitle';
+                subtitle.className = 'page-subtitle';
+                pageTitleEl.insertAdjacentElement('afterend', subtitle);
+            }
+
+            if (!document.getElementById('pageQuickLinks')) {
+                const quickLinks = document.createElement('div');
+                quickLinks.id = 'pageQuickLinks';
+                quickLinks.className = 'page-quick-links';
+                header.insertBefore(quickLinks, projectBanner);
+            }
+        }
+
+        function renderDocsTopTabs() {
+            const tabsEl = document.getElementById('topTabs');
+            if (!tabsEl) {
+                return;
+            }
+
+            tabsEl.innerHTML = docsCategories.map(category => `
+                <button type="button"
+                        class="top-tab${category.id === tutorialState.currentCategory ? ' active' : ''}"
+                        data-docs-category="${category.id}">
+                    ${escapeDocsHtml(getDocsText(category.label))}
+                </button>
+            `).join('');
+        }
+
+        function renderDocsSidebarGroups() {
+            const nav = document.querySelector('#sidebar nav');
+            if (!nav) {
+                return;
+            }
+
+            const category = getDocsCategory();
+            const activeSectionId = docsRuntime.activeSectionId || getVisibleDocsSections()[0]?.id || category.groups[0]?.sectionIds[0] || '';
+
+            nav.innerHTML = '';
+            nav.classList.add('sidebar-nav');
+
+            category.groups.forEach((group, index) => {
+                const details = document.createElement('details');
+                details.className = 'nav-group';
+                details.open = index === 0 || group.sectionIds.includes(activeSectionId);
+
+                const summary = document.createElement('summary');
+                summary.className = 'nav-group-summary';
+                summary.textContent = getDocsText(group.title);
+                details.appendChild(summary);
+
+                const linksWrap = document.createElement('div');
+                linksWrap.className = 'nav-group-links';
+
+                group.sectionIds.forEach(sectionId => {
+                    const link = docsNavLinkMap[sectionId];
+                    if (!link) {
+                        return;
+                    }
+
+                    link.classList.remove('is-hidden-by-category');
+                    linksWrap.appendChild(link);
+                });
+
+                details.appendChild(linksWrap);
+                nav.appendChild(details);
+            });
+        }
+
+        function ensureDocsLayout() {
+            const sidebar = document.getElementById('sidebar');
+            const mainContent = document.querySelector('.main-content');
+            if (!sidebar || !mainContent) {
+                return;
+            }
+
+            if (!document.getElementById('docsTopbar')) {
+                const topbar = document.createElement('div');
+                topbar.className = 'docs-topbar';
+                topbar.id = 'docsTopbar';
+                topbar.innerHTML = `
+                    <div class="docs-topbar-inner">
+                        <a href="#quick-start" class="docs-brand" data-target-id="quick-start">
+                            <span class="docs-brand-mark" aria-hidden="true">⌘</span>
+                            <span class="docs-brand-copy">
+                                <strong id="docsBrandTitle"></strong>
+                                <span id="docsBrandSubtitle"></span>
+                            </span>
+                        </a>
+                        <div class="top-tabs" id="topTabs"></div>
+                        <div class="docs-actions" id="docsActions">
+                            <button type="button" class="search-trigger" id="searchTrigger">
+                                <span class="search-trigger-text" id="searchTriggerText"></span>
+                                <kbd id="searchTriggerHint">Ctrl + K</kbd>
+                            </button>
+                        </div>
+                    </div>
+                `;
+
+                sidebar.parentNode.insertBefore(topbar, sidebar);
+            }
+
+            if (!document.getElementById('docsShell')) {
+                const shell = document.createElement('div');
+                shell.id = 'docsShell';
+                shell.className = 'docs-shell';
+                sidebar.parentNode.insertBefore(shell, sidebar);
+                shell.appendChild(sidebar);
+
+                const pageShell = document.createElement('div');
+                pageShell.id = 'pageShell';
+                pageShell.className = 'page-shell';
+                shell.appendChild(pageShell);
+                pageShell.appendChild(mainContent);
+            }
+
+            const pageShell = document.getElementById('pageShell');
+            if (pageShell && !document.getElementById('pageToc')) {
+                const toc = document.createElement('aside');
+                toc.className = 'page-toc';
+                toc.id = 'pageToc';
+                toc.innerHTML = `
+                    <div class="page-toc-card">
+                        <p class="page-toc-kicker" id="pageTocKicker"></p>
+                        <h2 class="page-toc-title" id="pageTocTitle"></h2>
+                        <div class="page-toc-links" id="pageTocLinks"></div>
+                        <button type="button" class="toc-share-btn" id="tocShareBtn"></button>
+                    </div>
+                `;
+                pageShell.appendChild(toc);
+            }
+
+            if (!document.getElementById('searchOverlay')) {
+                const overlay = document.createElement('div');
+                overlay.className = 'search-overlay';
+                overlay.id = 'searchOverlay';
+                overlay.innerHTML = `
+                    <div class="search-modal" role="dialog" aria-modal="true" aria-labelledby="searchModalLabel">
+                        <div class="search-modal-head">
+                            <span id="searchModalLabel"></span>
+                            <button type="button" class="search-modal-close" id="searchCloseBtn">Esc</button>
+                        </div>
+                        <div class="search-modal-input-wrap">
+                            <input type="search" class="search-modal-input" id="searchInput" autocomplete="off" spellcheck="false">
+                        </div>
+                        <div class="search-results" id="searchResults"></div>
+                    </div>
+                `;
+                document.body.appendChild(overlay);
+            }
+
+            const docsActions = document.getElementById('docsActions');
+            if (docsActions && languageDropdownEl && languageDropdownEl.parentElement !== docsActions) {
+                docsActions.appendChild(languageDropdownEl);
+            }
+
+            ensureDocsPageHeader();
+            renderDocsTopTabs();
+            renderDocsSidebarGroups();
+            docsRuntime.layoutReady = true;
+        }
+
+        function syncDocsChrome() {
+            const ui = getDocsUi();
+            const category = getDocsCategory();
+            const quickLinks = document.getElementById('pageQuickLinks');
+            const pageKicker = document.getElementById('pageKicker');
+            const pageSubtitle = document.getElementById('pageSubtitle');
+            const brandTitle = document.getElementById('docsBrandTitle');
+            const brandSubtitle = document.getElementById('docsBrandSubtitle');
+            const searchTriggerText = document.getElementById('searchTriggerText');
+            const searchTriggerHint = document.getElementById('searchTriggerHint');
+            const searchModalLabel = document.getElementById('searchModalLabel');
+            const searchInput = document.getElementById('searchInput');
+            const searchCloseBtn = document.getElementById('searchCloseBtn');
+            const tocKicker = document.getElementById('pageTocKicker');
+            const tocShareBtn = document.getElementById('tocShareBtn');
+
+            navTitleEl.textContent = getDocsText(category.label) || ui.sidebarTitle;
+            pageTitleEl.textContent = getDocsText(category.heroTitle);
+
+            if (pageKicker) {
+                pageKicker.textContent = ui.brandSubtitle;
+            }
+
+            if (pageSubtitle) {
+                pageSubtitle.textContent = getDocsText(category.subtitle);
+            }
+
+            if (brandTitle) {
+                brandTitle.textContent = ui.brandTitle;
+            }
+
+            if (brandSubtitle) {
+                brandSubtitle.textContent = ui.brandSubtitle;
+            }
+
+            if (searchTriggerText) {
+                searchTriggerText.textContent = ui.searchTrigger;
+            }
+
+            if (searchTriggerHint) {
+                searchTriggerHint.textContent = ui.searchHint;
+            }
+
+            if (searchModalLabel) {
+                searchModalLabel.textContent = ui.searchTrigger;
+            }
+
+            if (searchInput) {
+                searchInput.placeholder = ui.searchPlaceholder;
+            }
+
+            if (searchCloseBtn) {
+                searchCloseBtn.textContent = 'Esc';
+                searchCloseBtn.setAttribute('aria-label', ui.closeSearch);
+            }
+
+            if (tocKicker) {
+                tocKicker.textContent = ui.tocKicker;
+            }
+
+            if (tocShareBtn) {
+                tocShareBtn.textContent = ui.shareLink;
+            }
+
+            if (quickLinks) {
+                quickLinks.innerHTML = category.quickLinks.map(link => `
+                    <a href="#${link.targetId}" class="quick-link-card" data-target-id="${link.targetId}">
+                        <strong>${escapeDocsHtml(getDocsText(link.title))}</strong>
+                        <span>${escapeDocsHtml(getDocsText(link.description))}</span>
+                    </a>
+                `).join('');
+            }
+
+            renderDocsTopTabs();
+        }
+
+        function ensureDocsExtractorNote() {
+            const extractorsSection = document.getElementById('extractors');
+            if (!extractorsSection || extractorsSection.querySelector('[data-docs-extractor-note]')) {
+                return;
+            }
+
+            const note = document.createElement('div');
+            note.className = 'clarity-note';
+            note.dataset.docsExtractorNote = 'true';
+            note.innerHTML = tutorialState.currentLanguage === 'en'
+                ? `
+                    <h3 class="task-guide-title" id="extractor-vs-parser">One-minute rule: extractor or parser?</h3>
+                    <p>If the full answer is already visible on the page and only the captured result looks messy, incomplete, or badly formatted, start with the <strong>extractor</strong>.</p>
+                    <p>If the answer is not rendered yet, or you want to read the underlying JSON / text directly, you need the <strong>parser</strong> and network interception instead.</p>
+                    <p>If your goal is to create a parser for a new site, jump straight to the parser guide in the response detection section below.</p>
+                `
+                : `
+                    <h3 class="task-guide-title" id="extractor-vs-parser">一分钟搞懂：改「提取器」还是改「解析器」？</h3>
+                    <p>网页上已经有完整的字了，只是抓下来比较乱、缺内容、丢格式？先改<strong>提取器</strong>。它负责把网页 HTML 清洗成干净的 Markdown。</p>
+                    <p>字还没渲染出来，或者你想直接拦截底层 JSON / 文本？那就去看<strong>解析器</strong>和网络拦截。它负责把响应体转换成最终输出。</p>
+                    <p>如果你的目标是给新站点创建解析器，直接跳到下方「我想创建一个解析器，该从哪里看起？」这一段就行。</p>
+                `;
+
+            const firstParagraph = extractorsSection.querySelector('p');
+            if (firstParagraph) {
+                firstParagraph.insertAdjacentElement('afterend', note);
+            } else {
+                extractorsSection.prepend(note);
+            }
+        }
+
+        function ensureDocsParserGuide() {
+            const responseSection = document.getElementById('response-detection');
+            if (!responseSection || responseSection.querySelector('[data-docs-parser-guide]')) {
+                return;
+            }
+
+            const guide = document.createElement('div');
+            guide.className = 'task-guide';
+            guide.dataset.docsParserGuide = 'true';
+            guide.innerHTML = tutorialState.currentLanguage === 'en'
+                ? `
+                    <div class="task-guide-badge">Hands-on</div>
+                    <h3 class="task-guide-title" id="response-detection-parser-guide">I want to create a parser. Where should I start?</h3>
+                    <p>If the site already renders the answer in the DOM and only the extracted text looks wrong, stay with extractors. You only need a parser when the real answer lives inside the intercepted request or response.</p>
+                    <ol>
+                        <li>Use the built-in request generator in this section and export one real request sample.</li>
+                        <li>Send that export to AI together with <code>app/core/parsers/base.py</code>, <code>app/core/parsers/__init__.py</code>, and one or two similar parsers.</li>
+                        <li>Ask AI to create <code>app/core/parsers/xxx_parser.py</code> and tell you how to register it in <code>__init__.py</code>.</li>
+                        <li>Return to the dashboard, enable network interception, then fill in <code>listen_pattern</code> and the parser ID you just created.</li>
+                    </ol>
+                    <p>The detailed walkthrough is still right below. This entry is here so parser creation no longer stays buried in the middle of a long chapter.</p>
+                `
+                : `
+                    <div class="task-guide-badge">实战入口</div>
+                    <h3 class="task-guide-title" id="response-detection-parser-guide">我想创建一个解析器，该从哪里看起？</h3>
+                    <p>如果站点的回复已经渲染在 DOM 里，只是提取结果不对，那还是先看提取器。只有当真实内容藏在网络请求 / 响应里时，才需要自己写解析器。</p>
+                    <ol>
+                        <li>先用本节内置的拦截脚本导出一次真实请求样本。</li>
+                        <li>把导出文件和 <code>app/core/parsers/base.py</code>、<code>app/core/parsers/__init__.py</code>、一两个相近解析器一起发给 AI。</li>
+                        <li>让 AI 新建 <code>app/core/parsers/xxx_parser.py</code>，并告诉你 <code>__init__.py</code> 里该怎么注册。</li>
+                        <li>回到控制台开启网络拦截模式，再填写 <code>listen_pattern</code> 和你刚创建的 parser ID。</li>
+                    </ol>
+                    <p>真正的详细示例步骤还在本节下面，这里只是先给你一个清晰入口，避免“创建解析器”的说明继续埋在长章节中间。</p>
+                `;
+
+            const firstParagraph = responseSection.querySelector('p');
+            if (firstParagraph) {
+                firstParagraph.insertAdjacentElement('afterend', guide);
+            } else {
+                responseSection.prepend(guide);
+            }
+        }
+
+        function ensureDocsHeadingAnchors() {
+            sections.forEach(section => {
+                let h3Index = 0;
+                let h4Index = 0;
+
+                section.querySelectorAll('h3, h4').forEach(heading => {
+                    if (heading.id) {
+                        return;
+                    }
+
+                    if (heading.tagName === 'H3') {
+                        h3Index += 1;
+                        heading.id = `${section.id}-h3-${h3Index}`;
+                    } else {
+                        h4Index += 1;
+                        heading.id = `${section.id}-h4-${h4Index}`;
+                    }
+                });
+            });
+        }
+
+        function highlightDocsTerms(text, terms) {
+            let html = escapeDocsHtml(text);
+
+            terms.forEach(term => {
+                if (!term) {
+                    return;
+                }
+
+                const matcher = new RegExp(`(${escapeDocsRegExp(term)})`, 'ig');
+                html = html.replace(matcher, '<mark>$1</mark>');
+            });
+
+            return html;
+        }
+
+        function getDocsSearchSnippet(item, terms) {
+            const source = stripDocsText(item.snippetSource || item.title || '');
+            if (!source) {
+                return item.sectionTitle ? escapeDocsHtml(item.sectionTitle) : '';
+            }
+
+            const lowerSource = source.toLowerCase();
+            const firstIndex = terms.reduce((current, term) => {
+                const index = lowerSource.indexOf(term);
+                if (index === -1) {
+                    return current;
+                }
+                if (current === -1) {
+                    return index;
+                }
+                return Math.min(current, index);
+            }, -1);
+
+            let snippet = source;
+            if (firstIndex > 72) {
+                snippet = `...${source.slice(firstIndex - 48, firstIndex + 120)}`;
+            } else {
+                snippet = source.slice(0, 168);
+            }
+
+            if (snippet.length < source.length && !snippet.endsWith('...')) {
+                snippet += '...';
+            }
+
+            return highlightDocsTerms(snippet, terms);
+        }
+
+        function buildDocsSearchIndex() {
+            const index = [];
+
+            sections.forEach(section => {
+                const sectionTitle = stripDocsText(section.querySelector('h2')?.textContent || section.id);
+                const sectionText = stripDocsText(section.textContent);
+                const categoryId = section.dataset.docsCategory || docsSectionToCategory[section.id] || docsCategories[0].id;
+                const aliases = stripDocsText(section.dataset.searchAliases || '');
+
+                index.push({
+                    type: 'section',
+                    targetId: section.id,
+                    sectionId: section.id,
+                    categoryId,
+                    title: sectionTitle,
+                    sectionTitle,
+                    snippetSource: sectionText,
+                    searchText: `${sectionTitle} ${aliases} ${sectionText}`.toLowerCase()
+                });
+
+                section.querySelectorAll('h3, h4').forEach(heading => {
+                    const headingText = stripDocsText(heading.textContent);
+                    if (!headingText) {
+                        return;
+                    }
+
+                    const fragments = [headingText];
+                    let sibling = heading.nextElementSibling;
+                    let guard = 0;
+                    while (sibling && !/^H[34]$/.test(sibling.tagName) && guard < 4) {
+                        const text = stripDocsText(sibling.textContent);
+                        if (text) {
+                            fragments.push(text);
+                        }
+                        sibling = sibling.nextElementSibling;
+                        guard += 1;
+                    }
+
+                    index.push({
+                        type: 'heading',
+                        targetId: heading.id,
+                        sectionId: section.id,
+                        categoryId,
+                        title: headingText,
+                        sectionTitle,
+                        snippetSource: fragments.join(' '),
+                        searchText: `${headingText} ${sectionTitle} ${aliases} ${fragments.join(' ')}`.toLowerCase()
+                    });
+                });
+            });
+
+            docsRuntime.searchIndex = index;
+        }
+
+        function renderDocsSearchResults(query) {
+            const resultsEl = document.getElementById('searchResults');
+            if (!resultsEl) {
+                return;
+            }
+
+            const ui = getDocsUi();
+            const normalizedQuery = stripDocsText(query).toLowerCase();
+            const terms = normalizedQuery.split(/\s+/).filter(Boolean);
+
+            if (!terms.length) {
+                resultsEl.innerHTML = `<div class="search-empty">${escapeDocsHtml(ui.searchIdle)}</div>`;
+                return;
+            }
+
+            const results = docsRuntime.searchIndex
+                .filter(item => terms.every(term => item.searchText.includes(term)))
+                .map(item => {
+                    const titleLower = item.title.toLowerCase();
+                    const score = terms.reduce((total, term) => {
+                        let next = total;
+                        if (titleLower.includes(term)) {
+                            next += 12;
+                        }
+                        if (item.sectionTitle.toLowerCase().includes(term)) {
+                            next += 4;
+                        }
+                        if (item.searchText.includes(term)) {
+                            next += 2;
+                        }
+                        return next;
+                    }, item.type === 'heading' ? 1 : 0);
+
+                    return { ...item, score };
+                })
+                .sort((left, right) => right.score - left.score)
+                .slice(0, 14);
+
+            if (!results.length) {
+                resultsEl.innerHTML = `<div class="search-empty">${escapeDocsHtml(ui.searchEmpty)}</div>`;
+                return;
+            }
+
+            resultsEl.innerHTML = results.map(item => {
+                const categoryLabel = getDocsText(getDocsCategory(item.categoryId).label);
+                const badge = item.type === 'heading' ? ui.badgeHeading : ui.badgeSection;
+                const snippet = getDocsSearchSnippet(item, terms);
+
+                return `
+                    <button type="button" class="search-result" data-target-id="${item.targetId}">
+                        <div class="search-result-head">
+                            <span class="search-result-title">${highlightDocsTerms(item.title, terms)}</span>
+                            <span class="search-result-badge">${escapeDocsHtml(badge)}</span>
+                        </div>
+                        <div class="search-result-snippet">${escapeDocsHtml(categoryLabel)} / ${escapeDocsHtml(item.sectionTitle)} · ${snippet}</div>
+                    </button>
+                `;
+            }).join('');
+        }
+
+        function openDocsSearch(initialQuery = '') {
+            const overlay = document.getElementById('searchOverlay');
+            const input = document.getElementById('searchInput');
+            if (!overlay || !input) {
+                return;
+            }
+
+            tutorialState.searchOpen = true;
+            overlay.classList.add('open');
+            input.value = initialQuery;
+            renderDocsSearchResults(initialQuery);
+
+            requestAnimationFrame(() => {
+                input.focus();
+                input.select();
+            });
+        }
+
+        function closeDocsSearch() {
+            const overlay = document.getElementById('searchOverlay');
+            if (!overlay) {
+                return;
+            }
+
+            tutorialState.searchOpen = false;
+            overlay.classList.remove('open');
+        }
+
+        function getCurrentDocsSectionId() {
+            const visibleSections = getVisibleDocsSections();
+            let current = visibleSections[0]?.id || '';
+
+            visibleSections.forEach(section => {
+                if (window.scrollY >= section.offsetTop - 140) {
+                    current = section.id;
+                }
+            });
+
+            return current;
+        }
+
+        function getCurrentDocsHeadingId(sectionId = docsRuntime.activeSectionId) {
+            const section = document.getElementById(sectionId);
+            if (!section) {
+                return '';
+            }
+
+            let current = '';
+            section.querySelectorAll('h3, h4').forEach(heading => {
+                if (window.scrollY >= heading.offsetTop - 148) {
+                    current = heading.id;
+                }
+            });
+
+            return current;
+        }
+
+        function updateDocsTocActiveState() {
+            const activeHeadingId = docsRuntime.activeHeadingId;
+            const activeSectionId = docsRuntime.activeSectionId;
+
+            document.querySelectorAll('.toc-link').forEach(link => {
+                const targetId = (link.getAttribute('href') || '').replace(/^#/, '');
+                const isActive = activeHeadingId
+                    ? targetId === activeHeadingId
+                    : targetId === activeSectionId;
+                link.classList.toggle('active', isActive);
+            });
+        }
+
+        function renderDocsToc() {
+            const tocTitle = document.getElementById('pageTocTitle');
+            const tocLinks = document.getElementById('pageTocLinks');
+            if (!tocTitle || !tocLinks) {
+                return;
+            }
+
+            const ui = getDocsUi();
+            const sectionId = docsRuntime.activeSectionId || getCurrentDocsSectionId();
+            const section = document.getElementById(sectionId);
+
+            if (!section) {
+                tocTitle.textContent = ui.tocTitle;
+                tocTitle.dataset.sectionId = '';
+                tocLinks.innerHTML = `<div class="toc-empty">${escapeDocsHtml(ui.tocEmpty)}</div>`;
+                return;
+            }
+
+            const sectionTitle = stripDocsText(section.querySelector('h2')?.textContent || section.id);
+            const headings = Array.from(section.querySelectorAll('h3, h4'));
+
+            tocTitle.textContent = sectionTitle;
+            tocTitle.dataset.sectionId = section.id;
+
+            if (!headings.length) {
+                tocLinks.innerHTML = `
+                    <a href="#${section.id}" class="toc-link" data-target-id="${section.id}">
+                        ${escapeDocsHtml(sectionTitle)}
+                    </a>
+                `;
+                updateDocsTocActiveState();
+                return;
+            }
+
+            tocLinks.innerHTML = headings.map(heading => `
+                <a href="#${heading.id}"
+                   class="toc-link level-${heading.tagName.toLowerCase()}"
+                   data-target-id="${heading.id}">
+                    ${escapeDocsHtml(stripDocsText(heading.textContent))}
+                </a>
+            `).join('');
+
+            updateDocsTocActiveState();
+        }
+
+        function scrollDocsToTarget(targetId, behavior = 'smooth', options = {}) {
+            const target = document.getElementById(targetId);
+            if (!target) {
+                return;
+            }
+
+            const offset = window.innerWidth <= 900 ? 92 : 118;
+            const top = target.getBoundingClientRect().top + window.scrollY - offset;
+
+            window.scrollTo({
+                top: Math.max(top, 0),
+                behavior
+            });
+
+            if (options.updateHash !== false) {
+                history.replaceState(null, '', `#${targetId}`);
+            }
+        }
+
+        function revealDocsTarget(targetId, options = {}) {
+            const meta = getDocsTargetMeta(targetId);
+            if (!meta) {
+                return;
+            }
+
+            const behavior = options.behavior || 'smooth';
+            if (meta.categoryId !== tutorialState.currentCategory) {
+                setDocsCategory(meta.categoryId, {
+                    persist: options.persist,
+                    skipScroll: true
+                });
+            }
+
+            requestAnimationFrame(() => {
+                scrollDocsToTarget(targetId, behavior, {
+                    updateHash: options.updateHash !== false
+                });
+                updateActiveNavLink();
+            });
+
+            if (window.innerWidth <= 900) {
+                const sidebar = document.getElementById('sidebar');
+                if (sidebar?.classList.contains('open')) {
+                    toggleSidebar();
+                }
+            }
+        }
+
+        function copyDocsCurrentLink() {
+            const ui = getDocsUi();
+            const targetId = docsRuntime.activeHeadingId
+                || docsRuntime.activeSectionId
+                || getVisibleDocsSections()[0]?.id
+                || 'quick-start';
+
+            const url = new URL(window.location.href);
+            url.hash = targetId;
+
+            copyTextToClipboard(url.toString())
+                .then(() => showSiteCopyToast(ui.shareCopied))
+                .catch(() => showSiteCopyToast(ui.shareCopied, true));
+        }
+
+        function reorderDocsSections(categoryId) {
+            const mainContent = document.querySelector('.main-content');
+            const header = mainContent?.querySelector('.page-header');
+            if (!mainContent || !header) {
+                return;
+            }
+
+            const orderedIds = getDocsCategory(categoryId).groups.flatMap(group => group.sectionIds);
+            const remainingIds = Array.from(sections)
+                .map(section => section.id)
+                .filter(sectionId => !orderedIds.includes(sectionId));
+
+            [...orderedIds, ...remainingIds].forEach(sectionId => {
+                const section = document.getElementById(sectionId);
+                if (section) {
+                    mainContent.appendChild(section);
+                }
+            });
+        }
+
+        function setDocsCategory(categoryId, options = {}) {
+            const normalized = normalizeDocsCategory(categoryId);
+            tutorialState.currentCategory = normalized;
+
+            if (options.persist !== false) {
+                localStorage.setItem('tutorial-category', normalized);
+            }
+
+            reorderDocsSections(normalized);
+
+            sections.forEach(section => {
+                const isVisible = section.dataset.docsCategory === normalized;
+                section.classList.toggle('is-hidden-by-category', !isVisible);
+            });
+
+            navLinks.forEach(link => {
+                const isVisible = link.dataset.docsCategory === normalized;
+                link.classList.toggle('is-hidden-by-category', !isVisible);
+            });
+
+            renderDocsSidebarGroups();
+            syncDocsChrome();
+            docsRuntime.activeSectionId = '';
+            docsRuntime.activeHeadingId = '';
+            updateActiveNavLink();
+
+            if (!options.skipScroll) {
+                const firstSectionId = options.targetId || getDocsCategory(normalized).groups[0]?.sectionIds[0];
+                if (firstSectionId) {
+                    scrollDocsToTarget(firstSectionId, options.behavior || 'smooth', {
+                        updateHash: options.updateHash !== false
+                    });
+                }
+            }
+        }
+
+        function handleDocsHashChange() {
+            const hashTarget = decodeURIComponent(window.location.hash.replace(/^#/, ''));
+            if (!hashTarget) {
+                return;
+            }
+
+            const meta = getDocsTargetMeta(hashTarget);
+            if (!meta) {
+                return;
+            }
+
+            revealDocsTarget(hashTarget, {
+                behavior: 'auto',
+                persist: false,
+                updateHash: false
+            });
+        }
+
+        function bindDocsEvents() {
+            if (docsRuntime.eventsBound) {
+                return;
+            }
+
+            docsRuntime.eventsBound = true;
+
+            document.addEventListener('click', event => {
+                const navLink = event.target.closest('.nav-link');
+                if (navLink) {
+                    const href = navLink.getAttribute('href') || '';
+                    const targetId = decodeURIComponent(href.replace(/^#/, ''));
+                    if (targetId) {
+                        event.preventDefault();
+                        revealDocsTarget(targetId);
+                        return;
+                    }
+                }
+
+                const categoryTrigger = event.target.closest('.top-tab[data-docs-category]');
+                if (categoryTrigger) {
+                    event.preventDefault();
+                    const categoryId = categoryTrigger.getAttribute('data-docs-category');
+                    setDocsCategory(categoryId, {
+                        targetId: getDocsCategory(categoryId).groups[0]?.sectionIds[0]
+                    });
+                    return;
+                }
+
+                const targetedLink = event.target.closest('[data-target-id]');
+                if (targetedLink) {
+                    event.preventDefault();
+                    const targetId = targetedLink.getAttribute('data-target-id');
+                    if (targetedLink.classList.contains('search-result')) {
+                        closeDocsSearch();
+                    }
+                    revealDocsTarget(targetId);
+                    return;
+                }
+
+                if (event.target.closest('#searchTrigger')) {
+                    event.preventDefault();
+                    openDocsSearch(document.getElementById('searchInput')?.value || '');
+                    return;
+                }
+
+                if (event.target.closest('#searchCloseBtn') || event.target.id === 'searchOverlay') {
+                    event.preventDefault();
+                    closeDocsSearch();
+                    return;
+                }
+
+                if (event.target.closest('#tocShareBtn')) {
+                    event.preventDefault();
+                    copyDocsCurrentLink();
+                }
+            });
+
+            document.addEventListener('keydown', event => {
+                if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+                    event.preventDefault();
+                    openDocsSearch(document.getElementById('searchInput')?.value || '');
+                    return;
+                }
+
+                if (tutorialState.searchOpen && event.key === 'Escape') {
+                    closeDocsSearch();
+                }
+            });
+
+            const searchInput = document.getElementById('searchInput');
+            if (searchInput) {
+                searchInput.addEventListener('input', event => {
+                    renderDocsSearchResults(event.target.value);
+                });
+
+                searchInput.addEventListener('keydown', event => {
+                    if (event.key === 'Enter') {
+                        const firstResult = document.querySelector('.search-result');
+                        if (firstResult) {
+                            event.preventDefault();
+                            firstResult.click();
+                        }
+                    }
+                });
+            }
+
+            window.addEventListener('hashchange', handleDocsHashChange);
+        }
+
+        function updateActiveNavLink() {
+            const currentSectionId = getCurrentDocsSectionId();
+            docsRuntime.activeSectionId = currentSectionId;
+            docsRuntime.activeHeadingId = getCurrentDocsHeadingId(currentSectionId);
+
+            navLinks.forEach(link => {
+                const targetId = (link.getAttribute('href') || '').replace(/^#/, '');
+                const isActive = targetId === currentSectionId;
+                link.classList.toggle('active', isActive);
+            });
+
+            const tocTitle = document.getElementById('pageTocTitle');
+            if (tocTitle?.dataset.sectionId !== currentSectionId) {
+                renderDocsToc();
+            } else {
+                updateDocsTocActiveState();
+            }
+        }
+
+        function applyLanguage(language) {
+            const normalized = normalizeLanguage(language);
+            const fallback = tutorialTranslations.zh;
+            const bundle = tutorialTranslations[normalized] || fallback;
+
+            tutorialState.currentLanguage = normalized;
+
+            document.documentElement.lang = bundle.meta?.htmlLang || fallback.meta.htmlLang;
+            document.title = bundle.meta?.pageTitle || fallback.meta.pageTitle;
+
+            navTitleEl.textContent = bundle.ui?.navTitle || fallback.ui.navTitle;
+            pageTitleEl.textContent = bundle.ui?.pageHeaderTitle || fallback.ui.pageHeaderTitle;
+            projectLinkLabelTextEl.textContent = bundle.ui?.projectLinkLabel || fallback.ui.projectLinkLabel;
+            projectLinkDescriptionEl.textContent = bundle.ui?.projectLinkDescription || fallback.ui.projectLinkDescription;
+            projectLinkButtonTextEl.textContent = bundle.ui?.projectLinkButton || fallback.ui.projectLinkButton;
+            languageTriggerEl.setAttribute('aria-label', bundle.ui?.languageLabel || fallback.ui.languageLabel);
+            languageMenuEl.setAttribute('aria-label', bundle.ui?.languageLabel || fallback.ui.languageLabel);
+
+            navLinks.forEach(link => {
+                const sectionId = (link.getAttribute('href') || '').replace(/^#/, '');
+                link.textContent = bundle.nav?.[sectionId] || fallback.nav?.[sectionId] || link.textContent;
+            });
+
+            sections.forEach(section => {
+                const translatedHtml = bundle.sections?.[section.id] || fallback.sections?.[section.id];
+                if (typeof translatedHtml === 'string') {
+                    section.innerHTML = translatedHtml;
+                }
+            });
+
+            renderSiteGrid();
+            updateLanguageButtons();
+            updateThemeButton(document.documentElement.getAttribute('data-theme') || 'light');
+            updateHamburgerLabel();
+
+            assignDocsCategories();
+            ensureDocsExtractorNote();
+            ensureDocsParserGuide();
+            ensureDocsHeadingAnchors();
+            ensureDocsLayout();
+            bindDocsEvents();
+            syncDocsChrome();
+            buildDocsSearchIndex();
+
+            const hashTarget = decodeURIComponent(window.location.hash.replace(/^#/, ''));
+            const hashMeta = hashTarget ? getDocsTargetMeta(hashTarget) : null;
+            const nextCategory = hashMeta?.categoryId
+                || normalizeDocsCategory(localStorage.getItem('tutorial-category') || tutorialState.currentCategory);
+
+            setDocsCategory(nextCategory, {
+                persist: false,
+                skipScroll: true
+            });
+
+            if (hashMeta) {
+                requestAnimationFrame(() => {
+                    scrollDocsToTarget(hashTarget, 'auto', { updateHash: false });
+                    updateActiveNavLink();
+                });
+            } else {
+                updateActiveNavLink();
+            }
+
+            if (tutorialState.searchOpen) {
+                renderDocsSearchResults(document.getElementById('searchInput')?.value || '');
+            }
+        }
+
         captureChineseBundle();
         initTheme();
         applyLanguage(normalizeLanguage(localStorage.getItem('tutorial-language') || 'zh'));

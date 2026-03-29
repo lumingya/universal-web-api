@@ -246,41 +246,57 @@
     `;
 
     translations.sections['function-calling'] = `
-        <h2>🧰 Function Calling Compatibility</h2>
-        <p>The project now supports the <strong>OpenAI standard tool-calling format</strong>. It can accept <code>tools</code> / <code>tool_choice</code> and also the legacy <code>functions</code> / <code>function_call</code> fields.</p>
+        <h2>🧰 Function Calling (Tool Calling)</h2>
 
         <div class="info-box">
-            <p><strong>How it works:</strong> your client still sends a normal OpenAI-style request. The backend reformats tool definitions, tool history, and constraints into prompts that the website model can understand, then tries to parse the model output back into <code>tool_calls</code>.</p>
+            <p><strong>🎯 Quick navigation</strong></p>
+            <table>
+                <tr><th>What you need</th><th>Recommended feature</th><th>Jump</th></tr>
+                <tr><td>Let the model call tools such as search or calculators</td><td>Function calling</td><td><a href="#function-calling">View</a></td></tr>
+                <tr><td>Reduce Cloudflare challenges</td><td>Stealth mode</td><td><a href="#stealth-mode">View</a></td></tr>
+                <tr><td>Clear cookies every 10 turns</td><td>Automation commands</td><td><a href="#commands">View</a></td></tr>
+                <tr><td>Switch proxy when a captcha appears</td><td>Commands + proxy switching</td><td><a href="#proxy-switching">View</a></td></tr>
+                <tr><td>You do not know how to write selectors for a new site</td><td>AI recognition</td><td><a href="#ai-recognition">View</a></td></tr>
+                <tr><td>Change port, proxy, timeout, or other global settings</td><td>Environment settings</td><td><a href="#env-config">View</a></td></tr>
+            </table>
+        </div>
+
+        <p>The project supports the <strong>OpenAI-style <code>tools</code> format</strong> and also the older <code>functions</code> / <code>function_call</code> fields, so most clients that already support Tool Calling can connect directly.</p>
+
+        <div class="info-box">
+            <p><strong>What this is:</strong> a compatibility layer that lets you keep using familiar OpenAI-style tool definitions.</p>
         </div>
 
         <div class="highlight-box">
-            <p><strong>Important boundary:</strong> this is not native tool calling provided by the original website. It still depends heavily on prompt engineering and the model's own ability to follow formatting rules.</p>
+            <p><strong>⚠️ Important boundary:</strong> this is <strong>not native API tool calling</strong>. The backend rewrites your tool definitions into prompt instructions, the website model tries to follow them, and the backend then parses the result back into <code>tool_calls</code>. Reliability depends heavily on the model's own reasoning and formatting discipline.</p>
         </div>
 
-        <h3>When it tends to work better</h3>
-        <ul>
-            <li>The model is strong and follows formatting instructions well.</li>
-            <li>The number of tools is small and each tool has a clear purpose.</li>
-            <li>The parameter schema is simple and relatively flat.</li>
-            <li>The system prompt stays focused and does not contain too many unrelated requirements.</li>
-        </ul>
+        <h3>What affects success rate</h3>
+        <table>
+            <tr><th>Factor</th><th>Higher success</th><th>Lower success</th></tr>
+            <tr><td><strong>Model strength</strong></td><td>Strong models such as GPT-5 or Claude 4.5</td><td>Smaller or specialized models</td></tr>
+            <tr><td><strong>Tool count</strong></td><td>1-3 tools</td><td>10+ tools</td></tr>
+            <tr><td><strong>Parameter shape</strong></td><td>Flat and simple</td><td>Deep nesting and complex objects</td></tr>
+            <tr><td><strong>Naming clarity</strong></td><td><code>search_web</code>, <code>get_weather</code></td><td><code>func1</code>, <code>tool_x</code></td></tr>
+            <tr><td><strong>Prompt length</strong></td><td>Focused system prompts</td><td>Very long role or policy setup</td></tr>
+        </table>
 
-        <h3>When it tends to fail</h3>
+        <h3>Typical failure patterns</h3>
         <ul>
-            <li>The model cannot consistently understand that the output must stay structured.</li>
-            <li>Function names are too similar or schemas are too complex.</li>
-            <li>The prompt is too long and the model loses focus.</li>
-            <li>The response mixes normal text with malformed JSON, which the backend cannot parse cleanly.</li>
+            <li>The model answers in plain language instead of calling a tool.</li>
+            <li>The JSON shape is malformed and cannot be parsed.</li>
+            <li>Argument names do not match the schema.</li>
+            <li>The output mixes explanation text with a partial tool call.</li>
         </ul>
 
         <div class="note">
-            <p><strong>Expectation management:</strong> if you see cases like wrong function names, missing arguments, plain chat replies instead of tool calls, or backend parse failures, the problem is usually not your client library. It is usually the website model failing to produce a stable structured result.</p>
+            <p><strong>Expectation management:</strong> if you see wrong function names, missing arguments, plain chat replies instead of tool calls, or backend parse failures, the problem is usually not your client library. It is usually the website model failing to produce a stable structured result.</p>
         </div>
 
         <h3>Practical advice</h3>
         <ol>
             <li>Start with only 1 to 3 tools.</li>
-            <li>Use short and distinct function names.</li>
+            <li>Use clear verb-based names such as <code>search</code>, <code>calculate</code>, or <code>get</code>.</li>
             <li>Keep schemas flat before introducing deep nesting.</li>
             <li>Prefer stronger models whenever possible.</li>
             <li>If parsing keeps failing, simplify tools and arguments before adding more rules.</li>
@@ -459,28 +475,28 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
 
     translations.sections['extractors'] = `
         <h2>🧩 Extractor Configuration</h2>
-        <p>Extractors decide how clean Markdown text is parsed from the page HTML.</p>
+        <p>When an AI reply comes back messy, incomplete, or loses formatting, start with the extractor. If the problem is not in the page HTML but in the underlying response body, move on to parsers and network interception.</p>
         <pre><code>{
   "extractor_id": "deep_mode_v1",
   ...
 }</code></pre>
         <ul>
-            <li><strong>Default mode</strong>: extracts text from <code>result_container</code>.</li>
-            <li><strong>deep_mode</strong>: adds special handling for complex LaTeX and code blocks.</li>
+            <li><strong>Default mode</strong>: reads text directly from <code>result_container</code>, which is enough for most normal chat pages.</li>
+            <li><strong>deep_mode</strong>: adds extra handling for complex code blocks, LaTeX formulas, and similar formatting-heavy output.</li>
         </ul>
 
         <div class="note">
-            <p><strong>⚠️ Current recommendation:</strong> right now <strong>deep_mode</strong> is the most optimized option. Other modes are still incomplete.</p>
+            <p><strong>💡 Configuration advice:</strong> if the full answer is already visible on the page and only the extracted result looks wrong, stay in the extractor layer. If default mode is not enough, switch to <strong>deep_mode</strong>. If the real issue is that the answer is not rendered yet, or you want to read the raw JSON / text directly, move on to parsers and network interception.</p>
         </div>
 
         <div class="info-box">
-            <p><strong>💡 Complex output:</strong> even deep mode can still struggle with some complicated code blocks. In those cases, adapted sites may work better with network interception mode.</p>
+            <p><strong>⚠️ Complex output reminder:</strong> even <strong>deep_mode</strong> can still struggle with some difficult code blocks. If you need more faithful code, formulas, or raw streaming output, continue to the network interception mode below. Just remember that unsupported sites should not enable it casually.</p>
         </div>
     `;
 
     translations.sections['image-extraction'] = `
         <h2>🖼️ Image Extraction</h2>
-        <p>This section controls how generated images are found and downloaded from the page.</p>
+        <p>If you want the system to automatically save images generated or returned by the AI, this is the section to use. It controls how image nodes are found on the page and whether they are downloaded locally.</p>
         <pre><code>"image_extraction": {
   "enabled": true,
   "selector": "img",
@@ -491,64 +507,173 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
 }</code></pre>
         <p><strong>Saved locations:</strong></p>
         <ul>
-            <li><strong>Images you send</strong>: stored in <code>image/</code>.</li>
-            <li><strong>Images captured from the website</strong>: stored in <code>download_images/</code>.</li>
+            <li><strong>Images you send to the AI</strong>: stored in <code>image/</code>.</li>
+            <li><strong>Images generated or returned by the AI</strong>: stored in <code>download_images/</code>.</li>
         </ul>
+
+        <div class="note">
+            <p><strong>💡 Practical advice:</strong> on most sites you can start by enabling the feature and making sure <code>selector</code> matches the image nodes correctly. Only add <code>container_selector</code> when the page has too many unrelated images and you need to narrow the search area.</p>
+        </div>
     `;
 
     translations.sections['response-detection'] = `
         <h2>🌊 Response Detection</h2>
-        <p>This section defines how the project decides whether the AI is still generating and when a response should be considered finished.</p>
+        <p>The system needs to know when the AI starts speaking and when it has really finished. There are two modes here: the default DOM mode and the more advanced network interception mode.</p>
 
         <table>
             <tr><th>Mode</th><th>Streaming</th><th>Description</th></tr>
             <tr>
-                <td><strong>DOM mode</strong> (default)</td>
+                <td><strong>DOM mode</strong> (recommended default)</td>
                 <td>✅ Yes</td>
-                <td>Polls DOM changes and streams page updates in real time</td>
+                <td>Watches page changes like a human eye and works well for most normal chat scenarios</td>
             </tr>
             <tr>
                 <td><strong>Network interception mode</strong></td>
                 <td>✅ Yes, site-dependent</td>
-                <td>Intercepts browser requests and parses incremental responses, usually faster on adapted sites</td>
+                <td>Intercepts browser requests directly and parses the response body, better for advanced extraction on adapted sites</td>
             </tr>
         </table>
 
-        <h3>DOM mode</h3>
-        <p>DOM mode is the default and works for most text-based use cases. It polls the page repeatedly and checks whether the content has changed. Code blocks are the most common weak point because their HTML structure is often more complex.</p>
+        <h3>DOM mode (recommended 👀)</h3>
+        <p>DOM mode works by “watching the page”: as long as the content is still changing, the system assumes the AI is still typing. It is the best default for plain-text chats, roleplay, and most everyday use cases.</p>
+        <ul>
+            <li><strong>Best for</strong>: ordinary text conversations and most general chat flows.</li>
+            <li><strong>Strength</strong>: highly universal, with no parser required for each site.</li>
+            <li><strong>Limitation</strong>: it depends on the site's HTML structure, so complicated code blocks and formulas may still be incomplete.</li>
+        </ul>
 
         <h4>Decision rule</h4>
         <pre><code>Finished = (stable checks ≥ target count) AND (silence duration &gt; silence timeout)</code></pre>
         <p><strong>How it works:</strong></p>
         <ol>
             <li>The script checks the page at the configured interval.</li>
-            <li>If content changes, the counters are reset.</li>
-            <li>If content stays the same, the stability count goes up and silence time accumulates.</li>
-            <li>Once both thresholds are satisfied, the reply is considered complete.</li>
-            <li>If nothing appears before the initial wait expires, the request is considered failed.</li>
+            <li>If the content changes, the system knows the AI is still generating and keeps streaming new content.</li>
+            <li>If the content stops changing, the stability count goes up and the silence timer keeps accumulating.</li>
+            <li>Once both thresholds are satisfied, the reply is considered finished.</li>
+            <li>If nothing appears before the initial wait expires, the request is treated as failed, which often means the selector is wrong or the reply never started.</li>
         </ol>
 
         <h4>Tuning suggestions</h4>
         <table>
             <tr><th>Scenario</th><th>Silence timeout</th><th>Stable checks</th><th>Initial wait</th></tr>
-            <tr><td>Fast models</td><td>3-5 s</td><td>3-5</td><td>60 s</td></tr>
-            <tr><td>Slow reasoning models</td><td>10-15 s</td><td>8-12</td><td>300 s</td></tr>
-            <tr><td>Code generation</td><td>8-10 s</td><td>6-8</td><td>180 s</td></tr>
-            <tr><td>Long-form writing</td><td>12-15 s</td><td>10</td><td>300 s</td></tr>
+            <tr><td>Fast models (GPT-4o)</td><td>3-5 s</td><td>3-5</td><td>60 s</td></tr>
+            <tr><td>Slow reasoning (o1 / Claude)</td><td>10-15 s</td><td>8-12</td><td>300 s</td></tr>
+            <tr><td>Long-form or code generation</td><td>8-15 s</td><td>6-10</td><td>180-300 s</td></tr>
         </table>
 
-        <h3>Network interception mode</h3>
+        <h3>Network interception mode (advanced 📡)</h3>
         <div class="highlight-box">
-            <p><strong>⚠️ Important:</strong> network interception is only adapted for some sites. If a site does not enable it by default, do not turn it on casually. It may be unsupported or increase Cloudflare detection risk.</p>
+            <p><strong>⚠️ Prerequisite:</strong> network interception must be used together with a site parser. Do not enable it casually on unsupported sites, or you may get errors or raise the chance of anti-bot / Cloudflare challenges.</p>
         </div>
+
+        <p>Network interception works like reading the browser's underlying response directly. It intercepts XHR / Fetch traffic, reads the raw JSON or text, and turns it into final output or incremental chunks. On adapted sites, it is often faster, more stable, and better at preserving code blocks and formulas.</p>
+        <ul>
+            <li><strong>Best for</strong>: higher-fidelity code blocks, formulas, or sites where DOM extraction is unreliable.</li>
+            <li><strong>Strength</strong>: usually more stable on adapted sites and closer to the raw streamed response.</li>
+            <li><strong>Requirement</strong>: you need a valid <code>parser</code> and a good <code>listen_pattern</code>.</li>
+        </ul>
+
+        <div class="info-box">
+            <p><strong>💡 How to enable it:</strong> open the site configuration in the dashboard, go to <strong>Streaming Configuration</strong>, and switch the mode to <strong>Network Interception</strong>.</p>
+        </div>
+
+        <h4>Network interception fields</h4>
+        <table>
+            <tr><th>Field</th><th>Description</th><th>Example</th></tr>
+            <tr>
+                <td><strong>URL match pattern</strong></td>
+                <td>Intercept only requests whose URL contains this text; start with the most stable path keyword</td>
+                <td><code>GenerateContent</code></td>
+            </tr>
+            <tr>
+                <td><strong>Response parser</strong></td>
+                <td>The parser ID used to read the intercepted response body</td>
+                <td><code>lmarena</code> / custom parser</td>
+            </tr>
+            <tr>
+                <td><strong>First response timeout</strong></td>
+                <td>Maximum wait for the first useful network response</td>
+                <td><code>300</code> s</td>
+            </tr>
+            <tr>
+                <td><strong>Silence timeout</strong></td>
+                <td>How long to wait after the last new chunk before considering the reply finished</td>
+                <td><code>3</code> s</td>
+            </tr>
+            <tr>
+                <td><strong>Polling interval</strong></td>
+                <td>How often the listener checks for new intercepted data</td>
+                <td><code>0.5</code> s</td>
+            </tr>
+        </table>
 
         <div class="note">
-            <p><strong>General timeout fields:</strong> common values include global hard timeout, silence timeout, initial wait, and several advanced guardrails. In most cases, keep the defaults unless you already know the site's behavior.</p>
+            <p><strong>💡 Arena parser note:</strong> <code>arena.ai</code> already ships with two parsers. <code>lmarena</code> is for direct single-column mode, and <code>lmarena_side_left</code> is for side-by-side mode and reads the left output automatically. In most cases, keep the default mapping.</p>
         </div>
 
         <div class="highlight-box">
-            <p><strong>⚠️ arena.ai:</strong> for this site, keep the default DOM mode. Network monitoring creates extra browser connections and can raise the chance of being challenged.</p>
+            <p><strong>⚠️ arena.ai:</strong> in practice, it is still safer to stay on DOM mode for this site. Extra browser connections from network monitoring can raise the chance of Cloudflare challenges.</p>
         </div>
+
+        <h4>Practical guide: ask AI to write a parser for a new site</h4>
+        <p>If the target site is not SSE-based and instead returns one full JSON or text response at a time, you usually need a custom parser. The good news is that AI can do most of this work for you.</p>
+
+        <div class="success-box">
+            <p><strong>Built-in helper script:</strong> the project already includes <code>static/拦截请求发生器.txt</code>. You can copy it from this tutorial section or open the original text file directly.</p>
+            <div class="script-link-row">
+                <button type="button" class="btn" id="copyRequestGeneratorBtn">Copy Script</button>
+                <a class="btn" href="./%E6%8B%A6%E6%88%AA%E8%AF%B7%E6%B1%82%E5%8F%91%E7%94%9F%E5%99%A8.txt" target="_blank" rel="noopener">Open Script</a>
+            </div>
+            <details class="inline-script-viewer">
+                <summary>View the script inside the tutorial</summary>
+                <iframe
+                    id="requestGeneratorFrame"
+                    class="inline-script-frame"
+                    src="./%E6%8B%A6%E6%88%AA%E8%AF%B7%E6%B1%82%E5%8F%91%E7%94%9F%E5%99%A8.txt"
+                    title="Request generator script"
+                ></iframe>
+            </details>
+        </div>
+
+        <h4>Step by step</h4>
+        <ol>
+            <li>Open the target site in the controlled browser and stay on the real chat page.</li>
+            <li>Open the browser developer tools and switch to <code>Console</code>.</li>
+            <li>Copy the request generator script and run it.</li>
+            <li>Send one simple real message on the page and wait until the reply finishes.</li>
+            <li>Run <code>exportRequests()</code> in the console. The browser will download a requests JSON export.</li>
+            <li>Send that JSON to AI together with <code>app/core/parsers/base.py</code>, <code>app/core/parsers/__init__.py</code>, and one or two similar parser files.</li>
+            <li>Ask AI to create <code>app/core/parsers/xxx_parser.py</code> and tell you how to register it in <code>__init__.py</code>.</li>
+            <li>Return to the dashboard, enable network interception, and fill in the suggested <code>listen_pattern</code> and parser ID.</li>
+            <li>Test it. If the result is wrong, send the export, the bad output, and your new parser file back to AI for another round.</li>
+        </ol>
+
+        <div class="info-box">
+            <p><strong>💡 Tell AI these requirements:</strong></p>
+            <ul>
+                <li>This is a non-streaming response, so extract the final text from the full response body directly.</li>
+                <li>After the first successful parse, return <code>done=True</code> to avoid duplicate output.</li>
+                <li>If images are present, put them in the <code>images</code> field.</li>
+                <li>Tell me what needs to be changed in <code>app/core/parsers/__init__.py</code> to register the parser.</li>
+            </ul>
+        </div>
+
+        <p>You can send AI a prompt like this:</p>
+        <pre><code>This is an exported non-streaming network request sample from a new site. Please refer to the existing parsers in app/core/parsers and help me add a new parser.
+
+Requirements:
+1. Create a new parser class in app/core/parsers/xxx_parser.py and inherit from ResponseParser
+2. This site uses non-streaming responses, so extract the final text directly from the full response body
+3. After the first successful parse, return done=True to avoid duplicate appends
+4. If images are included, fill the images field
+5. Tell me what code I need to change in app/core/parsers/__init__.py to register it
+6. Tell me what listen_pattern and parser I should fill into the site configuration
+
+Attached:
+- exported requests json
+- one or two reference parser files
+- app/core/parsers/base.py
+- app/core/parsers/__init__.py</code></pre>
     `;
 
     translations.sections['workflow'] = `
@@ -579,25 +704,25 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
 
     translations.sections['file-paste'] = `
         <h2>📄 File Attach</h2>
-        <p>When the input text is too long, the system can create a temporary <code>.txt</code> file and try to upload that file to the website instead of pasting all text into the input box.</p>
+        <p>When your prompt is too long for the site's input box, the system can write it into a temporary <code>.txt</code> file and try to send it through the site's own upload entry instead of forcing all of the text into the input box.</p>
 
         <h3>Settings</h3>
         <table>
             <tr><th>Field</th><th>Default</th><th>Description</th></tr>
             <tr><td>Enabled</td><td>Depends on site preset</td><td>Whether file-attach mode is enabled</td></tr>
             <tr><td>Threshold</td><td><code>50000</code> chars</td><td>Global default threshold; site presets can override it</td></tr>
-            <tr><td>Hint text</td><td><code>Focus entirely on the file content</code></td><td>Extra instruction appended after the file is attached</td></tr>
+            <tr><td>Hint text</td><td><code>Focus entirely on the file content</code></td><td>Extra instruction appended after the file is attached to remind the model to read the attachment</td></tr>
         </table>
 
         <div class="info-box">
-            <p><strong>💡 Current upload order:</strong> the system first tries site-specific <code>file_input</code>, then generic <code>input[type=file]</code>, then optionally <code>upload_btn</code> and <code>drop_zone</code>. Only if all of those fail does it fall back to the Windows clipboard file-paste path.</p>
+            <p><strong>💡 Upload order:</strong> the system tries <code>file_input</code> first, then generic <code>input[type=file]</code>, then <code>upload_btn</code>, then <code>drop_zone</code>. Only after all of those fail does it fall back to the Windows clipboard path, and it will only continue sending after the attachment state looks stable.</p>
         </div>
 
         <h3>What to configure</h3>
-        <p>In practice, do not look only at <code>enabled</code> and <code>threshold</code>. For new sites, also check whether <code>upload_btn</code>, <code>file_input</code>, and <code>drop_zone</code> are configured correctly.</p>
+        <p>For new sites, do not stop at <code>enabled: true</code>. You still need to confirm that the site has a usable <code>upload_btn</code>, <code>file_input</code>, or <code>drop_zone</code> selector, or the feature will not be stable.</p>
 
         <div class="note">
-            <p><strong>⚠️ Validation after upload:</strong> the system now keeps watching attachment nodes, page-processing indicators, and whether the send button becomes submittable again, instead of mainly guessing with a fixed sleep. It only proceeds after the attachment state is stable; if the page shows attachment activity but never reaches a confirmable state, it will stop the text fallback to avoid sending both the file and the raw text together.</p>
+            <p><strong>⚠️ Why the hint text matters:</strong> after the upload succeeds, the system appends a short reminder such as “focus entirely on the file content” so the model does not ignore the attachment and only react to the short text in the box.</p>
         </div>
 
         <h3>Enabled by default in built-in presets</h3>
@@ -610,36 +735,38 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
         </ul>
 
         <div class="highlight-box">
-            <p><strong>Practical advice:</strong> before enabling file attach on a new site, confirm that the site itself really supports uploading files. Then make sure at least one reliable upload entry exists before testing long prompts.</p>
+            <p><strong>Practical advice:</strong> first confirm that the target site really supports file uploads, then make sure at least one reliable upload selector works, and only then test long prompts. Turning on the flag alone is usually not enough.</p>
         </div>
     `;
 
     translations.sections['stealth-mode'] = `
-        <h2>🛡️ Stealth Mode</h2>
-        <p>Stealth mode is used to reduce automation detection risk on websites protected by systems such as Cloudflare.</p>
+        <h2>🛡️ Stealth Mode (Anti-Detection)</h2>
+        <p>Stealth mode reduces automation-detection risk by making clicks, cursor movement, scrolling, and timing look more like real human behavior.</p>
+
+        <h3>Core idea</h3>
+        <p>Instead of “teleport and click immediately”, stealth mode uses more human-like motion and pauses so anti-bot systems have fewer obvious signals to latch onto.</p>
+        <table>
+            <tr><th>Action</th><th>Normal mode</th><th>Stealth mode</th></tr>
+            <tr><td>Click</td><td>Immediate CDP command</td><td>Press -> tiny movement -> release</td></tr>
+            <tr><td>Move</td><td>Instant jump</td><td>Bezier-like human motion</td></tr>
+            <tr><td>Idle</td><td>No movement</td><td>Small random drift</td></tr>
+            <tr><td>Scroll</td><td>Direct call</td><td>Wheel-event style interaction</td></tr>
+            <tr><td>Delay</td><td>Minimal</td><td>Randomized 0.1-0.3 s</td></tr>
+        </table>
 
         <h3>When to enable it</h3>
         <ul>
-            <li><strong>Enable it</strong>: for sites with strong anti-bot protection, such as <code>arena.ai</code> and <code>chatgpt.com</code>.</li>
-            <li><strong>Usually keep it off</strong>: for lower-protection sites such as AI Studio or DeepSeek, where speed matters more.</li>
+            <li><strong>Recommended</strong>: sites with strong anti-bot protection such as <code>arena.ai</code> and <code>chatgpt.com</code>.</li>
+            <li><strong>Recommended</strong>: when captcha or automation warnings appear often.</li>
+            <li><strong>Usually unnecessary</strong>: lower-protection sites such as AI Studio or DeepSeek.</li>
         </ul>
 
         <div class="info-box">
-            <p><strong>💡 Where to enable it:</strong> select a site in the dashboard and check the <strong>Stealth Mode</strong> box at the top. This setting is stored per preset.</p>
+            <p><strong>📍 Where to enable it:</strong> select a site in the dashboard and check <strong>Stealth Mode</strong> at the top. This setting is stored per preset.</p>
         </div>
 
-        <h3>What stealth mode changes</h3>
-        <table>
-            <tr><th>Behavior</th><th>Normal mode</th><th>Stealth mode</th></tr>
-            <tr><td>Mouse click</td><td>Direct CDP command</td><td>Human-like press and release with micro-offset</td></tr>
-            <tr><td>Mouse movement</td><td>Instant jump</td><td>Curved human-like movement</td></tr>
-            <tr><td>Idle state</td><td>No action</td><td>Small random drift</td></tr>
-            <tr><td>Scroll</td><td>Direct call</td><td>Wheel-event based interaction</td></tr>
-            <tr><td>Action interval</td><td>Minimal delay</td><td>Randomized delay around 0.1-0.3 seconds</td></tr>
-        </table>
-
-        <h3>DrissionPage patch</h3>
-        <p>To reduce detection risk further, this project applies a small patch to DrissionPage so network monitoring can reuse the browser's main connection instead of creating extra ones.</p>
+        <h3>DrissionPage patch (important)</h3>
+        <p>This project applies a small DrissionPage patch so network monitoring can reuse the browser's main connection instead of opening extra ones, which lowers detection risk.</p>
         <ul>
             <li><strong>Automatic</strong>: <code>start.bat</code> applies the patch after dependency installation.</li>
             <li><strong>Manual</strong>: <code>python patch_drissionpage.py</code></li>
@@ -647,11 +774,11 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
         </ul>
 
         <div class="note">
-            <p><strong>⚠️ Note:</strong> re-apply the patch after every DrissionPage upgrade. The patch is idempotent, so repeated runs are safe.</p>
+            <p><strong>⚠️ Important:</strong> re-apply the patch after every DrissionPage upgrade. The patch is idempotent, so repeated runs are safe.</p>
         </div>
 
         <div class="highlight-box">
-            <p><strong>⚠️ Special note for arena.ai:</strong> even with stealth mode enabled and network monitoring disabled, repeated chatting can still trigger Cloudflare after around ten messages within half an hour. That is the site's own policy rather than a script bug.</p>
+            <p><strong>⚠️ arena.ai note:</strong> even with stealth mode enabled and network monitoring disabled, repeated chatting can still trigger Cloudflare after roughly ten messages in half an hour. That is the site's own policy rather than a script bug. In practice, lowering frequency or combining this with proxy rotation works better.</p>
         </div>
     `;
 
@@ -728,7 +855,7 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
         <p><code>send_webhook</code> supports alert templates such as <code>{{tab_index}}</code>, <code>{{domain}}</code>, <code>{{network_status}}</code>, and <code>{{network_url}}</code>.</p>
         <pre><code>{"msg":"Tab #{{tab_index}} on {{domain}} hit {{network_status}}, URL={{network_url}}"}</code></pre>
 
-        <h3>Proxy switching</h3>
+        <h3 id="proxy-switching">Proxy switching</h3>
         <div class="note">
             <p><strong>Prerequisite:</strong> Clash must be running with External Controller enabled, for example:</p>
             <pre><code>external-controller: 127.0.0.1:9090
@@ -771,22 +898,21 @@ if session.error_count > 2:
     `;
 
     translations.sections['ai-recognition'] = `
-        <h2>🎯 AI Recognition</h2>
-        <p>If a site is not in the supported list, the system can call a helper AI to analyze the page and identify key elements such as the input box and send button.</p>
+        <h2>🎯 AI Recognition (New Site Adaptation)</h2>
+        <p>If a site is not in the supported list, the system can call a helper AI to analyze the page and identify key elements such as the input box, send button, and reply container.</p>
 
         <div class="info-box">
             <p><strong>📍 Where to configure it:</strong> open the <a href="/">dashboard</a> → Settings → <strong>AI Recognition</strong>.</p>
         </div>
 
-        <h3>Fields</h3>
-        <table>
-            <tr><th>Field</th><th>Description</th></tr>
-            <tr><td><strong>Order</strong></td><td>Controls recognition priority</td></tr>
-            <tr><td><strong>Key</strong></td><td>The element identifier to search for, such as <code>input_box</code> or <code>send_btn</code></td></tr>
-            <tr><td><strong>Description</strong></td><td>Plain-language guidance that helps the AI find the element accurately</td></tr>
-            <tr><td><strong>Enabled</strong></td><td>Whether the recognition item is active</td></tr>
-            <tr><td><strong>Actions</strong></td><td>Edit or remove the item</td></tr>
-        </table>
+        <h3>When you need it</h3>
+        <ul>
+            <li><strong>Needed</strong>: when you are trying to use a site that has not been adapted yet.</li>
+            <li><strong>Not needed</strong>: when you only use already supported sites.</li>
+        </ul>
+
+        <h3>How it works</h3>
+        <p>The flow is simple: open an unknown site -> send the first real request -> the system asks a helper AI to analyze the page -> the generated selectors are written into the site config.</p>
 
         <h3>Default recognition targets</h3>
         <table>
@@ -797,6 +923,16 @@ if session.error_count > 2:
             <tr><td><code>new_chat_btn</code></td><td>Button that starts a new chat</td><td>❌</td></tr>
             <tr><td><code>message_wrapper</code></td><td>Outer container for one full message</td><td>❌</td></tr>
             <tr><td><code>generating_indicator</code></td><td>Visible indicator shown while generating</td><td>❌</td></tr>
+        </table>
+
+        <h3>Fields</h3>
+        <table>
+            <tr><th>Field</th><th>Description</th></tr>
+            <tr><td><strong>Order</strong></td><td>Controls recognition priority</td></tr>
+            <tr><td><strong>Key</strong></td><td>The element identifier to search for, such as <code>input_box</code> or <code>send_btn</code></td></tr>
+            <tr><td><strong>Description</strong></td><td>Plain-language guidance that helps the AI find the element accurately</td></tr>
+            <tr><td><strong>Enabled</strong></td><td>Whether the recognition item is active</td></tr>
+            <tr><td><strong>Actions</strong></td><td>Edit or remove the item</td></tr>
         </table>
 
         <h3>Automatic flow</h3>
@@ -812,7 +948,7 @@ if session.error_count > 2:
         </div>
 
         <div class="note">
-            <p><strong>💡 Manual fallback:</strong> if you prefer not to configure a helper API, you can still create the site manually and use the selector tester and workflow visualizer yourself.</p>
+            <p><strong>💡 Manual flow:</strong> if you prefer not to configure a helper API, you can still let the project generate an empty site shell, then fill selectors manually with the selector tester or workflow visualizer.</p>
         </div>
     `;
 

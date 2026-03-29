@@ -325,6 +325,13 @@
                     >
                         命令系统
                     </button>
+                    <button
+                        type="button"
+                        :class="['mp-chip', { 'is-active': submitForm.item_type === 'response_parser' }]"
+                        @click="setSubmitType('response_parser')"
+                    >
+                        响应解析器
+                    </button>
                 </div>
 
                 <div class="mp-form-grid">
@@ -360,7 +367,7 @@
 
                     <label class="mp-field">
                         <span>分类</span>
-                        <input v-model.trim="submitForm.category" type="text" class="mp-control" :placeholder="submitForm.item_type === 'site_config' ? '默认使用站点域名' : '默认命令系统'">
+                        <input v-model.trim="submitForm.category" type="text" class="mp-control" :placeholder="submitForm.item_type === 'site_config' ? '默认使用站点域名' : (submitForm.item_type === 'command_bundle' ? '默认命令系统' : '默认响应解析器')">
                     </label>
                     <label class="mp-field">
                         <span>版本</span>
@@ -374,6 +381,34 @@
                         <span>标签</span>
                         <input v-model.trim="submitForm.tagsText" type="text" class="mp-control" placeholder="用逗号分隔，例如 中文, 稳定, 常用">
                     </label>
+
+                    <template v-if="submitForm.item_type === 'response_parser'">
+                        <label class="mp-field">
+                            <span>解析器 ID</span>
+                            <input v-model.trim="submitForm.parser_id" type="text" class="mp-control" placeholder="例如 my_parser">
+                        </label>
+                        <label class="mp-field">
+                            <span>类名</span>
+                            <input v-model.trim="submitForm.parser_class_name" type="text" class="mp-control" placeholder="例如 MyParser">
+                        </label>
+                        <label class="mp-field">
+                            <span>模块名</span>
+                            <input v-model.trim="submitForm.parser_module_name" type="text" class="mp-control" placeholder="例如 my_parser">
+                        </label>
+                        <label class="mp-field">
+                            <span>支持规则</span>
+                            <input v-model.trim="submitForm.parser_patterns_text" type="text" class="mp-control" placeholder="用逗号分隔 URL pattern">
+                        </label>
+                        <label class="mp-field mp-field--full">
+                            <span>解析器文件</span>
+                            <input type="file" accept=".py,text/x-python" class="mp-control" @change="handleParserFileChange">
+                            <small v-if="submitForm.parser_filename" class="mp-inline-tip">{{ submitForm.parser_filename }}</small>
+                        </label>
+                        <label class="mp-field mp-field--full">
+                            <span>源码</span>
+                            <textarea v-model="submitForm.parser_source" rows="12" class="mp-control" placeholder="粘贴或上传解析器源码"></textarea>
+                        </label>
+                    </template>
                 </div>
 
                 <div v-if="submitForm.item_type === 'command_bundle'" class="mp-command-picker">
@@ -392,6 +427,10 @@
                             </div>
                         </label>
                     </div>
+                </div>
+
+                <div v-if="submitForm.item_type === 'response_parser'" class="mp-inline-tip">
+                    导入解析器会把源码写入 <code>app/core/parsers</code>，并在当前应用里动态注册，请确认来源可信。
                 </div>
 
                 <div class="mp-preview-box">

@@ -5,6 +5,7 @@ app/core/parsers/registry.py - 解析器注册中心
 """
 
 import importlib
+import sys
 from typing import Dict, Type, Optional, List
 
 from app.core.config import logger
@@ -98,7 +99,11 @@ class ParserRegistry:
             AttributeError: 类不存在
         """
         try:
-            module = importlib.import_module(module_path)
+            importlib.invalidate_caches()
+            if module_path in sys.modules:
+                module = importlib.reload(sys.modules[module_path])
+            else:
+                module = importlib.import_module(module_path)
             parser_class = getattr(module, class_name)
             
             if not issubclass(parser_class, ResponseParser):
