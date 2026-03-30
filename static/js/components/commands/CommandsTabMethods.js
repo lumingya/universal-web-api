@@ -81,6 +81,13 @@ window.CommandsTabMethods = {
             return '跟随站点默认预设';
         },
 
+        normalizeCommandLogLevel(level) {
+            const normalized = String(level || 'GLOBAL').trim().toUpperCase();
+            return ['GLOBAL', 'DEBUG', 'INFO', 'WARNING', 'ERROR'].includes(normalized)
+                ? normalized
+                : 'GLOBAL';
+        },
+
         normalizeCommand(command) {
             const normalized = JSON.parse(JSON.stringify(command || {}));
             normalized.trigger = normalized.trigger || {
@@ -107,6 +114,7 @@ window.CommandsTabMethods = {
                 allow_during_workflow: false,
                 interrupt_policy: 'auto',
                 interrupt_message: '',
+                probe_js: '',
                 periodic_enabled: true,
                 periodic_interval_sec: 8,
                 periodic_jitter_sec: 2
@@ -115,6 +123,12 @@ window.CommandsTabMethods = {
             if (normalized.stop_on_error === undefined) {
                 normalized.stop_on_error = false;
             }
+            if (normalized.log_enabled === undefined) {
+                normalized.log_enabled = true;
+            } else {
+                normalized.log_enabled = !!normalized.log_enabled;
+            }
+            normalized.log_level = this.normalizeCommandLogLevel(normalized.log_level);
             if (normalized.trigger.command_id === undefined) {
                 normalized.trigger.command_id = '';
             }
@@ -154,6 +168,7 @@ window.CommandsTabMethods = {
             if (next.allow_during_workflow === undefined) next.allow_during_workflow = false;
             if (!next.interrupt_policy) next.interrupt_policy = 'auto';
             if (next.interrupt_message === undefined || next.interrupt_message === null) next.interrupt_message = '';
+            if (next.probe_js === undefined || next.probe_js === null) next.probe_js = '';
             const priority = Number(next.priority);
             next.priority = Number.isInteger(priority) ? priority : 2;
             if (!next.url_pattern && next.type === 'network_request_error') {
@@ -263,7 +278,49 @@ window.CommandsTabMethods = {
             if (this.editingCommand?.trigger?.type === 'command_result_event') {
                 return '请选择要监听的命令';
             }
+            if (this.editingCommand?.trigger?.type === 'command_check') {
+                return '请选择检查命令';
+            }
             return '请选择来源命令';
+        },
+
+        getTriggerTypeMeta(type) {
+            const builtins = window.CommandsTriggerTypeBuiltinMeta || {};
+            return {
+                label: (this.meta.trigger_types || {})[type] || builtins[type]?.label || type || '',
+                description: builtins[type]?.description || '用于在满足指定条件后触发动作。'
+            };
+        },
+
+        getTriggerTypeDescription(type) {
+            return this.getTriggerTypeMeta(type).description;
+        },
+
+        toggleTriggerTypePicker() {
+            if (!this.editingCommand?.trigger) return;
+            this.resetSourceCommandPicker();
+            this.triggerTypePickerOpen = !this.triggerTypePickerOpen;
+            this.triggerTypeTooltipType = this.triggerTypePickerOpen
+                ? String(this.editingCommand.trigger.type || '').trim()
+                : '';
+        },
+
+        setTriggerTypeTooltip(type) {
+            this.triggerTypeTooltipType = String(type || '').trim();
+        },
+
+        clearTriggerTypeTooltip() {
+            this.triggerTypeTooltipType = this.triggerTypePickerOpen
+                ? String(this.editingCommand?.trigger?.type || '').trim()
+                : '';
+        },
+
+        selectTriggerType(type) {
+            if (!this.editingCommand?.trigger || !type) return;
+            this.editingCommand.trigger.type = type;
+            this.triggerTypeTooltipType = String(type).trim();
+            this.triggerTypePickerOpen = false;
+            this.handleTriggerTypeChange();
         },
 
         getSourceCommandButtonLabel() {
@@ -303,8 +360,24 @@ window.CommandsTabMethods = {
             this.syncSourceCommandPickerState();
         },
 
+        syncPageProbeExpanded() {
+            const trigger = this.editingCommand?.trigger;
+            if (!trigger || trigger.type !== 'page_check') {
+                this.pageProbeExpanded = false;
+                return;
+            }
+            this.pageProbeExpanded = !!String(trigger.probe_js || '').trim();
+        },
+
+        togglePageProbeExpanded() {
+            if (this.editingCommand?.trigger?.type !== 'page_check') return;
+            this.pageProbeExpanded = !this.pageProbeExpanded;
+        },
+
         toggleSourceCommandPicker() {
             if (this.sourceCommandOptions.length === 0) return;
+            this.triggerTypePickerOpen = false;
+            this.triggerTypeTooltipType = '';
             this.sourceCommandPickerOpen = !this.sourceCommandPickerOpen;
             if (this.sourceCommandPickerOpen) {
                 this.syncSourceCommandPickerState();
@@ -345,7 +418,7 @@ window.CommandsTabMethods = {
                 return;
             }
             this.editingCommand.trigger.command_id = commandId;
-            if (this.editingCommand.trigger.type === 'command_result_match') {
+            if (['command_check', 'command_result_match'].includes(this.editingCommand.trigger.type)) {
                 this.handleResultSourceChange();
             }
             this.sourceCommandPickerOpen = false;
@@ -369,9 +442,10 @@ window.CommandsTabMethods = {
 
         getTriggerTargetLabel(trigger) {
             const type = trigger?.type;
-            if (type === 'page_check') return '检查文本';
-            if (type === 'command_result_match') return '监听命令';
-            if (type === 'command_result_event') return '监听命令';
+            if (type === 'page_check') return '检查条件';
+            if (type === 'command_check') return '检查命令';
+            if (type === 'command_result_match') return '来源命令结果';
+            if (type === 'command_result_event') return '来源命令';
             if (type === 'network_request_error') {
                 return trigger?.match_mode === 'regex' ? '正则表达式' : '监听 URL 规则';
             }
@@ -414,7 +488,7 @@ window.CommandsTabMethods = {
             if (trigger.type === 'command_triggered') {
                 return this.getCommandName(trigger.command_id);
             }
-            if (trigger.type === 'command_result_match') {
+            if (trigger.type === 'command_check' || trigger.type === 'command_result_match') {
                 const sourceName = this.getCommandName(trigger.command_id);
                 const actionLabel = this.getActionRefLabel(trigger.command_id, trigger.action_ref);
                 const ruleLabel = this.getMatchRuleLabel(trigger.match_rule || 'equals');
@@ -431,6 +505,14 @@ window.CommandsTabMethods = {
                 const pattern = trigger.url_pattern || trigger.value || '';
                 const codes = trigger.status_codes || '';
                 return (pattern || '*') + ' [' + codes + ']';
+            }
+            if (trigger.type === 'page_check') {
+                const textRule = String(trigger.value || '').trim();
+                const hasProbe = String(trigger.probe_js || '').trim();
+                if (textRule && hasProbe) return textRule + ' + JS探测';
+                if (textRule) return textRule;
+                if (hasProbe) return '仅 JS 探测';
+                return '';
             }
             return trigger.value;
         },
@@ -501,6 +583,7 @@ window.CommandsTabMethods = {
 
             const trigger = this.editingCommand.trigger;
             const currentValue = trigger.value;
+            this.triggerTypeTooltipType = String(trigger.type || '').trim();
             this.resetSourceCommandPicker();
 
             if (trigger.type === 'command_triggered') {
@@ -510,10 +593,11 @@ window.CommandsTabMethods = {
                 }
                 trigger.action_ref = '';
                 trigger.expected_value = '';
+                this.syncPageProbeExpanded();
                 return;
             }
 
-            if (trigger.type === 'command_result_match') {
+            if (trigger.type === 'command_check' || trigger.type === 'command_result_match') {
                 trigger.value = '';
                 if (!this.sourceCommandOptions.some(opt => opt.value === trigger.command_id)) {
                     trigger.command_id = this.sourceCommandOptions[0]?.value || '';
@@ -524,6 +608,7 @@ window.CommandsTabMethods = {
                 }
                 if (trigger.action_ref === undefined) trigger.action_ref = '';
                 this.handleResultSourceChange();
+                this.syncPageProbeExpanded();
                 return;
             }
 
@@ -535,6 +620,7 @@ window.CommandsTabMethods = {
                 trigger.command_ids = Array.isArray(trigger.command_ids) ? trigger.command_ids : [];
                 if (trigger.listen_all_commands === undefined) trigger.listen_all_commands = false;
                 if (trigger.informative_only === undefined) trigger.informative_only = true;
+                this.syncPageProbeExpanded();
                 return;
             }
 
@@ -547,6 +633,7 @@ window.CommandsTabMethods = {
                 if (trigger.url_pattern === undefined || trigger.url_pattern === null) {
                     trigger.url_pattern = '';
                 }
+                this.syncPageProbeExpanded();
                 return;
             }
 
@@ -555,6 +642,7 @@ window.CommandsTabMethods = {
                 if (currentValue === 10 || currentValue === '10' || typeof currentValue === 'number') {
                     trigger.value = '';
                 }
+                this.syncPageProbeExpanded();
                 return;
             }
 
@@ -564,12 +652,14 @@ window.CommandsTabMethods = {
                 const fallback = this.getNumericTriggerDefault(trigger.type);
                 const numericValue = Number(currentValue);
                 trigger.value = Number.isFinite(numericValue) && numericValue > 0 ? numericValue : fallback;
+                this.syncPageProbeExpanded();
                 return;
             }
 
             if (currentValue === '' || currentValue === null || currentValue === undefined) {
                 trigger.value = 10;
             }
+            this.syncPageProbeExpanded();
         },
 
         handleResultSourceChange() {
@@ -585,6 +675,8 @@ window.CommandsTabMethods = {
             this.editingCommand = this.normalizeCommand({
                 name: '新命令',
                 enabled: true,
+                log_enabled: true,
+                log_level: 'GLOBAL',
                 mode: 'simple',
                 trigger: {
                     type: 'request_count',
@@ -607,6 +699,7 @@ window.CommandsTabMethods = {
                     allow_during_workflow: false,
                     interrupt_policy: 'auto',
                     interrupt_message: '',
+                    probe_js: '',
                     periodic_enabled: true,
                     periodic_interval_sec: 8,
                     periodic_jitter_sec: 2
@@ -619,18 +712,24 @@ window.CommandsTabMethods = {
             });
             this.isNew = true;
             this.showEditor = true;
+            this.triggerTypePickerOpen = false;
+            this.triggerTypeTooltipType = '';
             this.resetSourceCommandPicker();
+            this.syncPageProbeExpanded();
             this.fetchBindingMeta();
         },
 
         openEditCommand(cmd) {
             this.editingCommand = this.normalizeCommand(cmd);
-            if (['command_result_match', 'command_result_event'].includes(this.editingCommand?.trigger?.type)) {
+            if (['command_check', 'command_result_match', 'command_result_event'].includes(this.editingCommand?.trigger?.type)) {
                 this.handleResultSourceChange();
             }
             this.isNew = false;
             this.showEditor = true;
+            this.triggerTypePickerOpen = false;
+            this.triggerTypeTooltipType = '';
             this.resetSourceCommandPicker();
+            this.syncPageProbeExpanded();
             this.fetchBindingMeta().then(() => this.loadPresetOptions());
         },
 
@@ -787,19 +886,19 @@ window.CommandsTabMethods = {
                     return;
                 }
             }
-            if (trigger.type === 'command_result_match') {
+            if (trigger.type === 'command_check' || trigger.type === 'command_result_match') {
                 const sourceId = String(trigger.command_id || '').trim();
                 if (!sourceId) {
-                    this.$emit('notify', { type: 'error', message: '请先选择“监听命令”。' });
+                    this.$emit('notify', { type: 'error', message: trigger.type === 'command_check' ? '请先选择“检查命令”。' : '请先选择“来源命令”。' });
                     return;
                 }
                 if (this.editingCommand.id && sourceId === this.editingCommand.id) {
-                    this.$emit('notify', { type: 'error', message: '监听命令不能是当前命令自己。' });
+                    this.$emit('notify', { type: 'error', message: trigger.type === 'command_check' ? '检查命令不能是当前命令自己。' : '来源命令不能是当前命令自己。' });
                     return;
                 }
                 const expected = String(trigger.expected_value || '').trim();
                 if (!expected) {
-                    this.$emit('notify', { type: 'error', message: '请填写“期望值”。' });
+                    this.$emit('notify', { type: 'error', message: '请填写“结果值”。' });
                     return;
                 }
             }
@@ -809,11 +908,11 @@ window.CommandsTabMethods = {
                     : [];
                 trigger.command_ids = ids;
                 if (!trigger.listen_all_commands && ids.length === 0) {
-                    this.$emit('notify', { type: 'error', message: '请至少选择一个监听命令，或切换为“全部命令”。' });
+                    this.$emit('notify', { type: 'error', message: '请至少选择一个来源命令，或切换为“全部命令”。' });
                     return;
                 }
                 if (this.editingCommand.id && ids.includes(this.editingCommand.id)) {
-                    this.$emit('notify', { type: 'error', message: '监听命令不能包含当前命令自己。' });
+                    this.$emit('notify', { type: 'error', message: '来源命令不能包含当前命令自己。' });
                     return;
                 }
             }
@@ -826,6 +925,16 @@ window.CommandsTabMethods = {
                 const statusCodes = String(trigger.status_codes || '').trim();
                 if (!statusCodes) {
                     this.$emit('notify', { type: 'error', message: '请填写要拦截的状态码（如 403,429,500）。' });
+                    return;
+                }
+            }
+            if (trigger.type === 'page_check') {
+                const textRule = String(trigger.value || '').trim();
+                const probeJs = String(trigger.probe_js || '').trim();
+                trigger.value = textRule;
+                trigger.probe_js = probeJs;
+                if (!textRule && !probeJs) {
+                    this.$emit('notify', { type: 'error', message: '页面检查至少要填写“检查文本”或“高级页面探测 JS”其中一项。' });
                     return;
                 }
             }
@@ -903,11 +1012,13 @@ window.CommandsTabMethods = {
             }
             if (trigger.type === 'network_request_error') {
                 trigger.value = trigger.url_pattern || '';
-            } else if (trigger.type === 'command_result_match') {
+            } else if (trigger.type === 'command_check' || trigger.type === 'command_result_match') {
                 trigger.value = '';
             } else if (trigger.type === 'command_result_event') {
                 trigger.value = '';
             }
+            this.editingCommand.log_enabled = !!this.editingCommand.log_enabled;
+            this.editingCommand.log_level = this.normalizeCommandLogLevel(this.editingCommand.log_level);
             this.editingCommand.group_name = String(this.editingCommand.group_name || '').trim();
             this.editingCommand.actions = (this.editingCommand.actions || [])
                 .map((action, index) => this.normalizeAction(action, index));
@@ -1514,7 +1625,7 @@ window.CommandsTabMethods = {
         },
 
         getTriggerLabel(type) {
-            return (this.meta.trigger_types || {})[type] || type;
+            return this.getTriggerTypeMeta(type).label;
         },
 
         getActionLabel(type) {

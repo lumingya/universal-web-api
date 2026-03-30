@@ -217,20 +217,21 @@ class CommandEngineRuntimeMixin:
                         if exec_key in self._executing:
                             continue
                         self._executing.add(exec_key)
-                    try:
-                        logger.info(
-                            f"[CMD] 恢复后补跑延后命令: {command.get('name')} "
-                            f"(标签页={getattr(session, 'id', '')})"
-                        )
-                        self._execute_command(
-                            command,
-                            session,
-                            chain=chain,
-                            interrupt_context=interrupt_context or None,
-                        )
-                    finally:
-                        with self._lock:
-                            self._executing.discard(exec_key)
+                    with self._command_logging_context(command):
+                        try:
+                            logger.info(
+                                f"[CMD] 恢复后补跑延后命令: {command.get('name')} "
+                                f"(标签页={getattr(session, 'id', '')})"
+                            )
+                            self._execute_command(
+                                command,
+                                session,
+                                chain=chain,
+                                interrupt_context=interrupt_context or None,
+                            )
+                        finally:
+                            with self._lock:
+                                self._executing.discard(exec_key)
             finally:
                 if acquired:
                     try:

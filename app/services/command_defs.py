@@ -15,9 +15,10 @@ TRIGGER_TYPES = {
     "error_count": "错误计数",
     "idle_timeout": "空闲超时",
     "page_check": "页面检查，适合 Cloudflare 场景",
+    "command_check": "命令检查",
     "command_triggered": "命令已触发",
-    "command_result_match": "结果匹配",
-    "command_result_event": "结果事件",
+    "command_result_match": "命令返回结果",
+    "command_result_event": "命令结果事件",
     "network_request_error": "网络异常",
 }
 
@@ -57,6 +58,8 @@ def get_default_command() -> Dict[str, Any]:
         "id": _new_command_id(),
         "name": "新命令",
         "enabled": True,
+        "log_enabled": True,
+        "log_level": "GLOBAL",
         "mode": "simple",
         "trigger": {
             "type": "request_count",

@@ -631,9 +631,7 @@ class _ConsoleColorFormatter(logging.Formatter):
 
 # 创建全局 Web 日志处理器
 _web_log_handler = _WebLogHandler()
-_web_log_handler.setLevel(
-    logging.DEBUG if AppConfig.is_debug() else logging.INFO
-)
+_web_log_handler.setLevel(logging.DEBUG)
 _web_log_handler.setFormatter(logging.Formatter('%(message)s'))
 
 
@@ -1395,6 +1393,10 @@ def _cuteify_debug_message(logger_name: str, message_text: str) -> str:
 
 # 上下文变量，存储当前请求的 request_id
 _request_context: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("request_id", default=None)
+_command_log_context: contextvars.ContextVar[Optional[Dict[str, Any]]] = contextvars.ContextVar(
+    "command_log_context",
+    default=None,
+)
 
 class SecureLogger:
     """安全日志器，带图标和格式化（支持上下文自动注入 request_id）"""
@@ -1449,14 +1451,14 @@ class SecureLogger:
         
         # 控制台输出 handler
         console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setLevel(level)
+        console_handler.setLevel(logging.DEBUG)
         console_handler.setFormatter(_ConsoleColorFormatter())
         logger.addHandler(console_handler)
         
         # Web 前端日志收集 handler（始终添加）
         logger.addHandler(_web_log_handler)
         
-        logger.setLevel(level)
+        logger.setLevel(logging.DEBUG)
         return logger
 
     def _format(self, level_key: str, msg: str) -> str:
@@ -1472,7 +1474,38 @@ class SecureLogger:
         normalized = str(key or "").strip() or "__default__"
         return f"{self._name}:{normalized}"
 
+    @staticmethod
+    def _coerce_bool(value: Any, default: bool = True) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        text = str(value).strip().lower()
+        if text in {"1", "true", "yes", "y", "on"}:
+            return True
+        if text in {"0", "false", "no", "n", "off"}:
+            return False
+        return default
+
+    def _get_effective_emit_level(self) -> Optional[int]:
+        context = _command_log_context.get()
+        if not isinstance(context, dict):
+            return self._level
+
+        if not self._coerce_bool(context.get("enabled", True), True):
+            return None
+
+        override = str(context.get("level", "GLOBAL") or "GLOBAL").strip().upper()
+        if override == "GLOBAL":
+            return self._level
+        return self.LEVEL_MAP.get(override, self._level)
+
     def _emit(self, level: int, level_key: str, msg: str, *, exc_info: bool = False):
+        effective_level = self._get_effective_emit_level()
+        if effective_level is None or level < effective_level:
+            return
         request_id = _request_context.get() or "SYSTEM"
         original_message_text = str(msg or "")
         display_message_text = original_message_text
@@ -1499,16 +1532,17 @@ class SecureLogger:
     def set_level(self, level: int):
         """动态调整日志级别"""
         self._level = level
-        self._logger.setLevel(level)
+        self._logger.setLevel(logging.DEBUG)
         for handler in self._logger.handlers:
-            handler.setLevel(level)
+            handler.setLevel(logging.DEBUG)
 
     def debug(self, msg: str):
         self._emit(logging.DEBUG, 'DEBUG', msg)
 
     def debug_throttled(self, key: str, msg: str, interval_sec: float = 5.0):
         """在高频路径里限频输出 DEBUG，并附带被抑制次数。"""
-        if not self._logger.isEnabledFor(logging.DEBUG):
+        effective_level = self._get_effective_emit_level()
+        if effective_level is None or logging.DEBUG < effective_level:
             return
 
         now = time.time()
@@ -1562,6 +1596,15 @@ class SecureLogger:
             yield
         finally:
             _request_context.reset(token)
+
+
+@contextlib.contextmanager
+def command_log_context(config: Optional[Dict[str, Any]] = None):
+    token = _command_log_context.set(config if isinstance(config, dict) else None)
+    try:
+        yield
+    finally:
+        _command_log_context.reset(token)
 
 # ================= 异常定义 =================
 

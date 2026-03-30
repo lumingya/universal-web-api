@@ -85,6 +85,18 @@
       "group_name": "gemini命令"
     },
     {
+      "id": "cmd_gemblkchk",
+      "name": "临时对话异常空白检测",
+      "enabled": false,
+      "group_name": "gemini命令"
+    },
+    {
+      "id": "cmd_gemblk001",
+      "name": "临时对话异常空白自动刷新",
+      "enabled": true,
+      "group_name": "gemini命令"
+    },
+    {
       "id": "cmd_gemsw001",
       "name": "自动切换预设",
       "enabled": true,

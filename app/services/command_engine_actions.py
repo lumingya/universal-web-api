@@ -99,7 +99,7 @@ class CommandEngineActionsMixin:
                 self._rollback_trigger_consumption(command, session, trigger_rollback)
             return False
 
-        def _run():
+        def _run_impl():
             acquired = False
             moved_running = False
             focus_emulation_applied = False
@@ -218,6 +218,10 @@ class CommandEngineActionsMixin:
                                 self._counter_dec(self._pending_high_by_domain, domain)
                     self._executing.discard(exec_key)
 
+        def _run():
+            with self._command_logging_context(command):
+                _run_impl()
+
         try:
             thread = threading.Thread(
                 target=_run,
@@ -243,6 +247,30 @@ class CommandEngineActionsMixin:
         session: 'TabSession',
         chain: Optional[List[str]] = None,
         interrupt_context: Optional[Dict[str, Any]] = None,
+        record_result: bool = True,
+        emit_followups: bool = True,
+        update_trigger_stats: bool = True,
+    ) -> Dict[str, Any]:
+        with self._command_logging_context(command):
+            return self._execute_command_impl(
+                command,
+                session,
+                chain=chain,
+                interrupt_context=interrupt_context,
+                record_result=record_result,
+                emit_followups=emit_followups,
+                update_trigger_stats=update_trigger_stats,
+            )
+
+    def _execute_command_impl(
+        self,
+        command: Dict,
+        session: 'TabSession',
+        chain: Optional[List[str]] = None,
+        interrupt_context: Optional[Dict[str, Any]] = None,
+        record_result: bool = True,
+        emit_followups: bool = True,
+        update_trigger_stats: bool = True,
     ) -> Dict[str, Any]:
         cmd_name = command.get("name", "未命名")
         mode = command.get("mode", "simple")
@@ -263,7 +291,8 @@ class CommandEngineActionsMixin:
         logger.debug(f"[CMD] ▶ 执行: {cmd_name} (模式={mode_label}, 标签页={session.id})")
         self._suspend_tab_global_network(session, reason=f"command:{command.get('id', '')}")
         try:
-            self._update_trigger_stats(command["id"])
+            if update_trigger_stats:
+                self._update_trigger_stats(command["id"])
 
             execution_result: Dict[str, Any]
             if mode == "advanced":
@@ -271,18 +300,20 @@ class CommandEngineActionsMixin:
             else:
                 execution_result = self._execute_simple(command, session)
 
-            self._record_command_result(command, session, execution_result)
+            if record_result:
+                self._record_command_result(command, session, execution_result)
 
             logger.debug(f"[CMD] ✅ 完成: {cmd_name}")
-            self._trigger_chained_commands(
-                command, session, chain=chain, interrupt_context=interrupt_context
-            )
-            self._trigger_result_match_commands(
-                command, session, chain=chain, interrupt_context=interrupt_context
-            )
-            self._trigger_result_event_commands(
-                command, session, chain=chain, interrupt_context=interrupt_context
-            )
+            if emit_followups:
+                self._trigger_chained_commands(
+                    command, session, chain=chain, interrupt_context=interrupt_context
+                )
+                self._trigger_result_match_commands(
+                    command, session, chain=chain, interrupt_context=interrupt_context
+                )
+                self._trigger_result_event_commands(
+                    command, session, chain=chain, interrupt_context=interrupt_context
+                )
             return execution_result
         finally:
             session._current_command_priority = previous_command_priority

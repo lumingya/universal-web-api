@@ -1,7 +1,57 @@
-﻿// ==================== CommandsTab Computed ====================
+// ==================== CommandsTab Computed ====================
+window.CommandsTriggerTypeBuiltinMeta = window.CommandsTriggerTypeBuiltinMeta || {
+        request_count: {
+            label: '请求计数',
+            description: '当页面请求次数达到阈值时触发，适合每隔一段交互插入一次动作。'
+        },
+        error_count: {
+            label: '错误计数',
+            description: '当累计错误次数达到阈值时触发，适合自动恢复、告警或切换策略。'
+        },
+        idle_timeout: {
+            label: '空闲超时',
+            description: '当标签页持续空闲超过设定秒数时触发，适合长时间无响应后的兜底处理。'
+        },
+        page_check: {
+            label: '页面检查，适合 Cloudflare 场景',
+            description: '按页面文本或 JS 探测结果判断是否命中，适合 Cloudflare、人机验证或异常空白页。'
+        },
+        command_check: {
+            label: '命令检查',
+            description: '先执行一条检查命令，再根据它某一步或最终返回值决定是否开始执行当前动作列表。'
+        },
+        command_triggered: {
+            label: '命令已触发',
+            description: '当指定命令刚刚被触发时联动执行，适合做后续补充动作。'
+        },
+        command_result_match: {
+            label: '命令返回结果',
+            description: '监听指定命令某一步或最终返回值，只有满足匹配条件时才触发。'
+        },
+        command_result_event: {
+            label: '命令结果事件',
+            description: '监听命令产生的结果事件，可按来源命令筛选，也可以只接收事件。'
+        },
+        network_request_error: {
+            label: '网络异常',
+            description: '按请求 URL 和状态码检查网络错误，命中后可立刻刷新、切代理或告警。'
+        }
+    };
+
 window.CommandsTabComputed = {
         triggerTypeOptions() {
-            return Object.entries(this.meta.trigger_types || {}).map(([k, v]) => ({ value: k, label: v }));
+            const builtins = window.CommandsTriggerTypeBuiltinMeta || {};
+            const backendLabels = this.meta.trigger_types || {};
+            const orderedKeys = Array.from(new Set([
+                ...Object.keys(builtins),
+                ...Object.keys(backendLabels)
+            ]));
+
+            return orderedKeys.map(key => ({
+                value: key,
+                label: backendLabels[key] || builtins[key]?.label || key,
+                description: builtins[key]?.description || '用于在满足指定条件后触发动作。'
+            }));
         },
         actionTypeOptions() {
             return Object.entries(this.meta.action_types || {})
@@ -38,6 +88,15 @@ window.CommandsTabComputed = {
             return [...categoryOrder, ...dynamicOrder]
                 .filter(name => grouped.has(name))
                 .map(name => ({ label: name, options: grouped.get(name) }));
+        },
+        commandLogLevelOptions() {
+            return [
+                { value: 'GLOBAL', label: '跟随全局' },
+                { value: 'DEBUG', label: '调试' },
+                { value: 'INFO', label: '信息' },
+                { value: 'WARNING', label: '警告' },
+                { value: 'ERROR', label: '错误' }
+            ];
         },
         sourceCommandOptions() {
             const currentId = this.editingCommand?.id;

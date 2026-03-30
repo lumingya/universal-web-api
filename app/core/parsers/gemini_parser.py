@@ -86,6 +86,62 @@ class GeminiParser(ResponseParser):
         self._last_len = 0
         self._full_cache = ""
 
+    @staticmethod
+    def _list_get(value: Any, index: int) -> Any:
+        if isinstance(value, list) and 0 <= index < len(value):
+            return value[index]
+        return None
+
+    @classmethod
+    def _nested_list_get(cls, value: Any, *path: int) -> Any:
+        current = value
+        for index in path:
+            current = cls._list_get(current, index)
+            if current is None:
+                return None
+        return current
+
+    @staticmethod
+    def _looks_like_content(value: Any) -> bool:
+        if not isinstance(value, str):
+            return False
+
+        text = value.strip()
+        if not text:
+            return False
+
+        lowered = text.lower()
+        if lowered.startswith(("r_", "c_", "rc_")) and len(text) <= 80:
+            return False
+
+        if text.startswith(("http://", "https://", "data:image", "blob:")):
+            return True
+        if "\n" in text or "\r" in text:
+            return True
+        if "<" in text and ">" in text:
+            return True
+        if any("\u4e00" <= ch <= "\u9fff" for ch in text):
+            return True
+
+        alpha_count = sum(ch.isalpha() for ch in text)
+        return len(text) >= 16 and alpha_count >= 6
+
+    @classmethod
+    def _iter_content_candidates(cls, value: Any):
+        if isinstance(value, str):
+            if cls._looks_like_content(value):
+                yield value
+            return
+
+        if isinstance(value, list):
+            for item in value:
+                yield from cls._iter_content_candidates(item)
+            return
+
+        if isinstance(value, dict):
+            for item in value.values():
+                yield from cls._iter_content_candidates(item)
+
     # ---------- 内部逻辑 ---------- #
     def _parse(self, raw_text: str) -> Tuple[Optional[str], bool]:
         """
@@ -155,10 +211,17 @@ class GeminiParser(ResponseParser):
                 return None
 
             inner_raw: str = first[2]
+            if not isinstance(inner_raw, str):
+                return None
             inner = json.loads(inner_raw)  # type: ignore[arg-type]
 
-            # inner[4][0][1][0]
-            content = inner[4][0][1][0]  # type: ignore[index]
+            content = self._nested_list_get(inner, 4, 0, 1, 0)
+            if not isinstance(content, str) or not content.strip():
+                content_block = self._list_get(inner, 4)
+                candidates = list(self._iter_content_candidates(content_block))
+                if not candidates:
+                    return None
+                content = max(candidates, key=len)
             if not isinstance(content, str):
                 return None
 

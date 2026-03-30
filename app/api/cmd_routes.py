@@ -111,6 +111,8 @@ async def verify_auth(authorization: Optional[str] = Header(None)) -> bool:
 class CommandCreateRequest(BaseModel):
     name: str = Field(default="新命令", max_length=100)
     enabled: bool = Field(default=True)
+    log_enabled: bool = Field(default=True)
+    log_level: str = Field(default="GLOBAL")
     mode: str = Field(default="simple")
     stop_on_error: bool = Field(default=False)
     trigger: dict = Field(default_factory=lambda: {
@@ -139,6 +141,8 @@ class CommandCreateRequest(BaseModel):
 class CommandUpdateRequest(BaseModel):
     name: Optional[str] = None
     enabled: Optional[bool] = None
+    log_enabled: Optional[bool] = None
+    log_level: Optional[str] = None
     mode: Optional[str] = None
     stop_on_error: Optional[bool] = None
     trigger: Optional[dict] = None

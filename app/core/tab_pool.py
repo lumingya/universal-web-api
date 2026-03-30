@@ -340,6 +340,15 @@ class _GlobalNetworkInterceptionManager:
         except Exception:
             pass
 
+    def _should_cleanup_worker_listener(
+        self,
+        session_id: str,
+        stop_event: threading.Event,
+    ) -> bool:
+        with self._lock:
+            current = self._workers.get(session_id)
+            return current is None or current.stop_event is stop_event
+
     def _dispatch_event(self, session: TabSession, event: Dict[str, Any]):
         try:
             from app.services.command_engine import command_engine
@@ -446,7 +455,7 @@ class _GlobalNetworkInterceptionManager:
                 self._dispatch_event(session, event)
 
         finally:
-            if tab is not None:
+            if tab is not None and self._should_cleanup_worker_listener(session_id, stop_event):
                 self._safe_stop_listen(tab)
 
 

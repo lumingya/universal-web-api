@@ -3,7 +3,7 @@
   "source_url": "https://raw.githubusercontent.com/lumingya/universal-web-api/main/config/marketplace.json",
   "repo_url": "https://github.com/lumingya/universal-web-api",
   "upload_url": "https://github.com/lumingya/universal-web-api/issues/new?template=marketplace_submission.md",
-  "cached_at": "2026-03-29T08:22:47Z",
+  "cached_at": "2026-03-30T09:29:41Z",
   "items": [
     {
       "id": "site_config-gemini.google.com",
@@ -33,6 +33,7 @@
       "parser_id": "",
       "parser_class_name": "",
       "parser_module_name": "",
+      "min_app_version": "",
       "site_config": {
         "gemini.google.com": {
           "default_preset": "主预设",

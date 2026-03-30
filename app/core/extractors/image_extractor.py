@@ -69,24 +69,62 @@ class ImageExtractor:
 
         // ===== 1. 确定根元素 =====
         // 🔧 修复：优先使用传入的元素（this），避免 containerSelector 重新定位到错误元素
-        let root;
-        if (this && this.nodeType === 1) {
+        const candidateRoots = [];
+        const pushRoot = (value) => {
+            if (!value) return;
+            const nodeType = Number(value.nodeType || 0);
+            if (nodeType !== 1 && nodeType !== 9) return;
+            if (!candidateRoots.includes(value)) {
+                candidateRoots.push(value);
+            }
+        };
+
+        if (this && (this.nodeType === 1 || this.nodeType === 9)) {
             // 传入了有效的 DOM 元素，直接使用
-            root = this;
-        } else if (containerSelector) {
-            // 回退：使用 containerSelector 查找
-            root = document.querySelector(containerSelector);
-        } else {
-            // 最终回退：使用 document
-            root = document;
+            pushRoot(this);
         }
 
-        if (!root) {
+        if (containerSelector) {
+            // 回退：使用 containerSelector 查找
+            try {
+                const scopedRoots = Array.from(document.querySelectorAll(containerSelector));
+                for (const scopedRoot of scopedRoots) {
+                    pushRoot(scopedRoot);
+                }
+            } catch {}
+        } else {
+            // 最终回退：使用 document
+            pushRoot(document);
+        }
+
+        if (candidateRoots.length === 0) {
             return { images: [], warnings: ["container_not_found"] };
         }
 
         // ===== 2. 查找所有图片元素 =====
-        const nodes = Array.from(root.querySelectorAll(selector));
+        const nodes = [];
+        const seenNodes = new Set();
+        const pushNode = (value) => {
+            if (!(value instanceof Element)) return;
+            if (seenNodes.has(value)) return;
+            seenNodes.add(value);
+            nodes.push(value);
+        };
+
+        for (const root of candidateRoots) {
+            try {
+                if (root instanceof Element && typeof root.matches === "function" && root.matches(selector)) {
+                    pushNode(root);
+                }
+            } catch {}
+
+            try {
+                const scopedNodes = root.querySelectorAll ? Array.from(root.querySelectorAll(selector)) : [];
+                for (const node of scopedNodes) {
+                    pushNode(node);
+                }
+            } catch {}
+        }
         
         if (nodes.length === 0) {
             return { images: [], warnings: [] };

@@ -1,4 +1,4 @@
-﻿// ==================== 命令管理组件 ====================
+// ==================== 命令管理组件 ====================
 window.CommandsTabComponent = {
     name: 'CommandsTabComponent',
     props: {
@@ -30,10 +30,13 @@ window.CommandsTabComponent = {
             groupActionMenuOpen: '',
             draggingCommandId: '',
             dragOverGroupName: '',
+            triggerTypePickerOpen: false,
+            triggerTypeTooltipType: '',
             sourceCommandPickerOpen: false,
             sourceCommandSearch: '',
             sourcePickerExpandedGroups: {},
             sourcePickerShowUngrouped: false,
+            pageProbeExpanded: false,
 
             // 编辑弹窗
             showEditor: false,

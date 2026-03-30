@@ -138,6 +138,112 @@ class CommandEngineResultsMixin:
             "rollback": {"kind": "result_token", "token": token},
         }
 
+    @staticmethod
+    def _extract_command_check_actual(
+        trigger: Dict[str, Any],
+        execution_result: Dict[str, Any],
+    ) -> str:
+        action_ref = str(trigger.get("action_ref", "")).strip()
+        actual: Any = execution_result.get("result", "")
+        if action_ref:
+            for step in execution_result.get("steps", []) or []:
+                if str(step.get("action_ref", "")).strip() == action_ref:
+                    actual = step.get("result", "")
+                    break
+        return actual
+
+    def _run_command_check_source(
+        self,
+        command: Dict[str, Any],
+        source_command: Dict[str, Any],
+        session: 'TabSession',
+    ) -> Optional[Dict[str, Any]]:
+        source_id = str((source_command or {}).get("id", "")).strip()
+        session_id = str(getattr(session, "id", "") or "").strip()
+        if not source_id or not session_id:
+            return None
+
+        exec_key = (source_id, session_id)
+        with self._lock:
+            if exec_key in self._executing:
+                return None
+            self._executing.add(exec_key)
+
+        with self._command_logging_context(source_command):
+            try:
+                return self._execute_command(
+                    source_command,
+                    session,
+                    chain=[str((command or {}).get("id", "")).strip()],
+                    record_result=False,
+                    emit_followups=False,
+                    update_trigger_stats=False,
+                )
+            except Exception as e:
+                logger.warning(
+                    f"[CMD] 命令检查执行失败: {source_command.get('name', source_id)} "
+                    f"(标签页={session_id}, 错误={e})"
+                )
+                return {
+                    "mode": str(source_command.get("mode", "") or ""),
+                    "result": f"command_check_failed: {e}",
+                    "steps": [],
+                    "error": str(e),
+                }
+            finally:
+                with self._lock:
+                    self._executing.discard(exec_key)
+
+    def _prepare_command_check_dispatch(
+        self,
+        command: Dict[str, Any],
+        session: 'TabSession',
+    ) -> Optional[Dict[str, Any]]:
+        trigger = command.get("trigger", {}) or {}
+        source_id = str(trigger.get("command_id", "")).strip()
+        target_id = str(command.get("id", "")).strip()
+        if not source_id or not target_id or source_id == target_id:
+            return None
+
+        source_command = self.get_command(source_id)
+        if not source_command:
+            return None
+
+        execution_result = self._run_command_check_source(command, source_command, session)
+        if not execution_result:
+            return None
+
+        actual_raw = self._extract_command_check_actual(trigger, execution_result)
+        actual = self._stringify_result(actual_raw)
+        expected = self._stringify_result(trigger.get("expected_value", ""))
+        rule = trigger.get("match_rule", "equals")
+        matched = self._match_value_rule(actual, expected, rule)
+
+        state, _ = self._ensure_trigger_state(command["id"], session)
+        signature = f"{source_id}|{str(trigger.get('action_ref', '')).strip()}|{actual}"
+        with self._lock:
+            if matched:
+                if str(state.get("command_check_sig", "") or "") == signature:
+                    return None
+                state["command_check_sig"] = signature
+                state["command_check_actual"] = actual[:500]
+            else:
+                state["command_check_sig"] = ""
+                state["command_check_actual"] = actual[:500]
+                return None
+
+        return {
+            "interrupt_context": {
+                "command_check": {
+                    "source_command_id": source_id,
+                    "source_command_name": str(source_command.get("name", "") or source_id),
+                    "actual_result": actual[:500],
+                    "expected_value": expected[:200],
+                    "match_rule": str(rule or "equals"),
+                }
+            }
+        }
+
     def _record_command_result(
         self,
         command: Dict[str, Any],

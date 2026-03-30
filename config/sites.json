@@ -408,7 +408,7 @@
           "load_timeout_seconds": 10,
           "download_blobs": true,
           "max_size_mb": 10,
-          "mode": "first"
+          "mode": "all"
         },
         "file_paste": {
           "enabled": false,

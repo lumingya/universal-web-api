@@ -27,7 +27,7 @@ try:
 except ImportError:
     HAS_REQUESTS = False
 
-from app.core.config import get_logger
+from app.core.config import command_log_context, get_logger
 from app.services.command_defs import ACTION_TYPES, TRIGGER_TYPES, CommandFlowAbort, _new_command_id, get_default_command
 from app.services.command_engine_actions import CommandEngineActionsMixin
 from app.services.command_engine_results import CommandEngineResultsMixin
@@ -113,6 +113,9 @@ class CommandEngine(CommandEngineRuntimeMixin, CommandEngineResultsMixin, Comman
         self._last_periodic_summary_log_at = 0.0
         self._periodic_active_log_interval_sec = 8.0
         self._periodic_idle_log_interval_sec = 30.0
+        self._periodic_summary_log_enabled = str(
+            os.getenv("CMD_PERIODIC_SUMMARY_LOG_ENABLED", "false")
+        ).strip().lower() in {"1", "true", "yes", "y", "on"}
         # page_check observer: {session_id: set_of_keywords_installed}
         self._observer_keywords_by_session: Dict[str, set] = {}
 
@@ -190,6 +193,8 @@ class CommandEngine(CommandEngineRuntimeMixin, CommandEngineResultsMixin, Comman
         return copy.deepcopy(meta) if meta else None
 
     def _should_log_periodic_summary(self, now_ts: float, due_total: int) -> bool:
+        if not self._periodic_summary_log_enabled:
+            return False
         interval = (
             self._periodic_active_log_interval_sec
             if due_total > 0
@@ -685,32 +690,33 @@ return (function() {
             due_total += len(due_commands)
             due_commands.sort(key=lambda item: (-item[0], item[1]))
             for _, _, cmd in due_commands:
-                current_status = str(getattr(getattr(session, "status", None), "value", "")).lower()
-                if current_status == "busy" and not self._has_active_workflow(session):
-                    break
-                if current_status not in {"idle", "busy"}:
-                    break
-                if self._should_trigger(cmd, session):
-                    meta = self._take_pending_async_trigger_meta(cmd, session) or {}
-                    if current_status == "busy":
-                        scheduled = self._schedule_command_for_active_workflow(
-                            cmd,
-                            session,
-                            interrupt_context=meta.get("interrupt_context"),
-                            trigger_rollback=meta.get("rollback"),
-                        )
-                        if not scheduled:
-                            if meta.get("rollback"):
-                                self._rollback_trigger_consumption(cmd, session, meta.get("rollback"))
-                            self._finalize_request_count_trigger_state(cmd, session, rollback=True)
-                            self._reset_page_check_latch(cmd, session, reason="workflow_schedule_failed")
-                    else:
-                        self._execute_command_async(
-                            cmd,
-                            session,
-                            interrupt_context=meta.get("interrupt_context"),
-                            trigger_rollback=meta.get("rollback"),
-                        )
+                with self._command_logging_context(cmd):
+                    current_status = str(getattr(getattr(session, "status", None), "value", "")).lower()
+                    if current_status == "busy" and not self._has_active_workflow(session):
+                        break
+                    if current_status not in {"idle", "busy"}:
+                        break
+                    if self._should_trigger(cmd, session):
+                        meta = self._take_pending_async_trigger_meta(cmd, session) or {}
+                        if current_status == "busy":
+                            scheduled = self._schedule_command_for_active_workflow(
+                                cmd,
+                                session,
+                                interrupt_context=meta.get("interrupt_context"),
+                                trigger_rollback=meta.get("rollback"),
+                            )
+                            if not scheduled:
+                                if meta.get("rollback"):
+                                    self._rollback_trigger_consumption(cmd, session, meta.get("rollback"))
+                                self._finalize_request_count_trigger_state(cmd, session, rollback=True)
+                                self._reset_page_check_latch(cmd, session, reason="workflow_schedule_failed")
+                        else:
+                            self._execute_command_async(
+                                cmd,
+                                session,
+                                interrupt_context=meta.get("interrupt_context"),
+                                trigger_rollback=meta.get("rollback"),
+                            )
 
         if self._should_log_periodic_summary(now, due_total):
             logger.debug(
@@ -751,7 +757,9 @@ return (function() {
                     data = data.get("commands", [])
 
                 if isinstance(data, list):
-                    commands = data
+                    commands = [entry for entry in data if isinstance(entry, dict)]
+                    for entry in commands:
+                        self._normalize_command_logging(entry)
                 else:
                     logger.warning(f"命令配置文件格式无效: {commands_file}")
             except json.JSONDecodeError as e:
@@ -919,6 +927,43 @@ return (function() {
         return str(group_name or "").strip()
 
     @staticmethod
+    def _coerce_bool_flag(value: Any, default: bool = True) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        text = str(value).strip().lower()
+        if text in {"1", "true", "yes", "y", "on"}:
+            return True
+        if text in {"0", "false", "no", "n", "off"}:
+            return False
+        return default
+
+    @staticmethod
+    def _normalize_command_log_level(value: Any) -> str:
+        level = str(value or "GLOBAL").strip().upper()
+        return level if level in {"GLOBAL", "DEBUG", "INFO", "WARNING", "ERROR"} else "GLOBAL"
+
+    def _normalize_command_logging(self, command: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        if not isinstance(command, dict):
+            return command
+        command["log_enabled"] = self._coerce_bool_flag(command.get("log_enabled", True), True)
+        command["log_level"] = self._normalize_command_log_level(command.get("log_level"))
+        return command
+
+    def _get_command_log_context(self, command: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        normalized = self._normalize_command_logging(command if isinstance(command, dict) else {}) or {}
+        return {
+            "enabled": bool(normalized.get("log_enabled", True)),
+            "level": self._normalize_command_log_level(normalized.get("log_level")),
+        }
+
+    def _command_logging_context(self, command: Optional[Dict[str, Any]]):
+        return command_log_context(self._get_command_log_context(command))
+
+    @staticmethod
     def _normalize_group_acquire_policy(value: Any) -> str:
         policy = str(value or "inherit_session").strip().lower()
         return policy if policy in {"inherit_session", "try_acquire", "require_acquire"} else "inherit_session"
@@ -1032,6 +1077,7 @@ return (function() {
             commands = self._load_commands()
             command["name"] = self._ensure_unique_command_name(command.get("name"), commands)
             command["group_name"] = self._normalize_group_name(command.get("group_name"))
+            self._normalize_command_logging(command)
             commands.append(command)
             self._save_commands(commands)
 
@@ -1054,6 +1100,7 @@ return (function() {
                     if "group_name" in updates:
                         updates["group_name"] = self._normalize_group_name(updates.get("group_name"))
                     cmd.update(updates)
+                    self._normalize_command_logging(cmd)
                     commands[i] = cmd
                     self._save_commands(commands)
                     logger.debug(f"[OK] 命令已更新: {cmd.get('name')} ({command_id})")
@@ -1308,27 +1355,28 @@ return (function() {
                         })
                         continue
                     self._executing.add(exec_key)
-                try:
-                    execution_result = self._execute_command(cmd, session, chain=chain_seed)
-                    command_ok = not self._execution_needs_page_check_retry(execution_result)
-                    results.append({
-                        "id": command_id,
-                        "name": cmd.get("name", command_id),
-                        "ok": command_ok,
-                        "result": execution_result,
-                        **({"error": "execution_not_ok"} if not command_ok else {}),
-                    })
-                except Exception as e:
-                    logger.error(f"trigger check failed [{cmd.get('name')}]: {e}")
-                    results.append({
-                        "id": command_id,
-                        "name": cmd.get("name", command_id),
-                        "ok": False,
-                        "error": str(e),
-                    })
-                finally:
-                    with self._lock:
-                        self._executing.discard(exec_key)
+                with self._command_logging_context(cmd):
+                    try:
+                        execution_result = self._execute_command(cmd, session, chain=chain_seed)
+                        command_ok = not self._execution_needs_page_check_retry(execution_result)
+                        results.append({
+                            "id": command_id,
+                            "name": cmd.get("name", command_id),
+                            "ok": command_ok,
+                            "result": execution_result,
+                            **({"error": "execution_not_ok"} if not command_ok else {}),
+                        })
+                    except Exception as e:
+                        logger.error(f"trigger check failed [{cmd.get('name')}]: {e}")
+                        results.append({
+                            "id": command_id,
+                            "name": cmd.get("name", command_id),
+                            "ok": False,
+                            "error": str(e),
+                        })
+                    finally:
+                        with self._lock:
+                            self._executing.discard(exec_key)
         finally:
             if group_acquired:
                 try:
@@ -1439,17 +1487,18 @@ return (function() {
         ordered_commands.sort(key=lambda item: (-self._get_command_priority(item[1]), item[0]))
 
         for _, cmd in ordered_commands:
-            try:
-                if self._should_trigger(cmd, session):
-                    meta = self._take_pending_async_trigger_meta(cmd, session) or {}
-                    self._execute_command_async(
-                        cmd,
-                        session,
-                        interrupt_context=meta.get("interrupt_context"),
-                        trigger_rollback=meta.get("rollback"),
-                    )
-            except Exception as e:
-                logger.error(f"trigger check failed [{cmd.get('name')}]: {e}")
+            with self._command_logging_context(cmd):
+                try:
+                    if self._should_trigger(cmd, session):
+                        meta = self._take_pending_async_trigger_meta(cmd, session) or {}
+                        self._execute_command_async(
+                            cmd,
+                            session,
+                            interrupt_context=meta.get("interrupt_context"),
+                            trigger_rollback=meta.get("rollback"),
+                        )
+                except Exception as e:
+                    logger.error(f"trigger check failed [{cmd.get('name')}]: {e}")
 
     def handle_network_event(self, session: 'TabSession', event: Dict[str, Any]) -> bool:
         """
@@ -1490,17 +1539,18 @@ return (function() {
                 continue
             if not self._matches_scope(cmd, session):
                 continue
-            dispatch = self._prepare_network_trigger_dispatch(cmd, session, event_copy)
-            if not dispatch:
-                continue
-            scheduled = self._execute_command_async(
-                cmd,
-                session,
-                interrupt_context=dispatch.get("interrupt_context"),
-                trigger_rollback=dispatch.get("rollback"),
-            )
-            if scheduled:
-                should_abort = should_abort or bool(trigger.get("abort_on_match", True))
+            with self._command_logging_context(cmd):
+                dispatch = self._prepare_network_trigger_dispatch(cmd, session, event_copy)
+                if not dispatch:
+                    continue
+                scheduled = self._execute_command_async(
+                    cmd,
+                    session,
+                    interrupt_context=dispatch.get("interrupt_context"),
+                    trigger_rollback=dispatch.get("rollback"),
+                )
+                if scheduled:
+                    should_abort = should_abort or bool(trigger.get("abort_on_match", True))
 
         return should_abort
 
@@ -1819,7 +1869,7 @@ return (function() {
             state_key=request_state_key,
             initial_req=initial_req if trigger_type == "request_count" else scope_request_count,
         )
-        if is_new and trigger_type != "page_check":
+        if is_new and trigger_type not in {"page_check", "command_check"}:
             return False  # Newly initialized: wait for next check cycle
 
         # Evaluate trigger condition by trigger type
@@ -1880,11 +1930,23 @@ return (function() {
             check_text = str(trigger.get("value", ""))
             normalized_text = check_text.lower().strip()
             op, keywords = self._parse_page_check_expression(check_text)
+            probe_js = str(trigger.get("probe_js", "") or "").strip()
             match_info = (
                 self._evaluate_page_check_expr(session, op, keywords)
-                if keywords else {"hit": False, "matched_keywords": [], "snapshot_preview": ""}
+                if keywords else {
+                    "hit": True if probe_js else False,
+                    "matched_keywords": [],
+                    "snapshot_preview": "",
+                }
             )
             current_hit = bool(match_info.get("hit"))
+            if probe_js and current_hit:
+                probe_info = self._evaluate_page_check_probe(session, probe_js)
+                match_info["probe_hit"] = bool(probe_info.get("hit"))
+                match_info["probe_result"] = probe_info.get("result")
+                match_info["probe_summary"] = str(probe_info.get("summary") or "").strip()
+                current_hit = bool(probe_info.get("hit"))
+                match_info["hit"] = current_hit
             fire_mode = str(trigger.get("fire_mode", "edge") or "edge").strip().lower()
             cooldown_sec = max(0.0, self._coerce_float(trigger.get("cooldown_sec", 0), 0.0))
             stable_for_sec = max(0.0, self._coerce_float(trigger.get("stable_for_sec", 0), 0.0))
@@ -1934,6 +1996,18 @@ return (function() {
                 logger.info(
                     f"[CMD] 触发命令: {command.get('name')} "
                     f"(命中命令结果匹配条件)"
+                )
+                return True
+
+        elif trigger_type == "command_check":
+            dispatch = self._prepare_command_check_dispatch(command, session)
+            if dispatch:
+                self._set_pending_async_trigger_meta(command, session, dispatch)
+                check_info = (dispatch.get("interrupt_context") or {}).get("command_check", {})
+                logger.info(
+                    f"[CMD] 触发命令: {command.get('name')} "
+                    f"(命令检查命中: 来源={check_info.get('source_command_name', '')}, "
+                    f"结果={str(check_info.get('actual_result', '') or '')[:80]})"
                 )
                 return True
 
@@ -2101,6 +2175,38 @@ return (function() {
         result["snapshot_text"] = snapshot
         return result
 
+    def _evaluate_page_check_probe(
+        self,
+        session: 'TabSession',
+        code: str,
+    ) -> Dict[str, Any]:
+        self._try_wake_tab(session, reason="page_check_probe")
+        try:
+            result = self._run_command_js(session.tab, code)
+        except Exception as e:
+            message = f"probe_js_failed: {e}"
+            return {
+                "hit": False,
+                "result": message,
+                "summary": message,
+            }
+
+        if isinstance(result, dict):
+            hit = bool(result.get("hit"))
+            summary = str(
+                result.get("summary", result.get("result", result))
+                or ""
+            ).strip()
+        else:
+            hit = bool(result)
+            summary = "" if result in (None, False, "", 0) else str(result).strip()
+
+        return {
+            "hit": hit,
+            "result": result,
+            "summary": summary[:180],
+        }
+
     def _log_page_check_hit_details(
         self,
         command: Dict,
@@ -2109,9 +2215,11 @@ return (function() {
     ):
         matched_keywords = match_info.get("matched_keywords") or []
         preview = str(match_info.get("snapshot_preview") or "").strip()
+        probe_summary = str(match_info.get("probe_summary") or "").strip()
+        probe_suffix = f", JS探测='{probe_summary}'" if probe_summary else ""
         logger.info(
             f"[CMD] 页面检查命中详情: {command.get('name')} "
-            f"(标签页={session.id}, 命中关键词={matched_keywords}, 快照预览='{preview}')"
+            f"(标签页={session.id}, 命中关键词={matched_keywords}, 快照预览='{preview}'{probe_suffix})"
         )
 
     def _check_page_content_expr(
