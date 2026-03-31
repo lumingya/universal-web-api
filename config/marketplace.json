@@ -5,6 +5,120 @@
   "upload_url": "https://github.com/lumingya/universal-web-api/issues/new?template=marketplace_submission.md",
   "items": [
     {
+      "id": "site_config-www.doubao.com",
+      "item_type": "site_config",
+      "name": "doubao",
+      "summary": "doubao",
+      "author": "hanyaypc-rgb",
+      "submitted_by": "hanyaypc-rgb",
+      "category": "www.doubao.com",
+      "site_domain": "www.doubao.com",
+      "domain": "www.doubao.com",
+      "preset_name": "主预设",
+      "downloads": 0,
+      "stars": 0,
+      "updated_at": "2026-03-31T13:52:08Z",
+      "version": "1.0.0",
+      "compatibility": "",
+      "repo_url": "https://github.com/lumingya/universal-web-api/issues/12",
+      "package_url": "",
+      "review_status": "",
+      "review_label": "",
+      "issue_number": 12,
+      "issue_url": "https://github.com/lumingya/universal-web-api/issues/12",
+      "issue_title": "[市场投稿] doubao",
+      "import_disabled": false,
+      "tags": [],
+      "parser_id": "",
+      "parser_class_name": "",
+      "parser_module_name": "",
+      "min_app_version": "",
+      "site_config": {
+        "www.doubao.com": {
+          "default_preset": "主预设",
+          "presets": {
+            "主预设": {
+              "selectors": {
+                "input_box": "textarea[data-testid=\"chat_input_input\"], textarea[placeholder], textarea",
+                "send_btn": "button[data-testid=\"chat_input_send_button\"], button[aria-label*=\"发送\"], button[type=\"submit\"]",
+                "result_container": "[data-testid=\"message_content\"], [data-testid=\"message-content\"]",
+                "new_chat_btn": "[data-testid=\"create_conversation_button\"], [data-testid=\"create-new-chat-button\"], button[aria-label*=\"新对话\"]"
+              },
+              "workflow": [
+                {
+                  "action": "CLICK",
+                  "target": "new_chat_btn",
+                  "optional": true,
+                  "value": null
+                },
+                {
+                  "action": "WAIT",
+                  "target": "",
+                  "optional": false,
+                  "value": "0.5"
+                },
+                {
+                  "action": "FILL_INPUT",
+                  "target": "input_box",
+                  "optional": false,
+                  "value": null
+                },
+                {
+                  "action": "CLICK",
+                  "target": "send_btn",
+                  "optional": true,
+                  "value": null
+                },
+                {
+                  "action": "KEY_PRESS",
+                  "target": "Enter",
+                  "optional": true,
+                  "value": null
+                },
+                {
+                  "action": "STREAM_WAIT",
+                  "target": "result_container",
+                  "optional": false,
+                  "value": null
+                }
+              ],
+              "stealth": false,
+              "image_extraction": {
+                "enabled": false,
+                "selector": "img",
+                "container_selector": ".image-box-grid-EYaIcP img.image-Q7dBqW",
+                "debounce_seconds": 2,
+                "wait_for_load": true,
+                "load_timeout_seconds": 60,
+                "download_blobs": true,
+                "max_size_mb": 10,
+                "mode": "all"
+              },
+              "file_paste": {
+                "enabled": true,
+                "threshold": 50000,
+                "hint_text": "完全专注于文件内容"
+              },
+              "stream_config": {
+                "mode": "network",
+                "hard_timeout": 300,
+                "silence_threshold": 2.5,
+                "initial_wait": 30,
+                "enable_wrapper_search": true,
+                "network": {
+                  "listen_pattern": "chat/completion",
+                  "parser": "doubao",
+                  "first_response_timeout": 300,
+                  "silence_threshold": 3,
+                  "response_interval": 0.5
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
       "id": "site_config-chat.deepseek.com",
       "item_type": "site_config",
       "name": "deepseek",
