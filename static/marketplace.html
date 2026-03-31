@@ -5,174 +5,215 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>插件市场</title>
     <link rel="icon" href="data:,">
-    <link rel="stylesheet" href="/static/css/marketplace.css?v=2.7.1&marketplace_layout=20260327g">
+    <!-- Replace marketplace.css with tailwindcss -->
+    <script src="/static/vendor/tailwindcss.js?v=2.6.7"></script>
+    <script>
+        window.tailwind = window.tailwind || {};
+        window.tailwind.config = { darkMode: 'class' };
+    </script>
+    <style>
+        [v-cloak] { display: none; }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(156, 163, 175, 0.5); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(107, 114, 128, 0.8); }
+        /* Custom scrollbar for pre block */
+        pre::-webkit-scrollbar { height: 8px; }
+        pre::-webkit-scrollbar-thumb { background: rgba(100, 116, 139, 0.5); }
+    </style>
 </head>
-<body>
-    <div id="marketplace-app" v-cloak class="mp-page">
-        <div class="mp-topbar">
-            <div class="mp-topbar__left">
-                <button type="button" class="mp-button mp-button--ghost" @click="goDashboard">返回控制台</button>
-                <div class="mp-heading">
-                    <h1>插件市场</h1>
-                    <p>站点配置与命令系统，默认按下载量排序</p>
+<body class="bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 min-h-screen font-sans antialiased transition-colors duration-300">
+    <div id="marketplace-app" v-cloak class="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 py-8 flex flex-col gap-6">
+        
+        <!-- Topbar: Relative Header -->
+        <header class="relative z-30 flex items-center justify-between gap-4 p-4 rounded-2xl bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl border border-white/20 dark:border-slate-800 shadow-sm transition-all">
+            <div class="flex items-center gap-4">
+                <button type="button" class="group flex items-center justify-center p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors text-slate-500 dark:text-slate-400" @click="goDashboard" title="返回控制台">
+                    <svg class="w-6 h-6 group-hover:-translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path></svg>
+                </button>
+                <div>
+                    <h1 class="text-2xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-slate-900 to-slate-700 dark:from-white dark:to-slate-300">插件市场</h1>
+                    <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">站点配置与命令系统，默认按下载量排序</p>
                 </div>
             </div>
-            <div class="mp-topbar__actions">
-                <button type="button" class="mp-button mp-button--ghost" @click="openReviewDialog">
+            <div class="flex items-center gap-2">
+                <button type="button" class="px-4 py-2 text-sm font-medium rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 hover:border-blue-500/50 transition-colors" @click="openReviewDialog">
                     {{ reviewEntryLabel }}
                 </button>
-                <button type="button" class="mp-button mp-button--ghost" @click="toggleDarkMode">
+                <button type="button" class="px-4 py-2 text-sm font-medium rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 shadow-inner hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors" @click="toggleDarkMode">
                     {{ darkMode ? '浅色模式' : '深色模式' }}
                 </button>
-                <button type="button" class="mp-button mp-button--primary" @click="openSubmitDialog">{{ submitEntryLabel }}</button>
+                <button type="button" class="px-5 py-2 text-sm font-bold rounded-xl text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 shadow-lg shadow-blue-500/30 transition-all hover:-translate-y-0.5" @click="openSubmitDialog">
+                    {{ submitEntryLabel }}
+                </button>
             </div>
-        </div>
+        </header>
 
-        <section class="mp-panel mp-panel--toolbar">
-            <div class="mp-toolbar">
-                <div class="mp-toolbar__title">
-                    <div class="mp-list-title">
-                        全部插件
-                        <span>({{ filteredItems.length }})</span>
+        <!-- Toolbar & Filters Panel -->
+        <section class="bg-white dark:bg-slate-900 rounded-3xl p-6 border border-slate-200 dark:border-slate-800 shadow-sm relative overflow-hidden">
+            <!-- Decorative gradient blur -->
+            <div class="absolute -right-20 -top-20 w-64 h-64 bg-blue-500/10 blur-3xl rounded-full pointer-events-none"></div>
+            
+            <div class="relative z-10 flex flex-col gap-6">
+                <!-- Title & Sort -->
+                <div class="flex flex-wrap items-center justify-between gap-4">
+                    <div>
+                        <h2 class="text-xl font-bold flex items-center gap-2">
+                            全部插件
+                            <span class="px-2.5 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 text-sm">{{ filteredItems.length }}</span>
+                        </h2>
+                        <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">收录站点配置和命令系统，支持预览、导入和公共投稿。</p>
                     </div>
-                    <p class="mp-toolbar__subtitle">收录站点配置和命令系统，支持预览、导入和公共投稿。</p>
+                    <div class="flex items-center gap-3">
+                        <button type="button" class="px-4 py-2 text-sm font-medium rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors" @click="loadCatalog({ force: true })">
+                            刷新
+                        </button>
+                        <div class="relative group">
+                            <select v-model="sortBy" class="appearance-none cursor-pointer pl-4 pr-10 py-2 text-sm font-medium rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:border-blue-500 transition-colors focus:ring-2 focus:ring-blue-500/20 outline-none w-40">
+                                <option value="downloads_desc">按下载量</option>
+                                <option value="updated_desc">按更新时间</option>
+                                <option value="stars_desc">按收藏数</option>
+                                <option value="name_asc">按名称</option>
+                            </select>
+                            <svg class="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none group-hover:text-blue-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+                        </div>
+                    </div>
                 </div>
-                <div class="mp-toolbar__actions">
-                    <button type="button" class="mp-button mp-button--ghost" @click="loadCatalog({ force: true })">刷新</button>
-                    <select v-model="sortBy" class="mp-control mp-control--select">
-                        <option value="downloads_desc">按下载量</option>
-                        <option value="updated_desc">按更新时间</option>
-                        <option value="stars_desc">按收藏数</option>
-                        <option value="name_asc">按名称</option>
-                    </select>
-                </div>
-            </div>
 
-            <div class="mp-filter-row">
-                <input
-                    v-model.trim="searchQuery"
-                    type="search"
-                    class="mp-control mp-control--search"
-                    placeholder="搜索标题、简介、站点或作者"
-                >
-                <div class="mp-segmented">
-                    <button
-                        v-for="option in typeOptions"
-                        :key="option.value"
-                        type="button"
-                        :class="['mp-chip', { 'is-active': selectedType === option.value }]"
-                        @click="selectedType = option.value"
-                    >
-                        {{ option.label }}
-                    </button>
-                </div>
-                <select v-if="siteOptions.length > 1 && selectedType !== 'command_bundle'" v-model="selectedSite" class="mp-control mp-control--select">
-                    <option value="all">全部站点</option>
-                    <option v-for="site in siteOptions" :key="site" :value="site">{{ site }}</option>
-                </select>
-            </div>
+                <!-- Filters -->
+                <div class="flex flex-wrap items-center gap-4 bg-slate-50 dark:bg-slate-950/50 p-3 rounded-2xl border border-slate-100 dark:border-slate-800/50">
+                    <div class="relative flex-1 min-w-[280px]">
+                        <svg class="w-5 h-5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+                        <input v-model.trim="searchQuery" type="search" class="w-full pl-10 pr-4 py-2 text-sm rounded-xl border border-transparent bg-white dark:bg-slate-900 shadow-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none transition-all placeholder-slate-400" placeholder="搜索标题、简介、站点或作者">
+                    </div>
+                    
+                    <div class="flex items-center gap-1.5 p-1 rounded-xl bg-slate-200/50 dark:bg-slate-800 overflow-x-auto">
+                        <button v-for="option in typeOptions" :key="option.value" type="button" 
+                                :class="['px-4 py-1.5 text-sm font-medium rounded-lg whitespace-nowrap transition-all', 
+                                         selectedType === option.value ? 'bg-white dark:bg-slate-600 text-blue-600 dark:text-blue-300 shadow-sm' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-amber-100 hover:bg-slate-200 dark:hover:bg-slate-700/50']"
+                                @click="selectedType = option.value">
+                            {{ option.label }}
+                        </button>
+                    </div>
 
-            <div v-if="submitHelpText" class="mp-banner mp-banner--info">{{ submitHelpText }}</div>
-            <div v-if="reviewSession.connected" class="mp-banner mp-banner--success">
-                GitHub 身份已连接
-                <template v-if="reviewSession.login"> · {{ reviewSession.login }}</template>
-                <template v-if="reviewSession.can_review && reviewSession.permission_label"> · {{ reviewSession.permission_label }}</template>
-                <template v-if="reviewSession.can_review"> · 可审核、拒绝和下架项目</template>
-                <template v-else> · 可管理你自己的投稿</template>
+                    <div v-if="siteOptions.length > 1 && selectedType !== 'command_bundle'" class="relative shrink-0">
+                        <select v-model="selectedSite" class="appearance-none cursor-pointer pl-4 pr-9 py-2 text-sm font-medium rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:border-blue-500 transition-colors focus:ring-2 focus:ring-blue-500/20 outline-none">
+                            <option value="all">全部站点</option>
+                            <option v-for="site in siteOptions" :key="site" :value="site">{{ site }}</option>
+                        </select>
+                        <svg class="w-4 h-4 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+                    </div>
+                </div>
+
+                <!-- Banners -->
+                <div class="space-y-2 empty:hidden">
+                    <div v-if="submitHelpText" class="px-4 py-3 text-sm rounded-xl bg-blue-50 dark:bg-blue-900/20 text-blue-800 dark:text-blue-300 border border-blue-200 dark:border-blue-800/50 flex items-center gap-2">
+                        <svg class="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                        {{ submitHelpText }}
+                    </div>
+                    <div v-if="reviewSession.connected" class="px-4 py-3 text-sm rounded-xl bg-emerald-50 dark:bg-emerald-900/20 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/50 flex items-center gap-2">
+                        <svg class="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                        GitHub 身份已连接
+                        <span class="opacity-70 mx-1">·</span>
+                        <template v-if="reviewSession.login">{{ reviewSession.login }}</template>
+                        <template v-if="reviewSession.can_review && reviewSession.permission_label"><span class="opacity-70 mx-1">·</span>{{ reviewSession.permission_label }}</template>
+                        <span class="opacity-70 mx-1">·</span>
+                        <template v-if="reviewSession.can_review">可审核、拒绝和下架项目</template>
+                        <template v-else>可管理你自己的投稿</template>
+                    </div>
+                    <div v-if="catalog.warning" class="px-4 py-3 text-sm rounded-xl bg-amber-50 dark:bg-amber-900/20 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800/50 flex items-center gap-2">
+                        <svg class="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+                        {{ catalog.warning }}
+                    </div>
+                    <div v-if="error" class="px-4 py-3 text-sm rounded-xl bg-red-50 dark:bg-red-900/20 text-red-800 dark:text-red-300 border border-red-200 dark:border-red-800/50 flex items-center gap-2">
+                        <svg class="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                        {{ error }}
+                    </div>
+                </div>
             </div>
-            <div v-if="catalog.warning" class="mp-banner mp-banner--warning">{{ catalog.warning }}</div>
-            <div v-if="error" class="mp-banner mp-banner--error">{{ error }}</div>
         </section>
 
-        <section class="mp-panel mp-panel--list">
-            <div v-if="loading" class="mp-empty">
-                <h3>正在加载插件市场</h3>
+        <!-- Catalog List -->
+        <section class="flex-1">
+            <div v-if="loading" class="flex flex-col items-center justify-center p-20 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-3xl text-slate-500">
+                <svg class="w-12 h-12 mb-4 animate-spin text-blue-500" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                <h3 class="text-xl font-bold text-slate-900 dark:text-white mb-2">正在加载插件市场</h3>
                 <p>稍等一下，列表马上就好。</p>
             </div>
 
-            <div v-else-if="filteredItems.length === 0" class="mp-empty">
-                <h3>还没有可显示的项目</h3>
+            <div v-else-if="filteredItems.length === 0" class="flex flex-col items-center justify-center p-20 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-3xl text-slate-500">
+                <svg class="w-16 h-16 mb-4 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"></path></svg>
+                <h3 class="text-xl font-bold text-slate-900 dark:text-white mb-2">还没有可显示的项目</h3>
                 <p>{{ emptyStateDescription }}</p>
             </div>
 
-            <div v-else class="mp-list">
-                <article v-for="item in filteredItems" :key="item.id" class="mp-list-item">
-                    <div class="mp-list-item__main">
-                        <div class="mp-list-item__badges">
-                            <span class="mp-badge">{{ typeLabel(item.item_type) }}</span>
-                            <span v-if="reviewLabel(item)" class="mp-badge mp-badge--pending">{{ reviewLabel(item) }}</span>
-                            <span v-if="item.site_domain" class="mp-badge mp-badge--muted">{{ item.site_domain }}</span>
-                            <span v-else-if="item.category" class="mp-badge mp-badge--muted">{{ item.category }}</span>
+            <div v-else class="grid grid-cols-1 gap-5">
+                <!-- Card Component -->
+                <article v-for="item in filteredItems" :key="item.id" class="group flex flex-col lg:flex-row gap-6 p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm hover:shadow-xl hover:shadow-blue-500/10 hover:border-blue-200 dark:hover:border-blue-800 transition-all duration-300 hover:-translate-y-1">
+                    
+                    <!-- Main Info (Left) -->
+                    <div class="flex-1 flex flex-col justify-start min-w-0">
+                        <div class="flex flex-wrap items-center gap-2 mb-3">
+                            <span class="px-2.5 py-1 text-[11px] font-bold uppercase tracking-wider rounded-lg bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 border border-blue-200/50 dark:border-blue-800/50">{{ typeLabel(item.item_type) }}</span>
+                            <span v-if="reviewLabel(item)" class="px-2.5 py-1 text-[11px] font-bold uppercase tracking-wider rounded-lg bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 border border-amber-200/50 dark:border-amber-800/50">{{ reviewLabel(item) }}</span>
+                            <span v-if="item.site_domain || item.category" class="px-2.5 py-1 text-[11px] font-bold uppercase overflow-hidden tracking-wider rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200/50 dark:border-slate-700/50 truncate max-w-[200px]">{{ item.site_domain || item.category }}</span>
                         </div>
-                        <h2 class="mp-item-title">{{ item.name }}</h2>
-                        <p class="mp-item-summary">{{ item.summary || '暂无简介' }}</p>
-                        <div class="mp-item-meta">
-                            <span>作者 {{ displayAuthor(item) }}</span>
-                            <span v-if="showSubmitter(item)">GitHub {{ item.submitted_by }}</span>
-                            <span v-if="item.version">版本 {{ item.version }}</span>
-                            <span v-if="item.compatibility">兼容 {{ item.compatibility }}</span>
-                            <span v-if="item.updated_at">更新 {{ item.updated_at }}</span>
-                            <button v-if="item.issue_url" type="button" class="mp-inline-link" @click="openLink(item.issue_url)">查看投稿</button>
+                        
+                        <h2 class="text-xl font-extrabold text-slate-900 dark:text-white mb-2 truncate">{{ item.name }}</h2>
+                        <p class="text-sm text-slate-500 dark:text-slate-400 mb-4 line-clamp-2 leading-relaxed">{{ item.summary || '暂无简介' }}</p>
+                        
+                        <div class="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-500 dark:text-slate-500 mb-4 font-medium">
+                            <span class="flex items-center gap-1.5"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path></svg> {{ displayAuthor(item) }}</span>
+                            <span v-if="showSubmitter(item)" class="flex items-center gap-1.5"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"></path></svg> {{ item.submitted_by }}</span>
+                            <span v-if="item.version" class="flex items-center gap-1.5"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"></path></svg> v{{ item.version }}</span>
+                            <span v-if="item.compatibility" class="flex items-center gap-1.5"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M12 5l7 7-7 7"></path></svg> {{ item.compatibility }}</span>
+                            <span v-if="item.updated_at" class="flex items-center gap-1.5"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg> {{ item.updated_at }}</span>
+                            <button v-if="item.issue_url" type="button" class="text-blue-500 hover:text-blue-600 dark:hover:text-blue-400 font-bold ml-auto" @click="openLink(item.issue_url)">查看投稿</button>
                         </div>
-                        <div v-if="Array.isArray(item.tags) && item.tags.length" class="mp-tags">
-                            <span v-for="tag in item.tags" :key="item.id + '-' + tag" class="mp-tag">{{ tag }}</span>
+
+                        <div v-if="Array.isArray(item.tags) && item.tags.length" class="flex flex-wrap gap-2 mt-auto pt-2">
+                            <span v-for="tag in item.tags" :key="item.id + '-' + tag" class="px-2.5 py-1 rounded-md bg-slate-100 dark:bg-slate-800/80 text-slate-500 dark:text-slate-400 text-xs shadow-sm border border-slate-200/50 dark:border-slate-700/50">#{{ tag }}</span>
                         </div>
                     </div>
 
-                    <div class="mp-list-item__side">
-                        <div class="mp-stats">
-                            <div class="mp-stat">
-                                <span>下载</span>
-                                <strong>{{ formatNumber(item.downloads || 0) }}</strong>
+                    <!-- Side Stats & Actions (Right) -->
+                    <div class="lg:w-72 shrink-0 flex flex-col justify-between pt-6 border-t border-slate-100 dark:border-slate-800 lg:pt-0 lg:border-t-0 lg:border-l lg:pl-6">
+                        <!-- Stats -->
+                        <div class="flex gap-3 mb-6">
+                            <div class="flex-1 bg-slate-50 dark:bg-slate-900/50 rounded-2xl p-3 border border-slate-100 dark:border-slate-800 text-center">
+                                <span class="block text-[11px] font-bold uppercase tracking-widest text-slate-400 mb-1">下载</span>
+                                <strong class="text-xl font-black text-slate-800 dark:text-slate-200">{{ formatNumber(item.downloads || 0) }}</strong>
                             </div>
-                            <div class="mp-stat">
-                                <span>收藏</span>
-                                <strong>{{ formatNumber(item.stars || 0) }}</strong>
+                            <div class="flex-1 bg-slate-50 dark:bg-slate-900/50 rounded-2xl p-3 border border-slate-100 dark:border-slate-800 text-center">
+                                <span class="block text-[11px] font-bold uppercase tracking-widest text-slate-400 mb-1">收藏</span>
+                                <strong class="text-xl font-black text-slate-800 dark:text-slate-200">{{ formatNumber(item.stars || 0) }}</strong>
                             </div>
                         </div>
-                        <div class="mp-actions">
-                            <button type="button" class="mp-button mp-button--ghost" @click="previewItem(item)">预览</button>
-                            <button
-                                v-if="canReviewItem(item)"
-                                type="button"
-                                class="mp-button mp-button--success"
-                                :disabled="reviewBusyId === ('approve:' + item.id) || !canImport(item)"
-                                @click="reviewItem(item, 'approve')"
-                            >
-                                {{ reviewBusyId === ('approve:' + item.id) ? '通过中...' : (canImport(item) ? '通过' : '缺少 JSON') }}
+                        
+                        <!-- Actions -->
+                        <div class="flex flex-wrap items-center justify-end gap-2.5">
+                            <button type="button" class="px-4 py-2 text-sm font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors shadow-sm" @click="previewItem(item)">
+                                预览
                             </button>
-                            <button
-                                v-if="canReviewItem(item)"
-                                type="button"
-                                class="mp-button mp-button--danger"
-                                :disabled="reviewBusyId === ('reject:' + item.id)"
-                                @click="reviewItem(item, 'reject')"
-                            >
-                                {{ reviewBusyId === ('reject:' + item.id) ? '拒绝中...' : '拒绝' }}
-                            </button>
-                            <button
-                                v-if="item.issue_url && !canImport(item)"
-                                type="button"
-                                class="mp-button mp-button--ghost"
-                                @click="openLink(item.issue_url)"
-                            >
+                            
+                            <template v-if="canReviewItem(item)">
+                                <button type="button" class="px-4 py-2 text-sm font-bold rounded-xl text-emerald-700 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-900/30 border border-emerald-200 dark:border-emerald-800/50 hover:bg-emerald-200 dark:hover:bg-emerald-800/50 transition-colors disabled:opacity-50" :disabled="reviewBusyId === ('approve:' + item.id) || !canImport(item)" @click="reviewItem(item, 'approve')">
+                                    {{ reviewBusyId === ('approve:' + item.id) ? '通过中...' : (canImport(item) ? '通过' : '缺少 JSON') }}
+                                </button>
+                                <button type="button" class="px-4 py-2 text-sm font-bold rounded-xl text-rose-700 dark:text-rose-300 bg-rose-100 dark:bg-rose-900/30 border border-rose-200 dark:border-rose-800/50 hover:bg-rose-200 dark:hover:bg-rose-800/50 transition-colors disabled:opacity-50" :disabled="reviewBusyId === ('reject:' + item.id)" @click="reviewItem(item, 'reject')">
+                                    {{ reviewBusyId === ('reject:' + item.id) ? '拒绝中...' : '拒绝' }}
+                                </button>
+                            </template>
+
+                            <button v-if="item.issue_url && !canImport(item)" type="button" class="px-4 py-2 text-sm font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors shadow-sm" @click="openLink(item.issue_url)">
                                 去补充
                             </button>
-                            <button
-                                v-if="canRemoveItem(item)"
-                                type="button"
-                                class="mp-button mp-button--danger"
-                                :disabled="reviewBusyId === ('remove:' + item.id)"
-                                @click="removeItem(item)"
-                            >
+
+                            <button v-if="canRemoveItem(item)" type="button" class="px-4 py-2 text-sm font-bold rounded-xl text-rose-700 dark:text-rose-300 bg-rose-100 dark:bg-rose-900/30 border border-rose-200 dark:border-rose-800/50 hover:bg-rose-200 dark:hover:bg-rose-800/50 transition-colors disabled:opacity-50" :disabled="reviewBusyId === ('remove:' + item.id)" @click="removeItem(item)">
                                 {{ reviewBusyId === ('remove:' + item.id) ? (removeItemLabel(item) + '中...') : removeItemLabel(item) }}
                             </button>
-                            <button
-                                type="button"
-                                class="mp-button mp-button--primary"
-                                :disabled="busyId === item.id || !canImport(item)"
-                                @click="startImport(item)"
-                            >
+
+                            <button type="button" class="px-5 py-2 text-sm font-bold rounded-xl text-white bg-blue-600 hover:bg-blue-500 shadow-md shadow-blue-600/20 transition-all hover:-translate-y-0.5 disabled:bg-slate-400 disabled:shadow-none disabled:translate-y-0" :disabled="busyId === item.id || !canImport(item)" @click="startImport(item)">
                                 {{ !canImport(item) ? '缺少 JSON' : (busyId === item.id ? '处理中...' : (item.item_type === 'command_bundle' ? '导入命令' : '导入配置')) }}
                             </button>
                         </div>
@@ -181,281 +222,260 @@
             </div>
         </section>
 
-        <footer class="mp-page-footer">
-            <div class="mp-toolbar__footer mp-toolbar__footer--page">
-                <div class="mp-inline-links" v-if="catalog.repo_url || (submitIsExternal && catalog.upload_url)">
-                    <button v-if="catalog.repo_url" type="button" class="mp-inline-link" @click="openLink(catalog.repo_url)">查看 GitHub 仓库</button>
-                    <button v-if="submitIsExternal && catalog.upload_url" type="button" class="mp-inline-link" @click="openLink(catalog.upload_url)">打开公共投稿页</button>
-                </div>
-            </div>
+        <!-- Footer -->
+        <footer class="mt-8 pt-6 border-t border-slate-200 dark:border-slate-800 flex flex-wrap gap-4 items-center justify-center text-sm font-medium text-slate-500">
+            <template v-if="catalog.repo_url || (submitIsExternal && catalog.upload_url)">
+                <button v-if="catalog.repo_url" type="button" class="hover:text-blue-500 transition-colors" @click="openLink(catalog.repo_url)">查看 GitHub 仓库</button>
+                <button v-if="submitIsExternal && catalog.upload_url" type="button" class="hover:text-blue-500 transition-colors" @click="openLink(catalog.upload_url)">打开公共投稿页</button>
+            </template>
         </footer>
 
-        <div v-if="showReviewDialog" class="mp-modal" @click.self="closeReviewDialog">
-            <div class="mp-modal__card">
-                <div class="mp-modal__header">
+        <!-- Review Dialog -->
+        <div v-if="showReviewDialog" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm" @click.self="closeReviewDialog">
+            <div class="bg-white dark:bg-slate-900 rounded-3xl w-full max-w-xl overflow-hidden shadow-2xl border border-white/10 flex flex-col max-h-[90vh]">
+                <div class="p-6 border-b border-slate-100 dark:border-slate-800 flex justify-between items-start">
                     <div>
-                        <h3>GitHub 审核</h3>
-                        <p>有仓库维护权限的账号可以审核投稿；投稿作者本人也可以撤回自己的投稿或下架自己已收录的项目。</p>
+                        <h3 class="text-xl font-bold text-slate-900 dark:text-white mb-1">GitHub 审核设置</h3>
+                        <p class="text-sm text-slate-500 leading-relaxed">有仓库维护权限的账号可审核投稿；作者本人可管理自己的投稿。</p>
                     </div>
-                    <button type="button" class="mp-button mp-button--ghost" @click="closeReviewDialog">关闭</button>
+                    <button type="button" class="p-2 -mr-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors" @click="closeReviewDialog">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                    </button>
                 </div>
-                <div class="mp-banner mp-banner--info mp-banner--compact">
-                    这里填写的 GitHub Token 只保存在当前浏览器本地，不会写入项目仓库，也不会发给其他用户。
+                <div class="p-6 overflow-y-auto space-y-6">
+                    <div class="px-4 py-3 rounded-xl bg-blue-50 dark:bg-blue-900/20 text-blue-800 dark:text-blue-300 text-sm border border-blue-200 dark:border-blue-800/50">
+                        填写的 GitHub Token 只保存在当前浏览器本地，不会上传或发给他人。
+                    </div>
+                    <div class="space-y-2">
+                        <label class="block text-sm font-bold text-slate-700 dark:text-slate-300">GitHub Token</label>
+                        <input v-model.trim="reviewToken" type="password" class="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none transition-all placeholder-slate-400" placeholder="粘贴 token 以授权">
+                        <p class="text-xs text-slate-500 mt-1">建议使用对当前公共仓库具备 `Contents` 与 `Issues` 写权限的 token。</p>
+                    </div>
+                    <div v-if="reviewSession.connected" class="flex flex-wrap gap-2 p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-700/50">
+                        <span class="px-2.5 py-1 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs font-medium">仓库: {{ reviewSession.repo || '未配置' }}</span>
+                        <span :class="['px-2.5 py-1 rounded border text-xs font-bold', reviewSession.can_review ? 'bg-emerald-100/50 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800' : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-500']">
+                            {{ reviewSession.can_review ? '✔ 已获得审核权限' : '已连接，可管理自己的投稿' }}
+                        </span>
+                        <span v-if="reviewSession.login" class="px-2.5 py-1 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs font-medium">账号: {{ reviewSession.login }}</span>
+                        <span v-if="reviewSession.permission_label" class="px-2.5 py-1 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs font-medium">角色: {{ reviewSession.permission_label }}</span>
+                    </div>
                 </div>
-                <label class="mp-field mp-field--full">
-                    <span>GitHub Token</span>
-                    <input
-                        v-model.trim="reviewToken"
-                        type="password"
-                        class="mp-control"
-                        placeholder="粘贴 GitHub token，用于识别你的仓库权限或投稿作者身份"
-                    >
-                </label>
-                <p class="mp-inline-tip">建议使用对当前公共仓库具备 `Contents` 与 `Issues` 写权限的 token。</p>
-                <div v-if="reviewSession.connected" class="mp-review-status">
-                    <span class="mp-badge mp-badge--muted">仓库 {{ reviewSession.repo || '未配置' }}</span>
-                    <span class="mp-badge" :class="reviewSession.can_review ? 'mp-badge--success' : 'mp-badge--muted'">
-                        {{ reviewSession.can_review ? '已获得审核权限' : '已连接，可管理自己的投稿' }}
-                    </span>
-                    <span v-if="reviewSession.login" class="mp-badge mp-badge--muted">账号 {{ reviewSession.login }}</span>
-                    <span v-if="reviewSession.permission_label" class="mp-badge mp-badge--muted">角色 {{ reviewSession.permission_label }}</span>
-                </div>
-                <div class="mp-modal__footer">
-                    <button type="button" class="mp-button mp-button--ghost" @click="clearReviewToken">清除</button>
-                    <button type="button" class="mp-button mp-button--primary" :disabled="reviewChecking" @click="saveReviewToken">
+                <div class="p-6 border-t border-slate-100 dark:border-slate-800 flex justify-end gap-3 bg-slate-50 dark:bg-slate-900/50">
+                    <button type="button" class="px-5 py-2.5 text-sm font-bold rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors" @click="clearReviewToken">清除</button>
+                    <button type="button" class="px-5 py-2.5 text-sm font-bold rounded-xl text-white bg-blue-600 hover:bg-blue-500 transition-colors disabled:opacity-50" :disabled="reviewChecking" @click="saveReviewToken">
                         {{ reviewChecking ? '验证中...' : '验证权限' }}
                     </button>
                 </div>
             </div>
         </div>
 
-        <div v-if="showPreviewDialog" class="mp-modal" @click.self="closePreviewDialog">
-            <div class="mp-modal__card mp-modal__card--wide">
-                <div class="mp-modal__header">
-                    <div>
-                        <h3>{{ previewDetail?.name || '项目预览' }}</h3>
-                        <p>{{ previewDetail?.summary || '查看项目详情与导入内容。' }}</p>
+        <!-- Preview Dialog -->
+        <div v-if="showPreviewDialog" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm" @click.self="closePreviewDialog">
+            <div class="bg-white dark:bg-slate-900 rounded-3xl w-full max-w-4xl overflow-hidden shadow-2xl border border-white/10 flex flex-col max-h-[90vh]">
+                <div class="p-6 border-b border-slate-100 dark:border-slate-800 flex justify-between items-start">
+                    <div class="max-w-[80%]">
+                        <h3 class="text-2xl font-black text-slate-900 dark:text-white mb-2 truncate">{{ previewDetail?.name || '项目预览' }}</h3>
+                        <p class="text-sm text-slate-500 leading-relaxed max-h-20 overflow-y-auto">{{ previewDetail?.summary || '查看项目详情与导入内容。' }}</p>
+                        
+                        <div class="flex flex-wrap items-center gap-2 mt-4 text-xs font-bold uppercase tracking-wide text-slate-400">
+                            <span class="px-2 py-1 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">{{ typeLabel(previewDetail.item_type) }}</span>
+                            <span v-if="reviewLabel(previewDetail)" class="px-2 py-1 rounded bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300">{{ reviewLabel(previewDetail) }}</span>
+                            <span v-if="previewDetail.site_domain" class="px-2 py-1 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">{{ previewDetail.site_domain }}</span>
+                            <span>📥 {{ formatNumber(previewDetail.downloads || 0) }}</span>
+                            <span v-if="previewDetail.updated_at">更新: {{ previewDetail.updated_at }}</span>
+                            <button v-if="previewDetail.issue_url" type="button" class="text-blue-500 hover:underline ml-2" @click="openLink(previewDetail.issue_url)">看投稿源</button>
+                        </div>
                     </div>
-                    <button type="button" class="mp-button mp-button--ghost" @click="closePreviewDialog">关闭</button>
+                    <button type="button" class="p-2 -mr-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors" @click="closePreviewDialog">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                    </button>
                 </div>
-                <div class="mp-modal__meta" v-if="previewDetail">
-                    <span>{{ typeLabel(previewDetail.item_type) }}</span>
-                    <span v-if="reviewLabel(previewDetail)">{{ reviewLabel(previewDetail) }}</span>
-                    <span v-if="previewDetail.site_domain">{{ previewDetail.site_domain }}</span>
-                    <span>下载 {{ formatNumber(previewDetail.downloads || 0) }}</span>
-                    <span v-if="previewDetail.updated_at">更新 {{ previewDetail.updated_at }}</span>
-                    <button v-if="previewDetail.issue_url" type="button" class="mp-inline-link" @click="openLink(previewDetail.issue_url)">查看 GitHub 投稿</button>
+                
+                <div class="p-6 overflow-y-auto flex-1 bg-slate-50 dark:bg-slate-950">
+                    <pre class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 text-xs font-mono text-slate-600 dark:text-slate-300 whitespace-pre-wrap break-all">{{ previewJsonText }}</pre>
                 </div>
-                <pre class="mp-json-preview">{{ previewJsonText }}</pre>
-                <div class="mp-modal__footer">
-                    <button type="button" class="mp-button mp-button--ghost" @click="copyPreviewJson">复制 JSON</button>
-                    <button v-if="previewDetail?.issue_url && previewDetail?.import_disabled" type="button" class="mp-button mp-button--ghost" @click="openLink(previewDetail.issue_url)">去补充 JSON</button>
-                    <button v-if="!previewDetail?.import_disabled" type="button" class="mp-button mp-button--primary" @click="startImportFromPreview">导入这个项目</button>
+                
+                <div class="p-6 border-t border-slate-100 dark:border-slate-800 flex justify-end gap-3 bg-white dark:bg-slate-900">
+                    <button type="button" class="px-5 py-2.5 text-sm font-bold rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors" @click="copyPreviewJson">复制 JSON</button>
+                    <button v-if="previewDetail?.issue_url && previewDetail?.import_disabled" type="button" class="px-5 py-2.5 text-sm font-bold rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors" @click="openLink(previewDetail.issue_url)">去补充 JSON</button>
+                    <button v-if="!previewDetail?.import_disabled" type="button" class="px-5 py-2.5 text-sm font-bold rounded-xl text-white bg-blue-600 hover:bg-blue-500 shadow-lg shadow-blue-500/30 transition-all hover:-translate-y-0.5" @click="startImportFromPreview">导入此项目</button>
                 </div>
             </div>
         </div>
 
-        <div v-if="showImportDialog" class="mp-modal" @click.self="closeImportDialog">
-            <div class="mp-modal__card">
-                <div class="mp-modal__header">
+        <!-- Import Dialog -->
+        <div v-if="showImportDialog" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm" @click.self="closeImportDialog">
+            <div class="bg-white dark:bg-slate-900 rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl border border-white/10 flex flex-col max-h-[90vh]">
+                <div class="p-6 border-b border-slate-100 dark:border-slate-800 flex justify-between items-start">
                     <div>
-                        <h3>导入站点配置</h3>
-                        <p>可以覆盖当前站点配置，或者另存为新预设。</p>
+                        <h3 class="text-xl font-bold text-slate-900 dark:text-white mb-1">导入站点配置</h3>
+                        <p class="text-sm text-slate-500">你可以直接覆盖，也可以另存为预设保存当前配置。</p>
                     </div>
-                    <button type="button" class="mp-button mp-button--ghost" @click="closeImportDialog">关闭</button>
+                    <button type="button" class="p-2 -mr-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors" @click="closeImportDialog">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                    </button>
                 </div>
-                <div class="mp-radio-list">
-                    <label class="mp-radio-card">
-                        <input v-model="importStrategy" type="radio" value="overwrite">
+                <div class="p-6 overflow-y-auto space-y-4">
+                    <label class="flex items-start gap-4 p-4 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 cursor-pointer hover:border-blue-500 transition-colors">
+                        <input v-model="importStrategy" type="radio" value="overwrite" class="mt-1 w-4 h-4 text-blue-600">
                         <div>
-                            <strong>覆盖站点配置</strong>
-                            <p>直接用市场中的配置替换这个站点当前内容。</p>
+                            <strong class="block text-sm text-slate-900 dark:text-white mb-1">完全覆盖站点配置</strong>
+                            <p class="text-xs text-slate-500">用市场中的这套参数替换当前站点的全部内容。</p>
                         </div>
                     </label>
-                    <label class="mp-radio-card">
-                        <input v-model="importStrategy" type="radio" value="save_as_preset">
-                        <div class="mp-radio-card__body">
-                            <strong>另存为新预设</strong>
-                            <p>保留当前站点配置，只把导入内容保存成新的预设。</p>
-                            <input
-                                v-if="importStrategy === 'save_as_preset'"
-                                v-model.trim="importPresetName"
-                                type="text"
-                                class="mp-control"
-                                placeholder="输入新的预设名称"
-                            >
+                    <label class="flex items-start gap-4 p-4 rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50 cursor-pointer hover:border-blue-500 transition-colors">
+                        <input v-model="importStrategy" type="radio" value="save_as_preset" class="mt-1 w-4 h-4 text-blue-600">
+                        <div class="flex-1">
+                            <strong class="block text-sm text-slate-900 dark:text-white mb-1">另存为新预设</strong>
+                            <p class="text-xs text-slate-500 mb-3">不动当前配置，只在站点多加一个配置套餐。</p>
+                            <input v-if="importStrategy === 'save_as_preset'" v-model.trim="importPresetName" type="text" class="w-full px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 focus:border-blue-500 outline-none text-sm" placeholder="输入预设的新名字">
                         </div>
                     </label>
                 </div>
-                <div class="mp-modal__footer">
-                    <button type="button" class="mp-button mp-button--ghost" @click="closeImportDialog">取消</button>
-                    <button type="button" class="mp-button mp-button--primary" :disabled="importSaving" @click="confirmImport">
-                        {{ importSaving ? '导入中...' : '确认导入' }}
+                <div class="p-6 border-t border-slate-100 dark:border-slate-800 flex justify-end gap-3 bg-slate-50 dark:bg-slate-900/50">
+                    <button type="button" class="px-5 py-2.5 text-sm font-bold rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors" @click="closeImportDialog">取消</button>
+                    <button type="button" class="px-5 py-2.5 text-sm font-bold rounded-xl text-white bg-blue-600 hover:bg-blue-500 transition-colors disabled:opacity-50 shadow-lg shadow-blue-500/20" :disabled="importSaving" @click="confirmImport">
+                        {{ importSaving ? '执行导入...' : '确认导入' }}
                     </button>
                 </div>
             </div>
         </div>
 
-        <div v-if="showSubmitDialog" class="mp-modal" @click.self="closeSubmitDialog">
-            <div class="mp-modal__card mp-modal__card--wide">
-                <div class="mp-modal__header">
+        <!-- Submit Dialog -->
+        <div v-if="showSubmitDialog" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm" @click.self="closeSubmitDialog">
+            <div class="bg-white dark:bg-slate-900 rounded-3xl w-full max-w-4xl overflow-hidden shadow-2xl border border-white/10 flex flex-col max-h-[95vh]">
+                <div class="p-6 border-b border-slate-100 dark:border-slate-800 flex justify-between items-start shrink-0">
                     <div>
-                        <h3>投稿上传</h3>
-                        <p>{{ submitIsExternal ? '标题和简介必填，提交后会打开 GitHub 公共投稿页。' : '标题和简介必填，提交前会实时生成预览。' }}</p>
+                        <h3 class="text-2xl font-bold text-slate-900 dark:text-white mb-1">新投稿发布</h3>
+                        <p class="text-sm text-slate-500">{{ submitIsExternal ? '支持公开分享你的预设。提交后将打开 Github Issue' : '直接生成并发布内容到市场' }}</p>
                     </div>
-                    <button type="button" class="mp-button mp-button--ghost" @click="closeSubmitDialog">关闭</button>
-                </div>
-
-                <div v-if="submitIsExternal" class="mp-banner mp-banner--info mp-banner--compact">
-                    完整预览 JSON 会在提交时自动复制到剪贴板，打开 GitHub 后直接粘贴即可。
-                </div>
-
-                <div class="mp-segmented mp-segmented--wide">
-                    <button
-                        type="button"
-                        :class="['mp-chip', { 'is-active': submitForm.item_type === 'site_config' }]"
-                        @click="setSubmitType('site_config')"
-                    >
-                        站点配置
-                    </button>
-                    <button
-                        type="button"
-                        :class="['mp-chip', { 'is-active': submitForm.item_type === 'command_bundle' }]"
-                        @click="setSubmitType('command_bundle')"
-                    >
-                        命令系统
-                    </button>
-                    <button
-                        type="button"
-                        :class="['mp-chip', { 'is-active': submitForm.item_type === 'response_parser' }]"
-                        @click="setSubmitType('response_parser')"
-                    >
-                        响应解析器
+                    <button type="button" class="p-2 -mr-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors" @click="closeSubmitDialog">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
                     </button>
                 </div>
+                
+                <div class="overflow-y-auto flex-1">
+                    <div class="p-6">
+                        <div v-if="submitIsExternal" class="mb-6 px-4 py-3 rounded-xl bg-blue-50 dark:bg-blue-900/20 text-blue-800 dark:text-blue-300 text-sm border border-blue-200 dark:border-blue-800/50">
+                            完整预览 JSON 会在提交时自动复制到剪贴板，打开 GitHub 后直接粘贴即可。
+                        </div>
 
-                <div class="mp-form-grid">
-                    <label class="mp-field">
-                        <span>标题</span>
-                        <input v-model.trim="submitForm.title" type="text" class="mp-control">
-                    </label>
-                    <label class="mp-field">
-                        <span>作者</span>
-                        <input v-model.trim="submitForm.author" type="text" class="mp-control">
-                    </label>
-                    <label class="mp-field mp-field--full">
-                        <span>简介</span>
-                        <textarea v-model.trim="submitForm.summary" rows="3" class="mp-control"></textarea>
-                    </label>
+                        <!-- Type Tabs -->
+                        <div class="flex flex-wrap items-center gap-2 mb-8 bg-slate-100 dark:bg-slate-800/50 p-1.5 rounded-2xl w-fit">
+                            <button type="button" :class="['px-5 py-2 text-sm font-bold rounded-xl transition-all', submitForm.item_type === 'site_config' ? 'bg-white dark:bg-slate-700 text-blue-600 dark:text-blue-400 shadow' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white']" @click="setSubmitType('site_config')">站点配置</button>
+                            <button type="button" :class="['px-5 py-2 text-sm font-bold rounded-xl transition-all', submitForm.item_type === 'command_bundle' ? 'bg-white dark:bg-slate-700 text-blue-600 dark:text-blue-400 shadow' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white']" @click="setSubmitType('command_bundle')">命令系统</button>
+                            <button type="button" :class="['px-5 py-2 text-sm font-bold rounded-xl transition-all', submitForm.item_type === 'response_parser' ? 'bg-white dark:bg-slate-700 text-blue-600 dark:text-blue-400 shadow' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white']" @click="setSubmitType('response_parser')">响应解析器</button>
+                        </div>
 
-                    <template v-if="submitForm.item_type === 'site_config'">
-                        <label class="mp-field">
-                            <span>站点</span>
-                            <select v-model="submitForm.site_domain" class="mp-control mp-control--select" @change="syncPresetSelection">
-                                <option value="" disabled>选择站点</option>
-                                <option v-for="site in availableSites" :key="site" :value="site">{{ site }}</option>
-                            </select>
-                        </label>
-                        <label class="mp-field">
-                            <span>预设</span>
-                            <select v-model="submitForm.preset_name" class="mp-control mp-control--select">
-                                <option value="" disabled>选择预设</option>
-                                <option v-for="preset in availablePresets" :key="preset" :value="preset">{{ preset }}</option>
-                            </select>
-                        </label>
-                    </template>
+                        <!-- Form Grid -->
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+                            <label class="space-y-2">
+                                <span class="block text-sm font-bold text-slate-700 dark:text-slate-300">标题*</span>
+                                <input v-model.trim="submitForm.title" type="text" class="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 focus:border-blue-500 outline-none text-sm transition-colors">
+                            </label>
+                            <label class="space-y-2">
+                                <span class="block text-sm font-bold text-slate-700 dark:text-slate-300">作者</span>
+                                <input v-model.trim="submitForm.author" type="text" class="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 focus:border-blue-500 outline-none text-sm transition-colors">
+                            </label>
+                            <label class="space-y-2 md:col-span-2">
+                                <span class="block text-sm font-bold text-slate-700 dark:text-slate-300">简介*</span>
+                                <textarea v-model.trim="submitForm.summary" rows="3" class="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 focus:border-blue-500 outline-none text-sm transition-colors resize-none"></textarea>
+                            </label>
 
-                    <label class="mp-field">
-                        <span>分类</span>
-                        <input v-model.trim="submitForm.category" type="text" class="mp-control" :placeholder="submitForm.item_type === 'site_config' ? '默认使用站点域名' : (submitForm.item_type === 'command_bundle' ? '默认命令系统' : '默认响应解析器')">
-                    </label>
-                    <label class="mp-field">
-                        <span>版本</span>
-                        <input v-model.trim="submitForm.version" type="text" class="mp-control">
-                    </label>
-                    <label class="mp-field">
-                        <span>兼容说明</span>
-                        <input v-model.trim="submitForm.compatibility" type="text" class="mp-control" placeholder="例如 2.6.x">
-                    </label>
-                    <label class="mp-field mp-field--full">
-                        <span>标签</span>
-                        <input v-model.trim="submitForm.tagsText" type="text" class="mp-control" placeholder="用逗号分隔，例如 中文, 稳定, 常用">
-                    </label>
+                            <template v-if="submitForm.item_type === 'site_config'">
+                                <label class="space-y-2">
+                                    <span class="block text-sm font-bold text-slate-700 dark:text-slate-300">绑定站点</span>
+                                    <select v-model="submitForm.site_domain" class="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 focus:border-blue-500 outline-none text-sm cursor-pointer" @change="syncPresetSelection">
+                                        <option value="" disabled>选择需要发布的站点</option>
+                                        <option v-for="site in availableSites" :key="site" :value="site">{{ site }}</option>
+                                    </select>
+                                </label>
+                                <label class="space-y-2">
+                                    <span class="block text-sm font-bold text-slate-700 dark:text-slate-300">导出预设内容</span>
+                                    <select v-model="submitForm.preset_name" class="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 focus:border-blue-500 outline-none text-sm cursor-pointer">
+                                        <option value="" disabled>选择预设</option>
+                                        <option v-for="preset in availablePresets" :key="preset" :value="preset">{{ preset }}</option>
+                                    </select>
+                                </label>
+                            </template>
 
-                    <template v-if="submitForm.item_type === 'response_parser'">
-                        <label class="mp-field">
-                            <span>解析器 ID</span>
-                            <input v-model.trim="submitForm.parser_id" type="text" class="mp-control" placeholder="例如 my_parser">
-                        </label>
-                        <label class="mp-field">
-                            <span>类名</span>
-                            <input v-model.trim="submitForm.parser_class_name" type="text" class="mp-control" placeholder="例如 MyParser">
-                        </label>
-                        <label class="mp-field">
-                            <span>模块名</span>
-                            <input v-model.trim="submitForm.parser_module_name" type="text" class="mp-control" placeholder="例如 my_parser">
-                        </label>
-                        <label class="mp-field">
-                            <span>支持规则</span>
-                            <input v-model.trim="submitForm.parser_patterns_text" type="text" class="mp-control" placeholder="用逗号分隔 URL pattern">
-                        </label>
-                        <label class="mp-field mp-field--full">
-                            <span>解析器文件</span>
-                            <input type="file" accept=".py,text/x-python" class="mp-control" @change="handleParserFileChange">
-                            <small v-if="submitForm.parser_filename" class="mp-inline-tip">{{ submitForm.parser_filename }}</small>
-                        </label>
-                        <label class="mp-field mp-field--full">
-                            <span>源码</span>
-                            <textarea v-model="submitForm.parser_source" rows="12" class="mp-control" placeholder="粘贴或上传解析器源码"></textarea>
-                        </label>
-                    </template>
-                </div>
+                            <label class="space-y-2">
+                                <span class="block text-sm font-bold text-slate-700 dark:text-slate-300">强制分类 (选填)</span>
+                                <input v-model.trim="submitForm.category" type="text" class="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 focus:border-blue-500 outline-none text-sm transition-colors" :placeholder="submitForm.item_type === 'site_config' ? '默认按站点域名分类' : '系统级组件'">
+                            </label>
+                            <label class="space-y-2">
+                                <span class="block text-sm font-bold text-slate-700 dark:text-slate-300">版本号</span>
+                                <input v-model.trim="submitForm.version" type="text" class="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 focus:border-blue-500 outline-none text-sm transition-colors" placeholder="1.0.0">
+                            </label>
+                            <label class="space-y-2">
+                                <span class="block text-sm font-bold text-slate-700 dark:text-slate-300">兼容说明</span>
+                                <input v-model.trim="submitForm.compatibility" type="text" class="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 focus:border-blue-500 outline-none text-sm transition-colors" placeholder="例如 支持 v2.6+">
+                            </label>
+                            <label class="space-y-2 md:col-span-2 mt-2">
+                                <span class="block text-sm font-bold text-slate-700 dark:text-slate-300">专属标签 (逗号分隔)</span>
+                                <input v-model.trim="submitForm.tagsText" type="text" class="w-full px-4 py-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 focus:border-blue-500 outline-none text-sm transition-colors" placeholder="稳定版, ChatGPT, 快速响应">
+                            </label>
 
-                <div v-if="submitForm.item_type === 'command_bundle'" class="mp-command-picker">
-                    <div class="mp-command-picker__header">
-                        <strong>选择命令</strong>
-                        <button type="button" class="mp-button mp-button--ghost" @click="loadCommands()">刷新命令</button>
-                    </div>
-                    <div v-if="commandLoading" class="mp-inline-tip">命令列表加载中...</div>
-                    <div v-else-if="commandOptions.length === 0" class="mp-inline-tip">当前没有可投稿的命令。</div>
-                    <div v-else class="mp-command-list">
-                        <label v-for="command in commandOptions" :key="command.id" class="mp-command-item">
-                            <input v-model="submitForm.selected_command_ids" type="checkbox" :value="command.id">
-                            <div>
-                                <strong>{{ command.name }}</strong>
-                                <span>{{ command.group_name || '未分组' }}</span>
+                            <!-- Command specific selection -->
+                            <div v-if="submitForm.item_type === 'command_bundle'" class="md:col-span-2 mt-4 space-y-3">
+                                <div class="flex items-center justify-between border-b border-slate-200 dark:border-slate-700 pb-2">
+                                    <strong class="text-sm">选中的命令包囊括以下内容：</strong>
+                                    <button type="button" class="text-blue-500 text-sm font-medium hover:underline" @click="loadCommands()">刷新本机命令</button>
+                                </div>
+                                <div v-if="commandLoading" class="text-sm text-slate-500 py-4 text-center">读取中...</div>
+                                <div v-else-if="commandOptions.length === 0" class="text-sm text-slate-500 py-4 text-center">机器上没有自定义命令可发布。</div>
+                                <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 max-h-60 overflow-y-auto pr-2">
+                                    <label v-for="command in commandOptions" :key="command.id" class="flex items-start gap-3 p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:border-blue-500 cursor-pointer transition-colors">
+                                        <input v-model="submitForm.selected_command_ids" type="checkbox" :value="command.id" class="mt-0.5 rounded text-blue-500 focus:ring-blue-500/30">
+                                        <div class="flex flex-col">
+                                            <strong class="text-sm text-slate-800 dark:text-slate-200 leading-tight mb-1">{{ command.name }}</strong>
+                                            <span class="text-[10px] text-slate-500 uppercase tracking-widest">{{ command.group_name || '散件' }}</span>
+                                        </div>
+                                    </label>
+                                </div>
                             </div>
-                        </label>
+                        </div>
+
+                        <!-- JSON Raw Preview block -->
+                        <div class="mt-8 border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden bg-slate-50 dark:bg-slate-950">
+                            <div class="flex justify-between items-center px-4 py-3 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
+                                <strong class="text-sm text-slate-700 dark:text-slate-300">生成的 JSON 载体预览</strong>
+                                <button type="button" class="text-xs font-bold text-blue-500 hover:text-blue-600 uppercase tracking-wider" @click="copySubmissionPreview">COPY JSON</button>
+                            </div>
+                            <pre class="p-4 text-xs font-mono text-slate-600 dark:text-slate-400 overflow-y-auto max-h-48 leading-relaxed">{{ submissionPreviewText }}</pre>
+                        </div>
                     </div>
                 </div>
 
-                <div v-if="submitForm.item_type === 'response_parser'" class="mp-inline-tip">
-                    导入解析器会把源码写入 <code>app/core/parsers</code>，并在当前应用里动态注册，请确认来源可信。
-                </div>
-
-                <div class="mp-preview-box">
-                    <div class="mp-preview-box__header">
-                        <strong>投稿预览</strong>
-                        <button type="button" class="mp-button mp-button--ghost" @click="copySubmissionPreview">复制 JSON</button>
-                    </div>
-                    <pre class="mp-json-preview mp-json-preview--short">{{ submissionPreviewText }}</pre>
-                </div>
-
-                <div class="mp-modal__footer">
-                    <button type="button" class="mp-button mp-button--ghost" @click="closeSubmitDialog">取消</button>
-                    <button type="button" class="mp-button mp-button--primary" :disabled="submitSaving" @click="submitItem">
-                        {{ submitSaving ? '提交中...' : submitEntryLabel }}
+                <div class="p-6 border-t border-slate-100 dark:border-slate-800 flex justify-end gap-3 shrink-0 bg-slate-50 dark:bg-slate-900/50">
+                    <button type="button" class="px-5 py-2.5 text-sm font-bold rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors" @click="closeSubmitDialog">取消构建</button>
+                    <button type="button" class="px-6 py-2.5 text-sm font-bold rounded-xl text-white bg-blue-600 hover:bg-blue-500 transition-all shadow-lg shadow-blue-500/20 hover:-translate-y-0.5 disabled:opacity-50 disabled:shadow-none disabled:translate-y-0" :disabled="submitSaving" @click="submitItem">
+                        {{ submitSaving ? '发布中...' : submitEntryLabel }}
                     </button>
                 </div>
             </div>
         </div>
 
-        <div class="mp-toast-stack">
-            <div v-for="toast in toasts" :key="toast.id" :class="['mp-toast', 'is-' + toast.type]">
+        <!-- Floating Toast Notifications -->
+        <div class="fixed bottom-6 right-6 z-[60] flex flex-col items-end gap-3 pointer-events-none">
+            <div v-for="toast in toasts" :key="toast.id" :class="['px-6 py-4 rounded-2xl shadow-xl border backdrop-blur-md font-medium text-sm flex items-center gap-3 animate-slide-up pointer-events-auto', toast.type === 'error' ? 'bg-red-500/95 border-red-400 text-white' : (toast.type === 'success' ? 'bg-emerald-500/95 border-emerald-400 text-white' : 'bg-slate-900/95 dark:bg-white/95 border-slate-700 dark:border-blue-100 text-white dark:text-slate-900')]">
+                <svg v-if="toast.type === 'error'" class="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                <svg v-else-if="toast.type === 'success'" class="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+                <svg v-else class="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
                 {{ toast.message }}
             </div>
         </div>
     </div>
+    
+    <style>
+        .animate-slide-up {
+            animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+        @keyframes slideUp {
+            0% { transform: translateY(1rem); opacity: 0; }
+            100% { transform: translateY(0); opacity: 1; }
+        }
+    </style>
 
     <script src="/static/vendor/vue.global.prod.js?v=2.6.7"></script>
     <script src="/static/js/marketplace-page.js?v=2.7.1"></script>

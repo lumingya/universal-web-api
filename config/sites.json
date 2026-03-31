@@ -552,6 +552,15 @@
             "first_response_timeout": 300,
             "silence_threshold": 3,
             "response_interval": 0.5
+          },
+          "send_confirmation": {
+            "post_click_observe_window": 2.4,
+            "pre_retry_probe_window": 0.18,
+            "retry_observe_window": 1.2,
+            "attachment_observe_window": 8.0,
+            "trust_network_activity": true,
+            "trust_generating_indicator": true,
+            "trust_send_disabled_with_input_shrink": true
           }
         },
         "workflow": [

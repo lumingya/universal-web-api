@@ -1539,6 +1539,68 @@ class WorkflowExecutor:
         context = getattr(self, "_context", None) or {}
         return bool(context.get("images"))
 
+    def _get_send_confirmation_config(self) -> Dict[str, Any]:
+        """Return the merged send confirmation strategy for the current site."""
+        config = {
+            "post_click_observe_window": float(
+                getattr(BrowserConstants, "SEND_POST_CLICK_OBSERVE_WINDOW", 1.8)
+            ),
+            "pre_retry_probe_window": 0.12,
+            "retry_observe_window": float(
+                getattr(BrowserConstants, "SEND_RETRY_OBSERVE_WINDOW", 0.9)
+            ),
+            "attachment_observe_window": float(
+                getattr(BrowserConstants, "ATTACHMENT_SEND_OBSERVE_WINDOW", 6.0)
+            ),
+            "trust_network_activity": True,
+            "trust_generating_indicator": True,
+            "trust_send_disabled_with_input_shrink": True,
+        }
+
+        raw_config = {}
+        if isinstance(self._stream_config, dict):
+            raw_config = self._stream_config.get("send_confirmation", {}) or {}
+
+        if isinstance(raw_config, dict):
+            config.update(raw_config)
+
+        return config
+
+    def _get_send_confirmation_window(
+        self,
+        key: str,
+        fallback: float,
+        *,
+        min_value: float = 0.0,
+        max_value: Optional[float] = None,
+    ) -> float:
+        """Read a numeric send confirmation option with clamping."""
+        config = self._get_send_confirmation_config()
+        try:
+            value = float(config.get(key, fallback))
+        except (TypeError, ValueError):
+            value = float(fallback)
+
+        value = max(min_value, value)
+        if max_value is not None:
+            value = min(value, max_value)
+        return value
+
+    def _get_send_confirmation_flag(self, key: str, fallback: bool = True) -> bool:
+        """Read a boolean send confirmation option."""
+        config = self._get_send_confirmation_config()
+        raw_value = config.get(key, fallback)
+
+        if isinstance(raw_value, bool):
+            return raw_value
+        if isinstance(raw_value, str):
+            lowered = raw_value.strip().lower()
+            if lowered in ("1", "true", "yes", "on"):
+                return True
+            if lowered in ("0", "false", "no", "off"):
+                return False
+        return bool(raw_value)
+
     def _probe_send_post_click_state(self, send_selector: str = "") -> Dict[str, Any]:
         """Passively inspect whether the page has transitioned into generating state."""
         selector_json = json.dumps((send_selector or "").strip(), ensure_ascii=False)
@@ -1644,9 +1706,23 @@ class WorkflowExecutor:
         max_wait: Optional[float] = None,
     ) -> bool:
         """Observe post-click send signals without issuing another click."""
-        observe_window = float(
-            max_wait if max_wait is not None
-            else getattr(BrowserConstants, "ATTACHMENT_SEND_OBSERVE_WINDOW", 6.0)
+        observe_window = self._get_send_confirmation_window(
+            "attachment_observe_window",
+            getattr(BrowserConstants, "ATTACHMENT_SEND_OBSERVE_WINDOW", 6.0),
+            min_value=0.0,
+            max_value=60.0,
+        ) if max_wait is None else float(max_wait)
+        trust_network_activity = self._get_send_confirmation_flag(
+            "trust_network_activity",
+            True,
+        )
+        trust_generating_indicator = self._get_send_confirmation_flag(
+            "trust_generating_indicator",
+            True,
+        )
+        trust_send_disabled_with_input_shrink = self._get_send_confirmation_flag(
+            "trust_send_disabled_with_input_shrink",
+            True,
         )
         if observe_window <= 0:
             return False
@@ -1674,7 +1750,7 @@ class WorkflowExecutor:
                 time.sleep(step)
             elapsed += step
 
-            if network_state.get("matched"):
+            if trust_network_activity and network_state.get("matched"):
                 logger.debug("[SEND] 已通过网络监听捕获到发送后的目标流事件")
                 return True
 
@@ -1683,7 +1759,14 @@ class WorkflowExecutor:
                 return True
 
             state = self._probe_send_post_click_state(send_selector)
-            if state.get("generating") or (state.get("sendDisabled") and current_len < before_len):
+            if trust_generating_indicator and state.get("generating"):
+                return True
+
+            if (
+                trust_send_disabled_with_input_shrink
+                and state.get("sendDisabled")
+                and current_len < before_len
+            ):
                 return True
 
             last_len = current_len
@@ -1709,12 +1792,29 @@ class WorkflowExecutor:
         max_wait = getattr(BrowserConstants, "IMAGE_SEND_MAX_WAIT", 12.0)
         retry_interval = getattr(BrowserConstants, "IMAGE_SEND_RETRY_INTERVAL", 0.6)
         avoid_repeat_click = self._has_recent_attachment_upload()
-        send_observe_window = min(
-            max_wait,
-            float(getattr(BrowserConstants, "SEND_POST_CLICK_OBSERVE_WINDOW", 1.8)),
+        send_observe_window = self._get_send_confirmation_window(
+            "post_click_observe_window",
+            getattr(BrowserConstants, "SEND_POST_CLICK_OBSERVE_WINDOW", 1.8),
+            min_value=0.0,
+            max_value=max_wait,
         )
-        retry_observe_window = float(
-            getattr(BrowserConstants, "SEND_RETRY_OBSERVE_WINDOW", 0.9)
+        retry_probe_window = self._get_send_confirmation_window(
+            "pre_retry_probe_window",
+            0.12,
+            min_value=0.0,
+            max_value=max_wait,
+        )
+        retry_observe_window = self._get_send_confirmation_window(
+            "retry_observe_window",
+            getattr(BrowserConstants, "SEND_RETRY_OBSERVE_WINDOW", 0.9),
+            min_value=0.0,
+            max_value=max_wait,
+        )
+        attachment_observe_window = self._get_send_confirmation_window(
+            "attachment_observe_window",
+            getattr(BrowserConstants, "ATTACHMENT_SEND_OBSERVE_WINDOW", 6.0),
+            min_value=0.0,
+            max_value=max_wait,
         )
 
         before_len = self._safe_get_input_len_by_key("input_box")
@@ -1728,7 +1828,11 @@ class WorkflowExecutor:
             return
 
         if avoid_repeat_click:
-            if self._observe_send_without_retry(selector, before_len):
+            if self._observe_send_without_retry(
+                selector,
+                before_len,
+                max_wait=attachment_observe_window,
+            ):
                 logger.info("发送成功（附件场景，已避免重复点击发送按钮）")
             else:
                 logger.warning("[SEND] 附件发送场景未观察到明确成功信号，跳过自动补点以避免误点停止按钮")
@@ -1755,7 +1859,7 @@ class WorkflowExecutor:
             if remaining > 0 and self._observe_send_without_retry(
                 selector,
                 before_len,
-                max_wait=min(0.12, remaining),
+                max_wait=min(retry_probe_window, remaining),
             ):
                 elapsed = max_wait - max(0.0, deadline - time.time())
                 logger.info(f"发送成功（重试前观察确认，elapsed={elapsed:.1f}s）")

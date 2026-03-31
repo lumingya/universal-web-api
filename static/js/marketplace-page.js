@@ -307,7 +307,16 @@
             },
 
             applyTheme() {
-                document.body.classList.toggle('mp-light', !this.darkMode);
+                // Tailwind dark mode toggle
+                if (this.darkMode) {
+                    document.documentElement.classList.add('dark');
+                    document.body.classList.add('dark');
+                    document.body.classList.remove('mp-light');
+                } else {
+                    document.documentElement.classList.remove('dark');
+                    document.body.classList.remove('dark');
+                    document.body.classList.add('mp-light');
+                }
             },
 
             toggleDarkMode() {

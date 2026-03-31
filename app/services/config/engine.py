@@ -1497,12 +1497,12 @@ class ConfigEngine:
         
         data = self._get_site_data(domain, preset_name)
         if data is None:
-            return default_config
+            return copy.deepcopy(default_config)
         
         stream_config = data.get("stream_config", {})
         
         # 合并默认值
-        result = default_config.copy()
+        result = copy.deepcopy(default_config)
         
         # 更新顶层字段
         for key in ["mode", "hard_timeout", "silence_threshold", 
