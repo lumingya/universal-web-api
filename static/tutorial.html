@@ -682,6 +682,101 @@
 
         .config-group .icon { font-size: 1.2rem; }
 
+        .tutorial-cta-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 14px;
+            margin: 18px 0;
+        }
+
+        .tutorial-cta-card {
+            position: relative;
+            overflow: hidden;
+            padding: 18px;
+            border-radius: 16px;
+            border: 1px solid rgba(37, 99, 235, 0.18);
+            background:
+                radial-gradient(circle at top right, rgba(59, 130, 246, 0.15), transparent 40%),
+                linear-gradient(135deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.98));
+            box-shadow: 0 16px 30px rgba(15, 23, 42, 0.08);
+        }
+
+        .tutorial-cta-card::after {
+            content: "";
+            position: absolute;
+            inset: auto -58px -70px auto;
+            width: 160px;
+            height: 160px;
+            border-radius: 9999px;
+            background: radial-gradient(circle, rgba(255, 255, 255, 0.3), transparent 72%);
+            pointer-events: none;
+        }
+
+        .tutorial-cta-card h4 {
+            margin: 0 0 10px;
+            font-size: 1.02rem;
+            color: var(--h1-color);
+        }
+
+        .tutorial-cta-card p {
+            margin: 0;
+            color: var(--desc-color);
+            line-height: 1.7;
+        }
+
+        .tutorial-pill-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin: 14px 0 0;
+        }
+
+        .tutorial-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 7px 12px;
+            border-radius: 9999px;
+            background: rgba(255, 255, 255, 0.82);
+            border: 1px solid rgba(148, 163, 184, 0.26);
+            color: var(--text-color);
+            font-size: 0.84rem;
+            font-weight: 600;
+        }
+
+        .tutorial-pill strong {
+            color: var(--primary-color);
+        }
+
+        .tutorial-callout-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-top: 16px;
+        }
+
+        .tutorial-mini-list {
+            margin: 12px 0 0;
+            padding-left: 1.2rem;
+        }
+
+        .tutorial-mini-list li {
+            margin-bottom: 0.55rem;
+        }
+
+        [data-theme="dark"] .tutorial-cta-card {
+            border-color: rgba(96, 165, 250, 0.22);
+            background:
+                radial-gradient(circle at top right, rgba(96, 165, 250, 0.14), transparent 40%),
+                linear-gradient(135deg, rgba(30, 41, 59, 0.96), rgba(15, 23, 42, 0.96));
+            box-shadow: 0 18px 34px rgba(0, 0, 0, 0.25);
+        }
+
+        [data-theme="dark"] .tutorial-pill {
+            background: rgba(15, 23, 42, 0.74);
+            border-color: rgba(71, 85, 105, 0.54);
+        }
+
         /* ===== 汉堡菜单按钮 ===== */
         .hamburger {
             display: none;
@@ -2138,7 +2233,7 @@
             </ol>
 
             <div class="highlight-box">
-                <p><strong>关键点：</strong>自动识别不是点“新增站点”按钮触发，而是<strong>未知域名第一次实际请求时</strong>触发。也就是说，只打开页面不发请求，后端不会自动写入配置。</p>
+            <p><strong>关键点：</strong>自动识别会在<strong>未知域名第一次实际请求时</strong>启动。点“新增站点”按钮只会先建一个空壳；只打开页面、不发请求时，后端不会自动写入配置。</p>
             </div>
 
             <div class="success-box">
@@ -2284,7 +2379,7 @@
             </ul>
 
             <div class="note">
-                <p><strong>最重要的预期管理：</strong>如果你遇到“明明该调工具却直接说了一段话”“参数对不上”“后端提示无法解析 <code>tool_calls</code>”这类现象，通常不是客户端接错了，而是网页端模型没能稳定完成这次工具调用输出。</p>
+            <p><strong>最重要的预期管理：</strong>如果你遇到“明明该调工具却直接说了一段话”“参数对不上”“后端提示无法解析 <code>tool_calls</code>”这类现象，先优先怀疑网页端模型这次没能稳定完成工具调用输出，客户端本身往往没有接错。</p>
             </div>
 
             <h3>实战建议</h3>
@@ -2437,6 +2532,27 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
         <section id="selectors">
             <h2>🔍 选择器配置 (Selectors)</h2>
             <p>每个站点（的每个预设）都需要定义一组 CSS 选择器，告诉程序去哪里输入、哪里点击。</p>
+
+            <h3 id="selector-basics">零基础先做这 3 件事</h3>
+            <div class="tutorial-cta-grid">
+                <div class="tutorial-cta-card">
+                    <h4>先认 3 个核心字段</h4>
+                    <p>第一轮只盯住 <code>input_box</code>、<code>send_btn</code>、<code>result_container</code>。这 3 项填对了，页面通常就能完成最基本的收发测试。</p>
+                    <div class="tutorial-pill-list">
+                        <span class="tutorial-pill"><strong>input_box</strong> 输入位置</span>
+                        <span class="tutorial-pill"><strong>send_btn</strong> 发送入口</span>
+                        <span class="tutorial-pill"><strong>result_container</strong> 回复区域</span>
+                    </div>
+                </div>
+                <div class="tutorial-cta-card">
+                    <h4>先去练习页走一遍</h4>
+                    <p>项目里已经放了一个本地模拟站，页面结构简单、字段标得清楚，适合第一次练手。先在那里熟悉概念，再回真实站点会轻松很多。</p>
+                    <div class="tutorial-callout-actions">
+                        <a class="btn" href="./selector-practice.html" target="_blank" rel="noopener">打开本地练习站</a>
+                    </div>
+                </div>
+            </div>
+
             <pre><code>"selectors": {
   "input_box": "textarea[id='prompt']",   // 输入框
   "send_btn": "button.send-btn",          // 发送按钮
@@ -2452,11 +2568,29 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
             </ul>
 
             <div class="info-box">
-                <p><strong>💡 自定义选择器：</strong>你可以自己新增选择器，比如新增一个「临时对话按钮」，然后在工作流里添加点击这个按钮的步骤，程序就会在执行时多点一步临时对话。</p>
+                <p><strong>💡 怎么找得更稳：</strong></p>
+                <ul class="tutorial-mini-list">
+                    <li>优先看 <code>textarea</code>、<code>button</code>、<code>input[type=file]</code>、<code>aria-label</code>、<code>data-testid</code> 这类信息。</li>
+                    <li>如果 class 名很像随机生成的一长串字母数字，先别急着用，后面页面一改就可能失效。</li>
+                    <li><code>result_container</code> 尽量选整条 AI 回复的外层。只选到某个 <code>p</code> 或 <code>span</code> 时，漏内容的概率会明显变高。</li>
+                </ul>
             </div>
 
+            <h3 id="selector-testing-checklist">填写顺序建议</h3>
+            <ol>
+                <li>先右键输入框，检查元素，把 <code>input_box</code> 填进去。</li>
+                <li>再找发送按钮，把 <code>send_btn</code> 填进去。</li>
+                <li>让页面出现一条 AI 回复，找到整条回复的外层，把 <code>result_container</code> 填进去。</li>
+                <li>每填一项就点一次「测试」，确认它能命中，别攒到最后一起查。</li>
+                <li>前三项稳定之后，再看要不要补 <code>new_chat_btn</code>、<code>message_wrapper</code>、上传相关字段。</li>
+            </ol>
+
             <div class="success-box">
-                <p><strong>🧪 测试选择器：</strong>在控制面板的选择器配置项中点击「测试」按钮可以验证选择器是否生效，也可以在「工作流可视化」中查看配置是否正确。</p>
+                <p><strong>🧪 测试选择器：</strong>在控制面板的选择器配置项中点击「测试」按钮可以验证选择器是否生效，也可以在「工作流可视化」中查看配置是否正确。练习页里给了推荐写法和高亮按钮，第一次上手时很适合边看边填。</p>
+            </div>
+
+            <div class="note">
+                <p><strong>💡 自定义选择器：</strong>你可以自己新增选择器，比如新增一个「临时对话按钮」，然后在工作流里添加点击这个按钮的步骤，程序就会在执行时多点一步临时对话。</p>
             </div>
         </section>
 
@@ -2510,6 +2644,22 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
         <section id="response-detection">
             <h2>🌊 响应检测配置</h2>
             <p>系统需要知道 AI 什么时候开始输出、什么时候算真的说完。这里提供两种模式：默认的 DOM 模式，以及更进阶的网络拦截模式。</p>
+
+            <h3 id="non-stream-listener-basics">什么时候该看非流式监听？</h3>
+            <div class="tutorial-cta-grid">
+                <div class="tutorial-cta-card">
+                    <h4>大多数时候先留在 DOM 模式</h4>
+                    <p>页面里的回复能稳定抓到时，DOM 模式就够用了。第一次适配新站点时，也建议先把 DOM 模式跑通，定位问题会直接很多。</p>
+                </div>
+                <div class="tutorial-cta-card">
+                    <h4>遇到这些情况再切网络拦截</h4>
+                    <p>代码块总是缺、公式总是乱、网页里看得到内容却很难完整提取，或者站点走的是“一次返回整包 JSON / 文本”的接口，这时再切到网络拦截更合适。</p>
+                    <div class="tutorial-pill-list">
+                        <span class="tutorial-pill"><strong>listen_pattern</strong> 请求关键词</span>
+                        <span class="tutorial-pill"><strong>parser</strong> 响应解析器</span>
+                    </div>
+                </div>
+            </div>
 
             <table>
                 <tr><th>模式</th><th>是否流式</th><th>说明</th></tr>
@@ -2567,6 +2717,10 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
 
             <div class="info-box">
                 <p><strong>💡 如何开启：</strong>在控制面板的站点配置 -> 「流式配置」中，把模式切换为「网络拦截」即可。</p>
+            </div>
+
+            <div class="note">
+                <p><strong>💡 上手顺序：</strong>先抓对请求关键词，再选解析器，最后再调超时。很多人卡在这里，是因为一上来就调秒数，真正的问题还留在 <code>listen_pattern</code> 和 <code>parser</code> 上。</p>
             </div>
 
             <h4>网络拦截配置项</h4>
@@ -2631,8 +2785,8 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
                 <p><strong>⚠️ 关于 arena.ai：</strong>这个站点更建议继续使用默认的 <strong>DOM 模式</strong>。因为网络监听会创建额外的浏览器连接，增加被 Cloudflare 检测到的概率。</p>
             </div>
 
-            <h4>实战：如何让 AI 帮你写一个新站点的解析器？</h4>
-            <p>如果目标网站不是 SSE 流式响应，而是一次性返回完整 JSON 或文本，你通常需要新增一个自定义解析器。别担心，这部分工作完全可以直接交给 AI 来做。</p>
+            <h4 id="non-stream-parser-guide">实战：如何让 AI 帮你写一个新站点的解析器？</h4>
+            <p>如果目标网站走的是一次性完整返回的 JSON 或文本接口，你通常需要新增一个自定义解析器。别担心，这部分工作完全可以直接交给 AI 来做。</p>
 
             <div class="success-box">
                 <p><strong>项目已内置脚本：</strong>项目里已经附带同内容文件 <code>static/拦截请求发生器.txt</code>。你现在不用回桌面找文件，直接在教程里展开就能看；也可以单独打开原始文本页。</p>
@@ -2692,7 +2846,7 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
 - app/core/parsers/__init__.py</code></pre>
 
             <div class="note">
-                <p><strong>💡 实战经验：</strong><code>listen_pattern</code> 先填最核心、最稳定的 URL 路径关键词，不要一上来写太宽。如果一次导出的请求太多，可以先用 <code>viewRequests()</code>、<code>searchRequests('chat')</code>，或者 <code>exportRequests({ minPriority: 'MEDIUM' })</code> 缩小范围。多数时候真正难的不是“注册解析器”，而是“抓错请求”或“给 AI 的参考样本不够”。</p>
+                <p><strong>💡 实战经验：</strong><code>listen_pattern</code> 先填最核心、最稳定的 URL 路径关键词，不要一上来写太宽。如果一次导出的请求太多，可以先用 <code>viewRequests()</code>、<code>searchRequests('chat')</code>，或者 <code>exportRequests({ minPriority: 'MEDIUM' })</code> 缩小范围。多数时候真正难点在两处：抓错请求，或者给 AI 的参考样本还不够。</p>
             </div>
         </section>
 
@@ -3632,7 +3786,7 @@ BROWSER_PROFILE_NAME=Default</code></pre>
         </section>
     </div>
 
-    <script src="./js/tutorial-i18n.js?v=2.6.9"></script>
+<script src="./js/tutorial-i18n.js?v=2.6.10"></script>
     <script>
         // 站点配置数据（域名已更新）
         const sites = [

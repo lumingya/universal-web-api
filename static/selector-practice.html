@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>交互式选择器练习站</title>
+    <script src="/static/vendor/tailwindcss.js?v=2.6.7"></script>
+    <script>
+        window.tailwind = window.tailwind || {};
+        window.tailwind.config = { darkMode: 'class' };
+    </script>
+    <style>
+        .spotlight {
+            position: relative;
+            outline: 3px solid rgba(16, 185, 129, 0.8) !important;
+            outline-offset: 3px;
+            box-shadow: 0 0 0 8px rgba(16, 185, 129, 0.2) !important;
+            z-index: 10;
+        }
+        .dragover {
+            border-color: rgba(59, 130, 246, 0.8) !important;
+            background-color: rgba(59, 130, 246, 0.1) !important;
+        }
+        .toast {
+            position: fixed;
+            right: 1.5rem;
+            bottom: 1.5rem;
+            padding: 0.75rem 1rem;
+            border-radius: 0.75rem;
+            background: rgba(15, 23, 42, 0.95);
+            color: #f8fafc;
+            font-size: 0.875rem;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+            opacity: 0;
+            transform: translateY(1rem);
+            pointer-events: none;
+            transition: opacity 0.3s ease, transform 0.3s ease;
+            z-index: 50;
+        }
+        .dark .toast {
+            background: rgba(255, 255, 255, 0.95);
+            color: #0f172a;
+        }
+        .toast.visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+        .selector-badge {
+            position: absolute;
+            top: -0.75rem;
+            left: 0.75rem;
+            display: none;
+            padding: 0.25rem 0.5rem;
+            border-radius: 9999px;
+            background: rgba(15, 23, 42, 0.9);
+            color: #f8fafc;
+            font-size: 0.75rem;
+            font-weight: 700;
+            z-index: 20;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+        .dark .selector-badge {
+            background: rgba(226, 232, 240, 0.95);
+            color: #0f172a;
+        }
+        .show-selector-labels [data-demo] > .selector-badge {
+            display: inline-flex;
+            align-items: center;
+        }
+        @keyframes pulse-dot {
+            0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
+            40% { opacity: 1; transform: scale(1.2); }
+        }
+        .typing-dots span {
+            display: inline-block;
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background-color: currentColor;
+            animation: pulse-dot 1.4s infinite ease-in-out both;
+        }
+        .typing-dots span:nth-child(1) { animation-delay: -0.32s; }
+        .typing-dots span:nth-child(2) { animation-delay: -0.16s; }
+        
+        /* Interactive Missions Animations */
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            20%, 60% { transform: translateX(-4px); }
+            40%, 80% { transform: translateX(4px); }
+        }
+        .shake-error {
+            animation: shake 0.4s cubic-bezier(.36,.07,.19,.97) both;
+            border-color: #ef4444 !important;
+        }
+        @keyframes pop {
+            0% { transform: scale(0.95); opacity: 0; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        .pop-in {
+            animation: pop 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+
+        [v-cloak] { display: none; }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(156, 163, 175, 0.5); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(107, 114, 128, 0.8); }
+    </style>
+</head>
+<body class="bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-100 min-h-screen flex flex-col transition-colors duration-300 font-sans pb-12">
+    
+    <!-- Hero Section: Detailed Guide -->
+    <header class="w-full max-w-7xl mx-auto px-6 pt-4 pb-2 flex flex-col items-center text-center">
+        <h1 class="text-2xl md:text-3xl font-extrabold tracking-tight mb-2 text-slate-900 dark:text-white">
+            什么是选择器？
+        </h1>
+        <p class="text-slate-500 dark:text-slate-400 max-w-2xl text-lg mb-2 leading-relaxed text-base">
+            核心目的：告诉脚本在对应步骤里需要<strong>点击</strong>或<strong>监听</strong>哪个区域。
+        </p>
+
+        <!-- Tutorial Layout with Image -->
+        <div class="flex flex-col lg:flex-row gap-4 w-full max-w-6xl mb-4 text-left bg-white dark:bg-slate-800 rounded-xl p-4 shadow-sm shadow-md border border-slate-200 dark:border-slate-700 shadow-sm relative overflow-hidden">
+            
+            <!-- Process Steps -->
+            <div class="flex-1 space-y-6 flex flex-col justify-center">
+                <h3 class="font-bold text-base text-slate-900 dark:text-white mb-2">完整抓取步骤：</h3>
+                
+                <div class="flex items-start gap-4">
+                    <div class="w-6 h-6 shrink-0 text-xs bg-blue-100 dark:bg-blue-900/50 text-blue-600 dark:text-blue-400 rounded-lg flex items-center justify-center font-bold text-sm">1</div>
+                    <div class="pt-1">
+                        <p class="text-slate-700 dark:text-slate-300 font-medium text-sm">找到对应的目标按右键，点击最下面的“检查”。</p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">例如找发送按钮：先用鼠标指向网页上的发送按钮，右键后在弹出的浏览器菜单中选择“检查”(Inspect)。</p>
+                    </div>
+                </div>
+                
+                <div class="flex items-start gap-4">
+                    <div class="w-6 h-6 shrink-0 text-xs bg-blue-100 dark:bg-blue-900/50 text-blue-600 dark:text-blue-400 rounded-lg flex items-center justify-center font-bold text-sm">2</div>
+                    <div class="pt-1">
+                        <p class="text-slate-700 dark:text-slate-300 font-medium text-sm">拖动鼠标，找到你想要点击的元素的最外层框。</p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">这时会弹出开发者工具满屏代码。其中会自动有一行代码变蓝（如右图所示）。你可以用鼠标在这行代码附近上下移动，观察网页上高亮的遮罩框是不是刚好包住了你想要的按钮整体。</p>
+                    </div>
+                </div>
+
+                <div class="flex items-start gap-4">
+                    <div class="w-6 h-6 shrink-0 text-xs bg-blue-100 dark:bg-blue-900/50 text-blue-600 dark:text-blue-400 rounded-lg flex items-center justify-center font-bold text-sm">3</div>
+                    <div class="pt-1">
+                        <p class="text-slate-700 dark:text-slate-300 font-medium text-sm">右键复制，拿到一串代码。</p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">确认那行蓝底代码刚好对应网页元素后，对着这行蓝色代码右键，依次选择 <strong>Copy (复制) &rarr; Copy selector (复制 selector)</strong>。</p>
+                    </div>
+                </div>
+
+                <div class="flex items-start gap-4">
+                    <div class="w-6 h-6 shrink-0 text-xs bg-blue-100 dark:bg-blue-900/50 text-blue-600 dark:text-blue-400 rounded-lg flex items-center justify-center font-bold text-sm">4</div>
+                    <div class="pt-1">
+                        <p class="text-slate-700 dark:text-slate-300 font-medium text-sm">发送给 AI，让它帮你精简。</p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400 mt-1 mb-2">直接把那一串代码，配合下面的提示词发送给 AI：</p>
+                        <div class="bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-100 dark:border-indigo-800 rounded-xl p-3 relative group">
+                            <p class="text-[11px] text-indigo-800 dark:text-indigo-300 font-mono leading-relaxed select-all cursor-text">我要点击发送按钮，以上是我从网页里复制出的代码。请立刻告诉我这个操作对应的稳定选择器是什么。</p>
+                            <span class="absolute top-2 right-2 text-[10px] text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity">可直接选中复制</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Image Area -->
+            <div class="w-full lg:w-[45%] rounded-xl bg-slate-50 dark:bg-slate-900 overflow-hidden border border-slate-200 dark:border-slate-700 flex items-center shadow-inner">
+                <img src="/static/截图.png" alt="右键检查元素截图示例" class="w-full h-auto object-cover hover:scale-[1.02] transition-transform duration-300">
+            </div>
+        </div>
+        
+    </header>
+
+    <!-- Main Layout -->
+    <main class="w-full max-w-7xl mx-auto px-4 flex flex-col lg:flex-row gap-4 flex-1 items-start">
+        
+        <!-- Left: Chat UI Mockup (Target Site) -->
+        <div class="flex-[1.4] w-full flex flex-col bg-white dark:bg-slate-800 rounded-xl h-[480px] border border-slate-200 dark:border-slate-700 shadow-xl overflow-hidden relative" id="practiceRoot">
+            
+            <!-- Browser Bar Mock -->
+            <div class="bg-slate-100 dark:bg-slate-900/50 border-b border-slate-200 dark:border-slate-700 px-4 py-3 flex items-center justify-between">
+                <div class="flex items-center gap-4">
+                    <div class="flex gap-2">
+                        <div class="w-3 h-3 rounded-full bg-red-400"></div>
+                        <div class="w-3 h-3 rounded-full bg-amber-400"></div>
+                        <div class="w-3 h-3 rounded-full bg-emerald-400"></div>
+                    </div>
+                    <div class="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-1.5 text-xs text-slate-400 dark:text-slate-500 font-mono w-64 text-left">
+                        https://demo.local/chat
+                    </div>
+                </div>
+                <button id="toggleOverlayBtn" class="text-xs px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 font-medium transition-colors">
+                    显示原始标签
+                </button>
+            </div>
+
+            <!-- Chat Header area -->
+            <div class="px-6 py-4 flex items-center justify-between border-b border-slate-100 dark:border-slate-700/50">
+                <div class="flex items-center gap-4">
+                    <button class="w-10 h-10 rounded-xl bg-slate-100 dark:bg-slate-700 flex items-center justify-center text-slate-500 hover:text-slate-700 dark:hover:text-slate-300">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path></svg>
+                    </button>
+                    <div>
+                        <h2 class="font-bold text-lg">模拟练兵场</h2>
+                        <span class="text-xs text-emerald-500 font-medium flex items-center gap-1">
+                            右键下方元素，体验复制流程
+                        </span>
+                    </div>
+                </div>
+                <button data-demo="new-chat-btn" id="newChatBtn" onclick="resetChat()" class="relative group flex items-center gap-2 px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors text-sm font-medium">
+                    <span class="selector-badge group-hover:block z-20">new_chat_btn</span>
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+                    新建对话
+                </button>
+            </div>
+
+            <!-- Chat Messages Area -->
+            <div class="flex-1 overflow-y-auto p-4 flex flex-col gap-4 relative " data-demo="result-container" id="resultContainer">
+                <span class="selector-badge !top-2 !left-2">result_container</span>
+                
+                <!-- Welcome Message -->
+                <div class="relative group flex flex-col items-start message-wrapper assistant" data-demo="message-wrapper">
+                    <span class="selector-badge group-hover:block z-20">message_wrapper</span>
+                    <div class="flex items-center gap-2 mb-1 pl-1">
+                        <div class="w-6 h-6 rounded bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center text-emerald-600 dark:text-emerald-400 text-xs font-bold">A</div>
+                        <span class="text-xs font-medium text-slate-500 message-role">助手</span>
+                    </div>
+                    <div class="bg-slate-100 dark:bg-slate-700 rounded-2xl rounded-tl-sm px-5 py-3 text-sm leading-relaxed max-w-[85%] message-content">
+                        欢迎来到模拟区。请看右侧的任务面板，按照指示在这里练习。
+                    </div>
+                </div>
+            </div>
+
+            <!-- Chat Composer Area -->
+            <div class="p-4 bg-white dark:bg-slate-800 border-t border-slate-100 dark:border-slate-700">
+                <!-- Drop Zone -->
+                <div data-demo="drop-zone" id="dropZone" class="hidden relative group border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-xl p-4 mb-4 text-center text-sm text-slate-400 transition-colors">
+                    <span class="selector-badge group-hover:block z-20">drop_zone</span>
+                    把图片拖到这里
+                </div>
+                
+                <!-- Input Row -->
+                <div class="flex items-end gap-3 relative">
+                    <div class="flex-1 rounded-2xl border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 shadow-sm focus-within:ring-2 focus-within:ring-blue-500/50 focus-within:border-blue-500 p-2 flex flex-col relative group">
+                        <span class="selector-badge group-hover:block z-20 !-top-3 !left-2">input_box</span>
+                        <textarea data-demo="input-box" id="inputBox" rows="2" class="w-full bg-transparent border-0 focus:ring-0 resize-none px-3 py-2 text-sm text-slate-900 dark:text-slate-100 placeholder-slate-400" placeholder="发送前，先找到我的选择器是什么？"></textarea>
+                        
+                        <div class="flex justify-between items-center px-2 pb-1 pt-2">
+                            <div class="flex gap-1 relative group inline-block">
+                                <button data-demo="upload-btn" id="uploadBtn" class="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors" title="上传文件">
+                                    <span class="selector-badge group-hover:block z-20">upload_btn</span>
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"></path></svg>
+                                </button>
+                                <input type="file" hidden data-demo="file-input" id="fileInput">
+                            </div>
+
+                            <button data-demo="send-btn" id="sendBtn" class="relative group bg-blue-600 hover:bg-blue-700 text-white p-2 rounded-xl shadow-md transition-transform hover:-translate-y-0.5 flex items-center gap-1 px-4">
+                                <span class="selector-badge group-hover:block z-20 right-0 left-auto !-top-3">send_btn</span>
+                                <span class="text-sm font-medium">发送</span>
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"></path></svg>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Generating Indicator -->
+                <div data-demo="generating-indicator" id="generatingIndicator" class="hidden relative group items-center gap-3 mt-3 px-4 py-2 bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400 rounded-lg text-sm font-medium">
+                    <span class="selector-badge group-hover:block z-20">generating_indicator</span>
+                    <div class="typing-dots flex gap-1 items-center"><span></span><span></span><span></span></div>
+                    <span>模拟生成中...</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right: Interactive Missions Panel -->
+        <aside class="flex-1 w-full flex flex-col gap-4">
+            
+            <!-- Quest Tracker -->
+            <div id="questContainer" class="bg-indigo-600 dark:bg-indigo-900 rounded-xl p-4 text-white shadow-lg shadow-indigo-600/20 relative overflow-hidden transition-all duration-500">
+                <div class="absolute inset-0 opacity-10 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-white via-indigo-400 to-transparent pointer-events-none"></div>
+                
+                <div class="relative z-10">
+                    <div class="flex items-center justify-between mb-3 border-b border-indigo-500/50 pb-2">
+                        <h2 class="text-xl font-extrabold tracking-tight">实战演练手册</h2>
+                        <span class="bg-indigo-800 text-indigo-100 text-xs px-2.5 py-1 rounded-full font-bold uppercase tracking-wider shadow-inner" id="questProgress">第 1关 / 3</span>
+                    </div>
+
+                    <!-- Quest 1 -->
+                    <div id="quest1" class="quest-step pop-in">
+                        <div class="flex items-start gap-4 mb-4">
+                            <div class="bg-indigo-500 rounded-lg p-2 shrink-0"><svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg></div>
+                            <div>
+                                <h3 class="font-bold text-base mb-1 leading-tight">找到输入框选择器 (input_box)</h3>
+                                <p class="text-indigo-200 text-xs leading-relaxed text-justify">请在左侧图表中找到“用户发消息的输入大框”，右键检查，把它的选择器粘或敲进下面。可以不拘泥于固定答案，选中为止！</p>
+                            </div>
+                        </div>
+                        <div class="flex flex-col gap-2">
+                            <div class="relative">
+                                <input type="text" id="quest1Input" placeholder='例如: #inputBox 或 textarea' class="w-full bg-indigo-950/50 border border-indigo-400/30 rounded-xl px-3 py-2 text-sm text-white placeholder-indigo-400 focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:border-transparent transition-all">
+                            </div>
+                            <button onclick="checkQuest(1)" class="w-full bg-indigo-50 hover:bg-white text-indigo-700 font-bold px-3 py-2 rounded-lg text-sm shadow-lg shadow-black/10 transition-transform active:scale-95">提交校验</button>
+                        </div>
+                    </div>
+
+                    <!-- Quest 2 -->
+                    <div id="quest2" class="quest-step hidden pop-in">
+                        <div class="flex items-start gap-4 mb-4">
+                            <div class="bg-indigo-500 rounded-lg p-2 shrink-0"><svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"></path></svg></div>
+                            <div>
+                                <h3 class="font-bold text-base mb-1 leading-tight">找到发送按钮 (send_btn)</h3>
+                                <p class="text-indigo-200 text-xs leading-relaxed text-justify">真棒！接下来找它的好兄弟——写好文字后，点一下就能发送的“发送按钮”。找到并把它的选择器写在下面。</p>
+                            </div>
+                        </div>
+                        <div class="flex flex-col gap-2">
+                            <div class="relative">
+                                <input type="text" id="quest2Input" placeholder='例如: #sendBtn 或 button' class="w-full bg-indigo-950/50 border border-indigo-400/30 rounded-xl px-3 py-2 text-sm text-white placeholder-indigo-400 focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:border-transparent transition-all">
+                            </div>
+                            <button onclick="checkQuest(2)" class="w-full bg-indigo-50 hover:bg-white text-indigo-700 font-bold px-3 py-2 rounded-lg text-sm shadow-lg shadow-black/10 transition-transform active:scale-95">提交校验</button>
+                        </div>
+                    </div>
+
+                    <!-- Quest 3 -->
+                    <div id="quest3" class="quest-step hidden pop-in">
+                        <div class="flex items-start gap-4 mb-4">
+                            <div class="bg-indigo-500 rounded-lg p-2 shrink-0"><svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 002-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg></div>
+                            <div>
+                                <h3 class="font-bold text-base mb-1 leading-tight">找到回复容器 (result_container)</h3>
+                                <p class="text-indigo-200 text-xs leading-relaxed text-justify">最后一关！消息发送后，对话区包裹所有 AI 回复的最外层框。找到它，脚本就知道哪里是监控数据的尽头了。</p>
+                            </div>
+                        </div>
+                        <div class="flex flex-col gap-2">
+                            <div class="relative">
+                                <input type="text" id="quest3Input" placeholder='例如: #resultContainer' class="w-full bg-indigo-950/50 border border-indigo-400/30 rounded-xl px-3 py-2 text-sm text-white placeholder-indigo-400 focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:border-transparent transition-all">
+                            </div>
+                            <button onclick="checkQuest(3)" class="w-full bg-indigo-50 hover:bg-white text-indigo-700 font-bold px-3 py-2 rounded-lg text-sm shadow-lg shadow-black/10 transition-transform active:scale-95">提交校验</button>
+                        </div>
+                    </div>
+
+                    <!-- Workflow Test -->
+                    <div id="questWorkflow" class="quest-step hidden pop-in">
+                        <div class="flex items-center gap-3 mb-4 border-b border-indigo-500/30 pb-3">
+                            <div class="w-10 h-10 bg-emerald-400 text-indigo-900 rounded-full flex items-center justify-center font-black text-xl"><svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path></svg></div>
+                            <h3 class="font-extrabold text-emerald-300 text-xl tracking-wide">三关已全部打通！</h3>
+                        </div>
+                        <p class="text-indigo-100 text-sm mb-4">现在你集齐了脚本必须的 3 个核心门牌号。接下来亲自配置这句测试语，点下按键，看看自动化是怎样让网页动起来的吧！</p>
+                        
+                        <div class="space-y-4">
+                            <div class="bg-indigo-950/50 p-4 rounded-xl border border-indigo-400/20">
+                                <label class="block text-indigo-300 text-xs font-bold mb-2 tracking-wider">你需要发出的测试指令</label>
+                                <textarea id="testWorkflowText" rows="2" class="w-full bg-transparent border-0 border-b border-indigo-500/50 focus:border-emerald-400 focus:ring-0 text-white placeholder-indigo-400/50 resize-none font-medium text-lg leading-relaxed px-0 transition-colors" placeholder="说点什么..."></textarea>
+                            </div>
+                            
+                            <button id="runWorkflowBtn" onclick="runAutomatedWorkflow()" class="w-full relative group overflow-hidden bg-gradient-to-r from-emerald-400 to-teal-400 hover:from-emerald-300 hover:to-teal-300 text-teal-950 font-black text-base px-4 py-4 rounded-xl shadow-xl shadow-emerald-900/40 transition-all hover:shadow-emerald-900/60 active:scale-95 flex items-center justify-center gap-3">
+                                <span class="relative z-10 flex items-center gap-2">自动执行工作流 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg></span>
+                            </button>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+
+            <!-- Existing Cheat Sheet Folded -->
+            <div class="bg-white dark:bg-slate-800 rounded-3xl border border-slate-200 dark:border-slate-700 shadow-md overflow-hidden transition-colors">
+                <details class="group">
+                    <summary class="flex items-center justify-between p-3 cursor-pointer font-bold select-none hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
+                        <div class="flex items-center gap-2 text-slate-800 text-sm dark:text-slate-200">
+                            <span class="w-8 h-8 rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-500 flex items-center justify-center font-black">?</span>
+                            <span>【作弊条】偷看所有的参考答案</span>
+                        </div>
+                        <svg class="w-5 h-5 text-slate-400 group-open:rotate-180 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+                    </summary>
+                    <div class="p-3 pt-0 border-t border-slate-100 dark:border-slate-700 flex flex-col gap-6" id="cheatSheetList">
+                        <!-- Populated by JS -->
+                    </div>
+                </details>
+            </div>
+
+        </aside>
+
+    </main>
+
+    <div class="toast" id="toast"></div>
+
+    <!-- JS Logic -->
+    <script>
+        // --- Dark mode sync ---
+        function syncDarkMode() {
+            const isDark = localStorage.getItem('darkMode') === 'true';
+            document.documentElement.classList.toggle('dark', isDark);
+        }
+        syncDarkMode();
+        window.addEventListener('storage', (e) => {
+            if (e.key === 'darkMode') syncDarkMode();
+        });
+
+        // Elements
+        const toast = document.getElementById('toast');
+        const practiceRoot = document.getElementById('practiceRoot');
+        const resultContainer = document.getElementById('resultContainer');
+        const generatingIndicator = document.getElementById('generatingIndicator');
+        const inputBox = document.getElementById('inputBox');
+        const sendBtn = document.getElementById('sendBtn');
+        const toggleOverlayBtn = document.getElementById('toggleOverlayBtn');
+
+        let overlayVisible = false;
+        let toastTimer = null;
+        let streamTimer = null;
+
+        function showToast(message, isError=false) {
+            toast.textContent = message;
+            toast.classList.toggle('bg-red-500', isError);
+            toast.classList.add('visible');
+            clearTimeout(toastTimer);
+            toastTimer = setTimeout(() => {
+                toast.classList.remove('visible');
+                toast.classList.remove('bg-red-500');
+            }, 2000);
+        }
+
+        function clearSpotlight() {
+            document.querySelectorAll('.spotlight').forEach(node => node.classList.remove('spotlight'));
+        }
+
+        toggleOverlayBtn.addEventListener('click', () => {
+            overlayVisible = !overlayVisible;
+            practiceRoot.classList.toggle('show-selector-labels', overlayVisible);
+            toggleOverlayBtn.textContent = overlayVisible ? '隐藏原始标签' : '显示原始标签';
+        });
+
+        /* --- Interactive Mission Logic --- */
+        let userSavedSelectors = {
+            inputBox: '',
+            sendBtn: '',
+            resultContainer: ''
+        };
+
+        const targetNodes = {
+            1: document.getElementById('inputBox'),
+            2: document.getElementById('sendBtn'),
+            3: document.getElementById('resultContainer')
+        };
+
+        function validateSelector(userInput, targetNodeId) {
+            try {
+                if (!userInput.trim()) return false;
+                // Query within the practice bounds or root DOM
+                const found = document.querySelector(userInput.trim());
+                return found === targetNodes[targetNodeId];
+            } catch (e) {
+                return false; // invalid syntax
+            }
+        }
+
+        function proceedTo(step) {
+            for(let i=1; i<=3; i++){
+                document.getElementById('quest'+i)?.classList.add('hidden');
+            }
+            document.getElementById('questWorkflow').classList.add('hidden');
+
+            if(step <= 3) {
+                document.getElementById('questProgress').textContent = `第 ${step}关 / 3`;
+                const q = document.getElementById('quest'+step);
+                q.classList.remove('hidden');
+            } else {
+                document.getElementById('questProgress').textContent = `测试室解锁`;
+                document.getElementById('questProgress').classList.replace('bg-indigo-800', 'bg-emerald-500');
+                document.getElementById('questContainer').classList.replace('bg-indigo-600', 'bg-slate-800');
+                if(document.documentElement.classList.contains('dark')) {
+                    document.getElementById('questContainer').classList.replace('dark:bg-indigo-900', 'dark:bg-slate-900');
+                }
+                document.getElementById('questWorkflow').classList.remove('hidden');
+                
+                // Prefill some nice default test text
+                document.getElementById('testWorkflowText').value = "你好，这句消息是自动化脚本打的哟！";
+            }
+        }
+
+        function checkQuest(level) {
+            const inputEl = document.getElementById('quest'+level+'Input');
+            const val = inputEl.value;
+            if(validateSelector(val, level)) {
+                showToast("回答正确！成功捕获DOM！");
+                if (level === 1) userSavedSelectors.inputBox = val;
+                if (level === 2) userSavedSelectors.sendBtn = val;
+                if (level === 3) userSavedSelectors.resultContainer = val;
+                
+                inputEl.classList.remove('shake-error');
+                clearSpotlight();
+                targetNodes[level].classList.add('spotlight');
+                setTimeout(() => clearSpotlight(), 1500);
+
+                setTimeout(() => proceedTo(level + 1), 600);
+            } else {
+                showToast("不对喔，选手的目标不匹配，或者语法错误。", true);
+                inputEl.classList.remove('shake-error');
+                void inputEl.offsetWidth; // reflow
+                inputEl.classList.add('shake-error');
+            }
+        }
+
+        /* --- Workflow Simulation Logic --- */
+        async function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+        
+        async function typeString(targetEl, text) {
+            targetEl.value = '';
+            for (let i = 0; i < text.length; i++) {
+                targetEl.value += text[i];
+                targetEl.scrollTop = targetEl.scrollHeight; // maintain scroll
+                await sleep(50 + Math.random() * 60);
+            }
+        }
+
+        function createMsgHTML(role, content) {
+            if (role === 'assistant') {
+                return `
+                <div class="relative group flex flex-col items-start message-wrapper assistant pop-in" data-demo="message-wrapper">
+                    <span class="selector-badge group-hover:block z-20">message_wrapper</span>
+                    <div class="flex items-center gap-2 mb-1 pl-1">
+                        <div class="w-6 h-6 rounded bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center text-emerald-600 dark:text-emerald-400 text-xs font-bold">A</div>
+                        <span class="text-xs font-medium text-slate-500 message-role">助手</span>
+                    </div>
+                    <div class="bg-slate-100 dark:bg-slate-700 rounded-2xl rounded-tl-sm px-5 py-3 text-sm leading-relaxed max-w-[85%] message-content">${content}</div>
+                </div>`;
+            } else {
+                return `
+                <div class="relative group flex flex-col items-end message-wrapper user pop-in">
+                    <div class="flex items-center gap-2 mb-1 pr-1 flex-row-reverse">
+                        <div class="w-6 h-6 rounded bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center text-blue-600 dark:text-blue-400 text-xs font-bold">U</div>
+                        <span class="text-xs font-medium text-slate-500 message-role">用户</span>
+                    </div>
+                    <div class="bg-blue-600 text-white rounded-2xl rounded-tr-sm px-5 py-3 text-sm leading-relaxed max-w-[85%] message-content">${content}</div>
+                </div>`;
+            }
+        }
+
+        async function streamAssistantReply(text, finalResultContainer) {
+            finalResultContainer.classList.add('spotlight'); // Highlight the container being monitored
+            
+            const msgNodeHtml = createMsgHTML('assistant', '');
+            finalResultContainer.insertAdjacentHTML('beforeend', msgNodeHtml);
+            const msgNode = finalResultContainer.lastElementChild;
+            const contentEl = msgNode.querySelector('.message-content');
+            
+            generatingIndicator.style.display = 'flex';
+            msgNode.scrollIntoView({ behavior: 'smooth', block: 'end' });
+            
+            let index = 0;
+            const len = text.length;
+            
+            while(index <= len) {
+                contentEl.innerHTML = text.slice(0, index).replace(/\\n/g, '<br>');
+                index += Math.floor(Math.random() * 3) + 2;
+                msgNode.scrollIntoView({ behavior: 'smooth', block: 'end' });
+                await sleep(50 + Math.random() * 30);
+            }
+            contentEl.innerHTML = text.replace(/\\n/g, '<br>');
+            
+            generatingIndicator.style.display = 'none';
+            setTimeout(() => finalResultContainer.classList.remove('spotlight'), 1500);
+            showToast('自动化演示完成！机器就是这样利用您提供的选择器工作的。');
+        }
+
+        async function runAutomatedWorkflow() {
+            const btn = document.getElementById('runWorkflowBtn');
+            const textToType = document.getElementById('testWorkflowText').value || "测试";
+            btn.disabled = true;
+            btn.classList.add('opacity-50');
+            clearSpotlight();
+
+            // 1. Resolve elements using user's selectors
+            const uInput = document.querySelector(userSavedSelectors.inputBox);
+            const uBtn = document.querySelector(userSavedSelectors.sendBtn);
+            const uContainer = document.querySelector(userSavedSelectors.resultContainer);
+
+            // Phase 1: Typing
+            uInput.classList.add('spotlight');
+            uInput.focus();
+            await sleep(500);
+            await typeString(uInput, textToType);
+            await sleep(400);
+            uInput.classList.remove('spotlight');
+
+            // Phase 2: Clicking
+            uBtn.classList.add('spotlight');
+            await sleep(400);
+            uBtn.classList.remove('spotlight');
+            uBtn.classList.add('scale-95', 'bg-blue-800'); // press effect
+            await sleep(150);
+            uBtn.classList.remove('scale-95', 'bg-blue-800');
+            
+            // Phase 3: Push msg to view
+            uContainer.insertAdjacentHTML('beforeend', createMsgHTML('user', textToType));
+            uContainer.lastElementChild.scrollIntoView({ behavior: 'smooth', block: 'end' });
+            uInput.value = ''; // clear
+            
+            await sleep(600);
+            
+            // Phase 4: AI Reply mapped via result_container
+            await streamAssistantReply("您好！这是由全自动化的工作流触发的回复！不仅把你的话推过来了，还找到了这片容器。\n这就是“告诉脚本怎么操作和去哪找结果”的魅力！", uContainer);
+            
+            btn.disabled = false;
+            btn.classList.remove('opacity-50');
+        }
+
+        function resetChat() {
+            clearTimeout(streamTimer);
+            resultContainer.innerHTML = '<span class="selector-badge !top-2 !left-2">result_container</span>' + 
+                createMsgHTML('assistant', '欢迎来到模拟区。请看右侧的任务面板，按照指示在这里练习。');
+            generatingIndicator.style.display = 'none';
+            clearSpotlight();
+        }
+
+        // --- Cheat Sheet Rendering ---
+        const cheats = [
+            { key: 'input_box', desc: '用户发消息的输入大框。', sel: '[data-demo="input-box"]' },
+            { key: 'send_btn', desc: '点一下发消息的按钮。', sel: '#sendBtn' },
+            { key: 'result_container', desc: '包住 AI 回复区域的外层。', sel: '#resultContainer' },
+            { key: 'new_chat_btn', desc: '新建对话按钮。', sel: '[data-demo="new-chat-btn"]' },
+            { key: 'message_wrapper', desc: '单条消息容器。', sel: '.message-wrapper' }
+        ];
+
+        document.getElementById('cheatSheetList').innerHTML = cheats.map(c => `
+            <div class="pb-4 border-b border-slate-100 dark:border-slate-700/50 last:border-0 last:pb-0">
+                <div class="flex items-center justify-between mb-1">
+                    <h4 class="font-bold text-slate-800 dark:text-slate-200">${c.key}</h4>
+                </div>
+                <p class="text-xs text-slate-500 dark:text-slate-400 mb-2">${c.desc}</p>
+                <div class="bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-2 flex justify-between items-center group/c">
+                    <code class="text-xs font-mono text-pink-500 dark:text-pink-400 ml-1">${c.sel.replace(/"/g, '&quot;')}</code>
+                    <button onclick="copySelector('${c.sel.replace(/"/g, '\\"')}')" class="text-xs text-blue-500 hover:text-blue-700 px-2 py-1 opacity-0 group-hover/c:opacity-100 transition-opacity">复制</button>
+                </div>
+            </div>
+        `).join('');
+
+        async function copySelector(selector) {
+            try { await navigator.clipboard.writeText(selector); showToast('已复制选择器'); }
+            catch (e) { showToast('复制失败', true); }
+        }
+
+        /* Standard enter to submit for quests */
+        [1,2,3].forEach(level => {
+            document.getElementById('quest'+level+'Input').addEventListener('keydown', e => {
+                if(e.key === 'Enter') checkQuest(level);
+            });
+        });
+    </script>
+</body>
+</html>

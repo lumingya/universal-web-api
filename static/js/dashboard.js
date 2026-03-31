@@ -1299,18 +1299,6 @@ const app = createApp({
             }
         },
 
-        // 🆕 测试图片提取
-        async testImageExtraction() {
-            if (!this.currentDomain) {
-                this.notify('请先选择站点', 'warning'); // 适配当前的 notify 方法
-                return;
-            }
-
-            this.notify('图片提取测试功能开发中...', 'info');
-            // TODO: 实现测试逻辑
-            // 可以发送一个测试请求，然后显示返回的图片
-        },
-
         // 🆕 重新加载当前站点配置（应用预设后调用）
         async reloadConfig() {
             if (!this.currentDomain) return;

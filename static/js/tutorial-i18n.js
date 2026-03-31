@@ -157,7 +157,7 @@
         </ol>
 
         <div class="highlight-box">
-            <p><strong>Key point:</strong> automatic recognition is not triggered by the <strong>Add Site</strong> button. It is triggered by the <strong>first real request to an unknown domain</strong>.</p>
+            <p><strong>Key point:</strong> automatic recognition starts on the <strong>first real request to an unknown domain</strong>. The <strong>Add Site</strong> button only creates an empty shell.</p>
         </div>
 
         <h3>Path B: manual configuration</h3>
@@ -290,7 +290,7 @@
         </ul>
 
         <div class="note">
-            <p><strong>Expectation management:</strong> if you see wrong function names, missing arguments, plain chat replies instead of tool calls, or backend parse failures, the problem is usually not your client library. It is usually the website model failing to produce a stable structured result.</p>
+            <p><strong>Expectation management:</strong> if you see wrong function names, missing arguments, plain chat replies instead of tool calls, or backend parse failures, look at the website model first. In many cases it simply did not produce a stable structured result.</p>
         </div>
 
         <h3>Practical advice</h3>
@@ -450,6 +450,27 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
     translations.sections['selectors'] = `
         <h2>🔍 Selector Configuration</h2>
         <p>Each site and each preset needs a set of CSS selectors so the program knows where to type and where to click.</p>
+
+        <h3 id="selector-basics">Start with these three jobs</h3>
+        <div class="tutorial-cta-grid">
+            <div class="tutorial-cta-card">
+                <h4>Learn the three core fields first</h4>
+                <p>For the first pass, focus only on <code>input_box</code>, <code>send_btn</code>, and <code>result_container</code>. Once these three are correct, the page usually becomes testable.</p>
+                <div class="tutorial-pill-list">
+                    <span class="tutorial-pill"><strong>input_box</strong> where you type</span>
+                    <span class="tutorial-pill"><strong>send_btn</strong> where the message is submitted</span>
+                    <span class="tutorial-pill"><strong>result_container</strong> where the reply appears</span>
+                </div>
+            </div>
+            <div class="tutorial-cta-card">
+                <h4>Use the local practice page first</h4>
+                <p>The project now ships with a local mock site built for selector practice. It is a much easier place to learn the field mapping before you inspect a real website.</p>
+                <div class="tutorial-callout-actions">
+                    <a class="btn" href="./selector-practice.html" target="_blank" rel="noopener">Open the local practice page</a>
+                </div>
+            </div>
+        </div>
+
         <pre><code>"selectors": {
   "input_box": "textarea[id='prompt']",
   "send_btn": "button.send-btn",
@@ -465,17 +486,35 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
         </ul>
 
         <div class="info-box">
-            <p><strong>💡 Custom selectors:</strong> you can define extra selectors such as a temporary-chat button and then reference them inside the workflow.</p>
+            <p><strong>💡 How to find more stable selectors:</strong></p>
+            <ul class="tutorial-mini-list">
+                <li>Look for <code>textarea</code>, <code>button</code>, <code>input[type=file]</code>, <code>aria-label</code>, and <code>data-testid</code> first.</li>
+                <li>If a class name looks like a random generated string, keep searching. Those selectors often become fragile after a UI update.</li>
+                <li>For <code>result_container</code>, start with a larger wrapper around the whole answer. Targeting only a small <code>p</code> or <code>span</code> tends to miss content.</li>
+            </ul>
         </div>
 
+        <h3 id="selector-testing-checklist">Suggested fill order</h3>
+        <ol>
+            <li>Inspect the input area first and fill <code>input_box</code>.</li>
+            <li>Find the send button and fill <code>send_btn</code>.</li>
+            <li>Wait until one AI answer appears, then capture the outer answer wrapper as <code>result_container</code>.</li>
+            <li>Use the dashboard test button after every field instead of waiting until the end.</li>
+            <li>After the first three fields are stable, add <code>new_chat_btn</code>, <code>message_wrapper</code>, and upload-related selectors when needed.</li>
+        </ol>
+
         <div class="success-box">
-            <p><strong>🧪 Test selectors:</strong> use the <strong>Test</strong> button in the dashboard to confirm whether a selector really works.</p>
+            <p><strong>🧪 Test selectors:</strong> use the <strong>Test</strong> button in the dashboard to confirm whether a selector really works. The local practice page also includes highlight and copy actions, which helps a lot during the first setup.</p>
+        </div>
+
+        <div class="note">
+            <p><strong>💡 Custom selectors:</strong> you can define extra selectors such as a temporary-chat button and then reference them inside the workflow.</p>
         </div>
     `;
 
     translations.sections['extractors'] = `
         <h2>🧩 Extractor Configuration</h2>
-        <p>When an AI reply comes back messy, incomplete, or loses formatting, start with the extractor. If the problem is not in the page HTML but in the underlying response body, move on to parsers and network interception.</p>
+        <p>When an AI reply comes back messy, incomplete, or loses formatting, start with the extractor. If the issue lives in the underlying response body, move on to parsers and network interception.</p>
         <pre><code>{
   "extractor_id": "deep_mode_v1",
   ...
@@ -519,6 +558,22 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
     translations.sections['response-detection'] = `
         <h2>🌊 Response Detection</h2>
         <p>The system needs to know when the AI starts speaking and when it has really finished. There are two modes here: the default DOM mode and the more advanced network interception mode.</p>
+
+        <h3 id="non-stream-listener-basics">When should you look at non-stream monitoring?</h3>
+        <div class="tutorial-cta-grid">
+            <div class="tutorial-cta-card">
+                <h4>Most sites should stay on DOM mode first</h4>
+                <p>If the reply is visible on the page and you can capture it reliably, DOM mode is already good enough. It is also the easiest starting point when you adapt a new site for the first time.</p>
+            </div>
+            <div class="tutorial-cta-card">
+                <h4>Switch when these problems show up</h4>
+                <p>Move to network interception when code blocks keep breaking, formulas keep losing structure, DOM extraction becomes unreliable, or the site returns one complete JSON / text payload at a time.</p>
+                <div class="tutorial-pill-list">
+                    <span class="tutorial-pill"><strong>listen_pattern</strong> request keyword</span>
+                    <span class="tutorial-pill"><strong>parser</strong> response parser</span>
+                </div>
+            </div>
+        </div>
 
         <table>
             <tr><th>Mode</th><th>Streaming</th><th>Description</th></tr>
@@ -577,6 +632,10 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
             <p><strong>💡 How to enable it:</strong> open the site configuration in the dashboard, go to <strong>Streaming Configuration</strong>, and switch the mode to <strong>Network Interception</strong>.</p>
         </div>
 
+        <div class="note">
+            <p><strong>💡 Recommended order:</strong> lock the request keyword first, choose the parser second, and tune timeouts after that. Many failed attempts happen because the first two fields are still wrong.</p>
+        </div>
+
         <h4>Network interception fields</h4>
         <table>
             <tr><th>Field</th><th>Description</th><th>Example</th></tr>
@@ -615,8 +674,8 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
             <p><strong>⚠️ arena.ai:</strong> in practice, it is still safer to stay on DOM mode for this site. Extra browser connections from network monitoring can raise the chance of Cloudflare challenges.</p>
         </div>
 
-        <h4>Practical guide: ask AI to write a parser for a new site</h4>
-        <p>If the target site is not SSE-based and instead returns one full JSON or text response at a time, you usually need a custom parser. The good news is that AI can do most of this work for you.</p>
+        <h4 id="non-stream-parser-guide">Practical guide: ask AI to write a parser for a new site</h4>
+        <p>If the target site returns one full JSON or text response at a time, you usually need a custom parser. The good news is that AI can do most of this work for you.</p>
 
         <div class="success-box">
             <p><strong>Built-in helper script:</strong> the project already includes <code>static/拦截请求发生器.txt</code>. You can copy it from this tutorial section or open the original text file directly.</p>
@@ -899,7 +958,7 @@ if session.error_count > 2:
 
     translations.sections['ai-recognition'] = `
         <h2>🎯 AI Recognition (New Site Adaptation)</h2>
-        <p>If a site is not in the supported list, the system can call a helper AI to analyze the page and identify key elements such as the input box, send button, and reply container.</p>
+        <p>For sites outside the supported list, the system can call a helper AI to analyze the page and identify key elements such as the input box, send button, and reply container.</p>
 
         <div class="info-box">
             <p><strong>📍 Where to configure it:</strong> open the <a href="/">dashboard</a> → Settings → <strong>AI Recognition</strong>.</p>

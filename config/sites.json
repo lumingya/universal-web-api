@@ -139,7 +139,7 @@
         ],
         "stealth": false,
         "image_extraction": {
-          "enabled": false,
+          "enabled": true,
           "selector": "img",
           "container_selector": null,
           "debounce_seconds": 2,
@@ -599,7 +599,7 @@
           "mode": "all"
         },
         "file_paste": {
-          "enabled": true,
+          "enabled": false,
           "threshold": 50000,
           "hint_text": "完全专注于文件内容"
         }

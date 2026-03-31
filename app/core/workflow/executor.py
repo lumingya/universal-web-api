@@ -1636,9 +1636,20 @@ class WorkflowExecutor:
                 "generating": False,
             }
 
-    def _observe_send_without_retry(self, send_selector: str, before_len: int) -> bool:
-        """Attachment/file-paste scenario: observe state changes but avoid a second click."""
-        observe_window = getattr(BrowserConstants, "ATTACHMENT_SEND_OBSERVE_WINDOW", 6.0)
+    def _observe_send_without_retry(
+        self,
+        send_selector: str,
+        before_len: int,
+        *,
+        max_wait: Optional[float] = None,
+    ) -> bool:
+        """Observe post-click send signals without issuing another click."""
+        observe_window = float(
+            max_wait if max_wait is not None
+            else getattr(BrowserConstants, "ATTACHMENT_SEND_OBSERVE_WINDOW", 6.0)
+        )
+        if observe_window <= 0:
+            return False
         poll_interval = 0.25
         elapsed = 0.0
         last_len = before_len
@@ -1698,6 +1709,13 @@ class WorkflowExecutor:
         max_wait = getattr(BrowserConstants, "IMAGE_SEND_MAX_WAIT", 12.0)
         retry_interval = getattr(BrowserConstants, "IMAGE_SEND_RETRY_INTERVAL", 0.6)
         avoid_repeat_click = self._has_recent_attachment_upload()
+        send_observe_window = min(
+            max_wait,
+            float(getattr(BrowserConstants, "SEND_POST_CLICK_OBSERVE_WINDOW", 1.8)),
+        )
+        retry_observe_window = float(
+            getattr(BrowserConstants, "SEND_RETRY_OBSERVE_WINDOW", 0.9)
+        )
 
         before_len = self._safe_get_input_len_by_key("input_box")
         self._execute_click(selector, target_key, optional)
@@ -1716,24 +1734,52 @@ class WorkflowExecutor:
                 logger.warning("[SEND] 附件发送场景未观察到明确成功信号，跳过自动补点以避免误点停止按钮")
             return
 
+        if self._observe_send_without_retry(selector, before_len, max_wait=send_observe_window):
+            logger.info("发送成功（首次点击后观察确认）")
+            return
+
         logger.warning(f"[SEND] 发送未成功，进入重试窗口 max_wait={max_wait}s")
 
-        elapsed = 0.0
-        while elapsed < max_wait:
+        deadline = time.time() + max_wait
+        while time.time() < deadline:
             if self._check_cancelled():
                 return
 
-            step = min(retry_interval, max_wait - elapsed)
+            remaining = max(0.0, deadline - time.time())
+            step = min(retry_interval, remaining)
+            if step <= 0:
+                break
             time.sleep(step)
-            elapsed += step
+
+            remaining = max(0.0, deadline - time.time())
+            if remaining > 0 and self._observe_send_without_retry(
+                selector,
+                before_len,
+                max_wait=min(0.12, remaining),
+            ):
+                elapsed = max_wait - max(0.0, deadline - time.time())
+                logger.info(f"发送成功（重试前观察确认，elapsed={elapsed:.1f}s）")
+                return
 
             self._execute_click(selector, target_key, optional)
 
-            time.sleep(0.25)
+            if time.time() < deadline:
+                time.sleep(min(0.25, max(0.0, deadline - time.time())))
             new_len = self._safe_get_input_len_by_key("input_box")
 
             if self._is_send_success(after_len, new_len) or self._is_send_success(before_len, new_len):
+                elapsed = max_wait - max(0.0, deadline - time.time())
                 logger.info(f"发送成功 (重试{elapsed:.1f}s)")
+                return
+
+            remaining = max(0.0, deadline - time.time())
+            if remaining > 0 and self._observe_send_without_retry(
+                selector,
+                before_len,
+                max_wait=min(retry_observe_window, remaining),
+            ):
+                elapsed = max_wait - max(0.0, deadline - time.time())
+                logger.info(f"发送成功（重试后观察确认，elapsed={elapsed:.1f}s）")
                 return
 
             after_len = new_len

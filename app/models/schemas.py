@@ -211,6 +211,17 @@ class ImageExtractionConfig(TypedDict, total=False):
     mode: Literal["all", "first", "last"]  # 提取模式
 # ================= 流式监控配置 =================
 
+class SendConfirmationConfig(TypedDict, total=False):
+    """Post-click send confirmation strategy."""
+    post_click_observe_window: float
+    pre_retry_probe_window: float
+    retry_observe_window: float
+    attachment_observe_window: float
+    trust_network_activity: bool
+    trust_generating_indicator: bool
+    trust_send_disabled_with_input_shrink: bool
+
+
 class StreamConfig(TypedDict, total=False):
     """流式监控配置（可选字段）"""
     silence_threshold: float
@@ -218,6 +229,7 @@ class StreamConfig(TypedDict, total=False):
     enable_wrapper_search: bool
     rerender_wait: float
     content_shrink_tolerance: int
+    send_confirmation: SendConfirmationConfig
 
 
 # ================= 站点配置 =================
@@ -541,8 +553,46 @@ def validate_site_config(config: Dict[str, Any]) -> bool:
         if "enable_wrapper_search" in stream_config:
             if not isinstance(stream_config["enable_wrapper_search"], bool):
                 return False
+
+        if "send_confirmation" in stream_config:
+            if not isinstance(stream_config["send_confirmation"], dict):
+                return False
+
+            send_confirmation = stream_config["send_confirmation"]
+            numeric_fields = [
+                "post_click_observe_window",
+                "pre_retry_probe_window",
+                "retry_observe_window",
+                "attachment_observe_window",
+            ]
+            bool_fields = [
+                "trust_network_activity",
+                "trust_generating_indicator",
+                "trust_send_disabled_with_input_shrink",
+            ]
+
+            for key in numeric_fields:
+                if key in send_confirmation and not isinstance(send_confirmation[key], (int, float)):
+                    return False
+
+            for key in bool_fields:
+                if key in send_confirmation and not isinstance(send_confirmation[key], bool):
+                    return False
     
     return True
+
+
+def get_default_send_confirmation_config() -> SendConfirmationConfig:
+    """Get the default send confirmation strategy."""
+    return {
+        "post_click_observe_window": 1.8,
+        "pre_retry_probe_window": 0.12,
+        "retry_observe_window": 0.9,
+        "attachment_observe_window": 6.0,
+        "trust_network_activity": True,
+        "trust_generating_indicator": True,
+        "trust_send_disabled_with_input_shrink": True,
+    }
 
 
 def get_default_stream_config() -> StreamConfig:
@@ -552,7 +602,8 @@ def get_default_stream_config() -> StreamConfig:
         "initial_wait": 30.0,
         "enable_wrapper_search": True,
         "rerender_wait": 0.5,
-        "content_shrink_tolerance": 3
+        "content_shrink_tolerance": 3,
+        "send_confirmation": get_default_send_confirmation_config(),
     }
 
 
@@ -569,6 +620,15 @@ def merge_stream_config(
     
     result = defaults.copy()
     result.update(site_config)
+
+    default_send_confirmation = defaults.get("send_confirmation")
+    site_send_confirmation = site_config.get("send_confirmation")
+    if isinstance(default_send_confirmation, dict):
+        result["send_confirmation"] = default_send_confirmation.copy()
+        if isinstance(site_send_confirmation, dict):
+            result["send_confirmation"].update(site_send_confirmation)
+    elif isinstance(site_send_confirmation, dict):
+        result["send_confirmation"] = site_send_confirmation.copy()
     
     return result
 
@@ -620,6 +680,8 @@ __all__ = [
     'get_default_selector_definitions',
     'validate_workflow_step',
     'validate_site_config',
+    'SendConfirmationConfig',
+    'get_default_send_confirmation_config',
     'get_default_stream_config',
     'merge_stream_config',
     'ImageData',

@@ -19,7 +19,8 @@ from app.models.schemas import (
     WorkflowStep,
     SelectorDefinition,
     get_default_image_extraction_config,
-    get_default_file_paste_config
+    get_default_file_paste_config,
+    get_default_send_confirmation_config,
 )
 from app.services.extractor_manager import extractor_manager
 from app.services.parser_manager import parser_manager
@@ -80,6 +81,7 @@ def get_default_stream_config() -> Dict[str, Any]:
         "silence_threshold": 2.5,   # 静默超时（秒）
         "initial_wait": 30.0,       # 初始等待（秒）
         "enable_wrapper_search": True,
+        "send_confirmation": get_default_send_confirmation_config(),
         
         # 网络监听配置（可选）
         "network": None
@@ -1246,7 +1248,7 @@ class ConfigEngine:
         
         image_config = data.get("image_extraction", {})
         
-        result = default_config.copy()
+        result = copy.deepcopy(default_config)
         result.update(image_config)
         
         return result
@@ -1507,6 +1509,10 @@ class ConfigEngine:
                     "initial_wait", "enable_wrapper_search"]:
             if key in stream_config:
                 result[key] = stream_config[key]
+
+        # 处理 send_confirmation 配置
+        if isinstance(stream_config.get("send_confirmation"), dict):
+            result["send_confirmation"].update(stream_config["send_confirmation"])
         
         # 处理 network 配置
         if stream_config.get("network"):
@@ -1585,6 +1591,12 @@ class ConfigEngine:
         # 验证布尔字段
         if "enable_wrapper_search" in config:
             result["enable_wrapper_search"] = bool(config["enable_wrapper_search"])
+
+        # 验证 send_confirmation 配置
+        if isinstance(config.get("send_confirmation"), dict):
+            result["send_confirmation"] = self._validate_send_confirmation_config(
+                config["send_confirmation"]
+            )
         
         # 验证 network 配置
         if config.get("network"):
@@ -1595,6 +1607,50 @@ class ConfigEngine:
                 if network_config.get("parser") and network_config.get("listen_pattern"):
                     result["mode"] = "network"
         
+        return result
+
+    def _validate_send_confirmation_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """验证发送成功判定配置。"""
+        result = get_default_send_confirmation_config()
+
+        if not isinstance(config, dict):
+            return result
+
+        numeric_ranges = {
+            "post_click_observe_window": (0.0, 15.0),
+            "pre_retry_probe_window": (0.0, 5.0),
+            "retry_observe_window": (0.0, 15.0),
+            "attachment_observe_window": (0.0, 30.0),
+        }
+        for key, (minimum, maximum) in numeric_ranges.items():
+            if key not in config:
+                continue
+            try:
+                value = float(config[key])
+            except (TypeError, ValueError):
+                continue
+            result[key] = max(minimum, min(value, maximum))
+
+        bool_fields = [
+            "trust_network_activity",
+            "trust_generating_indicator",
+            "trust_send_disabled_with_input_shrink",
+        ]
+        for key in bool_fields:
+            if key not in config:
+                continue
+            raw_value = config[key]
+            if isinstance(raw_value, str):
+                lowered = raw_value.strip().lower()
+                if lowered in ("1", "true", "yes", "on"):
+                    result[key] = True
+                    continue
+                if lowered in ("0", "false", "no", "off"):
+                    result[key] = False
+                    continue
+                continue
+            result[key] = bool(raw_value)
+
         return result
     
     def _validate_network_config(self, config: Dict[str, Any]) -> Optional[Dict[str, Any]]:

@@ -7,7 +7,7 @@ window.ImageConfigPanel = {
         currentDomain: { type: String, default: null },
         collapsed: { type: Boolean, default: true }
     },
-    emits: ['update:collapsed', 'update-image-config', 'test-image-extraction', 'reload-config'],
+    emits: ['update:collapsed', 'update-image-config', 'reload-config'],
     data() {
         return {
             showPresetMenu: false,
@@ -263,16 +263,6 @@ window.ImageConfigPanel = {
                         </div>
                     </div>
 
-                    <!-- 测试按钮 -->
-                    <div class="border-t dark:border-gray-700 pt-4 flex justify-end">
-                        <button @click="$emit('test-image-extraction')"
-                                class="px-4 py-2 text-sm font-medium text-blue-600 dark:text-blue-400 border border-blue-300 dark:border-blue-600 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-900/30 transition-colors flex items-center gap-2">
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z"/>
-                            </svg>
-                            测试图片提取
-                        </button>
-                    </div>
                 </template>
             </div>
         </div>

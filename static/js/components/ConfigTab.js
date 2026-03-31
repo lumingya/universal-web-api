@@ -9,7 +9,7 @@ window.ConfigTab = {
     emits: [
         'add-selector', 'remove-selector', 'update-selector-key', 'test-selector',
         'add-step', 'remove-step', 'move-step', 'action-change', 'show-templates',
-        'update-image-config', 'test-image-extraction', 'reload-config'
+        'update-image-config', 'reload-config'
     ],
         // 注册子组件（确保模板可解析）
     components: {
@@ -418,7 +418,6 @@ window.ConfigTab = {
                     :collapsed="imageConfigCollapsed"
                     @update:collapsed="imageConfigCollapsed = $event"
                     @update-image-config="$emit('update-image-config', $event)"
-                    @test-image-extraction="$emit('test-image-extraction')"
                     @reload-config="$emit('reload-config')"
                 />
 
