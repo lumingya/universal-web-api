@@ -5,11 +5,121 @@
   "upload_url": "https://github.com/lumingya/universal-web-api/issues/new?template=marketplace_submission.md",
   "items": [
     {
+      "id": "site_config-chat.deepseek.com",
+      "item_type": "site_config",
+      "name": "deepseek",
+      "summary": "deepseek",
+      "author": "hanyaypc-rgb",
+      "submitted_by": "hanyaypc-rgb",
+      "category": "chat.deepseek.com",
+      "site_domain": "chat.deepseek.com",
+      "domain": "chat.deepseek.com",
+      "preset_name": "主预设",
+      "downloads": 0,
+      "stars": 0,
+      "updated_at": "2026-03-31T13:49:59Z",
+      "version": "1.0.0",
+      "compatibility": "",
+      "repo_url": "https://github.com/lumingya/universal-web-api/issues/10",
+      "package_url": "",
+      "review_status": "",
+      "review_label": "",
+      "issue_number": 10,
+      "issue_url": "https://github.com/lumingya/universal-web-api/issues/10",
+      "issue_title": "[市场投稿] deepseek",
+      "import_disabled": false,
+      "tags": [],
+      "parser_id": "",
+      "parser_class_name": "",
+      "parser_module_name": "",
+      "min_app_version": "",
+      "site_config": {
+        "chat.deepseek.com": {
+          "default_preset": "主预设",
+          "presets": {
+            "主预设": {
+              "selectors": {
+                "input_box": "textarea",
+                "send_btn": "div.bf38813a > div > div[role='button']",
+                "result_container": "css:div.ds-markdown",
+                "new_chat_btn": "div._5a8ac7a",
+                "generating_indicator": "css:._7436101.bcc55ca1"
+              },
+              "stream_config": {
+                "mode": "network",
+                "hard_timeout": 300,
+                "silence_threshold": 3,
+                "initial_wait": 30,
+                "enable_wrapper_search": true,
+                "network": {
+                  "listen_pattern": "api/v0/chat/completion",
+                  "parser": "deepseek",
+                  "first_response_timeout": 300,
+                  "silence_threshold": 3,
+                  "response_interval": 0.5
+                }
+              },
+              "workflow": [
+                {
+                  "action": "CLICK",
+                  "target": "new_chat_btn",
+                  "optional": true,
+                  "value": null
+                },
+                {
+                  "action": "WAIT",
+                  "target": "",
+                  "optional": false,
+                  "value": "0.5"
+                },
+                {
+                  "action": "FILL_INPUT",
+                  "target": "input_box",
+                  "optional": false,
+                  "value": null
+                },
+                {
+                  "action": "CLICK",
+                  "target": "send_btn",
+                  "optional": true,
+                  "value": null
+                },
+                {
+                  "action": "STREAM_WAIT",
+                  "target": "result_container",
+                  "optional": false,
+                  "value": null
+                }
+              ],
+              "stealth": false,
+              "image_extraction": {
+                "enabled": false,
+                "selector": "img",
+                "container_selector": null,
+                "debounce_seconds": 2,
+                "wait_for_load": true,
+                "load_timeout_seconds": 5,
+                "download_blobs": true,
+                "max_size_mb": 10,
+                "mode": "all"
+              },
+              "file_paste": {
+                "enabled": true,
+                "threshold": 50000,
+                "hint_text": "完全专注于文件内容"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
       "id": "site_config-gemini.google.com",
       "item_type": "site_config",
       "name": "gemini最新预设",
       "summary": "当原有预设报错后可更新",
       "author": "本地投稿",
+      "submitted_by": "",
       "category": "gemini.google.com",
       "site_domain": "gemini.google.com",
       "domain": "gemini.google.com",
@@ -28,6 +138,10 @@
       "issue_title": "[市场投稿] gemini最新预设",
       "import_disabled": false,
       "tags": [],
+      "parser_id": "",
+      "parser_class_name": "",
+      "parser_module_name": "",
+      "min_app_version": "",
       "site_config": {
         "gemini.google.com": {
           "default_preset": "主预设",
