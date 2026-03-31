@@ -5,6 +5,118 @@
   "upload_url": "https://github.com/lumingya/universal-web-api/issues/new?template=marketplace_submission.md",
   "items": [
     {
+      "id": "site_config-chat.qwen.ai",
+      "item_type": "site_config",
+      "name": "qwen",
+      "summary": "qwen",
+      "author": "hanyaypc-rgb",
+      "submitted_by": "hanyaypc-rgb",
+      "category": "chat.qwen.ai",
+      "site_domain": "chat.qwen.ai",
+      "domain": "chat.qwen.ai",
+      "preset_name": "主预设",
+      "downloads": 0,
+      "stars": 0,
+      "updated_at": "2026-03-31T13:51:07Z",
+      "version": "1.0.0",
+      "compatibility": "",
+      "repo_url": "https://github.com/lumingya/universal-web-api/issues/11",
+      "package_url": "",
+      "review_status": "",
+      "review_label": "",
+      "issue_number": 11,
+      "issue_url": "https://github.com/lumingya/universal-web-api/issues/11",
+      "issue_title": "[市场投稿] qwen",
+      "import_disabled": false,
+      "tags": [],
+      "parser_id": "",
+      "parser_class_name": "",
+      "parser_module_name": "",
+      "min_app_version": "",
+      "site_config": {
+        "chat.qwen.ai": {
+          "default_preset": "主预设",
+          "presets": {
+            "主预设": {
+              "selectors": {
+                "input_box": "textarea.message-input-textarea, textarea#chat-input, textarea[data-testid=\"yuntu-textarea\"], textarea[placeholder], div[role=\"textbox\"][contenteditable=\"true\"]",
+                "send_btn": "button.send-button, .send-button, .message-input-right-button-send, .chat-prompt-send-button, #send-message-button, button[type=\"submit\"], button[aria-label*=\"发送\"], button[aria-label*=\"Send\"]",
+                "result_container": ".chat-response-message .qwen-markdown, .chat-response-message-right .qwen-markdown, .response-message-content, .custom-qwen-markdown, .qwen-markdown",
+                "new_chat_btn": "xpath://div[@id=\"sidebar\"]//div[contains(@class, \"sidebar-entry-list-content\")][.//div[contains(@class, \"sidebar-entry-list-text\") and normalize-space(.)=\"新建对话\"]][1]",
+                "message_wrapper": ".qwen-chat-message, .chat-response-message, .chat-user-message, .chat-item, [data-role]",
+                "generating_indicator": "button[aria-label*=\"停止\"], button[aria-label*=\"Stop\"]",
+                "file_input": "input[type=\"file\"]",
+                "drop_zone": "body"
+              },
+              "workflow": [
+                {
+                  "action": "CLICK",
+                  "target": "new_chat_btn",
+                  "optional": true,
+                  "value": null
+                },
+                {
+                  "action": "WAIT",
+                  "target": "",
+                  "optional": false,
+                  "value": "0.5"
+                },
+                {
+                  "action": "FILL_INPUT",
+                  "target": "input_box",
+                  "optional": false,
+                  "value": null
+                },
+                {
+                  "action": "KEY_PRESS",
+                  "target": "Enter",
+                  "optional": true,
+                  "value": null
+                },
+                {
+                  "action": "STREAM_WAIT",
+                  "target": "result_container",
+                  "optional": false,
+                  "value": null
+                }
+              ],
+              "stealth": false,
+              "stream_config": {
+                "mode": "network",
+                "hard_timeout": 300,
+                "silence_threshold": 2.5,
+                "initial_wait": 30,
+                "enable_wrapper_search": true,
+                "network": {
+                  "listen_pattern": "api/v2/chat/completions",
+                  "parser": "qwen",
+                  "first_response_timeout": 300,
+                  "silence_threshold": 3,
+                  "response_interval": 0.5
+                }
+              },
+              "image_extraction": {
+                "enabled": false,
+                "selector": "img",
+                "container_selector": null,
+                "debounce_seconds": 2,
+                "wait_for_load": true,
+                "load_timeout_seconds": 5,
+                "download_blobs": true,
+                "max_size_mb": 10,
+                "mode": "all"
+              },
+              "file_paste": {
+                "enabled": true,
+                "threshold": 40000,
+                "hint_text": "完全专注于文件内容"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
       "id": "site_config-www.doubao.com",
       "item_type": "site_config",
       "name": "doubao",
