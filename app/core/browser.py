@@ -399,7 +399,7 @@ class BrowserCore:
             self._connected = False
             return False
     
-    def health_check(self, connect_if_needed: bool = True) -> Dict[str, Any]:
+    def health_check(self) -> Dict[str, Any]:
         result = {
             "status": "unhealthy",
             "connected": False,
@@ -410,9 +410,6 @@ class BrowserCore:
         
         try:
             if not self.page:
-                if not connect_if_needed:
-                    result["error"] = "浏览器尚未建立控制连接"
-                    return result
                 if not self._connect():
                     result["error"] = "无法连接到浏览器"
                     return result

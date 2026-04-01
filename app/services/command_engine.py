@@ -136,23 +136,6 @@ class CommandEngine(CommandEngineRuntimeMixin, CommandEngineResultsMixin, Comman
             self._browser = get_browser(auto_connect=False)
         return self._browser
 
-    def _is_quiet_background_session(self, session: Optional['TabSession']) -> bool:
-        """Cloudflare 等高风控站点在空闲期尽量不做后台探测。"""
-        if session is None:
-            return False
-
-        domain = str(getattr(session, "current_domain", "") or "").strip().lower()
-        if not domain:
-            return False
-
-        raw_preset_name = getattr(session, "preset_name", "")
-        preset_name = self._resolve_preset_name(raw_preset_name, session) or None
-        try:
-            return bool(self._get_config_engine().get_site_stealth_mode(domain, preset_name))
-        except Exception as e:
-            logger.debug(f"[CMD] 读取站点隐身配置失败（忽略）: {e}")
-            return False
-
     def _suspend_tab_global_network(self, session: 'TabSession', reason: str = "command"):
         """命令执行期间暂停标签页全局网络监听，避免和工作流监听冲突。"""
         try:
@@ -234,9 +217,6 @@ class CommandEngine(CommandEngineRuntimeMixin, CommandEngineResultsMixin, Comman
         Best-effort wake-up for background/discard-prone tabs.
         Uses lifecycle and lightweight JS ping, without forcing browser focus.
         """
-        if reason in {"periodic_keepalive", "page_check", "page_check_probe"} and self._is_quiet_background_session(session):
-            logger.debug(f"[CMD] 跳过后台唤醒: {session.id} ({reason})")
-            return
         if not self._wake_tab_before_page_check:
             return
         focus_emulation_set = False
@@ -504,9 +484,6 @@ return (function() {
         """Inject or update MutationObserver for real-time page_check text detection."""
         if not keywords:
             return
-        if self._is_quiet_background_session(session):
-            logger.debug(f"[CMD] 跳过页面观察器注入: {session.id}")
-            return
         sid = str(getattr(session, "id", "") or "")
         if not sid:
             return
@@ -557,8 +534,6 @@ return (function() {
 
     def _maybe_periodic_keepalive(self, session: 'TabSession', now_ts: float):
         if not self._periodic_keepalive_enabled:
-            return
-        if self._is_quiet_background_session(session):
             return
         sid = str(getattr(session, "id", "") or "")
         if not sid:
@@ -652,7 +627,6 @@ return (function() {
             session_status = str(getattr(getattr(session, "status", None), "value", "")).lower()
             if session_status not in {"idle", "busy"}:
                 continue
-            quiet_background = self._is_quiet_background_session(session)
             is_busy_workflow = session_status == "busy" and self._has_active_workflow(session)
             if session_status == "busy" and not is_busy_workflow:
                 continue
@@ -678,8 +652,6 @@ return (function() {
                     continue
 
                 trigger_type = str(trigger.get("type", "")).strip().lower()
-                if quiet_background and session_status == "idle" and trigger_type == "page_check":
-                    continue
                 if (
                     is_busy_workflow
                     and trigger_type == "page_check"

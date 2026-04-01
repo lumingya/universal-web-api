@@ -53,12 +53,6 @@ _GUIDE_SITE_ORDER = [
     "arena.ai",
 ]
 
-
-def _should_connect_browser_on_startup() -> bool:
-    value = str(os.getenv("BROWSER_CONNECT_ON_STARTUP", "false")).strip().lower()
-    return value in {"1", "true", "yes", "y", "on"}
-
-
 def _setup_windows_event_loop_policy():
     """
     在 Windows 上优先使用 SelectorEventLoop，规避 Proactor 在连接断开时
@@ -171,13 +165,43 @@ def _should_open_startup_pages(browser) -> bool:
     return False
 
 
+def _capture_startup_blank_tab_id(browser) -> str:
+    """
+    在启动瞬间捕获可用于引导页的初始空白标签页。
+
+    目的：
+    - 避免延迟线程在 0.8s 后重新检查时，被用户刚刚新开的工作标签页“抢跑”
+    - 只要最初那张 blank 页还在，就仍然把引导页打开到那张页里
+    """
+    try:
+        tab_ids = list(getattr(browser.page, "tab_ids", []) or [])
+        if len(tab_ids) != 1:
+            return ""
+
+        tab_id = str(tab_ids[0] or "").strip()
+        if not tab_id:
+            return ""
+
+        try:
+            tab = browser.page.get_tab(tab_id)
+            current_url = str(getattr(tab, "url", "") or "")
+        except Exception:
+            current_url = str(getattr(browser.page, "url", "") or "")
+
+        return tab_id if current_url in _STARTUP_EMPTY_URLS else ""
+    except Exception as e:
+        logger.debug(f"捕获启动空白标签页失败: {e}")
+        return ""
+
+
 def _open_controlled_browser_page_non_blocking(
     browser,
     page_url: str,
     page_name: str,
     initial_delay_sec: float = 1.0,
+    startup_blank_tab_id: str = "",
 ):
-    """Navigate the controlled browser only if it still stays on the initial blank page."""
+    """Navigate the controlled browser only if the captured startup blank page is still available."""
 
     def _worker():
         try:
@@ -187,17 +211,35 @@ def _open_controlled_browser_page_non_blocking(
                 logger.warning(f"[startup] {page_name}未就绪，跳过自动打开: {page_url}")
                 return
 
-            if not _should_open_startup_pages(browser):
-                logger.info(f"[startup] 受控浏览器已离开空白页，跳过打开{page_name}")
-                return
-
             target_tab = None
-            try:
-                target_tab = browser.page.latest_tab
-            except Exception:
-                target_tab = None
-            if target_tab is None:
-                target_tab = browser.page
+            startup_tab_id = str(startup_blank_tab_id or "").strip()
+
+            if startup_tab_id:
+                try:
+                    target_tab = browser.page.get_tab(startup_tab_id)
+                except Exception:
+                    logger.info(f"[startup] 启动时的空白页已不存在，跳过打开{page_name}")
+                    return
+
+                current_url = ""
+                try:
+                    current_url = str(getattr(target_tab, "url", "") or "")
+                except Exception:
+                    current_url = ""
+                if current_url not in _STARTUP_EMPTY_URLS:
+                    logger.info(f"[startup] 启动时的空白页已被使用，跳过打开{page_name}")
+                    return
+            else:
+                if not _should_open_startup_pages(browser):
+                    logger.info(f"[startup] 受控浏览器已离开空白页，跳过打开{page_name}")
+                    return
+
+                try:
+                    target_tab = browser.page.latest_tab
+                except Exception:
+                    target_tab = None
+                if target_tab is None:
+                    target_tab = browser.page
 
             target_tab.get(page_url)
             logger.info(f"[startup] {page_name}已在受控浏览器打开: {page_url}")
@@ -295,45 +337,47 @@ async def lifespan(app: FastAPI):
     logger.info("=" * 60)
 
     # main.py 中 lifespan 函数的浏览器检查部分
-    if _should_connect_browser_on_startup():
-        try:
-            browser = get_browser(auto_connect=False)
-            health = browser.health_check(connect_if_needed=True)
 
-            if health["connected"]:
-                if _should_open_startup_pages(browser):
-                    try:
-                        base_url = _get_local_startup_base_url()
-                        tutorial_url = f"{base_url}/static/tutorial.html"
-                        guide_url = f"{base_url}/static/controlled-browser-guide.html"
-                        logger.info(f"[startup] 首次启动，使用系统浏览器打开教程页: {tutorial_url}")
-                        _open_startup_page_non_blocking(
-                            tutorial_url,
-                            page_name="教程页",
-                            initial_delay_sec=1.2,
-                        )
-                        logger.info(f"[startup] 首次启动，准备在受控浏览器打开引导页: {guide_url}")
-                        _open_controlled_browser_page_non_blocking(
-                            browser,
-                            guide_url,
-                            page_name="受控浏览器引导页",
-                            initial_delay_sec=0.8,
-                        )
-                    except Exception as e:
-                        logger.warning(f"⚠️ 无法打开教程页: {e}")
-                else:
-                    try:
-                        existing_tab_count = len(browser.page.get_tabs())
-                    except Exception:
-                        existing_tab_count = "?"
-                    logger.info(f"✅ 浏览器已连接 (检测到 {existing_tab_count} 个现有页面，跳过教程)")
+    try:
+        
+        browser = get_browser(auto_connect=False)
+        health = browser.health_check()
+    
+        if health["connected"]:
+            startup_blank_tab_id = _capture_startup_blank_tab_id(browser)
+            if _should_open_startup_pages(browser):
+                try:
+                    base_url = _get_local_startup_base_url()
+                    tutorial_url = f"{base_url}/static/tutorial.html"
+                    guide_url = f"{base_url}/static/controlled-browser-guide.html"
+                    logger.info(f"[startup] 首次启动，使用系统浏览器打开教程页: {tutorial_url}")
+                    _open_startup_page_non_blocking(
+                        tutorial_url,
+                        page_name="教程页",
+                        initial_delay_sec=1.2,
+                    )
+                    logger.info(f"[startup] 首次启动，准备在受控浏览器打开引导页: {guide_url}")
+                    _open_controlled_browser_page_non_blocking(
+                        browser,
+                        guide_url,
+                        page_name="受控浏览器引导页",
+                        initial_delay_sec=0.8,
+                        startup_blank_tab_id=startup_blank_tab_id,
+                    )
+                except Exception as e:
+                    logger.warning(f"⚠️ 无法打开教程页: {e}")
             else:
-                logger.warning(f"⚠️ 浏览器未连接: {health.get('error', '未知')}")
-
-        except Exception as e:
-            logger.warning(f"⚠️ 浏览器检查跳过: {e}")
-    else:
-        logger.info("[startup] 已跳过受控浏览器预连接（BROWSER_CONNECT_ON_STARTUP=false）")
+                # 显示已连接状态
+                try:
+                    existing_tab_count = len(browser.page.get_tabs())
+                except Exception:
+                    existing_tab_count = "?"
+                logger.info(f"✅ 浏览器已连接 (检测到 {existing_tab_count} 个现有页面，跳过教程)")
+        else:
+            logger.warning(f"⚠️ 浏览器未连接: {health.get('error', '未知')}")
+        
+    except Exception as e:
+        logger.warning(f"⚠️ 浏览器检查跳过: {e}")
 
     # 显式预热命令调度器，避免依赖控制面板接口后才初始化。
     try:

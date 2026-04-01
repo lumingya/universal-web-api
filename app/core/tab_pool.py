@@ -616,24 +616,6 @@ class TabPoolManager:
         with self._lock:
             return self._tabs.get(session_id)
 
-    @staticmethod
-    def _is_quiet_background_session(session: Optional[TabSession]) -> bool:
-        if session is None:
-            return False
-
-        domain = str(getattr(session, "current_domain", "") or "").strip().lower()
-        if not domain:
-            return False
-
-        preset_name = str(getattr(session, "preset_name", "") or "").strip() or None
-        try:
-            from app.services.config_engine import config_engine
-
-            return bool(config_engine.get_site_stealth_mode(domain, preset_name))
-        except Exception as e:
-            logger.debug(f"[GlobalNet] 读取站点隐身配置失败（忽略）: {e}")
-            return False
-
     def _start_global_monitor_for_session(self, session: Optional[TabSession]):
         if not session or not self._global_network_monitor:
             return
@@ -641,9 +623,6 @@ class TabPoolManager:
             return
         # 仅在空闲标签页常驻监听，任务执行时让位
         if session.status != TabStatus.IDLE:
-            return
-        if self._is_quiet_background_session(session):
-            logger.debug(f"[GlobalNet] 跳过高风控站点的空闲监听: {session.id}")
             return
         self._global_network_monitor.start_for_session(session)
 

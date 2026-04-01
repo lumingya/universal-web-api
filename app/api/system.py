@@ -258,7 +258,7 @@ async def health_check():
     """服务健康检查"""
     try:
         browser = get_browser(auto_connect=False)
-        browser_health = browser.health_check(connect_if_needed=False)
+        browser_health = browser.health_check()
     except Exception as e:
         browser_health = {"connected": False, "error": str(e)}
 

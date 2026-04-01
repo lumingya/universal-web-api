@@ -1059,19 +1059,6 @@ class ConfigEngine:
         """获取指定预设的工作流配置"""
         data = self._get_site_data_readonly(domain, preset_name)
         return data.get("workflow", DEFAULT_WORKFLOW) if data else DEFAULT_WORKFLOW
-
-    def get_site_stealth_mode(self, domain: str, preset_name: str = None) -> bool:
-        """获取指定站点预设是否启用隐身模式。"""
-        self.refresh_if_changed()
-
-        data = self._get_site_data_readonly(domain, preset_name)
-        if data is not None:
-            return bool(data.get("stealth", False))
-
-        normalized_domain = str(domain or "").strip().lower()
-        if not normalized_domain:
-            return False
-        return self._guess_stealth(normalized_domain)
     
     def set_preset_workflow(self, domain: str, workflow: List, 
                             preset_name: str = None) -> bool:

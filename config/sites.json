@@ -133,7 +133,7 @@
             "value": null
           }
         ],
-        "stealth": true,
+        "stealth": false,
         "image_extraction": {
           "enabled": true,
           "selector": "img",
@@ -204,7 +204,7 @@
             "value": null
           }
         ],
-        "stealth": true,
+        "stealth": false,
         "image_extraction": {
           "enabled": false,
           "selector": "img",
@@ -285,7 +285,7 @@
             "value": null
           }
         ],
-        "stealth": false,
+        "stealth": true,
         "image_extraction": {
           "enabled": false,
           "selector": "img",
@@ -718,7 +718,7 @@
             "value": null
           }
         ],
-        "stealth": false,
+        "stealth": true,
         "stream_config": {
           "mode": "network",
           "hard_timeout": 300,
