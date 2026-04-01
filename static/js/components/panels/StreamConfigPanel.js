@@ -13,12 +13,32 @@ window.StreamConfigPanel = {
             availableParsers: [],
             loadingParsers: false,
             guideExpanded: false,
+            networkStepsExpanded: false,
+            attachmentSensitivityOptions: [
+                {
+                    value: 'low',
+                    label: '低',
+                    description: '只认更强的发送信号，适合按钮状态经常乱跳的站点。'
+                },
+                {
+                    value: 'medium',
+                    label: '中',
+                    description: '平衡等待时间和识别速度，适合作为大多数站点的默认值。'
+                },
+                {
+                    value: 'high',
+                    label: '高',
+                    description: '更早接受附件发送成功信号，适合文件或图片上传后页面反馈较慢的站点。'
+                }
+            ],
             defaultNetworkConfig: {
                 listen_pattern: '',
                 parser: '',
-                first_response_timeout: 300.0,
                 silence_threshold: 3.0,
                 response_interval: 0.5
+            },
+            defaultSendConfirmationConfig: {
+                attachment_sensitivity: 'medium'
             }
         };
     },
@@ -32,6 +52,19 @@ window.StreamConfigPanel = {
                 ...this.defaultNetworkConfig,
                 ...(this.streamConfig.network || {})
             };
+        },
+
+        sendConfirmationConfig() {
+            return {
+                ...this.defaultSendConfirmationConfig,
+                ...(this.streamConfig.send_confirmation || {})
+            };
+        },
+
+        attachmentSensitivityMeta() {
+            return this.attachmentSensitivityOptions.find(
+                option => option.value === this.sendConfirmationConfig.attachment_sensitivity
+            ) || this.attachmentSensitivityOptions[1];
         },
 
         selectedParserMeta() {
@@ -58,7 +91,7 @@ window.StreamConfigPanel = {
                 },
                 {
                     label: '超时参数',
-                    ready: Number(this.networkConfig.first_response_timeout) > 0 && Number(this.networkConfig.silence_threshold) > 0
+                    ready: Number(this.streamConfig.hard_timeout) > 0 && Number(this.networkConfig.silence_threshold) > 0
                 }
             ];
         }
@@ -81,6 +114,15 @@ window.StreamConfigPanel = {
         updateNetworkField(field, value) {
             const network = { ...this.networkConfig, [field]: value };
             const newConfig = { ...this.streamConfig, network };
+            this.$emit('save-stream-config', newConfig);
+        },
+
+        updateSendConfirmationField(field, value) {
+            const send_confirmation = {
+                ...this.sendConfirmationConfig,
+                [field]: value
+            };
+            const newConfig = { ...this.streamConfig, send_confirmation };
             this.$emit('save-stream-config', newConfig);
         },
 
@@ -187,13 +229,15 @@ window.StreamConfigPanel = {
                  @click="toggle">
                 <div class="flex items-center gap-2">
                     <span class="w-4 inline-flex justify-center text-gray-500 dark:text-gray-400" v-html="collapsed ? $icons.chevronDown : $icons.chevronUp"></span>
-                    <h3 class="font-semibold text-gray-900 dark:text-white">📡 非流式监听</h3>
-                    <span :class="[
-                        'px-2 py-0.5 text-xs rounded font-medium',
-                        isNetworkMode ? 'bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300' : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400'
-                    ]">
-                        {{ isNetworkMode ? '网络拦截' : 'DOM 轮询' }}
-                    </span>
+                    <h3 class="font-semibold text-gray-900 dark:text-white">📡 网络监听模式</h3>
+                    <span v-if="isNetworkMode" class="text-xs font-medium px-2 py-0.5 rounded bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400">已启用</span>
+                    <span v-else class="text-xs font-medium px-2 py-0.5 rounded bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400">DOM 流式</span>
+                </div>
+                <div class="flex items-center" @click.stop>
+                    <label class="toggle-label scale-90 !m-0">
+                        <input type="checkbox" :checked="isNetworkMode" @change="toggleNetworkMode" class="sr-only peer">
+                        <div class="toggle-bg"></div>
+                    </label>
                 </div>
             </div>
 
@@ -216,26 +260,11 @@ window.StreamConfigPanel = {
                     </div>
                     <div class="mt-3">
                         <div class="text-base font-semibold text-slate-900 dark:text-slate-50">
-                            大多数站点先用 DOM 模式就够了
+                            DOM 模式（流式）与 网络拦截（非流式）
                         </div>
                         <p class="mt-1.5 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                            页面里的回复能稳定抓到时，先保留 DOM 模式。遇到代码块总是缺、公式总是乱，或者目标站点一次性返回完整 JSON / 文本，再切到网络拦截会更合适。
+                            网络拦截是<strong>非流式</strong>获取底层请求，而 DOM 监听是<strong>流式</strong>读取页面展示内容。如果遇到包含复杂 JSON 结构或 LaTeX 数学公式的场景，DOM 提取会比较困难，此时请使用网络拦截。如果站点默认未开启该模式，说明尚未为其适配好网络解析器。
                         </p>
-                    </div>
-
-                    <div class="dashboard-guide-steps">
-                        <div class="dashboard-guide-step">
-                            <strong>先看</strong>
-                            <span>教程里的“非流式监听”章节会告诉你什么时候该开，什么时候继续留在 DOM 模式。</span>
-                        </div>
-                        <div class="dashboard-guide-step">
-                            <strong>再填</strong>
-                            <span>网络拦截最关键的就是两项：<code>listen_pattern</code> 和 <code>parser</code>。这两项没对上，后面调超时也帮不上忙。</span>
-                        </div>
-                        <div class="dashboard-guide-step">
-                            <strong>最后调</strong>
-                            <span>等能稳定拦截到正确请求后，再去改首次响应超时、静默超时和轮询间隔。</span>
-                        </div>
                     </div>
 
                     <div class="dashboard-checklist">
@@ -250,43 +279,51 @@ window.StreamConfigPanel = {
                     <div class="dashboard-guide-actions">
                         <button @click="openTutorial('non-stream-listener-basics')" class="dashboard-guide-btn">
                             <span v-html="$icons.arrowTopRightOnSquare"></span>
-                            打开非流式监听教程
+                            dom和非流式区别
                         </button>
                         <button @click="openTutorial('non-stream-parser-guide')" class="dashboard-guide-btn dashboard-guide-btn--secondary">
                             <span v-html="$icons.folderOpen"></span>
-                            查看解析器操作步骤
+                            从零配置一个解析器教程
                         </button>
                     </div>
-                </div>
-
-                <!-- 模式切换 -->
-                <div class="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-900/50 rounded-xl border border-gray-200/70 dark:border-gray-700/70">
-                    <div>
-                        <div class="text-sm font-medium text-gray-700 dark:text-gray-300">网络拦截模式</div>
-                        <div class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                            只有在你已经确认需要抓底层响应时再打开。平时调普通站点，DOM 模式会更省心。
-                        </div>
-                    </div>
-                    <label class="toggle-label scale-90">
-                        <input type="checkbox" :checked="isNetworkMode" @change="toggleNetworkMode" class="sr-only peer">
-                        <div class="toggle-bg"></div>
-                    </label>
                 </div>
 
                 <!-- 网络模式配置 -->
                 <div v-if="isNetworkMode" class="space-y-4 border-t dark:border-gray-700 pt-4">
-                    <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-                        <div class="dashboard-mini-card">
-                            <div class="dashboard-mini-card-title">第 1 步：锁定请求关键词</div>
-                            <div class="dashboard-mini-card-copy">先找目标请求 URL 里最稳定的一小段路径，填进 <code>listen_pattern</code>。</div>
-                        </div>
-                        <div class="dashboard-mini-card">
-                            <div class="dashboard-mini-card-title">第 2 步：选对解析器</div>
-                            <div class="dashboard-mini-card-copy">有内置解析器就直接选；没有时先按教程导出请求，让 AI 帮你写 parser。</div>
-                        </div>
-                        <div class="dashboard-mini-card">
-                            <div class="dashboard-mini-card-title">第 3 步：补超时</div>
-                            <div class="dashboard-mini-card-copy">慢模型把首次响应超时和全局硬超时一起拉高，长推理会更稳。</div>
+                    <div>
+                        <button v-if="!networkStepsExpanded"
+                                @click="networkStepsExpanded = true"
+                                type="button"
+                                class="dashboard-guide-toggle dashboard-guide-toggle--violet">
+                            <span>配置步骤</span>
+                            <span v-html="$icons.chevronDown"></span>
+                        </button>
+                        <div v-else class="space-y-3">
+                            <div class="flex items-center justify-between gap-3">
+                                <div class="text-xs font-medium uppercase tracking-[0.18em] text-slate-400 dark:text-slate-500">
+                                    三步看完再填
+                                </div>
+                                <button @click="networkStepsExpanded = false"
+                                        type="button"
+                                        class="dashboard-guide-toggle dashboard-guide-toggle--violet">
+                                    <span>收起</span>
+                                    <span v-html="$icons.chevronUp"></span>
+                                </button>
+                            </div>
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                <div class="dashboard-mini-card">
+                                    <div class="dashboard-mini-card-title">第 1 步：锁定请求关键词</div>
+                                    <div class="dashboard-mini-card-copy">先找目标请求 URL 里最稳定的一小段路径，填进 <code>listen_pattern</code>。</div>
+                                </div>
+                                <div class="dashboard-mini-card">
+                                    <div class="dashboard-mini-card-title">第 2 步：选对解析器</div>
+                                    <div class="dashboard-mini-card-copy">有内置解析器就直接选；没有时先按教程导出请求，让 AI 帮你写 parser。</div>
+                                </div>
+                                <div class="dashboard-mini-card">
+                                    <div class="dashboard-mini-card-title">第 3 步：补超时</div>
+                                    <div class="dashboard-mini-card-copy">非流式站点一般只需要调全局硬超时和静默超时，等慢站点时把整体等待时间拉高就行。</div>
+                                </div>
+                            </div>
                         </div>
                     </div>
 
@@ -333,15 +370,7 @@ window.StreamConfigPanel = {
                         </div>
                     </div>
 
-                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">首次响应超时</label>
-                            <div class="flex items-center gap-2">
-                                <input type="number" :value="networkConfig.first_response_timeout" @input="updateNetworkField('first_response_timeout', parseFloat($event.target.value) || 300)"
-                                       min="1" max="300" step="0.5" class="flex-1 border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-purple-400 focus:border-transparent">
-                                <span class="text-sm text-gray-500 dark:text-gray-400">秒</span>
-                            </div>
-                        </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
                             <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">静默超时</label>
                             <div class="flex items-center gap-2">
@@ -396,7 +425,7 @@ window.StreamConfigPanel = {
                 <!-- 通用配置 -->
                 <div class="border-t dark:border-gray-700 pt-4">
                     <div class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">通用配置</div>
-                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div class="grid grid-cols-1 gap-4">
                         <div>
                             <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">全局硬超时</label>
                             <div class="flex items-center gap-2">
@@ -404,21 +433,40 @@ window.StreamConfigPanel = {
                                        min="10" max="600" step="10" class="flex-1 border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent">
                                 <span class="text-sm text-gray-500 dark:text-gray-400">秒</span>
                             </div>
+                            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                非流式监听里，这就是一次完整对话允许等待的最长时间。
+                            </p>
                         </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">静默超时 (DOM)</label>
-                            <div class="flex items-center gap-2">
-                                <input type="number" :value="streamConfig.silence_threshold" @input="updateField('silence_threshold', parseFloat($event.target.value) || 2.5)"
-                                       min="0.5" max="30" step="0.5" class="flex-1 border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent">
-                                <span class="text-sm text-gray-500 dark:text-gray-400">秒</span>
+                    </div>
+
+                    <div class="mt-4 rounded-xl border border-blue-200/80 dark:border-blue-800/70 bg-blue-50/70 dark:bg-blue-900/20 p-4">
+                        <div class="flex items-start justify-between gap-3">
+                            <div>
+                                <div class="text-sm font-medium text-gray-800 dark:text-gray-100">附件发送判定</div>
+                                <p class="mt-1 text-xs leading-5 text-gray-600 dark:text-gray-300">
+                                    这里会同时作用于文件粘贴和图片粘贴。点击发送后，系统会先观察页面信号，再决定这次发送是否已经成功。
+                                </p>
                             </div>
+                            <span class="px-2 py-0.5 text-xs rounded-full bg-white/80 dark:bg-gray-800/80 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-700">
+                                当前：{{ attachmentSensitivityMeta.label }}
+                            </span>
                         </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">初始等待</label>
-                            <div class="flex items-center gap-2">
-                                <input type="number" :value="streamConfig.initial_wait" @input="updateField('initial_wait', parseFloat($event.target.value) || 30)"
-                                       min="5" max="120" step="5" class="flex-1 border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent">
-                                <span class="text-sm text-gray-500 dark:text-gray-400">秒</span>
+
+                        <div class="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3 items-start">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">敏感度</label>
+                                <select :value="sendConfirmationConfig.attachment_sensitivity"
+                                        @change="updateSendConfirmationField('attachment_sensitivity', $event.target.value)"
+                                        class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent">
+                                    <option v-for="option in attachmentSensitivityOptions"
+                                            :key="option.value"
+                                            :value="option.value">
+                                        {{ option.label }}
+                                    </option>
+                                </select>
+                            </div>
+                            <div class="md:col-span-2 text-xs leading-6 text-gray-600 dark:text-gray-300 bg-white/70 dark:bg-gray-900/40 rounded-lg border border-blue-100 dark:border-blue-900/60 px-3 py-2">
+                                {{ attachmentSensitivityMeta.description }}
                             </div>
                         </div>
                     </div>

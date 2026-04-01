@@ -212,7 +212,6 @@ def _build_settings_backup_bundle() -> Dict[str, Any]:
 
 
 DEFAULT_BROWSER_CONSTANTS: Dict[str, Any] = {
-    "DEFAULT_PORT": 9222,
     "CONNECTION_TIMEOUT": 10,
     "STEALTH_DELAY_MIN": 0.1,
     "STEALTH_DELAY_MAX": 0.3,
@@ -229,17 +228,11 @@ DEFAULT_BROWSER_CONSTANTS: Dict[str, Any] = {
     "STREAM_SILENCE_THRESHOLD": 8.0,
     "STREAM_MAX_TIMEOUT": 600,
     "STREAM_INITIAL_WAIT": 180,
-    "STREAM_RERENDER_WAIT": 0.5,
     "STREAM_CONTENT_SHRINK_TOLERANCE": 3,
-    "STREAM_MIN_VALID_LENGTH": 10,
     "STREAM_STABLE_COUNT_THRESHOLD": 8,
     "STREAM_SILENCE_THRESHOLD_FALLBACK": 12,
     "MAX_MESSAGE_LENGTH": 100000,
     "MAX_MESSAGES_COUNT": 100,
-    "STREAM_INITIAL_ELEMENT_WAIT": 10,
-    "STREAM_MAX_ABNORMAL_COUNT": 5,
-    "STREAM_MAX_ELEMENT_MISSING": 10,
-    "STREAM_CONTENT_SHRINK_THRESHOLD": 0.3,
     "GLOBAL_NETWORK_INTERCEPTION_ENABLED": False,
     "GLOBAL_NETWORK_INTERCEPTION_LISTEN_PATTERN": "http",
     "GLOBAL_NETWORK_INTERCEPTION_WAIT_TIMEOUT": 0.5,
@@ -265,7 +258,7 @@ async def health_check():
     """服务健康检查"""
     try:
         browser = get_browser(auto_connect=False)
-        browser_health = browser.health_check()
+        browser_health = browser.health_check(connect_if_needed=False)
     except Exception as e:
         browser_health = {"connected": False, "error": str(e)}
 

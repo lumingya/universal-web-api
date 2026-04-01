@@ -45,7 +45,8 @@ if not defined PROXY_BYPASS set "PROXY_BYPASS=localhost,127.0.0.1"
 if not defined PIP_MIRROR_URL set "PIP_MIRROR_URL=https://pypi.tuna.tsinghua.edu.cn/simple"
 if not defined BROWSER_PROFILE_DIR set "BROWSER_PROFILE_DIR="
 if not defined BROWSER_PROFILE_NAME set "BROWSER_PROFILE_NAME="
-if not defined PROFILE_CLEAN_ENABLED set "PROFILE_CLEAN_ENABLED=true"
+if not defined PROFILE_CLEAN_ENABLED set "PROFILE_CLEAN_ENABLED=false"
+if not defined BROWSER_CONNECT_ON_STARTUP set "BROWSER_CONNECT_ON_STARTUP=false"
 
 echo.
 echo   当前配置:
@@ -62,6 +63,7 @@ if defined BROWSER_PROFILE_NAME (
     echo     PROFILE_NAME  : %BROWSER_PROFILE_NAME%
 )
 echo     PROFILE_CLEAN : %PROFILE_CLEAN_ENABLED%
+echo     BROWSER_WARMUP: %BROWSER_CONNECT_ON_STARTUP%
 if /I "%PROXY_ENABLED%"=="true" (
     echo     PROXY        : %PROXY_ADDRESS%
 ) else (

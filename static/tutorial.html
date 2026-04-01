@@ -2691,15 +2691,15 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
                 <li>如果内容还在变，说明 AI 仍在输出，系统会重置稳定计数并继续流式返回新增内容。</li>
                 <li>如果内容没再变化，稳定次数增加，静默时间继续累加。</li>
                 <li>当“稳定次数”和“静默时间”同时达到阈值时，系统判定这一轮回复结束。</li>
-                <li>如果超过「初始等待」仍完全没看到内容出现，通常说明 <code>result_container</code> 选错了，或 AI 还没真正开始回复。</li>
+                <li>如果一直等到「全局硬超时」都还没看到内容出现，通常说明 <code>result_container</code> 选错了，或 AI 还没真正开始回复。</li>
             </ol>
 
             <h4>调优建议</h4>
             <table>
-                <tr><th>场景</th><th>静默超时阈值</th><th>稳定判定次数</th><th>初始等待</th></tr>
-                <tr><td>快速模型 (GPT-4o)</td><td>3-5 秒</td><td>3-5 次</td><td>60 秒</td></tr>
-                <tr><td>慢速思考 (o1/Claude)</td><td>10-15 秒</td><td>8-12 次</td><td>300 秒</td></tr>
-                <tr><td>长文 / 代码生成</td><td>8-15 秒</td><td>6-10 次</td><td>180-300 秒</td></tr>
+                <tr><th>场景</th><th>静默超时阈值</th><th>稳定判定次数</th><th>全局硬超时</th></tr>
+                <tr><td>快速模型 (GPT-4o)</td><td>3-5 秒</td><td>3-5 次</td><td>120 秒</td></tr>
+                <tr><td>慢速思考 (o1/Claude)</td><td>10-15 秒</td><td>8-12 次</td><td>300-600 秒</td></tr>
+                <tr><td>长文 / 代码生成</td><td>8-15 秒</td><td>6-10 次</td><td>240-600 秒</td></tr>
             </table>
 
             <h3>网络拦截模式（进阶推荐 📡）</h3>
@@ -2737,11 +2737,6 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
                     <td><code>lmarena</code> / 自定义 parser</td>
                 </tr>
                 <tr>
-                    <td><strong>首次响应超时</strong></td>
-                    <td>等待首个有效网络响应的最长时间；超时后会根据模式回退或中止</td>
-                    <td><code>300</code> 秒</td>
-                </tr>
-                <tr>
                     <td><strong>静默超时</strong></td>
                     <td>拦截到响应后，多久没有新数据判定为完成</td>
                     <td><code>3</code> 秒</td>
@@ -2765,20 +2760,10 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
                     <td>单次请求的绝对超时上限，超过这个时间无论如何都会结束</td>
                     <td><code>300</code> 秒</td>
                 </tr>
-                <tr>
-                    <td><strong>静默超时</strong></td>
-                    <td>连续多久没有新内容时，判定回复已经结束</td>
-                    <td><code>3</code> 秒</td>
-                </tr>
-                <tr>
-                    <td><strong>初始等待</strong></td>
-                    <td>等待 AI 开始出现第一段回复的最长时间</td>
-                    <td><code>30</code> 秒</td>
-                </tr>
             </table>
 
             <div class="note">
-                <p><strong>💡 关于超时配置：</strong>慢速思考模型（如 o1、Claude 长推理）建议把「首次响应超时」和「全局硬超时」一起调高。前者控制“等第一段回复多久”，后者控制“整轮最多跑多久”，两者不一定要完全相同。</p>
+                <p><strong>💡 关于超时配置：</strong>慢速思考模型（如 o1、Claude 长推理）建议先把「全局硬超时」调高。非流式监听站点里，这个值就是一整轮对话允许等待的最长时间；如果响应会分段返回，再按需要补调「静默超时」。</p>
             </div>
 
             <div class="highlight-box">
@@ -3601,7 +3586,6 @@ BROWSER_PROFILE_NAME=Default</code></pre>
                     <tr><td><strong>静默超时阈值</strong></td><td><code>8.0</code> 秒</td><td>🔑 内容不再变化多久后判定完成</td></tr>
                     <tr><td>静默超时备用</td><td><code>12</code> 秒</td><td>慢速模型的宽限时间</td></tr>
                     <tr><td>最大超时</td><td><code>600</code> 秒</td><td>单次请求的绝对超时上限</td></tr>
-                    <tr><td>初始等待</td><td><code>180</code> 秒</td><td>等待 AI 开始回复的最长时间</td></tr>
                     <tr><td><strong>稳定判定次数</strong></td><td><code>8</code> 次</td><td>🔑 连续多少次检查内容不变判定完成</td></tr>
                 </table>
                 <div class="note">

@@ -242,14 +242,19 @@ class WorkflowExecutor:
                 if not interception_cfg.get("listen_pattern"):
                     interception_cfg["listen_pattern"] = interception_pattern or "http"
                 interception_cfg["event_only"] = True
-                interception_cfg.setdefault("first_response_timeout", 300)
                 interception_cfg.setdefault("silence_threshold", 2)
                 interception_cfg.setdefault("response_interval", 0.3)
+                effective_interception_stream_config = {
+                    "hard_timeout": float(
+                        (stream_config or {}).get("hard_timeout", 300) or 300
+                    ),
+                    "network": interception_cfg,
+                }
 
                 self._network_monitor = create_network_monitor(
                     tab=tab,
                     formatter=self.formatter,
-                    stream_config={"network": interception_cfg},
+                    stream_config=effective_interception_stream_config,
                     stop_checker=should_stop_checker,
                     event_handler=self._handle_network_event
                 )
@@ -446,17 +451,17 @@ class WorkflowExecutor:
         parser = self._kimi_page_parser
         parser.reset()
 
+        hard_timeout = float(
+            self._stream_config.get("hard_timeout", 300) or 300
+        )
         first_response_timeout = float(
-            self._network_config.get("first_response_timeout", 30) or 30
+            self._network_config.get("first_response_timeout", hard_timeout) or hard_timeout
         )
         response_interval = float(
             self._network_config.get("response_interval", 0.3) or 0.3
         )
         silence_threshold = float(
             self._network_config.get("silence_threshold", 3) or 3
-        )
-        hard_timeout = float(
-            self._stream_config.get("hard_timeout", 300) or 300
         )
 
         phase_start = time.time()
@@ -1542,6 +1547,7 @@ class WorkflowExecutor:
     def _get_send_confirmation_config(self) -> Dict[str, Any]:
         """Return the merged send confirmation strategy for the current site."""
         config = {
+            "attachment_sensitivity": "medium",
             "post_click_observe_window": float(
                 getattr(BrowserConstants, "SEND_POST_CLICK_OBSERVE_WINDOW", 1.8)
             ),
@@ -1566,6 +1572,13 @@ class WorkflowExecutor:
 
         return config
 
+    def _get_raw_send_confirmation_config(self) -> Dict[str, Any]:
+        """Return only the site-provided send confirmation overrides."""
+        if not isinstance(self._stream_config, dict):
+            return {}
+        raw_config = self._stream_config.get("send_confirmation", {}) or {}
+        return raw_config if isinstance(raw_config, dict) else {}
+
     def _get_send_confirmation_window(
         self,
         key: str,
@@ -1573,9 +1586,10 @@ class WorkflowExecutor:
         *,
         min_value: float = 0.0,
         max_value: Optional[float] = None,
+        raw_only: bool = False,
     ) -> float:
         """Read a numeric send confirmation option with clamping."""
-        config = self._get_send_confirmation_config()
+        config = self._get_raw_send_confirmation_config() if raw_only else self._get_send_confirmation_config()
         try:
             value = float(config.get(key, fallback))
         except (TypeError, ValueError):
@@ -1586,9 +1600,15 @@ class WorkflowExecutor:
             value = min(value, max_value)
         return value
 
-    def _get_send_confirmation_flag(self, key: str, fallback: bool = True) -> bool:
+    def _get_send_confirmation_flag(
+        self,
+        key: str,
+        fallback: bool = True,
+        *,
+        raw_only: bool = False,
+    ) -> bool:
         """Read a boolean send confirmation option."""
-        config = self._get_send_confirmation_config()
+        config = self._get_raw_send_confirmation_config() if raw_only else self._get_send_confirmation_config()
         raw_value = config.get(key, fallback)
 
         if isinstance(raw_value, bool):
@@ -1600,6 +1620,40 @@ class WorkflowExecutor:
             if lowered in ("0", "false", "no", "off"):
                 return False
         return bool(raw_value)
+
+    def _get_attachment_send_confirmation_profile(self) -> Dict[str, Any]:
+        """Resolve the 3-level attachment send sensitivity profile."""
+        raw_value = str(
+            self._get_raw_send_confirmation_config().get("attachment_sensitivity")
+            or self._get_send_confirmation_config().get("attachment_sensitivity")
+            or "medium"
+        ).strip().lower()
+        level = raw_value if raw_value in {"low", "medium", "high"} else "medium"
+
+        profiles = {
+            "low": {
+                "attachment_observe_window": 4.0,
+                "trust_network_activity": True,
+                "trust_generating_indicator": True,
+                "trust_send_disabled_with_input_shrink": False,
+            },
+            "medium": {
+                "attachment_observe_window": 6.0,
+                "trust_network_activity": True,
+                "trust_generating_indicator": True,
+                "trust_send_disabled_with_input_shrink": True,
+            },
+            "high": {
+                "attachment_observe_window": 8.0,
+                "trust_network_activity": True,
+                "trust_generating_indicator": True,
+                "trust_send_disabled_with_input_shrink": True,
+            },
+        }
+        return {
+            "level": level,
+            **profiles[level],
+        }
 
     def _probe_send_post_click_state(self, send_selector: str = "") -> Dict[str, Any]:
         """Passively inspect whether the page has transitioned into generating state."""
@@ -1704,6 +1758,9 @@ class WorkflowExecutor:
         before_len: int,
         *,
         max_wait: Optional[float] = None,
+        trust_network_activity: Optional[bool] = None,
+        trust_generating_indicator: Optional[bool] = None,
+        trust_send_disabled_with_input_shrink: Optional[bool] = None,
     ) -> bool:
         """Observe post-click send signals without issuing another click."""
         observe_window = self._get_send_confirmation_window(
@@ -1712,18 +1769,21 @@ class WorkflowExecutor:
             min_value=0.0,
             max_value=60.0,
         ) if max_wait is None else float(max_wait)
-        trust_network_activity = self._get_send_confirmation_flag(
-            "trust_network_activity",
-            True,
-        )
-        trust_generating_indicator = self._get_send_confirmation_flag(
-            "trust_generating_indicator",
-            True,
-        )
-        trust_send_disabled_with_input_shrink = self._get_send_confirmation_flag(
-            "trust_send_disabled_with_input_shrink",
-            True,
-        )
+        if trust_network_activity is None:
+            trust_network_activity = self._get_send_confirmation_flag(
+                "trust_network_activity",
+                True,
+            )
+        if trust_generating_indicator is None:
+            trust_generating_indicator = self._get_send_confirmation_flag(
+                "trust_generating_indicator",
+                True,
+            )
+        if trust_send_disabled_with_input_shrink is None:
+            trust_send_disabled_with_input_shrink = self._get_send_confirmation_flag(
+                "trust_send_disabled_with_input_shrink",
+                True,
+            )
         if observe_window <= 0:
             return False
         poll_interval = 0.25
@@ -1792,6 +1852,7 @@ class WorkflowExecutor:
         max_wait = getattr(BrowserConstants, "IMAGE_SEND_MAX_WAIT", 12.0)
         retry_interval = getattr(BrowserConstants, "IMAGE_SEND_RETRY_INTERVAL", 0.6)
         avoid_repeat_click = self._has_recent_attachment_upload()
+        attachment_profile = self._get_attachment_send_confirmation_profile()
         send_observe_window = self._get_send_confirmation_window(
             "post_click_observe_window",
             getattr(BrowserConstants, "SEND_POST_CLICK_OBSERVE_WINDOW", 1.8),
@@ -1812,9 +1873,25 @@ class WorkflowExecutor:
         )
         attachment_observe_window = self._get_send_confirmation_window(
             "attachment_observe_window",
-            getattr(BrowserConstants, "ATTACHMENT_SEND_OBSERVE_WINDOW", 6.0),
+            attachment_profile["attachment_observe_window"],
             min_value=0.0,
             max_value=max_wait,
+            raw_only=True,
+        )
+        attachment_trust_network_activity = self._get_send_confirmation_flag(
+            "trust_network_activity",
+            attachment_profile["trust_network_activity"],
+            raw_only=True,
+        )
+        attachment_trust_generating_indicator = self._get_send_confirmation_flag(
+            "trust_generating_indicator",
+            attachment_profile["trust_generating_indicator"],
+            raw_only=True,
+        )
+        attachment_trust_send_disabled_with_input_shrink = self._get_send_confirmation_flag(
+            "trust_send_disabled_with_input_shrink",
+            attachment_profile["trust_send_disabled_with_input_shrink"],
+            raw_only=True,
         )
 
         before_len = self._safe_get_input_len_by_key("input_box")
@@ -1832,10 +1909,18 @@ class WorkflowExecutor:
                 selector,
                 before_len,
                 max_wait=attachment_observe_window,
+                trust_network_activity=attachment_trust_network_activity,
+                trust_generating_indicator=attachment_trust_generating_indicator,
+                trust_send_disabled_with_input_shrink=attachment_trust_send_disabled_with_input_shrink,
             ):
-                logger.info("发送成功（附件场景，已避免重复点击发送按钮）")
+                logger.info(
+                    f"发送成功（附件场景，已避免重复点击发送按钮，sensitivity={attachment_profile['level']}）"
+                )
             else:
-                logger.warning("[SEND] 附件发送场景未观察到明确成功信号，跳过自动补点以避免误点停止按钮")
+                logger.warning(
+                    "[SEND] 附件发送场景未观察到明确成功信号，跳过自动补点以避免误点停止按钮 "
+                    f"(sensitivity={attachment_profile['level']})"
+                )
             return
 
         if self._observe_send_without_retry(selector, before_len, max_wait=send_observe_window):

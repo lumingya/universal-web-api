@@ -18,6 +18,8 @@ window.SelectorPanel = {
         return {
             showMenu: false,
             guideExpanded: false,
+            openRenameKey: '',
+            renameDrafts: {},
             coreSelectorKeys: ['input_box', 'send_btn', 'result_container']
         };
     },
@@ -83,6 +85,56 @@ window.SelectorPanel = {
 
         isSelectorFilled(key) {
             return String((this.selectors || {})[key] || '').trim().length > 0;
+        },
+
+        isBuiltInSelectorKey(key) {
+            return [
+                'input_box',
+                'send_btn',
+                'result_container',
+                'new_chat_btn',
+                'message_wrapper',
+                'generating_indicator',
+                'upload_btn',
+                'file_input',
+                'drop_zone'
+            ].includes(String(key || '').trim());
+        },
+
+        canRenameSelectorKey(key) {
+            return !this.isBuiltInSelectorKey(key);
+        },
+
+        openRenameEditor(key) {
+            this.openRenameKey = key;
+            this.renameDrafts = {
+                ...this.renameDrafts,
+                [key]: key
+            };
+
+            this.$nextTick(() => {
+                const ref = this.$refs['renameInput-' + key];
+                const input = Array.isArray(ref) ? ref[0] : ref;
+                if (input && typeof input.focus === 'function') {
+                    input.focus();
+                    if (typeof input.select === 'function') {
+                        input.select();
+                    }
+                }
+            });
+        },
+
+        closeRenameEditor() {
+            this.openRenameKey = '';
+        },
+
+        submitRenameKey(key) {
+            const nextKey = String((this.renameDrafts || {})[key] || '').trim();
+            this.openRenameKey = '';
+            if (!nextKey || nextKey === key) {
+                return;
+            }
+            this.$emit('update-selector-key', key, nextKey);
         },
 
         getSelectorMeta(key) {
@@ -332,16 +384,25 @@ window.SelectorPanel = {
                             <div class="flex flex-wrap items-center gap-2">
                                 <div class="text-sm font-semibold text-gray-900 dark:text-white">{{ key }}</div>
                                 <span :class="getChipClass(key)">{{ getSelectorMeta(key).chip }}</span>
-                                <button type="button"
-                                        class="dashboard-field-help-trigger"
-                                        :aria-label="key + ' 字段说明'">
-                                    i
+                                <button v-if="canRenameSelectorKey(key)"
+                                        @click="openRenameEditor(key)"
+                                        type="button"
+                                        class="inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-medium text-slate-500 dark:text-slate-400 border border-slate-200/80 dark:border-slate-700/80 hover:text-blue-600 dark:hover:text-blue-300 hover:border-blue-300 dark:hover:border-blue-700 transition-colors">
+                                    <span v-html="$icons.pencil"></span>
+                                    <span>改名</span>
                                 </button>
-                            </div>
-                            <div class="dashboard-field-tooltip" role="tooltip">
-                                <div class="dashboard-field-tooltip-title">{{ getSelectorMeta(key).title }}</div>
-                                <div class="dashboard-field-tooltip-copy">{{ getSelectorMeta(key).description }}</div>
-                                <div class="dashboard-field-tooltip-copy dashboard-field-tooltip-copy--muted">{{ getSelectorMeta(key).hint }}</div>
+                                <div class="dashboard-field-help">
+                                    <button type="button"
+                                            class="dashboard-field-help-trigger"
+                                            :aria-label="key + ' 字段说明'">
+                                        i
+                                    </button>
+                                    <div class="dashboard-field-tooltip" role="tooltip">
+                                        <div class="dashboard-field-tooltip-title">{{ getSelectorMeta(key).title }}</div>
+                                        <div class="dashboard-field-tooltip-copy">{{ getSelectorMeta(key).description }}</div>
+                                        <div class="dashboard-field-tooltip-copy dashboard-field-tooltip-copy--muted">{{ getSelectorMeta(key).hint }}</div>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                         <div class="text-[11px] font-medium text-slate-400 dark:text-slate-500 shrink-0">
@@ -349,10 +410,27 @@ window.SelectorPanel = {
                         </div>
                     </div>
 
-                    <input :value="key"
-                           @blur="$emit('update-selector-key', key, $event.target.value)"
-                           class="border dark:border-gray-600 px-2.5 py-2 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent font-semibold w-full mb-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                           placeholder="键名">
+                    <div v-if="openRenameKey === key"
+                         class="mb-2 flex flex-col md:flex-row gap-2 rounded-xl border border-blue-200/80 dark:border-blue-800/70 bg-blue-50/70 dark:bg-blue-900/20 p-2.5">
+                        <input :ref="'renameInput-' + key"
+                               v-model="renameDrafts[key]"
+                               @keyup.enter="submitRenameKey(key)"
+                               @keyup.esc="closeRenameEditor()"
+                               class="flex-1 border dark:border-gray-600 px-2.5 py-2 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent font-semibold text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                               placeholder="新的字段键名">
+                        <div class="flex items-center gap-2">
+                            <button @click="submitRenameKey(key)"
+                                    type="button"
+                                    class="px-3 py-1.5 rounded-md text-xs font-medium text-blue-600 dark:text-blue-300 border border-blue-300 dark:border-blue-700 hover:bg-blue-100/80 dark:hover:bg-blue-900/40 transition-colors">
+                                保存
+                            </button>
+                            <button @click="closeRenameEditor()"
+                                    type="button"
+                                    class="px-3 py-1.5 rounded-md text-xs font-medium text-slate-500 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-white/80 dark:hover:bg-slate-800/70 transition-colors">
+                                取消
+                            </button>
+                        </div>
+                    </div>
 
                     <input :value="selectors[key]"
                            @input="$emit('update-selector-value', key, $event.target.value)"

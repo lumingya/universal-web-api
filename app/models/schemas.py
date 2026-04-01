@@ -213,6 +213,7 @@ class ImageExtractionConfig(TypedDict, total=False):
 
 class SendConfirmationConfig(TypedDict, total=False):
     """Post-click send confirmation strategy."""
+    attachment_sensitivity: Literal["low", "medium", "high"]
     post_click_observe_window: float
     pre_retry_probe_window: float
     retry_observe_window: float
@@ -224,11 +225,6 @@ class SendConfirmationConfig(TypedDict, total=False):
 
 class StreamConfig(TypedDict, total=False):
     """流式监控配置（可选字段）"""
-    silence_threshold: float
-    initial_wait: float
-    enable_wrapper_search: bool
-    rerender_wait: float
-    content_shrink_tolerance: int
     send_confirmation: SendConfirmationConfig
 
 
@@ -538,22 +534,6 @@ def validate_site_config(config: Dict[str, Any]) -> bool:
         
         stream_config = config["stream_config"]
         
-        if "silence_threshold" in stream_config:
-            if not isinstance(stream_config["silence_threshold"], (int, float)):
-                return False
-            if stream_config["silence_threshold"] <= 0:
-                return False
-        
-        if "initial_wait" in stream_config:
-            if not isinstance(stream_config["initial_wait"], (int, float)):
-                return False
-            if stream_config["initial_wait"] <= 0:
-                return False
-        
-        if "enable_wrapper_search" in stream_config:
-            if not isinstance(stream_config["enable_wrapper_search"], bool):
-                return False
-
         if "send_confirmation" in stream_config:
             if not isinstance(stream_config["send_confirmation"], dict):
                 return False
@@ -570,6 +550,9 @@ def validate_site_config(config: Dict[str, Any]) -> bool:
                 "trust_generating_indicator",
                 "trust_send_disabled_with_input_shrink",
             ]
+            enum_fields = {
+                "attachment_sensitivity": {"low", "medium", "high"},
+            }
 
             for key in numeric_fields:
                 if key in send_confirmation and not isinstance(send_confirmation[key], (int, float)):
@@ -578,6 +561,13 @@ def validate_site_config(config: Dict[str, Any]) -> bool:
             for key in bool_fields:
                 if key in send_confirmation and not isinstance(send_confirmation[key], bool):
                     return False
+
+            for key, allowed_values in enum_fields.items():
+                if key not in send_confirmation:
+                    continue
+                value = str(send_confirmation[key]).strip().lower()
+                if value not in allowed_values:
+                    return False
     
     return True
 
@@ -585,6 +575,7 @@ def validate_site_config(config: Dict[str, Any]) -> bool:
 def get_default_send_confirmation_config() -> SendConfirmationConfig:
     """Get the default send confirmation strategy."""
     return {
+        "attachment_sensitivity": "medium",
         "post_click_observe_window": 1.8,
         "pre_retry_probe_window": 0.12,
         "retry_observe_window": 0.9,
@@ -598,11 +589,6 @@ def get_default_send_confirmation_config() -> SendConfirmationConfig:
 def get_default_stream_config() -> StreamConfig:
     """获取默认的流式监控配置"""
     return {
-        "silence_threshold": 2.5,
-        "initial_wait": 30.0,
-        "enable_wrapper_search": True,
-        "rerender_wait": 0.5,
-        "content_shrink_tolerance": 3,
         "send_confirmation": get_default_send_confirmation_config(),
     }
 

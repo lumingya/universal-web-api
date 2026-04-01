@@ -1058,7 +1058,6 @@ if session.error_count > 2:
             <h4><span class="icon">🌍</span> Browser</h4>
             <table>
                 <tr><th>Setting</th><th>Default</th><th>Description</th></tr>
-                <tr><td>Chrome debug port</td><td><code>9222</code></td><td>Remote debugging port used by the browser</td></tr>
             </table>
         </div>
 

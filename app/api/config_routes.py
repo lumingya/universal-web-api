@@ -1038,8 +1038,6 @@ async def get_stream_config_defaults(authenticated: bool = Depends(verify_auth))
         "limits": {
             "hard_timeout": {"min": 10, "max": 600},
             "silence_threshold": {"min": 0.5, "max": 30},
-            "initial_wait": {"min": 5, "max": 120},
-            "first_response_timeout": {"min": 1, "max": 300},
             "response_interval": {"min": 0.1, "max": 5}
         },
         "mode_options": ["dom", "network"]

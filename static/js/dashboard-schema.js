@@ -65,14 +65,6 @@ const BROWSER_CONSTANTS_SCHEMA = {
         label: '连接配置',
         icon: '🔌',
         items: {
-            DEFAULT_PORT: {
-                label: '调试端口',
-                desc: 'Chrome DevTools 远程调试端口',
-                type: 'number',
-                min: 1024,
-                max: 65535,
-                default: 9222
-            },
             CONNECTION_TIMEOUT: {
                 label: '连接超时',
                 unit: '秒',
@@ -156,11 +148,12 @@ const BROWSER_CONSTANTS_SCHEMA = {
     stream: {
         label: '流式监控',
         icon: '📡',
-        desc: '控制 AI 响应的检测频率和超时判定',
+        desc: '只影响 DOM 流式监听。这里控制轮询频率、开始等待时间和结束判定。',
         items: {
             STREAM_CHECK_INTERVAL_MIN: {
                 label: '检查间隔下限',
                 unit: '秒',
+                desc: '有新内容出现时，轮询会尽量压到这个最小间隔。值越小，显示越及时，但更吃性能。',
                 type: 'number',
                 step: 0.05,
                 min: 0.05,
@@ -169,6 +162,7 @@ const BROWSER_CONSTANTS_SCHEMA = {
             STREAM_CHECK_INTERVAL_MAX: {
                 label: '检查间隔上限',
                 unit: '秒',
+                desc: '内容暂时不变时，轮询间隔会逐步放大到这个上限。值越大，更省资源，但结束判断会更慢。',
                 type: 'number',
                 step: 0.1,
                 min: 0.1,
@@ -177,6 +171,7 @@ const BROWSER_CONSTANTS_SCHEMA = {
             STREAM_CHECK_INTERVAL_DEFAULT: {
                 label: '默认检查间隔',
                 unit: '秒',
+                desc: '开始监听时先用这个间隔检查，后续会在上下限之间动态调整。',
                 type: 'number',
                 step: 0.05,
                 min: 0.05,
@@ -185,7 +180,7 @@ const BROWSER_CONSTANTS_SCHEMA = {
             STREAM_SILENCE_THRESHOLD: {
                 label: '静默超时阈值',
                 unit: '秒',
-                desc: '无新内容多久后判定完成',
+                desc: '内容已经开始变化后，连续这么久没有新内容，并且稳定次数也达标时，判定这轮回复完成。',
                 type: 'number',
                 min: 1,
                 default: 8.0
@@ -193,7 +188,7 @@ const BROWSER_CONSTANTS_SCHEMA = {
             STREAM_SILENCE_THRESHOLD_FALLBACK: {
                 label: '静默超时备用',
                 unit: '秒',
-                desc: '慢速模型的备用阈值',
+                desc: '兜底静默基准。主判定迟迟不满足时，会按更宽松的窗口收尾，防止长时间挂住。',
                 type: 'number',
                 min: 1,
                 default: 12
@@ -201,7 +196,7 @@ const BROWSER_CONSTANTS_SCHEMA = {
             STREAM_MAX_TIMEOUT: {
                 label: '最大超时',
                 unit: '秒',
-                desc: '单次响应的绝对超时上限',
+                desc: '单轮监听的硬上限。无论页面状态如何，超过这个时间都会强制结束。',
                 type: 'number',
                 min: 60,
                 default: 600
@@ -209,14 +204,14 @@ const BROWSER_CONSTANTS_SCHEMA = {
             STREAM_INITIAL_WAIT: {
                 label: '初始等待',
                 unit: '秒',
-                desc: '等待首次响应的最长时间',
+                desc: '发送后等待 AI 明确开始回复的最长时间。一直没有新节点、新文字或生成态时，会按超时处理。',
                 type: 'number',
                 min: 10,
                 default: 180
             },
             STREAM_STABLE_COUNT_THRESHOLD: {
                 label: '稳定判定次数',
-                desc: '连续多少次检查不变才判定完成',
+                desc: '内容连续多少次检查都没变化，才算稳定。它需要和静默超时一起满足，才会判定结束。',
                 type: 'number',
                 min: 1,
                 default: 8
@@ -227,58 +222,14 @@ const BROWSER_CONSTANTS_SCHEMA = {
         label: '流式监控（高级）',
         icon: '⚙️',
         collapsed: true,
+        desc: '这里只保留当前版本仍在生效的兼容参数，大多数站点不用改。',
         items: {
-            STREAM_RERENDER_WAIT: {
-                label: '重渲染等待',
-                unit: '秒',
-                desc: '等待页面重新渲染',
-                type: 'number',
-                step: 0.1,
-                default: 0.5
-            },
             STREAM_CONTENT_SHRINK_TOLERANCE: {
                 label: '内容收缩容忍次数',
-                desc: '允许内容变短的次数',
+                desc: '允许回复在小范围内回退多少字符仍不当成异常。用于容忍编辑器重排、占位符回收这类轻微波动。',
                 type: 'number',
                 min: 0,
                 default: 3
-            },
-            STREAM_MIN_VALID_LENGTH: {
-                label: '最小有效长度',
-                unit: '字符',
-                desc: '响应被视为有效的最小长度',
-                type: 'number',
-                min: 1,
-                default: 10
-            },
-            STREAM_INITIAL_ELEMENT_WAIT: {
-                label: '初始元素等待',
-                unit: '秒',
-                type: 'number',
-                min: 1,
-                default: 10
-            },
-            STREAM_MAX_ABNORMAL_COUNT: {
-                label: '最大异常次数',
-                desc: '连续异常多少次后中止',
-                type: 'number',
-                min: 1,
-                default: 5
-            },
-            STREAM_MAX_ELEMENT_MISSING: {
-                label: '最大元素丢失次数',
-                type: 'number',
-                min: 1,
-                default: 10
-            },
-            STREAM_CONTENT_SHRINK_THRESHOLD: {
-                label: '内容收缩阈值',
-                desc: '内容缩减超过此比例视为异常',
-                type: 'number',
-                step: 0.05,
-                min: 0,
-                max: 1,
-                default: 0.3
             }
         }
     },
@@ -287,15 +238,17 @@ const BROWSER_CONSTANTS_SCHEMA = {
         icon: '✅',
         items: {
             MAX_MESSAGE_LENGTH: {
-                label: '消息最大长度',
+                label: '单条消息本地上限',
                 unit: '字符',
+                desc: '这里只控制程序侧的输入校验。超过这个字符数会在发送前拦下，不代表目标站点或模型的真实长度限制。',
                 type: 'number',
                 min: 1000,
                 default: 100000
             },
             MAX_MESSAGES_COUNT: {
-                label: '消息最大数量',
+                label: '消息条数本地上限',
                 unit: '条',
+                desc: '这里只控制程序一次接收的 messages 条数。超过后会在本地校验阶段拦下，不代表站点真实上下文上限。',
                 type: 'number',
                 min: 1,
                 default: 100

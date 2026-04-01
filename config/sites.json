@@ -70,13 +70,9 @@
         "stream_config": {
           "mode": "network",
           "hard_timeout": 300,
-          "silence_threshold": 3,
-          "initial_wait": 30,
-          "enable_wrapper_search": true,
           "network": {
             "listen_pattern": "GenerateContent",
             "parser": "aistudio",
-            "first_response_timeout": 300,
             "silence_threshold": 3,
             "response_interval": 0.5
           }
@@ -137,7 +133,7 @@
             "value": null
           }
         ],
-        "stealth": false,
+        "stealth": true,
         "image_extraction": {
           "enabled": true,
           "selector": "img",
@@ -208,7 +204,7 @@
             "value": null
           }
         ],
-        "stealth": false,
+        "stealth": true,
         "image_extraction": {
           "enabled": false,
           "selector": "img",
@@ -244,13 +240,9 @@
         "stream_config": {
           "mode": "network",
           "hard_timeout": 600,
-          "silence_threshold": 2.5,
-          "initial_wait": 30,
-          "enable_wrapper_search": true,
           "network": {
             "listen_pattern": "backend-api/f/conversation",
             "parser": "chatgpt",
-            "first_response_timeout": 300,
             "silence_threshold": 2,
             "response_interval": 0.5
           }
@@ -331,13 +323,9 @@
         "stream_config": {
           "mode": "network",
           "hard_timeout": 600,
-          "silence_threshold": 2.5,
-          "initial_wait": 30,
-          "enable_wrapper_search": true,
           "network": {
             "listen_pattern": "StreamGenerate",
             "parser": "gemini",
-            "first_response_timeout": 300,
             "silence_threshold": 3,
             "response_interval": 1
           }
@@ -442,13 +430,9 @@
         "stream_config": {
           "mode": "network",
           "hard_timeout": 600,
-          "silence_threshold": 2.5,
-          "initial_wait": 30,
-          "enable_wrapper_search": true,
           "network": {
             "listen_pattern": "StreamGenerate",
             "parser": "gemini",
-            "first_response_timeout": 300,
             "silence_threshold": 3,
             "response_interval": 1
           }
@@ -543,17 +527,14 @@
         "stream_config": {
           "mode": "network",
           "hard_timeout": 300,
-          "silence_threshold": 3,
-          "initial_wait": 30,
-          "enable_wrapper_search": true,
           "network": {
             "listen_pattern": "api/v0/chat/completion",
             "parser": "deepseek",
-            "first_response_timeout": 300,
             "silence_threshold": 3,
             "response_interval": 0.5
           },
           "send_confirmation": {
+            "attachment_sensitivity": "high",
             "post_click_observe_window": 2.4,
             "pre_retry_probe_window": 0.18,
             "retry_observe_window": 1.2,
@@ -683,13 +664,9 @@
         "stream_config": {
           "mode": "network",
           "hard_timeout": 300,
-          "silence_threshold": 2.5,
-          "initial_wait": 30,
-          "enable_wrapper_search": true,
           "network": {
             "listen_pattern": "chat/completion",
             "parser": "doubao",
-            "first_response_timeout": 300,
             "silence_threshold": 3,
             "response_interval": 0.5
           }
@@ -745,13 +722,9 @@
         "stream_config": {
           "mode": "network",
           "hard_timeout": 300,
-          "silence_threshold": 2.5,
-          "initial_wait": 30,
-          "enable_wrapper_search": true,
           "network": {
             "listen_pattern": "chat_conversations",
             "parser": "claude",
-            "first_response_timeout": 300,
             "silence_threshold": 3,
             "response_interval": 0.5
           }
@@ -829,15 +802,11 @@
         "stream_config": {
           "mode": "network",
           "hard_timeout": 300,
-          "silence_threshold": 2.5,
-          "initial_wait": 30,
-          "enable_wrapper_search": true,
           "network": {
             "parser": "lmarena_side_left",
             "url_pattern": "**/nextjs-api/stream/create-evaluation**",
             "method": "POST",
             "listen_pattern": "/nextjs-api/stream/create-evaluation",
-            "first_response_timeout": 300,
             "silence_threshold": 3,
             "response_interval": 1
           }
@@ -931,15 +900,11 @@
         "stream_config": {
           "mode": "network",
           "hard_timeout": 300,
-          "silence_threshold": 2.5,
-          "initial_wait": 30,
-          "enable_wrapper_search": true,
           "network": {
             "parser": "lmarena",
             "url_pattern": "**/nextjs-api/stream/create-evaluation**",
             "method": "POST",
             "listen_pattern": "/nextjs-api/stream/create-evaluation",
-            "first_response_timeout": 300,
             "silence_threshold": 3,
             "response_interval": 1
           }
@@ -975,15 +940,11 @@
         "stream_config": {
           "mode": "network",
           "hard_timeout": 300,
-          "silence_threshold": 2.5,
-          "initial_wait": 30,
-          "enable_wrapper_search": true,
           "network": {
             "parser": "lmarena",
             "url_pattern": "**/nextjs-api/stream/create-evaluation**",
             "method": "POST",
             "listen_pattern": "/nextjs-api/stream/create-evaluation",
-            "first_response_timeout": 300,
             "silence_threshold": 3,
             "response_interval": 1
           }
@@ -1030,15 +991,11 @@
         "stream_config": {
           "mode": "network",
           "hard_timeout": 300,
-          "silence_threshold": 2.5,
-          "initial_wait": 30,
-          "enable_wrapper_search": true,
           "network": {
             "parser": "lmarena",
             "url_pattern": "**/nextjs-api/stream/create-evaluation**",
             "method": "POST",
             "listen_pattern": "/nextjs-api/stream/create-evaluation",
-            "first_response_timeout": 300,
             "silence_threshold": 3,
             "response_interval": 1
           }
@@ -1111,15 +1068,11 @@
         "stream_config": {
           "mode": "network",
           "hard_timeout": 300,
-          "silence_threshold": 2.5,
-          "initial_wait": 30,
-          "enable_wrapper_search": true,
           "network": {
             "parser": "lmarena_side_left",
             "url_pattern": "**/nextjs-api/stream/create-evaluation**",
             "method": "POST",
             "listen_pattern": "/nextjs-api/stream/create-evaluation",
-            "first_response_timeout": 300,
             "silence_threshold": 3,
             "response_interval": 1
           }
@@ -1193,13 +1146,9 @@
         "stream_config": {
           "mode": "network",
           "hard_timeout": 300,
-          "silence_threshold": 2.5,
-          "initial_wait": 30,
-          "enable_wrapper_search": true,
           "network": {
             "listen_pattern": "api/v2/chat/completions",
             "parser": "qwen",
-            "first_response_timeout": 300,
             "silence_threshold": 3,
             "response_interval": 0.5
           }
@@ -1277,13 +1226,9 @@
         "stream_config": {
           "mode": "network",
           "hard_timeout": 300,
-          "silence_threshold": 2.5,
-          "initial_wait": 30,
-          "enable_wrapper_search": true,
           "network": {
             "listen_pattern": "/apiv2/kimi.gateway.chat.v1.ChatService/Chat",
             "parser": "kimi",
-            "first_response_timeout": 300,
             "silence_threshold": 3,
             "response_interval": 0.5
           }

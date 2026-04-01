@@ -53,9 +53,9 @@ window.ConfigTab = {
             defaultStreamConfig: {
                 mode: 'dom',
                 hard_timeout: 300,
-                silence_threshold: 2.5,
-                initial_wait: 30.0,
-                enable_wrapper_search: true,
+                send_confirmation: {
+                    attachment_sensitivity: 'medium'
+                },
                 network: null
             }
         };
@@ -78,7 +78,17 @@ window.ConfigTab = {
         },
         streamConfig() {
             if (!this.presetConfig) return this.defaultStreamConfig;
-            return { ...this.defaultStreamConfig, ...(this.presetConfig.stream_config || {}) };
+            const streamConfig = this.presetConfig.stream_config || {};
+            return {
+                ...this.defaultStreamConfig,
+                mode: streamConfig.mode || this.defaultStreamConfig.mode,
+                hard_timeout: streamConfig.hard_timeout || this.defaultStreamConfig.hard_timeout,
+                network: streamConfig.network || this.defaultStreamConfig.network,
+                send_confirmation: {
+                    ...(this.defaultStreamConfig.send_confirmation || {}),
+                    ...(streamConfig.send_confirmation || {})
+                }
+            };
         }
     },
     methods: {

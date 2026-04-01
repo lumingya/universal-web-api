@@ -78,9 +78,6 @@ def get_default_stream_config() -> Dict[str, Any]:
     return {
         "mode": "dom",              # dom / network
         "hard_timeout": 300,        # 全局硬超时（秒）
-        "silence_threshold": 2.5,   # 静默超时（秒）
-        "initial_wait": 30.0,       # 初始等待（秒）
-        "enable_wrapper_search": True,
         "send_confirmation": get_default_send_confirmation_config(),
         
         # 网络监听配置（可选）
@@ -93,7 +90,6 @@ def get_default_network_config() -> Dict[str, Any]:
     return {
         "listen_pattern": "",           # URL 匹配模式（必填）
         "parser": "",                   # 解析器 ID（必填）
-        "first_response_timeout": 300.0,  # 首次响应超时（秒）
         "silence_threshold": 3.0,       # 静默超时（秒）
         "response_interval": 0.5        # 轮询间隔（秒）
     }
@@ -1063,6 +1059,19 @@ class ConfigEngine:
         """获取指定预设的工作流配置"""
         data = self._get_site_data_readonly(domain, preset_name)
         return data.get("workflow", DEFAULT_WORKFLOW) if data else DEFAULT_WORKFLOW
+
+    def get_site_stealth_mode(self, domain: str, preset_name: str = None) -> bool:
+        """获取指定站点预设是否启用隐身模式。"""
+        self.refresh_if_changed()
+
+        data = self._get_site_data_readonly(domain, preset_name)
+        if data is not None:
+            return bool(data.get("stealth", False))
+
+        normalized_domain = str(domain or "").strip().lower()
+        if not normalized_domain:
+            return False
+        return self._guess_stealth(normalized_domain)
     
     def set_preset_workflow(self, domain: str, workflow: List, 
                             preset_name: str = None) -> bool:
@@ -1139,11 +1148,7 @@ class ConfigEngine:
                 "selectors": selectors,
                 "workflow": DEFAULT_WORKFLOW,
                 "stealth": self._guess_stealth(domain),
-                "stream_config": {
-                    "silence_threshold": 2.5,
-                    "initial_wait": 30.0,
-                    "enable_wrapper_search": True
-                },
+                "stream_config": copy.deepcopy(get_default_stream_config()),
                 "image_extraction": get_default_image_extraction_config(),
                 "file_paste": get_default_file_paste_config()
             }
@@ -1166,11 +1171,7 @@ class ConfigEngine:
             "selectors": fallback_selectors,
             "workflow": DEFAULT_WORKFLOW,
             "stealth": False,
-            "stream_config": {
-                "silence_threshold": 2.5,
-                "initial_wait": 30.0,
-                "enable_wrapper_search": True
-            },
+            "stream_config": copy.deepcopy(get_default_stream_config()),
             "image_extraction": get_default_image_extraction_config(),
             "file_paste": get_default_file_paste_config()
         }
@@ -1209,6 +1210,14 @@ class ConfigEngine:
         migrated_count = 0
         default_image_config = get_default_image_extraction_config()
         default_file_paste = get_default_file_paste_config()
+        obsolete_stream_keys = {
+            "silence_threshold",
+            "initial_wait",
+            "enable_wrapper_search",
+            "rerender_wait",
+            "content_shrink_tolerance",
+        }
+        obsolete_network_keys = {"first_response_timeout"}
         
         for domain, site_config in self.sites.items():
             if domain.startswith("_"):
@@ -1226,6 +1235,26 @@ class ConfigEngine:
                     preset_data["file_paste"] = default_file_paste.copy()
                     migrated_count += 1
                     logger.debug(f"迁移: {domain}/{preset_name} (添加 file_paste)")
+
+                stream_config = preset_data.get("stream_config")
+                if isinstance(stream_config, dict):
+                    removed_stream = False
+                    for key in list(obsolete_stream_keys):
+                        if key in stream_config:
+                            del stream_config[key]
+                            removed_stream = True
+
+                    network_config = stream_config.get("network")
+                    removed_network = False
+                    if isinstance(network_config, dict):
+                        for key in list(obsolete_network_keys):
+                            if key in network_config:
+                                del network_config[key]
+                                removed_network = True
+
+                    if removed_stream or removed_network:
+                        migrated_count += 1
+                        logger.debug(f"迁移: {domain}/{preset_name} (清理废弃的流式配置字段)")
         
         if migrated_count > 0:
             self._save_config()
@@ -1505,8 +1534,7 @@ class ConfigEngine:
         result = copy.deepcopy(default_config)
         
         # 更新顶层字段
-        for key in ["mode", "hard_timeout", "silence_threshold", 
-                    "initial_wait", "enable_wrapper_search"]:
+        for key in ["mode", "hard_timeout"]:
             if key in stream_config:
                 result[key] = stream_config[key]
 
@@ -1520,7 +1548,9 @@ class ConfigEngine:
             network_config = stream_config["network"]
             
             result["network"] = network_default.copy()
-            result["network"].update(network_config)
+            for key in ["listen_pattern", "parser", "silence_threshold", "response_interval"]:
+                if key in network_config:
+                    result["network"][key] = network_config[key]
         
         return result
     
@@ -1575,22 +1605,14 @@ class ConfigEngine:
                 result["mode"] = mode
         
         # 验证数值字段
-        for key in ["hard_timeout", "silence_threshold", "initial_wait"]:
+        for key in ["hard_timeout"]:
             if key in config:
                 try:
                     val = float(config[key])
                     if key == "hard_timeout":
                         result[key] = max(10, min(val, 600))
-                    elif key == "silence_threshold":
-                        result[key] = max(0.5, min(val, 30))
-                    elif key == "initial_wait":
-                        result[key] = max(5, min(val, 120))
                 except (ValueError, TypeError):
                     pass
-        
-        # 验证布尔字段
-        if "enable_wrapper_search" in config:
-            result["enable_wrapper_search"] = bool(config["enable_wrapper_search"])
 
         # 验证 send_confirmation 配置
         if isinstance(config.get("send_confirmation"), dict):
@@ -1651,6 +1673,10 @@ class ConfigEngine:
                 continue
             result[key] = bool(raw_value)
 
+        sensitivity = str(config.get("attachment_sensitivity") or "").strip().lower()
+        if sensitivity in {"low", "medium", "high"}:
+            result["attachment_sensitivity"] = sensitivity
+
         return result
     
     def _validate_network_config(self, config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -1687,13 +1713,11 @@ class ConfigEngine:
                     result["parser"] = parser_id
         
         # 验证数值字段
-        for key in ["first_response_timeout", "silence_threshold", "response_interval"]:
+        for key in ["silence_threshold", "response_interval"]:
             if key in config:
                 try:
                     val = float(config[key])
-                    if key == "first_response_timeout":
-                        result[key] = max(1, min(val, 300))
-                    elif key == "silence_threshold":
+                    if key == "silence_threshold":
                         result[key] = max(0.5, min(val, 30))
                     elif key == "response_interval":
                         result[key] = max(0.1, min(val, 5))

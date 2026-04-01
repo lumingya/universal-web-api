@@ -54,6 +54,11 @@ _GUIDE_SITE_ORDER = [
 ]
 
 
+def _should_connect_browser_on_startup() -> bool:
+    value = str(os.getenv("BROWSER_CONNECT_ON_STARTUP", "false")).strip().lower()
+    return value in {"1", "true", "yes", "y", "on"}
+
+
 def _setup_windows_event_loop_policy():
     """
     在 Windows 上优先使用 SelectorEventLoop，规避 Proactor 在连接断开时
@@ -290,45 +295,45 @@ async def lifespan(app: FastAPI):
     logger.info("=" * 60)
 
     # main.py 中 lifespan 函数的浏览器检查部分
+    if _should_connect_browser_on_startup():
+        try:
+            browser = get_browser(auto_connect=False)
+            health = browser.health_check(connect_if_needed=True)
 
-    try:
-        
-        browser = get_browser(auto_connect=False)
-        health = browser.health_check()
-    
-        if health["connected"]:
-            if _should_open_startup_pages(browser):
-                try:
-                    base_url = _get_local_startup_base_url()
-                    tutorial_url = f"{base_url}/static/tutorial.html"
-                    guide_url = f"{base_url}/static/controlled-browser-guide.html"
-                    logger.info(f"[startup] 首次启动，使用系统浏览器打开教程页: {tutorial_url}")
-                    _open_startup_page_non_blocking(
-                        tutorial_url,
-                        page_name="教程页",
-                        initial_delay_sec=1.2,
-                    )
-                    logger.info(f"[startup] 首次启动，准备在受控浏览器打开引导页: {guide_url}")
-                    _open_controlled_browser_page_non_blocking(
-                        browser,
-                        guide_url,
-                        page_name="受控浏览器引导页",
-                        initial_delay_sec=0.8,
-                    )
-                except Exception as e:
-                    logger.warning(f"⚠️ 无法打开教程页: {e}")
+            if health["connected"]:
+                if _should_open_startup_pages(browser):
+                    try:
+                        base_url = _get_local_startup_base_url()
+                        tutorial_url = f"{base_url}/static/tutorial.html"
+                        guide_url = f"{base_url}/static/controlled-browser-guide.html"
+                        logger.info(f"[startup] 首次启动，使用系统浏览器打开教程页: {tutorial_url}")
+                        _open_startup_page_non_blocking(
+                            tutorial_url,
+                            page_name="教程页",
+                            initial_delay_sec=1.2,
+                        )
+                        logger.info(f"[startup] 首次启动，准备在受控浏览器打开引导页: {guide_url}")
+                        _open_controlled_browser_page_non_blocking(
+                            browser,
+                            guide_url,
+                            page_name="受控浏览器引导页",
+                            initial_delay_sec=0.8,
+                        )
+                    except Exception as e:
+                        logger.warning(f"⚠️ 无法打开教程页: {e}")
+                else:
+                    try:
+                        existing_tab_count = len(browser.page.get_tabs())
+                    except Exception:
+                        existing_tab_count = "?"
+                    logger.info(f"✅ 浏览器已连接 (检测到 {existing_tab_count} 个现有页面，跳过教程)")
             else:
-                # 显示已连接状态
-                try:
-                    existing_tab_count = len(browser.page.get_tabs())
-                except Exception:
-                    existing_tab_count = "?"
-                logger.info(f"✅ 浏览器已连接 (检测到 {existing_tab_count} 个现有页面，跳过教程)")
-        else:
-            logger.warning(f"⚠️ 浏览器未连接: {health.get('error', '未知')}")
-        
-    except Exception as e:
-        logger.warning(f"⚠️ 浏览器检查跳过: {e}")
+                logger.warning(f"⚠️ 浏览器未连接: {health.get('error', '未知')}")
+
+        except Exception as e:
+            logger.warning(f"⚠️ 浏览器检查跳过: {e}")
+    else:
+        logger.info("[startup] 已跳过受控浏览器预连接（BROWSER_CONNECT_ON_STARTUP=false）")
 
     # 显式预热命令调度器，避免依赖控制面板接口后才初始化。
     try:

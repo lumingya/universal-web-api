@@ -114,6 +114,10 @@ class NetworkMonitor:
         # 从配置中加载参数
         self._stream_config = stream_config or {}
         network_config = self._stream_config.get("network", {})
+        top_level_hard_timeout = self._stream_config.get(
+            "hard_timeout",
+            self.DEFAULT_HARD_TIMEOUT
+        )
         
         self._listen_pattern = network_config.get("listen_pattern", "")
         self._stream_match_pattern = network_config.get(
@@ -123,13 +127,13 @@ class NetworkMonitor:
         self._stream_match_mode = str(
             network_config.get("stream_match_mode", "keyword") or "keyword"
         ).strip().lower()
-        self._first_response_timeout = network_config.get(
-            "first_response_timeout",
-            self.DEFAULT_FIRST_RESPONSE_TIMEOUT
-        )
         self._hard_timeout = network_config.get(
             "hard_timeout",
-            self.DEFAULT_HARD_TIMEOUT
+            top_level_hard_timeout
+        )
+        self._first_response_timeout = network_config.get(
+            "first_response_timeout",
+            self._hard_timeout
         )
         self._response_interval = network_config.get(
             "response_interval",

@@ -506,6 +506,12 @@ body.app-mounted #app-shell {
     position: relative;
 }
 
+.dashboard-field-help {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+}
+
 .dashboard-field-alias {
     display: inline-flex;
     align-items: center;
@@ -535,7 +541,7 @@ body.app-mounted #app-shell {
 }
 
 .dashboard-field-help-trigger:hover,
-.dashboard-field-summary:focus-within .dashboard-field-help-trigger {
+.dashboard-field-help:focus-within .dashboard-field-help-trigger {
     transform: translateY(-1px);
     border-color: rgba(59, 130, 246, 0.34);
     color: #1d4ed8;
@@ -565,7 +571,7 @@ body.app-mounted #app-shell {
     content: "";
     position: absolute;
     top: -0.35rem;
-    left: 1.3rem;
+    left: 0.38rem;
     width: 0.72rem;
     height: 0.72rem;
     border-left: 1px solid rgba(148, 163, 184, 0.22);
@@ -574,10 +580,11 @@ body.app-mounted #app-shell {
     transform: rotate(45deg);
 }
 
-.dashboard-field-summary:hover .dashboard-field-tooltip,
-.dashboard-field-summary:focus-within .dashboard-field-tooltip {
+.dashboard-field-help:hover .dashboard-field-tooltip,
+.dashboard-field-help:focus-within .dashboard-field-tooltip {
     opacity: 1;
     transform: translateY(0);
+    pointer-events: auto;
 }
 
 .dashboard-field-tooltip-title {
@@ -719,7 +726,7 @@ body.app-mounted #app-shell {
     color: #cbd5e1;
 }
 
-.dark .dashboard-field-summary:focus-within .dashboard-field-help-trigger,
+.dark .dashboard-field-help:focus-within .dashboard-field-help-trigger,
 .dark .dashboard-field-help-trigger:hover {
     border-color: rgba(96, 165, 250, 0.46);
     color: #bfdbfe;
