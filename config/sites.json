@@ -285,7 +285,7 @@
             "value": null
           }
         ],
-        "stealth": true,
+        "stealth": false,
         "image_extraction": {
           "enabled": false,
           "selector": "img",
@@ -538,7 +538,7 @@
             "post_click_observe_window": 2.4,
             "pre_retry_probe_window": 0.18,
             "retry_observe_window": 1.2,
-            "attachment_observe_window": 8.0,
+            "attachment_observe_window": 8,
             "trust_network_activity": true,
             "trust_generating_indicator": true,
             "trust_send_disabled_with_input_shrink": true
@@ -718,7 +718,7 @@
             "value": null
           }
         ],
-        "stealth": true,
+        "stealth": false,
         "stream_config": {
           "mode": "network",
           "hard_timeout": 300,

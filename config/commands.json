@@ -13,8 +13,25 @@
         "command_id": "",
         "priority": 3,
         "periodic_enabled": true,
-        "periodic_interval_sec": 8.0,
-        "periodic_jitter_sec": 2.0
+        "periodic_interval_sec": 8,
+        "periodic_jitter_sec": 2,
+        "command_ids": [],
+        "listen_all_commands": false,
+        "informative_only": true,
+        "action_ref": "",
+        "match_rule": "equals",
+        "expected_value": "",
+        "match_mode": "keyword",
+        "status_codes": "403,429,500,502,503,504",
+        "abort_on_match": true,
+        "fire_mode": "edge",
+        "cooldown_sec": 0,
+        "stable_for_sec": 0,
+        "check_while_busy_workflow": true,
+        "allow_during_workflow": false,
+        "interrupt_policy": "auto",
+        "interrupt_message": "",
+        "probe_js": ""
       },
       "actions": [
         {
@@ -47,8 +64,9 @@
       "last_triggered": 1773570668.7475963,
       "trigger_count": 54,
       "group_name": "竞技场命令",
-      "log_enabled": true,
-      "log_level": "GLOBAL"
+      "log_enabled": false,
+      "log_level": "GLOBAL",
+      "stop_on_error": false
     },
     {
       "name": "网络错误闭环恢复",
@@ -540,8 +558,8 @@
       "script": "",
       "script_lang": "javascript",
       "id": "cmd_69640733",
-      "last_triggered": 1773824286.0963094,
-      "trigger_count": 8,
+      "last_triggered": 1775036708.4062357,
+      "trigger_count": 1,
       "log_enabled": true,
       "log_level": "GLOBAL"
     },
