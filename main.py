@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, FileResponse
 # ================= 导入配置 =================
 
-from app.core.config import AppConfig, get_logger
+from app.core.config import AppConfig, get_logger, get_shared_file_log_handler
 
 # ================= 日志配置 =================
 
@@ -33,6 +33,13 @@ logging.basicConfig(
     format='%(message)s',
     datefmt='%H:%M:%S'
 )
+
+_root_logger = logging.getLogger()
+_root_file_handler = get_shared_file_log_handler()
+if _root_file_handler is not None and all(
+    handler is not _root_file_handler for handler in _root_logger.handlers
+):
+    _root_logger.addHandler(_root_file_handler)
 
 # 使用统一的 SecureLogger
 logger = get_logger("MAIN")

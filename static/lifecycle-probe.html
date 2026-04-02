@@ -1,0 +1,791 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lifecycle Probe</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f4efe7;
+      --card: rgba(255, 251, 245, 0.92);
+      --ink: #1f2430;
+      --muted: #596274;
+      --accent: #b55239;
+      --accent-soft: rgba(181, 82, 57, 0.12);
+      --ok: #1d6b4e;
+      --warn: #9b5a00;
+      --danger: #9b2c2c;
+      --line: rgba(31, 36, 48, 0.12);
+      --shadow: 0 24px 60px rgba(63, 41, 24, 0.14);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(210, 149, 103, 0.22), transparent 32%),
+        radial-gradient(circle at right 20%, rgba(105, 143, 112, 0.16), transparent 26%),
+        linear-gradient(135deg, #f8f3eb 0%, #f1e6d8 54%, #efe7df 100%);
+      min-height: 100vh;
+    }
+
+    .page {
+      width: min(1200px, calc(100vw - 32px));
+      margin: 24px auto 40px;
+    }
+
+    .hero,
+    .panel,
+    .log-card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
+    }
+
+    .hero {
+      padding: 28px 28px 24px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero::after {
+      content: "";
+      position: absolute;
+      inset: auto -60px -60px auto;
+      width: 220px;
+      height: 220px;
+      background: radial-gradient(circle, rgba(181, 82, 57, 0.16), transparent 72%);
+      pointer-events: none;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: clamp(32px, 5vw, 52px);
+      line-height: 1;
+      letter-spacing: -0.04em;
+    }
+
+    .subtitle {
+      margin: 0;
+      max-width: 780px;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.6;
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-top: 22px;
+    }
+
+    button {
+      appearance: none;
+      border: 0;
+      border-radius: 999px;
+      padding: 12px 18px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 160ms ease, box-shadow 160ms ease, background-color 160ms ease;
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+    }
+
+    .primary {
+      color: #fff;
+      background: linear-gradient(135deg, #c85d42, #9f412d);
+      box-shadow: 0 12px 24px rgba(159, 65, 45, 0.22);
+    }
+
+    .secondary {
+      color: var(--ink);
+      background: #f8f1e8;
+      border: 1px solid rgba(31, 36, 48, 0.12);
+    }
+
+    .hint {
+      margin-top: 16px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+      gap: 16px;
+      margin-top: 18px;
+    }
+
+    .panel {
+      padding: 20px;
+    }
+
+    .panel.span-4 {
+      grid-column: span 4;
+    }
+
+    .panel.span-6 {
+      grid-column: span 6;
+    }
+
+    .panel.span-8 {
+      grid-column: span 8;
+    }
+
+    .panel.span-12,
+    .log-card {
+      grid-column: span 12;
+    }
+
+    .label {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--muted);
+      margin-bottom: 10px;
+    }
+
+    .metric {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+
+    .metric strong {
+      font-size: clamp(28px, 4vw, 42px);
+      line-height: 1;
+      letter-spacing: -0.05em;
+    }
+
+    .metric span {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .mini-list {
+      display: grid;
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .mini-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      font-size: 14px;
+      color: var(--muted);
+      border-top: 1px solid rgba(31, 36, 48, 0.08);
+      padding-top: 10px;
+    }
+
+    .mini-row b {
+      color: var(--ink);
+    }
+
+    .pill-wrap {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 6px;
+    }
+
+    .pill {
+      border-radius: 999px;
+      padding: 8px 10px;
+      font-size: 12px;
+      line-height: 1;
+      border: 1px solid rgba(31, 36, 48, 0.08);
+      background: rgba(255, 255, 255, 0.66);
+      color: var(--muted);
+    }
+
+    .pill.ok {
+      color: var(--ok);
+      background: rgba(29, 107, 78, 0.12);
+      border-color: rgba(29, 107, 78, 0.2);
+    }
+
+    .pill.warn {
+      color: var(--warn);
+      background: rgba(155, 90, 0, 0.12);
+      border-color: rgba(155, 90, 0, 0.2);
+    }
+
+    .pill.danger {
+      color: var(--danger);
+      background: rgba(155, 44, 44, 0.12);
+      border-color: rgba(155, 44, 44, 0.2);
+    }
+
+    .summary {
+      display: grid;
+      gap: 12px;
+    }
+
+    .summary-box {
+      padding: 14px 16px;
+      border-radius: 18px;
+      border: 1px solid rgba(31, 36, 48, 0.08);
+      background: rgba(255, 255, 255, 0.62);
+    }
+
+    .summary-box h2 {
+      margin: 0 0 8px;
+      font-size: 15px;
+    }
+
+    .summary-box p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.6;
+      font-size: 14px;
+    }
+
+    .log-card {
+      margin-top: 18px;
+      padding: 20px;
+    }
+
+    .log-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 14px;
+    }
+
+    .log-head h2 {
+      margin: 0;
+      font-size: 20px;
+    }
+
+    .log {
+      background: #1c1f27;
+      color: #e6edf3;
+      border-radius: 18px;
+      padding: 16px;
+      min-height: 260px;
+      max-height: 420px;
+      overflow: auto;
+      font-family: Consolas, "SFMono-Regular", Monaco, monospace;
+      font-size: 12px;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .test-steps {
+      margin-top: 12px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.7;
+    }
+
+    .test-steps strong {
+      color: var(--ink);
+    }
+
+    @media (max-width: 960px) {
+      .panel.span-4,
+      .panel.span-6,
+      .panel.span-8 {
+        grid-column: span 12;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <div class="label">Lifecycle / Background Throttle Probe</div>
+      <h1>后台节流探针</h1>
+      <p class="subtitle">
+        这个页面不查传统 webdriver 指纹，只测受控浏览器在切标签、最小化、失焦和后台驻留时到底有没有继续跑计时器、worker 和动画帧。
+        它更适合判断你那组 anti-throttle 启动参数是不是在产生“非常驻前台也像前台”的副作用。
+      </p>
+      <div class="toolbar">
+        <button class="primary" id="startBtn">重置并开始一次测试</button>
+        <button class="secondary" id="copyBtn">复制本次摘要</button>
+        <button class="secondary" id="clearBtn">清空日志</button>
+      </div>
+      <div class="hint">
+        建议流程：先点“重置并开始一次测试”，然后切到别的标签页或把浏览器最小化 30 秒，再回来观察主线程、worker 和 rAF 的漂移差异。
+      </div>
+    </section>
+
+    <section class="grid">
+      <article class="panel span-4">
+        <div class="label">当前状态</div>
+        <div class="metric">
+          <strong id="visibilityState">visible</strong>
+          <span id="focusState">focused</span>
+        </div>
+        <div class="pill-wrap" id="statusPills"></div>
+        <div class="mini-list">
+          <div class="mini-row"><span>自上次重置已运行</span><b id="uptime">0.0s</b></div>
+          <div class="mini-row"><span>隐藏累计时长</span><b id="hiddenTime">0.0s</b></div>
+          <div class="mini-row"><span>最后一次变 hidden</span><b id="lastHiddenAt">-</b></div>
+          <div class="mini-row"><span>document.wasDiscarded</span><b id="wasDiscarded">false</b></div>
+        </div>
+      </article>
+
+      <article class="panel span-4">
+        <div class="label">主线程 Interval</div>
+        <div class="metric">
+          <strong id="mainAvgDrift">0ms</strong>
+          <span>平均漂移</span>
+        </div>
+        <div class="mini-list">
+          <div class="mini-row"><span>最大漂移</span><b id="mainMaxDrift">0ms</b></div>
+          <div class="mini-row"><span>隐藏时样本数</span><b id="hiddenIntervalSamples">0</b></div>
+          <div class="mini-row"><span>隐藏时最大漂移</span><b id="hiddenMaxDrift">0ms</b></div>
+          <div class="mini-row"><span>最近一次 tick</span><b id="mainLastDelta">0ms</b></div>
+        </div>
+      </article>
+
+      <article class="panel span-4">
+        <div class="label">Worker Interval</div>
+        <div class="metric">
+          <strong id="workerAvgDrift">0ms</strong>
+          <span>平均漂移</span>
+        </div>
+        <div class="mini-list">
+          <div class="mini-row"><span>最大漂移</span><b id="workerMaxDrift">0ms</b></div>
+          <div class="mini-row"><span>隐藏时样本数</span><b id="workerHiddenSamples">0</b></div>
+          <div class="mini-row"><span>隐藏时最大漂移</span><b id="workerHiddenMaxDrift">0ms</b></div>
+          <div class="mini-row"><span>最近一次 tick</span><b id="workerLastDelta">0ms</b></div>
+        </div>
+      </article>
+
+      <article class="panel span-6">
+        <div class="label">requestAnimationFrame</div>
+        <div class="metric">
+          <strong id="rafRate">0 fps</strong>
+          <span>当前窗口</span>
+        </div>
+        <div class="mini-list">
+          <div class="mini-row"><span>最近 2 秒帧数</span><b id="rafFrames">0</b></div>
+          <div class="mini-row"><span>隐藏期间是否仍在跑</span><b id="rafHidden">未知</b></div>
+          <div class="mini-row"><span>最大帧间隔</span><b id="rafMaxGap">0ms</b></div>
+          <div class="mini-row"><span>最后一帧间隔</span><b id="rafLastGap">0ms</b></div>
+        </div>
+      </article>
+
+      <article class="panel span-6">
+        <div class="label">生命周期事件</div>
+        <div class="pill-wrap" id="eventPills"></div>
+        <div class="mini-list">
+          <div class="mini-row"><span>visibilitychange 次数</span><b id="visibilityEvents">0</b></div>
+          <div class="mini-row"><span>freeze 次数</span><b id="freezeEvents">0</b></div>
+          <div class="mini-row"><span>resume 次数</span><b id="resumeEvents">0</b></div>
+          <div class="mini-row"><span>pageshow/pagehide</span><b id="pageShowHide">0 / 0</b></div>
+        </div>
+      </article>
+
+      <article class="panel span-8">
+        <div class="label">自动解读</div>
+        <div class="summary" id="summaryBoxes"></div>
+      </article>
+
+      <article class="panel span-4">
+        <div class="label">测试步骤</div>
+        <div class="test-steps">
+          <strong>1.</strong> 保持这个页面在前台，先点一次“重置并开始一次测试”。<br>
+          <strong>2.</strong> 切换到别的标签页，或者把浏览器最小化，停留 30 到 60 秒。<br>
+          <strong>3.</strong> 回来后看三件事：主线程漂移、worker 漂移、是否收到了 freeze/resume。<br>
+          <strong>4.</strong> 如果隐藏期间主线程和 worker 都几乎不漂，且 rAF 也不怎么停，这通常说明后台节流被明显放松。<br>
+          <strong>5.</strong> 如果隐藏后出现大漂移、freeze 或恢复事件，更接近普通 Chrome 默认行为。
+        </div>
+      </article>
+    </section>
+
+    <section class="log-card">
+      <div class="log-head">
+        <h2>事件日志</h2>
+        <div class="label" id="lastSummaryAt">尚未生成摘要</div>
+      </div>
+      <div class="log" id="log"></div>
+    </section>
+  </main>
+
+  <script>
+    const state = {
+      startedAt: performance.now(),
+      hiddenStartedAt: null,
+      totalHiddenMs: 0,
+      lastHiddenHuman: '-',
+      visibilityEvents: 0,
+      freezeEvents: 0,
+      resumeEvents: 0,
+      pageShowEvents: 0,
+      pageHideEvents: 0,
+      mainDrifts: [],
+      mainHiddenDrifts: [],
+      workerDrifts: [],
+      workerHiddenDrifts: [],
+      mainLastDelta: 0,
+      workerLastDelta: 0,
+      rafFramesRecent: [],
+      rafHiddenObserved: false,
+      rafLastGap: 0,
+      rafMaxGap: 0,
+      summaryText: '',
+      worker: null
+    };
+
+    const el = (id) => document.getElementById(id);
+    const logEl = el('log');
+
+    function fmtMs(value) {
+      if (!Number.isFinite(value)) return '-';
+      return `${Math.round(value)}ms`;
+    }
+
+    function fmtSec(value) {
+      if (!Number.isFinite(value)) return '-';
+      return `${(value / 1000).toFixed(1)}s`;
+    }
+
+    function avg(values) {
+      if (!values.length) return 0;
+      return values.reduce((sum, item) => sum + item, 0) / values.length;
+    }
+
+    function max(values) {
+      if (!values.length) return 0;
+      return Math.max(...values);
+    }
+
+    function log(message) {
+      const stamp = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+      logEl.textContent += `[${stamp}] ${message}\n`;
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function setPills(targetId, pills) {
+      const host = el(targetId);
+      host.innerHTML = '';
+      pills.forEach(({ text, level }) => {
+        const node = document.createElement('span');
+        node.className = `pill ${level || ''}`.trim();
+        node.textContent = text;
+        host.appendChild(node);
+      });
+    }
+
+    function summaryBoxes() {
+      const hiddenMain = max(state.mainHiddenDrifts);
+      const hiddenWorker = max(state.workerHiddenDrifts);
+      const hiddenSamples = state.mainHiddenDrifts.length + state.workerHiddenDrifts.length;
+      const boxes = [];
+
+      if (!hiddenSamples) {
+        boxes.push({
+          title: '还没拿到隐藏期样本',
+          text: '先切到别的标签页或最小化 30 秒以上，再回来，这样才有办法判断后台节流是否被放松。'
+        });
+      } else if (hiddenMain < 400 && hiddenWorker < 400) {
+        boxes.push({
+          title: '隐藏期计时器仍然非常活跃',
+          text: '主线程和 worker 在页面隐藏期间都没有出现明显漂移，这更像后台节流被显著放松，不太像普通 Chrome 默认表现。'
+        });
+      } else if (hiddenMain > 1500 || hiddenWorker > 1500) {
+        boxes.push({
+          title: '隐藏期出现明显节流或冻结',
+          text: '隐藏期间出现了秒级漂移，说明浏览器在回到后台后确实压制了定时器，更接近默认浏览器行为。'
+        });
+      } else {
+        boxes.push({
+          title: '隐藏期有轻度节流',
+          text: '后台确实出现了漂移，但不算特别重，通常说明某些默认节流机制被放松了，但没有完全失效。'
+        });
+      }
+
+      if (state.freezeEvents > 0 || state.resumeEvents > 0) {
+        boxes.push({
+          title: '检测到 Page Lifecycle 冻结事件',
+          text: '浏览器显式触发了 freeze/resume，这通常更接近系统或浏览器默认的后台资源回收路径。'
+        });
+      } else {
+        boxes.push({
+          title: '没有收到 freeze/resume',
+          text: '这不代表一定异常，但如果你长时间最小化也一直收不到事件，通常要结合漂移结果一起看。'
+        });
+      }
+
+      if (state.rafHiddenObserved) {
+        boxes.push({
+          title: '隐藏期间 rAF 仍被观察到',
+          text: 'requestAnimationFrame 在后台通常会停得很厉害。如果隐藏期间它仍持续产生活动，这会让页面生命周期看起来偏“前台化”。'
+        });
+      } else {
+        boxes.push({
+          title: '隐藏期间 rAF 基本停住',
+          text: '这更接近常见浏览器在后台对动画帧的默认处理方式。'
+        });
+      }
+
+      const host = el('summaryBoxes');
+      host.innerHTML = '';
+      boxes.forEach((box) => {
+        const node = document.createElement('div');
+        node.className = 'summary-box';
+        node.innerHTML = `<h2>${box.title}</h2><p>${box.text}</p>`;
+        host.appendChild(node);
+      });
+
+      const summary = [
+        `visibility=${document.visibilityState}`,
+        `focus=${document.hasFocus()}`,
+        `hidden_total=${fmtSec(state.totalHiddenMs)}`,
+        `main_hidden_max=${fmtMs(hiddenMain)}`,
+        `worker_hidden_max=${fmtMs(hiddenWorker)}`,
+        `freeze=${state.freezeEvents}`,
+        `resume=${state.resumeEvents}`,
+        `raf_hidden=${state.rafHiddenObserved}`
+      ].join(', ');
+      state.summaryText = summary;
+      el('lastSummaryAt').textContent = `最近摘要: ${summary}`;
+    }
+
+    function refresh() {
+      const now = performance.now();
+      const totalHiddenMs = state.totalHiddenMs + (document.hidden && state.hiddenStartedAt ? now - state.hiddenStartedAt : 0);
+
+      el('visibilityState').textContent = document.visibilityState;
+      el('focusState').textContent = document.hasFocus() ? 'focused' : 'blurred';
+      el('uptime').textContent = fmtSec(now - state.startedAt);
+      el('hiddenTime').textContent = fmtSec(totalHiddenMs);
+      el('lastHiddenAt').textContent = state.lastHiddenHuman;
+      el('wasDiscarded').textContent = String(document.wasDiscarded || false);
+      el('mainAvgDrift').textContent = fmtMs(avg(state.mainDrifts));
+      el('mainMaxDrift').textContent = fmtMs(max(state.mainDrifts));
+      el('hiddenIntervalSamples').textContent = String(state.mainHiddenDrifts.length);
+      el('hiddenMaxDrift').textContent = fmtMs(max(state.mainHiddenDrifts));
+      el('mainLastDelta').textContent = fmtMs(state.mainLastDelta);
+      el('workerAvgDrift').textContent = fmtMs(avg(state.workerDrifts));
+      el('workerMaxDrift').textContent = fmtMs(max(state.workerDrifts));
+      el('workerHiddenSamples').textContent = String(state.workerHiddenDrifts.length);
+      el('workerHiddenMaxDrift').textContent = fmtMs(max(state.workerHiddenDrifts));
+      el('workerLastDelta').textContent = fmtMs(state.workerLastDelta);
+      el('rafFrames').textContent = String(state.rafFramesRecent.length);
+      el('rafRate').textContent = `${Math.round(state.rafFramesRecent.length / 2)} fps`;
+      el('rafHidden').textContent = state.rafHiddenObserved ? '是' : '否';
+      el('rafMaxGap').textContent = fmtMs(state.rafMaxGap);
+      el('rafLastGap').textContent = fmtMs(state.rafLastGap);
+      el('visibilityEvents').textContent = String(state.visibilityEvents);
+      el('freezeEvents').textContent = String(state.freezeEvents);
+      el('resumeEvents').textContent = String(state.resumeEvents);
+      el('pageShowHide').textContent = `${state.pageShowEvents} / ${state.pageHideEvents}`;
+
+      const status = [
+        { text: `visibility: ${document.visibilityState}`, level: document.hidden ? 'warn' : 'ok' },
+        { text: document.hasFocus() ? 'focus=true' : 'focus=false', level: document.hasFocus() ? 'ok' : 'warn' },
+        { text: `wasDiscarded=${document.wasDiscarded || false}`, level: document.wasDiscarded ? 'danger' : 'ok' }
+      ];
+      setPills('statusPills', status);
+
+      const events = [
+        { text: `visibilitychange ${state.visibilityEvents}`, level: state.visibilityEvents ? 'ok' : '' },
+        { text: `freeze ${state.freezeEvents}`, level: state.freezeEvents ? 'warn' : '' },
+        { text: `resume ${state.resumeEvents}`, level: state.resumeEvents ? 'ok' : '' },
+        { text: `pageshow ${state.pageShowEvents}`, level: state.pageShowEvents ? 'ok' : '' },
+        { text: `pagehide ${state.pageHideEvents}`, level: state.pageHideEvents ? 'warn' : '' }
+      ];
+      setPills('eventPills', events);
+
+      summaryBoxes();
+    }
+
+    function resetState() {
+      state.startedAt = performance.now();
+      state.hiddenStartedAt = null;
+      state.totalHiddenMs = 0;
+      state.lastHiddenHuman = '-';
+      state.visibilityEvents = 0;
+      state.freezeEvents = 0;
+      state.resumeEvents = 0;
+      state.pageShowEvents = 0;
+      state.pageHideEvents = 0;
+      state.mainDrifts = [];
+      state.mainHiddenDrifts = [];
+      state.workerDrifts = [];
+      state.workerHiddenDrifts = [];
+      state.mainLastDelta = 0;
+      state.workerLastDelta = 0;
+      state.rafFramesRecent = [];
+      state.rafHiddenObserved = false;
+      state.rafLastGap = 0;
+      state.rafMaxGap = 0;
+      logEl.textContent = '';
+      log('测试状态已重置。');
+      refresh();
+    }
+
+    function installMainIntervalProbe() {
+      let last = performance.now();
+      window.setInterval(() => {
+        const now = performance.now();
+        const delta = now - last;
+        last = now;
+        state.mainLastDelta = delta;
+        const drift = Math.max(0, delta - 1000);
+        state.mainDrifts.push(drift);
+        if (state.mainDrifts.length > 200) state.mainDrifts.shift();
+        if (document.hidden) {
+          state.mainHiddenDrifts.push(drift);
+          if (state.mainHiddenDrifts.length > 120) state.mainHiddenDrifts.shift();
+        }
+      }, 1000);
+    }
+
+    function installWorkerProbe() {
+      const workerCode = `
+        let last = performance.now();
+        setInterval(() => {
+          const now = performance.now();
+          const delta = now - last;
+          last = now;
+          self.postMessage({ type: 'tick', delta });
+        }, 1000);
+      `;
+      const blob = new Blob([workerCode], { type: 'application/javascript' });
+      state.worker = new Worker(URL.createObjectURL(blob));
+      state.worker.onmessage = (event) => {
+        const delta = Number(event.data.delta) || 0;
+        state.workerLastDelta = delta;
+        const drift = Math.max(0, delta - 1000);
+        state.workerDrifts.push(drift);
+        if (state.workerDrifts.length > 200) state.workerDrifts.shift();
+        if (document.hidden) {
+          state.workerHiddenDrifts.push(drift);
+          if (state.workerHiddenDrifts.length > 120) state.workerHiddenDrifts.shift();
+        }
+      };
+    }
+
+    function installRAFProbe() {
+      let last = performance.now();
+      function frame(now) {
+        const gap = now - last;
+        last = now;
+        state.rafLastGap = gap;
+        state.rafMaxGap = Math.max(state.rafMaxGap, gap);
+        state.rafFramesRecent.push(now);
+        if (document.hidden) {
+          state.rafHiddenObserved = true;
+        }
+        while (state.rafFramesRecent.length && now - state.rafFramesRecent[0] > 2000) {
+          state.rafFramesRecent.shift();
+        }
+        requestAnimationFrame(frame);
+      }
+      requestAnimationFrame(frame);
+    }
+
+    function addLifecycleListeners() {
+      document.addEventListener('visibilitychange', () => {
+        state.visibilityEvents += 1;
+        if (document.hidden) {
+          state.hiddenStartedAt = performance.now();
+          state.lastHiddenHuman = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+          log(`visibilitychange -> hidden`);
+        } else {
+          if (state.hiddenStartedAt) {
+            state.totalHiddenMs += performance.now() - state.hiddenStartedAt;
+            state.hiddenStartedAt = null;
+          }
+          log(`visibilitychange -> visible`);
+        }
+        refresh();
+      });
+
+      window.addEventListener('focus', () => {
+        log('window focus');
+        refresh();
+      });
+
+      window.addEventListener('blur', () => {
+        log('window blur');
+        refresh();
+      });
+
+      document.addEventListener('freeze', () => {
+        state.freezeEvents += 1;
+        log('document freeze');
+        refresh();
+      });
+
+      document.addEventListener('resume', () => {
+        state.resumeEvents += 1;
+        log('document resume');
+        refresh();
+      });
+
+      window.addEventListener('pageshow', (event) => {
+        state.pageShowEvents += 1;
+        log(`pageshow persisted=${event.persisted}`);
+        refresh();
+      });
+
+      window.addEventListener('pagehide', (event) => {
+        state.pageHideEvents += 1;
+        log(`pagehide persisted=${event.persisted}`);
+        refresh();
+      });
+    }
+
+    el('startBtn').addEventListener('click', () => {
+      resetState();
+      log('请现在切到别的标签页，或把浏览器最小化 30 到 60 秒。');
+    });
+
+    el('clearBtn').addEventListener('click', () => {
+      logEl.textContent = '';
+      log('日志已清空。');
+    });
+
+    el('copyBtn').addEventListener('click', async () => {
+      refresh();
+      const lines = [
+        '[Lifecycle Probe Summary]',
+        state.summaryText,
+        `main_avg=${fmtMs(avg(state.mainDrifts))}`,
+        `worker_avg=${fmtMs(avg(state.workerDrifts))}`,
+        `raf_max_gap=${fmtMs(state.rafMaxGap)}`,
+        `visibility_events=${state.visibilityEvents}`,
+        `freeze=${state.freezeEvents}`,
+        `resume=${state.resumeEvents}`
+      ].join('\n');
+      try {
+        await navigator.clipboard.writeText(lines);
+        log('已复制摘要到剪贴板。');
+      } catch (error) {
+        log(`复制失败: ${error}`);
+      }
+    });
+
+    installMainIntervalProbe();
+    installWorkerProbe();
+    installRAFProbe();
+    addLifecycleListeners();
+    log(`页面已初始化。wasDiscarded=${document.wasDiscarded || false}, visibility=${document.visibilityState}`);
+    refresh();
+    window.setInterval(refresh, 500);
+  </script>
+</body>
+</html>

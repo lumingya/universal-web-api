@@ -933,7 +933,13 @@
             "action": "JS_EXEC",
             "target": "",
             "optional": false,
-            "value": "return (async () => { const normalize = (text) => String(text || '').replace(/\\s+/g, ' ').trim(); const menuBtn = [...document.querySelectorAll('button[role=\"combobox\"]')].find((el) => { const text = normalize(el.textContent); return text.includes('Battle Mode') || text.includes('Side by Side'); }); if (!menuBtn) { return 'ARENA_MODE_MENU_NOT_FOUND'; } menuBtn.click(); await new Promise((resolve) => setTimeout(resolve, 300)); const options = [...document.querySelectorAll('[role=\"option\"], [role=\"menuitem\"], p')]; const targetOption = options.find((el) => normalize(el.textContent) === 'Side by Side'); if (!targetOption) { return 'ARENA_SIDE_BY_SIDE_NOT_FOUND'; } const clickable = targetOption.closest('[role=\"option\"]') || targetOption.closest('[role=\"menuitem\"]') || targetOption.closest('button') || targetOption.parentElement || targetOption; clickable.click(); await new Promise((resolve) => setTimeout(resolve, 200)); return 'ARENA_SIDE_BY_SIDE_SELECTED'; })();"
+            "value": "return (async () => {\n  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));\n  const norm = (v) => String(v || '').replace(/\\s+/g, ' ').trim().toLowerCase();\n  const isVisible = (el) => {\n    if (!el || !el.isConnected) return false;\n    try {\n      const style = window.getComputedStyle(el);\n      if (style.display === 'none' || style.visibility === 'hidden') return false;\n      const rect = el.getBoundingClientRect();\n      return rect.width > 0 && rect.height > 0;\n    } catch (e) {\n      return false;\n    }\n  };\n  const clickEl = (el) => {\n    if (!isVisible(el)) return false;\n    try { el.click(); return true; } catch (e) {}\n    try { el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); return true; } catch (e) {}\n    return false;\n  };\n  const textareaReady = () => !!document.querySelector('textarea[name=\"message\"]');\n  if (location.pathname.includes('/text/side-by-side') && textareaReady()) {\n    return 'ARENA_SIDE_READY';\n  }\n\n  const candidates = Array.from(document.querySelectorAll('a, button, [role=\"button\"], div, p, span'));\n  const findSideLink = () => candidates.find((el) => {\n    const href = (el.getAttribute && el.getAttribute('href')) || '';\n    const text = norm(el.innerText || el.textContent || el.getAttribute?.('aria-label') || '');\n    if (!isVisible(el)) return false;\n    if (href && href.includes('/text/side-by-side')) return true;\n    return text === 'side by side' || text.includes('side by side compare') || text.includes('side by side');\n  });\n\n  let target = findSideLink();\n  if (target && clickEl(target.closest('a,button,[role=\"button\"]') || target)) {\n    await sleep(1200);\n    if (textareaReady()) return 'ARENA_SIDE_CLICKED';\n  }\n\n  const menuBtn = Array.from(document.querySelectorAll('button[role=\"combobox\"], button[aria-haspopup=\"listbox\"], button[aria-haspopup=\"dialog\"]')).find((el) => {\n    const text = norm(el.innerText || el.textContent || el.getAttribute('aria-label') || '');\n    return text.includes('battle mode') || text.includes('side by side') || text.includes('direct');\n  });\n  if (menuBtn && clickEl(menuBtn)) {\n    await sleep(350);\n    const opts = Array.from(document.querySelectorAll('[role=\"option\"], [role=\"menuitem\"], button, div, p, span'));\n    const opt = opts.find((el) => {\n      const text = norm(el.innerText || el.textContent || el.getAttribute?.('aria-label') || '');\n      return (text === 'side by side' || text.includes('side by side compare')) && isVisible(el);\n    });\n    if (opt && clickEl(opt.closest('[role=\"option\"],[role=\"menuitem\"],button,[role=\"button\"]') || opt)) {\n      await sleep(1200);\n      if (textareaReady()) return 'ARENA_SIDE_SELECTED';\n    }\n  }\n\n  target = findSideLink();\n  if (target && clickEl(target.closest('a,button,[role=\"button\"]') || target)) {\n    await sleep(1200);\n    if (textareaReady()) return 'ARENA_SIDE_CLICKED_LATE';\n  }\n\n  return textareaReady() ? 'ARENA_INPUT_READY_BUT_MODE_UNKNOWN' : 'ARENA_SIDE_SWITCH_NOT_FOUND';\n})();"
+          },
+          {
+            "action": "WAIT",
+            "target": "",
+            "optional": false,
+            "value": 1.5
           }
         ],
         "stealth": true,
@@ -1022,22 +1028,22 @@
           "input_box": "textarea[name=\"message\"]",
           "send_btn": "button[type=\"submit\"]",
           "result_container": "div.min-w-0:not([class*=\"bg-surface\"]) > .prose-sm",
-          "new_chat_btn": "a[href=\"/text/side-by-side\"][data-sidebar=\"menu-button\"]",
+          "new_chat_btn": "a[href*=\"/text/side-by-side\"], a[data-sidebar=\"menu-button\"][href*=\"side-by-side\"], button[aria-label*=\"side by side\" i]",
           "message_wrapper": null,
           "generating_indicator": null
         },
         "workflow": [
           {
-            "action": "CLICK",
-            "target": "new_chat_btn",
-            "optional": true,
-            "value": null
+            "action": "JS_EXEC",
+            "target": "",
+            "optional": false,
+            "value": "return (async () => {\n  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));\n  const norm = (v) => String(v || '').replace(/\\s+/g, ' ').trim().toLowerCase();\n  const isVisible = (el) => {\n    if (!el || !el.isConnected) return false;\n    try {\n      const style = window.getComputedStyle(el);\n      if (style.display === 'none' || style.visibility === 'hidden') return false;\n      const rect = el.getBoundingClientRect();\n      return rect.width > 0 && rect.height > 0;\n    } catch (e) {\n      return false;\n    }\n  };\n  const clickEl = (el) => {\n    if (!isVisible(el)) return false;\n    try { el.click(); return true; } catch (e) {}\n    try { el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); return true; } catch (e) {}\n    return false;\n  };\n  const textareaReady = () => !!document.querySelector('textarea[name=\"message\"]');\n  if (location.pathname.includes('/text/side-by-side') && textareaReady()) {\n    return 'ARENA_SIDE_READY';\n  }\n\n  const candidates = Array.from(document.querySelectorAll('a, button, [role=\"button\"], div, p, span'));\n  const findSideLink = () => candidates.find((el) => {\n    const href = (el.getAttribute && el.getAttribute('href')) || '';\n    const text = norm(el.innerText || el.textContent || el.getAttribute?.('aria-label') || '');\n    if (!isVisible(el)) return false;\n    if (href && href.includes('/text/side-by-side')) return true;\n    return text === 'side by side' || text.includes('side by side compare') || text.includes('side by side');\n  });\n\n  let target = findSideLink();\n  if (target && clickEl(target.closest('a,button,[role=\"button\"]') || target)) {\n    await sleep(1200);\n    if (textareaReady()) return 'ARENA_SIDE_CLICKED';\n  }\n\n  const menuBtn = Array.from(document.querySelectorAll('button[role=\"combobox\"], button[aria-haspopup=\"listbox\"], button[aria-haspopup=\"dialog\"]')).find((el) => {\n    const text = norm(el.innerText || el.textContent || el.getAttribute('aria-label') || '');\n    return text.includes('battle mode') || text.includes('side by side') || text.includes('direct');\n  });\n  if (menuBtn && clickEl(menuBtn)) {\n    await sleep(350);\n    const opts = Array.from(document.querySelectorAll('[role=\"option\"], [role=\"menuitem\"], button, div, p, span'));\n    const opt = opts.find((el) => {\n      const text = norm(el.innerText || el.textContent || el.getAttribute?.('aria-label') || '');\n      return (text === 'side by side' || text.includes('side by side compare')) && isVisible(el);\n    });\n    if (opt && clickEl(opt.closest('[role=\"option\"],[role=\"menuitem\"],button,[role=\"button\"]') || opt)) {\n      await sleep(1200);\n      if (textareaReady()) return 'ARENA_SIDE_SELECTED';\n    }\n  }\n\n  target = findSideLink();\n  if (target && clickEl(target.closest('a,button,[role=\"button\"]') || target)) {\n    await sleep(1200);\n    if (textareaReady()) return 'ARENA_SIDE_CLICKED_LATE';\n  }\n\n  return textareaReady() ? 'ARENA_INPUT_READY_BUT_MODE_UNKNOWN' : 'ARENA_SIDE_SWITCH_NOT_FOUND';\n})();"
           },
           {
             "action": "WAIT",
             "target": "",
             "optional": false,
-            "value": 2
+            "value": 1.5
           },
           {
             "action": "FILL_INPUT",

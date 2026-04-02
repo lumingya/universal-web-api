@@ -17,6 +17,7 @@ import os
 import time
 import json
 import logging
+from logging.handlers import RotatingFileHandler
 import re
 import sys
 import threading
@@ -27,6 +28,11 @@ from typing import Any, Dict, List, Optional
 from functools import lru_cache
 from collections import deque
 from urllib.parse import quote
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_LOG_DIR = PROJECT_ROOT / "logs"
+_shared_file_log_handler: Optional[logging.Handler] = None
+_shared_file_log_handler_lock = threading.Lock()
 # ================= 环境变量加载 =================
 
 def load_dotenv(env_file: str = ".env", override: bool = True):
@@ -619,6 +625,72 @@ class _ConsoleColorFormatter(logging.Formatter):
 _web_log_handler = _WebLogHandler()
 _web_log_handler.setLevel(logging.DEBUG)
 _web_log_handler.setFormatter(logging.Formatter('%(message)s'))
+
+
+def _get_positive_int_env(name: str, default: int) -> int:
+    raw = str(os.getenv(name, "") or "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except Exception:
+        return default
+    return value if value > 0 else default
+
+
+def _resolve_log_dir() -> Path:
+    configured = str(os.getenv("LOG_DIR", "") or "").strip()
+    if not configured:
+        return DEFAULT_LOG_DIR
+    candidate = Path(configured)
+    if not candidate.is_absolute():
+        candidate = PROJECT_ROOT / candidate
+    return candidate.resolve()
+
+
+def get_log_file_path() -> Path:
+    configured = str(os.getenv("LOG_FILE", "") or "").strip()
+    if configured:
+        candidate = Path(configured)
+        if not candidate.is_absolute():
+            candidate = PROJECT_ROOT / candidate
+        return candidate.resolve()
+    return _resolve_log_dir() / "app.log"
+
+
+def get_shared_file_log_handler() -> Optional[logging.Handler]:
+    global _shared_file_log_handler
+
+    with _shared_file_log_handler_lock:
+        if _shared_file_log_handler is not None:
+            return _shared_file_log_handler
+
+        try:
+            log_file = get_log_file_path()
+            log_file.parent.mkdir(parents=True, exist_ok=True)
+
+            handler = RotatingFileHandler(
+                log_file,
+                maxBytes=_get_positive_int_env("LOG_MAX_BYTES", 5 * 1024 * 1024),
+                backupCount=_get_positive_int_env("LOG_BACKUP_COUNT", 5),
+                encoding="utf-8",
+            )
+            handler.setLevel(logging.DEBUG)
+            handler.setFormatter(
+                logging.Formatter(
+                    '%(asctime)s | %(levelname)s | %(name)s | %(message)s',
+                    '%Y-%m-%d %H:%M:%S',
+                )
+            )
+            _shared_file_log_handler = handler
+        except Exception as e:
+            try:
+                print(f"[Config] failed to initialize file logging: {e}", file=sys.stderr)
+            except Exception:
+                pass
+            _shared_file_log_handler = None
+
+        return _shared_file_log_handler
 
 
 _REQUEST_FINISH_PATTERN = re.compile(r"^完成 \(([\d.]+)s\)$")
@@ -1440,6 +1512,10 @@ class SecureLogger:
         console_handler.setLevel(logging.DEBUG)
         console_handler.setFormatter(_ConsoleColorFormatter())
         logger.addHandler(console_handler)
+
+        file_handler = get_shared_file_log_handler()
+        if file_handler is not None:
+            logger.addHandler(file_handler)
         
         # Web 前端日志收集 handler（始终添加）
         logger.addHandler(_web_log_handler)

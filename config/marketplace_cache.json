@@ -3,8 +3,138 @@
   "source_url": "https://raw.githubusercontent.com/lumingya/universal-web-api/main/config/marketplace.json",
   "repo_url": "https://github.com/lumingya/universal-web-api",
   "upload_url": "https://github.com/lumingya/universal-web-api/issues/new?template=marketplace_submission.md",
-  "cached_at": "2026-03-31T15:22:54Z",
+  "cached_at": "2026-04-01T16:21:17Z",
   "items": [
+    {
+      "id": "site_config-aistudio.google.com",
+      "item_type": "site_config",
+      "name": "arena.ai direct模式",
+      "summary": "arena.ai direct模式",
+      "author": "lumingya",
+      "submitted_by": "lumingya",
+      "category": "aistudio.google.com",
+      "site_domain": "aistudio.google.com",
+      "domain": "aistudio.google.com",
+      "preset_name": "主预设",
+      "downloads": 0,
+      "stars": 0,
+      "updated_at": "2026-04-01T16:11:55Z",
+      "version": "1.0.0",
+      "compatibility": "",
+      "repo_url": "https://github.com/lumingya/universal-web-api/issues/13",
+      "package_url": "",
+      "review_status": "",
+      "review_label": "",
+      "issue_number": 13,
+      "issue_url": "https://github.com/lumingya/universal-web-api/issues/13",
+      "issue_title": "[市场投稿] arena.ai direct模式",
+      "import_disabled": false,
+      "tags": [],
+      "parser_id": "",
+      "parser_class_name": "",
+      "parser_module_name": "",
+      "min_app_version": "",
+      "site_config": {
+        "aistudio.google.com": {
+          "default_preset": "主预设",
+          "presets": {
+            "主预设": {
+              "selectors": {
+                "input_box": "textarea[formcontrolname=\"promptText\"]",
+                "send_btn": "button[aria-label=\"Run\"]",
+                "result_container": ".chat-turn-container.model ms-prompt-chunk:not(:has(ms-thought-chunk)) ms-cmark-node.cmark-node",
+                "new_chat_btn": "button[aria-label=\"New chat\"]",
+                "confirm_btn": "button.ms-button-primary[type=\"button\"]"
+              },
+              "stream_config": {
+                "mode": "network",
+                "hard_timeout": 300,
+                "network": {
+                  "listen_pattern": "GenerateContent",
+                  "parser": "aistudio",
+                  "silence_threshold": 3,
+                  "response_interval": 0.5
+                }
+              },
+              "workflow": [
+                {
+                  "action": "JS_EXEC",
+                  "target": "",
+                  "optional": false,
+                  "value": "window.location.assign('/');"
+                },
+                {
+                  "action": "WAIT",
+                  "target": "",
+                  "optional": false,
+                  "value": 0.5
+                },
+                {
+                  "action": "CLICK",
+                  "target": "confirm_btn",
+                  "optional": true,
+                  "value": null
+                },
+                {
+                  "action": "WAIT",
+                  "target": "",
+                  "optional": false,
+                  "value": 0.1
+                },
+                {
+                  "action": "CLICK",
+                  "target": "input_box",
+                  "optional": false,
+                  "value": null
+                },
+                {
+                  "action": "WAIT",
+                  "target": "",
+                  "optional": false,
+                  "value": 0.1
+                },
+                {
+                  "action": "FILL_INPUT",
+                  "target": "input_box",
+                  "optional": false,
+                  "value": null
+                },
+                {
+                  "action": "CLICK",
+                  "target": "send_btn",
+                  "optional": false,
+                  "value": null
+                },
+                {
+                  "action": "STREAM_WAIT",
+                  "target": "result_container",
+                  "optional": false,
+                  "value": null
+                }
+              ],
+              "stealth": false,
+              "image_extraction": {
+                "enabled": true,
+                "selector": "img",
+                "container_selector": null,
+                "debounce_seconds": 2,
+                "wait_for_load": true,
+                "load_timeout_seconds": 5,
+                "download_blobs": true,
+                "max_size_mb": 10,
+                "mode": "all"
+              },
+              "file_paste": {
+                "enabled": true,
+                "threshold": 50000,
+                "hint_text": "完全专注于文件内容",
+                "post_upload_settle": 5
+              }
+            }
+          }
+        }
+      }
+    },
     {
       "id": "site_config-chat.qwen.ai",
       "item_type": "site_config",
