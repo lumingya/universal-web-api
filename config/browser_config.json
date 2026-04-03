@@ -43,7 +43,8 @@
     "min_tabs": 1,
     "idle_timeout": 300,
     "acquire_timeout": 60,
-    "stuck_timeout": 300
+    "stuck_timeout": 300,
+    "allocation_mode": "round_robin"
   },
   "UPLOAD_HISTORY_IMAGES": false
 }

@@ -959,7 +959,7 @@
       "mode": "simple",
       "trigger": {
         "type": "page_check",
-        "value": "terms of use && privacy policy && agree",
+        "value": "terms of use && privacy policy && by clicking && agree",
         "command_id": "",
         "action_ref": "",
         "match_rule": "equals",
@@ -971,7 +971,7 @@
         "domain": "arena.ai",
         "tab_index": null,
         "priority": 3,
-        "allow_during_workflow": true,
+        "allow_during_workflow": false,
         "interrupt_policy": "resume",
         "periodic_enabled": true,
         "periodic_interval_sec": 3,
@@ -1018,6 +1018,66 @@
       "log_level": "GLOBAL"
     },
     {
+      "id": "cmd_arena_login_popup_clear_cookies",
+      "name": "ARENA_LOGIN_POPUP_CLEAR_COOKIES",
+      "enabled": true,
+      "mode": "simple",
+      "trigger": {
+        "type": "page_check",
+        "value": "login or create account && continue with google && continue with email",
+        "command_id": "",
+        "action_ref": "",
+        "match_rule": "equals",
+        "expected_value": "",
+        "match_mode": "keyword",
+        "status_codes": "403,429,500,502,503,504",
+        "abort_on_match": true,
+        "scope": "domain",
+        "domain": "arena.ai",
+        "tab_index": null,
+        "priority": 7,
+        "allow_during_workflow": false,
+        "interrupt_policy": "resume",
+        "periodic_enabled": true,
+        "periodic_interval_sec": 3,
+        "periodic_jitter_sec": 1,
+        "fire_mode": "edge",
+        "cooldown_sec": 12,
+        "check_while_busy_workflow": false
+      },
+      "actions": [
+        {
+          "type": "clear_cookies",
+          "action_id": "step_1_clear"
+        },
+        {
+          "type": "wait",
+          "seconds": 0.5,
+          "action_id": "step_2_wait"
+        },
+        {
+          "type": "refresh_page",
+          "action_id": "step_3_refresh"
+        },
+        {
+          "type": "wait",
+          "seconds": 2.0,
+          "action_id": "step_4_wait_refresh"
+        },
+        {
+          "type": "run_js",
+          "action_id": "step_5_result",
+          "fail_on_falsy": false,
+          "code": "return (() => 'ARENA_LOGIN_POPUP_CLEARED')()"
+        }
+      ],
+      "group_name": "竞技场命令",
+      "script": "",
+      "script_lang": "javascript",
+      "log_enabled": true,
+      "log_level": "GLOBAL"
+    },
+    {
       "id": "cmd_arena_terms_refresh_followup",
       "name": "ARENA_AGREE_POPUP_REFRESH_ABORT",
       "enabled": true,
@@ -1036,7 +1096,7 @@
         "status_codes": "403,429,500,502,503,504",
         "abort_on_match": true,
         "priority": 4,
-        "allow_during_workflow": true,
+        "allow_during_workflow": false,
         "interrupt_policy": "abort",
         "interrupt_message": "触发 Arena 协议确认弹窗，点击未生效，页面已自动刷新，请重试",
         "periodic_enabled": false,

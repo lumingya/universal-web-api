@@ -153,7 +153,11 @@
         }
       }
     },
-    "default_preset": "主预设"
+    "default_preset": "主预设",
+    "advanced": {
+      "independent_cookies": false,
+      "independent_cookies_auto_takeover": false
+    }
   },
   "grok.com": {
     "presets": {
@@ -762,10 +766,10 @@
         },
         "workflow": [
           {
-            "action": "CLICK",
-            "target": "new_chat_btn",
-            "optional": true,
-            "value": null
+            "action": "JS_EXEC",
+            "target": "",
+            "optional": false,
+            "value": "window.location.assign('https://arena.ai/text/direct');"
           },
           {
             "action": "WAIT",
@@ -790,6 +794,12 @@
             "target": "Enter",
             "optional": false,
             "value": null
+          },
+          {
+            "action": "JS_EXEC",
+            "target": "",
+            "optional": true,
+            "value": "return (async () => { const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)); const norm = (v) => String(v || '').replace(/\\s+/g, ' ').trim().toLowerCase(); const isVisible = (el) => { if (!el) return false; const rect = el.getBoundingClientRect(); const style = window.getComputedStyle(el); return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden'; }; const popupVisible = () => Array.from(document.querySelectorAll('button, [role=\"button\"], input[type=\"button\"], input[type=\"submit\"], [role=\"dialog\"], [data-radix-popper-content-wrapper]')).some((el) => { if (!isVisible(el)) return false; const text = norm(el.innerText || el.value || el.getAttribute('aria-label')); return text.includes('terms of use') && text.includes('privacy policy') && text.includes('agree'); }); const findAgreeButton = () => Array.from(document.querySelectorAll('button, [role=\"button\"], input[type=\"button\"], input[type=\"submit\"]')).find((el) => { if (!isVisible(el) || el.disabled) return false; const text = norm(el.innerText || el.value || el.getAttribute('aria-label')); return text === 'agree' || text.includes('agree'); }); const appearanceDeadline = Date.now() + 2200; let popupSeen = false; let clicked = false; while (Date.now() < appearanceDeadline) { if (popupVisible()) { popupSeen = true; break; } await sleep(120); } if (!popupSeen) return 'ARENA_AGREE_NOT_PRESENT'; const settleDeadline = Date.now() + 3500; while (Date.now() < settleDeadline) { const button = findAgreeButton(); if (button && !clicked) { button.click(); clicked = true; await sleep(180); } if (!popupVisible()) return clicked ? 'ARENA_AGREE_DISMISSED' : 'ARENA_AGREE_CLEARED'; await sleep(120); } return clicked ? 'ARENA_AGREE_STILL_VISIBLE' : 'ARENA_AGREE_BUTTON_NOT_FOUND'; })();"
           },
           {
             "action": "STREAM_WAIT",
@@ -933,13 +943,13 @@
             "action": "JS_EXEC",
             "target": "",
             "optional": false,
-            "value": "return (async () => {\n  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));\n  const norm = (v) => String(v || '').replace(/\\s+/g, ' ').trim().toLowerCase();\n  const isVisible = (el) => {\n    if (!el || !el.isConnected) return false;\n    try {\n      const style = window.getComputedStyle(el);\n      if (style.display === 'none' || style.visibility === 'hidden') return false;\n      const rect = el.getBoundingClientRect();\n      return rect.width > 0 && rect.height > 0;\n    } catch (e) {\n      return false;\n    }\n  };\n  const clickEl = (el) => {\n    if (!isVisible(el)) return false;\n    try { el.click(); return true; } catch (e) {}\n    try { el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); return true; } catch (e) {}\n    return false;\n  };\n  const textareaReady = () => !!document.querySelector('textarea[name=\"message\"]');\n  if (location.pathname.includes('/text/side-by-side') && textareaReady()) {\n    return 'ARENA_SIDE_READY';\n  }\n\n  const candidates = Array.from(document.querySelectorAll('a, button, [role=\"button\"], div, p, span'));\n  const findSideLink = () => candidates.find((el) => {\n    const href = (el.getAttribute && el.getAttribute('href')) || '';\n    const text = norm(el.innerText || el.textContent || el.getAttribute?.('aria-label') || '');\n    if (!isVisible(el)) return false;\n    if (href && href.includes('/text/side-by-side')) return true;\n    return text === 'side by side' || text.includes('side by side compare') || text.includes('side by side');\n  });\n\n  let target = findSideLink();\n  if (target && clickEl(target.closest('a,button,[role=\"button\"]') || target)) {\n    await sleep(1200);\n    if (textareaReady()) return 'ARENA_SIDE_CLICKED';\n  }\n\n  const menuBtn = Array.from(document.querySelectorAll('button[role=\"combobox\"], button[aria-haspopup=\"listbox\"], button[aria-haspopup=\"dialog\"]')).find((el) => {\n    const text = norm(el.innerText || el.textContent || el.getAttribute('aria-label') || '');\n    return text.includes('battle mode') || text.includes('side by side') || text.includes('direct');\n  });\n  if (menuBtn && clickEl(menuBtn)) {\n    await sleep(350);\n    const opts = Array.from(document.querySelectorAll('[role=\"option\"], [role=\"menuitem\"], button, div, p, span'));\n    const opt = opts.find((el) => {\n      const text = norm(el.innerText || el.textContent || el.getAttribute?.('aria-label') || '');\n      return (text === 'side by side' || text.includes('side by side compare')) && isVisible(el);\n    });\n    if (opt && clickEl(opt.closest('[role=\"option\"],[role=\"menuitem\"],button,[role=\"button\"]') || opt)) {\n      await sleep(1200);\n      if (textareaReady()) return 'ARENA_SIDE_SELECTED';\n    }\n  }\n\n  target = findSideLink();\n  if (target && clickEl(target.closest('a,button,[role=\"button\"]') || target)) {\n    await sleep(1200);\n    if (textareaReady()) return 'ARENA_SIDE_CLICKED_LATE';\n  }\n\n  return textareaReady() ? 'ARENA_INPUT_READY_BUT_MODE_UNKNOWN' : 'ARENA_SIDE_SWITCH_NOT_FOUND';\n})();"
+            "value": "window.location.assign('https://arena.ai/text/side-by-side');"
           },
           {
             "action": "WAIT",
             "target": "",
             "optional": false,
-            "value": 1.5
+            "value": 2
           }
         ],
         "stealth": true,
@@ -1037,13 +1047,13 @@
             "action": "JS_EXEC",
             "target": "",
             "optional": false,
-            "value": "return (async () => {\n  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));\n  const norm = (v) => String(v || '').replace(/\\s+/g, ' ').trim().toLowerCase();\n  const isVisible = (el) => {\n    if (!el || !el.isConnected) return false;\n    try {\n      const style = window.getComputedStyle(el);\n      if (style.display === 'none' || style.visibility === 'hidden') return false;\n      const rect = el.getBoundingClientRect();\n      return rect.width > 0 && rect.height > 0;\n    } catch (e) {\n      return false;\n    }\n  };\n  const clickEl = (el) => {\n    if (!isVisible(el)) return false;\n    try { el.click(); return true; } catch (e) {}\n    try { el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window })); return true; } catch (e) {}\n    return false;\n  };\n  const textareaReady = () => !!document.querySelector('textarea[name=\"message\"]');\n  if (location.pathname.includes('/text/side-by-side') && textareaReady()) {\n    return 'ARENA_SIDE_READY';\n  }\n\n  const candidates = Array.from(document.querySelectorAll('a, button, [role=\"button\"], div, p, span'));\n  const findSideLink = () => candidates.find((el) => {\n    const href = (el.getAttribute && el.getAttribute('href')) || '';\n    const text = norm(el.innerText || el.textContent || el.getAttribute?.('aria-label') || '');\n    if (!isVisible(el)) return false;\n    if (href && href.includes('/text/side-by-side')) return true;\n    return text === 'side by side' || text.includes('side by side compare') || text.includes('side by side');\n  });\n\n  let target = findSideLink();\n  if (target && clickEl(target.closest('a,button,[role=\"button\"]') || target)) {\n    await sleep(1200);\n    if (textareaReady()) return 'ARENA_SIDE_CLICKED';\n  }\n\n  const menuBtn = Array.from(document.querySelectorAll('button[role=\"combobox\"], button[aria-haspopup=\"listbox\"], button[aria-haspopup=\"dialog\"]')).find((el) => {\n    const text = norm(el.innerText || el.textContent || el.getAttribute('aria-label') || '');\n    return text.includes('battle mode') || text.includes('side by side') || text.includes('direct');\n  });\n  if (menuBtn && clickEl(menuBtn)) {\n    await sleep(350);\n    const opts = Array.from(document.querySelectorAll('[role=\"option\"], [role=\"menuitem\"], button, div, p, span'));\n    const opt = opts.find((el) => {\n      const text = norm(el.innerText || el.textContent || el.getAttribute?.('aria-label') || '');\n      return (text === 'side by side' || text.includes('side by side compare')) && isVisible(el);\n    });\n    if (opt && clickEl(opt.closest('[role=\"option\"],[role=\"menuitem\"],button,[role=\"button\"]') || opt)) {\n      await sleep(1200);\n      if (textareaReady()) return 'ARENA_SIDE_SELECTED';\n    }\n  }\n\n  target = findSideLink();\n  if (target && clickEl(target.closest('a,button,[role=\"button\"]') || target)) {\n    await sleep(1200);\n    if (textareaReady()) return 'ARENA_SIDE_CLICKED_LATE';\n  }\n\n  return textareaReady() ? 'ARENA_INPUT_READY_BUT_MODE_UNKNOWN' : 'ARENA_SIDE_SWITCH_NOT_FOUND';\n})();"
+            "value": "window.location.assign('https://arena.ai/text/side-by-side');"
           },
           {
             "action": "WAIT",
             "target": "",
             "optional": false,
-            "value": 1.5
+            "value": 2
           },
           {
             "action": "FILL_INPUT",
@@ -1062,6 +1072,12 @@
             "target": "Enter",
             "optional": false,
             "value": null
+          },
+          {
+            "action": "JS_EXEC",
+            "target": "",
+            "optional": true,
+            "value": "return (async () => { const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)); const norm = (v) => String(v || '').replace(/\\s+/g, ' ').trim().toLowerCase(); const isVisible = (el) => { if (!el) return false; const rect = el.getBoundingClientRect(); const style = window.getComputedStyle(el); return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden'; }; const popupVisible = () => Array.from(document.querySelectorAll('button, [role=\"button\"], input[type=\"button\"], input[type=\"submit\"], [role=\"dialog\"], [data-radix-popper-content-wrapper]')).some((el) => { if (!isVisible(el)) return false; const text = norm(el.innerText || el.value || el.getAttribute('aria-label')); return text.includes('terms of use') && text.includes('privacy policy') && text.includes('agree'); }); const findAgreeButton = () => Array.from(document.querySelectorAll('button, [role=\"button\"], input[type=\"button\"], input[type=\"submit\"]')).find((el) => { if (!isVisible(el) || el.disabled) return false; const text = norm(el.innerText || el.value || el.getAttribute('aria-label')); return text === 'agree' || text.includes('agree'); }); const appearanceDeadline = Date.now() + 2200; let popupSeen = false; let clicked = false; while (Date.now() < appearanceDeadline) { if (popupVisible()) { popupSeen = true; break; } await sleep(120); } if (!popupSeen) return 'ARENA_AGREE_NOT_PRESENT'; const settleDeadline = Date.now() + 3500; while (Date.now() < settleDeadline) { const button = findAgreeButton(); if (button && !clicked) { button.click(); clicked = true; await sleep(180); } if (!popupVisible()) return clicked ? 'ARENA_AGREE_DISMISSED' : 'ARENA_AGREE_CLEARED'; await sleep(120); } return clicked ? 'ARENA_AGREE_STILL_VISIBLE' : 'ARENA_AGREE_BUTTON_NOT_FOUND'; })();"
           },
           {
             "action": "STREAM_WAIT",
@@ -1101,7 +1117,11 @@
         }
       }
     },
-    "default_preset": "主预设-sidebyside模式"
+    "default_preset": "主预设-sidebyside模式",
+    "advanced": {
+      "independent_cookies": true,
+      "independent_cookies_auto_takeover": false
+    }
   },
   "chat.qwen.ai": {
     "presets": {

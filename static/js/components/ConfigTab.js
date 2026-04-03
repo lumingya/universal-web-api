@@ -38,6 +38,10 @@ window.ConfigTab = {
             streamConfigCollapsed: true,
             filePasteCollapsed: true,
 
+            advancedConfigSaving: false,
+            isolatedTabCreating: false,
+            sharedTabCreating: false,
+
             // 默认配置
             defaultImageConfig: {
                 enabled: false,
@@ -89,6 +93,19 @@ window.ConfigTab = {
                     ...(streamConfig.send_confirmation || {})
                 }
             };
+        },
+        siteAdvancedConfig() {
+            if (!this.currentConfig) {
+                return {
+                    independent_cookies: false,
+                    independent_cookies_auto_takeover: false
+                };
+            }
+            return {
+                independent_cookies: false,
+                independent_cookies_auto_takeover: false,
+                ...(this.currentConfig.advanced || {})
+            };
         }
     },
     methods: {
@@ -117,6 +134,158 @@ window.ConfigTab = {
             } catch (e) {
                 console.error('保存流式配置失败:', e);
                 alert('保存失败: ' + e.message);
+            }
+        },
+
+        async updateIndependentCookies(enabled) {
+            if (!this.currentDomain || !this.currentConfig) return;
+            const nextEnabled = !!enabled;
+            const currentEnabled = !!this.siteAdvancedConfig.independent_cookies;
+            if (nextEnabled && !currentEnabled) {
+                const confirmed = window.confirm(
+                    [
+                        '开启“独立 Cookie 标签页”后，可能带来这些影响：',
+                        '',
+                        '1. 新开的该站点独立会话通常不会继承当前受控浏览器里的登录态、Cookie 和 localStorage，可能表现为未登录。',
+                        '2. 独立会话通常会以单独窗口出现，并且内存占用会明显高于普通标签页。',
+                        '',
+                        '确认仍要开启吗？'
+                    ].join('\n')
+                );
+                if (!confirmed) return;
+            }
+
+            this.advancedConfigSaving = true;
+            const previousAdvanced = { ...(this.currentConfig.advanced || {}) };
+            this.currentConfig.advanced = {
+                ...previousAdvanced,
+                independent_cookies: nextEnabled,
+                independent_cookies_auto_takeover: !!previousAdvanced.independent_cookies_auto_takeover
+            };
+
+            try {
+                const token = localStorage.getItem('api_token');
+                const headers = { 'Content-Type': 'application/json' };
+                if (token) headers['Authorization'] = 'Bearer ' + token;
+
+                const response = await fetch('/api/sites/' + encodeURIComponent(this.currentDomain) + '/advanced-config', {
+                    method: 'PUT',
+                    headers,
+                    body: JSON.stringify({
+                        independent_cookies: nextEnabled,
+                        independent_cookies_auto_takeover: !!this.currentConfig.advanced.independent_cookies_auto_takeover
+                    })
+                });
+
+                if (!response.ok) {
+                    const err = await response.json().catch(() => ({}));
+                    throw new Error(err.detail || ('HTTP ' + response.status));
+                }
+
+                this.$emit('reload-config');
+            } catch (e) {
+                this.currentConfig.advanced = previousAdvanced;
+                console.error('保存站点高级配置失败:', e);
+                alert('保存失败: ' + e.message);
+            } finally {
+                this.advancedConfigSaving = false;
+            }
+        },
+
+        async updateIndependentCookiesAutoTakeover(enabled) {
+            if (!this.currentDomain || !this.currentConfig) return;
+
+            this.advancedConfigSaving = true;
+            const previousAdvanced = { ...(this.currentConfig.advanced || {}) };
+            this.currentConfig.advanced = {
+                ...previousAdvanced,
+                independent_cookies_auto_takeover: !!enabled
+            };
+
+            try {
+                const token = localStorage.getItem('api_token');
+                const headers = { 'Content-Type': 'application/json' };
+                if (token) headers['Authorization'] = 'Bearer ' + token;
+
+                const response = await fetch('/api/sites/' + encodeURIComponent(this.currentDomain) + '/advanced-config', {
+                    method: 'PUT',
+                    headers,
+                    body: JSON.stringify({
+                        independent_cookies: !!this.siteAdvancedConfig.independent_cookies,
+                        independent_cookies_auto_takeover: !!enabled
+                    })
+                });
+
+                if (!response.ok) {
+                    const err = await response.json().catch(() => ({}));
+                    throw new Error(err.detail || ('HTTP ' + response.status));
+                }
+
+                this.$emit('reload-config');
+            } catch (e) {
+                this.currentConfig.advanced = previousAdvanced;
+                console.error('保存站点高级配置失败:', e);
+                alert('保存失败: ' + e.message);
+            } finally {
+                this.advancedConfigSaving = false;
+            }
+        },
+
+        async createIsolatedCookieTab() {
+            if (!this.currentDomain) return;
+
+            this.isolatedTabCreating = true;
+            try {
+                const token = localStorage.getItem('api_token');
+                const headers = { 'Content-Type': 'application/json' };
+                if (token) headers['Authorization'] = 'Bearer ' + token;
+
+                const response = await fetch('/api/sites/' + encodeURIComponent(this.currentDomain) + '/isolated-tab', {
+                    method: 'POST',
+                    headers
+                });
+
+                if (!response.ok) {
+                    const err = await response.json().catch(() => ({}));
+                    throw new Error(err.detail || ('HTTP ' + response.status));
+                }
+
+                const result = await response.json();
+                alert(result.message || ('已为 ' + this.currentDomain + ' 新建独立 Cookie 标签页'));
+            } catch (e) {
+                console.error('新建独立 Cookie 标签页失败:', e);
+                alert('新建失败: ' + e.message);
+            } finally {
+                this.isolatedTabCreating = false;
+            }
+        },
+
+        async createSharedCookieTab() {
+            if (!this.currentDomain) return;
+
+            this.sharedTabCreating = true;
+            try {
+                const token = localStorage.getItem('api_token');
+                const headers = { 'Content-Type': 'application/json' };
+                if (token) headers['Authorization'] = 'Bearer ' + token;
+
+                const response = await fetch('/api/sites/' + encodeURIComponent(this.currentDomain) + '/shared-tab', {
+                    method: 'POST',
+                    headers
+                });
+
+                if (!response.ok) {
+                    const err = await response.json().catch(() => ({}));
+                    throw new Error(err.detail || ('HTTP ' + response.status));
+                }
+
+                const result = await response.json();
+                alert(result.message || ('已为 ' + this.currentDomain + ' 打开共享 Cookie 受控窗口'));
+            } catch (e) {
+                console.error('打开共享 Cookie 受控窗口失败:', e);
+                alert('打开失败: ' + e.message);
+            } finally {
+                this.sharedTabCreating = false;
             }
         },
 
@@ -407,6 +576,77 @@ window.ConfigTab = {
                     <p class="text-xs text-gray-400 dark:text-gray-500 mt-2">
                         新建预设会克隆当前选中的预设配置。在标签页池中可为不同标签页选择不同预设。未手动指定时会自动使用“默认预设”。
                     </p>
+                </div>
+
+                <div class="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg shadow-sm px-4 py-3">
+                    <div class="flex items-center justify-between flex-wrap gap-3">
+                        <div>
+                            <div class="text-sm font-semibold text-gray-700 dark:text-gray-300">高级功能</div>
+                            <p class="text-xs text-gray-400 dark:text-gray-500 mt-1">
+                                适合像 arena.ai 这类需要多匿名会话的站点。
+                            </p>
+                            <details class="mt-2 group">
+                                <summary class="text-xs text-blue-500 dark:text-blue-400 cursor-pointer select-none">
+                                    查看说明
+                                </summary>
+                                <div class="mt-2 space-y-2">
+                                    <p class="text-xs text-gray-400 dark:text-gray-500">
+                                        开启后，可以为这个站点创建独立 Cookie 会话。
+                                    </p>
+                                    <p class="text-xs text-gray-400 dark:text-gray-500">
+                                        说明：Chromium 的独立上下文通常会显示为单独窗口。这不是新起一个完全独立的浏览器进程，而是同一浏览器里的隔离会话。
+                                    </p>
+                                    <p class="text-xs text-amber-600 dark:text-amber-400">
+                                        注意：开启后，新开的该站点标签页不会继承当前浏览器里已有的登录态、Cookie 或 localStorage。原本已登录的共享标签页如果重新进入并被转换为独立标签页，通常会表现为未登录。
+                                    </p>
+                                    <p class="text-xs text-gray-400 dark:text-gray-500">
+                                        单标签页清 Cookie 不会影响同站点的其它独立标签页。
+                                    </p>
+                                    <p class="text-xs text-gray-400 dark:text-gray-500">
+                                        默认不会自动接管你手动新开的普通标签页，避免原标签页被关闭；只有点下面的按钮才会新建独立会话。
+                                    </p>
+                                </div>
+                            </details>
+                        </div>
+                        <label class="flex items-center gap-3 text-sm text-gray-700 dark:text-gray-300">
+                            <span>独立 Cookie 标签页</span>
+                            <input
+                                type="checkbox"
+                                class="rounded"
+                                :checked="siteAdvancedConfig.independent_cookies"
+                                :disabled="advancedConfigSaving"
+                                @change="updateIndependentCookies($event.target.checked)"
+                            >
+                        </label>
+                    </div>
+
+                    <label class="mt-3 flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400">
+                        <input
+                            type="checkbox"
+                            class="rounded"
+                            :checked="siteAdvancedConfig.independent_cookies_auto_takeover"
+                            :disabled="advancedConfigSaving || !siteAdvancedConfig.independent_cookies"
+                            @change="updateIndependentCookiesAutoTakeover($event.target.checked)"
+                        >
+                        <span>自动接管手动新标签页（会关闭原页并改为独立窗口）</span>
+                    </label>
+
+                    <div class="mt-3 flex items-center gap-3 flex-wrap">
+                        <button
+                            @click="createSharedCookieTab"
+                            :disabled="sharedTabCreating"
+                            class="px-3 py-1.5 text-xs font-medium bg-slate-600 text-white rounded hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            {{ sharedTabCreating ? '打开中...' : '打开共享 Cookie 受控窗口' }}
+                        </button>
+                        <button
+                            @click="createIsolatedCookieTab"
+                            :disabled="!siteAdvancedConfig.independent_cookies || isolatedTabCreating"
+                            class="px-3 py-1.5 text-xs font-medium bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            {{ isolatedTabCreating ? '创建中...' : '新建独立 Cookie 会话（单独窗口）' }}
+                        </button>
+                    </div>
                 </div>
 
                 <!-- 选择器面板 -->

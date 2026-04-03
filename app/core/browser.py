@@ -15,11 +15,12 @@ v2.0 改动：
 
 import json
 import os
+import socket
 import threading
 import time
 import contextlib
 from typing import Optional, List, Dict, Any, Generator, Callable
-from DrissionPage import ChromiumPage, ChromiumOptions
+from DrissionPage import Chromium, ChromiumPage, ChromiumOptions
 
 from app.core.config import (
     logger,
@@ -47,6 +48,7 @@ def _load_tab_pool_config() -> Dict:
         "idle_timeout": 300,
         "acquire_timeout": 60,
         "stuck_timeout": 180,
+        "allocation_mode": "first_idle",
     }
     
     # 从 browser_config.json 加载
@@ -91,10 +93,15 @@ class BrowserCore:
             return
         
         self.port = port or BrowserConstants.DEFAULT_PORT
+        self.browser_handle: Optional[Chromium] = None
         self.page: Optional[ChromiumPage] = None
         
         self._connected = False
         self._should_stop_checker: Callable[[], bool] = lambda: False
+        self._watchdog_thread: Optional[threading.Thread] = None
+        self._watchdog_stop = threading.Event()
+        self._last_watchdog_port_open: Optional[bool] = None
+        self._last_watchdog_session_alive: Optional[bool] = None
         
         self.formatter = SSEFormatter()
         self.config_engine = None
@@ -371,7 +378,7 @@ class BrowserCore:
                 
                     pool_config = _load_tab_pool_config()
                     self._tab_pool = TabPoolManager(
-                        browser_page=self.page,
+                        browser_page=self.get_browser_handle(),
                         **pool_config
                     )
                     self._tab_pool.initialize()
@@ -390,14 +397,138 @@ class BrowserCore:
             opts = ChromiumOptions()
             opts.set_address(f"127.0.0.1:{self.port}")
             opts.existing_only()
-            self.page = ChromiumPage(addr_or_opts=opts)
+            self.browser_handle = Chromium(addr_or_opts=opts)
+            try:
+                self.page = self.browser_handle.latest_tab
+            except Exception:
+                self.page = None
             self._connected = True
+            self._start_connection_watchdog()
             logger.info("浏览器连接成功")
             return True
         except Exception as e:
             logger.error(f"浏览器连接失败: {e}")
+            self.browser_handle = None
+            self.page = None
             self._connected = False
             return False
+
+    def _is_debug_port_open(self, timeout: float = 0.4) -> bool:
+        try:
+            with socket.create_connection(("127.0.0.1", int(self.port)), timeout=float(timeout)):
+                return True
+        except Exception:
+            return False
+
+    def _probe_browser_connection(self) -> bool:
+        """Lightweight liveness probe for the underlying browser session."""
+        browser = self.get_browser_handle()
+        if not browser:
+            return False
+
+        try:
+            browser.get_tabs()
+            return True
+        except Exception:
+            return False
+
+    def get_browser_handle(self):
+        if self.browser_handle is not None:
+            return self.browser_handle
+        browser = getattr(self.page, "browser", None)
+        if browser is not None:
+            self.browser_handle = browser
+            return browser
+        return self.page
+
+    def get_tabs(self):
+        browser = self.get_browser_handle()
+        if browser is None:
+            raise BrowserConnectionError("无法连接到浏览器")
+        return browser.get_tabs()
+
+    def get_tab_ids(self) -> List[str]:
+        browser = self.get_browser_handle()
+        if browser is None:
+            raise BrowserConnectionError("无法连接到浏览器")
+        return list(getattr(browser, "tab_ids", []) or [])
+
+    def get_tab(self, id_or_num=None):
+        browser = self.get_browser_handle()
+        if browser is None:
+            raise BrowserConnectionError("无法连接到浏览器")
+        return browser.get_tab(id_or_num)
+
+    def get_latest_tab(self):
+        browser = self.get_browser_handle()
+        if browser is None:
+            raise BrowserConnectionError("无法连接到浏览器")
+        return browser.latest_tab
+
+    def _get_watchdog_tab_snapshot(self) -> str:
+        try:
+            if not self._tab_pool:
+                return "tab_pool=uninitialized"
+            status = self._tab_pool.get_status()
+            total = int(status.get("total", 0) or 0)
+            idle = int(status.get("idle", 0) or 0)
+            busy = int(status.get("busy", 0) or 0)
+            tabs = status.get("tabs") or []
+            labels = []
+            for item in tabs[:4]:
+                if not isinstance(item, dict):
+                    continue
+                labels.append(
+                    f"{item.get('id', '?')}:{item.get('status', '?')}:{'iso' if item.get('is_isolated_context') else 'shared'}"
+                )
+            extra = f", tabs=[{', '.join(labels)}]" if labels else ""
+            return f"tab_pool(total={total}, idle={idle}, busy={busy}{extra})"
+        except Exception as e:
+            return f"tab_pool=error({e})"
+
+    def _connection_watchdog_loop(self) -> None:
+        while not self._watchdog_stop.wait(1.0):
+            port_open = self._is_debug_port_open()
+            session_alive = self._probe_browser_connection() if port_open else False
+
+            if (
+                port_open == self._last_watchdog_port_open
+                and session_alive == self._last_watchdog_session_alive
+            ):
+                continue
+
+            snapshot = self._get_watchdog_tab_snapshot()
+            if port_open and session_alive:
+                logger.info(
+                    f"[BrowserWatchdog] 受控浏览器连接正常 (port={self.port}, session=alive, {snapshot})"
+                )
+            elif port_open and not session_alive:
+                logger.warning(
+                    f"[BrowserWatchdog] 调试端口可达，但当前页面会话已失效 "
+                    f"(port={self.port}, session=dead, connected={self._connected}, {snapshot})"
+                )
+            else:
+                logger.error(
+                    f"[BrowserWatchdog] 受控浏览器调试端口不可达 "
+                    f"(port={self.port}, connected={self._connected}, {snapshot})"
+                )
+
+            self._last_watchdog_port_open = port_open
+            self._last_watchdog_session_alive = session_alive
+
+    def _start_connection_watchdog(self) -> None:
+        if self._watchdog_thread and self._watchdog_thread.is_alive():
+            return
+
+        self._watchdog_stop.clear()
+        self._last_watchdog_port_open = None
+        self._last_watchdog_session_alive = None
+        self._watchdog_thread = threading.Thread(
+            target=self._connection_watchdog_loop,
+            daemon=True,
+            name="browser-connection-watchdog",
+        )
+        self._watchdog_thread.start()
     
     def health_check(self) -> Dict[str, Any]:
         result = {
@@ -409,7 +540,14 @@ class BrowserCore:
         }
         
         try:
-            if not self.page:
+            if not self.get_browser_handle():
+                if not self._connect():
+                    result["error"] = "无法连接到浏览器"
+                    return result
+            elif not self._probe_browser_connection():
+                self._connected = False
+                self.browser_handle = None
+                self.page = None
                 if not self._connect():
                     result["error"] = "无法连接到浏览器"
                     return result
@@ -429,11 +567,11 @@ class BrowserCore:
     
     def ensure_connection(self) -> bool:
         if self._connected:
-            try:
-                _ = self.page.latest_tab
+            if self._probe_browser_connection():
                 return True
-            except Exception:
-                self._connected = False
+            self._connected = False
+            self.browser_handle = None
+            self.page = None
         
         return self._connect()
     
@@ -1962,12 +2100,14 @@ class BrowserCore:
     def close(self):
         """关闭浏览器连接"""
         logger.info("关闭浏览器连接")
+        self._watchdog_stop.set()
         
         if self._tab_pool:
             self._tab_pool.shutdown()
             self._tab_pool = None
         
         self._connected = False
+        self.browser_handle = None
         self.page = None
         
         with self._lock:

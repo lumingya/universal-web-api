@@ -13,7 +13,13 @@ window.TabPoolTabComponent = {
             refreshInterval: null,
             lastUpdate: null,
             baseUrl: '',
-            presetUpdating: {}  // { tabIndex: true } 正在切换预设的标签页
+            presetUpdating: {},  // { tabIndex: true } 正在切换预设的标签页
+            allocationMode: 'first_idle',
+            allocationModeOptions: [
+                { value: 'first_idle', label: '优先空闲' },
+                { value: 'round_robin', label: '轮询' }
+            ],
+            allocationModeUpdating: false
         };
     },
     computed: {
@@ -50,12 +56,43 @@ window.TabPoolTabComponent = {
                 
                 const data = await response.json();
                 this.tabs = data.tabs || [];
+                this.allocationMode = data.allocation_mode || 'first_idle';
+                this.allocationModeOptions = data.allocation_mode_options || this.allocationModeOptions;
                 this.lastUpdate = new Date().toLocaleTimeString();
                 this.error = null;
             } catch (e) {
                 this.error = e.message;
             } finally {
                 this.loading = false;
+            }
+        },
+
+        async updateAllocationMode(newMode) {
+            const nextMode = String(newMode || '').trim();
+            if (!nextMode || nextMode === this.allocationMode) return;
+
+            this.allocationModeUpdating = true;
+            try {
+                const token = localStorage.getItem('api_token');
+                const headers = { 'Content-Type': 'application/json' };
+                if (token) headers['Authorization'] = `Bearer ${token}`;
+
+                const response = await fetch('/api/tab-pool/config', {
+                    method: 'PUT',
+                    headers,
+                    body: JSON.stringify({ allocation_mode: nextMode })
+                });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+                const data = await response.json();
+                this.allocationMode = data.allocation_mode || nextMode;
+                this.allocationModeOptions = data.allocation_mode_options || this.allocationModeOptions;
+                this.$emit('notify', { type: 'success', message: '标签页池分配模式已切换' });
+                await this.fetchTabs();
+            } catch (e) {
+                this.$emit('notify', { type: 'error', message: '切换分配模式失败: ' + e.message });
+            } finally {
+                this.allocationModeUpdating = false;
             }
         },
         
@@ -200,7 +237,22 @@ window.TabPoolTabComponent = {
             <!-- 标题栏 -->
             <div class="flex items-center justify-between mb-6">
                 <div>
-                    <h2 class="text-xl font-bold dark:text-white">🗂️ 标签页池</h2>
+                    <div class="flex items-center gap-3 flex-wrap">
+                        <h2 class="text-xl font-bold dark:text-white">🗂️ 标签页池</h2>
+                        <div class="flex items-center gap-2">
+                            <span class="text-xs text-gray-500 dark:text-gray-400">分配模式</span>
+                            <select
+                                :value="allocationMode"
+                                @change="updateAllocationMode($event.target.value)"
+                                :disabled="allocationModeUpdating"
+                                class="text-xs border dark:border-gray-600 px-2 py-1 rounded bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-200 focus:ring-2 focus:ring-blue-400 focus:border-transparent disabled:opacity-50"
+                            >
+                                <option v-for="mode in allocationModeOptions" :key="mode.value" :value="mode.value">
+                                    {{ mode.label }}
+                                </option>
+                            </select>
+                        </div>
+                    </div>
                     <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
                         管理浏览器中的标签页，每个标签页有独立的路由前缀
                     </p>
@@ -271,6 +323,10 @@ window.TabPoolTabComponent = {
                                 <!-- 会话 ID -->
                                 <span class="text-xs text-gray-500 dark:text-gray-400 font-mono">
                                     {{ tab.id }}
+                                </span>
+                                <span v-if="tab.is_isolated_context"
+                                      class="inline-flex items-center px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 text-xs">
+                                    独立 Cookie
                                 </span>
                             </div>
                             

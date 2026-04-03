@@ -228,10 +228,27 @@ class StreamConfig(TypedDict, total=False):
     send_confirmation: SendConfirmationConfig
 
 
+# ================= 站点高级配置 =================
+
+class SiteAdvancedConfig(TypedDict, total=False):
+    """站点级高级功能配置（不随预设切换）"""
+    independent_cookies: bool
+    independent_cookies_auto_takeover: bool
+
+
+def get_default_site_advanced_config() -> 'SiteAdvancedConfig':
+    """获取默认站点高级配置"""
+    return {
+        "independent_cookies": False,
+        "independent_cookies_auto_takeover": False,
+    }
+
+
 # ================= 站点配置 =================
 
 class SiteConfig(TypedDict, total=False):
     """站点配置结构"""
+    advanced: SiteAdvancedConfig
     selectors: Dict[str, Optional[str]]
     workflow: List[WorkflowStep]
     stealth: bool

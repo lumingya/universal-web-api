@@ -3730,10 +3730,11 @@ BROWSER_PROFILE_NAME=Default</code></pre>
             <p>A: 大多数时候<strong>不需要</strong>。默认值已经覆盖了最常见的使用场景，遇到具体问题时再针对性调整即可。</p>
 
             <h3>Q6: 目前有哪些已知问题？</h3>
-            <p>A: 目前确认过的已知问题主要有这两个：</p>
+            <p>A: 目前确认过的已知问题主要包括：</p>
             <ul>
                 <li>VSCode 的 <strong>Codex</strong> 插件目前不适配，原因暂时未知。</li>
                 <li>DrissionPage 每次升级后，都需要重新执行对应补丁。</li>
+                <li>“独立 Cookie 标签页”目前仍属于高级实验功能。教程正文暂不展开这部分用法；如果强行追求“同一受控浏览器窗口内的独立 Cookie”，在浏览器原生菜单等场景下可能出现稳定性问题，当前建议优先使用共享 Cookie 方案。</li>
             </ul>
 
             <h3>Q7: 代理切换命令不生效怎么办？</h3>
@@ -3770,7 +3771,7 @@ BROWSER_PROFILE_NAME=Default</code></pre>
         </section>
     </div>
 
-<script src="./js/tutorial-i18n.js?v=2.6.10"></script>
+<script src="./js/tutorial-i18n.js?v=2.7.5"></script>
     <script>
         // 站点配置数据（域名已更新）
         const sites = [

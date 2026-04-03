@@ -20,6 +20,7 @@ from app.models.schemas import (
     SelectorDefinition,
     get_default_image_extraction_config,
     get_default_file_paste_config,
+    get_default_site_advanced_config,
     get_default_send_confirmation_config,
 )
 from app.services.extractor_manager import extractor_manager
@@ -756,6 +757,44 @@ class ConfigEngine:
             return None
 
         return self._resolve_default_preset_name(site)
+
+    def get_site_advanced_config(self, domain: str) -> Dict[str, Any]:
+        """获取站点级高级配置。"""
+        self.refresh_if_changed()
+
+        site = self.sites.get(domain)
+        if not site:
+            return get_default_site_advanced_config()
+
+        raw_config = site.get("advanced") if isinstance(site, dict) else None
+        if not isinstance(raw_config, dict):
+            raw_config = {}
+
+        return {
+            **get_default_site_advanced_config(),
+            **copy.deepcopy(raw_config),
+        }
+
+    def set_site_advanced_config(self, domain: str, config: Dict[str, Any]) -> bool:
+        """设置站点级高级配置。"""
+        self.refresh_if_changed()
+
+        site = self.sites.get(domain)
+        if not site:
+            logger.warning(f"站点不存在: {domain}")
+            return False
+
+        normalized = {
+            **get_default_site_advanced_config(),
+            **copy.deepcopy(config or {}),
+        }
+        normalized["independent_cookies"] = bool(normalized.get("independent_cookies", False))
+        normalized["independent_cookies_auto_takeover"] = bool(
+            normalized.get("independent_cookies_auto_takeover", False)
+        )
+
+        site["advanced"] = normalized
+        return self._save_config()
 
     def set_default_preset(self, domain: str, preset_name: str) -> bool:
         """设置指定站点的默认预设"""

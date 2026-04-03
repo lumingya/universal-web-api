@@ -1272,6 +1272,7 @@ BROWSER_PROFILE_NAME=Default</code></pre>
         <ul>
             <li>The VSCode <strong>Codex</strong> plugin is currently incompatible.</li>
             <li>The DrissionPage patch must be re-applied after every upgrade.</li>
+            <li><strong>Independent Cookie tabs</strong> are still an advanced experimental feature. The tutorial does not walk through that workflow yet. In particular, trying to force truly isolated cookies inside the same controlled browser window is not reliable right now, so the shared-cookie path is still the recommended default.</li>
         </ul>
 
         <h3>Q7: Why is proxy switching not working?</h3>

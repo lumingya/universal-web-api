@@ -157,13 +157,13 @@ def _get_local_startup_base_url() -> str:
 
 def _should_open_startup_pages(browser) -> bool:
     try:
-        tab_ids = browser.page.get_tabs()
+        tab_ids = browser.get_tabs()
         if len(tab_ids) == 0:
             return True
         if len(tab_ids) == 1:
             url = ""
             try:
-                url = browser.page.url or ""
+                url = str(getattr(browser.get_latest_tab(), "url", "") or "")
             except Exception:
                 pass
             return url in _STARTUP_EMPTY_URLS
@@ -181,7 +181,7 @@ def _capture_startup_blank_tab_id(browser) -> str:
     - 只要最初那张 blank 页还在，就仍然把引导页打开到那张页里
     """
     try:
-        tab_ids = list(getattr(browser.page, "tab_ids", []) or [])
+        tab_ids = browser.get_tab_ids()
         if len(tab_ids) != 1:
             return ""
 
@@ -190,10 +190,13 @@ def _capture_startup_blank_tab_id(browser) -> str:
             return ""
 
         try:
-            tab = browser.page.get_tab(tab_id)
+            tab = browser.get_tab(tab_id)
             current_url = str(getattr(tab, "url", "") or "")
         except Exception:
-            current_url = str(getattr(browser.page, "url", "") or "")
+            try:
+                current_url = str(getattr(browser.get_latest_tab(), "url", "") or "")
+            except Exception:
+                current_url = ""
 
         return tab_id if current_url in _STARTUP_EMPTY_URLS else ""
     except Exception as e:
@@ -223,7 +226,7 @@ def _open_controlled_browser_page_non_blocking(
 
             if startup_tab_id:
                 try:
-                    target_tab = browser.page.get_tab(startup_tab_id)
+                    target_tab = browser.get_tab(startup_tab_id)
                 except Exception:
                     logger.info(f"[startup] 启动时的空白页已不存在，跳过打开{page_name}")
                     return
@@ -242,11 +245,11 @@ def _open_controlled_browser_page_non_blocking(
                     return
 
                 try:
-                    target_tab = browser.page.latest_tab
+                    target_tab = browser.get_latest_tab()
                 except Exception:
                     target_tab = None
                 if target_tab is None:
-                    target_tab = browser.page
+                    return
 
             target_tab.get(page_url)
             logger.info(f"[startup] {page_name}已在受控浏览器打开: {page_url}")
@@ -376,7 +379,7 @@ async def lifespan(app: FastAPI):
             else:
                 # 显示已连接状态
                 try:
-                    existing_tab_count = len(browser.page.get_tabs())
+                    existing_tab_count = len(browser.get_tabs())
                 except Exception:
                     existing_tab_count = "?"
                 logger.info(f"✅ 浏览器已连接 (检测到 {existing_tab_count} 个现有页面，跳过教程)")

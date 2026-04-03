@@ -42,6 +42,12 @@ class ParserInstallRequest(BaseModel):
     overwrite: bool = Field(default=False)
 
 
+class SiteAdvancedConfigRequest(BaseModel):
+    """站点级高级配置更新请求。"""
+    independent_cookies: bool = Field(default=False)
+    independent_cookies_auto_takeover: bool = Field(default=False)
+
+
 # ================= 认证依赖 =================
 
 async def verify_auth(authorization: Optional[str] = Header(None)) -> bool:
@@ -173,6 +179,107 @@ async def get_site_config(
         # 返回整个站点结构（含所有预设）
         import copy
         return copy.deepcopy(config_engine.sites[domain])
+
+
+@router.get("/api/sites/{domain}/advanced-config")
+async def get_site_advanced_config(
+    domain: str,
+    authenticated: bool = Depends(verify_auth)
+):
+    """获取站点级高级配置。"""
+    if domain not in config_engine.sites:
+        raise HTTPException(status_code=404, detail=f"配置不存在: {domain}")
+
+    try:
+        config = config_engine.get_site_advanced_config(domain)
+        return {
+            "domain": domain,
+            "advanced": config,
+        }
+    except Exception as e:
+        logger.error(f"获取站点高级配置失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/api/sites/{domain}/advanced-config")
+async def set_site_advanced_config(
+    domain: str,
+    body: SiteAdvancedConfigRequest,
+    authenticated: bool = Depends(verify_auth)
+):
+    """更新站点级高级配置。"""
+    if domain not in config_engine.sites:
+        raise HTTPException(status_code=404, detail=f"配置不存在: {domain}")
+
+    payload = {
+        "independent_cookies": bool(body.independent_cookies),
+        "independent_cookies_auto_takeover": bool(body.independent_cookies_auto_takeover),
+    }
+
+    try:
+        success = config_engine.set_site_advanced_config(domain, payload)
+        if not success:
+            raise HTTPException(status_code=500, detail="高级配置保存失败")
+
+        return {
+            "status": "success",
+            "message": f"站点 {domain} 高级配置已更新",
+            "domain": domain,
+            "advanced": config_engine.get_site_advanced_config(domain),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"更新站点高级配置失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/sites/{domain}/isolated-tab")
+async def create_site_isolated_tab(
+    domain: str,
+    authenticated: bool = Depends(verify_auth)
+):
+    """为指定站点新建一个独立 Cookie 标签页。"""
+    if domain not in config_engine.sites:
+        raise HTTPException(status_code=404, detail=f"配置不存在: {domain}")
+
+    try:
+        browser = get_browser(auto_connect=False)
+        result = browser.tab_pool.create_isolated_site_tab(domain)
+        if not result.get("ok"):
+            raise HTTPException(status_code=400, detail=result.get("error", "create_isolated_tab_failed"))
+        return result
+    except HTTPException:
+        raise
+    except BrowserConnectionError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        logger.error(f"创建独立 Cookie 标签页失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/sites/{domain}/shared-tab")
+async def create_site_shared_tab(
+    domain: str,
+    authenticated: bool = Depends(verify_auth)
+):
+    """为指定站点打开一个共享 Cookie 的受控窗口。"""
+    if domain not in config_engine.sites:
+        raise HTTPException(status_code=404, detail=f"配置不存在: {domain}")
+
+    try:
+        browser = get_browser(auto_connect=False)
+        result = browser.tab_pool.create_shared_site_tab(domain)
+        if not result.get("ok"):
+            raise HTTPException(status_code=400, detail=result.get("error", "create_shared_tab_failed"))
+        return result
+    except HTTPException:
+        raise
+    except BrowserConnectionError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        logger.error(f"打开共享 Cookie 受控窗口失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ================= 图片提取配置 API =================
@@ -381,14 +488,14 @@ async def inject_workflow_editor(request: Request):
         
         browser_instance = get_browser(auto_connect=True)
         
-        if not browser_instance.page:
+        if not browser_instance.get_browser_handle():
             return JSONResponse(
                 status_code=503,
                 content={"success": False, "message": "浏览器未连接"}
             )
         
         try:
-            tab = browser_instance.page.latest_tab
+            tab = browser_instance.get_latest_tab()
         except Exception as e:
             return JSONResponse(
                 status_code=503,

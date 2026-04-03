@@ -12,6 +12,7 @@ import time
 import asyncio
 import queue
 import threading
+from pathlib import Path
 from typing import Optional, Any, Dict, List
 
 from fastapi import APIRouter, Request, HTTPException, Header, Depends
@@ -39,6 +40,28 @@ logger = get_logger("API.TAB")
 
 router = APIRouter()
 FOLLOW_DEFAULT_PRESET = "__DEFAULT__"
+TAB_POOL_ALLOCATION_OPTIONS = [
+    {"value": "first_idle", "label": "优先空闲"},
+    {"value": "round_robin", "label": "轮询"},
+]
+
+
+def _read_browser_config() -> Dict[str, Any]:
+    config_path = Path("config/browser_config.json")
+    if not config_path.exists():
+        return {}
+    with open(config_path, "r", encoding="utf-8-sig") as f:
+        return json.load(f)
+
+
+def _write_browser_config(payload: Dict[str, Any]) -> None:
+    config_path = Path("config/browser_config.json")
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = Path(str(config_path) + ".tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2, ensure_ascii=False)
+        f.flush()
+    tmp_path.replace(config_path)
 
 
 def _extract_stream_error_message(chunk: Any) -> str:
@@ -70,6 +93,11 @@ class ChatRequest(BaseModel):
     parallel_tool_calls: Optional[bool] = Field(default=None)
     functions: Optional[list] = Field(default=None)
     function_call: Optional[Any] = Field(default=None)
+
+
+class TabPoolConfigRequest(BaseModel):
+    """标签页池配置更新请求。"""
+    allocation_mode: str = Field(default="first_idle")
 
 
 # ================= 认证依赖 =================
@@ -130,6 +158,7 @@ async def get_tab_pool_tabs(authenticated: bool = Depends(verify_auth)):
     try:
         browser = get_browser(auto_connect=False)
         tabs = browser.tab_pool.get_tabs_with_index()
+        pool_status = browser.tab_pool.get_status()
         
         # 🆕 为每个标签页附加可用预设列表
         try:
@@ -157,11 +186,67 @@ async def get_tab_pool_tabs(authenticated: bool = Depends(verify_auth)):
         
         return {
             "tabs": tabs,
-            "count": len(tabs)
+            "count": len(tabs),
+            "allocation_mode": pool_status.get("allocation_mode", "first_idle"),
+            "allocation_mode_options": TAB_POOL_ALLOCATION_OPTIONS,
         }
     except Exception as e:
         logger.error(f"获取标签页列表失败: {e}")
-        return {"tabs": [], "count": 0, "error": str(e)}
+        return {
+            "tabs": [],
+            "count": 0,
+            "error": str(e),
+            "allocation_mode": "first_idle",
+            "allocation_mode_options": TAB_POOL_ALLOCATION_OPTIONS,
+        }
+
+
+@router.put("/api/tab-pool/config")
+async def update_tab_pool_config(
+    body: TabPoolConfigRequest,
+    authenticated: bool = Depends(verify_auth)
+):
+    """更新标签页池运行模式并持久化到 browser_config.json。"""
+    allocation_mode = str(body.allocation_mode or "").strip().lower()
+    if allocation_mode not in {"first_idle", "round_robin"}:
+        raise HTTPException(status_code=400, detail="invalid_allocation_mode")
+
+    try:
+        config = _read_browser_config()
+        tab_pool_config = config.get("tab_pool") or {}
+        if not isinstance(tab_pool_config, dict):
+            tab_pool_config = {}
+        tab_pool_config["allocation_mode"] = allocation_mode
+        config["tab_pool"] = tab_pool_config
+        _write_browser_config(config)
+
+        try:
+            from app.core.config import BrowserConstants
+            if hasattr(BrowserConstants, "reload"):
+                BrowserConstants.reload()
+        except Exception as reload_error:
+            logger.warning(f"热重载浏览器常量失败: {reload_error}")
+
+        pool_synced = False
+        try:
+            browser = get_browser(auto_connect=False)
+            browser.tab_pool.apply_runtime_config(allocation_mode=allocation_mode)
+            pool_synced = True
+        except Exception as sync_error:
+            logger.warning(f"同步运行中标签页池配置失败: {sync_error}")
+
+        return {
+            "success": True,
+            "message": "标签页池分配模式已更新",
+            "allocation_mode": allocation_mode,
+            "allocation_mode_options": TAB_POOL_ALLOCATION_OPTIONS,
+            "pool_synced": pool_synced,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"更新标签页池配置失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ================= 指定标签页的聊天 API =================
