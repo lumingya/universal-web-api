@@ -20,7 +20,7 @@ from fastapi import APIRouter, Request, HTTPException, Header, Depends
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from app.core.config import AppConfig, get_logger
+from app.core.config import AppConfig, get_logger, SSEFormatter
 from app.core import get_browser
 from app.services.request_manager import (
     request_manager, 
@@ -40,6 +40,8 @@ from app.services.tool_calling import (
 logger = get_logger("API.CHAT")
 
 router = APIRouter()
+STREAM_QUEUE_POLL_TIMEOUT = 0.5
+SSE_HEARTBEAT_INTERVAL = 15.0
 
 def _extract_stream_error_message(chunk: Any) -> str:
     if not isinstance(chunk, str) or not chunk.startswith("data: "):
@@ -339,6 +341,8 @@ async def _stream_with_lifecycle(
         worker_thread = threading.Thread(target=worker, daemon=True)
         worker_thread.start()
 
+        last_sse_emit_at = time.monotonic()
+
         while True:
             if await request.is_disconnected():
                 logger.debug("客户端断开")
@@ -346,8 +350,14 @@ async def _stream_with_lifecycle(
                 break
 
             try:
-                chunk = await asyncio.to_thread(chunk_queue.get, timeout=0.5)
+                chunk = await asyncio.to_thread(
+                    chunk_queue.get,
+                    timeout=STREAM_QUEUE_POLL_TIMEOUT,
+                )
             except queue.Empty:
+                if time.monotonic() - last_sse_emit_at >= SSE_HEARTBEAT_INTERVAL:
+                    yield SSEFormatter.pack_comment("keepalive")
+                    last_sse_emit_at = time.monotonic()
                 continue
 
             if chunk is None:
@@ -366,6 +376,7 @@ async def _stream_with_lifecycle(
                 logger.info(f"[SEND] 发送包含图片的 chunk 给客户端")
             
             yield chunk
+            last_sse_emit_at = time.monotonic()
             error_message = _extract_stream_error_message(chunk)
             if error_message:
                 logger.warning(f"流式响应返回错误事件: {error_message}")

@@ -1,3 +1,5 @@
 {
-  "default_presets": {}
+  "default_presets": {
+    "gemini.google.com": "主预设"
+  }
 }

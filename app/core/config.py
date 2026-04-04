@@ -1757,6 +1757,12 @@ class SSEFormatter:
             }]
         }
         return f"data: {json.dumps(data, ensure_ascii=False)}\n\ndata: [DONE]\n\n"
+
+    @staticmethod
+    def pack_comment(comment: str = "keepalive") -> str:
+        """打包 SSE 注释帧，用于长连接保活。"""
+        safe_comment = " ".join(str(comment or "keepalive").splitlines()).strip() or "keepalive"
+        return f": {safe_comment}\n\n"
     
     @staticmethod
     def pack_error(message: str, error_type: str = "execution_error",

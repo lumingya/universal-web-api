@@ -312,7 +312,7 @@
   },
   "gemini.google.com": {
     "presets": {
-      "主预设": {
+      "快速模型": {
         "selectors": {
           "input_box": "rich-textarea .ql-editor[contenteditable=\"true\"][role=\"textbox\"]",
           "send_btn": "button.send-button",
@@ -321,7 +321,7 @@
           "message_wrapper": null,
           "generating_indicator": "",
           "点击模型选择": "[data-test-id=\"logo-pill-label-container\"]",
-          "选择模型": "//button[.//span[contains(text(), \"Pro\")]]",
+          "选择模型": "//button[.//span[contains(text(), \"思考\")]]",
           "临时对话按钮": "button.temp-chat-button"
         },
         "stream_config": {
@@ -337,14 +337,32 @@
         "workflow": [
           {
             "action": "CLICK",
-            "target": "点击模型选择",
+            "target": "new_chat_btn",
             "optional": true,
+            "value": null
+          },
+          {
+            "action": "WAIT",
+            "target": "",
+            "optional": false,
+            "value": 0.5
+          },
+          {
+            "action": "CLICK",
+            "target": "临时对话按钮",
+            "optional": false,
+            "value": null
+          },
+          {
+            "action": "CLICK",
+            "target": "点击模型选择",
+            "optional": false,
             "value": null
           },
           {
             "action": "CLICK",
             "target": "选择模型",
-            "optional": true,
+            "optional": false,
             "value": null
           },
           {
@@ -382,26 +400,15 @@
           "load_timeout_seconds": 10,
           "download_blobs": true,
           "max_size_mb": 10,
-          "mode": "all"
+          "mode": "first"
         },
         "file_paste": {
           "enabled": false,
-          "threshold": 30000,
-          "hint_text": "完全专注于文件内容",
-          "post_upload_settle": 5,
-          "upload_signal_selectors": [
-            "[class*=\"attachment\"]",
-            "[class*=\"file\"]",
-            "[class*=\"preview\"]",
-            "[class*=\"chip\"]",
-            "mat-chip",
-            "mat-chip-row",
-            ".mat-mdc-chip",
-            ".mat-mdc-chip-row"
-          ]
+          "threshold": 50000,
+          "hint_text": "完全专注于文件内容"
         }
       },
-      "快速模型": {
+      "主预设": {
         "selectors": {
           "input_box": "rich-textarea .ql-editor[contenteditable=\"true\"][role=\"textbox\"]",
           "send_btn": "button.send-button",
@@ -410,7 +417,7 @@
           "message_wrapper": null,
           "generating_indicator": "",
           "点击模型选择": "[data-test-id=\"logo-pill-label-container\"]",
-          "选择模型": "//button[.//span[contains(text(), \"思考\")]]",
+          "选择模型": "//button[.//span[contains(text(), \"Pro\")]]",
           "临时对话按钮": "button.temp-chat-button"
         },
         "stream_config": {
@@ -435,6 +442,12 @@
             "target": "",
             "optional": false,
             "value": 0.5
+          },
+          {
+            "action": "CLICK",
+            "target": "临时对话按钮",
+            "optional": false,
+            "value": null
           },
           {
             "action": "CLICK",
@@ -492,7 +505,7 @@
         }
       }
     },
-    "default_preset": "主预设"
+    "default_preset": "快速模型"
   },
   "chat.deepseek.com": {
     "presets": {
