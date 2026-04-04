@@ -108,7 +108,7 @@ window.FilePastePanel = {
             <div class="px-4 py-3 border-b dark:border-gray-700 flex justify-between items-center cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
                  @click="toggle">
                 <div class="flex items-center gap-2">
-                    <span class="w-4 inline-flex justify-center" aria-hidden="true"></span>
+                    <span class="w-4 inline-flex justify-center text-gray-500 dark:text-gray-400" v-html="collapsed ? $icons.chevronDown : $icons.chevronUp"></span>
                     <h3 class="font-semibold text-gray-900 dark:text-white">📄 文件粘贴</h3>
                     <span class="text-sm text-gray-500 dark:text-gray-400">({{ enabledCount }}/{{ domains.length }} 启用)</span>
                 </div>

@@ -8,7 +8,8 @@ window.SidebarComponent = {
         authEnabled: { type: Boolean, default: false },
         hasToken: { type: Boolean, default: false },
         darkMode: { type: Boolean, default: false },
-        activeTab: { type: String, default: 'config' }  // ✨ 新增
+        activeTab: { type: String, default: 'config' },  // ✨ 新增
+        systemStats: { type: Object, default: () => ({ memory_mb: 0, disk_status: '未知', total_requests: 0 }) }
     },
     emits: [
         'select-site', 
@@ -24,7 +25,8 @@ window.SidebarComponent = {
     ],
     data() {
         return {
-            searchQuery: ''
+            searchQuery: '',
+            isStatsExpanded: false
         };
     },
     computed: {
@@ -65,6 +67,31 @@ window.SidebarComponent = {
                         <span>🔒 认证: {{ hasToken ? '已配置' : '未配置' }}</span>
                         <button @click.stop="$emit('show-token-dialog')" 
                                 class="text-blue-500 dark:text-blue-400">设置</button>
+                    </div>
+                </div>
+            </div>
+
+            <!--状态面板-->
+            <div class="p-3 border-b dark:border-gray-700 bg-white dark:bg-gray-800 transition-all duration-300">
+                <div class="flex items-center justify-between mb-2 cursor-pointer group" @click="isStatsExpanded = !isStatsExpanded">
+                    <span class="text-sm font-semibold dark:text-white group-hover:text-blue-500 transition-colors">系统占用面板</span>
+                    <span class="text-gray-400 transform transition-transform duration-300" :class="{'rotate-180': isStatsExpanded}">
+                        ▼
+                    </span>
+                </div>
+                <div class="text-xs space-y-2 overflow-hidden transition-all duration-300" 
+                     :style="{maxHeight: isStatsExpanded ? '150px' : '0', opacity: isStatsExpanded ? '1' : '0', margin: isStatsExpanded ? '' : '0'}">
+                    <div class="flex justify-between items-center text-gray-600 dark:text-gray-400 border-l-2 border-blue-400 pl-2">
+                        <span>💻 内存占用</span>
+                        <span class="font-medium">{{ systemStats.memory_mb }} MB</span>
+                    </div>
+                    <div class="flex flex-col text-gray-600 dark:text-gray-400 border-l-2 border-green-400 pl-2">
+                        <span>💾 硬盘状态</span>
+                        <span class="font-medium truncate" :title="systemStats.disk_status">{{ systemStats.disk_status }}</span>
+                    </div>
+                    <div class="flex justify-between items-center text-gray-600 dark:text-gray-400 border-l-2 border-purple-400 pl-2">
+                        <span>📊 总请求数</span>
+                        <span class="font-medium">{{ systemStats.total_requests }}</span>
                     </div>
                 </div>
             </div>

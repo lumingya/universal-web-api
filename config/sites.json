@@ -336,24 +336,6 @@
         },
         "workflow": [
           {
-            "action": "KEY_PRESS",
-            "target": "Ctrl+Shift+O",
-            "optional": true,
-            "value": null
-          },
-          {
-            "action": "WAIT",
-            "target": "",
-            "optional": false,
-            "value": 0.5
-          },
-          {
-            "action": "CLICK",
-            "target": "临时对话按钮",
-            "optional": true,
-            "value": null
-          },
-          {
             "action": "CLICK",
             "target": "点击模型选择",
             "optional": true,
@@ -453,12 +435,6 @@
             "target": "",
             "optional": false,
             "value": 0.5
-          },
-          {
-            "action": "CLICK",
-            "target": "临时对话按钮",
-            "optional": true,
-            "value": null
           },
           {
             "action": "CLICK",
@@ -568,8 +544,8 @@
             "value": null
           },
           {
-            "action": "CLICK",
-            "target": "send_btn",
+            "action": "KEY_PRESS",
+            "target": "Enter",
             "optional": true,
             "value": null
           },
@@ -599,7 +575,11 @@
         }
       }
     },
-    "default_preset": "主预设"
+    "default_preset": "主预设",
+    "advanced": {
+      "independent_cookies": false,
+      "independent_cookies_auto_takeover": false
+    }
   },
   "www.doubao.com": {
     "presets": {

@@ -37,6 +37,7 @@ window.ConfigTab = {
             imageConfigCollapsed: true,
             streamConfigCollapsed: true,
             filePasteCollapsed: true,
+            advancedConfigCollapsed: true,
 
             advancedConfigSaving: false,
             isolatedTabCreating: false,
@@ -137,7 +138,7 @@ window.ConfigTab = {
             }
         },
 
-        async updateIndependentCookies(enabled) {
+        async updateIndependentCookies(enabled, event) {
             if (!this.currentDomain || !this.currentConfig) return;
             const nextEnabled = !!enabled;
             const currentEnabled = !!this.siteAdvancedConfig.independent_cookies;
@@ -152,7 +153,11 @@ window.ConfigTab = {
                         '确认仍要开启吗？'
                     ].join('\n')
                 );
-                if (!confirmed) return;
+                if (!confirmed) {
+                    // 用户取消：把 checkbox 视觉状态还原
+                    if (event && event.target) event.target.checked = currentEnabled;
+                    return;
+                }
             }
 
             this.advancedConfigSaving = true;
@@ -578,76 +583,7 @@ window.ConfigTab = {
                     </p>
                 </div>
 
-                <div class="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg shadow-sm px-4 py-3">
-                    <div class="flex items-center justify-between flex-wrap gap-3">
-                        <div>
-                            <div class="text-sm font-semibold text-gray-700 dark:text-gray-300">高级功能</div>
-                            <p class="text-xs text-gray-400 dark:text-gray-500 mt-1">
-                                适合像 arena.ai 这类需要多匿名会话的站点。
-                            </p>
-                            <details class="mt-2 group">
-                                <summary class="text-xs text-blue-500 dark:text-blue-400 cursor-pointer select-none">
-                                    查看说明
-                                </summary>
-                                <div class="mt-2 space-y-2">
-                                    <p class="text-xs text-gray-400 dark:text-gray-500">
-                                        开启后，可以为这个站点创建独立 Cookie 会话。
-                                    </p>
-                                    <p class="text-xs text-gray-400 dark:text-gray-500">
-                                        说明：Chromium 的独立上下文通常会显示为单独窗口。这不是新起一个完全独立的浏览器进程，而是同一浏览器里的隔离会话。
-                                    </p>
-                                    <p class="text-xs text-amber-600 dark:text-amber-400">
-                                        注意：开启后，新开的该站点标签页不会继承当前浏览器里已有的登录态、Cookie 或 localStorage。原本已登录的共享标签页如果重新进入并被转换为独立标签页，通常会表现为未登录。
-                                    </p>
-                                    <p class="text-xs text-gray-400 dark:text-gray-500">
-                                        单标签页清 Cookie 不会影响同站点的其它独立标签页。
-                                    </p>
-                                    <p class="text-xs text-gray-400 dark:text-gray-500">
-                                        默认不会自动接管你手动新开的普通标签页，避免原标签页被关闭；只有点下面的按钮才会新建独立会话。
-                                    </p>
-                                </div>
-                            </details>
-                        </div>
-                        <label class="flex items-center gap-3 text-sm text-gray-700 dark:text-gray-300">
-                            <span>独立 Cookie 标签页</span>
-                            <input
-                                type="checkbox"
-                                class="rounded"
-                                :checked="siteAdvancedConfig.independent_cookies"
-                                :disabled="advancedConfigSaving"
-                                @change="updateIndependentCookies($event.target.checked)"
-                            >
-                        </label>
-                    </div>
 
-                    <label class="mt-3 flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400">
-                        <input
-                            type="checkbox"
-                            class="rounded"
-                            :checked="siteAdvancedConfig.independent_cookies_auto_takeover"
-                            :disabled="advancedConfigSaving || !siteAdvancedConfig.independent_cookies"
-                            @change="updateIndependentCookiesAutoTakeover($event.target.checked)"
-                        >
-                        <span>自动接管手动新标签页（会关闭原页并改为独立窗口）</span>
-                    </label>
-
-                    <div class="mt-3 flex items-center gap-3 flex-wrap">
-                        <button
-                            @click="createSharedCookieTab"
-                            :disabled="sharedTabCreating"
-                            class="px-3 py-1.5 text-xs font-medium bg-slate-600 text-white rounded hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                            {{ sharedTabCreating ? '打开中...' : '打开共享 Cookie 受控窗口' }}
-                        </button>
-                        <button
-                            @click="createIsolatedCookieTab"
-                            :disabled="!siteAdvancedConfig.independent_cookies || isolatedTabCreating"
-                            class="px-3 py-1.5 text-xs font-medium bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                            {{ isolatedTabCreating ? '创建中...' : '新建独立 Cookie 会话（单独窗口）' }}
-                        </button>
-                    </div>
-                </div>
 
                 <!-- 选择器面板 -->
                 <selector-panel v-if="presetConfig"
@@ -686,6 +622,78 @@ window.ConfigTab = {
                     :collapsed="filePasteCollapsed"
                     @update:collapsed="filePasteCollapsed = $event"
                 />
+                <!-- 高级功能折叠面板 -->
+                <div class="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg shadow-sm">
+                    <div class="px-4 py-3 border-b dark:border-gray-700 flex items-center gap-2 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors select-none"
+                         @click="advancedConfigCollapsed = !advancedConfigCollapsed">
+                        <span class="w-4 inline-flex justify-center text-gray-500 dark:text-gray-400" v-html="advancedConfigCollapsed ? $icons.chevronDown : $icons.chevronUp"></span>
+                        <h3 class="font-semibold text-gray-900 dark:text-white">🔒 高级功能</h3>
+                        <span class="text-sm text-gray-500 dark:text-gray-400">
+                            (独立 Cookie:
+                            <span :class="siteAdvancedConfig.independent_cookies ? 'text-green-500' : 'text-gray-400'">
+                                {{ siteAdvancedConfig.independent_cookies ? '已启用' : '未启用' }}
+                            </span>)
+                        </span>
+                    </div>
+                    <div v-show="!advancedConfigCollapsed" class="p-4 space-y-4">
+                        <p class="text-xs text-gray-400 dark:text-gray-500">
+                            适合像 arena.ai 这类需要多匿名会话的站点。
+                        </p>
+                        <details class="group">
+                            <summary class="text-xs text-blue-500 dark:text-blue-400 cursor-pointer select-none">
+                                查看说明
+                            </summary>
+                            <div class="mt-2 space-y-2 pl-2">
+                                <p class="text-xs text-gray-400 dark:text-gray-500">开启后，可以为这个站点创建独立 Cookie 会话。</p>
+                                <p class="text-xs text-gray-400 dark:text-gray-500">说明：Chromium 的独立上下文通常会显示为单独窗口。这不是新起一个完全独立的浏览器进程，而是同一浏览器里的隔离会话。</p>
+                                <p class="text-xs text-amber-600 dark:text-amber-400">注意：开启后，新开的该站点标签页不会继承当前浏览器里已有的登录态、Cookie 或 localStorage。原本已登录的共享标签页如果重新进入并被转换为独立标签页，通常会表现为未登录。</p>
+                                <p class="text-xs text-gray-400 dark:text-gray-500">单标签页清 Cookie 不会影响同站点的其它独立标签页。</p>
+                                <p class="text-xs text-gray-400 dark:text-gray-500">默认不会自动接管你手动新开的普通标签页，避免原标签页被关闭；只有点下面的按钮才会新建独立会话。</p>
+                            </div>
+                        </details>
+
+                        <div class="flex items-center justify-between">
+                            <label class="flex items-center gap-3 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    class="rounded"
+                                    :checked="siteAdvancedConfig.independent_cookies"
+                                    :disabled="advancedConfigSaving"
+                                    @change="updateIndependentCookies($event.target.checked, $event)"
+                                >
+                                <span>独立 Cookie 标签页</span>
+                            </label>
+                        </div>
+
+                        <label class="flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400 cursor-pointer">
+                            <input
+                                type="checkbox"
+                                class="rounded"
+                                :checked="siteAdvancedConfig.independent_cookies_auto_takeover"
+                                :disabled="advancedConfigSaving || !siteAdvancedConfig.independent_cookies"
+                                @change="updateIndependentCookiesAutoTakeover($event.target.checked)"
+                            >
+                            <span>自动接管手动新标签页（会关闭原页并改为独立窗口）</span>
+                        </label>
+
+                        <div class="flex items-center gap-3 flex-wrap">
+                            <button
+                                @click="createSharedCookieTab"
+                                :disabled="sharedTabCreating"
+                                class="px-3 py-1.5 text-xs font-medium bg-slate-600 text-white rounded hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                {{ sharedTabCreating ? '打开中...' : '打开共享 Cookie 受控窗口' }}
+                            </button>
+                            <button
+                                @click="createIsolatedCookieTab"
+                                :disabled="!siteAdvancedConfig.independent_cookies || isolatedTabCreating"
+                                class="px-3 py-1.5 text-xs font-medium bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                {{ isolatedTabCreating ? '创建中...' : '新建独立 Cookie 会话（单独窗口）' }}
+                            </button>
+                        </div>
+                    </div>
+                </div>
                 <!-- 工作流面板 -->
                 <workflow-panel v-if="presetConfig"
                     :workflow="presetConfig.workflow || []"

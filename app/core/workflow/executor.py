@@ -1655,20 +1655,44 @@ class WorkflowExecutor:
             **profiles[level],
         }
 
+    @staticmethod
+    def _to_query_selector(selector: Any) -> str:
+        """Convert a configured selector into querySelector-compatible CSS when possible."""
+        value = str(selector or "").strip()
+        if not value:
+            return ""
+
+        lowered = value.lower()
+        if lowered.startswith("css:"):
+            return value[4:].strip()
+
+        if lowered.startswith(("xpath:", "tag:")) or value.startswith("@") or "@@" in value:
+            return ""
+
+        return value
+
     def _probe_send_post_click_state(self, send_selector: str = "") -> Dict[str, Any]:
         """Passively inspect whether the page has transitioned into generating state."""
-        selector_json = json.dumps((send_selector or "").strip(), ensure_ascii=False)
+        selector_json = json.dumps(self._to_query_selector(send_selector), ensure_ascii=False)
+        generating_selector = ""
+        if isinstance(self._selectors, dict):
+            generating_selector = self._to_query_selector(
+                self._selectors.get("generating_indicator", "")
+            )
+        generating_selector_json = json.dumps(generating_selector, ensure_ascii=False)
         js = f"""
         return (function() {{
             try {{
                 const sendSelector = {selector_json};
+                const configuredGeneratingSelector = {generating_selector_json};
                 const indicators = [
+                    configuredGeneratingSelector,
                     'button[aria-label*="Stop"]',
                     'button[aria-label*="stop"]',
                     'button[aria-label*="停止"]',
                     '[data-state="streaming"]',
                     '.stop-generating'
-                ];
+                ].filter(Boolean);
 
                 function lowered(value) {{
                     return String(value || '').toLowerCase();

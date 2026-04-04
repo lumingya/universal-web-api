@@ -18,7 +18,7 @@
     <div id="app-shell" class="app-shell" style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:24px;background:radial-gradient(circle at top, rgba(59,130,246,.16), transparent 38%), linear-gradient(180deg, #111827 0%, #0f172a 100%);z-index:9999;">
         <div class="app-shell-card" style="width:min(480px,100%);padding:28px;border:1px solid rgba(148,163,184,.24);border-radius:18px;background:rgba(15,23,42,.88);box-shadow:0 20px 50px rgba(0,0,0,.35);color:#e5eefc;text-align:center;">
             <div class="app-shell-title">控制面板加载中</div>
-            <p class="app-shell-text">正在加载前端资源和配置。如果停留太久，通常是外部 CDN 响应慢。</p>
+            <p class="app-shell-text">正在加载前端资源和配置。如果停留太久，通常是本地服务初始化或接口响应较慢。</p>
             <button type="button" class="app-shell-button" onclick="window.location.reload()">重新加载</button>
         </div>
     </div>
@@ -50,6 +50,7 @@
                            :has-token="hasToken"
                            :dark-mode="darkMode"
                            :active-tab="activeTab"
+                           :system-stats="systemStats"
                            @select-site="selectSite"
                            @add-site="addNewSite"
                            @delete-site="confirmDelete"

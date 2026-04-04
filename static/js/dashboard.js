@@ -1,5 +1,6 @@
 const { createApp } = Vue
 const MARKETPLACE_CLIENT_VERSION_STORAGE_KEY = 'marketplace_client_version'
+const DASHBOARD_SITES_CACHE_STORAGE_KEY = 'dashboard_sites_cache_v1'
 
 function loadStoredMarketplaceClientVersion() {
     try {
@@ -17,6 +18,40 @@ function saveStoredMarketplaceClientVersion(version) {
         } else {
             localStorage.removeItem(MARKETPLACE_CLIENT_VERSION_STORAGE_KEY)
         }
+    } catch (error) {
+        // ignore storage failures and keep runtime data available
+    }
+}
+
+function loadStoredSitesCache() {
+    try {
+        const raw = localStorage.getItem(DASHBOARD_SITES_CACHE_STORAGE_KEY)
+        if (!raw) {
+            return null
+        }
+        const parsed = JSON.parse(raw)
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            return null
+        }
+        if (!parsed.sites || typeof parsed.sites !== 'object' || Array.isArray(parsed.sites)) {
+            return null
+        }
+        return {
+            sites: parsed.sites,
+            currentDomain: typeof parsed.currentDomain === 'string' ? parsed.currentDomain : null
+        }
+    } catch (error) {
+        return null
+    }
+}
+
+function saveStoredSitesCache(sites, currentDomain) {
+    try {
+        localStorage.setItem(DASHBOARD_SITES_CACHE_STORAGE_KEY, JSON.stringify({
+            sites: sites && typeof sites === 'object' ? sites : {},
+            currentDomain: typeof currentDomain === 'string' ? currentDomain : null,
+            savedAt: Date.now()
+        }))
     } catch (error) {
         // ignore storage failures and keep runtime data available
     }
@@ -513,6 +548,12 @@ const ENV_CONFIG_SCHEMA = {
                 desc: '例如 Default、Profile 1',
                 type: 'text',
                 default: ''
+            },
+            PROFILE_CLEAN_ENABLED: {
+                label: '启动时清理浏览器缓存',
+                desc: '每次启动脚本时自动清理 ShaderCache、GPUCache 等垃圾缓存，保留登录态和 Cookie',
+                type: 'switch',
+                default: false
             }
         }
     },
@@ -693,6 +734,13 @@ const app = createApp({
                 tab_title: null
             },
 
+            // 系统占用统计
+            systemStats: {
+                memory_mb: 0,
+                disk_status: '加载中...',
+                total_requests: 0
+            },
+
             // 认证
             authEnabled: false,
             tempToken: '',
@@ -711,6 +759,8 @@ const app = createApp({
             lastLogTimestamp: 0,
             lastLogSeq: 0,
             logPollingTimer: null,
+            systemStatsTimer: null,
+            isFetchingSystemStats: false,
 
             // ========== 导入功能 ==========
             showImportDialog: false,
@@ -882,6 +932,7 @@ const app = createApp({
 
         // 初始化折叠状态
         this.initCollapsedStates()
+        this.restoreSitesCache()
 
         this.initializeDashboard()
 
@@ -896,17 +947,28 @@ const app = createApp({
 
     beforeUnmount() {
         this.stopLogPolling()
+        if (this.systemStatsTimer) {
+            clearInterval(this.systemStatsTimer)
+            this.systemStatsTimer = null
+        }
     },
 
     methods: {
         async initializeDashboard() {
-            await Promise.all([
-                this.loadConfig(true),
-                this.loadHealthStatus({ silent: true })
-            ])
+            await this.loadConfig(true)
 
             this.startLogPolling()
             this.ensureTabDataLoaded(this.activeTab)
+
+            // 每 2 秒刷新系统状态
+            this.loadHealthStatus({ silent: true, timeoutMs: 2500 }).catch(() => {})
+            this.fetchSystemStats({ timeoutMs: 5000 }).catch(() => {})
+            if (this.systemStatsTimer) {
+                clearInterval(this.systemStatsTimer)
+            }
+            this.systemStatsTimer = setInterval(() => {
+                this.fetchSystemStats({ timeoutMs: 5000 }).catch(() => {})
+            }, 15000)
         },
 
         startLogPolling() {
@@ -983,6 +1045,7 @@ const app = createApp({
 
         async apiRequest(url, options = {}) {
             const token = localStorage.getItem('api_token')
+            const timeoutMs = Number(options.timeoutMs || 0)
             const headers = {
                 'Content-Type': 'application/json',
                 ...options.headers
@@ -992,9 +1055,22 @@ const app = createApp({
                 headers['Authorization'] = 'Bearer ' + token
             }
 
+            const fetchOptions = { ...options }
+            delete fetchOptions.timeoutMs
+
+            let timeoutId = null
+            let controller = null
+            if (timeoutMs > 0 && typeof AbortController !== 'undefined') {
+                controller = new AbortController()
+                fetchOptions.signal = controller.signal
+                timeoutId = setTimeout(() => {
+                    controller.abort()
+                }, timeoutMs)
+            }
+
             try {
                 const response = await fetch(url, {
-                    ...options,
+                    ...fetchOptions,
                     headers
                 })
 
@@ -1011,10 +1087,17 @@ const app = createApp({
 
                 return await response.json()
             } catch (error) {
+                if (error && error.name === 'AbortError') {
+                    throw new Error('REQUEST_TIMEOUT')
+                }
                 if (error.message !== 'UNAUTHORIZED') {
                     console.error('API 请求错误:', error)
                 }
                 throw error
+            } finally {
+                if (timeoutId) {
+                    clearTimeout(timeoutId)
+                }
             }
         },
 
@@ -1026,12 +1109,13 @@ const app = createApp({
 
             this.isLoading = true
             try {
-                const data = await this.apiRequest('/api/config')
+                const data = await this.apiRequest('/api/config', { timeoutMs: 5000 })
                 this.sites = this.normalizeConfig(data)
 
                 if (!this.currentDomain && Object.keys(this.sites).length > 0) {
                     this.currentDomain = Object.keys(this.sites)[0]
                 }
+                saveStoredSitesCache(this.sites, this.currentDomain)
 
                 if (!silent) {
                     this.notify('配置已刷新 (' + Object.keys(this.sites).length + ' 个站点)', 'success')
@@ -1039,7 +1123,9 @@ const app = createApp({
                 return true
             } catch (error) {
                 this.notify('加载配置失败: ' + error.message, 'error')
-                this.sites = {}
+                if (Object.keys(this.sites || {}).length === 0) {
+                    this.sites = {}
+                }
                 return false
             } finally {
                 this.isLoading = false
@@ -1068,13 +1154,29 @@ const app = createApp({
         async refreshStatus() {
             const [configOk, healthOk] = await Promise.all([
                 this.loadConfig(true),
-                this.loadHealthStatus()
+                this.loadHealthStatus(),
+                this.fetchSystemStats()
             ])
 
             if (configOk || healthOk) {
                 this.notify('状态已刷新', 'success')
             } else {
                 this.notify('刷新失败', 'error')
+            }
+        },
+
+        async fetchSystemStats({ timeoutMs = 0 } = {}) {
+            if (this.isFetchingSystemStats) {
+                return this.systemStats
+            }
+            this.isFetchingSystemStats = true
+            try {
+                this.systemStats = await this.apiRequest('/api/system/stats', {
+                    timeoutMs: timeoutMs || 2500
+                })
+                return this.systemStats
+            } catch (e) {
+                // 静默失败，不打扰用户
             }
         },
 
@@ -3318,6 +3420,168 @@ const app = createApp({
         },
 
         // ========== Toast 通知 ==========
+
+        async apiRequest(url, options = {}) {
+            const token = localStorage.getItem('api_token')
+            const timeoutMs = Number(options.timeoutMs || 0)
+            const headers = {
+                'Content-Type': 'application/json',
+                ...options.headers
+            }
+
+            if (token) {
+                headers['Authorization'] = 'Bearer ' + token
+            }
+
+            const fetchOptions = { ...options }
+            delete fetchOptions.timeoutMs
+
+            let timeoutId = null
+            let controller = null
+            if (timeoutMs > 0 && typeof AbortController !== 'undefined') {
+                controller = new AbortController()
+                fetchOptions.signal = controller.signal
+                timeoutId = setTimeout(() => {
+                    controller.abort()
+                }, timeoutMs)
+            }
+
+            try {
+                const response = await fetch(url, {
+                    ...fetchOptions,
+                    headers
+                })
+
+                if (!response.ok) {
+                    if (response.status === 401) {
+                        this.notify('璁よ瘉澶辫触锛岃妫€鏌?Token', 'error')
+                        this.showTokenDialog = true
+                        throw new Error('UNAUTHORIZED')
+                    }
+
+                    const errorData = await response.json().catch(() => ({}))
+                    throw new Error(errorData.detail || '璇锋眰澶辫触 (' + response.status + ')')
+                }
+
+                return await response.json()
+            } catch (error) {
+                if (error && error.name === 'AbortError') {
+                    throw new Error('REQUEST_TIMEOUT')
+                }
+                if (error.message !== 'UNAUTHORIZED') {
+                    console.error('API 璇锋眰閿欒:', error)
+                }
+                throw error
+            } finally {
+                if (timeoutId) {
+                    clearTimeout(timeoutId)
+                }
+            }
+        },
+
+        restoreSitesCache() {
+            const cached = loadStoredSitesCache()
+            if (!cached || !cached.sites) {
+                return
+            }
+            this.sites = this.normalizeConfig(cached.sites)
+            const domains = Object.keys(this.sites)
+            if (domains.length === 0) {
+                return
+            }
+            if (cached.currentDomain && this.sites[cached.currentDomain]) {
+                this.currentDomain = cached.currentDomain
+                return
+            }
+            if (!this.currentDomain) {
+                this.currentDomain = domains[0]
+            }
+        },
+
+        async loadConfig(silent) {
+            if (typeof silent !== 'boolean') {
+                silent = false
+            }
+
+            this.isLoading = true
+            try {
+                const data = await this.apiRequest('/api/config', { timeoutMs: 5000 })
+                this.sites = this.normalizeConfig(data)
+
+                if (!this.currentDomain && Object.keys(this.sites).length > 0) {
+                    this.currentDomain = Object.keys(this.sites)[0]
+                }
+                saveStoredSitesCache(this.sites, this.currentDomain)
+
+                if (!silent) {
+                    this.notify('閰嶇疆宸插埛鏂?(' + Object.keys(this.sites).length + ' 涓珯鐐?', 'success')
+                }
+                return true
+            } catch (error) {
+                this.notify('鍔犺浇閰嶇疆澶辫触: ' + error.message, 'error')
+                if (Object.keys(this.sites || {}).length === 0) {
+                    this.sites = {}
+                }
+                return false
+            } finally {
+                this.isLoading = false
+            }
+        },
+
+        async refreshStatus() {
+            const [configOk, healthOk] = await Promise.all([
+                this.loadConfig(true),
+                this.loadHealthStatus({ timeoutMs: 2500 }),
+                this.fetchSystemStats({ timeoutMs: 5000 })
+            ])
+
+            if (configOk || healthOk) {
+                this.notify('鐘舵€佸凡鍒锋柊', 'success')
+            } else {
+                this.notify('鍒锋柊澶辫触', 'error')
+            }
+        },
+
+        async fetchSystemStats({ timeoutMs = 0 } = {}) {
+            if (this.isFetchingSystemStats) {
+                return this.systemStats
+            }
+            this.isFetchingSystemStats = true
+            try {
+                this.systemStats = await this.apiRequest('/api/system/stats', {
+                    timeoutMs: timeoutMs || 5000
+                })
+                return this.systemStats
+            } catch (error) {
+                return this.systemStats
+            } finally {
+                this.isFetchingSystemStats = false
+            }
+        },
+
+        async loadHealthStatus({ silent = false, timeoutMs = 0 } = {}) {
+            try {
+                const health = await this.apiRequest('/health', {
+                    timeoutMs: timeoutMs || 2500
+                })
+                this.appVersion = String(health.version || '').trim()
+                saveStoredMarketplaceClientVersion(this.appVersion)
+                this.browserStatus = health.browser || {}
+                this.authEnabled = health.config?.auth_enabled || false
+                return true
+            } catch (error) {
+                if (error.message === 'UNAUTHORIZED') {
+                    this.authEnabled = true
+                    return true
+                }
+
+                console.error('鐘舵€佹鏌ュけ璐?', error)
+                if (!silent) {
+                    this.notify('鐘舵€佹鏌ュけ璐? ' + error.message, 'error')
+                }
+                return false
+            }
+        },
 
         notify(message, type) {
             if (!type) type = 'info'

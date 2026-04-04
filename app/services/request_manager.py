@@ -9,6 +9,8 @@ v2.0 改动：
 
 import asyncio
 import threading
+import json
+import os
 import time
 import uuid
 from enum import Enum
@@ -127,9 +129,31 @@ class RequestManager:
         self._request_counter = 0  # 请求计数器
         
         self._max_history = 100
+        
+        self._stats_file = "config/app_stats.json"
+        self.total_requests = 0
+        self._load_stats()
+        
         self._initialized = True
         
         logger.debug("RequestManager 初始化完成")
+        
+    def _load_stats(self):
+        try:
+            if os.path.exists(self._stats_file):
+                with open(self._stats_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    self.total_requests = data.get("total_requests", 0)
+        except Exception as e:
+            logger.debug(f"加载状态失败: {e}")
+
+    def _save_stats(self):
+        try:
+            os.makedirs(os.path.dirname(self._stats_file), exist_ok=True)
+            with open(self._stats_file, "w", encoding="utf-8") as f:
+                json.dump({"total_requests": self.total_requests}, f)
+        except Exception as e:
+            logger.debug(f"保存状态失败: {e}")
     
     def create_request(self) -> RequestContext:
         """创建新请求"""
@@ -191,6 +215,9 @@ class RequestManager:
     def start_request(self, ctx: RequestContext, tab_id: str = None):
         """标记请求开始执行"""
         ctx.mark_running(tab_id)
+        with self._requests_lock:
+            self.total_requests += 1
+            threading.Thread(target=self._save_stats, daemon=True).start()
         # 日志由调用方在上下文中记录，这里不再重复
 
     def bind_tab(self, request_id: str, tab_id: str) -> bool:

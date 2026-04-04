@@ -700,7 +700,7 @@ async def test_selector(
         return {"success": False, "count": 0, "message": f"浏览器未连接: {str(e)}"}
 
     except Exception as e:
-        logger.error(f"测试选择器失败: {e}", exc_info=True)
+        logger.error(f"测试选择器失败: {e}")
         return {"success": False, "count": 0, "message": str(e)}
 
 
@@ -758,3 +758,121 @@ async def cancel_current(
         "request_id": current_id,
         "tab_id": tab_id or running_requests[0].tab_id,
     }
+
+import shutil
+import os as _os
+import psutil as _psutil
+
+
+def _get_project_memory_mb() -> float:
+    """计算本项目总内存占用（Python 进程 + 浏览器子进程树）"""
+    try:
+        main_proc = _psutil.Process(_os.getpid())
+        total_rss = main_proc.memory_info().rss
+
+        # 收集 Python 进程的所有子进程（包括浏览器）
+        for child in main_proc.children(recursive=True):
+            try:
+                total_rss += child.memory_info().rss
+            except (_psutil.NoSuchProcess, _psutil.AccessDenied):
+                pass
+
+        # 额外：尝试通过调试端口找到独立启动的 Chrome 进程
+        debug_port = str(AppConfig.get_browser_port())
+        for proc in _psutil.process_iter(['pid', 'name', 'cmdline']):
+            try:
+                if proc.pid == main_proc.pid:
+                    continue
+                # 跳过已统计的子进程
+                if proc.pid in {c.pid for c in main_proc.children(recursive=True)}:
+                    continue
+                cmdline = proc.info.get('cmdline') or []
+                cmdline_str = ' '.join(cmdline)
+                if ('chrome' in (proc.info.get('name') or '').lower() or
+                    'msedge' in (proc.info.get('name') or '').lower()):
+                    if f'--remote-debugging-port={debug_port}' in cmdline_str:
+                        # 找到主浏览器进程，加上它和它的子进程
+                        total_rss += proc.memory_info().rss
+                        for bchild in proc.children(recursive=True):
+                            try:
+                                total_rss += bchild.memory_info().rss
+                            except (_psutil.NoSuchProcess, _psutil.AccessDenied):
+                                pass
+            except (_psutil.NoSuchProcess, _psutil.AccessDenied):
+                pass
+
+        return round(total_rss / (1024 * 1024), 1)
+    except Exception:
+        return 0.0
+
+
+def _get_project_disk_usage_mb() -> float:
+    """计算本项目目录占用的磁盘空间"""
+    try:
+        project_dir = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+        total_size = 0
+        for dirpath, dirnames, filenames in _os.walk(project_dir):
+            # 跳过 .git 和 chrome_profile 等大目录以加速
+            dirnames[:] = [d for d in dirnames if d not in {'.git', '__pycache__', 'node_modules', 'chrome_profile'}]
+            for f in filenames:
+                fp = _os.path.join(dirpath, f)
+                try:
+                    total_size += _os.path.getsize(fp)
+                except OSError:
+                    pass
+        return round(total_size / (1024 * 1024), 1)
+    except Exception:
+        return 0.0
+
+
+_SYSTEM_STATS_CACHE = {
+    "expires_at": 0.0,
+    "payload": {
+        "memory_mb": 0.0,
+        "disk_status": "0 MB",
+        "total_requests": 0,
+    },
+}
+_DISK_USAGE_CACHE = {
+    "expires_at": 0.0,
+    "value": 0.0,
+}
+
+
+def _format_disk_usage(disk_mb: float) -> str:
+    if disk_mb >= 1024:
+        return f"{round(disk_mb / 1024, 2)} GB"
+    return f"{disk_mb} MB"
+
+
+def _get_project_disk_usage_mb_cached(ttl_seconds: float = 60.0) -> float:
+    now = time.monotonic()
+    cached_value = float(_DISK_USAGE_CACHE.get("value", 0.0) or 0.0)
+    if now < float(_DISK_USAGE_CACHE.get("expires_at", 0.0) or 0.0):
+        return cached_value
+
+    disk_mb = _get_project_disk_usage_mb()
+    _DISK_USAGE_CACHE["value"] = disk_mb
+    _DISK_USAGE_CACHE["expires_at"] = now + max(1.0, float(ttl_seconds or 60.0))
+    return disk_mb
+
+
+def _get_system_stats_payload_cached(ttl_seconds: float = 10.0) -> Dict[str, Any]:
+    now = time.monotonic()
+    cached_payload = _SYSTEM_STATS_CACHE.get("payload") or {}
+    if now < float(_SYSTEM_STATS_CACHE.get("expires_at", 0.0) or 0.0):
+        return dict(cached_payload)
+
+    payload = {
+        "memory_mb": _get_project_memory_mb(),
+        "disk_status": _format_disk_usage(_get_project_disk_usage_mb_cached()),
+        "total_requests": int(getattr(request_manager, "total_requests", 0) or 0),
+    }
+    _SYSTEM_STATS_CACHE["payload"] = payload
+    _SYSTEM_STATS_CACHE["expires_at"] = now + max(1.0, float(ttl_seconds or 10.0))
+    return dict(payload)
+
+
+@router.get("/api/system/stats")
+async def get_system_stats(authenticated: bool = Depends(verify_auth)):
+    return await asyncio.to_thread(_get_system_stats_payload_cached)

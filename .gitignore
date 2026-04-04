@@ -37,6 +37,9 @@ obj/
 *.log
 logs/
 
+# 运行时统计（持久化请求计数等）
+config/app_stats.json
+
 # 系统文件
 .DS_Store
 Thumbs.db

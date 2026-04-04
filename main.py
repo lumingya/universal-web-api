@@ -544,7 +544,7 @@ async def not_found_handler(request, exc):
 
 @app.exception_handler(500)
 async def internal_error_handler(request, exc):
-    logger.error(f"内部错误: {exc}", exc_info=True)
+    logger.error(f"内部错误: {exc}")
     return JSONResponse(
         status_code=500,
         content={"error": {"message": "服务器内部错误"}}
