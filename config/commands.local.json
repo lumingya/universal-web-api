@@ -115,10 +115,22 @@
       "group_name": "竞技场命令"
     },
     {
+      "id": "cmd_arena_login_popup_clear_cookies",
+      "name": "ARENA_LOGIN_POPUP_CLEAR_COOKIES",
+      "enabled": true,
+      "group_name": "竞技场命令"
+    },
+    {
       "id": "cmd_arena_terms_refresh_followup",
       "name": "ARENA_AGREE_POPUP_REFRESH_ABORT",
       "enabled": true,
       "group_name": "竞技场命令"
+    },
+    {
+      "id": "cmd_500d2416",
+      "name": "新命令2",
+      "enabled": true,
+      "group_name": ""
     }
   ]
 }

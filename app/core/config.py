@@ -35,6 +35,17 @@ _shared_file_log_handler: Optional[logging.Handler] = None
 _shared_file_log_handler_lock = threading.Lock()
 # ================= 环境变量加载 =================
 
+
+class classproperty:
+    """Allow config access via both `AppConfig.X` and `app_config.X`."""
+
+    def __init__(self, fget):
+        self.fget = fget
+
+    def __get__(self, obj, owner=None):
+        return self.fget(owner)
+
+
 def load_dotenv(env_file: str = ".env", override: bool = True):
     """
     手动加载 .env 文件（不依赖 python-dotenv）
@@ -278,11 +289,26 @@ class AppConfig:
             return False
         return not bool(AppConfig.get_marketplace_index_url())
     
-    # ===== 便捷属性（类属性风格访问）=====
-    HOST = property(lambda self: self.get_host())
-    PORT = property(lambda self: self.get_port())
-    DEBUG = property(lambda self: self.is_debug())
-    LOG_LEVEL = property(lambda self: self.get_log_level())
+    # ===== 便捷属性（支持类/实例两种访问方式）=====
+    @classproperty
+    def HOST(cls) -> str:
+        return cls.get_host()
+
+    @classproperty
+    def PORT(cls) -> int:
+        return cls.get_port()
+
+    @classproperty
+    def DEBUG(cls) -> bool:
+        return cls.is_debug()
+
+    @classproperty
+    def LOG_LEVEL(cls) -> str:
+        return cls.get_log_level()
+
+    @classproperty
+    def AUTH_TOKEN(cls) -> str:
+        return cls.get_auth_token()
 
 
 # 创建全局配置实例

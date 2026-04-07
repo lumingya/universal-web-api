@@ -2972,13 +2972,36 @@ const app = createApp({
             if (!this.currentConfig) return null
             const presets = this.currentConfig.presets
             if (!presets) return this.currentConfig
-            const name = this.getActivePresetName()
+            const name = this.resolveExistingPresetName(this.currentConfig, this.getActivePresetName())
             const configuredDefault = this.currentConfig.default_preset
             return presets[name]
                 || (configuredDefault ? presets[configuredDefault] : null)
                 || presets['主预设']
                 || Object.values(presets)[0]
                 || null
+        },
+
+        resolveExistingPresetName(site, presetName) {
+            const presets = site && site.presets
+            const normalized = String(presetName || '').trim()
+            if (!presets || typeof presets !== 'object' || !normalized) {
+                return normalized
+            }
+            if (presets[normalized]) {
+                return normalized
+            }
+            if (normalized.startsWith('预设_')) {
+                const stripped = normalized.slice(3).trim()
+                if (stripped && presets[stripped]) {
+                    return stripped
+                }
+            } else {
+                const prefixed = '预设_' + normalized
+                if (presets[prefixed]) {
+                    return prefixed
+                }
+            }
+            return normalized
         },
 
         // ========== 数据操作 ==========
@@ -3081,6 +3104,17 @@ const app = createApp({
                     const y = Number(step.value?.y)
                     if (!Number.isFinite(x) || !Number.isFinite(y)) {
                         this.notify('步骤 ' + (i + 1) + ': 请输入有效的 X/Y 坐标', 'error')
+                        return false
+                    }
+                }
+
+                if (step.action === 'COORD_SCROLL') {
+                    const startX = Number(step.value?.start_x)
+                    const startY = Number(step.value?.start_y)
+                    const endX = Number(step.value?.end_x)
+                    const endY = Number(step.value?.end_y)
+                    if (![startX, startY, endX, endY].every(Number.isFinite)) {
+                        this.notify('步骤 ' + (i + 1) + ': 请输入完整的起点/终点坐标', 'error')
                         return false
                     }
                 }
@@ -3262,6 +3296,14 @@ const app = createApp({
                     y: Number(step.value?.y ?? 0),
                     random_radius: Number(step.value?.random_radius ?? 10)
                 }
+            } else if (step.action === 'COORD_SCROLL') {
+                step.target = ''
+                step.value = {
+                    start_x: Number(step.value?.start_x ?? 0),
+                    start_y: Number(step.value?.start_y ?? 0),
+                    end_x: Number(step.value?.end_x ?? 0),
+                    end_y: Number(step.value?.end_y ?? 300)
+                }
             } else if (step.action === 'KEY_PRESS') {
                 step.value = null
                 if (!step.target) step.target = 'Enter'
@@ -3374,7 +3416,8 @@ const app = createApp({
 
             const site = JSON.parse(JSON.stringify(this.sites[this.currentDomain] || {}))
             const presets = site.presets || { '主预设': {} }
-            const presetName = this.getActivePresetName()
+            const activePresetName = this.getActivePresetName()
+            const presetName = this.resolveExistingPresetName(site, activePresetName) || activePresetName
             const currentPreset = presets[presetName] || presets['主预设'] || {}
             const { domain, preset_name, timestamp, ...presetPatch } = parsed
 

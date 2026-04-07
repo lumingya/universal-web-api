@@ -10,7 +10,8 @@ app/api/config_routes.py - 配置管理 API
 """
 
 import json
-from typing import Optional, Dict, Any
+import time
+from typing import Optional, Dict, Any, Callable
 
 from fastapi import APIRouter, Request, HTTPException, Header, Depends
 from fastapi.responses import JSONResponse
@@ -27,6 +28,328 @@ from app.utils.similarity import verify_extraction
 logger = get_logger("API.CONFIG")
 
 router = APIRouter()
+
+
+def _notify_workflow_editor_action_result(tab, action_id: str, success: bool, message: str) -> None:
+    """将测试结果回推给已注入的可视化编辑器页面。"""
+    try:
+        tab.run_js(
+            """
+            return (function(actionId, ok, text) {
+              if (window.WorkflowEditor && typeof window.WorkflowEditor.handleBackendResult === 'function') {
+                window.WorkflowEditor.handleBackendResult(actionId, ok, text);
+                return true;
+              }
+              return false;
+            })(arguments[0], arguments[1], arguments[2]);
+            """,
+            str(action_id or ""),
+            bool(success),
+            str(message or ""),
+        )
+    except Exception as e:
+        logger.debug(f"回推编辑器测试结果失败（忽略）: {e}")
+
+
+def _notify_workflow_editor_action_status(tab, action_id: str, phase: str, message: str) -> None:
+    """将测试中间状态回推给已注入的可视化编辑器页面。"""
+    try:
+        tab.run_js(
+            """
+            return (function(actionId, phaseName, text) {
+              if (window.WorkflowEditor && typeof window.WorkflowEditor.handleBackendStatus === 'function') {
+                window.WorkflowEditor.handleBackendStatus(actionId, phaseName, text);
+                return true;
+              }
+              return false;
+            })(arguments[0], arguments[1], arguments[2]);
+            """,
+            str(action_id or ""),
+            str(phase or ""),
+            str(message or ""),
+        )
+    except Exception as e:
+        logger.debug(f"回推编辑器测试状态失败（忽略）: {e}")
+
+
+def _wake_workflow_editor_test_tab(session) -> None:
+    """在测试前尽量唤醒后台标签页，避免页面被冻结导致点击无效。"""
+    if session is None:
+        return
+
+    try:
+        if hasattr(session, "activate"):
+            session.activate()
+    except Exception:
+        pass
+
+    focus_emulation_set = False
+    try:
+        session.tab.run_cdp("Emulation.setFocusEmulationEnabled", enabled=True)
+        focus_emulation_set = True
+    except Exception:
+        pass
+
+    try:
+        session.tab.run_cdp("Page.setWebLifecycleState", state="active")
+    except Exception:
+        pass
+
+    try:
+        session.tab.run_js("return document.readyState || '';")
+    except Exception:
+        pass
+    finally:
+        if focus_emulation_set:
+            try:
+                session.tab.run_cdp("Emulation.setFocusEmulationEnabled", enabled=False)
+            except Exception:
+                pass
+
+
+def _execute_workflow_editor_test_payload(
+    browser_instance,
+    data: Dict[str, Any],
+    progress_callback: Optional[Callable[[str, str], None]] = None
+) -> Dict[str, Any]:
+    """复用真实执行器执行可视化编辑器测试。"""
+    from app.core.workflow.executor import WorkflowExecutor
+
+    action_labels = {
+        "CLICK": "点击元素",
+        "COORD_CLICK": "坐标点击",
+        "COORD_SCROLL": "模拟滑动",
+        "FILL_INPUT": "填入内容",
+        "STREAM_WAIT": "流式等待",
+        "WAIT": "等待",
+        "KEY_PRESS": "按键",
+        "JS_EXEC": "执行脚本",
+    }
+
+    domain = str(data.get("domain") or "").strip()
+    tab_id = str(data.get("tab_id") or "").strip()
+    workflow = data.get("workflow") or []
+    selectors = data.get("selectors") or {}
+    preset_name = str(data.get("preset_name") or "").strip() or None
+    prompt_text = str(data.get("prompt") or "")
+    stealth = bool(data.get("stealth", False))
+    stream_config = dict(data.get("stream_config") or {})
+    image_config = data.get("image_extraction") or {}
+    file_paste_config = data.get("file_paste") or {}
+
+    if not domain:
+        raise HTTPException(status_code=400, detail="缺少 domain")
+    if not isinstance(workflow, list) or not workflow:
+        raise HTTPException(status_code=400, detail="workflow 必须是非空数组")
+    if not isinstance(selectors, dict):
+        raise HTTPException(status_code=400, detail="selectors 必须是对象")
+
+    if not browser_instance.get_browser_handle():
+        raise HTTPException(status_code=503, detail="浏览器未连接")
+
+    task_id = f"workflow_editor_test_{int(time.time() * 1000)}"
+    session = None
+    started_at = time.time()
+
+    try:
+        if tab_id and getattr(browser_instance, "tab_pool", None) is not None:
+            session = browser_instance.tab_pool.acquire_by_raw_tab_id(
+                tab_id,
+                task_id,
+                timeout=5,
+                count_request=False,
+            )
+
+        tab = session.tab if session is not None else (
+            browser_instance.get_tab(tab_id) if tab_id else browser_instance.get_latest_tab()
+        )
+
+        logger.debug(
+            "[WFE_TEST] tab resolved "
+            f"session={getattr(session, 'id', None)!r} "
+            f"raw_tab_id={getattr(tab, 'tab_id', None)!r} "
+            f"url={str(getattr(tab, 'url', '') or '')[:160]!r}"
+        )
+
+        test_stream_config = dict(stream_config or {})
+        test_network_config = dict(test_stream_config.get("network") or {})
+        test_stream_config["hard_timeout"] = min(
+            float(test_stream_config.get("hard_timeout", 45) or 45),
+            45.0,
+        )
+        test_network_config["first_response_timeout"] = min(
+            float(test_network_config.get("first_response_timeout", 12) or 12),
+            12.0,
+        )
+        test_network_config["silence_threshold"] = min(
+            float(test_network_config.get("silence_threshold", 3) or 3),
+            3.0,
+        )
+        test_stream_config["network"] = test_network_config
+
+        logger.debug(
+            "[WFE_TEST] start "
+            f"domain={domain!r} tab_id={tab_id!r} preset={preset_name!r} "
+            f"steps={len(workflow)} selectors={len(selectors)} "
+            f"hard_timeout={test_stream_config['hard_timeout']:.1f}s "
+            f"first_response_timeout={test_network_config['first_response_timeout']:.1f}s "
+            f"silence_threshold={test_network_config['silence_threshold']:.1f}s"
+        )
+
+        if progress_callback:
+            progress_callback("running", f"本地控制台已接管，准备执行 {len(workflow)} 个动作")
+
+        _wake_workflow_editor_test_tab(session)
+
+        url = str(getattr(tab, "url", "") or "")
+        actual_domain = extract_remote_site_domain(url)
+        if not actual_domain:
+            raise HTTPException(status_code=400, detail="当前页面不是可解析的网站")
+        if actual_domain != domain:
+            raise HTTPException(
+                status_code=400,
+                detail=f"域名不匹配：当前页面是 {actual_domain}，测试目标是 {domain}"
+            )
+
+        resolved_site_config = config_engine.get_site_config(
+            domain,
+            getattr(tab, "html", "") or "",
+            preset_name=preset_name
+        ) or {}
+
+        extractor = config_engine.get_site_extractor(domain, preset_name=preset_name)
+        executor = WorkflowExecutor(
+            tab=tab,
+            stealth_mode=stealth,
+            should_stop_checker=lambda: False,
+            extractor=extractor,
+            image_config=image_config,
+            stream_config=test_stream_config or resolved_site_config.get("stream_config") or {},
+            file_paste_config=file_paste_config,
+            selectors=selectors,
+            session=session,
+        )
+
+        executed = 0
+        context = {
+            "prompt": prompt_text,
+            "images": [],
+        }
+
+        for step in workflow:
+            action = str(step.get("action") or "").strip()
+            target_key = str(step.get("target") or "")
+            optional = bool(step.get("optional", False))
+            value = step.get("value")
+            selector = selectors.get(target_key, "")
+            current_index = executed + 1
+
+            logger.debug(
+                "[WFE_TEST] step "
+                f"index={current_index} action={action!r} target={target_key!r} "
+                f"selector={selector!r} optional={optional}"
+            )
+
+            if progress_callback:
+                progress_callback(
+                    "step",
+                    f"执行 {current_index}/{len(workflow)} · {action_labels.get(action, action)}"
+                )
+
+            if not action:
+                raise HTTPException(status_code=400, detail="workflow 中存在缺少 action 的步骤")
+
+            if action == "FILL_INPUT" and value is not None:
+                context["prompt"] = str(value)
+
+            for _ in executor.execute_step(
+                action=action,
+                selector=selector,
+                target_key=target_key,
+                value=value,
+                optional=optional,
+                context=context
+            ):
+                pass
+
+            executed += 1
+
+        logger.debug(
+            "[WFE_TEST] done "
+            f"domain={domain!r} tab_id={tab_id or str(getattr(tab, 'tab_id', '') or '')!r} "
+            f"executed_steps={executed} duration={time.time() - started_at:.2f}s"
+        )
+
+        return {
+            "success": True,
+            "message": f"已测试 {executed} 个步骤",
+            "domain": domain,
+            "tab_id": tab_id or str(getattr(tab, "tab_id", "") or ""),
+            "preset_name": preset_name or config_engine.get_default_preset(domain) or "主预设",
+            "executed_steps": executed,
+            "_tab_ref": tab,
+        }
+    finally:
+        if session is not None and getattr(browser_instance, "tab_pool", None) is not None:
+            logger.debug(f"[WFE_TEST] release session={session.id!r}")
+            browser_instance.tab_pool.release(session.id, check_triggers=False)
+
+
+def _save_site_workflow_payload(domain: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    """保存工作流配置，供直接 API 和桥接模式复用。"""
+    new_workflow = data.get("workflow")
+    new_selectors = data.get("selectors")
+    preset_name = data.get("preset_name")
+
+    if new_workflow is None:
+        raise HTTPException(status_code=400, detail="缺少 workflow 字段")
+
+    if not isinstance(new_workflow, list):
+        raise HTTPException(status_code=400, detail="workflow 必须是数组")
+
+    if new_selectors is not None and (
+        not isinstance(new_selectors, dict) or isinstance(new_selectors, list)
+    ):
+        raise HTTPException(status_code=400, detail="selectors 必须是对象")
+
+    config_engine.refresh_if_changed()
+    if domain not in config_engine.sites:
+        raise HTTPException(status_code=404, detail=f"站点不存在: {domain}")
+
+    site = config_engine.sites[domain]
+    presets = site.get("presets", {})
+    resolved_preset_name = None
+    if preset_name:
+        resolved_preset_name = config_engine._resolve_preset_alias_key(preset_name, presets)
+        if resolved_preset_name not in presets:
+            raise HTTPException(status_code=404, detail=f"预设不存在: {preset_name}")
+
+    preset_data = config_engine._get_site_data(domain, resolved_preset_name)
+    if preset_data is None:
+        raise HTTPException(status_code=404, detail="站点或预设不存在")
+
+    preset_data["workflow"] = new_workflow
+    if new_selectors is not None:
+        preset_data["selectors"] = new_selectors
+
+    success = config_engine.save_config()
+    if not success:
+        raise HTTPException(status_code=500, detail="保存配置文件失败")
+
+    used_preset = (
+        resolved_preset_name
+        or config_engine.get_default_preset(domain)
+        or "主预设"
+    )
+    logger.info(f"站点 {domain} [{used_preset}] 工作流已更新: {len(new_workflow)} 个步骤")
+
+    return {
+        "status": "success",
+        "message": f"工作流已保存",
+        "domain": domain,
+        "preset_name": used_preset,
+        "steps_count": len(new_workflow)
+    }
 
 
 # ================= 请求模型 =================
@@ -560,6 +883,186 @@ async def inject_workflow_editor(request: Request):
         )
 
 
+@router.post("/api/workflow-editor/test")
+async def test_workflow_editor_steps(
+    request: Request,
+    authenticated: bool = Depends(verify_auth)
+):
+    """在当前活动标签页上按真实执行器测试工作流步骤。"""
+    from app.core.browser import get_browser
+
+    try:
+        data = await request.json()
+        logger.debug(f"[WFE_TEST] direct api request keys={sorted(list(data.keys()))}")
+        browser_instance = get_browser(auto_connect=True)
+        result = _execute_workflow_editor_test_payload(browser_instance, data)
+        result.pop("_tab_ref", None)
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"工作流编辑器测试失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/api/workflow-editor/consume-actions")
+async def consume_workflow_editor_actions(
+    authenticated: bool = Depends(verify_auth)
+):
+    """由本地控制台轮询，消费远端页面注入编辑器排队的动作请求。"""
+    from app.core.browser import get_browser
+
+    browser_instance = get_browser(auto_connect=True)
+    if not browser_instance.get_browser_handle():
+        return {
+            "success": False,
+            "message": "浏览器未连接",
+            "executed_count": 0,
+            "results": [],
+        }
+
+    consume_started_at = time.time()
+    results = []
+    tabs = []
+    queued_total = 0
+    try:
+        tabs = browser_instance.get_tabs() or []
+    except Exception as e:
+        logger.debug(f"读取浏览器标签页失败: {e}")
+        tabs = []
+
+    for tab in tabs:
+        try:
+            queued_actions = tab.run_js(
+                """
+                return (function() {
+                  const queue = Array.isArray(window.__WORKFLOW_EDITOR_PENDING_ACTIONS__)
+                    ? window.__WORKFLOW_EDITOR_PENDING_ACTIONS__
+                    : [];
+                  if (!queue.length) {
+                    return [];
+                  }
+                  const pending = queue.splice(0, queue.length);
+                  return pending;
+                })();
+                """
+            )
+        except Exception:
+            continue
+
+        if not isinstance(queued_actions, list) or not queued_actions:
+            continue
+
+        queued_total += len(queued_actions)
+
+        logger.debug(
+            "[WFE_BRIDGE] queued actions "
+            f"tab_id={getattr(tab, 'tab_id', None)!r} count={len(queued_actions)}"
+        )
+
+        for action in queued_actions:
+            action_id = str((action or {}).get("id") or "").strip()
+            action_type = str((action or {}).get("type") or "").strip()
+            payload = (action or {}).get("payload") or {}
+
+            logger.debug(
+                "[WFE_BRIDGE] consume action "
+                f"id={action_id!r} type={action_type!r} "
+                f"payload_keys={sorted(list(payload.keys())) if isinstance(payload, dict) else 'invalid'}"
+            )
+
+            if action_type not in {"test_workflow", "save_workflow"}:
+                logger.debug(f"忽略未知编辑器动作: {action_type}")
+                continue
+
+            try:
+                payload = dict(payload)
+                action_started_at = time.time()
+                queue_wait_ms = max(
+                    0,
+                    int((time.time() * 1000) - float((action or {}).get("created_at") or 0))
+                )
+                logger.debug(
+                    "[WFE_BRIDGE] execute "
+                    f"id={action_id!r} type={action_type!r} "
+                    f"preset={str(payload.get('preset_name') or '')!r} "
+                    f"steps={len(payload.get('workflow') or [])} "
+                    f"queue_wait_ms={queue_wait_ms}"
+                )
+                if action_type == "test_workflow":
+                    payload.setdefault("tab_id", str(getattr(tab, "tab_id", "") or ""))
+                    result = _execute_workflow_editor_test_payload(
+                        browser_instance,
+                        payload,
+                        progress_callback=lambda phase, message, _tab=tab, _action_id=action_id: _notify_workflow_editor_action_status(
+                            _tab,
+                            _action_id,
+                            phase,
+                            message,
+                        )
+                    )
+                    tab_ref = result.pop("_tab_ref", tab)
+                else:
+                    domain = str(payload.get("domain") or "").strip()
+                    result = _save_site_workflow_payload(domain, payload)
+                    tab_ref = tab
+                _notify_workflow_editor_action_result(
+                    tab_ref,
+                    action_id,
+                    True,
+                    str(result.get("message") or "测试完成"),
+                )
+                logger.debug(
+                    "[WFE_BRIDGE] action success "
+                    f"id={action_id!r} "
+                    f"duration={time.time() - action_started_at:.2f}s "
+                    f"message={str(result.get('message') or '')!r}"
+                )
+                results.append({
+                    "id": action_id,
+                    "type": action_type,
+                    "success": True,
+                    "message": result.get("message") or "测试完成",
+                })
+            except HTTPException as e:
+                message = str(e.detail or "测试失败")
+                logger.debug(
+                    f"[WFE_BRIDGE] action http error id={action_id!r} "
+                    f"message={message!r}"
+                )
+                _notify_workflow_editor_action_result(tab, action_id, False, message)
+                results.append({
+                    "id": action_id,
+                    "type": action_type,
+                    "success": False,
+                    "message": message,
+                })
+            except Exception as e:
+                message = str(e or "测试失败")
+                logger.error(f"[WFE_BRIDGE] action exception id={action_id!r}: {message}")
+                _notify_workflow_editor_action_result(tab, action_id, False, message)
+                results.append({
+                    "id": action_id,
+                    "type": action_type,
+                    "success": False,
+                    "message": message,
+                })
+
+    if queued_total > 0:
+        logger.debug(
+            "[WFE_BRIDGE] consume done "
+            f"queued_count={queued_total} executed_count={len(results)} "
+            f"duration={time.time() - consume_started_at:.2f}s"
+        )
+    return {
+        "success": True,
+        "message": f"已消费 {len(results)} 个动作",
+        "executed_count": len(results),
+        "results": results,
+    }
+
+
 @router.put("/api/sites/{domain}/workflow")
 async def update_site_workflow(
     domain: str,
@@ -569,53 +1072,7 @@ async def update_site_workflow(
     """更新站点的工作流配置（可视化编辑器保存）"""
     try:
         data = await request.json()
-        new_workflow = data.get("workflow")
-        new_selectors = data.get("selectors")
-        preset_name = data.get("preset_name")
-        
-        if new_workflow is None:
-            raise HTTPException(status_code=400, detail="缺少 workflow 字段")
-
-        if not isinstance(new_workflow, list):
-            raise HTTPException(status_code=400, detail="workflow 必须是数组")
-
-        if new_selectors is not None and (
-            not isinstance(new_selectors, dict) or isinstance(new_selectors, list)
-        ):
-            raise HTTPException(status_code=400, detail="selectors 必须是对象")
-        
-        if domain not in config_engine.sites:
-            raise HTTPException(status_code=404, detail=f"站点不存在: {domain}")
-
-        site = config_engine.sites[domain]
-        presets = site.get("presets", {})
-        if preset_name and preset_name not in presets:
-            raise HTTPException(status_code=404, detail=f"预设不存在: {preset_name}")
-
-        config_engine.refresh_if_changed()
-        preset_data = config_engine._get_site_data(domain, preset_name)
-        if preset_data is None:
-            raise HTTPException(status_code=404, detail="站点或预设不存在")
-
-        preset_data["workflow"] = new_workflow
-        if new_selectors is not None:
-            preset_data["selectors"] = new_selectors
-
-        success = config_engine.save_config()
-        
-        if not success:
-            raise HTTPException(status_code=500, detail="保存配置文件失败")
-        
-        used_preset = preset_name or "主预设"
-        logger.info(f"站点 {domain} [{used_preset}] 工作流已更新: {len(new_workflow)} 个步骤")
-        
-        return {
-            "status": "success",
-            "message": f"工作流已保存",
-            "domain": domain,
-            "preset_name": used_preset,
-            "steps_count": len(new_workflow)
-        }
+        return _save_site_workflow_payload(domain, data)
         
     except HTTPException:
         raise

@@ -182,7 +182,7 @@
         {
           "type": "execute_workflow",
           "prompt": "",
-          "preset_name": "切换SideBySide",
+          "preset_name": "预设_选择模型",
           "action_id": "step_1_model"
         }
       ],
@@ -232,7 +232,7 @@
         },
         {
           "type": "execute_workflow",
-          "preset_name": "过cf盾",
+          "preset_name": "预设_过CF盾",
           "prompt": "",
           "action_id": "step_3_verify"
         },
@@ -275,13 +275,24 @@
         "abort_on_match": true,
         "priority": 4,
         "periodic_enabled": false,
-        "periodic_interval_sec": 8.0,
-        "periodic_jitter_sec": 2.0
+        "periodic_interval_sec": 8,
+        "periodic_jitter_sec": 2,
+        "command_ids": [],
+        "listen_all_commands": false,
+        "informative_only": true,
+        "fire_mode": "edge",
+        "cooldown_sec": 0,
+        "stable_for_sec": 0,
+        "check_while_busy_workflow": true,
+        "allow_during_workflow": false,
+        "interrupt_policy": "auto",
+        "interrupt_message": "",
+        "probe_js": ""
       },
       "actions": [
         {
           "type": "execute_workflow",
-          "preset_name": "过cf盾",
+          "preset_name": "预设_选择模型",
           "prompt": "",
           "action_id": "step_1_verify"
         },
@@ -303,7 +314,8 @@
       "last_triggered": 1772621496.7491813,
       "trigger_count": 1,
       "log_enabled": true,
-      "log_level": "GLOBAL"
+      "log_level": "GLOBAL",
+      "stop_on_error": false
     },
     {
       "id": "cmd_cf_pagecheck_arena_verify",
@@ -336,7 +348,7 @@
       "actions": [
         {
           "type": "execute_workflow",
-          "preset_name": "过cf盾",
+          "preset_name": "预设_过CF盾",
           "prompt": "",
           "action_id": "step_1_verify"
         },
@@ -509,7 +521,7 @@
       "actions": [
         {
           "type": "execute_workflow",
-          "preset_name": "切换SideBySide",
+          "preset_name": "预设_选择模型",
           "prompt": "",
           "action_id": "step_1_model"
         }
@@ -522,7 +534,7 @@
       "log_level": "GLOBAL"
     },
     {
-      "name": "切换模型中",
+      "name": "选择模型中",
       "enabled": true,
       "mode": "simple",
       "trigger": {
@@ -550,7 +562,7 @@
         {
           "type": "execute_workflow",
           "action_id": "step_2",
-          "preset_name": "切换SideBySide",
+          "preset_name": "预设_选择模型",
           "prompt": ""
         }
       ],
@@ -558,7 +570,7 @@
       "script": "",
       "script_lang": "javascript",
       "id": "cmd_69640733",
-      "last_triggered": 1775036708.4062357,
+      "last_triggered": 1775543681.60639,
       "trigger_count": 1,
       "log_enabled": true,
       "log_level": "GLOBAL"
@@ -591,7 +603,7 @@
       "actions": [
         {
           "type": "execute_workflow",
-          "preset_name": "切换SideBySide",
+          "preset_name": "预设_选择模型",
           "prompt": "",
           "action_id": "step_1_model"
         }
@@ -654,7 +666,7 @@
           "user_id": "#",
           "group_id": "",
           "message": "Arena 告警\\n命令：{{source_command_name}}\\n结果：{{command_result_summary}}\\n站点：{{domain}}\\n标签页：#{{tab_index}}\\n时间：{{iso_time}}",
-          "access_token": "qwe07931",
+          "access_token": "{{NAPCAT_ACCESS_TOKEN}}",
           "timeout": 8,
           "raise_for_status": true
         }
@@ -696,7 +708,7 @@
       "actions": [
         {
           "type": "execute_workflow",
-          "preset_name": "切换SideBySide",
+          "preset_name": "预设_选择模型",
           "prompt": "",
           "action_id": "step_1_model"
         }
@@ -766,7 +778,7 @@
       "group_name": "gemini命令",
       "script": "",
       "script_lang": "javascript",
-      "last_triggered": 1774453977.5999684,
+      "last_triggered": 1775383928.5613492,
       "trigger_count": 2,
       "stop_on_error": false,
       "log_enabled": true,
@@ -877,7 +889,7 @@
       "mode": "simple",
       "trigger": {
         "type": "page_check",
-        "value": "你已达到 Pro 模型的用量限额",
+        "value": "你已达到 Pro 模型的用量限额 || 用量限额",
         "command_id": "",
         "action_ref": "",
         "match_rule": "equals",
@@ -893,7 +905,16 @@
         "periodic_interval_sec": 3,
         "periodic_jitter_sec": 1,
         "fire_mode": "edge",
-        "cooldown_sec": 6
+        "cooldown_sec": 6,
+        "command_ids": [],
+        "listen_all_commands": false,
+        "informative_only": true,
+        "stable_for_sec": 0,
+        "check_while_busy_workflow": true,
+        "allow_during_workflow": false,
+        "interrupt_policy": "auto",
+        "interrupt_message": "",
+        "probe_js": ""
       },
       "actions": [
         {
@@ -908,7 +929,8 @@
       "last_triggered": 1773883775.3839626,
       "trigger_count": 1,
       "log_enabled": true,
-      "log_level": "GLOBAL"
+      "log_level": "GLOBAL",
+      "stop_on_error": false
     },
     {
       "name": "新命令1",
@@ -947,7 +969,7 @@
       "script": "",
       "script_lang": "javascript",
       "id": "cmd_0020e346",
-      "last_triggered": 1774781032.7463317,
+      "last_triggered": 1775378505.1375713,
       "trigger_count": 1,
       "log_enabled": true,
       "log_level": "GLOBAL"
@@ -1127,6 +1149,55 @@
       "trigger_count": 1,
       "log_enabled": true,
       "log_level": "GLOBAL"
+    },
+    {
+      "name": "新命令2",
+      "enabled": true,
+      "log_enabled": true,
+      "log_level": "GLOBAL",
+      "mode": "simple",
+      "stop_on_error": false,
+      "trigger": {
+        "type": "request_count",
+        "value": 10,
+        "command_id": "",
+        "command_ids": [],
+        "listen_all_commands": false,
+        "informative_only": true,
+        "action_ref": "",
+        "match_rule": "equals",
+        "expected_value": "",
+        "match_mode": "keyword",
+        "status_codes": "403,429,500,502,503,504",
+        "abort_on_match": true,
+        "scope": "domain",
+        "domain": "arena.ai",
+        "tab_index": null,
+        "fire_mode": "edge",
+        "cooldown_sec": 0,
+        "allow_during_workflow": false,
+        "interrupt_policy": "auto",
+        "interrupt_message": "",
+        "probe_js": "",
+        "periodic_enabled": true,
+        "periodic_interval_sec": 8,
+        "periodic_jitter_sec": 2,
+        "stable_for_sec": 0,
+        "check_while_busy_workflow": true,
+        "priority": 2
+      },
+      "actions": [
+        {
+          "type": "execute_workflow",
+          "action_id": "step_1",
+          "prompt": "",
+          "preset_name": "预设_选择模型"
+        }
+      ],
+      "group_name": "",
+      "script": "",
+      "script_lang": "javascript",
+      "id": "cmd_500d2416"
     }
   ]
 }

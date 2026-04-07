@@ -333,6 +333,101 @@ def human_scroll(
             time.sleep(random.uniform(0.02, 0.08))
 
 
+def human_scroll_path(
+    tab,
+    from_pos: Tuple[int, int],
+    to_pos: Tuple[int, int],
+    check_cancelled: Callable[[], bool] = None
+) -> Tuple[int, int]:
+    """
+    沿坐标路径执行人类化滚轮滚动。
+
+    轨迹本身使用平滑鼠标移动，滚动量取 from/to 的坐标差，
+    以多段 wheel 事件逐步逼近目标，适合隐身模式下的坐标滑动。
+    """
+    x0, y0 = int(from_pos[0]), int(from_pos[1])
+    x1, y1 = int(to_pos[0]), int(to_pos[1])
+
+    total_dx = x1 - x0
+    total_dy = y1 - y0
+
+    if total_dx == 0 and total_dy == 0:
+        _dispatch_mouse_move(tab, x0, y0)
+        return (x0, y0)
+
+    travel = math.hypot(total_dx, total_dy)
+    steps = max(4, min(14, int(travel / 55) + random.randint(1, 3)))
+    prev_scroll_x = 0
+    prev_scroll_y = 0
+
+    _dispatch_mouse_move(tab, x0, y0)
+    start_time = time.perf_counter()
+    duration = max(0.18, min(0.9, 0.20 + travel / 900.0 + random.uniform(0.02, 0.12)))
+    step_interval = duration / steps
+
+    for i in range(1, steps + 1):
+        if check_cancelled and check_cancelled():
+            return (x0, y0)
+
+        raw_t = i / steps
+        t = 0.5 - 0.5 * math.cos(raw_t * math.pi)
+
+        cur_x = int(round(x0 + total_dx * t + random.gauss(0, 1.4) * math.sin(raw_t * math.pi)))
+        cur_y = int(round(y0 + total_dy * t + random.gauss(0, 1.8) * math.sin(raw_t * math.pi)))
+        _dispatch_mouse_move(tab, cur_x, cur_y)
+
+        target_scroll_x = int(round(total_dx * t))
+        target_scroll_y = int(round(total_dy * t))
+        delta_x = target_scroll_x - prev_scroll_x
+        delta_y = target_scroll_y - prev_scroll_y
+
+        if delta_x or delta_y:
+            try:
+                tab.run_cdp(
+                    'Input.dispatchMouseEvent',
+                    type='mouseWheel',
+                    x=cur_x,
+                    y=cur_y,
+                    deltaX=delta_x,
+                    deltaY=delta_y,
+                    button='none',
+                    buttons=0,
+                    pointerType='mouse'
+                )
+                prev_scroll_x += delta_x
+                prev_scroll_y += delta_y
+            except Exception as e:
+                logger.debug(f"[SCROLL_CDP] path mouseWheel 派发失败: {e}")
+                break
+
+        target_time = start_time + step_interval * i
+        remaining = target_time - time.perf_counter()
+        if remaining > 0:
+            time.sleep(remaining * random.uniform(0.75, 1.0))
+
+    # 收尾，确保滚动量累计完整
+    rest_dx = total_dx - prev_scroll_x
+    rest_dy = total_dy - prev_scroll_y
+    if rest_dx or rest_dy:
+        try:
+            tab.run_cdp(
+                'Input.dispatchMouseEvent',
+                type='mouseWheel',
+                x=x1,
+                y=y1,
+                deltaX=rest_dx,
+                deltaY=rest_dy,
+                button='none',
+                buttons=0,
+                pointerType='mouse'
+            )
+        except Exception as e:
+            logger.debug(f"[SCROLL_CDP] path 收尾滚动失败: {e}")
+
+    _dispatch_mouse_move(tab, x1, y1)
+    return (x1, y1)
+
+
 # ================= 精确 CDP 点击 =================
 
 def cdp_precise_click(

@@ -83,42 +83,45 @@ class WorkflowEditorInjector:
             already_injected = tab.run_js("return !!window.__WORKFLOW_EDITOR_INJECTED__")
             
             if already_injected:
-                # 🔧 已存在：更新配置后重新加载
-                logger.info(f"编辑器已存在，更新配置: domain={target_domain}")
-                
+                # 已存在：销毁旧实例后强制重注入，避免继续运行旧脚本
+                logger.info(f"编辑器已存在，执行强制重注入: domain={target_domain}")
+                try:
+                    tab.run_js("window.WorkflowEditor?.destroy?.();")
+                except Exception as destroy_error:
+                    logger.debug(f"销毁旧编辑器失败（忽略）: {destroy_error}")
+
                 api_port = os.getenv("PORT", "9099")
                 api_base = f"http://127.0.0.1:{api_port}"
-                
-                update_parts = [
-                    cls._build_js_assignment("__WORKFLOW_EDITOR_API_BASE__", api_base)
+
+                reinject_parts = [
+                    cls._build_js_assignment("__WORKFLOW_EDITOR_API_BASE__", api_base),
+                    cls._build_js_assignment("__WORKFLOW_EDITOR_TAB_ID__", str(getattr(tab, "tab_id", "") or ""))
                 ]
-                
+
                 if target_domain:
-                    update_parts.append(
+                    reinject_parts.append(
                         cls._build_js_assignment("__WORKFLOW_EDITOR_TARGET_DOMAIN__", target_domain)
                     )
 
                 if preset_name:
-                    update_parts.append(
+                    reinject_parts.append(
                         cls._build_js_assignment("__WORKFLOW_EDITOR_PRESET_NAME__", preset_name)
                     )
-                
+
                 if site_config:
-                    update_parts.append(
+                    reinject_parts.append(
                         cls._build_js_assignment("__WORKFLOW_EDITOR_CONFIG__", site_config)
                     )
-                
-                # 更新配置变量
-                tab.run_js("\n".join(update_parts))
-                
-                # 调用 reload 重新加载配置，然后显示
-                tab.run_js("window.WorkflowEditor?.reload?.(); window.WorkflowEditor?.show?.();")
-                
+
+                full_script = "\n".join(reinject_parts) + "\n\n" + script
+                tab.run_js(full_script)
+
                 return {
                     "success": True,
-                    "message": "编辑器已存在，配置已更新并重新加载",
+                    "message": "编辑器已存在，已强制更新到最新版本",
                     "already_existed": True,
-                    "config_updated": True
+                    "config_updated": True,
+                    "reinject": True
                 }
             
             # 🆕 构建完整注入脚本（变量 + 编辑器代码）
@@ -130,6 +133,9 @@ class WorkflowEditorInjector:
             # 1. 注入 API 地址
             injection_parts.append(
                 cls._build_js_assignment("__WORKFLOW_EDITOR_API_BASE__", api_base)
+            )
+            injection_parts.append(
+                cls._build_js_assignment("__WORKFLOW_EDITOR_TAB_ID__", str(getattr(tab, "tab_id", "") or ""))
             )
             
             # 2. 注入目标域名

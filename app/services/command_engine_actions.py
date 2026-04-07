@@ -890,7 +890,9 @@ class CommandEngineActionsMixin:
 
         def _replace(match: re.Match) -> str:
             key = match.group(1).strip()
-            return str(context.get(key, ""))
+            if key in context:
+                return str(context.get(key, ""))
+            return str(os.getenv(key, ""))
 
         return re.sub(r"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}", _replace, raw)
 

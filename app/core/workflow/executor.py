@@ -25,7 +25,13 @@ from app.core.config import (
 )
 from app.core.elements import ElementFinder
 from app.core.parsers import ParserRegistry
-from app.utils.human_mouse import smooth_move_mouse, idle_drift, human_scroll, cdp_precise_click
+from app.utils.human_mouse import (
+    smooth_move_mouse,
+    idle_drift,
+    human_scroll,
+    human_scroll_path,
+    cdp_precise_click,
+)
 from app.core.stream_monitor import StreamMonitor
 from app.core.network_monitor import (
     create_network_monitor,
@@ -749,6 +755,13 @@ class WorkflowExecutor:
                     self._page_warmed_up = True
 
                 self._execute_coord_click(value, optional)
+
+            elif action == "COORD_SCROLL":
+                if self.stealth_mode and not getattr(self, '_page_warmed_up', False):
+                    self._warmup_page_for_stealth()
+                    self._page_warmed_up = True
+
+                self._execute_coord_scroll(value, optional)
             
             elif action == "FILL_INPUT":
                 
@@ -1083,6 +1096,47 @@ class WorkflowExecutor:
                 return
             raise
 
+    def _execute_coord_scroll(self, value: Any, optional: bool):
+        """执行坐标滚轮滑动。"""
+        if self._check_cancelled():
+            return
+
+        if not isinstance(value, dict):
+            if optional:
+                logger.warning("[COORD_SCROLL] 缺少滑动配置，已跳过")
+                return
+            raise WorkflowError("coord_scroll_missing_value")
+
+        try:
+            start_x = int(value.get("start_x"))
+            start_y = int(value.get("start_y"))
+            end_x = int(value.get("end_x"))
+            end_y = int(value.get("end_y"))
+        except Exception:
+            if optional:
+                logger.warning(f"[COORD_SCROLL] 坐标无效，已跳过: {value}")
+                return
+            raise WorkflowError("coord_scroll_invalid_position")
+
+        try:
+            if self.stealth_mode:
+                self._human_scroll_at(start_x, start_y, end_x, end_y)
+            else:
+                self._direct_scroll_at(start_x, start_y, end_x, end_y)
+
+            self._smart_delay(
+                BrowserConstants.ACTION_DELAY_MIN,
+                BrowserConstants.ACTION_DELAY_MAX
+            )
+        except Exception:
+            if optional:
+                logger.warning(
+                    f"[COORD_SCROLL] 滑动失败，已跳过: "
+                    f"({start_x}, {start_y}) -> ({end_x}, {end_y})"
+                )
+                return
+            raise
+
     def _ensure_mouse_origin(self) -> tuple:
         """
         确保存在一个页面内鼠标起点。
@@ -1196,6 +1250,99 @@ class WorkflowExecutor:
             raise WorkflowError("coord_click_failed")
 
         self._mouse_pos = (x, y)
+
+    def _direct_scroll_at(self, start_x: int, start_y: int, end_x: int, end_y: int):
+        """普通模式下执行坐标滚轮滑动。"""
+        total_dx = end_x - start_x
+        total_dy = end_y - start_y
+        logger.debug(
+            f"[COORD_SCROLL] normal wheel scroll: "
+            f"({start_x}, {start_y}) -> ({end_x}, {end_y})"
+        )
+
+        steps = max(3, min(12, int(max(abs(total_dx), abs(total_dy)) / 90) + 1))
+        prev_dx = 0
+        prev_dy = 0
+
+        for i in range(1, steps + 1):
+            if self._check_cancelled():
+                return
+
+            t = i / steps
+            anchor_x = int(round(start_x + total_dx * t))
+            anchor_y = int(round(start_y + total_dy * t))
+            scroll_dx = int(round(total_dx * t)) - prev_dx
+            scroll_dy = int(round(total_dy * t)) - prev_dy
+
+            self.tab.run_cdp(
+                'Input.dispatchMouseEvent',
+                type='mouseMoved',
+                x=anchor_x,
+                y=anchor_y,
+                button='none',
+                buttons=0,
+                modifiers=0,
+                pointerType='mouse'
+            )
+            self.tab.run_cdp(
+                'Input.dispatchMouseEvent',
+                type='mouseWheel',
+                x=anchor_x,
+                y=anchor_y,
+                deltaX=scroll_dx,
+                deltaY=scroll_dy,
+                button='none',
+                buttons=0,
+                pointerType='mouse'
+            )
+
+            prev_dx += scroll_dx
+            prev_dy += scroll_dy
+
+            if i < steps:
+                time.sleep(random.uniform(0.02, 0.06))
+
+        self._mouse_pos = (end_x, end_y)
+
+    def _human_scroll_at(self, start_x: int, start_y: int, end_x: int, end_y: int):
+        """隐身模式下执行人类化坐标滚轮滑动。"""
+        logger.debug(
+            f"[COORD_SCROLL] stealth wheel scroll: "
+            f"({start_x}, {start_y}) -> ({end_x}, {end_y})"
+        )
+
+        start_pos = self._ensure_mouse_origin()
+        self._mouse_pos = smooth_move_mouse(
+            tab=self.tab,
+            from_pos=start_pos,
+            to_pos=(start_x, start_y),
+            check_cancelled=self._check_cancelled
+        )
+
+        if self._check_cancelled():
+            return
+
+        if random.random() < 0.6:
+            self._mouse_pos = idle_drift(
+                tab=self.tab,
+                duration=random.uniform(0.05, 0.12),
+                center_pos=self._mouse_pos,
+                check_cancelled=self._check_cancelled,
+                drift_radius=random.uniform(1.0, 2.4),
+                freq_hz=random.uniform(6.0, 9.0)
+            )
+        else:
+            time.sleep(random.uniform(0.04, 0.10))
+
+        if self._check_cancelled():
+            return
+
+        self._mouse_pos = human_scroll_path(
+            tab=self.tab,
+            from_pos=(start_x, start_y),
+            to_pos=(end_x, end_y),
+            check_cancelled=self._check_cancelled
+        )
     
     def _stealth_click_element(self, ele):
         """

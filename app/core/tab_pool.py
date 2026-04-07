@@ -1720,6 +1720,92 @@ class TabPoolManager:
             raise
         finally:
             self.release(session.id)
+
+    def acquire_by_raw_tab_id(
+        self,
+        raw_tab_id: str,
+        task_id: str,
+        timeout: float = None,
+        count_request: bool = True
+    ) -> Optional[TabSession]:
+        """
+        根据底层浏览器标签页 ID 获取指定标签页会话。
+
+        这用于外部已经明确知道目标标签页时，复用 TabPool 的运行时上下文，
+        保持与正常工作流执行一致的监听、占用与释放行为。
+        """
+        raw_tab_id = str(raw_tab_id or "").strip()
+        if not raw_tab_id:
+            return None
+
+        timeout = timeout or self.acquire_timeout
+        deadline = time.time() + timeout
+
+        with self._condition:
+            while True:
+                if self._shutdown:
+                    return None
+
+                if self._should_scan():
+                    self._scan_new_tabs()
+
+                persistent_index = self._raw_id_to_persistent.get(raw_tab_id)
+                if not persistent_index:
+                    logger.warning(f"底层标签页 ID 不存在: {raw_tab_id}")
+                    return None
+
+                session_id = self._persistent_to_session_id.get(persistent_index)
+                if not session_id:
+                    logger.warning(f"底层标签页 {raw_tab_id} 未绑定会话")
+                    return None
+
+                session = self._tabs.get(session_id)
+                if not session:
+                    logger.warning(f"底层标签页 {raw_tab_id} 对应会话已移除")
+                    return None
+
+                if not session.is_healthy():
+                    logger.warning(f"[{session.id}] 标签页不健康")
+                    return None
+
+                if self._should_defer_to_command(session, task_id):
+                    logger.debug(f"[{session.id}] defer raw-tab acquire to high-priority command")
+                    remaining = deadline - time.time()
+                    if remaining <= 0:
+                        return None
+                    self._condition.wait(timeout=min(remaining, 0.5))
+                    continue
+
+                if session.status == TabStatus.IDLE:
+                    acquired = (
+                        session.acquire(task_id)
+                        if count_request
+                        else session.acquire_for_command(task_id)
+                    )
+                    if acquired:
+                        self._stop_global_monitor_for_session(session.id, reason="acquire_by_raw_tab_id")
+                        if self._auto_activate_on_acquire and session.id != self._active_session_id:
+                            session.activate()
+                            self._active_session_id = session.id
+                        logger.debug(
+                            f"TabPool → {session.id} (raw_tab_id={raw_tab_id}, idx=#{persistent_index})"
+                        )
+                        return session
+
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    logger.warning(
+                        f"获取底层标签页 {raw_tab_id} 超时（当前状态: {session.status.value}）"
+                    )
+                    return None
+
+                logger.debug_throttled(
+                    f"tab_pool.wait_raw.{raw_tab_id}",
+                    f"等待底层标签页 {raw_tab_id} 释放...",
+                    interval_sec=5.0,
+                )
+                self._condition.wait(timeout=min(remaining, 1.0))
+
     def acquire_by_index(self, persistent_index: int, task_id: str, timeout: float = None) -> Optional[TabSession]:
         """
         根据持久化编号获取指定标签页

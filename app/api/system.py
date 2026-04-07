@@ -10,6 +10,7 @@ app/api/system.py - 系统功能 API
 """
 
 import json
+import os
 import re
 import time
 import asyncio
@@ -806,20 +807,80 @@ def _get_project_memory_mb() -> float:
         return 0.0
 
 
-def _get_project_disk_usage_mb() -> float:
-    """计算本项目目录占用的磁盘空间"""
+def _resolve_browser_profile_root(project_dir: Path) -> Optional[Path]:
+    """解析浏览器用户目录根路径。留空时默认使用项目内 chrome_profile。"""
     try:
-        project_dir = _os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
-        total_size = 0
-        for dirpath, dirnames, filenames in _os.walk(project_dir):
-            # 跳过 .git 和 chrome_profile 等大目录以加速
-            dirnames[:] = [d for d in dirnames if d not in {'.git', '__pycache__', 'node_modules', 'chrome_profile'}]
-            for f in filenames:
-                fp = _os.path.join(dirpath, f)
-                try:
-                    total_size += _os.path.getsize(fp)
-                except OSError:
-                    pass
+        env_config = _load_env_config_from_file()
+        raw_value = str(
+            env_config.get("BROWSER_PROFILE_DIR")
+            or os.getenv("BROWSER_PROFILE_DIR", "")
+            or ""
+        ).strip()
+        if not raw_value:
+            return project_dir / "chrome_profile"
+
+        profile_dir = Path(raw_value)
+        if not profile_dir.is_absolute():
+            profile_dir = project_dir / profile_dir
+        return profile_dir
+    except Exception:
+        return project_dir / "chrome_profile"
+
+
+def _get_path_size_bytes(path: Path, *, skip_dir_names: Optional[set[str]] = None) -> int:
+    """递归统计路径大小。"""
+    try:
+        resolved = path.resolve()
+    except Exception:
+        resolved = path
+
+    if not resolved.exists():
+        return 0
+
+    if resolved.is_file():
+        try:
+            return resolved.stat().st_size
+        except OSError:
+            return 0
+
+    total_size = 0
+    skip_names = set(skip_dir_names or set())
+
+    for dirpath, dirnames, filenames in os.walk(resolved):
+        if skip_names:
+            dirnames[:] = [d for d in dirnames if d not in skip_names]
+        for filename in filenames:
+            file_path = Path(dirpath) / filename
+            try:
+                total_size += file_path.stat().st_size
+            except OSError:
+                pass
+
+    return total_size
+
+
+def _get_project_disk_usage_mb() -> float:
+    """计算项目实际占用磁盘空间，包含 venv 和浏览器用户目录。"""
+    try:
+        project_dir = Path(__file__).resolve().parents[2]
+        total_size = _get_path_size_bytes(
+            project_dir,
+            skip_dir_names={".git", "__pycache__", "node_modules"},
+        )
+
+        profile_dir = _resolve_browser_profile_root(project_dir)
+        if profile_dir is not None:
+            try:
+                project_resolved = project_dir.resolve()
+                profile_resolved = profile_dir.resolve()
+            except Exception:
+                project_resolved = project_dir
+                profile_resolved = profile_dir
+
+            # 外部浏览器用户目录不在项目内时，额外计入一次。
+            if profile_resolved != project_resolved and project_resolved not in profile_resolved.parents:
+                total_size += _get_path_size_bytes(profile_resolved)
+
         return round(total_size / (1024 * 1024), 1)
     except Exception:
         return 0.0

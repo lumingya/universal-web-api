@@ -16,6 +16,7 @@ ActionType = Literal[
     "FILL_INPUT",
     "CLICK",
     "COORD_CLICK",
+    "COORD_SCROLL",
     "STREAM_WAIT",
     "STREAM_OUTPUT",
     "KEY_PRESS",

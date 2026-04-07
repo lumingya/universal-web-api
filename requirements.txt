@@ -12,3 +12,4 @@ python-dotenv>=1.0.0
 pyperclip>=1.8.2
 Pillow>=10.0.0
 pywin32>=306
+psutil>=5.9.0

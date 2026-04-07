@@ -586,6 +586,91 @@
           "threshold": 50000,
           "hint_text": "完全专注于文件内容"
         }
+      },
+      "专家模式": {
+        "selectors": {
+          "input_box": "textarea",
+          "send_btn": "div.bf38813a > div > div[role='button']",
+          "result_container": "css:div.ds-markdown",
+          "new_chat_btn": "div._5a8ac7a",
+          "generating_indicator": "css:._7436101.bcc55ca1",
+          "专家": "div[data-model-type=\"expert\"]"
+        },
+        "stream_config": {
+          "mode": "network",
+          "hard_timeout": 300,
+          "network": {
+            "listen_pattern": "api/v0/chat/completion",
+            "parser": "deepseek",
+            "silence_threshold": 3,
+            "response_interval": 0.5
+          },
+          "send_confirmation": {
+            "attachment_sensitivity": "high",
+            "post_click_observe_window": 2.4,
+            "pre_retry_probe_window": 0.18,
+            "retry_observe_window": 1.2,
+            "attachment_observe_window": 8,
+            "trust_network_activity": true,
+            "trust_generating_indicator": true,
+            "trust_send_disabled_with_input_shrink": true
+          }
+        },
+        "workflow": [
+          {
+            "action": "CLICK",
+            "target": "new_chat_btn",
+            "optional": true,
+            "value": null
+          },
+          {
+            "action": "CLICK",
+            "target": "专家",
+            "optional": false,
+            "value": null
+          },
+          {
+            "action": "WAIT",
+            "target": "",
+            "optional": false,
+            "value": "0.5"
+          },
+          {
+            "action": "FILL_INPUT",
+            "target": "input_box",
+            "optional": false,
+            "value": null
+          },
+          {
+            "action": "KEY_PRESS",
+            "target": "Enter",
+            "optional": true,
+            "value": null
+          },
+          {
+            "action": "STREAM_WAIT",
+            "target": "result_container",
+            "optional": false,
+            "value": null
+          }
+        ],
+        "stealth": false,
+        "image_extraction": {
+          "enabled": false,
+          "selector": "img",
+          "container_selector": null,
+          "debounce_seconds": 2,
+          "wait_for_load": true,
+          "load_timeout_seconds": 5,
+          "download_blobs": true,
+          "max_size_mb": 10,
+          "mode": "all"
+        },
+        "file_paste": {
+          "enabled": false,
+          "threshold": 50000,
+          "hint_text": "完全专注于文件内容"
+        }
       }
     },
     "default_preset": "主预设",
@@ -748,7 +833,7 @@
   },
   "arena.ai": {
     "presets": {
-      "主预设-direct模式": {
+      "主预设-直连模式": {
         "selectors": {
           "input_box": "textarea[name=\"message\"]",
           "send_btn": "button[type=\"submit\"]",
@@ -806,7 +891,7 @@
           "mode": "network",
           "hard_timeout": 300,
           "network": {
-            "parser": "lmarena_side_left",
+            "parser": "lmarena",
             "url_pattern": "**/nextjs-api/stream/create-evaluation**",
             "method": "POST",
             "listen_pattern": "/nextjs-api/stream/create-evaluation",
@@ -832,46 +917,8 @@
         }
       },
       "预设_选择模型": {
-        "selectors": {
-          "点击battle": "xpath://button[@role='combobox' and .//*[contains(normalize-space(), 'Battle')]]",
-          "切换direct": "xpath://div[@role='option' and .//p[normalize-space()='Direct']]",
-          "点击gemini3.0pro": "css:[role='option'][data-value='gemini-3-pro']",
-          "点击max": "xpath://button[@aria-haspopup='dialog' and @data-state='closed' and .//*[contains(normalize-space(), 'Max')]]",
-          "点击gemini3_0pro": "css:[role='option'][data-value='gemini-3-pro']"
-        },
+        "selectors": {},
         "workflow": [
-          {
-            "action": "COORD_CLICK",
-            "target": "",
-            "optional": false,
-            "value": {
-              "x": 136,
-              "y": 29,
-              "random_radius": 10
-            }
-          },
-          {
-            "action": "WAIT",
-            "target": "",
-            "optional": false,
-            "value": 0.43
-          },
-          {
-            "action": "COORD_CLICK",
-            "target": "",
-            "optional": false,
-            "value": {
-              "x": 154,
-              "y": 139,
-              "random_radius": 10
-            }
-          },
-          {
-            "action": "WAIT",
-            "target": "",
-            "optional": false,
-            "value": 0.32
-          },
           {
             "action": "COORD_CLICK",
             "target": "",
@@ -886,15 +933,15 @@
             "action": "WAIT",
             "target": "",
             "optional": false,
-            "value": 1
+            "value": 0.3
           },
           {
             "action": "COORD_CLICK",
             "target": "",
             "optional": false,
             "value": {
-              "x": 367,
-              "y": 369,
+              "x": 371,
+              "y": 316,
               "random_radius": 10
             }
           }
@@ -929,53 +976,7 @@
           "hint_text": "完全专注于文件内容"
         }
       },
-      "预设_切换SideBySide": {
-        "selectors": {},
-        "workflow": [
-          {
-            "action": "JS_EXEC",
-            "target": "",
-            "optional": false,
-            "value": "window.location.assign('https://arena.ai/text/side-by-side');"
-          },
-          {
-            "action": "WAIT",
-            "target": "",
-            "optional": false,
-            "value": 2
-          }
-        ],
-        "stealth": true,
-        "stream_config": {
-          "mode": "network",
-          "hard_timeout": 300,
-          "network": {
-            "parser": "lmarena",
-            "url_pattern": "**/nextjs-api/stream/create-evaluation**",
-            "method": "POST",
-            "listen_pattern": "/nextjs-api/stream/create-evaluation",
-            "silence_threshold": 3,
-            "response_interval": 1
-          }
-        },
-        "image_extraction": {
-          "enabled": false,
-          "selector": "img",
-          "container_selector": null,
-          "debounce_seconds": 2,
-          "wait_for_load": true,
-          "load_timeout_seconds": 5,
-          "download_blobs": true,
-          "max_size_mb": 10,
-          "mode": "all"
-        },
-        "file_paste": {
-          "enabled": false,
-          "threshold": 50000,
-          "hint_text": "完全专注于文件内容"
-        }
-      },
-      "预设_过cf盾": {
+      "预设_过CF盾": {
         "selectors": {
           "input_box": "textarea[name=\"message\"]",
           "send_btn": "button[type=\"submit\"]",
@@ -1026,7 +1027,7 @@
           "hint_text": "完全专注于文件内容"
         }
       },
-      "主预设-sidebyside模式": {
+      "主预设-双栏模式": {
         "selectors": {
           "input_box": "textarea[name=\"message\"]",
           "send_btn": "button[type=\"submit\"]",
@@ -1110,7 +1111,7 @@
         }
       }
     },
-    "default_preset": "主预设-sidebyside模式",
+    "default_preset": "主预设-直连模式",
     "advanced": {
       "independent_cookies": true,
       "independent_cookies_auto_takeover": false

@@ -31,30 +31,107 @@ window.WorkflowPanel = {
     data() {
         return {
             editorInjecting: false,
+            editorBridgePolling: false,
+            editorBridgeInFlight: false,
+            editorBridgeTimer: null,
             keyPresets: WORKFLOW_KEY_PRESETS,
             expandedJsEditors: {},
             customKeyModes: {}
         };
+    },
+    mounted() {
+        this.startEditorBridgePolling();
+    },
+    beforeUnmount() {
+        this.stopEditorBridgePolling();
     },
     methods: {
         toggle() {
             this.$emit('update:collapsed', !this.collapsed);
         },
 
+        async authJsonRequest(url, options = {}) {
+            const token = localStorage.getItem('api_token');
+            const headers = {
+                'Content-Type': 'application/json',
+                ...(options.headers || {})
+            };
+
+            if (token) {
+                headers['Authorization'] = 'Bearer ' + token;
+            }
+
+            const response = await fetch(url, {
+                ...options,
+                headers
+            });
+
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                const message = payload.detail || payload.message || ('HTTP ' + response.status);
+                const error = new Error(message);
+                error.status = response.status;
+                throw error;
+            }
+
+            return payload;
+        },
+
+        startEditorBridgePolling() {
+            if (this.editorBridgePolling || this.editorBridgeTimer) return;
+            this.editorBridgePolling = true;
+            console.debug('[WorkflowPanel] start editor bridge polling');
+            this.consumeEditorBridgeActions();
+            this.editorBridgeTimer = window.setInterval(() => {
+                this.consumeEditorBridgeActions();
+            }, 250);
+        },
+
+        stopEditorBridgePolling() {
+            this.editorBridgePolling = false;
+            if (this.editorBridgeTimer) {
+                window.clearInterval(this.editorBridgeTimer);
+                this.editorBridgeTimer = null;
+            }
+            console.debug('[WorkflowPanel] stop editor bridge polling');
+        },
+
+        async consumeEditorBridgeActions() {
+            if (this.editorBridgeInFlight) return;
+            this.editorBridgeInFlight = true;
+            try {
+                const result = await this.authJsonRequest('/api/workflow-editor/consume-actions', {
+                    method: 'POST',
+                    body: '{}'
+                });
+                if (result && Number(result.executed_count || 0) > 0) {
+                    console.debug('[WorkflowPanel] consumed editor bridge actions:', result);
+                }
+            } catch (e) {
+                console.debug('[WorkflowPanel] consume editor bridge actions failed:', e);
+            } finally {
+                this.editorBridgeInFlight = false;
+            }
+        },
+
         async launchVisualEditor() {
             if (this.editorInjecting) return;
             this.editorInjecting = true;
             try {
-                const response = await fetch('/api/workflow-editor/inject', {
+                console.debug('[WorkflowPanel] launch visual editor', {
+                    domain: this.currentDomain,
+                    preset: this.selectedPreset
+                });
+                const result = await this.authJsonRequest('/api/workflow-editor/inject', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         target_domain: this.currentDomain,
                         preset_name: this.selectedPreset
                     })
                 });
-                const result = await response.json();
                 if (result.success) {
+                    this.startEditorBridgePolling();
+                    console.debug('[WorkflowPanel] visual editor launch result:', result);
                     alert(result.already_existed
                         ? '编辑器已激活，请切换到浏览器窗口查看。'
                         : '编辑器已注入，请切换到浏览器窗口，使用右下角工具栏编辑工作流。');
@@ -167,6 +244,7 @@ window.WorkflowPanel = {
                                 <option value="FILL_INPUT">填入内容</option>
                                 <option value="CLICK">点击元素</option>
                                 <option value="COORD_CLICK">坐标点击</option>
+                                <option value="COORD_SCROLL">模拟滑动</option>
                                 <option value="STREAM_WAIT">流式等待</option>
                                 <option value="WAIT">等待</option>
                                 <option value="KEY_PRESS">按键</option>
@@ -176,7 +254,7 @@ window.WorkflowPanel = {
 
                         <div class="flex-1 min-w-0">
                             <label class="text-xs font-medium text-gray-500 dark:text-gray-400">
-                                {{ ['FILL_INPUT', 'CLICK', 'STREAM_WAIT'].includes(step.action) ? '目标选择器' : step.action === 'COORD_CLICK' ? '坐标参数' : step.action === 'JS_EXEC' ? 'JavaScript' : '参数' }}
+                                {{ ['FILL_INPUT', 'CLICK', 'STREAM_WAIT'].includes(step.action) ? '目标选择器' : ['COORD_CLICK', 'COORD_SCROLL'].includes(step.action) ? '坐标参数' : step.action === 'JS_EXEC' ? 'JavaScript' : '参数' }}
                             </label>
 
                             <select v-if="['FILL_INPUT', 'CLICK', 'STREAM_WAIT'].includes(step.action)" v-model="step.target"
@@ -207,6 +285,36 @@ window.WorkflowPanel = {
                                        placeholder="随机半径">
                                 <div class="w-full text-xs text-gray-500 dark:text-gray-400">
                                     使用 viewport CSS 坐标，不是屏幕坐标。
+                                </div>
+                            </div>
+
+                            <div v-else-if="step.action === 'COORD_SCROLL'" class="flex items-center gap-2 mt-1 flex-wrap">
+                                <input :value="step.value?.start_x ?? ''"
+                                       @input="step.value = { ...(step.value || {}), start_x: Number($event.target.value) }"
+                                       type="number"
+                                       step="1"
+                                       class="border dark:border-gray-600 px-2 py-1.5 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent w-28 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                                       placeholder="起点 X">
+                                <input :value="step.value?.start_y ?? ''"
+                                       @input="step.value = { ...(step.value || {}), start_y: Number($event.target.value) }"
+                                       type="number"
+                                       step="1"
+                                       class="border dark:border-gray-600 px-2 py-1.5 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent w-28 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                                       placeholder="起点 Y">
+                                <input :value="step.value?.end_x ?? ''"
+                                       @input="step.value = { ...(step.value || {}), end_x: Number($event.target.value) }"
+                                       type="number"
+                                       step="1"
+                                       class="border dark:border-gray-600 px-2 py-1.5 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent w-28 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                                       placeholder="终点 X">
+                                <input :value="step.value?.end_y ?? ''"
+                                       @input="step.value = { ...(step.value || {}), end_y: Number($event.target.value) }"
+                                       type="number"
+                                       step="1"
+                                       class="border dark:border-gray-600 px-2 py-1.5 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent w-28 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                                       placeholder="终点 Y">
+                                <div class="w-full text-xs text-gray-500 dark:text-gray-400">
+                                    使用 viewport CSS 坐标。普通模式直接派发滚轮，隐身模式会按站点 stealth 配置走人类化轨迹。
                                 </div>
                             </div>
 
