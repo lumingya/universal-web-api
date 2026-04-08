@@ -23,53 +23,53 @@
     </style>
 </head>
 <body class="bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 min-h-screen font-sans antialiased transition-colors duration-300">
-    <div id="marketplace-app" v-cloak class="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 py-8 flex flex-col gap-6">
+    <div id="marketplace-app" v-cloak class="max-w-[1400px] mx-auto px-4 sm:px-5 lg:px-6 py-4 flex flex-col gap-3">
         
         <!-- Topbar: Relative Header -->
-        <header class="relative z-30 flex items-center justify-between gap-4 p-4 rounded-2xl bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl border border-white/20 dark:border-slate-800 shadow-sm transition-all">
-            <div class="flex items-center gap-4">
-                <button type="button" class="group flex items-center justify-center p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors text-slate-500 dark:text-slate-400" @click="goDashboard" title="返回控制台">
+        <header class="relative z-30 flex items-center justify-between gap-3 p-2.5 rounded-xl bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl border border-white/20 dark:border-slate-800 shadow-sm transition-all">
+            <div class="flex items-center gap-3">
+                <button type="button" class="group flex items-center justify-center p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors text-slate-500 dark:text-slate-400" @click="goDashboard" title="返回控制台">
                     <svg class="w-6 h-6 group-hover:-translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path></svg>
                 </button>
                 <div>
-                    <h1 class="text-2xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-slate-900 to-slate-700 dark:from-white dark:to-slate-300">插件市场</h1>
+                    <h1 class="text-lg font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-slate-900 to-slate-700 dark:from-white dark:to-slate-300">插件市场</h1>
                     <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">站点配置与命令系统，默认按下载量排序</p>
                 </div>
             </div>
             <div class="flex items-center gap-2">
-                <button type="button" class="px-4 py-2 text-sm font-medium rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 hover:border-blue-500/50 transition-colors" @click="openReviewDialog">
+                <button type="button" class="px-2.5 py-1 text-sm font-medium rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 hover:border-blue-500/50 transition-colors" @click="openReviewDialog">
                     {{ reviewEntryLabel }}
                 </button>
-                <button type="button" class="px-4 py-2 text-sm font-medium rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 shadow-inner hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors" @click="toggleDarkMode">
+                <button type="button" class="px-2.5 py-1 text-sm font-medium rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 shadow-inner hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors" @click="toggleDarkMode">
                     {{ darkMode ? '浅色模式' : '深色模式' }}
                 </button>
-                <button type="button" class="px-5 py-2 text-sm font-bold rounded-xl text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 shadow-lg shadow-blue-500/30 transition-all hover:-translate-y-0.5" @click="openSubmitDialog">
+                <button type="button" class="px-3 py-1 text-sm font-bold rounded-lg text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 shadow-lg shadow-blue-500/30 transition-all hover:-translate-y-0.5" @click="openSubmitDialog">
                     {{ submitEntryLabel }}
                 </button>
             </div>
         </header>
 
         <!-- Toolbar & Filters Panel -->
-        <section class="bg-white dark:bg-slate-900 rounded-3xl p-6 border border-slate-200 dark:border-slate-800 shadow-sm relative overflow-hidden">
+        <section class="bg-white dark:bg-slate-900 rounded-2xl p-3.5 border border-slate-200 dark:border-slate-800 shadow-sm relative overflow-hidden">
             <!-- Decorative gradient blur -->
             <div class="absolute -right-20 -top-20 w-64 h-64 bg-blue-500/10 blur-3xl rounded-full pointer-events-none"></div>
             
-            <div class="relative z-10 flex flex-col gap-6">
+            <div class="relative z-10 flex flex-col gap-3">
                 <!-- Title & Sort -->
                 <div class="flex flex-wrap items-center justify-between gap-4">
                     <div>
-                        <h2 class="text-xl font-bold flex items-center gap-2">
+                        <h2 class="text-base font-bold flex items-center gap-2">
                             全部插件
-                            <span class="px-2.5 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 text-sm">{{ filteredItems.length }}</span>
+                            <span class="px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 text-xs">{{ filteredItems.length }}</span>
                         </h2>
-                        <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">收录站点配置和命令系统，支持预览、导入和公共投稿。</p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">收录站点配置和命令系统，支持预览、导入和公共投稿。</p>
                     </div>
                     <div class="flex items-center gap-3">
-                        <button type="button" class="px-4 py-2 text-sm font-medium rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors" @click="loadCatalog({ force: true })">
+                        <button type="button" class="px-2.5 py-1 text-sm font-medium rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors" @click="loadCatalog({ force: true })">
                             刷新
                         </button>
                         <div class="relative group">
-                            <select v-model="sortBy" class="appearance-none cursor-pointer pl-4 pr-10 py-2 text-sm font-medium rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:border-blue-500 transition-colors focus:ring-2 focus:ring-blue-500/20 outline-none w-40">
+                            <select v-model="sortBy" class="appearance-none cursor-pointer pl-3 pr-8 py-1 text-sm font-medium rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:border-blue-500 transition-colors focus:ring-2 focus:ring-blue-500/20 outline-none w-32">
                                 <option value="downloads_desc">按下载量</option>
                                 <option value="updated_desc">按更新时间</option>
                                 <option value="stars_desc">按收藏数</option>
@@ -81,15 +81,15 @@
                 </div>
 
                 <!-- Filters -->
-                <div class="flex flex-wrap items-center gap-4 bg-slate-50 dark:bg-slate-950/50 p-3 rounded-2xl border border-slate-100 dark:border-slate-800/50">
+                <div class="flex flex-wrap items-center gap-2.5 bg-slate-50 dark:bg-slate-950/50 p-2 rounded-xl border border-slate-100 dark:border-slate-800/50">
                     <div class="relative flex-1 min-w-[280px]">
                         <svg class="w-5 h-5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
-                        <input v-model.trim="searchQuery" type="search" class="w-full pl-10 pr-4 py-2 text-sm rounded-xl border border-transparent bg-white dark:bg-slate-900 shadow-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none transition-all placeholder-slate-400" placeholder="搜索标题、简介、站点或作者">
+                        <input v-model.trim="searchQuery" type="search" class="w-full pl-10 pr-4 py-1 text-sm rounded-lg border border-transparent bg-white dark:bg-slate-900 shadow-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 outline-none transition-all placeholder-slate-400" placeholder="搜索标题、简介、站点或作者">
                     </div>
                     
-                    <div class="flex items-center gap-1.5 p-1 rounded-xl bg-slate-200/50 dark:bg-slate-800 overflow-x-auto">
+                    <div class="flex items-center gap-1.5 p-1 rounded-lg bg-slate-200/50 dark:bg-slate-800 overflow-x-auto">
                         <button v-for="option in typeOptions" :key="option.value" type="button" 
-                                :class="['px-4 py-1.5 text-sm font-medium rounded-lg whitespace-nowrap transition-all', 
+                                :class="['px-2.5 py-0.5 text-sm font-medium rounded-md whitespace-nowrap transition-all', 
                                          selectedType === option.value ? 'bg-white dark:bg-slate-600 text-blue-600 dark:text-blue-300 shadow-sm' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-amber-100 hover:bg-slate-200 dark:hover:bg-slate-700/50']"
                                 @click="selectedType = option.value">
                             {{ option.label }}
@@ -97,7 +97,7 @@
                     </div>
 
                     <div v-if="siteOptions.length > 1" :class="['relative shrink-0 transition-opacity', selectedType === 'command_bundle' ? 'opacity-0 pointer-events-none' : 'opacity-100']">
-                        <select v-model="selectedSite" class="appearance-none cursor-pointer pl-4 pr-9 py-2 text-sm font-medium rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:border-blue-500 transition-colors focus:ring-2 focus:ring-blue-500/20 outline-none">
+                        <select v-model="selectedSite" class="appearance-none cursor-pointer pl-3 pr-8 py-1 text-sm font-medium rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:border-blue-500 transition-colors focus:ring-2 focus:ring-blue-500/20 outline-none">
                             <option value="all">全部站点</option>
                             <option v-for="site in siteOptions" :key="site" :value="site">{{ site }}</option>
                         </select>
@@ -107,11 +107,11 @@
 
                 <!-- Banners -->
                 <div class="space-y-2 empty:hidden">
-                    <div v-if="submitHelpText" class="px-4 py-3 text-sm rounded-xl bg-blue-50 dark:bg-blue-900/20 text-blue-800 dark:text-blue-300 border border-blue-200 dark:border-blue-800/50 flex items-center gap-2">
+                    <div v-if="submitHelpText" class="px-3 py-2 text-sm rounded-lg bg-blue-50 dark:bg-blue-900/20 text-blue-800 dark:text-blue-300 border border-blue-200 dark:border-blue-800/50 flex items-center gap-2">
                         <svg class="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
                         {{ submitHelpText }}
                     </div>
-                    <div v-if="reviewSession.connected" class="px-4 py-3 text-sm rounded-xl bg-emerald-50 dark:bg-emerald-900/20 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/50 flex items-center gap-2">
+                    <div v-if="reviewSession.connected" class="px-3 py-2 text-sm rounded-lg bg-emerald-50 dark:bg-emerald-900/20 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/50 flex items-center gap-2">
                         <svg class="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
                         GitHub 身份已连接
                         <span class="opacity-70 mx-1">·</span>
@@ -121,11 +121,11 @@
                         <template v-if="reviewSession.can_review">可审核、拒绝和下架项目</template>
                         <template v-else>可管理你自己的投稿</template>
                     </div>
-                    <div v-if="catalog.warning" class="px-4 py-3 text-sm rounded-xl bg-amber-50 dark:bg-amber-900/20 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800/50 flex items-center gap-2">
+                    <div v-if="catalog.warning" class="px-3 py-2 text-sm rounded-lg bg-amber-50 dark:bg-amber-900/20 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800/50 flex items-center gap-2">
                         <svg class="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
                         {{ catalog.warning }}
                     </div>
-                    <div v-if="error" class="px-4 py-3 text-sm rounded-xl bg-red-50 dark:bg-red-900/20 text-red-800 dark:text-red-300 border border-red-200 dark:border-red-800/50 flex items-center gap-2">
+                    <div v-if="error" class="px-3 py-2 text-sm rounded-lg bg-red-50 dark:bg-red-900/20 text-red-800 dark:text-red-300 border border-red-200 dark:border-red-800/50 flex items-center gap-2">
                         <svg class="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
                         {{ error }}
                     </div>
@@ -135,34 +135,34 @@
 
         <!-- Catalog List -->
         <section class="flex-1">
-            <div v-if="loading" class="flex flex-col items-center justify-center p-20 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-3xl text-slate-500">
+            <div v-if="loading" class="flex flex-col items-center justify-center p-14 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-2xl text-slate-500">
                 <svg class="w-12 h-12 mb-4 animate-spin text-blue-500" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
                 <h3 class="text-xl font-bold text-slate-900 dark:text-white mb-2">正在加载插件市场</h3>
                 <p>稍等一下，列表马上就好。</p>
             </div>
 
-            <div v-else-if="filteredItems.length === 0" class="flex flex-col items-center justify-center p-20 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-3xl text-slate-500">
+            <div v-else-if="filteredItems.length === 0" class="flex flex-col items-center justify-center p-14 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-2xl text-slate-500">
                 <svg class="w-16 h-16 mb-4 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"></path></svg>
                 <h3 class="text-xl font-bold text-slate-900 dark:text-white mb-2">还没有可显示的项目</h3>
                 <p>{{ emptyStateDescription }}</p>
             </div>
 
-            <div v-else class="grid grid-cols-1 gap-5">
+            <div v-else class="grid grid-cols-1 gap-3">
                 <!-- Card Component -->
-                <article v-for="item in filteredItems" :key="item.id" class="group flex flex-col lg:flex-row gap-6 p-6 rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm hover:shadow-xl hover:shadow-blue-500/10 hover:border-blue-200 dark:hover:border-blue-800 transition-all duration-300 hover:-translate-y-1">
+                <article v-for="item in filteredItems" :key="item.id" class="group flex flex-col lg:flex-row gap-3 p-3.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm hover:shadow-xl hover:shadow-blue-500/10 hover:border-blue-200 dark:hover:border-blue-800 transition-all duration-300 hover:-translate-y-1">
                     
                     <!-- Main Info (Left) -->
                     <div class="flex-1 flex flex-col justify-start min-w-0">
-                        <div class="flex flex-wrap items-center gap-2 mb-3">
-                            <span class="px-2.5 py-1 text-[11px] font-bold uppercase tracking-wider rounded-lg bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 border border-blue-200/50 dark:border-blue-800/50">{{ typeLabel(item.item_type) }}</span>
-                            <span v-if="reviewLabel(item)" class="px-2.5 py-1 text-[11px] font-bold uppercase tracking-wider rounded-lg bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 border border-amber-200/50 dark:border-amber-800/50">{{ reviewLabel(item) }}</span>
-                            <span v-if="item.site_domain || item.category" class="px-2.5 py-1 text-[11px] font-bold uppercase overflow-hidden tracking-wider rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200/50 dark:border-slate-700/50 truncate max-w-[200px]">{{ item.site_domain || item.category }}</span>
+                        <div class="flex flex-wrap items-center gap-1.5 mb-2">
+                            <span class="px-2 py-0.5 text-[11px] font-bold uppercase tracking-wider rounded-md bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 border border-blue-200/50 dark:border-blue-800/50">{{ typeLabel(item.item_type) }}</span>
+                            <span v-if="reviewLabel(item)" class="px-2 py-0.5 text-[11px] font-bold uppercase tracking-wider rounded-md bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 border border-amber-200/50 dark:border-amber-800/50">{{ reviewLabel(item) }}</span>
+                            <span v-if="item.site_domain || item.category" class="px-2 py-0.5 text-[11px] font-bold uppercase overflow-hidden tracking-wider rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200/50 dark:border-slate-700/50 truncate max-w-[200px]">{{ item.site_domain || item.category }}</span>
                         </div>
                         
-                        <h2 class="text-xl font-extrabold text-slate-900 dark:text-white mb-2 truncate">{{ item.name }}</h2>
-                        <p class="text-sm text-slate-500 dark:text-slate-400 mb-4 line-clamp-2 leading-relaxed">{{ item.summary || '暂无简介' }}</p>
+                        <h2 class="text-base font-extrabold text-slate-900 dark:text-white mb-1 truncate">{{ item.name }}</h2>
+                        <p class="text-sm text-slate-500 dark:text-slate-400 mb-2.5 line-clamp-2 leading-relaxed">{{ item.summary || '暂无简介' }}</p>
                         
-                        <div class="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-500 dark:text-slate-500 mb-4 font-medium">
+                        <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-slate-500 dark:text-slate-500 mb-2.5 font-medium">
                             <span class="flex items-center gap-1.5"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path></svg> {{ displayAuthor(item) }}</span>
                             <span v-if="showSubmitter(item)" class="flex items-center gap-1.5"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"></path></svg> {{ item.submitted_by }}</span>
                             <span v-if="item.version" class="flex items-center gap-1.5"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"></path></svg> v{{ item.version }}</span>
@@ -171,49 +171,49 @@
                             <button v-if="item.issue_url" type="button" class="text-blue-500 hover:text-blue-600 dark:hover:text-blue-400 font-bold ml-auto" @click="openLink(item.issue_url)">查看投稿</button>
                         </div>
 
-                        <div v-if="Array.isArray(item.tags) && item.tags.length" class="flex flex-wrap gap-2 mt-auto pt-2">
-                            <span v-for="tag in item.tags" :key="item.id + '-' + tag" class="px-2.5 py-1 rounded-md bg-slate-100 dark:bg-slate-800/80 text-slate-500 dark:text-slate-400 text-xs shadow-sm border border-slate-200/50 dark:border-slate-700/50">#{{ tag }}</span>
+                        <div v-if="Array.isArray(item.tags) && item.tags.length" class="flex flex-wrap gap-1.5 mt-auto pt-1">
+                            <span v-for="tag in item.tags" :key="item.id + '-' + tag" class="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800/80 text-slate-500 dark:text-slate-400 text-xs shadow-sm border border-slate-200/50 dark:border-slate-700/50">#{{ tag }}</span>
                         </div>
                     </div>
 
                     <!-- Side Stats & Actions (Right) -->
-                    <div class="lg:w-72 shrink-0 flex flex-col justify-between pt-6 border-t border-slate-100 dark:border-slate-800 lg:pt-0 lg:border-t-0 lg:border-l lg:pl-6">
+                    <div class="lg:w-56 shrink-0 flex flex-col justify-between pt-3 border-t border-slate-100 dark:border-slate-800 lg:pt-0 lg:border-t-0 lg:border-l lg:pl-3">
                         <!-- Stats -->
-                        <div class="flex gap-3 mb-6">
-                            <div class="flex-1 bg-slate-50 dark:bg-slate-900/50 rounded-2xl p-3 border border-slate-100 dark:border-slate-800 text-center">
+                        <div class="flex gap-2.5 mb-3">
+                            <div class="flex-1 bg-slate-50 dark:bg-slate-900/50 rounded-lg p-2 border border-slate-100 dark:border-slate-800 text-center">
                                 <span class="block text-[11px] font-bold uppercase tracking-widest text-slate-400 mb-1">下载</span>
-                                <strong class="text-xl font-black text-slate-800 dark:text-slate-200">{{ formatNumber(item.downloads || 0) }}</strong>
+                                <strong class="text-base font-black text-slate-800 dark:text-slate-200">{{ formatNumber(item.downloads || 0) }}</strong>
                             </div>
-                            <div class="flex-1 bg-slate-50 dark:bg-slate-900/50 rounded-2xl p-3 border border-slate-100 dark:border-slate-800 text-center">
+                            <div class="flex-1 bg-slate-50 dark:bg-slate-900/50 rounded-lg p-2 border border-slate-100 dark:border-slate-800 text-center">
                                 <span class="block text-[11px] font-bold uppercase tracking-widest text-slate-400 mb-1">收藏</span>
-                                <strong class="text-xl font-black text-slate-800 dark:text-slate-200">{{ formatNumber(item.stars || 0) }}</strong>
+                                <strong class="text-base font-black text-slate-800 dark:text-slate-200">{{ formatNumber(item.stars || 0) }}</strong>
                             </div>
                         </div>
                         
                         <!-- Actions -->
-                        <div class="flex flex-wrap items-center justify-end gap-2.5">
-                            <button type="button" class="px-4 py-2 text-sm font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors shadow-sm" @click="previewItem(item)">
+                        <div class="flex flex-wrap items-center justify-end gap-1.5">
+                            <button type="button" class="px-3 py-1 text-sm font-bold rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors shadow-sm" @click="previewItem(item)">
                                 预览
                             </button>
                             
                             <template v-if="canReviewItem(item)">
-                                <button type="button" class="px-4 py-2 text-sm font-bold rounded-xl text-emerald-700 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-900/30 border border-emerald-200 dark:border-emerald-800/50 hover:bg-emerald-200 dark:hover:bg-emerald-800/50 transition-colors disabled:opacity-50" :disabled="reviewBusyId === ('approve:' + item.id) || !canImport(item)" @click="reviewItem(item, 'approve')">
+                                <button type="button" class="px-3 py-1 text-sm font-bold rounded-lg text-emerald-700 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-900/30 border border-emerald-200 dark:border-emerald-800/50 hover:bg-emerald-200 dark:hover:bg-emerald-800/50 transition-colors disabled:opacity-50" :disabled="reviewBusyId === ('approve:' + item.id) || !canImport(item)" @click="reviewItem(item, 'approve')">
                                     {{ reviewBusyId === ('approve:' + item.id) ? '通过中...' : (canImport(item) ? '通过' : '缺少 JSON') }}
                                 </button>
-                                <button type="button" class="px-4 py-2 text-sm font-bold rounded-xl text-rose-700 dark:text-rose-300 bg-rose-100 dark:bg-rose-900/30 border border-rose-200 dark:border-rose-800/50 hover:bg-rose-200 dark:hover:bg-rose-800/50 transition-colors disabled:opacity-50" :disabled="reviewBusyId === ('reject:' + item.id)" @click="reviewItem(item, 'reject')">
+                                <button type="button" class="px-3 py-1 text-sm font-bold rounded-lg text-rose-700 dark:text-rose-300 bg-rose-100 dark:bg-rose-900/30 border border-rose-200 dark:border-rose-800/50 hover:bg-rose-200 dark:hover:bg-rose-800/50 transition-colors disabled:opacity-50" :disabled="reviewBusyId === ('reject:' + item.id)" @click="reviewItem(item, 'reject')">
                                     {{ reviewBusyId === ('reject:' + item.id) ? '拒绝中...' : '拒绝' }}
                                 </button>
                             </template>
 
-                            <button v-if="item.issue_url && !canImport(item)" type="button" class="px-4 py-2 text-sm font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors shadow-sm" @click="openLink(item.issue_url)">
+                            <button v-if="item.issue_url && !canImport(item)" type="button" class="px-3 py-1 text-sm font-bold rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors shadow-sm" @click="openLink(item.issue_url)">
                                 去补充
                             </button>
 
-                            <button v-if="canRemoveItem(item)" type="button" class="px-4 py-2 text-sm font-bold rounded-xl text-rose-700 dark:text-rose-300 bg-rose-100 dark:bg-rose-900/30 border border-rose-200 dark:border-rose-800/50 hover:bg-rose-200 dark:hover:bg-rose-800/50 transition-colors disabled:opacity-50" :disabled="reviewBusyId === ('remove:' + item.id)" @click="removeItem(item)">
+                            <button v-if="canRemoveItem(item)" type="button" class="px-3 py-1 text-sm font-bold rounded-lg text-rose-700 dark:text-rose-300 bg-rose-100 dark:bg-rose-900/30 border border-rose-200 dark:border-rose-800/50 hover:bg-rose-200 dark:hover:bg-rose-800/50 transition-colors disabled:opacity-50" :disabled="reviewBusyId === ('remove:' + item.id)" @click="removeItem(item)">
                                 {{ reviewBusyId === ('remove:' + item.id) ? (removeItemLabel(item) + '中...') : removeItemLabel(item) }}
                             </button>
 
-                            <button type="button" class="px-5 py-2 text-sm font-bold rounded-xl text-white bg-blue-600 hover:bg-blue-500 shadow-md shadow-blue-600/20 transition-all hover:-translate-y-0.5 disabled:bg-slate-400 disabled:shadow-none disabled:translate-y-0" :disabled="busyId === item.id || !canImport(item)" @click="startImport(item)">
+                            <button type="button" class="px-3.5 py-1 text-sm font-bold rounded-lg text-white bg-blue-600 hover:bg-blue-500 shadow-md shadow-blue-600/20 transition-all hover:-translate-y-0.5 disabled:bg-slate-400 disabled:shadow-none disabled:translate-y-0" :disabled="busyId === item.id || !canImport(item)" @click="startImport(item)">
                                 {{ !canImport(item) ? '缺少 JSON' : (busyId === item.id ? '处理中...' : (item.item_type === 'command_bundle' ? '导入命令' : '导入配置')) }}
                             </button>
                         </div>

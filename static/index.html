@@ -198,9 +198,10 @@
                           class="ml-1 w-2 h-2 bg-orange-500 rounded-full inline-block"></span>
                 </button>
                 <button @click="openMarketplace"
-                        :class="['marketplace-entry-button', 'ml-auto']">
+                        :class="['marketplace-entry-button', 'ml-auto', { 'has-update': marketplaceHasUpdates }]">
                     <span v-html="$icons.shoppingBag"></span>
                     插件市场
+                    <span v-if="marketplaceHasUpdates" class="marketplace-entry-button__badge" aria-label="插件市场有新内容"></span>
                 </button>
             </div>
             <div class="flex-1 overflow-y-auto">

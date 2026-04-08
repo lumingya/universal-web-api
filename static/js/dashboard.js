@@ -1,5 +1,7 @@
 const { createApp } = Vue
 const MARKETPLACE_CLIENT_VERSION_STORAGE_KEY = 'marketplace_client_version'
+const MARKETPLACE_SEEN_SNAPSHOT_STORAGE_KEY = 'marketplace_seen_snapshot_v1'
+const MARKETPLACE_LATEST_SNAPSHOT_STORAGE_KEY = 'marketplace_latest_snapshot_v1'
 const DASHBOARD_SITES_CACHE_STORAGE_KEY = 'dashboard_sites_cache_v1'
 
 function loadStoredMarketplaceClientVersion() {
@@ -21,6 +23,61 @@ function saveStoredMarketplaceClientVersion(version) {
     } catch (error) {
         // ignore storage failures and keep runtime data available
     }
+}
+
+function loadStoredMarketplaceSnapshot(storageKey) {
+    try {
+        const raw = localStorage.getItem(storageKey)
+        if (!raw) {
+            return null
+        }
+        const parsed = JSON.parse(raw)
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            return null
+        }
+        const ids = Array.isArray(parsed.ids) ? parsed.ids.map(item => String(item || '').trim()).filter(Boolean) : []
+        return {
+            ids,
+            count: Number(parsed.count || ids.length || 0),
+            savedAt: Number(parsed.savedAt || 0)
+        }
+    } catch (error) {
+        return null
+    }
+}
+
+function saveStoredMarketplaceSnapshot(storageKey, snapshot) {
+    try {
+        if (!snapshot) {
+            localStorage.removeItem(storageKey)
+            return
+        }
+        localStorage.setItem(storageKey, JSON.stringify(snapshot))
+    } catch (error) {
+        // ignore storage failures and keep runtime data available
+    }
+}
+
+function buildMarketplaceSnapshot(catalog) {
+    const items = Array.isArray(catalog && catalog.items) ? catalog.items : []
+    const ids = items
+        .map(item => String(item && item.id || '').trim())
+        .filter(Boolean)
+        .sort((left, right) => left.localeCompare(right, 'zh-CN'))
+
+    return {
+        ids,
+        count: ids.length,
+        savedAt: Date.now()
+    }
+}
+
+function hasMarketplaceNewItems(latestSnapshot, seenSnapshot) {
+    if (!latestSnapshot || !Array.isArray(latestSnapshot.ids) || !seenSnapshot || !Array.isArray(seenSnapshot.ids)) {
+        return false
+    }
+    const seenIds = new Set(seenSnapshot.ids)
+    return latestSnapshot.ids.some(id => !seenIds.has(id))
 }
 
 function loadStoredSitesCache() {
@@ -825,6 +882,8 @@ const app = createApp({
             },
             marketplaceLoading: false,
             marketplaceError: '',
+            marketplaceHasUpdates: false,
+            marketplaceCheckTimer: null,
             marketplaceImportingId: null,
             showMarketplacePreview: false,
             marketplacePreviewData: null,
@@ -933,6 +992,7 @@ const app = createApp({
         // 初始化折叠状态
         this.initCollapsedStates()
         this.restoreSitesCache()
+        this.refreshMarketplaceUpdateFlagFromStorage()
 
         this.initializeDashboard()
 
@@ -947,6 +1007,7 @@ const app = createApp({
 
     beforeUnmount() {
         this.stopLogPolling()
+        this.stopMarketplaceUpdatePolling()
         if (this.systemStatsTimer) {
             clearInterval(this.systemStatsTimer)
             this.systemStatsTimer = null
@@ -958,10 +1019,11 @@ const app = createApp({
             await this.loadConfig(true)
 
             this.startLogPolling()
+            await this.loadHealthStatus({ silent: true, timeoutMs: 2500 }).catch(() => false)
+            this.startMarketplaceUpdatePolling()
             this.ensureTabDataLoaded(this.activeTab)
 
             // 每 2 秒刷新系统状态
-            this.loadHealthStatus({ silent: true, timeoutMs: 2500 }).catch(() => {})
             this.fetchSystemStats({ timeoutMs: 5000 }).catch(() => {})
             if (this.systemStatsTimer) {
                 clearInterval(this.systemStatsTimer)
@@ -989,6 +1051,24 @@ const app = createApp({
 
             clearInterval(this.logPollingTimer)
             this.logPollingTimer = null
+        },
+
+        startMarketplaceUpdatePolling() {
+            this.loadMarketplaceCatalog({ silent: true, background: true }).catch(() => {})
+            if (this.marketplaceCheckTimer) {
+                clearInterval(this.marketplaceCheckTimer)
+            }
+            this.marketplaceCheckTimer = setInterval(() => {
+                this.loadMarketplaceCatalog({ silent: true, background: true, force: true }).catch(() => {})
+            }, 300000)
+        },
+
+        stopMarketplaceUpdatePolling() {
+            if (!this.marketplaceCheckTimer) {
+                return
+            }
+            clearInterval(this.marketplaceCheckTimer)
+            this.marketplaceCheckTimer = null
         },
         // ========== 初始化 ==========
 
@@ -1214,6 +1294,43 @@ const app = createApp({
             }
             const separator = target.includes('?') ? '&' : '?'
             return target + separator + 'app_version=' + encodeURIComponent(version)
+        },
+
+        refreshMarketplaceUpdateFlagFromStorage() {
+            const latestSnapshot = loadStoredMarketplaceSnapshot(MARKETPLACE_LATEST_SNAPSHOT_STORAGE_KEY)
+            const seenSnapshot = loadStoredMarketplaceSnapshot(MARKETPLACE_SEEN_SNAPSHOT_STORAGE_KEY)
+            this.marketplaceHasUpdates = hasMarketplaceNewItems(latestSnapshot, seenSnapshot)
+            return this.marketplaceHasUpdates
+        },
+
+        syncMarketplaceUpdateState(catalog, { markSeen = false } = {}) {
+            const latestSnapshot = buildMarketplaceSnapshot(catalog)
+            const seenSnapshot = loadStoredMarketplaceSnapshot(MARKETPLACE_SEEN_SNAPSHOT_STORAGE_KEY)
+
+            if (!seenSnapshot) {
+                saveStoredMarketplaceSnapshot(MARKETPLACE_SEEN_SNAPSHOT_STORAGE_KEY, latestSnapshot)
+                saveStoredMarketplaceSnapshot(MARKETPLACE_LATEST_SNAPSHOT_STORAGE_KEY, latestSnapshot)
+                this.marketplaceHasUpdates = false
+                return false
+            }
+
+            saveStoredMarketplaceSnapshot(MARKETPLACE_LATEST_SNAPSHOT_STORAGE_KEY, latestSnapshot)
+
+            if (markSeen) {
+                saveStoredMarketplaceSnapshot(MARKETPLACE_SEEN_SNAPSHOT_STORAGE_KEY, latestSnapshot)
+                this.marketplaceHasUpdates = false
+                return false
+            }
+
+            this.marketplaceHasUpdates = hasMarketplaceNewItems(latestSnapshot, seenSnapshot)
+            return this.marketplaceHasUpdates
+        },
+
+        markMarketplaceCatalogAsSeen() {
+            if (!Array.isArray(this.marketplaceCatalog && this.marketplaceCatalog.items)) {
+                return false
+            }
+            return this.syncMarketplaceUpdateState(this.marketplaceCatalog, { markSeen: true })
         },
 
         async checkAuth() {
@@ -2329,9 +2446,13 @@ const app = createApp({
         },
 
         async ensureTabDataLoaded(tab) {
-            if (tab === 'marketplace' && !this.hasLoadedMarketplace) {
-                this.hasLoadedMarketplace = true;
-                await this.loadMarketplaceCatalog({ silent: true });
+            if (tab === 'marketplace') {
+                if (!this.hasLoadedMarketplace) {
+                    this.hasLoadedMarketplace = true;
+                    await this.loadMarketplaceCatalog({ silent: true, markSeen: true });
+                    return;
+                }
+                this.markMarketplaceCatalogAsSeen();
                 return;
             }
             if (tab === 'settings' && !this.hasLoadedSettings) {
@@ -2346,8 +2467,10 @@ const app = createApp({
             }
         },
 
-        async loadMarketplaceCatalog({ silent = false, force = false } = {}) {
-            this.marketplaceLoading = true;
+        async loadMarketplaceCatalog({ silent = false, force = false, background = false, markSeen = false } = {}) {
+            if (!background) {
+                this.marketplaceLoading = true;
+            }
             this.marketplaceError = '';
             try {
                 const suffix = force ? '?refresh=true' : '';
@@ -2365,6 +2488,10 @@ const app = createApp({
                     warning: '',
                     ...(data || {})
                 };
+                this.syncMarketplaceUpdateState(this.marketplaceCatalog, {
+                    markSeen: markSeen || this.activeTab === 'marketplace'
+                });
+                this.hasLoadedMarketplace = true;
                 if (!silent) {
                     this.notify('插件市场已刷新', 'success');
                 }
@@ -2376,7 +2503,9 @@ const app = createApp({
                 }
                 return false;
             } finally {
-                this.marketplaceLoading = false;
+                if (!background) {
+                    this.marketplaceLoading = false;
+                }
             }
         },
 

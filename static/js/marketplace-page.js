@@ -2,6 +2,8 @@
     const MAIN_PRESET_NAME = '主预设';
     const REVIEW_TOKEN_STORAGE_KEY = 'marketplace_github_review_token';
     const MARKETPLACE_CLIENT_VERSION_STORAGE_KEY = 'marketplace_client_version';
+    const MARKETPLACE_SEEN_SNAPSHOT_STORAGE_KEY = 'marketplace_seen_snapshot_v1';
+    const MARKETPLACE_LATEST_SNAPSHOT_STORAGE_KEY = 'marketplace_latest_snapshot_v1';
 
     function deepClone(value) {
         return JSON.parse(JSON.stringify(value));
@@ -30,6 +32,32 @@
         } catch (error) {
             // ignore storage failures and keep runtime data available
         }
+    }
+
+    function saveStoredMarketplaceSnapshot(storageKey, snapshot) {
+        try {
+            if (!snapshot) {
+                localStorage.removeItem(storageKey);
+                return;
+            }
+            localStorage.setItem(storageKey, JSON.stringify(snapshot));
+        } catch (error) {
+            // ignore storage failures and keep runtime data available
+        }
+    }
+
+    function buildMarketplaceSnapshot(catalog) {
+        const items = Array.isArray(catalog && catalog.items) ? catalog.items : [];
+        const ids = items
+            .map((item) => safeString(item && item.id))
+            .filter(Boolean)
+            .sort((left, right) => left.localeCompare(right, 'zh-CN'));
+
+        return {
+            ids,
+            count: ids.length,
+            savedAt: Date.now()
+        };
     }
 
     function createEmptyReviewSession() {
@@ -253,6 +281,12 @@
         },
 
         methods: {
+            syncMarketplaceSeenState(catalog) {
+                const snapshot = buildMarketplaceSnapshot(catalog);
+                saveStoredMarketplaceSnapshot(MARKETPLACE_LATEST_SNAPSHOT_STORAGE_KEY, snapshot);
+                saveStoredMarketplaceSnapshot(MARKETPLACE_SEEN_SNAPSHOT_STORAGE_KEY, snapshot);
+            },
+
             async apiRequest(url, options = {}) {
                 const token = localStorage.getItem('api_token');
                 const headers = {
@@ -541,6 +575,7 @@
                         items: [],
                         ...(data || {})
                     };
+                    this.syncMarketplaceSeenState(this.catalog);
                 } catch (error) {
                     this.error = error.status === 401
                         ? '请先在控制台里配置 API Token，再打开插件市场。'

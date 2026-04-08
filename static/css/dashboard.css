@@ -768,6 +768,7 @@ body.app-mounted #app-shell {
 
 /* ==================== Marketplace ==================== */
 .marketplace-entry-button {
+    position: relative;
     display: inline-flex;
     align-items: center;
     gap: 0.5rem;
@@ -779,6 +780,17 @@ body.app-mounted #app-shell {
     font-size: 0.875rem;
     font-weight: 700;
     transition: transform 0.15s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.marketplace-entry-button__badge {
+    position: absolute;
+    top: 0.42rem;
+    right: 0.58rem;
+    width: 0.6rem;
+    height: 0.6rem;
+    border-radius: 9999px;
+    background: #ef4444;
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.98);
 }
 
 .marketplace-entry-button:hover {
@@ -802,6 +814,10 @@ body.app-mounted #app-shell {
 .dark .marketplace-entry-button.is-active {
     background: linear-gradient(135deg, #1d4ed8, #0f766e);
     color: #eff6ff;
+}
+
+.dark .marketplace-entry-button__badge {
+    box-shadow: 0 0 0 2px rgba(15, 23, 42, 0.96);
 }
 
 .marketplace-shell {

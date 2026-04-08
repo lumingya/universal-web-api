@@ -16,9 +16,9 @@
     --mp-success: #10b981;
     --mp-warning: #f59e0b;
     --mp-danger: #ef4444;
-    --mp-shadow: 0 24px 60px rgba(2, 8, 23, 0.34);
-    --mp-radius: 18px;
-    --mp-radius-sm: 12px;
+    --mp-shadow: 0 12px 32px rgba(2, 8, 23, 0.28);
+    --mp-radius: 12px;
+    --mp-radius-sm: 8px;
     --mp-font: "Segoe UI Variable", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
 }
 
@@ -63,8 +63,8 @@ button {
 }
 
 .mp-page {
-    width: min(1240px, calc(100vw - 28px));
-    margin: 16px auto 40px;
+    width: min(1240px, calc(100vw - 20px));
+    margin: 6px auto 18px;
 }
 
 .mp-topbar,
@@ -79,9 +79,9 @@ button {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 18px;
-    padding: 16px 18px;
-    border-radius: 20px;
+    gap: 8px;
+    padding: 7px 12px;
+    border-radius: 12px;
     position: relative;
     overflow: hidden;
     backdrop-filter: blur(14px);
@@ -115,25 +115,25 @@ button {
 
 .mp-heading h1 {
     margin: 0;
-    font-size: 22px;
+    font-size: 15px;
     font-weight: 800;
     letter-spacing: 0.01em;
-    line-height: 1.15;
+    line-height: 1.1;
 }
 
 .mp-heading p {
-    margin: 4px 0 0;
-    font-size: 13px;
+    margin: 1px 0 0;
+    font-size: 11px;
     color: var(--mp-text-soft);
 }
 
 .mp-panel {
     border-radius: var(--mp-radius);
-    margin-top: 12px;
+    margin-top: 5px;
 }
 
 .mp-panel--toolbar {
-    padding: 16px;
+    padding: 8px 12px;
     background:
         linear-gradient(180deg, rgba(15, 23, 42, 0.96), rgba(11, 19, 35, 0.94));
 }
@@ -142,21 +142,21 @@ button {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 14px;
+    gap: 8px;
 }
 
 .mp-toolbar__title {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 2px;
 }
 
 .mp-list-title {
-    font-size: 18px;
+    font-size: 13px;
     font-weight: 800;
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 5px;
 }
 
 .mp-list-title span {
@@ -166,8 +166,8 @@ button {
 .mp-toolbar__subtitle {
     margin: 0;
     max-width: 52ch;
-    font-size: 12.5px;
-    line-height: 1.5;
+    font-size: 11px;
+    line-height: 1.35;
     color: var(--mp-text-soft);
 }
 
@@ -176,14 +176,14 @@ button {
     align-items: flex-start;
     justify-content: space-between;
     flex-wrap: wrap;
-    gap: 10px 16px;
-    margin-top: 12px;
-    padding-top: 12px;
+    gap: 5px 8px;
+    margin-top: 5px;
+    padding-top: 5px;
     border-top: 1px solid rgba(96, 165, 250, 0.12);
 }
 
 .mp-page-footer {
-    margin-top: 18px;
+    margin-top: 8px;
     padding: 2px 2px 0;
 }
 
@@ -196,16 +196,16 @@ button {
 .mp-inline-meta {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px;
-    font-size: 12px;
+    gap: 3px;
+    font-size: 11px;
     color: var(--mp-text-soft);
 }
 
 .mp-inline-meta span {
     display: inline-flex;
     align-items: center;
-    min-height: 26px;
-    padding: 0 10px;
+    min-height: 18px;
+    padding: 0 6px;
     border-radius: 999px;
     border: 1px solid rgba(96, 165, 250, 0.12);
     background: rgba(9, 16, 30, 0.46);
@@ -221,10 +221,10 @@ button {
 .mp-source-pill {
     display: inline-flex;
     align-items: center;
-    min-height: 26px;
-    padding: 0 10px;
+    min-height: 18px;
+    padding: 0 7px;
     border-radius: 999px;
-    font-size: 12px;
+    font-size: 11px;
     color: #bfdbfe;
     border: 1px solid rgba(96, 165, 250, 0.24);
     background: rgba(37, 99, 235, 0.16);
@@ -251,9 +251,9 @@ button {
 }
 
 .mp-filter-row {
-    margin-top: 12px;
-    padding: 10px;
-    border-radius: 16px;
+    margin-top: 5px;
+    padding: 5px 6px;
+    border-radius: 9px;
     border: 1px solid rgba(96, 165, 250, 0.1);
     background: rgba(8, 14, 27, 0.44);
 }
@@ -262,10 +262,11 @@ button {
     border: 1px solid rgba(148, 163, 184, 0.24);
     background: rgba(12, 20, 36, 0.9);
     color: var(--mp-text);
-    border-radius: 14px;
-    padding: 10px 12px;
-    min-height: 42px;
+    border-radius: 8px;
+    padding: 4px 8px;
+    min-height: 28px;
     box-sizing: border-box;
+    font-size: 12px;
 }
 
 .mp-control::placeholder {
@@ -404,8 +405,8 @@ body.mp-light .mp-control {
     border: 1px solid rgba(148, 163, 184, 0.22);
     background: rgba(15, 23, 42, 0.76);
     color: var(--mp-text-soft);
-    padding: 8px 12px;
-    font-size: 13px;
+    padding: 3px 8px;
+    font-size: 11px;
     font-weight: 600;
     line-height: 1;
 }
@@ -433,9 +434,9 @@ body.mp-light .mp-chip:hover {
 
 .mp-button {
     border: 1px solid transparent;
-    min-height: 40px;
-    padding: 9px 14px;
-    font-size: 13px;
+    min-height: 26px;
+    padding: 4px 10px;
+    font-size: 12px;
     line-height: 1;
 }
 
@@ -485,10 +486,10 @@ body.mp-light .mp-chip:hover {
 }
 
 .mp-banner {
-    margin-top: 12px;
-    padding: 10px 12px;
-    border-radius: 14px;
-    font-size: 12.5px;
+    margin-top: 5px;
+    padding: 5px 8px;
+    border-radius: 7px;
+    font-size: 11.5px;
 }
 
 .mp-banner--info {
@@ -562,21 +563,21 @@ body.mp-light .mp-empty {
 
 .mp-list {
     display: grid;
-    gap: 10px;
+    gap: 4px;
 }
 
 .mp-list-item {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
-    gap: 16px;
-    padding: 14px 16px;
+    gap: 8px;
+    padding: 7px 12px;
     border: 1px solid rgba(96, 165, 250, 0.16);
-    border-radius: 16px;
+    border-radius: 9px;
     background:
         radial-gradient(circle at top right, rgba(59, 130, 246, 0.07), transparent 26%),
         linear-gradient(135deg, rgba(13, 21, 38, 0.98), rgba(14, 24, 43, 0.94));
-    box-shadow: 0 12px 24px rgba(2, 8, 23, 0.12);
+    box-shadow: 0 4px 12px rgba(2, 8, 23, 0.08);
     transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
 }
 
@@ -590,7 +591,7 @@ body.mp-light .mp-empty {
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 2px;
 }
 
 .mp-list-item__badges,
@@ -607,10 +608,10 @@ body.mp-light .mp-empty {
 .mp-tag {
     display: inline-flex;
     align-items: center;
-    min-height: 24px;
-    padding: 0 10px;
+    min-height: 17px;
+    padding: 0 6px;
     border-radius: 999px;
-    font-size: 12px;
+    font-size: 10.5px;
 }
 
 .mp-badge {
@@ -639,28 +640,29 @@ body.mp-light .mp-empty {
 
 .mp-item-title {
     margin: 0;
-    font-size: 16px;
-    font-weight: 800;
-    line-height: 1.3;
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1.2;
 }
 
 .mp-item-summary {
     margin: 0;
-    font-size: 12.5px;
-    line-height: 1.5;
+    font-size: 11px;
+    line-height: 1.35;
     color: var(--mp-text-soft);
     max-width: 76ch;
     display: -webkit-box;
-    -webkit-line-clamp: 2;
+    -webkit-line-clamp: 1;
+    line-clamp: 1;
     -webkit-box-orient: vertical;
     overflow: hidden;
 }
 
 .mp-item-meta {
-    margin-top: 2px;
-    font-size: 12px;
+    margin-top: 1px;
+    font-size: 10.5px;
     color: var(--mp-text-muted);
-    gap: 6px 10px;
+    gap: 3px 7px;
 }
 
 .mp-tag {
@@ -674,40 +676,40 @@ body.mp-light .mp-empty {
     display: flex;
     align-items: center;
     justify-content: flex-end;
-    gap: 10px;
-    min-width: 280px;
+    gap: 6px;
+    min-width: 200px;
 }
 
 .mp-stats {
     display: flex;
-    gap: 6px;
+    gap: 4px;
     flex-wrap: wrap;
 }
 
 .mp-stat {
-    min-width: 68px;
-    border-radius: 12px;
+    min-width: 44px;
+    border-radius: 6px;
     background: rgba(8, 15, 29, 0.82);
     border: 1px solid rgba(148, 163, 184, 0.14);
-    padding: 8px 10px;
+    padding: 3px 6px;
 }
 
 .mp-stat span {
     display: block;
-    font-size: 12px;
+    font-size: 10px;
     color: var(--mp-text-muted);
 }
 
 .mp-stat strong {
     display: block;
-    margin-top: 3px;
-    font-size: 14px;
+    margin-top: 1px;
+    font-size: 12px;
     font-weight: 700;
 }
 
 .mp-actions {
     display: flex;
-    gap: 8px;
+    gap: 5px;
     width: auto;
     flex: 0 0 auto;
     flex-wrap: wrap;
@@ -715,10 +717,10 @@ body.mp-light .mp-empty {
 }
 
 .mp-empty {
-    padding: 42px 22px;
+    padding: 28px 18px;
     text-align: center;
     border: 1px dashed rgba(96, 165, 250, 0.18);
-    border-radius: 20px;
+    border-radius: 14px;
     background: rgba(11, 18, 33, 0.72);
 }
 
