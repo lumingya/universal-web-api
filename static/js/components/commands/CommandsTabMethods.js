@@ -671,6 +671,35 @@ window.CommandsTabMethods = {
             }
         },
 
+        resetEditorViewport() {
+            const applyReset = () => {
+                const overlay = this.$refs?.editorOverlay;
+                const body = this.$refs?.editorBody;
+
+                if (overlay && typeof overlay.scrollTo === 'function') {
+                    overlay.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+                } else if (overlay) {
+                    overlay.scrollTop = 0;
+                    overlay.scrollLeft = 0;
+                }
+
+                if (body && typeof body.scrollTo === 'function') {
+                    body.scrollTo({ top: 0, left: 0, behavior: 'auto' });
+                } else if (body) {
+                    body.scrollTop = 0;
+                    body.scrollLeft = 0;
+                }
+            };
+
+            this.$nextTick(() => {
+                applyReset();
+                requestAnimationFrame(() => {
+                    applyReset();
+                    setTimeout(applyReset, 60);
+                });
+            });
+        },
+
         openNewCommand() {
             this.editingCommand = this.normalizeCommand({
                 name: '新命令',
@@ -716,7 +745,8 @@ window.CommandsTabMethods = {
             this.triggerTypeTooltipType = '';
             this.resetSourceCommandPicker();
             this.syncPageProbeExpanded();
-            this.fetchBindingMeta();
+            this.fetchBindingMeta().finally(() => this.resetEditorViewport());
+            this.resetEditorViewport();
         },
 
         openEditCommand(cmd) {
@@ -730,7 +760,10 @@ window.CommandsTabMethods = {
             this.triggerTypeTooltipType = '';
             this.resetSourceCommandPicker();
             this.syncPageProbeExpanded();
-            this.fetchBindingMeta().then(() => this.loadPresetOptions());
+            this.fetchBindingMeta()
+                .then(() => this.loadPresetOptions())
+                .finally(() => this.resetEditorViewport());
+            this.resetEditorViewport();
         },
 
         addAction() {

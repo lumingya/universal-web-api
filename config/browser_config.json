@@ -46,5 +46,8 @@
     "stuck_timeout": 300,
     "allocation_mode": "round_robin"
   },
-  "UPLOAD_HISTORY_IMAGES": false
+  "UPLOAD_HISTORY_IMAGES": false,
+  "NETWORK_DEBUG_CAPTURE_ENABLED": true,
+  "NETWORK_DEBUG_CAPTURE_MAX_BODY_CHARS": 200000,
+  "NETWORK_DEBUG_CAPTURE_PARSER_FILTER": ""
 }

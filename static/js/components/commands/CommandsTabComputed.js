@@ -13,8 +13,8 @@ window.CommandsTriggerTypeBuiltinMeta = window.CommandsTriggerTypeBuiltinMeta ||
             description: '当标签页持续空闲超过设定秒数时触发，适合长时间无响应后的兜底处理。'
         },
         page_check: {
-            label: '页面检查，适合 Cloudflare 场景',
-            description: '按页面文本或 JS 探测结果判断是否命中，适合 Cloudflare、人机验证或异常空白页。'
+            label: '页面特征探测',
+            description: '通过文本检索或 JavaScript 注入自动检测页面状态（支持识别 Cloudflare 拦截、人机验证或 502 等异常）。'
         },
         command_check: {
             label: '命令检查',

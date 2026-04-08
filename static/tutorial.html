@@ -1647,14 +1647,19 @@
         .page-toc {
             position: sticky;
             top: 24px;
+            min-height: 0;
         }
 
         .page-toc-card {
+            display: flex;
+            flex-direction: column;
             padding: 16px;
             border-radius: 18px;
             border: 1px solid var(--docs-card-border);
             background: var(--docs-card-bg);
             box-shadow: var(--docs-shadow);
+            max-height: calc(100vh - 48px);
+            overflow: hidden;
         }
 
         .page-toc-kicker {
@@ -1674,6 +1679,10 @@
         .page-toc-links {
             display: grid;
             gap: 6px;
+            min-height: 0;
+            overflow-y: auto;
+            padding-right: 4px;
+            scrollbar-gutter: stable;
         }
 
         .toc-link {
@@ -1713,6 +1722,7 @@
         .toc-share-btn {
             width: 100%;
             margin-top: 18px;
+            flex-shrink: 0;
             padding: 12px 16px;
             border-radius: 16px;
             border: 1px solid var(--docs-search-border);
@@ -2774,7 +2784,7 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
             <p>如果目标网站走的是一次性完整返回的 JSON 或文本接口，你通常需要新增一个自定义解析器。别担心，这部分工作完全可以直接交给 AI 来做。</p>
 
             <div class="success-box">
-                <p><strong>项目已内置脚本：</strong>项目里已经附带同内容文件 <code>static/拦截请求发生器.txt</code>。你现在不用回桌面找文件，直接在教程里展开就能看；也可以单独打开原始文本页。</p>
+                <p><strong>项目已内置脚本：</strong>项目里已经附带同内容文件 <code>static/拦截请求发生器.txt</code>。可以将该文件内容放在控制台里来拦截网络请求。</p>
                 <div class="script-link-row">
                     <button type="button" class="btn" id="copyRequestGeneratorBtn">复制脚本</button>
                     <a class="btn" href="./%E6%8B%A6%E6%88%AA%E8%AF%B7%E6%B1%82%E5%8F%91%E7%94%9F%E5%99%A8.txt" target="_blank" rel="noopener">单独打开脚本</a>
@@ -2794,7 +2804,7 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
             <ol>
                 <li>用受控浏览器打开目标站点，停在真正聊天的页面。</li>
                 <li>打开开发者工具的 <code>Console</code>。</li>
-                <li>把项目附带的 <code>static/拦截请求发生器.txt</code> 脚本完整复制进去运行。</li>
+                <li>把项目附带的 <code>static/拦截请求发生器.txt</code> 脚本完整复制进去回车运行。如果第一次打开 Console 还不能直接粘贴，就先用鼠标点一下控制台输入区域，或者先手动输入一次 <code>allow pasting</code>（部分浏览器内核会要求先解除粘贴保护），再重新粘贴脚本。</li>
                 <li>手动发一条最简单的消息，让站点真实请求完整跑一遍。</li>
                 <li>请求结束后，在 Console 里执行 <code>exportRequests()</code>，浏览器会下载导出的请求 JSON。</li>
                 <li>把这个 JSON 连同 <code>app/core/parsers/base.py</code>、<code>app/core/parsers/__init__.py</code> 和一两个相近解析器一起发给 AI。</li>

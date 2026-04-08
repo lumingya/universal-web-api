@@ -12,6 +12,7 @@ import time
 import json
 import re
 from typing import Generator, Optional, Dict, Callable, Any
+from pathlib import Path
 
 from app.core.config import logger, SSEFormatter, BrowserConstants
 from app.core.parsers import ParserRegistry, ResponseParser
@@ -151,6 +152,7 @@ class NetworkMonitor:
         self._total_chunks = 0
         self._total_content_chars = 0
         self._prefetched_responses = []
+        self._debug_capture_counter = 0
         
         logger.debug(
             f"[NetworkMonitor] 初始化完成 "
@@ -601,6 +603,101 @@ class NetworkMonitor:
             time.sleep(0.05)
 
         return body, source
+
+    def _write_parser_debug_dump(
+        self,
+        raw_body: str,
+        event: Dict[str, Any],
+        parse_result: Dict[str, Any],
+        raw_body_source: str,
+        is_event_stream: bool,
+    ) -> None:
+        if not self._is_network_debug_capture_enabled():
+            return
+
+        try:
+            parser_id = str(self.parser.get_id() or "").strip().lower()
+            parser_filter = self._get_network_debug_capture_parser_filter()
+            if parser_filter and parser_id != parser_filter:
+                return
+
+            self._debug_capture_counter += 1
+            max_chars = self._get_network_debug_capture_max_body_chars()
+            raw_body_text = str(raw_body or "")
+            truncated = len(raw_body_text) > max_chars
+            stored_body = raw_body_text[:max_chars] if truncated else raw_body_text
+
+            parser_debug = None
+            if hasattr(self.parser, "export_debug_data"):
+                try:
+                    parser_debug = self.parser.export_debug_data(raw_body_text)
+                except Exception as parser_exc:
+                    parser_debug = {"error": str(parser_exc)}
+
+            payload = {
+                "captured_at": int(time.time()),
+                "parser": parser_id,
+                "capture_index": self._debug_capture_counter,
+                "event": {
+                    "url": str(event.get("url", "") or ""),
+                    "method": str(event.get("method", "") or ""),
+                    "status": int(event.get("status", 0) or 0),
+                    "timestamp": float(event.get("timestamp", 0) or 0),
+                },
+                "source": str(raw_body_source or ""),
+                "is_event_stream": bool(is_event_stream),
+                "raw_body_len": len(raw_body_text),
+                "raw_body_truncated": truncated,
+                "raw_body": stored_body,
+                "parse_result": {
+                    "content_len": len(str(parse_result.get("content", "") or "")),
+                    "content_preview": str(parse_result.get("content", "") or "")[:800],
+                    "done": bool(parse_result.get("done", False)),
+                    "error": str(parse_result.get("error") or ""),
+                    "image_count": len(parse_result.get("images", []) or []),
+                },
+                "parser_debug": parser_debug,
+            }
+
+            dump_dir = Path("logs") / "network_parser_debug"
+            dump_dir.mkdir(parents=True, exist_ok=True)
+            filename = (
+                f"{int(time.time())}_{self._debug_capture_counter:03d}_{parser_id or 'unknown'}.json"
+            )
+            dump_path = dump_dir / filename
+            dump_path.write_text(
+                json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+            logger.debug(
+                "[NetworkMonitor] 网络解析调试快照已写入 "
+                f"({dump_path}, parser={parser_id}, body_len={len(raw_body_text)}, truncated={truncated})"
+            )
+        except Exception as exc:
+            logger.debug(f"[NetworkMonitor] 写入网络解析调试快照失败: {exc}")
+
+    @staticmethod
+    def _is_network_debug_capture_enabled() -> bool:
+        try:
+            return bool(BrowserConstants.get("NETWORK_DEBUG_CAPTURE_ENABLED"))
+        except Exception:
+            return False
+
+    @staticmethod
+    def _get_network_debug_capture_max_body_chars() -> int:
+        try:
+            value = int(BrowserConstants.get("NETWORK_DEBUG_CAPTURE_MAX_BODY_CHARS"))
+            return max(2000, value)
+        except Exception:
+            return 200000
+
+    @staticmethod
+    def _get_network_debug_capture_parser_filter() -> str:
+        try:
+            return str(BrowserConstants.get("NETWORK_DEBUG_CAPTURE_PARSER_FILTER") or "").strip().lower()
+        except Exception:
+            return ""
         
     def pre_start(self):
         """
@@ -870,6 +967,13 @@ class NetworkMonitor:
             parse_result = self._handle_parse_result(parse_result)
             if parse_result.get("error"):
                 continue
+            self._write_parser_debug_dump(
+                raw_body,
+                event,
+                parse_result,
+                raw_body_source,
+                is_event_stream,
+            )
 
             # 提取内容
             content = parse_result.get("content", "")

@@ -36,6 +36,7 @@ from app.services.tool_calling import (
     normalize_tool_request,
     summarize_messages_for_debug,
 )
+from app.utils.model_routing import collect_route_domain_models, resolve_model_route_domain
 
 logger = get_logger("API.CHAT")
 
@@ -184,6 +185,26 @@ async def chat_completions(
     """
     OpenAI 兼容的聊天补全接口
     """
+    try:
+        browser = get_browser(auto_connect=False)
+        tabs = browser.tab_pool.get_tabs_with_index()
+        route_domain = resolve_model_route_domain(body.model, tabs)
+    except Exception as e:
+        logger.debug(f"模型路由解析失败（已忽略）: {e}")
+        route_domain = ""
+
+    if route_domain:
+        logger.info(f"模型路由命中: model={body.model!r} -> {route_domain}")
+        from app.api import tab_routes as tab_routes_api
+
+        route_body = tab_routes_api.ChatRequest(**body.model_dump())
+        return await tab_routes_api.chat_with_route_domain(
+            route_domain=route_domain,
+            request=request,
+            body=route_body,
+            authenticated=authenticated,
+        )
+
     ctx = request_manager.create_request()
     with logger.context(ctx.request_id):
         logger.info("开始")
@@ -425,7 +446,6 @@ async def _non_stream_with_lifecycle(
 ) -> JSONResponse:
     """非流式响应 + 生命周期管理"""
     collected_content = []
-    collected_images = []
     error_data = None
 
     async for chunk in _stream_with_lifecycle(request, body, ctx):
@@ -449,11 +469,6 @@ async def _non_stream_with_lifecycle(
                         content = delta.get("content", "")
                         if content:
                             collected_content.append(content)
-                        
-                        images = delta.get("images", [])
-                        if images:
-                            collected_images.extend(images)
-                            
                 except json.JSONDecodeError:
                     continue
 
@@ -461,41 +476,18 @@ async def _non_stream_with_lifecycle(
         return JSONResponse(content=error_data, status_code=500)
 
     full_content = "".join(collected_content)
-
-    if collected_images:
-        normalized_images = []
-        for ref in collected_images:
-            value = str(ref or "").strip()
-            if value and value not in normalized_images:
-                normalized_images.append(value)
-        collected_images = normalized_images
-
-        placeholder_pattern = re.compile(
-            r"^\s*https?://(?:[\w.-]+\.)?googleusercontent\.com/image_generation_content/\d+\s*$",
-            re.IGNORECASE | re.MULTILINE,
-        )
-        full_content = placeholder_pattern.sub("", full_content)
-        full_content = re.sub(r"\n{3,}", "\n\n", full_content).strip()
-
-        if "![image_" not in full_content and collected_images:
-            markdown = "\n".join(
-                f"![image_{idx}]({ref})"
-                for idx, ref in enumerate(collected_images)
-            )
-            if full_content:
-                full_content = f"{full_content}\n\n{markdown}"
-            else:
-                full_content = markdown
+    placeholder_pattern = re.compile(
+        r"^\s*https?://(?:[\w.-]+\.)?googleusercontent\.com/image_generation_content/\d+\s*$",
+        re.IGNORECASE | re.MULTILINE,
+    )
+    full_content = placeholder_pattern.sub("", full_content)
+    full_content = re.sub(r"\n{3,}", "\n\n", full_content).strip()
     
     message = {
         "role": "assistant",
         "content": full_content
     }
-    
-    # 🛡️ 兼容：保留 images 字段供特殊客户端使用
-    if collected_images:
-        message["images"] = collected_images
-    
+
     response = {
         "id": f"chatcmpl-{int(time.time() * 1000)}",
         "object": "chat.completion",
@@ -702,16 +694,31 @@ def _pack_done() -> str:
 @router.get("/v1/models")
 async def list_models(authenticated: bool = Depends(verify_auth)):
     """列出可用模型"""
-    return {
-        "object": "list",
-        "data": [
-            {
-                "id": "web-browser",
+    data = [
+        {
+            "id": "web-browser",
+            "object": "model",
+            "created": int(time.time()),
+            "owned_by": "universal-web-api"
+        }
+    ]
+
+    try:
+        browser = get_browser(auto_connect=False)
+        tabs = browser.tab_pool.get_tabs_with_index()
+        for item in collect_route_domain_models(tabs):
+            data.append({
+                "id": item["id"],
                 "object": "model",
                 "created": int(time.time()),
-                "owned_by": "universal-web-api"
-            }
-        ]
+                "owned_by": item["route_domain"],
+            })
+    except Exception as e:
+        logger.debug(f"构建模型列表失败（已忽略）: {e}")
+
+    return {
+        "object": "list",
+        "data": data,
     }
 
 

@@ -4,133 +4,133 @@
       "id": "cmd_58625812",
       "name": "自动清除 Cookie",
       "enabled": true,
-      "group_name": "竞技场命令"
+      "group_name": "arena"
     },
     {
       "id": "cmd_b34a8efd",
       "name": "网络错误闭环恢复",
       "enabled": true,
-      "group_name": "竞技场命令"
+      "group_name": "arena"
     },
     {
       "id": "cmd_aab3f583",
       "name": "清除cookie后恢复",
       "enabled": true,
-      "group_name": "竞技场命令"
+      "group_name": "arena"
     },
     {
       "id": "cmd_9b1e4a01",
       "name": "黑屏后恢复1",
       "enabled": true,
-      "group_name": "竞技场命令"
+      "group_name": "arena"
     },
     {
       "id": "cmd_9b1e4a02",
       "name": "ARENA_RECOVER_VERIFY_AFTER_COOKIE_CLEAR",
       "enabled": true,
-      "group_name": "竞技场命令"
+      "group_name": "arena"
     },
     {
       "id": "cmd_cf_pagecheck_arena_verify",
       "name": "自动过cf盾",
       "enabled": true,
-      "group_name": "竞技场命令"
+      "group_name": "arena"
     },
     {
       "id": "cmd_arena_human_verify_clear_cookie",
       "name": "人机验证即清Cookie",
       "enabled": true,
-      "group_name": "竞技场命令"
+      "group_name": "arena"
     },
     {
       "id": "cmd_arena_cookie_accept",
       "name": "自动接受Cookie弹窗",
       "enabled": true,
-      "group_name": "竞技场命令"
+      "group_name": "arena"
     },
     {
       "id": "cmd_9b1e4a03",
       "name": "黑屏后恢复",
       "enabled": true,
-      "group_name": "竞技场命令"
+      "group_name": "arena"
     },
     {
       "id": "cmd_69640733",
-      "name": "切换模型中",
+      "name": "选择模型中",
       "enabled": true,
-      "group_name": "竞技场命令"
+      "group_name": "arena"
     },
     {
       "id": "cmd_9b1e4a04",
       "name": "人机验证后恢复",
       "enabled": true,
-      "group_name": "竞技场命令"
+      "group_name": "arena"
     },
     {
       "id": "cmd_arena_notify_qq",
       "name": "ARENA关键恢复QQ通知",
       "enabled": true,
-      "group_name": "竞技场命令"
+      "group_name": "arena"
     },
     {
       "id": "cmd_9b1e4a05",
       "name": "网络错误后选择模型",
       "enabled": true,
-      "group_name": "竞技场命令"
+      "group_name": "arena"
     },
     {
       "id": "cmd_gemrf001",
       "name": "自动刷新页面",
       "enabled": true,
-      "group_name": "gemini命令"
+      "group_name": "gemini"
     },
     {
       "id": "cmd_gemblkchk",
       "name": "临时对话异常空白检测",
       "enabled": false,
-      "group_name": "gemini命令"
+      "group_name": "gemini"
     },
     {
       "id": "cmd_gemblk001",
       "name": "临时对话异常空白自动刷新",
       "enabled": true,
-      "group_name": "gemini命令"
+      "group_name": "gemini"
     },
     {
       "id": "cmd_gemsw001",
       "name": "自动切换预设",
       "enabled": true,
-      "group_name": "gemini命令"
+      "group_name": "gemini"
     },
     {
       "id": "cmd_0020e346",
       "name": "新命令1",
       "enabled": true,
-      "group_name": "gemini命令"
+      "group_name": "gemini"
     },
     {
       "id": "cmd_arena_terms_refresh_abort",
       "name": "ARENA_AGREE_POPUP_CLICK_FIRST",
       "enabled": true,
-      "group_name": "竞技场命令"
+      "group_name": "arena"
     },
     {
       "id": "cmd_arena_login_popup_clear_cookies",
       "name": "ARENA_LOGIN_POPUP_CLEAR_COOKIES",
       "enabled": true,
-      "group_name": "竞技场命令"
+      "group_name": "arena"
     },
     {
       "id": "cmd_arena_terms_refresh_followup",
       "name": "ARENA_AGREE_POPUP_REFRESH_ABORT",
       "enabled": true,
-      "group_name": "竞技场命令"
+      "group_name": "arena"
     },
     {
-      "id": "cmd_500d2416",
-      "name": "新命令2",
+      "id": "cmd_72ae0f7d",
+      "name": "ds刷新",
       "enabled": true,
-      "group_name": ""
+      "group_name": "ds"
     }
   ]
 }

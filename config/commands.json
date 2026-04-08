@@ -63,7 +63,7 @@
       "id": "cmd_58625812",
       "last_triggered": 1773570668.7475963,
       "trigger_count": 54,
-      "group_name": "竞技场命令",
+      "group_name": "arena",
       "log_enabled": false,
       "log_level": "GLOBAL",
       "stop_on_error": false
@@ -149,7 +149,7 @@
       "id": "cmd_b34a8efd",
       "last_triggered": 1772620932.8849528,
       "trigger_count": 65,
-      "group_name": "竞技场命令",
+      "group_name": "arena",
       "log_enabled": true,
       "log_level": "GLOBAL"
     },
@@ -191,7 +191,7 @@
       "id": "cmd_aab3f583",
       "last_triggered": 1772699908.392711,
       "trigger_count": 30,
-      "group_name": "竞技场命令",
+      "group_name": "arena",
       "log_enabled": true,
       "log_level": "GLOBAL"
     },
@@ -250,7 +250,7 @@
       "script": "",
       "script_lang": "javascript",
       "id": "cmd_9b1e4a01",
-      "group_name": "竞技场命令",
+      "group_name": "arena",
       "last_triggered": 1772621487.3919528,
       "trigger_count": 1,
       "log_enabled": true,
@@ -310,7 +310,7 @@
       "script": "",
       "script_lang": "javascript",
       "id": "cmd_9b1e4a02",
-      "group_name": "竞技场命令",
+      "group_name": "arena",
       "last_triggered": 1772621496.7491813,
       "trigger_count": 1,
       "log_enabled": true,
@@ -363,7 +363,7 @@
           "action_id": "step_3_probe"
         }
       ],
-      "group_name": "竞技场命令",
+      "group_name": "arena",
       "script": "",
       "script_lang": "javascript",
       "last_triggered": 1773823912.412253,
@@ -429,7 +429,7 @@
           "action_id": "step_5_probe"
         }
       ],
-      "group_name": "竞技场命令",
+      "group_name": "arena",
       "script": "",
       "script_lang": "javascript",
       "stop_on_error": false,
@@ -486,7 +486,7 @@
           "code": "return (() => { const text = String((document.body && (document.body.innerText || document.body.textContent)) || '').replace(/\\s+/g, ' ').trim().toLowerCase(); const visible = text.includes('this website uses cookies') && text.includes('accept cookies'); return visible ? { ok: false, result: 'cookie_banner_still_visible' } : { ok: true, result: 'cookie_banner_cleared' }; })()"
         }
       ],
-      "group_name": "竞技场命令",
+      "group_name": "arena",
       "script": "",
       "script_lang": "javascript",
       "stop_on_error": false,
@@ -529,7 +529,7 @@
       "script": "",
       "script_lang": "javascript",
       "id": "cmd_9b1e4a03",
-      "group_name": "竞技场命令",
+      "group_name": "arena",
       "log_enabled": true,
       "log_level": "GLOBAL"
     },
@@ -566,7 +566,7 @@
           "prompt": ""
         }
       ],
-      "group_name": "竞技场命令",
+      "group_name": "arena",
       "script": "",
       "script_lang": "javascript",
       "id": "cmd_69640733",
@@ -611,7 +611,7 @@
       "script": "",
       "script_lang": "javascript",
       "id": "cmd_9b1e4a04",
-      "group_name": "竞技场命令",
+      "group_name": "arena",
       "log_enabled": true,
       "log_level": "GLOBAL"
     },
@@ -671,7 +671,7 @@
           "raise_for_status": true
         }
       ],
-      "group_name": "竞技场命令",
+      "group_name": "arena",
       "script": "",
       "script_lang": "javascript",
       "last_triggered": 1773570844.6040304,
@@ -716,7 +716,7 @@
       "script": "",
       "script_lang": "javascript",
       "id": "cmd_9b1e4a05",
-      "group_name": "竞技场命令",
+      "group_name": "arena",
       "log_enabled": true,
       "log_level": "GLOBAL"
     },
@@ -775,7 +775,7 @@
           "code": "return (async () => { const findClickableButton = () => { const btn = document.querySelector('button.temp-chat-button'); if (!(btn instanceof HTMLButtonElement) || !btn.isConnected) return null; const style = window.getComputedStyle(btn); const hidden = btn.getClientRects().length === 0 || style.display === 'none' || style.visibility === 'hidden'; if (btn.disabled || hidden) return null; return btn; }; const deadline = Date.now() + 10000; while (Date.now() < deadline) { const btn = findClickableButton(); if (btn) { btn.click(); return 'temp_chat_button_clicked'; } await new Promise(resolve => setTimeout(resolve, 250)); } return 'temp_chat_button_timeout'; })()"
         }
       ],
-      "group_name": "gemini命令",
+      "group_name": "gemini",
       "script": "",
       "script_lang": "javascript",
       "last_triggered": 1775383928.5613492,
@@ -825,7 +825,7 @@
           "code": "return (() => { try { const reset = (value) => { delete window.__geminiTempChatBlankSince; return value; }; const href = String(window.location.href || ''); if (!/[?&]pageId=none\\b/i.test(href)) return reset('GEMINI_TEMP_CHAT_SKIP'); const vw = window.innerWidth || document.documentElement.clientWidth || 0; const vh = window.innerHeight || document.documentElement.clientHeight || 0; const isVisible = (el) => { if (!(el instanceof HTMLElement) || !el.isConnected) return false; const rect = el.getBoundingClientRect(); if (rect.width < 1 || rect.height < 1) return false; if (rect.bottom <= 0 || rect.right <= 0 || rect.top >= vh || rect.left >= vw) return false; const style = window.getComputedStyle(el); return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0.05; }; for (const el of Array.from(document.querySelectorAll('[role=\"progressbar\"], [aria-busy=\"true\"]'))) { if (isVisible(el)) return reset('GEMINI_TEMP_CHAT_LOADING'); } const inputSelectors = ['textarea', '[contenteditable=\"true\"]', '[role=\"textbox\"]', 'input[type=\"text\"]']; const composerHints = []; let hasComposer = false; for (const el of Array.from(document.querySelectorAll(inputSelectors.join(',')))) { if (!isVisible(el)) continue; const rect = el.getBoundingClientRect(); if (rect.width < Math.max(280, vw * 0.22) || rect.height < 28 || rect.top < vh * 0.35) continue; hasComposer = true; composerHints.push(el.getAttribute('placeholder') || '', el.getAttribute('aria-label') || '', 'value' in el ? (el.value || '') : '', el.innerText || el.textContent || ''); } if (!hasComposer) return reset('GEMINI_TEMP_CHAT_SKIP'); const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim().toLowerCase(); const allText = normalize((document.body?.innerText || document.documentElement?.innerText || '') + ' ' + composerHints.join(' ')); if (!allText.includes('gemini')) return reset('GEMINI_TEMP_CHAT_SKIP'); const normalMarkers = ['临时对话', '临时对话不会显示在近期对话', 'gemini 应用活动记录中', '通过临时对话提问']; const normalHits = normalMarkers.filter(marker => allText.includes(marker.toLowerCase())).length; if (normalHits >= 2) return reset('GEMINI_TEMP_CHAT_OK'); const brokenHints = ['问问 gemini', '问问 gemini 3', 'ask gemini']; const hasBrokenHint = brokenHints.some(marker => allText.includes(marker)); if (!hasBrokenHint && normalHits > 0) return reset('GEMINI_TEMP_CHAT_OK'); const now = Date.now(); const since = Number(window.__geminiTempChatBlankSince || 0); if (!since) { window.__geminiTempChatBlankSince = now; return 'GEMINI_TEMP_CHAT_PENDING'; } if ((now - since) < 5000) return 'GEMINI_TEMP_CHAT_PENDING'; window.__geminiTempChatBlankSince = now; return 'GEMINI_TEMP_CHAT_BLANK'; } catch (error) { delete window.__geminiTempChatBlankSince; return 'GEMINI_TEMP_CHAT_PROBE_ERROR'; } })()"
         }
       ],
-      "group_name": "gemini命令",
+      "group_name": "gemini",
       "script": "",
       "script_lang": "javascript",
       "last_triggered": 1774782777.7221844,
@@ -873,7 +873,7 @@
           "action_id": "step_1_refresh"
         }
       ],
-      "group_name": "gemini命令",
+      "group_name": "gemini",
       "script": "",
       "script_lang": "javascript",
       "last_triggered": null,
@@ -923,7 +923,7 @@
           "action_id": "step_1_switch_preset"
         }
       ],
-      "group_name": "gemini命令",
+      "group_name": "gemini",
       "script": "",
       "script_lang": "javascript",
       "last_triggered": 1773883775.3839626,
@@ -965,7 +965,7 @@
           "code": "return (async () => { const findClickableButton = () => { const btn = document.querySelector('button.temp-chat-button'); if (!(btn instanceof HTMLButtonElement) || !btn.isConnected) return null; const style = window.getComputedStyle(btn); const hidden = btn.getClientRects().length === 0 || style.display === 'none' || style.visibility === 'hidden'; if (btn.disabled || hidden) return null; return btn; }; const deadline = Date.now() + 2000; while (Date.now() < deadline) { const btn = findClickableButton(); if (btn) { btn.click(); return 'temp_chat_button_clicked'; } await new Promise(resolve => setTimeout(resolve, 200)); } return 'temp_chat_button_timeout'; })()"
         }
       ],
-      "group_name": "gemini命令",
+      "group_name": "gemini",
       "script": "",
       "script_lang": "javascript",
       "id": "cmd_0020e346",
@@ -1031,7 +1031,7 @@
           "code": "return (() => { try { const clickOutcome = String(window.__arenaAgreePopupLastClick || '').trim(); const candidates = Array.from(document.querySelectorAll('button, [role=\"button\"], input[type=\"button\"], input[type=\"submit\"], [role=\"dialog\"], [data-radix-popper-content-wrapper]')); const hasVisiblePopup = candidates.some(el => { const text = (el.innerText || el.value || el.getAttribute('aria-label') || '').toLowerCase(); if (!(text.includes('terms of use') && text.includes('privacy policy') && text.includes('agree'))) return false; const rect = el.getBoundingClientRect(); const style = window.getComputedStyle(el); return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden'; }); if (!hasVisiblePopup) return 'AGREE_DISMISSED'; if (clickOutcome === 'AGREE_CLICKED') return 'AGREE_REFRESH_NEEDED'; if (clickOutcome.startsWith('AGREE_CLICK_FAILED:') || clickOutcome === 'AGREE_BUTTON_NOT_FOUND') return 'AGREE_REFRESH_NEEDED'; return 'AGREE_STILL_VISIBLE'; } catch (e) { return 'AGREE_PROBE_FAILED:' + e; } })()"
         }
       ],
-      "group_name": "竞技场命令",
+      "group_name": "arena",
       "script": "",
       "script_lang": "javascript",
       "last_triggered": 1773823950.6523237,
@@ -1093,7 +1093,7 @@
           "code": "return (() => 'ARENA_LOGIN_POPUP_CLEARED')()"
         }
       ],
-      "group_name": "竞技场命令",
+      "group_name": "arena",
       "script": "",
       "script_lang": "javascript",
       "log_enabled": true,
@@ -1142,7 +1142,7 @@
           "code": "return (() => 'ARENA_AGREE_POPUP_REFRESHED')()"
         }
       ],
-      "group_name": "竞技场命令",
+      "group_name": "arena",
       "script": "",
       "script_lang": "javascript",
       "last_triggered": 1773823847.8804283,
@@ -1151,15 +1151,15 @@
       "log_level": "GLOBAL"
     },
     {
-      "name": "新命令2",
+      "name": "ds刷新",
       "enabled": true,
       "log_enabled": true,
-      "log_level": "GLOBAL",
+      "log_level": "WARNING",
       "mode": "simple",
       "stop_on_error": false,
       "trigger": {
-        "type": "request_count",
-        "value": 10,
+        "type": "page_check",
+        "value": "资源检查异常",
         "command_id": "",
         "command_ids": [],
         "listen_all_commands": false,
@@ -1170,13 +1170,13 @@
         "match_mode": "keyword",
         "status_codes": "403,429,500,502,503,504",
         "abort_on_match": true,
-        "scope": "domain",
-        "domain": "arena.ai",
+        "scope": "all",
+        "domain": "",
         "tab_index": null,
         "fire_mode": "edge",
         "cooldown_sec": 0,
-        "allow_during_workflow": false,
-        "interrupt_policy": "auto",
+        "allow_during_workflow": true,
+        "interrupt_policy": "resume",
         "interrupt_message": "",
         "probe_js": "",
         "periodic_enabled": true,
@@ -1184,20 +1184,18 @@
         "periodic_jitter_sec": 2,
         "stable_for_sec": 0,
         "check_while_busy_workflow": true,
-        "priority": 2
+        "priority": 3
       },
       "actions": [
         {
-          "type": "execute_workflow",
-          "action_id": "step_1",
-          "prompt": "",
-          "preset_name": "预设_选择模型"
+          "type": "refresh_page",
+          "action_id": "step_2"
         }
       ],
-      "group_name": "",
+      "group_name": "ds",
       "script": "",
       "script_lang": "javascript",
-      "id": "cmd_500d2416"
+      "id": "cmd_72ae0f7d"
     }
   ]
 }

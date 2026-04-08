@@ -374,94 +374,98 @@ window.CommandsTabTemplate = `
             </div>
         </div>
 
-        <div v-if="showEditor" class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-            <div class="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-2xl max-h-[85vh] overflow-y-auto m-4">
-                <div class="p-6">
-                    <!-- 弹窗标题 -->
-                    <div class="flex justify-between items-center mb-6">
-                        <h3 class="text-lg font-bold dark:text-white">
-                            {{ isNew ? '新建命令' : '编辑命令' }}
-                        </h3>
-                        <button @click="showEditor = false" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 text-xl">✕</button>
-                    </div>
+        <div v-if="showEditor" ref="editorOverlay" class="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-sm transition-all">
+            <div class="flex min-h-screen items-center justify-center p-4 sm:p-6">
+            <div class="mx-auto flex w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-slate-200/50 bg-white shadow-[0_20px_40px_-15px_rgba(0,0,0,0.2)] dark:border-slate-600 dark:bg-slate-900/95 dark:shadow-[0_20px_50px_-15px_rgba(0,0,0,0.5)]" style="max-height: calc(100vh - 3rem);">
+                <div class="flex items-center justify-between border-b border-slate-200/60 bg-slate-50/80 px-6 py-4 dark:border-slate-800/80 dark:bg-slate-900/80">
+                    <h3 class="flex items-center gap-2 text-lg font-bold text-slate-800 dark:text-slate-100">
+                        <span class="text-blue-500">{{ isNew ? '✨' : '⚙️' }}</span>
+                        {{ isNew ? '新建自动化规则' : '编辑自动化规则' }}
+                    </h3>
+                    <button @click="showEditor = false" class="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-200 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-300">
+                        <svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" /></svg>
+                    </button>
+                </div>
+                <div ref="editorBody" class="relative flex-1 overflow-x-hidden overflow-y-auto p-6 space-y-7 bg-white/50 dark:bg-slate-900/20">
 
                     <!-- 基本信息 -->
-                    <div class="mb-5 space-y-3">
-                        <div>
-                            <label class="block text-sm font-medium dark:text-gray-300 mb-1">命令名称</label>
-                            <input v-model="editingCommand.name" type="text"
-                                   class="w-full px-3 py-2 border dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 dark:text-white focus:ring-2 focus:ring-blue-400">
+                    <div class="space-y-4">
+                        <div class="flex items-center gap-2 text-sm font-bold tracking-widest text-slate-700 uppercase dark:text-slate-200">
+                            <span class="h-2 w-2 rounded-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.8)]"></span>
+                            基础配置
                         </div>
-                        <div class="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1.2fr)_auto]">
+                        
+                        <div class="grid grid-cols-1 gap-5 rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm dark:border-slate-800/80 dark:bg-slate-900/40 md:grid-cols-2 lg:grid-cols-3">
+                            <div class="lg:col-span-2">
+                                <label class="mb-1.5 block text-xs font-semibold text-slate-500 dark:text-slate-400">规则名称</label>
+                                <input v-model="editingCommand.name" type="text" placeholder="起个直观的名字"
+                                       class="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3 py-2 text-base text-slate-800 transition focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-700 dark:bg-slate-950/50 dark:text-slate-200 dark:focus:border-blue-500 dark:focus:bg-slate-900">
+                            </div>
+                            
                             <div>
-                                <label class="block text-sm font-medium dark:text-gray-300 mb-1">命令组（可选）</label>
-                                <input v-model.trim="editingCommand.group_name"
-                                       list="command-group-options"
-                                       type="text"
-                                       placeholder="例如：过盾流程组"
-                                       class="w-full px-3 py-2 border dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 dark:text-white focus:ring-2 focus:ring-sky-400">
+                                <label class="mb-1.5 block text-xs font-semibold text-slate-500 dark:text-slate-400">控制模式</label>
+                                <div class="flex h-[42px] items-center justify-between rounded-xl border border-slate-200 bg-slate-50/50 p-1 dark:border-slate-700 dark:bg-slate-950/50">
+                                    <label class="relative flex min-w-0 flex-1 cursor-pointer items-center justify-center rounded-lg px-3 py-1.5 text-sm font-medium transition"
+                                           :class="editingCommand.mode === 'simple' ? 'bg-white text-blue-600 shadow border border-slate-200/50 dark:bg-slate-800 dark:text-blue-400 dark:border-slate-600' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'">
+                                        <input type="radio" v-model="editingCommand.mode" value="simple" class="sr-only">
+                                        简单配置
+                                    </label>
+                                    <label class="relative flex min-w-0 flex-1 cursor-pointer items-center justify-center rounded-lg px-3 py-1.5 text-sm font-medium transition"
+                                           :class="editingCommand.mode === 'advanced' ? 'bg-white text-purple-600 shadow border border-slate-200/50 dark:bg-slate-800 dark:text-purple-400 dark:border-slate-600' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'">
+                                        <input type="radio" v-model="editingCommand.mode" value="advanced" class="sr-only">
+                                        脚本编程
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div class="lg:col-span-1 border-t border-slate-100 dark:border-slate-800/80 pt-4 lg:border-t-0 lg:pt-0">
+                                <label class="mb-1.5 block text-xs font-semibold text-slate-500 dark:text-slate-400">所属分组 (可选)</label>
+                                <input v-model.trim="editingCommand.group_name" list="command-group-options" type="text" placeholder="例如：过盾流程组"
+                                       class="w-full rounded-xl border border-slate-200 bg-slate-50/50 px-3 py-2 text-sm text-slate-800 transition focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-700 dark:bg-slate-950/50 dark:text-slate-200 dark:focus:border-blue-500 dark:focus:bg-slate-900">
                                 <datalist id="command-group-options">
                                     <option v-for="group in commandGroups" :key="group.name" :value="group.name"></option>
                                 </datalist>
                             </div>
-
-                            <div class="rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/50">
-                                <div class="mb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400 dark:text-slate-500">模式</div>
-                                <div class="flex items-center gap-3">
-                                    <label class="flex items-center gap-1.5 cursor-pointer">
-                                        <input type="radio" v-model="editingCommand.mode" value="simple" class="text-blue-500">
-                                        <span class="text-sm dark:text-gray-300">简单</span>
-                                    </label>
-                                    <label class="flex items-center gap-1.5 cursor-pointer">
-                                        <input type="radio" v-model="editingCommand.mode" value="advanced" class="text-purple-500">
-                                        <span class="text-sm dark:text-gray-300">高级</span>
-                                    </label>
+                            
+                            <div class="lg:col-span-2 border-t border-slate-100 dark:border-slate-800/80 pt-4 lg:border-t-0 lg:pt-0 flex flex-col justify-center">
+                                <div class="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-slate-50/80 p-3 dark:bg-slate-800/40">
+                                    <div class="flex items-center gap-3">
+                                        <label class="relative inline-flex cursor-pointer items-center">
+                                            <input type="checkbox" v-model="editingCommand.log_enabled" class="peer sr-only">
+                                            <div class="h-5 w-9 rounded-full bg-slate-200 outline-none ring-0 transition duration-200 ease-in-out after:absolute after:left-[2px] after:top-[2px] after:h-4 after:w-4 after:rounded-full after:bg-white after:shadow-sm after:transition-all after:content-[''] peer-checked:bg-blue-500 peer-checked:after:translate-x-full dark:bg-slate-700"></div>
+                                        </label>
+                                        <div class="flex flex-col">
+                                            <span class="text-sm font-semibold text-slate-700 dark:text-slate-200">日志调试输出</span>
+                                            <span class="text-[11px] text-slate-500 dark:text-slate-400 hidden sm:inline">独立控制此命令的触发判定与详细执行日志输出。</span>
+                                        </div>
+                                    </div>
+                                    <div v-if="editingCommand.log_enabled" class="flex items-center gap-1 border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-1 rounded-lg shadow-sm">
+                                        <label v-for="opt in commandLogLevelOptions" :key="'log-level-' + opt.value" class="cursor-pointer">
+                                            <input type="radio" v-model="editingCommand.log_level" :value="opt.value" class="sr-only">
+                                            <span :class="[
+                                                'inline-flex items-center rounded-md px-2.5 py-1 text-xs font-semibold transition',
+                                                editingCommand.log_level === opt.value
+                                                    ? 'bg-blue-100 text-blue-700 shadow-sm dark:bg-blue-900/60 dark:text-blue-300'
+                                                    : 'text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800/80'
+                                            ]">{{ opt.label }}</span>
+                                        </label>
+                                    </div>
                                 </div>
-                            </div>
-                        </div>
-
-                        <div class="rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2.5 dark:border-slate-700 dark:bg-slate-900/50">
-                            <div class="flex flex-wrap items-center justify-between gap-2">
-                                <div class="min-w-0">
-                                    <div class="text-sm font-medium text-slate-700 dark:text-slate-200">运行日志</div>
-                                    <p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-                                        只控制当前命令的触发和执行日志
-                                    </p>
-                                </div>
-                                <label class="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 dark:border-slate-700 dark:bg-slate-950/70 dark:text-slate-300">
-                                    <input type="checkbox" v-model="editingCommand.log_enabled" class="rounded">
-                                    打印日志
-                                </label>
-                            </div>
-                            <div v-if="editingCommand.log_enabled" class="mt-3 flex flex-wrap items-center gap-2">
-                                <span class="text-[11px] font-medium text-slate-500 dark:text-slate-400">级别</span>
-                                <label v-for="opt in commandLogLevelOptions"
-                                       :key="'log-level-' + opt.value"
-                                       class="cursor-pointer">
-                                    <input type="radio"
-                                           v-model="editingCommand.log_level"
-                                           :value="opt.value"
-                                           class="sr-only">
-                                    <span :class="[
-                                            'inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium transition',
-                                            editingCommand.log_level === opt.value
-                                                ? 'bg-sky-100 text-sky-700 ring-1 ring-sky-300 dark:bg-sky-900/40 dark:text-sky-200 dark:ring-sky-700'
-                                                : 'bg-white text-slate-500 ring-1 ring-slate-200 hover:bg-slate-100 dark:bg-slate-950/70 dark:text-slate-300 dark:ring-slate-700 dark:hover:bg-slate-800'
-                                        ]">
-                                        {{ opt.label }}
-                                    </span>
-                                </label>
                             </div>
                         </div>
                     </div>
 
-                    <!-- 触发条件 -->
-                    <div class="mb-6 p-4 bg-gray-50 dark:bg-gray-900 rounded-lg">
-                        <h4 class="text-sm font-semibold dark:text-gray-300 mb-3">🎯 触发条件</h4>
+                    <!-- 触发机制 -->
+                    <div class="space-y-4">
+                        <div class="flex items-center gap-2 text-sm font-bold tracking-widest text-slate-700 uppercase dark:text-slate-200">
+                            <span class="h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.8)]"></span>
+                            触发机制
+                        </div>
+                        <div class="rounded-2xl border border-emerald-200/60 bg-emerald-50/40 p-5 shadow-sm dark:border-emerald-600/30 dark:bg-emerald-950/20">
 
-                        <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+                        <div class="grid grid-cols-1 gap-5 md:grid-cols-2">
                             <div>
-                                <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">类型</label>
+                                <label class="block text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1.5 focus-within:text-emerald-600">探针类型</label>
                                 <div class="relative">
                                     <button type="button"
                                             @click="toggleTriggerTypePicker"
@@ -529,8 +533,8 @@ window.CommandsTabTemplate = `
                                 </div>
                             </div>
                             <div>
-                                <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">
-                                    {{ getTriggerTargetLabel(editingCommand.trigger) }}
+                                <label class="block text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1.5">
+                                    {{ getTriggerTargetLabel(editingCommand.trigger) }}条件
                                 </label>
                                 <div v-if="['command_triggered', 'command_check', 'command_result_match', 'command_result_event'].includes(editingCommand.trigger.type)"
                                      class="relative">
@@ -633,7 +637,7 @@ window.CommandsTabTemplate = `
                                 <input v-else-if="editingCommand.trigger.type === 'page_check'"
                                        v-model="editingCommand.trigger.value"
                                        type="text"
-                                       placeholder="可填页面文本、关键词或表达式；也可留空只用下方 JS 探测"
+                                       placeholder="填写匹配文本 / 选择器（可留空使用JS精判）"
                                        class="w-full px-3 py-2 border dark:border-gray-600 rounded bg-white dark:bg-gray-700 dark:text-white text-sm">
                                 <input v-else v-model.number="editingCommand.trigger.value"
                                        type="number"
@@ -643,15 +647,17 @@ window.CommandsTabTemplate = `
                         </div>
 
                         <div v-if="editingCommand.trigger.type === 'page_check'"
-                             class="mt-3 rounded-xl border border-sky-200/70 bg-sky-50/70 p-3 dark:border-sky-800/60 dark:bg-sky-900/20">
+                             class="mt-4 rounded-xl border border-sky-200/80 bg-white p-4 shadow-sm dark:border-sky-800/40 dark:bg-slate-800/60 transition-all hover:border-sky-300 dark:hover:border-sky-700">
                             <button type="button"
                                     @click="togglePageProbeExpanded"
                                     class="flex w-full items-center justify-between gap-3 text-left">
                                 <div>
-                                    <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1 cursor-pointer">高级页面探测 JS（可选）</label>
-                                    <p class="text-xs text-sky-700 dark:text-sky-300">
-                                        默认收起；需要时再用 JS 做精判。
-                                        <span v-if="editingCommand.trigger.probe_js && editingCommand.trigger.probe_js.trim()" class="text-sky-800 dark:text-sky-200">已配置脚本。</span>
+                                    <label class="block text-sm font-semibold text-slate-700 dark:text-slate-200 mb-0.5 cursor-pointer flex items-center gap-2">
+                                        <span class="text-sky-500">⚡</span> 高级页面探测逻辑 (JS)
+                                    </label>
+                                    <p class="text-[11px] text-slate-500 dark:text-slate-400">
+                                        支持构建更复杂的DOM检测逻辑
+                                        <span v-if="editingCommand.trigger.probe_js && editingCommand.trigger.probe_js.trim()" class="font-medium text-sky-600 dark:text-sky-400 ml-1 bg-sky-50 dark:bg-sky-900/30 px-1.5 py-0.5 rounded">脚本已激活</span>
                                     </p>
                                 </div>
                                 <span class="shrink-0 text-xs font-medium text-sky-700 dark:text-sky-300">
@@ -663,12 +669,9 @@ window.CommandsTabTemplate = `
                                           rows="7"
                                           placeholder="return (() => { /* 返回真值表示命中；可返回字符串用于日志 */ })()"
                                           class="w-full px-3 py-2 border dark:border-gray-600 rounded bg-white dark:bg-gray-700 dark:text-white text-xs font-mono"></textarea>
-                                <p class="mt-2 text-xs text-sky-700 dark:text-sky-300">
-                                    这段 JS 会在页面检查命中前先执行一次。返回真值才算真正触发；返回字符串时会写入命中日志详情。适合“页面结构异常、但纯文本关键词判断不出来”的场景。
-                                </p>
-                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                                    可以单独使用高级探测，也可以和上方“检查条件”叠加，形成“文本初筛 + JS 精判”的组合。
-                                </p>
+                                <div class="mt-2 text-[11px] leading-relaxed text-slate-500 dark:text-slate-400 bg-sky-50/50 dark:bg-sky-900/10 p-2.5 rounded-lg border border-sky-100 dark:border-sky-800/30">
+                                    当此 JS 返回真值时，视为检测命中（若返回字符串则输出到日志）。它会在满足上方"条件"后执行，常用于"文本命中初筛 → JS结构精判"的场景。也可将上方留空，完全由 JS 接管判定。
+                                </div>
                             </div>
                         </div>
 
@@ -793,11 +796,11 @@ window.CommandsTabTemplate = `
                                 仅影响“空闲标签页周期扫描”；对话完成后的即时触发检查仍会执行。
                             </p>
                             <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                                优先级支持任意整数，数值越大越高。默认请求基准优先级为 2（可用环境变量 <code>CMD_REQUEST_PRIORITY_BASELINE</code> 调整），所以像 <code>-99</code>、<code>0</code>、<code>2</code>、<code>99</code> 都可以。
+                                优先级支持任意整数，数值越大越高。默认请求基准为 2 
                             </p>
                         </div>
 
-                        <div class="mt-3 rounded-xl border border-slate-200/70 bg-white/80 p-3 dark:border-slate-700/60 dark:bg-slate-900/40">
+                        <div class="mt-4 rounded-xl border border-slate-200/70 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800/50">
                             <div class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
                                 <div v-if="editingCommand.trigger.type === 'page_check'">
                                     <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">页面命中触发模式</label>
@@ -850,9 +853,9 @@ window.CommandsTabTemplate = `
                             </div>
                         </div>
 
-                        <div class="mt-3">
-                            <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">作用范围</label>
-                            <div class="flex items-center gap-4">
+                        <div class="mt-4 p-4 rounded-xl bg-white border border-slate-200/80 shadow-sm dark:bg-slate-800/60 dark:border-slate-700/60">
+                            <label class="block text-xs font-semibold text-slate-500 dark:text-slate-400 mb-2">有效判定作用范围</label>
+                            <div class="flex flex-wrap items-center gap-4">
                                 <label class="flex items-center gap-1.5 text-sm dark:text-gray-300">
                                     <input type="radio" v-model="editingCommand.trigger.scope" value="all" @change="handleTriggerScopeChange"> 所有标签页
                                 </label>
@@ -892,29 +895,36 @@ window.CommandsTabTemplate = `
                         </div>
                     </div>
 
-                    <!-- 简单模式：动作列表 -->
-                    <div v-if="editingCommand.mode === 'simple'" class="mb-6">
-                        <div class="flex items-center justify-between mb-3">
-                            <h4 class="text-sm font-semibold dark:text-gray-300">🔧 动作列表</h4>
-                            <button @click="addAction" class="text-xs text-blue-500 hover:text-blue-700">+ 添加动作</button>
+                    <!-- 动作与执行 -->
+                    <div v-if="editingCommand.mode === 'simple'" class="mt-6 space-y-4">
+                        <div class="overflow-hidden rounded-2xl border border-violet-300/35 bg-slate-950/88 shadow-[0_22px_44px_-24px_rgba(15,23,42,0.95)] backdrop-blur-xl dark:border-violet-700/40">
+                        <div class="flex items-center justify-between gap-3 border-b border-violet-200/10 px-4 py-3">
+                            <div class="flex items-center gap-2 text-sm font-bold tracking-widest text-slate-700 uppercase dark:text-slate-200">
+                                <span class="h-2 w-2 rounded-full bg-violet-500 shadow-[0_0_8px_rgba(139,92,246,0.8)]"></span>
+                                执行动作
+                            </div>
+                            <button @click="addAction" class="rounded-lg bg-violet-500/12 px-3 py-1.5 text-xs font-semibold text-violet-200 transition hover:bg-violet-500/20 dark:text-violet-100">
+                                + 添加执行步骤
+                            </button>
                         </div>
-
-                        <label class="mb-3 flex items-center gap-2 text-sm dark:text-gray-300">
+                        
+                        <div class="bg-violet-950/18 px-4 py-4 space-y-3">
+                        <label class="mb-3 flex items-center gap-2 text-sm text-slate-200">
                             <input type="checkbox" v-model="editingCommand.stop_on_error" class="rounded">
                             动作失败后立即停止后续步骤
                         </label>
 
-                        <div v-if="editingCommand.actions.length === 0" class="text-sm text-gray-400 dark:text-gray-500 text-center py-4">
+                        <div v-if="editingCommand.actions.length === 0" class="py-4 text-center text-sm text-slate-400">
                             暂无动作，点击上方添加
                         </div>
 
                         <div v-for="(action, i) in editingCommand.actions" :key="i"
-                             class="flex flex-wrap items-start gap-2 mb-2 p-3 bg-gray-50 dark:bg-gray-900 rounded-lg">
-                            <span class="text-xs text-gray-400 w-5">{{ i + 1 }}</span>
+                             class="mb-2 flex flex-wrap items-start gap-2 rounded-xl border border-white/6 bg-slate-900/92 p-3">
+                            <span class="w-5 text-xs text-slate-400">{{ i + 1 }}</span>
 
                                 <select v-model="action.type"
                                      @change="handleActionTypeChange(action)"
-                                     class="flex-1 min-w-[180px] px-2 py-1.5 border dark:border-gray-600 rounded bg-white dark:bg-gray-700 dark:text-white text-sm">
+                                     class="min-w-[180px] flex-1 rounded border border-slate-600 bg-slate-700 px-2 py-1.5 text-sm text-white">
                                     <optgroup v-for="group in actionTypeGroups" :key="group.label" :label="group.label">
                                         <option v-for="opt in group.options" :key="opt.value" :value="opt.value">
                                             {{ opt.label }}
@@ -924,20 +934,20 @@ window.CommandsTabTemplate = `
 
                             <!-- 动作参数 -->
                             <input v-if="action.type === 'wait'" v-model.number="action.seconds" type="number" min="0" step="0.5" placeholder="秒"
-                                   class="w-20 px-2 py-1.5 border dark:border-gray-600 rounded bg-white dark:bg-gray-700 dark:text-white text-sm">
+                                   class="w-20 rounded border border-slate-600 bg-slate-700 px-2 py-1.5 text-sm text-white">
                             <input v-if="action.type === 'run_js'" v-model="action.code" type="text" placeholder="JavaScript 代码"
-                                   class="flex-1 px-2 py-1.5 border dark:border-gray-600 rounded bg-white dark:bg-gray-700 dark:text-white text-sm font-mono">
+                                   class="flex-1 rounded border border-slate-600 bg-slate-700 px-2 py-1.5 text-sm font-mono text-white">
                             <input v-if="action.type === 'click_element'" v-model.trim="action.selector" type="text" placeholder="CSS / XPath 选择器"
-                                   class="flex-1 px-2 py-1.5 border dark:border-gray-600 rounded bg-white dark:bg-gray-700 dark:text-white text-sm font-mono">
+                                   class="flex-1 rounded border border-slate-600 bg-slate-700 px-2 py-1.5 text-sm font-mono text-white">
                             <div v-if="action.type === 'click_coordinates'" class="flex flex-wrap items-center gap-2">
                                 <input v-model.number="action.x" type="number" step="1" placeholder="X"
-                                       class="w-24 px-2 py-1.5 border dark:border-gray-600 rounded bg-white dark:bg-gray-700 dark:text-white text-sm">
+                                       class="w-24 rounded border border-slate-600 bg-slate-700 px-2 py-1.5 text-sm text-white">
                                 <input v-model.number="action.y" type="number" step="1" placeholder="Y"
-                                       class="w-24 px-2 py-1.5 border dark:border-gray-600 rounded bg-white dark:bg-gray-700 dark:text-white text-sm">
+                                       class="w-24 rounded border border-slate-600 bg-slate-700 px-2 py-1.5 text-sm text-white">
                             </div>
                             <div v-if="['execute_preset', 'execute_workflow'].includes(action.type)" class="flex-1 min-w-[220px]">
                                 <select v-model="action.preset_name"
-                                        class="w-full px-2 py-1.5 border dark:border-gray-600 rounded bg-white dark:bg-gray-700 dark:text-white text-sm">
+                                        class="w-full rounded border border-slate-600 bg-slate-700 px-2 py-1.5 text-sm text-white">
                                     <option :value="getFollowDefaultPresetValue()">
                                         {{ getFollowDefaultPresetLabel() }}
                                     </option>
@@ -949,27 +959,27 @@ window.CommandsTabTemplate = `
                                        v-model="action.prompt"
                                        type="text"
                                        placeholder="可选测试消息"
-                                       class="w-full mt-2 px-2 py-1.5 border dark:border-gray-600 rounded bg-white dark:bg-gray-700 dark:text-white text-sm">
-                                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                       class="mt-2 w-full rounded border border-slate-600 bg-slate-700 px-2 py-1.5 text-sm text-white">
+                                <p class="mt-1 text-xs text-slate-400">
                                     {{ getPresetHint() }}
                                 </p>
                             </div>
                             <div v-if="action.type === 'execute_command_group'" class="flex-1 min-w-[220px] space-y-2">
                                 <select v-model="action.group_name"
-                                        class="w-full px-2 py-1.5 border dark:border-gray-600 rounded bg-white dark:bg-gray-700 dark:text-white text-sm">
+                                        class="w-full rounded border border-slate-600 bg-slate-700 px-2 py-1.5 text-sm text-white">
                                     <option value="" disabled>请选择命令组</option>
                                     <option v-for="group in commandGroups" :key="group.name" :value="group.name">
                                         {{ group.name }}（{{ group.enabledCount }}/{{ group.count }}）
                                     </option>
                                 </select>
-                                <label class="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+                                <label class="flex items-center gap-2 text-xs text-slate-400">
                                     <input type="checkbox" v-model="action.include_disabled" class="rounded">
                                     包含禁用命令
                                 </label>
                                 <div>
-                                    <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">占用策略</label>
+                                    <label class="mb-1 block text-xs text-slate-400">占用策略</label>
                                     <select v-model="action.acquire_policy"
-                                            class="w-full px-2 py-1.5 border dark:border-gray-600 rounded bg-white dark:bg-gray-700 dark:text-white text-sm">
+                                            class="w-full rounded border border-slate-600 bg-slate-700 px-2 py-1.5 text-sm text-white">
                                         <option value="inherit_session">沿用当前会话</option>
                                         <option value="try_acquire">尝试重新占用</option>
                                         <option value="require_acquire">必须重新占用</option>
@@ -977,29 +987,29 @@ window.CommandsTabTemplate = `
                                 </div>
                             </div>
                             <input v-if="action.type === 'navigate'" v-model="action.url" type="text" placeholder="URL"
-                                   class="flex-1 px-2 py-1.5 border dark:border-gray-600 rounded bg-white dark:bg-gray-700 dark:text-white text-sm">
-                            <span v-if="action.type === 'send_webhook'" class="text-xs text-gray-500 dark:text-gray-400 flex-1 font-mono">
+                                   class="flex-1 rounded border border-slate-600 bg-slate-700 px-2 py-1.5 text-sm text-white">
+                            <span v-if="action.type === 'send_webhook'" class="flex-1 text-xs font-mono text-slate-400">
                                 {{ (action.method || 'POST').toUpperCase() }} · {{ action.url || '未配置 URL' }}
                             </span>
-                            <span v-if="action.type === 'send_napcat'" class="text-xs text-gray-500 dark:text-gray-400 flex-1 font-mono">
+                            <span v-if="action.type === 'send_napcat'" class="flex-1 text-xs font-mono text-slate-400">
                                 NapCat · {{ action.target_type === 'group' ? ('群 ' + (action.group_id || '未填写')) : ('QQ ' + (action.user_id || '未填写')) }}
                             </span>
-                            <span v-if="action.type === 'abort_task'" class="text-xs text-gray-500 dark:text-gray-400 flex-1">
+                            <span v-if="action.type === 'abort_task'" class="flex-1 text-xs text-slate-400">
                                 触发后取消当前请求并停止后续动作
                             </span>
-                            <span v-if="action.type === 'release_tab_lock'" class="text-xs text-gray-500 dark:text-gray-400 flex-1">
+                            <span v-if="action.type === 'release_tab_lock'" class="flex-1 text-xs text-slate-400">
                                 解除当前标签页占用（可强制释放并清空页面）                            </span>
 
                             <!-- 代理切换 - 简略显示 -->
-                            <span v-if="action.type === 'switch_proxy'" class="text-xs text-gray-500 dark:text-gray-400 flex-1">
+                            <span v-if="action.type === 'switch_proxy'" class="flex-1 text-xs text-slate-400">
                                 {{ action.mode === 'random' ? '随机' : action.mode === 'round_robin' ? '轮询' : action.node_name || '指定' }}
                                 @ {{ action.selector || 'Proxy' }}
                             </span>
 
                             <!-- 排序 & 删除 -->
-                            <button @click="moveAction(i, -1)" :disabled="i === 0" class="text-gray-400 hover:text-gray-600 disabled:opacity-30 text-sm">↑</button>
-                            <button @click="moveAction(i, 1)" :disabled="i === editingCommand.actions.length - 1" class="text-gray-400 hover:text-gray-600 disabled:opacity-30 text-sm">↓</button>
-                            <button @click="removeAction(i)" class="text-red-400 hover:text-red-600 text-sm">✕</button>
+                            <button @click="moveAction(i, -1)" :disabled="i === 0" class="text-sm text-slate-400 hover:text-slate-200 disabled:opacity-30">↑</button>
+                            <button @click="moveAction(i, 1)" :disabled="i === editingCommand.actions.length - 1" class="text-sm text-slate-400 hover:text-slate-200 disabled:opacity-30">↓</button>
+                            <button @click="removeAction(i)" class="text-sm text-red-400 hover:text-red-300">✕</button>
                         </div>
 
                         <!-- 代理切换详细配置（当某个 switch_proxy 动作时显示） -->
@@ -1234,17 +1244,25 @@ window.CommandsTabTemplate = `
                                     执行后中断后续动作                                </label>
                             </div>
                         </div>
+                        </div>
+                        </div> <!-- Close action floating panel -->
                     </div>
 
                     <!-- 高级模式：脚本编辑器 -->
-                    <div v-if="editingCommand.mode === 'advanced'" class="mb-6">
-                        <div class="flex items-center justify-between mb-3">
-                            <h4 class="text-sm font-semibold dark:text-gray-300">📝 脚本</h4>
-                            <select v-model="editingCommand.script_lang"
-                                    class="px-2 py-1 border dark:border-gray-600 rounded bg-white dark:bg-gray-700 dark:text-white text-xs">
-                                <option value="javascript">JavaScript</option>
-                                <option value="python">Python</option>
-                            </select>
+                    <div v-if="editingCommand.mode === 'advanced'" class="space-y-4">
+                        <div class="flex flex-wrap items-center justify-between gap-4">
+                            <div class="flex items-center gap-2 text-sm font-bold tracking-widest text-slate-700 uppercase dark:text-slate-200">
+                                <span class="h-2 w-2 rounded-full bg-violet-500 shadow-[0_0_8px_rgba(139,92,246,0.8)]"></span>
+                                脚本编程
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <span class="text-xs font-semibold text-slate-500 mr-2">运行环境</span>
+                                <select v-model="editingCommand.script_lang"
+                                        class="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm focus:border-violet-500 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">
+                                    <option value="javascript">JavaScript (前端注入)</option>
+                                    <option value="python">Python (后端执行)</option>
+                                </select>
+                            </div>
                         </div>
 
                         <div class="mb-2 p-3 bg-gray-50 dark:bg-gray-900 rounded text-xs text-gray-500 dark:text-gray-400">
@@ -1266,19 +1284,21 @@ window.CommandsTabTemplate = `
                         </textarea>
                     </div>
 
-                    <!-- 底部按钮 -->
-                    <div class="flex justify-end gap-3 pt-4 border-t dark:border-gray-700">
-                        <button @click="showEditor = false"
-                                class="px-4 py-2 border dark:border-gray-600 rounded-lg text-sm dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700">
-                            取消
-                        </button>
-                        <button @click="saveCommand"
-                                class="px-4 py-2 bg-blue-500 text-white rounded-lg text-sm hover:bg-blue-600">
-                            {{ isNew ? '创建' : '保存' }}
-                        </button>
-                    </div>
+                </div> <!-- Closing body space-y-7 wrapper -->
+
+                <!-- 底部按钮 -->
+                <div class="flex shrink-0 items-center justify-end gap-3 border-t border-slate-200 bg-slate-50 px-6 py-4 dark:border-slate-700/80 dark:bg-slate-800/80 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
+                    <button @click="showEditor = false"
+                            class="rounded-xl border border-slate-300 bg-white px-5 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100 hover:text-slate-900 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700 dark:hover:text-white">
+                        取消
+                    </button>
+                    <button @click="saveCommand"
+                            class="rounded-xl bg-blue-600 px-6 py-2 text-sm font-bold text-white shadow-md shadow-blue-500/30 transition hover:bg-blue-700 hover:shadow-blue-600/40 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:bg-blue-500 dark:hover:bg-blue-600 dark:focus:ring-offset-slate-900">
+                        {{ isNew ? '立即创建' : '保存设置' }}
+                    </button>
                 </div>
+            </div> <!-- End Main Modal Container -->
             </div>
-        </div>
+        </div> <!-- End Overlay Backdrop -->
     </div>
 `;

@@ -675,10 +675,39 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
         </div>
 
         <h4 id="non-stream-parser-guide">Practical guide: ask AI to write a parser for a new site</h4>
-        <p>If the target site returns one full JSON or text response at a time, you usually need a custom parser. The good news is that AI can do most of this work for you.</p>
+        <p>If the target site returns JSON, SSE, or plain text from the network layer, you usually need a custom parser. The fastest workflow now is: try the built-in debug capture first, and only fall back to the manual console listener when the built-in capture misses the request.</p>
 
         <div class="success-box">
-            <p><strong>Built-in helper script:</strong> the project already includes <code>static/拦截请求发生器.txt</code>. You can copy it from this tutorial section or open the original text file directly.</p>
+            <p><strong>Recommended first choice:</strong> turn on the built-in parser debug capture in <strong>Dashboard → Settings → Browser Constants</strong>. When a network parser is hit, the project can automatically save raw bodies and parser debug data into <code>logs/network_parser_debug/</code>.</p>
+            <ul>
+                <li>Enable <code>NETWORK_DEBUG_CAPTURE_ENABLED</code>.</li>
+                <li>Optionally set <code>NETWORK_DEBUG_CAPTURE_PARSER_FILTER</code> to a parser ID such as <code>deepseek</code> so you only capture the site you are debugging.</li>
+                <li>Leave the parser filter empty if you want to capture everything.</li>
+            </ul>
+        </div>
+
+        <div class="highlight-box">
+            <p><strong>⚠️ Important:</strong> built-in capture is much simpler, but it is not guaranteed to catch every site or every response shape. Some websites still need manual in-page interception, especially when their traffic is hidden behind unusual wrappers or paths that the normal listener cannot see cleanly.</p>
+        </div>
+
+        <h4>Preferred workflow: built-in debug capture</h4>
+        <ol>
+            <li>Open the target site in the controlled browser and stay on the real chat page.</li>
+            <li>In <strong>Dashboard → Settings → Browser Constants</strong>, enable <code>NETWORK_DEBUG_CAPTURE_ENABLED</code>.</li>
+            <li>Optionally fill <code>NETWORK_DEBUG_CAPTURE_PARSER_FILTER</code> with the parser you are testing, such as <code>deepseek</code>.</li>
+            <li>Turn on network interception for that site, then send one simple real message and wait until the reply finishes.</li>
+            <li>Open <code>logs/network_parser_debug/</code> and collect the generated JSON debug files.</li>
+            <li>Send those debug files to AI together with <code>app/core/parsers/base.py</code>, <code>app/core/parsers/__init__.py</code>, and one or two similar parser files.</li>
+            <li>Ask AI to create <code>app/core/parsers/xxx_parser.py</code> and tell you how to register it in <code>__init__.py</code>.</li>
+            <li>Return to the dashboard, fill in the suggested <code>listen_pattern</code> and parser ID, then test again.</li>
+            <li>If the result is still wrong, send AI the debug dump, the bad output, and your current parser file for another round.</li>
+        </ol>
+
+        <h4>Fallback workflow: manual console listener</h4>
+        <p>Use this only when the built-in capture did not record the request or did not preserve enough structure.</p>
+
+        <div class="info-box">
+            <p><strong>Manual helper script:</strong> the project already includes <code>static/拦截请求发生器.txt</code>. You can copy it from this tutorial section or open the original text file directly.</p>
             <div class="script-link-row">
                 <button type="button" class="btn" id="copyRequestGeneratorBtn">Copy Script</button>
                 <a class="btn" href="./%E6%8B%A6%E6%88%AA%E8%AF%B7%E6%B1%82%E5%8F%91%E7%94%9F%E5%99%A8.txt" target="_blank" rel="noopener">Open Script</a>
@@ -694,23 +723,19 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
             </details>
         </div>
 
-        <h4>Step by step</h4>
         <ol>
-            <li>Open the target site in the controlled browser and stay on the real chat page.</li>
             <li>Open the browser developer tools and switch to <code>Console</code>.</li>
-            <li>Copy the request generator script and run it.</li>
-            <li>Send one simple real message on the page and wait until the reply finishes.</li>
+            <li>Copy the request generator script and run it on the real site page.</li>
+            <li>Send one simple real message and wait until the reply finishes.</li>
             <li>Run <code>exportRequests()</code> in the console. The browser will download a requests JSON export.</li>
-            <li>Send that JSON to AI together with <code>app/core/parsers/base.py</code>, <code>app/core/parsers/__init__.py</code>, and one or two similar parser files.</li>
-            <li>Ask AI to create <code>app/core/parsers/xxx_parser.py</code> and tell you how to register it in <code>__init__.py</code>.</li>
-            <li>Return to the dashboard, enable network interception, and fill in the suggested <code>listen_pattern</code> and parser ID.</li>
-            <li>Test it. If the result is wrong, send the export, the bad output, and your new parser file back to AI for another round.</li>
+            <li>Send that JSON to AI together with the same parser base files and reference parsers.</li>
+            <li>Ask AI to build the parser and tell you what <code>listen_pattern</code> and parser ID to use.</li>
         </ol>
 
         <div class="info-box">
             <p><strong>💡 Tell AI these requirements:</strong></p>
             <ul>
-                <li>This is a non-streaming response, so extract the final text from the full response body directly.</li>
+                <li>This parser may receive plain JSON, SSE-like event streams, or text chunks, so inspect the raw response body carefully before deciding how to extract content.</li>
                 <li>After the first successful parse, return <code>done=True</code> to avoid duplicate output.</li>
                 <li>If images are present, put them in the <code>images</code> field.</li>
                 <li>Tell me what needs to be changed in <code>app/core/parsers/__init__.py</code> to register the parser.</li>
@@ -718,18 +743,18 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
         </div>
 
         <p>You can send AI a prompt like this:</p>
-        <pre><code>This is an exported non-streaming network request sample from a new site. Please refer to the existing parsers in app/core/parsers and help me add a new parser.
+        <pre><code>This is a network parser debug sample from a new site. Please refer to the existing parsers in app/core/parsers and help me add a new parser.
 
 Requirements:
 1. Create a new parser class in app/core/parsers/xxx_parser.py and inherit from ResponseParser
-2. This site uses non-streaming responses, so extract the final text directly from the full response body
+2. Inspect the raw response carefully and decide whether it is plain JSON, an SSE/event stream, or another text format
 3. After the first successful parse, return done=True to avoid duplicate appends
 4. If images are included, fill the images field
 5. Tell me what code I need to change in app/core/parsers/__init__.py to register it
 6. Tell me what listen_pattern and parser I should fill into the site configuration
 
 Attached:
-- exported requests json
+- debug dump files from logs/network_parser_debug (preferred), or exported requests json from the manual listener if built-in capture missed it
 - one or two reference parser files
 - app/core/parsers/base.py
 - app/core/parsers/__init__.py</code></pre>
@@ -1184,6 +1209,21 @@ BROWSER_PROFILE_NAME=Default</code></pre>
                 <tr><td>Max anomaly count</td><td><code>5</code></td><td>Abort after too many anomalies</td></tr>
                 <tr><td>Max missing-element count</td><td><code>10</code></td><td>Abort after repeated missing-element checks</td></tr>
             </table>
+        </div>
+
+        <div class="config-group">
+            <h4><span class="icon">🧪</span> Parser debug capture</h4>
+            <p style="color: var(--desc-color); font-size: 0.9rem; margin-bottom: 10px;">Use these when you are developing or fixing a network parser. Captured files are written to <code>logs/network_parser_debug/</code>.</p>
+            <table>
+                <tr><th>Setting</th><th>Default</th><th>Description</th></tr>
+                <tr><td>Enable response debug capture</td><td>Off</td><td>When a network parser runs, save the raw body, request metadata, and parser debug summary for later inspection.</td></tr>
+                <tr><td>Max body chars</td><td><code>200000</code></td><td>Maximum raw response length to save per capture file. Raise this if the site streams long replies and the useful tail gets cut off.</td></tr>
+                <tr><td>Parser filter</td><td>Empty</td><td>Leave blank to capture all parsers, or set a specific parser ID such as <code>deepseek</code> to reduce noise.</td></tr>
+            </table>
+        </div>
+
+        <div class="note">
+            <p><strong>💡 Recommended usage:</strong> when adapting a new site, enable parser debug capture first and reproduce one real reply. If no useful dump appears, then switch to the manual listener script from the tutorial's parser guide.</p>
         </div>
     `;
 

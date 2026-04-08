@@ -419,6 +419,27 @@ const BROWSER_CONSTANTS_SCHEMA = {
                 step: 0.1,
                 min: 0.2,
                 default: 1.0
+            },
+            NETWORK_DEBUG_CAPTURE_ENABLED: {
+                label: '启用响应调试捕获',
+                desc: '命中网络解析器时，把原始响应、事件信息和解析摘要落盘到 logs/network_parser_debug，方便开发新解析器。',
+                type: 'switch',
+                default: false
+            },
+            NETWORK_DEBUG_CAPTURE_MAX_BODY_CHARS: {
+                label: '最大正文长度',
+                unit: '字符',
+                desc: '单次捕获最多保存多少字符的原始 body，防止超大流响应占满磁盘。',
+                type: 'number',
+                min: 2000,
+                step: 1000,
+                default: 200000
+            },
+            NETWORK_DEBUG_CAPTURE_PARSER_FILTER: {
+                label: '解析器过滤',
+                desc: '留空表示捕获全部解析器；填 deepseek、qwen 这类 ID 时只捕获指定解析器。',
+                type: 'text',
+                default: ''
             }
         }
     },

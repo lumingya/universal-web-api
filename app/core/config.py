@@ -354,6 +354,9 @@ class BrowserConstants:
         'GLOBAL_NETWORK_INTERCEPTION_LISTEN_PATTERN': 'http',
         'GLOBAL_NETWORK_INTERCEPTION_WAIT_TIMEOUT': 0.5,
         'GLOBAL_NETWORK_INTERCEPTION_RETRY_DELAY': 1.0,
+        'NETWORK_DEBUG_CAPTURE_ENABLED': False,
+        'NETWORK_DEBUG_CAPTURE_MAX_BODY_CHARS': 200000,
+        'NETWORK_DEBUG_CAPTURE_PARSER_FILTER': '',
     }
     
     # ===== 类属性（会被配置文件覆盖）=====
@@ -405,6 +408,11 @@ class BrowserConstants:
     GLOBAL_NETWORK_INTERCEPTION_LISTEN_PATTERN = "http"
     GLOBAL_NETWORK_INTERCEPTION_WAIT_TIMEOUT = 0.5
     GLOBAL_NETWORK_INTERCEPTION_RETRY_DELAY = 1.0
+
+    # 网络解析调试捕获
+    NETWORK_DEBUG_CAPTURE_ENABLED = False
+    NETWORK_DEBUG_CAPTURE_MAX_BODY_CHARS = 200000
+    NETWORK_DEBUG_CAPTURE_PARSER_FILTER = ""
 
     @classmethod
     def _load_config(cls):
@@ -1751,11 +1759,13 @@ class SSEFormatter:
         completion_id: str = None,
         images: list[str] | None = None,
     ) -> str:
-        """打包流式 chunk"""
+        """打包流式 chunk。
+
+        注意：为了保持 OpenAI 兼容性，不再向 delta 注入自定义 images 字段。
+        图片应通过 content 中的 Markdown 链接传递。
+        """
         chunk_id = completion_id or cls._generate_id()
         delta = {"content": content}
-        if images:
-            delta["images"] = images
         data = {
             "id": chunk_id,
             "object": "chat.completion.chunk",
@@ -1843,13 +1853,29 @@ class SSEFormatter:
                 "total_tokens": 0
             }
         }
+
+    @staticmethod
+    def _build_markdown_image_block(images: list) -> str:
+        refs = []
+        for item in images or []:
+            if isinstance(item, dict):
+                ref = str(item.get("url") or item.get("data_uri") or "").strip()
+            else:
+                ref = str(item or "").strip()
+            if ref:
+                refs.append(ref)
+
+        if not refs:
+            return ""
+
+        return "".join(f"\n\n![image_{idx}]({ref})" for idx, ref in enumerate(refs)) + "\n\n"
+
     @classmethod
     def pack_images_chunk(cls, images: list, completion_id: str = None) -> str:
         """
-        打包携带图片的 SSE chunk（Phase B 新增）
-        
-        这个 chunk 会在最后一个文本 chunk 之后、[DONE] 之前发送。
-        客户端可以从 delta.images 中获取图片数据。
+        打包携带图片的 SSE chunk。
+
+        为保持 OpenAI 兼容性，图片会转成 Markdown 内容，而不是放进 delta.images。
         
         Args:
             images: 图片数据列表，每项符合 ImageData 格式
@@ -1860,53 +1886,22 @@ class SSEFormatter:
         
         Example:
             >>> chunk = SSEFormatter.pack_images_chunk([{"kind": "url", "url": "..."}])
-            >>> # "data: {"choices": [{"delta": {"images": [...]}}]}\n\n"
         """
-        import time
-        import json
-        
-        if not images:
+        markdown = cls._build_markdown_image_block(images)
+        if not markdown:
             return ""
-        
-        data = {
-            "id": completion_id or cls._generate_id(),
-            "object": "chat.completion.chunk",
-            "created": int(time.time()),
-            "model": "web-browser",
-            "choices": [{
-                "index": 0,
-                "delta": {
-                    "images": images
-                },
-                "finish_reason": None
-            }]
-        }
-        
-        return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+        return cls.pack_chunk(markdown, completion_id=completion_id)
+
     def pack_final_chunk_with_images(self, images: list, completion_id: str = None) -> str:
         """
-        🆕 打包包含图片的最终 chunk
-        
-        在流式输出的最后一个 chunk 中附带图片信息
+        打包包含图片的最终 chunk。
+
+        为保持 OpenAI 兼容性，图片会转成 Markdown 内容，而不是放进 delta.images。
         """
-        if not completion_id:
-            completion_id = self._generate_id()
-        
-        data = {
-            "id": completion_id,
-            "object": "chat.completion.chunk",
-            "created": int(time.time()),
-            "model": "web-browser",
-            "choices": [{
-                "index": 0,
-                "delta": {
-                    "images": images  # 图片数据放在 delta.images 中
-                },
-                "finish_reason": None
-            }]
-        }
-        
-        return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+        markdown = self._build_markdown_image_block(images)
+        if not markdown:
+            return ""
+        return self.pack_chunk(markdown, completion_id=completion_id)
 # ================= 消息验证器 =================
 
 class MessageValidator:

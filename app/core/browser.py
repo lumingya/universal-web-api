@@ -1445,7 +1445,6 @@ class BrowserCore:
                                 yield self.formatter.pack_chunk(
                                     md,
                                     completion_id=executor._completion_id,
-                                    images=image_refs,
                                 )
                                 logger.debug(f"[MD_IMAGE] 已发送结构化图片，共 {len(image_refs)} 张")
                             else:
