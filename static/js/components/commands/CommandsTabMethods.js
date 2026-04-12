@@ -65,6 +65,9 @@ window.CommandsTabMethods = {
             this.initNapcatAction(next);
             this.initCommandGroupAction(next);
             this.initReleaseLockAction(next);
+            this.initAutomationAction(next);
+            this.initHttpRequestAction(next);
+            this.initAppendFileAction(next);
             return next;
         },
 
@@ -779,6 +782,9 @@ window.CommandsTabMethods = {
             this.initNapcatAction(action);
             this.initCommandGroupAction(action);
             this.initReleaseLockAction(action);
+            this.initAutomationAction(action);
+            this.initHttpRequestAction(action);
+            this.initAppendFileAction(action);
             if (action.type === 'execute_workflow' && action.prompt === undefined) {
                 action.prompt = '';
             }
@@ -880,6 +886,104 @@ window.CommandsTabMethods = {
                     action.stop_actions = this.releaseLockDefaults.stop_actions;
                 }
             }
+        },
+
+        initAutomationAction(action) {
+            if (action.type === 'write_element') {
+                action.selector = action.selector || this.automationWriteDefaults.selector;
+                action.write_mode = action.write_mode || this.automationWriteDefaults.write_mode;
+                if (action.clear_first === undefined) action.clear_first = this.automationWriteDefaults.clear_first;
+                action.value_source = action.value_source || this.automationWriteDefaults.value_source;
+                if (action.text === undefined) action.text = this.automationWriteDefaults.text;
+                if (action.template === undefined) action.template = this.automationWriteDefaults.template;
+                if (action.variable_name === undefined) action.variable_name = this.automationWriteDefaults.variable_name;
+                action.random_kind = action.random_kind || this.automationWriteDefaults.random_kind;
+                if (action.random_length === undefined) action.random_length = this.automationWriteDefaults.random_length;
+                if (action.prefix === undefined) action.prefix = this.automationWriteDefaults.prefix;
+                if (action.suffix === undefined) action.suffix = this.automationWriteDefaults.suffix;
+                action.preset_name = action.preset_name || this.automationWriteDefaults.preset_name;
+                action.date_format = action.date_format || this.automationWriteDefaults.date_format;
+                if (action.min_age === undefined) action.min_age = this.automationWriteDefaults.min_age;
+                if (action.max_age === undefined) action.max_age = this.automationWriteDefaults.max_age;
+                if (action.save_as === undefined) action.save_as = this.automationWriteDefaults.save_as;
+                if (action.timeout_sec === undefined) action.timeout_sec = this.automationWriteDefaults.timeout_sec;
+            }
+            if (action.type === 'read_element') {
+                action.selector = action.selector || this.automationReadDefaults.selector;
+                action.read_mode = action.read_mode || this.automationReadDefaults.read_mode;
+                if (action.attr_name === undefined) action.attr_name = this.automationReadDefaults.attr_name;
+                if (action.trim === undefined) action.trim = this.automationReadDefaults.trim;
+                if (action.save_as === undefined) action.save_as = this.automationReadDefaults.save_as;
+                if (action.timeout_sec === undefined) action.timeout_sec = this.automationReadDefaults.timeout_sec;
+            }
+        },
+
+        initHttpRequestAction(action) {
+            if (action.type !== 'http_request') return;
+            action.method = action.method || this.httpRequestDefaults.method;
+            action.url = action.url || this.httpRequestDefaults.url;
+            if (action.headers === undefined) action.headers = this.httpRequestDefaults.headers;
+            if (action.body === undefined) action.body = this.httpRequestDefaults.body;
+            action.body_mode = action.body_mode || this.httpRequestDefaults.body_mode;
+            action.response_mode = action.response_mode || this.httpRequestDefaults.response_mode;
+            action.credentials = action.credentials || this.httpRequestDefaults.credentials;
+            if (action.timeout_sec === undefined) action.timeout_sec = this.httpRequestDefaults.timeout_sec;
+            if (action.fail_on_http_error === undefined) action.fail_on_http_error = this.httpRequestDefaults.fail_on_http_error;
+            if (action.save_as === undefined) action.save_as = this.httpRequestDefaults.save_as;
+        },
+
+        initAppendFileAction(action) {
+            if (action.type !== 'append_file') return;
+            action.file_path = action.file_path || this.appendFileDefaults.file_path;
+            if (action.content === undefined) action.content = this.appendFileDefaults.content;
+            if (action.append_newline === undefined) action.append_newline = this.appendFileDefaults.append_newline;
+            if (action.create_dirs === undefined) action.create_dirs = this.appendFileDefaults.create_dirs;
+            action.encoding = action.encoding || this.appendFileDefaults.encoding;
+        },
+
+        isAutomationVarNameValid(value) {
+            const text = String(value || '').trim();
+            if (!text) return true;
+            return /^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(text);
+        },
+
+        getAutomationPresetLabel(value) {
+            const map = {
+                name_cn: '随机中文姓名',
+                surname_cn: '随机姓氏',
+                given_name_cn: '随机名字',
+                birth_date: '随机生日',
+                birth_year: '随机出生年',
+                birth_month: '随机出生月',
+                birth_day: '随机出生日'
+            };
+            return map[value] || value || '未设置';
+        },
+
+        getAutomationWriteSummary(action) {
+            if (!action) return '';
+            const source = String(action.value_source || 'literal');
+            if (source === 'template') return '模板';
+            if (source === 'variable') return '变量 ' + (action.variable_name || '未设置');
+            if (source === 'random') return '随机 ' + (action.random_kind || 'alnum') + ' × ' + (action.random_length || 8);
+            if (source === 'prefix_random') return '前缀随机 ' + (action.random_kind || 'alnum') + ' × ' + (action.random_length || 8);
+            if (source === 'preset') return this.getAutomationPresetLabel(action.preset_name);
+            return (action.text || '').slice(0, 24) || '固定文本';
+        },
+
+        getAutomationReadSummary(action) {
+            if (!action) return '';
+            return (action.read_mode || 'auto') + (action.save_as ? (' -> ' + action.save_as) : '');
+        },
+
+        getHttpRequestSummary(action) {
+            if (!action) return '';
+            return (action.method || 'GET') + ' ' + ((action.url || '').slice(0, 40) || '未配置 URL');
+        },
+
+        getAppendFileSummary(action) {
+            if (!action) return '';
+            return (action.file_path || '未配置文件') + (action.append_newline ? ' + 换行' : '');
         },
 
         removeAction(index) {
@@ -1041,6 +1145,90 @@ window.CommandsTabMethods = {
             });
             if (clickCoordinateAction) {
                 this.$emit('notify', { type: 'error', message: '“点击坐标”动作必须填写有效的 X / Y 坐标。' });
+                return;
+            }
+            const invalidWriteAction = (this.editingCommand.actions || []).find(action => {
+                if (action.type !== 'write_element') return false;
+                if (!String(action.selector || '').trim()) return true;
+                if (!Number.isFinite(Number(action.timeout_sec)) || Number(action.timeout_sec) <= 0) return true;
+                const source = String(action.value_source || 'literal');
+                if (source === 'template') return !String(action.template || '').trim();
+                if (source === 'variable') return !String(action.variable_name || '').trim();
+                if (source === 'random' || source === 'prefix_random') {
+                    if (!Number.isFinite(Number(action.random_length)) || Number(action.random_length) <= 0) return true;
+                    if (source === 'prefix_random' && !String(action.prefix || '').trim() && !String(action.suffix || '').trim()) {
+                        return false;
+                    }
+                }
+                if (source === 'preset') {
+                    const preset = String(action.preset_name || '').trim();
+                    if (!preset) return true;
+                    if (preset.startsWith('birth_')) {
+                        if (!Number.isFinite(Number(action.min_age)) || Number(action.min_age) < 0) return true;
+                        if (!Number.isFinite(Number(action.max_age)) || Number(action.max_age) < Number(action.min_age)) return true;
+                    }
+                }
+                if (!this.isAutomationVarNameValid(action.save_as)) return true;
+                if (source === 'variable' && !this.isAutomationVarNameValid(action.variable_name)) return true;
+                return false;
+            });
+            if (invalidWriteAction) {
+                this.$emit('notify', { type: 'error', message: '“写入元素”动作配置不完整，请检查选择器、数据来源、超时和变量名。变量名只能用字母、数字和下划线，且不能以数字开头。' });
+                return;
+            }
+            const invalidReadAction = (this.editingCommand.actions || []).find(action => {
+                if (action.type !== 'read_element') return false;
+                if (!String(action.selector || '').trim()) return true;
+                if (!Number.isFinite(Number(action.timeout_sec)) || Number(action.timeout_sec) <= 0) return true;
+                if (String(action.read_mode || 'auto') === 'attr' && !String(action.attr_name || '').trim()) return true;
+                if (String(action.save_as || '').trim() && !this.isAutomationVarNameValid(action.save_as)) return true;
+                return false;
+            });
+            if (invalidReadAction) {
+                this.$emit('notify', { type: 'error', message: '“读取元素”动作配置不完整，请检查选择器、读取模式、属性名和变量名。' });
+                return;
+            }
+            const invalidHttpRequestAction = (this.editingCommand.actions || []).find(action => {
+                if (action.type !== 'http_request') return false;
+                if (!String(action.url || '').trim()) return true;
+                if (!Number.isFinite(Number(action.timeout_sec)) || Number(action.timeout_sec) <= 0) return true;
+                if (String(action.save_as || '').trim() && !this.isAutomationVarNameValid(action.save_as)) return true;
+                const method = String(action.method || 'GET').toUpperCase();
+                if (method !== 'GET' && method !== 'HEAD' && String(action.body_mode || 'json') === 'json') {
+                    const bodyText = String(action.body || '').trim();
+                    if (bodyText) {
+                        try {
+                            JSON.parse(bodyText);
+                        } catch (_) {
+                            return true;
+                        }
+                    }
+                }
+                const headersText = String(action.headers || '').trim();
+                if (headersText) {
+                    try {
+                        const parsedHeaders = JSON.parse(headersText);
+                        if (!parsedHeaders || typeof parsedHeaders !== 'object' || Array.isArray(parsedHeaders)) return true;
+                    } catch (_) {
+                        return true;
+                    }
+                }
+                return false;
+            });
+            if (invalidHttpRequestAction) {
+                this.$emit('notify', { type: 'error', message: '“页面内请求”动作配置不完整，请检查 URL、超时、Headers JSON、Body JSON 和变量名。' });
+                return;
+            }
+            const invalidAppendFileAction = (this.editingCommand.actions || []).find(action => {
+                if (action.type !== 'append_file') return false;
+                if (!String(action.file_path || '').trim()) return true;
+                if (action.content === undefined || action.content === null) return true;
+                const encoding = String(action.encoding || '').trim().toLowerCase();
+                if (!encoding) return true;
+                return false;
+            });
+            if (invalidAppendFileAction) {
+                this.$emit('notify', { type: 'error', message: '“追加到文件”动作必须填写文件路径、追加内容和编码。' });
                 return;
             }
             if (trigger.type === 'network_request_error') {

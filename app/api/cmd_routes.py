@@ -8,6 +8,7 @@ app/api/cmd_routes.py - 命令系统 API 路由
 """
 
 import json
+import threading
 from typing import Optional, List
 
 from fastapi import APIRouter, HTTPException, Depends, Header
@@ -15,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from app.core.config import AppConfig, get_logger
 from app.services.command_engine import command_engine
+from app.services.request_manager import request_manager, RequestStatus
 
 logger = get_logger("API.CMD")
 
@@ -340,41 +342,70 @@ async def test_command(command_id: str, authenticated: bool = Depends(verify_aut
         browser = get_browser(auto_connect=False)
         pool = browser.tab_pool
 
-        status = pool.get_status()
-        idle_tabs = [t for t in status.get("tabs", []) if t.get("status") == "idle"]
-        idle_tabs.sort(key=lambda t: t.get("persistent_index", 0))
+        sessions = []
+        if hasattr(pool, "get_sessions_snapshot"):
+            sessions = pool.get_sessions_snapshot()
+        idle_sessions = [
+            session for session in sessions
+            if getattr(getattr(session, "status", None), "value", "") == "idle"
+        ]
+        idle_sessions.sort(key=lambda item: getattr(item, "persistent_index", 0))
 
-        if not idle_tabs:
+        if not idle_sessions:
             raise HTTPException(status_code=409, detail="no_idle_tabs")
 
-        executed_tabs: List[int] = []
+        scheduled_tabs: List[int] = []
         skipped_tabs: List[int] = []
         failed_tabs: List[dict] = []
 
-        for tab_info in idle_tabs:
-            tab_index = tab_info.get("persistent_index")
-            if tab_index is None:
-                continue
+        def _run_command_in_background(target_session, target_ctx):
+            try:
+                setattr(target_session, "_command_request_id", target_ctx.request_id)
+                request_manager.start_request(target_ctx, tab_id=target_session.id)
+                with command_engine._command_logging_context(cmd):
+                    command_engine._execute_command(cmd, target_session)
+                if not target_ctx.should_stop() and target_ctx.status == RequestStatus.RUNNING:
+                    target_ctx.mark_completed()
+            except Exception as e:
+                logger.error(f"manual command test worker failed(tab={getattr(target_session, 'persistent_index', '?')}): {e}")
+                target_ctx.mark_failed(str(e))
+            finally:
+                request_manager.finish_request(target_ctx, success=(target_ctx.status == RequestStatus.COMPLETED))
+                setattr(target_session, "_command_request_id", None)
+                try:
+                    pool.release(target_session.id, check_triggers=False)
+                except Exception as release_error:
+                    logger.debug(f"manual command test release failed: {release_error}")
 
-            session = pool.acquire_by_index(tab_index, f"cmd_test_{command_id}_{tab_index}", timeout=3)
-            if not session:
-                failed_tabs.append({"tab_index": tab_index, "error": "acquire_failed"})
+        for candidate in idle_sessions:
+            tab_index = getattr(candidate, "persistent_index", None)
+            if tab_index is None:
                 continue
 
             try:
                 # Respect command scope even in manual test mode.
-                if not command_engine._matches_scope(cmd, session):
+                if not command_engine._matches_scope(cmd, candidate):
                     skipped_tabs.append(tab_index)
                     continue
 
-                command_engine._execute_command(cmd, session)
-                executed_tabs.append(tab_index)
+                ctx = request_manager.create_request()
+                session = pool.acquire_by_index(tab_index, ctx.request_id, timeout=3)
+                if not session:
+                    failed_tabs.append({"tab_index": tab_index, "error": "acquire_failed"})
+                    continue
+
+                worker = threading.Thread(
+                    target=_run_command_in_background,
+                    args=(session, ctx),
+                    daemon=True,
+                    name=f"cmd-test-{command_id[:8]}-{tab_index}",
+                )
+                worker.start()
+                scheduled_tabs.append(tab_index)
             except Exception as e:
                 failed_tabs.append({"tab_index": tab_index, "error": str(e)})
-            finally:
-                pool.release(session.id, check_triggers=False)
 
-        if not executed_tabs:
+        if not scheduled_tabs:
             if skipped_tabs and not failed_tabs:
                 raise HTTPException(
                     status_code=409,
@@ -387,11 +418,11 @@ async def test_command(command_id: str, authenticated: bool = Depends(verify_aut
 
         return {
             "success": True,
-            "message": f"command executed on tabs: {executed_tabs}",
-            "executed_tabs": executed_tabs,
+            "message": f"command scheduled on tabs: {scheduled_tabs}",
+            "executed_tabs": scheduled_tabs,
             "skipped_tabs": skipped_tabs,
             "failed_tabs": failed_tabs,
-            "executed_count": len(executed_tabs),
+            "executed_count": len(scheduled_tabs),
         }
 
     except HTTPException:

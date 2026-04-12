@@ -870,6 +870,7 @@ class BrowserCore:
         if not request_id:
             return
         try:
+            setattr(session, "_bound_request_id", request_id)
             from app.services.request_manager import request_manager
             request_manager.bind_tab(request_id, session.id)
         except Exception as e:

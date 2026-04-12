@@ -149,6 +149,8 @@ class TabSession:
                 self.request_count -= 1
             self.status = TabStatus.IDLE
             self.current_task_id = None
+            setattr(self, "_bound_request_id", None)
+            setattr(self, "_command_request_id", None)
             self.last_used_at = time.time()
             
             if clear_page:
@@ -171,6 +173,8 @@ class TabSession:
         with self._lock:
             self.status = TabStatus.IDLE
             self.current_task_id = None
+            setattr(self, "_bound_request_id", None)
+            setattr(self, "_command_request_id", None)
             self.last_used_at = time.time()
 
         try:
@@ -814,6 +818,52 @@ class TabPoolManager:
             return browser
         return self.page
 
+    def _list_current_tab_ids_via_cdp(self) -> List[str]:
+        browser = self._get_browser_handle()
+        if browser is None or not hasattr(browser, "_run_cdp"):
+            return []
+
+        try:
+            result = browser._run_cdp("Target.getTargets") or {}
+            target_infos = result.get("targetInfos") or []
+        except Exception as e:
+            logger.debug(f"[TabPool] Target.getTargets 失败: {e}")
+            return []
+
+        tab_ids: List[str] = []
+        for info in target_infos:
+            if not isinstance(info, dict):
+                continue
+            if str(info.get("type") or "").strip().lower() != "page":
+                continue
+            target_id = str(info.get("targetId") or "").strip()
+            if target_id:
+                tab_ids.append(target_id)
+        return tab_ids
+
+    def _list_current_tab_refs(self) -> List[Any]:
+        browser = self._get_browser_handle()
+        if browser is None:
+            return []
+
+        try:
+            tabs = browser.get_tabs()
+            return list(tabs or [])
+        except Exception as e:
+            cdp_tab_ids = self._list_current_tab_ids_via_cdp()
+            if cdp_tab_ids:
+                logger.warning(
+                    f"[TabPool] browser.get_tabs() 失败，回退到 Target.getTargets 扫描: {e}"
+                )
+                return cdp_tab_ids
+            fallback_ids = list(getattr(browser, "tab_ids", []) or [])
+            if fallback_ids:
+                logger.warning(
+                    f"[TabPool] browser.get_tabs() 失败，回退到 tab_ids 扫描: {e}"
+                )
+                return fallback_ids
+            raise
+
     def _build_site_entry_url(self, domain: str) -> str:
         normalized_domain = str(domain or "").strip()
         if not normalized_domain:
@@ -1109,7 +1159,11 @@ class TabPoolManager:
         if tab_ref is None:
             return None
 
-        if hasattr(tab_ref, "tab_id") and hasattr(tab_ref, "url"):
+        try:
+            existing_tab_id = getattr(tab_ref, "tab_id", None)
+        except Exception:
+            existing_tab_id = None
+        if existing_tab_id:
             return tab_ref
 
         raw_tab_id = self._get_tab_ref_id(tab_ref)
@@ -1181,18 +1235,21 @@ class TabPoolManager:
         """扫描并添加新标签页（已持有锁）"""
         try:
             browser = self._get_browser_handle()
-            current_tabs = browser.get_tabs()
+            current_tabs = self._list_current_tab_refs()
             current_tab_ids = [
                 raw_id for raw_id in
                 (self._get_tab_ref_id(tab_ref) for tab_ref in current_tabs)
                 if raw_id
             ]
             current_tab_set = set(current_tab_ids)
-            current_context_by_raw = {
-                raw_id: self._get_browser_context_id(raw_id)
-                for raw_id in current_tab_ids
-            }
+            current_context_by_raw = {}
+            for raw_id in current_tab_ids:
+                try:
+                    current_context_by_raw[raw_id] = self._get_browser_context_id(raw_id)
+                except Exception as e:
+                    logger.debug(f"[TabPool] skip context lookup for {raw_id}: {e}")
             self._cleanup_orphaned_isolated_contexts(list(current_context_by_raw.values()))
+            changed = False
 
             session_raw_by_id: Dict[str, str] = {}
             for rid, pidx in self._raw_id_to_persistent.items():
@@ -1274,6 +1331,7 @@ class TabPoolManager:
                     logger.info(
                         f"[{session_id}] rebound isolated context target: {raw_id} -> {replacement_raw_id}"
                     )
+                    changed = True
                     continue
 
                 if session.is_isolated_context and browser_context_id:
@@ -1302,6 +1360,7 @@ class TabPoolManager:
                     self._mark_orphaned_isolated_context(browser_context_id)
                 if self._active_session_id == session_id:
                     self._active_session_id = None
+                changed = True
 
             # 顺手清理已切换到本地页/无效页的空闲标签，避免继续展示和参与调度。
             self._cleanup_unhealthy_tabs()
@@ -1358,6 +1417,7 @@ class TabPoolManager:
                     self._tabs[session.id] = session
                     self._start_global_monitor_for_session(session)
                     new_count += 1
+                    changed = True
                     
                     display_url = url[:60] + "..." if len(url) > 60 else url
                     logger.debug(f"🆕 发现新标签页: {session.id} -> {display_url}")
@@ -1367,6 +1427,8 @@ class TabPoolManager:
                     continue
             
             self._last_scan_time = time.time()
+            if changed:
+                self._condition.notify_all()
             
             if new_count > 0:
                 logger.info(f"扫描完成: +{new_count} 个，当前共 {len(self._tabs)} 个标签页")
@@ -1382,7 +1444,7 @@ class TabPoolManager:
             
             try:
                 browser = self._get_browser_handle()
-                existing_tabs = browser.get_tabs()
+                existing_tabs = self._list_current_tab_refs()
                 logger.debug(f"检测到 {len(existing_tabs)} 个标签页")
                 
                 for tab_ref in existing_tabs:
@@ -1515,6 +1577,9 @@ class TabPoolManager:
                 self._active_session_id = None
             
             del self._tabs[tab_id]
+
+        if to_remove:
+            self._condition.notify_all()
     
     def _should_defer_to_command(self, session: TabSession, task_id: str) -> bool:
         """Whether request acquisition should defer to high-priority pending/running commands."""
@@ -1683,7 +1748,7 @@ class TabPoolManager:
     
     def refresh_tabs(self) -> Dict:
         """手动刷新标签页列表（供外部调用）"""
-        with self._lock:
+        with self._condition:
             old_count = len(self._tabs)
             old_ids = set(self._tabs.keys())
             
@@ -1699,6 +1764,7 @@ class TabPoolManager:
             removed = old_ids - new_ids
             
             if added or removed:
+                self._condition.notify_all()
                 logger.info(f"刷新完成: +{len(added)} -{len(removed)} = {len(self._tabs)} 个标签页")
             
             return {

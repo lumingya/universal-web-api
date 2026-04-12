@@ -3,8 +3,10 @@ import json
 import os
 import random
 import re
+import string
 import threading
 import time
+from datetime import date, timedelta
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from urllib.parse import urlsplit
 
@@ -570,6 +572,12 @@ class CommandEngineActionsMixin:
         elif action_type in {"execute_preset", "switch_preset"}:
             return self._execute_preset_action(action, session)
 
+        elif action_type == "write_element":
+            return self._execute_write_element_action(action, session)
+
+        elif action_type == "read_element":
+            return self._execute_read_element_action(action, session)
+
         elif action_type == "click_element":
             selector = action.get("selector", "")
             if selector:
@@ -645,7 +653,7 @@ class CommandEngineActionsMixin:
             return self._execute_workflow_action(action, session)
 
         elif action_type == "navigate":
-            url = action.get("url", "")
+            url = self._render_template(action.get("url", ""), self._build_template_context(session)).strip()
             if url:
                 try:
                     tab.get(url)
@@ -656,6 +664,12 @@ class CommandEngineActionsMixin:
                     logger.warning(f"[CMD] 导航失败: {e}")
                     return f"navigate_failed:{e}"
             return "navigate_skipped"
+
+        elif action_type == "http_request":
+            return self._execute_http_request_action(action, session)
+
+        elif action_type == "append_file":
+            return self._execute_append_file_action(action, session)
 
         elif action_type == "switch_proxy":
             return self._execute_switch_proxy(action, session)
@@ -729,7 +743,7 @@ class CommandEngineActionsMixin:
             if self._should_follow_default_preset(raw_preset_name):
                 domain = self._get_session_domain(session)
                 preset_name = self._get_config_engine().get_default_preset(domain) or ""
-            prompt = str(action.get("prompt", ""))
+            prompt = self._render_template(action.get("prompt", ""), self._build_template_context(session))
             inherited_workflow_priority = self._normalize_priority(
                 action.get("workflow_priority", getattr(session, "_current_command_priority", None)),
                 self._get_request_priority_baseline(),
@@ -856,13 +870,466 @@ class CommandEngineActionsMixin:
             logger.warning(f"[CMD] 执行工作流失败: {e}")
             return {"ok": False, "error": str(e)}
 
+    @staticmethod
+    def _sanitize_command_var_name(name: Any) -> str:
+        raw = str(name or "").strip()
+        if not raw:
+            return ""
+        return re.sub(r"[^a-zA-Z0-9_]+", "_", raw).strip("_")[:64]
+
+    def _get_command_vars(self, session: 'TabSession') -> Dict[str, str]:
+        store = getattr(session, "_command_vars", None)
+        if isinstance(store, dict):
+            return store
+        store = {}
+        setattr(session, "_command_vars", store)
+        return store
+
+    def _set_command_var(self, session: 'TabSession', name: Any, value: Any) -> str:
+        key = self._sanitize_command_var_name(name)
+        if not key:
+            return ""
+        self._get_command_vars(session)[key] = str(value or "")
+        return key
+
+    def _save_generated_value(
+        self,
+        session: 'TabSession',
+        save_as: Any,
+        value: Any,
+        extras: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        key = self._set_command_var(session, save_as, value)
+        if key and isinstance(extras, dict):
+            for extra_key, extra_value in extras.items():
+                if extra_value is None:
+                    continue
+                self._set_command_var(session, f"{key}_{extra_key}", extra_value)
+        return key
+
+    @staticmethod
+    def _preview_text(value: Any, limit: int = 120) -> str:
+        text = str(value or "")
+        if len(text) <= limit:
+            return text
+        return text[: limit - 3] + "..."
+
+    @staticmethod
+    def _pick_random_chars(kind: str, length: int) -> str:
+        charsets = {
+            "digits": string.digits,
+            "letters": string.ascii_letters,
+            "alnum": string.ascii_letters + string.digits,
+            "hex": string.hexdigits.lower()[:16],
+        }
+        pool = charsets.get(str(kind or "").strip().lower(), charsets["alnum"])
+        return "".join(random.choice(pool) for _ in range(max(0, length)))
+
+    @staticmethod
+    def _format_birthdate(picked: date, date_format: str) -> str:
+        fmt = str(date_format or "YYYY-MM-DD").strip() or "YYYY-MM-DD"
+        replacements = [
+            ("YYYY", f"{picked.year:04d}"),
+            ("YY", f"{picked.year % 100:02d}"),
+            ("MM", f"{picked.month:02d}"),
+            ("DD", f"{picked.day:02d}"),
+            ("M", str(picked.month)),
+            ("D", str(picked.day)),
+        ]
+        rendered = fmt
+        for token, value in replacements:
+            rendered = rendered.replace(token, value)
+        return rendered
+
+    def _generate_birthdate_value(self, action: Dict) -> Dict[str, Any]:
+        preset_name = str(action.get("preset_name", "") or "").strip().lower()
+        min_age = max(0, self._coerce_int(action.get("min_age", 18), 18))
+        max_age = max(min_age, self._coerce_int(action.get("max_age", 35), 35))
+        latest = date.today() - timedelta(days=max(0, min_age) * 365)
+        earliest = date.today() - timedelta(days=max(0, max_age) * 365 + max_age // 4 + 2)
+        span_days = max(0, (latest - earliest).days)
+        picked = earliest + timedelta(days=random.randint(0, span_days if span_days > 0 else 0))
+        parts = {
+            "year": f"{picked.year:04d}",
+            "month": f"{picked.month:02d}",
+            "day": f"{picked.day:02d}",
+            "month_num": str(picked.month),
+            "day_num": str(picked.day),
+            "iso": picked.isoformat(),
+        }
+        value = self._format_birthdate(
+            picked,
+            str(action.get("date_format", "YYYY-MM-DD") or "YYYY-MM-DD"),
+        )
+        if preset_name == "birth_year":
+            value = parts["year"]
+        elif preset_name == "birth_month":
+            value = parts["month"]
+        elif preset_name == "birth_day":
+            value = parts["day"]
+        return {"value": value, "extras": parts}
+
+    @staticmethod
+    def _generate_chinese_name_value(action: Dict) -> Dict[str, Any]:
+        surnames = list("赵钱孙李周吴郑王冯陈褚卫蒋沈韩杨朱秦尤许何吕施张孔曹严华金魏陶姜谢邹喻柏水窦章云苏潘葛奚范彭郎鲁韦昌马苗凤花方俞任袁柳鲍史唐费廉岑薛雷贺倪汤滕殷罗毕郝安常乐于时傅皮卞齐康伍余元顾孟平黄和穆萧尹")
+        given_chars = list("子文宇晨若思雨欣安泽俊浩嘉依清语然一可宁涵诗雅博昊轩瑶琪妍婷悦萌锦瑞宸铭霖舒彤佳林远晴川宁知南星岚婧凡熙程涵洛言楚歆沐芷")
+        surname = random.choice(surnames)
+        given_len = 1 if random.random() < 0.32 else 2
+        given = "".join(random.choice(given_chars) for _ in range(given_len))
+        preset_name = str(action.get("preset_name", "") or "").strip().lower()
+        if preset_name == "surname_cn":
+            value = surname
+        elif preset_name == "given_name_cn":
+            value = given
+        else:
+            value = surname + given
+        return {
+            "value": value,
+            "extras": {
+                "surname": surname,
+                "given": given,
+                "full": surname + given,
+            },
+        }
+
+    def _resolve_automation_value(self, action: Dict, session: 'TabSession') -> Dict[str, Any]:
+        source = str(action.get("value_source", "literal") or "literal").strip().lower()
+        context = self._build_template_context(session)
+        extras: Dict[str, Any] = {}
+
+        if source == "template":
+            value = self._render_template(action.get("template", ""), context)
+        elif source == "variable":
+            key = self._sanitize_command_var_name(action.get("variable_name"))
+            value = self._get_command_vars(session).get(key, "")
+        elif source in {"random", "prefix_random"}:
+            length = max(1, self._coerce_int(action.get("random_length", 8), 8))
+            random_part = self._pick_random_chars(action.get("random_kind", "alnum"), length)
+            prefix = self._render_template(action.get("prefix", ""), context) if source == "prefix_random" else ""
+            suffix = self._render_template(action.get("suffix", ""), context) if source == "prefix_random" else ""
+            value = f"{prefix}{random_part}{suffix}"
+            extras["random"] = random_part
+        elif source == "preset":
+            preset_name = str(action.get("preset_name", "") or "").strip().lower()
+            if preset_name in {"name_cn", "surname_cn", "given_name_cn"}:
+                generated = self._generate_chinese_name_value(action)
+            elif preset_name in {"birth_date", "birth_year", "birth_month", "birth_day"}:
+                generated = self._generate_birthdate_value(action)
+            else:
+                generated = {"value": "", "extras": {}}
+            value = str(generated.get("value", "") or "")
+            extras.update(generated.get("extras") or {})
+        else:
+            value = str(action.get("text", "") or "")
+
+        return {
+            "value": str(value or ""),
+            "extras": extras,
+        }
+
+    @staticmethod
+    def _read_element_value(ele: Any, read_mode: str, attr_name: str = "") -> str:
+        js = (
+            "return (function() {\n"
+            "  try {\n"
+            "    const el = this;\n"
+            "    const tag = String(el?.tagName || '').toLowerCase();\n"
+            "    const isInput = tag === 'textarea' || tag === 'input' || tag === 'select';\n"
+            "    const isCE = !!(el?.isContentEditable || el?.getAttribute?.('contenteditable') === 'true');\n"
+            f"    const normalizedMode = {json.dumps(str(read_mode or 'auto').strip().lower())};\n"
+            f"    const attrName = {json.dumps(str(attr_name or '').strip())};\n"
+            "    if (normalizedMode === 'value') return String(el?.value ?? '');\n"
+            "    if (normalizedMode === 'html') return String(el?.innerHTML ?? '');\n"
+            "    if (normalizedMode === 'attr') return String(el?.getAttribute?.(attrName || '') ?? '');\n"
+            "    if (normalizedMode === 'text') {\n"
+            "      if (isInput) return String(el?.value ?? '');\n"
+            "      if (isCE) return String(el?.innerText ?? '');\n"
+            "      return String(el?.innerText ?? el?.textContent ?? '');\n"
+            "    }\n"
+            "    if (isInput) return String(el?.value ?? '');\n"
+            "    if (isCE) return String(el?.innerText ?? '');\n"
+            "    return String(el?.innerText ?? el?.textContent ?? '');\n"
+            "  } catch (error) {\n"
+            "    return '';\n"
+            "  }\n"
+            "}).call(this);"
+        )
+        value = ele.run_js(js)
+        return str(value or "")
+
+    def _execute_read_element_action(self, action: Dict, session: 'TabSession') -> Any:
+        selector = str(action.get("selector", "") or "").strip()
+        if not selector:
+            return {"ok": False, "error": "empty_selector"}
+
+        timeout_sec = max(0.5, self._coerce_float(action.get("timeout_sec", 6), 6.0))
+        read_mode = str(action.get("read_mode", "auto") or "auto").strip().lower()
+        attr_name = str(action.get("attr_name", "") or "").strip()
+        trim_enabled = bool(action.get("trim", True))
+
+        try:
+            ele = session.tab.ele(selector, timeout=timeout_sec)
+            if not ele:
+                return {"ok": False, "error": f"element_not_found:{selector}"}
+            value = self._read_element_value(ele, read_mode, attr_name)
+            if trim_enabled:
+                value = value.strip()
+            saved_as = self._save_generated_value(session, action.get("save_as"), value)
+            logger.info(
+                f"[CMD] 已读取元素: selector={selector}, mode={read_mode}, "
+                f"保存变量={saved_as or '-'}, 预览={self._preview_text(value)!r}"
+            )
+            return value
+        except Exception as e:
+            logger.warning(f"[CMD] 读取元素失败: {e}")
+            return {"ok": False, "error": str(e)}
+
+    def _execute_write_element_action(self, action: Dict, session: 'TabSession') -> Any:
+        selector = str(action.get("selector", "") or "").strip()
+        if not selector:
+            return {"ok": False, "error": "empty_selector"}
+
+        timeout_sec = max(0.5, self._coerce_float(action.get("timeout_sec", 6), 6.0))
+        write_mode = str(action.get("write_mode", "replace") or "replace").strip().lower()
+        clear_first = bool(action.get("clear_first", write_mode == "replace"))
+        resolved = self._resolve_automation_value(action, session)
+        value = str(resolved.get("value", "") or "")
+        extras = resolved.get("extras") or {}
+
+        try:
+            ele = session.tab.ele(selector, timeout=timeout_sec)
+            if not ele:
+                return {"ok": False, "error": f"element_not_found:{selector}"}
+
+            from app.core.workflow.text_input import TextInputHandler
+
+            handler = TextInputHandler(
+                session.tab,
+                stealth_mode=False,
+                smart_delay_fn=lambda minimum=0.05, maximum=0.12: time.sleep(random.uniform(minimum, maximum)),
+                check_cancelled_fn=lambda: False,
+            )
+            if clear_first and write_mode == "replace":
+                handler.clear_input_safely(ele)
+                time.sleep(0.08)
+            success = handler.set_input_atomic(ele, value, mode="append" if write_mode == "append" else "replace")
+            if not success:
+                return {"ok": False, "error": "write_failed"}
+
+            actual_value = handler.read_input_full_text(ele)
+            actual_normalized = handler.normalize_for_compare(actual_value)
+            expected_normalized = handler.normalize_for_compare(value)
+            if write_mode == "append":
+                verified = expected_normalized in actual_normalized
+            else:
+                expected_core = re.sub(r"\s+", "", value)
+                actual_core = re.sub(r"\s+", "", actual_value)
+                verified = actual_normalized == expected_normalized or (expected_core and expected_core == actual_core)
+            if not verified:
+                return {
+                    "ok": False,
+                    "error": "write_verify_failed",
+                    "expected": self._preview_text(value),
+                    "actual": self._preview_text(actual_value),
+                }
+
+            saved_as = self._save_generated_value(session, action.get("save_as"), value, extras)
+            logger.info(
+                f"[CMD] 已写入元素: selector={selector}, mode={write_mode}, "
+                f"保存变量={saved_as or '-'}, 预览={self._preview_text(value)!r}"
+            )
+            return value
+        except Exception as e:
+            logger.warning(f"[CMD] 写入元素失败: {e}")
+            return {"ok": False, "error": str(e)}
+
+    def _execute_http_request_action(self, action: Dict, session: 'TabSession') -> Any:
+        ctx = self._build_template_context(session)
+        method = str(action.get("method", "GET") or "GET").strip().upper()
+        url = self._render_template(action.get("url", ""), ctx).strip()
+        if not url:
+            return {"ok": False, "error": "empty_url"}
+
+        headers_raw = action.get("headers", "")
+        headers_value = self._render_template_data(headers_raw, ctx)
+        if isinstance(headers_value, dict):
+            headers = {str(key): str(value) for key, value in headers_value.items()}
+        else:
+            parsed_headers = self._parse_json_or_string(str(headers_value or ""))
+            headers = parsed_headers if isinstance(parsed_headers, dict) else {}
+
+        body = self._render_template(str(action.get("body", "") or ""), ctx)
+        body_mode = str(action.get("body_mode", "json") or "json").strip().lower()
+        response_mode = str(action.get("response_mode", "text") or "text").strip().lower()
+        credentials = str(action.get("credentials", "include") or "include").strip().lower() or "include"
+        timeout_ms = int(max(1000, self._coerce_float(action.get("timeout_sec", 15), 15.0) * 1000))
+        fail_on_http_error = bool(action.get("fail_on_http_error", True))
+
+        request_js = f"""
+        return (async () => {{
+            const method = {json.dumps(method)};
+            const url = {json.dumps(url)};
+            const headers = {json.dumps(headers, ensure_ascii=False)};
+            const bodyMode = {json.dumps(body_mode)};
+            const rawBody = {json.dumps(body, ensure_ascii=False)};
+            const responseMode = {json.dumps(response_mode)};
+            const credentialsMode = {json.dumps(credentials)};
+            const failOnHttpError = {str(bool(fail_on_http_error)).lower()};
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort('timeout'), {timeout_ms});
+            try {{
+                const init = {{
+                    method,
+                    headers: Object.assign({{}}, headers),
+                    credentials: credentialsMode,
+                    redirect: 'follow',
+                    signal: controller.signal,
+                }};
+                if (!['GET', 'HEAD'].includes(method)) {{
+                    if (bodyMode === 'form') {{
+                        const params = new URLSearchParams();
+                        try {{
+                            const parsed = rawBody ? JSON.parse(rawBody) : {{}};
+                            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {{
+                                Object.entries(parsed).forEach(([key, value]) => params.append(String(key), String(value ?? '')));
+                            }} else if (rawBody) {{
+                                params.append('value', rawBody);
+                            }}
+                        }} catch (error) {{
+                            if (rawBody) params.append('value', rawBody);
+                        }}
+                        init.body = params.toString();
+                        if (!init.headers['Content-Type']) {{
+                            init.headers['Content-Type'] = 'application/x-www-form-urlencoded;charset=UTF-8';
+                        }}
+                    }} else if (bodyMode === 'text') {{
+                        init.body = rawBody;
+                        if (!init.headers['Content-Type']) {{
+                            init.headers['Content-Type'] = 'text/plain;charset=UTF-8';
+                        }}
+                    }} else {{
+                        init.body = rawBody;
+                        if (!init.headers['Content-Type']) {{
+                            init.headers['Content-Type'] = 'application/json;charset=UTF-8';
+                        }}
+                    }}
+                }}
+                const response = await fetch(url, init);
+                const contentType = response.headers.get('content-type') || '';
+                let text = '';
+                try {{
+                    text = await response.text();
+                }} catch (error) {{
+                    text = '';
+                }}
+                let parsedJson = null;
+                if (text) {{
+                    try {{
+                        parsedJson = JSON.parse(text);
+                    }} catch (error) {{}}
+                }}
+                const payload = {{
+                    ok: response.ok,
+                    status: response.status,
+                    url: response.url || url,
+                    content_type: contentType,
+                    text,
+                    json: parsedJson,
+                }};
+                if (failOnHttpError && payload.status >= 400) {{
+                    return '__CMD_HTTP_STATUS__' + JSON.stringify({{
+                        ok: payload.ok,
+                        status: payload.status,
+                        url: payload.url,
+                        body: parsedJson !== null ? parsedJson : text
+                    }});
+                }}
+                if (responseMode === 'status') return JSON.stringify({{
+                    ok: payload.ok,
+                    status: payload.status,
+                    url: payload.url
+                }});
+                if (responseMode === 'json') return parsedJson !== null ? JSON.stringify(parsedJson) : text;
+                if (responseMode === 'response') return JSON.stringify({{
+                    ok: payload.ok,
+                    status: payload.status,
+                    url: payload.url,
+                    body: parsedJson !== null ? parsedJson : text
+                }});
+                return text;
+            }} catch (error) {{
+                return '__CMD_HTTP_ERROR__' + String(error && error.message ? error.message : error);
+            }} finally {{
+                clearTimeout(timer);
+            }}
+        }})()
+        """
+
+        try:
+            result = self._run_command_js(session.tab, request_js)
+            result_text = str(result or "")
+            if result_text.startswith("__CMD_HTTP_ERROR__"):
+                return {"ok": False, "error": result_text.replace("__CMD_HTTP_ERROR__", "", 1)}
+            if result_text.startswith("__CMD_HTTP_STATUS__"):
+                try:
+                    parsed = json.loads(result_text.replace("__CMD_HTTP_STATUS__", "", 1))
+                except Exception:
+                    parsed = {}
+                status_code = int(parsed.get("status", 0) or 0)
+                return {"ok": False, "error": f"http_status_{status_code}", "status": status_code, "response": parsed}
+
+            saved_as = self._save_generated_value(session, action.get("save_as"), result_text)
+            logger.info(
+                f"[CMD] 页面内请求完成: {method} {url} "
+                f"(mode={response_mode}, 保存变量={saved_as or '-'}, 预览={self._preview_text(result_text)!r})"
+            )
+            return result_text
+        except Exception as e:
+            logger.warning(f"[CMD] 页面内请求失败: {e}")
+            return {"ok": False, "error": str(e)}
+
+    def _execute_append_file_action(self, action: Dict, session: 'TabSession') -> Any:
+        ctx = self._build_template_context(session)
+        file_path = self._render_template(action.get("file_path", ""), ctx).strip()
+        if not file_path:
+            return {"ok": False, "error": "empty_file_path"}
+
+        content = self._render_template(action.get("content", ""), ctx)
+        append_newline = bool(action.get("append_newline", True))
+        create_dirs = bool(action.get("create_dirs", True))
+        encoding = str(action.get("encoding", "utf-8") or "utf-8").strip() or "utf-8"
+
+        try:
+            normalized_path = os.path.abspath(file_path)
+            parent_dir = os.path.dirname(normalized_path)
+            if create_dirs and parent_dir:
+                os.makedirs(parent_dir, exist_ok=True)
+
+            write_text = content + ("\n" if append_newline else "")
+            with open(normalized_path, "a", encoding=encoding, newline="") as f:
+                f.write(write_text)
+
+            logger.info(
+                f"[CMD] 已追加到文件: path={normalized_path}, "
+                f"chars={len(write_text)}, newline={append_newline}"
+            )
+            return {
+                "ok": True,
+                "path": normalized_path,
+                "chars": len(write_text),
+                "preview": self._preview_text(write_text),
+            }
+        except Exception as e:
+            logger.warning(f"[CMD] 追加文件失败: {e}")
+            return {"ok": False, "error": str(e), "path": file_path}
+
     def _build_template_context(self, session: 'TabSession') -> Dict[str, Any]:
         current_context = getattr(session, "_current_command_context", None) or {}
         latest_event = copy.deepcopy(current_context.get("network_event") or {})
         latest_result_event = copy.deepcopy(current_context.get("command_result_event") or {})
         domain = self._get_session_domain(session)
         effective_preset = session.preset_name or self._get_config_engine().get_default_preset(domain) or "主预设"
-        return {
+        context = {
             "tab_id": session.id,
             "tab_index": session.persistent_index,
             "domain": domain,
@@ -884,6 +1351,12 @@ class CommandEngineActionsMixin:
             "command_result_informative": str(bool(latest_result_event.get("informative", False))).lower(),
             "command_result_time": str(int(latest_result_event.get("timestamp", 0) or 0)),
         }
+        context.update({
+            str(key): str(value)
+            for key, value in self._get_command_vars(session).items()
+            if str(key).strip()
+        })
+        return context
 
     def _render_template(self, template: Any, context: Dict[str, Any]) -> str:
         raw = str(template or "")
@@ -1251,6 +1724,42 @@ class CommandEngineActionsMixin:
 
         if lang == "python":
             import json as json_module
+            from app.services.request_manager import request_manager
+
+            def _check_cancelled() -> bool:
+                request_ids = []
+                try:
+                    for attr_name in ("_command_request_id", "_bound_request_id"):
+                        request_id = str(getattr(session, attr_name, "") or "").strip()
+                        if request_id and request_id not in request_ids:
+                            request_ids.append(request_id)
+                except Exception:
+                    pass
+                try:
+                    task_id = str(getattr(session, "current_task_id", "") or "").strip()
+                    if task_id.startswith("req-") and task_id not in request_ids:
+                        request_ids.append(task_id)
+                except Exception:
+                    pass
+                try:
+                    for request_id in request_ids:
+                        ctx = request_manager.get_request(request_id)
+                        if ctx is not None and ctx.should_stop():
+                            return True
+                except Exception:
+                    pass
+                try:
+                    stop_reason = str(getattr(session, "_workflow_stop_reason", "") or "").strip().lower()
+                    if stop_reason in {"command_interrupt", "command_interrupt_abort", "timeout"}:
+                        return True
+                except Exception:
+                    pass
+                return False
+
+            def _raise_if_cancelled() -> None:
+                if _check_cancelled():
+                    raise RuntimeError("python_script_cancelled")
+
             context = {
                 "tab": session.tab,
                 "session": session,
@@ -1259,6 +1768,8 @@ class CommandEngineActionsMixin:
                 "logger": logger,
                 "time": time,
                 "json": json_module,
+                "check_cancelled": _check_cancelled,
+                "raise_if_cancelled": _raise_if_cancelled,
                 "result": "",
             }
             try:

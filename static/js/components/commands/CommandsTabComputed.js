@@ -59,7 +59,7 @@ window.CommandsTabComputed = {
                 .map(([k, v]) => ({ value: k, label: v }));
         },
         actionTypeGroups() {
-            const categoryOrder = ['页面操作', '预设与流程', '通知与集成', '任务控制'];
+            const categoryOrder = ['页面操作', '自动化', '预设与流程', '通知与集成', '任务控制'];
             const categoryMap = {
                 clear_cookies: '页面操作',
                 refresh_page: '页面操作',
@@ -69,6 +69,10 @@ window.CommandsTabComputed = {
                 navigate: '页面操作',
                 click_element: '页面操作',
                 click_coordinates: '页面操作',
+                write_element: '自动化',
+                read_element: '自动化',
+                http_request: '自动化',
+                append_file: '自动化',
                 execute_preset: '预设与流程',
                 execute_workflow: '预设与流程',
                 execute_command_group: '预设与流程',

@@ -1252,57 +1252,6 @@ const app = createApp({
             }
         },
 
-        async refreshStatus() {
-            const [configOk, healthOk] = await Promise.all([
-                this.loadConfig(true),
-                this.loadHealthStatus(),
-                this.fetchSystemStats()
-            ])
-
-            if (configOk || healthOk) {
-                this.notify('状态已刷新', 'success')
-            } else {
-                this.notify('刷新失败', 'error')
-            }
-        },
-
-        async fetchSystemStats({ timeoutMs = 0 } = {}) {
-            if (this.isFetchingSystemStats) {
-                return this.systemStats
-            }
-            this.isFetchingSystemStats = true
-            try {
-                this.systemStats = await this.apiRequest('/api/system/stats', {
-                    timeoutMs: timeoutMs || 2500
-                })
-                return this.systemStats
-            } catch (e) {
-                // 静默失败，不打扰用户
-            }
-        },
-
-        async loadHealthStatus({ silent = false } = {}) {
-            try {
-                const health = await this.apiRequest('/health')
-                this.appVersion = String(health.version || '').trim()
-                saveStoredMarketplaceClientVersion(this.appVersion)
-                this.browserStatus = health.browser || {}
-                this.authEnabled = health.config?.auth_enabled || false
-                return true
-            } catch (error) {
-                if (error.message === 'UNAUTHORIZED') {
-                    this.authEnabled = true
-                    return true
-                }
-
-                console.error('状态检查失败:', error)
-                if (!silent) {
-                    this.notify('状态检查失败: ' + error.message, 'error')
-                }
-                return false
-            }
-        },
-
         getMarketplaceClientVersion() {
             return String(this.appVersion || '').trim() || loadStoredMarketplaceClientVersion()
         },
@@ -3647,13 +3596,13 @@ const app = createApp({
 
                 if (!response.ok) {
                     if (response.status === 401) {
-                        this.notify('璁よ瘉澶辫触锛岃妫€鏌?Token', 'error')
+                        this.notify('认证失败，请检查 Token', 'error')
                         this.showTokenDialog = true
                         throw new Error('UNAUTHORIZED')
                     }
 
                     const errorData = await response.json().catch(() => ({}))
-                    throw new Error(errorData.detail || '璇锋眰澶辫触 (' + response.status + ')')
+                    throw new Error(errorData.detail || '请求失败 (' + response.status + ')')
                 }
 
                 return await response.json()
@@ -3662,7 +3611,7 @@ const app = createApp({
                     throw new Error('REQUEST_TIMEOUT')
                 }
                 if (error.message !== 'UNAUTHORIZED') {
-                    console.error('API 璇锋眰閿欒:', error)
+                    console.error('API 请求错误:', error)
                 }
                 throw error
             } finally {
@@ -3707,11 +3656,11 @@ const app = createApp({
                 saveStoredSitesCache(this.sites, this.currentDomain)
 
                 if (!silent) {
-                    this.notify('閰嶇疆宸插埛鏂?(' + Object.keys(this.sites).length + ' 涓珯鐐?', 'success')
+                    this.notify('配置已刷新 (' + Object.keys(this.sites).length + ' 个站点)', 'success')
                 }
                 return true
             } catch (error) {
-                this.notify('鍔犺浇閰嶇疆澶辫触: ' + error.message, 'error')
+                this.notify('加载配置失败: ' + error.message, 'error')
                 if (Object.keys(this.sites || {}).length === 0) {
                     this.sites = {}
                 }
@@ -3729,9 +3678,9 @@ const app = createApp({
             ])
 
             if (configOk || healthOk) {
-                this.notify('鐘舵€佸凡鍒锋柊', 'success')
+                this.notify('状态已刷新', 'success')
             } else {
-                this.notify('鍒锋柊澶辫触', 'error')
+                this.notify('刷新失败', 'error')
             }
         },
 
@@ -3768,9 +3717,9 @@ const app = createApp({
                     return true
                 }
 
-                console.error('鐘舵€佹鏌ュけ璐?', error)
+                console.error('状态检查失败:', error)
                 if (!silent) {
-                    this.notify('鐘舵€佹鏌ュけ璐? ' + error.message, 'error')
+                    this.notify('状态检查失败: ' + error.message, 'error')
                 }
                 return false
             }

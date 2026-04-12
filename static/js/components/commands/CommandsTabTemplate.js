@@ -374,9 +374,9 @@ window.CommandsTabTemplate = `
             </div>
         </div>
 
-        <div v-if="showEditor" ref="editorOverlay" class="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-sm transition-all">
-            <div class="flex min-h-screen items-center justify-center p-4 sm:p-6">
-            <div class="mx-auto flex w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-slate-200/50 bg-white shadow-[0_20px_40px_-15px_rgba(0,0,0,0.2)] dark:border-slate-600 dark:bg-slate-900/95 dark:shadow-[0_20px_50px_-15px_rgba(0,0,0,0.5)]" style="max-height: calc(100vh - 3rem);">
+        <div v-if="showEditor" ref="editorOverlay" class="fixed inset-0 z-50 overflow-hidden bg-slate-900/60">
+            <div class="flex h-full items-stretch justify-center p-3 sm:p-4">
+            <div class="mx-auto flex h-full w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-slate-200/50 bg-white shadow-[0_20px_40px_-15px_rgba(0,0,0,0.2)] dark:border-slate-600 dark:bg-slate-900/95 dark:shadow-[0_20px_50px_-15px_rgba(0,0,0,0.5)] sm:my-2" style="max-height: calc(100vh - 1.5rem);">
                 <div class="flex items-center justify-between border-b border-slate-200/60 bg-slate-50/80 px-6 py-4 dark:border-slate-800/80 dark:bg-slate-900/80">
                     <h3 class="flex items-center gap-2 text-lg font-bold text-slate-800 dark:text-slate-100">
                         <span class="text-blue-500">{{ isNew ? '✨' : '⚙️' }}</span>
@@ -386,7 +386,7 @@ window.CommandsTabTemplate = `
                         <svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" /></svg>
                     </button>
                 </div>
-                <div ref="editorBody" class="relative flex-1 overflow-x-hidden overflow-y-auto p-6 space-y-7 bg-white/50 dark:bg-slate-900/20">
+                <div ref="editorBody" class="relative flex-1 overflow-y-auto overflow-x-hidden overscroll-contain p-5 sm:p-6 space-y-7 bg-white/50 dark:bg-slate-900/20">
 
                     <!-- 基本信息 -->
                     <div class="space-y-4">
@@ -986,6 +986,18 @@ window.CommandsTabTemplate = `
                                     </select>
                                 </div>
                             </div>
+                            <span v-if="action.type === 'write_element'" class="flex-1 text-xs text-slate-400">
+                                写入 {{ action.selector || '未配置选择器' }} · {{ getAutomationWriteSummary(action) }}
+                            </span>
+                            <span v-if="action.type === 'read_element'" class="flex-1 text-xs text-slate-400">
+                                读取 {{ action.selector || '未配置选择器' }} · {{ getAutomationReadSummary(action) }}
+                            </span>
+                            <span v-if="action.type === 'http_request'" class="flex-1 text-xs font-mono text-slate-400">
+                                {{ getHttpRequestSummary(action) }}
+                            </span>
+                            <span v-if="action.type === 'append_file'" class="flex-1 text-xs font-mono text-slate-400">
+                                {{ getAppendFileSummary(action) }}
+                            </span>
                             <input v-if="action.type === 'navigate'" v-model="action.url" type="text" placeholder="URL"
                                    class="flex-1 rounded border border-slate-600 bg-slate-700 px-2 py-1.5 text-sm text-white">
                             <span v-if="action.type === 'send_webhook'" class="flex-1 text-xs font-mono text-slate-400">
@@ -1010,6 +1022,336 @@ window.CommandsTabTemplate = `
                             <button @click="moveAction(i, -1)" :disabled="i === 0" class="text-sm text-slate-400 hover:text-slate-200 disabled:opacity-30">↑</button>
                             <button @click="moveAction(i, 1)" :disabled="i === editingCommand.actions.length - 1" class="text-sm text-slate-400 hover:text-slate-200 disabled:opacity-30">↓</button>
                             <button @click="removeAction(i)" class="text-sm text-red-400 hover:text-red-300">✕</button>
+                        </div>
+
+                        <div v-for="(action, i) in editingCommand.actions.filter(a => a.type === 'write_element')"
+                             :key="'automation-write-' + i"
+                             class="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-800 dark:bg-emerald-900/20">
+                            <h5 class="mb-3 text-sm font-semibold text-emerald-800 dark:text-emerald-300">📝 自动化写入</h5>
+
+                            <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+                                <div class="md:col-span-2">
+                                    <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">元素选择器</label>
+                                    <input v-model.trim="action.selector" type="text"
+                                           placeholder="例如：input[name='email'] 或 xpath://button[contains(., 'Continue')]"
+                                           class="w-full rounded border px-2 py-1.5 text-sm font-mono dark:border-gray-600 dark:bg-gray-700 dark:text-white">
+                                </div>
+                                <div>
+                                    <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">写入方式</label>
+                                    <select v-model="action.write_mode"
+                                            class="w-full rounded border px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white">
+                                        <option value="replace">替换原内容</option>
+                                        <option value="append">追加到末尾</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">数据来源</label>
+                                    <select v-model="action.value_source"
+                                            class="w-full rounded border px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white">
+                                        <option value="literal">固定文本</option>
+                                        <option value="template">模板变量</option>
+                                        <option value="variable">读取变量</option>
+                                        <option value="random">纯随机串</option>
+                                        <option value="prefix_random">前后缀 + 随机串</option>
+                                        <option value="preset">预制数据</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div v-if="action.value_source === 'literal'" class="mt-3">
+                                <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">固定文本</label>
+                                <textarea v-model="action.text" rows="3"
+                                          placeholder="支持固定字符、数字、汉字"
+                                          class="w-full rounded border px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white"></textarea>
+                            </div>
+
+                            <div v-if="action.value_source === 'template'" class="mt-3">
+                                <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">模板文本</label>
+                                <textarea v-model="action.template" rows="3"
+                                          placeholder="例如：{{temp_email}} 或 user_{{temp_email}}"
+                                          class="w-full rounded border px-2 py-1.5 text-sm font-mono dark:border-gray-600 dark:bg-gray-700 dark:text-white"></textarea>
+                                <p class="mt-1 text-xs text-emerald-700 dark:text-emerald-300">模板可直接读取“读取元素”保存的变量，例如 <span v-pre>{{temp_email}}</span>。</p>
+                            </div>
+
+                            <div v-if="action.value_source === 'variable'" class="mt-3">
+                                <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">变量名</label>
+                                <input v-model.trim="action.variable_name" type="text"
+                                       placeholder="例如：temp_email"
+                                       class="w-full rounded border px-2 py-1.5 text-sm font-mono dark:border-gray-600 dark:bg-gray-700 dark:text-white">
+                            </div>
+
+                            <div v-if="['random', 'prefix_random'].includes(action.value_source)" class="mt-3 grid grid-cols-1 gap-3 md:grid-cols-4">
+                                <div>
+                                    <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">随机类型</label>
+                                    <select v-model="action.random_kind"
+                                            class="w-full rounded border px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white">
+                                        <option value="alnum">字母 + 数字</option>
+                                        <option value="digits">纯数字</option>
+                                        <option value="letters">纯字母</option>
+                                        <option value="hex">16 进制</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">随机长度</label>
+                                    <input v-model.number="action.random_length" type="number" min="1" step="1"
+                                           class="w-full rounded border px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white">
+                                </div>
+                                <div v-if="action.value_source === 'prefix_random'">
+                                    <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">前缀</label>
+                                    <input v-model="action.prefix" type="text"
+                                           class="w-full rounded border px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white">
+                                </div>
+                                <div v-if="action.value_source === 'prefix_random'">
+                                    <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">后缀</label>
+                                    <input v-model="action.suffix" type="text"
+                                           class="w-full rounded border px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white">
+                                </div>
+                            </div>
+
+                            <div v-if="action.value_source === 'preset'" class="mt-3 space-y-3">
+                                <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+                                    <div>
+                                        <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">预制数据</label>
+                                        <select v-model="action.preset_name"
+                                                class="w-full rounded border px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white">
+                                            <option value="name_cn">随机中文姓名</option>
+                                            <option value="surname_cn">随机姓氏</option>
+                                            <option value="given_name_cn">随机名字</option>
+                                            <option value="birth_date">随机生日</option>
+                                            <option value="birth_year">随机出生年</option>
+                                            <option value="birth_month">随机出生月</option>
+                                            <option value="birth_day">随机出生日</option>
+                                        </select>
+                                    </div>
+                                    <div v-if="String(action.preset_name || '').startsWith('birth_')">
+                                        <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">日期格式</label>
+                                        <input v-model="action.date_format" type="text"
+                                               placeholder="YYYY-MM-DD"
+                                               class="w-full rounded border px-2 py-1.5 text-sm font-mono dark:border-gray-600 dark:bg-gray-700 dark:text-white">
+                                    </div>
+                                </div>
+                                <div v-if="String(action.preset_name || '').startsWith('birth_')" class="grid grid-cols-1 gap-3 md:grid-cols-2">
+                                    <div>
+                                        <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">最小年龄</label>
+                                        <input v-model.number="action.min_age" type="number" min="0" step="1"
+                                               class="w-full rounded border px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white">
+                                    </div>
+                                    <div>
+                                        <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">最大年龄</label>
+                                        <input v-model.number="action.max_age" type="number" min="0" step="1"
+                                               class="w-full rounded border px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
+                                <div>
+                                    <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">保存成变量（可选）</label>
+                                    <input v-model.trim="action.save_as" type="text"
+                                           placeholder="例如：signup_name"
+                                           class="w-full rounded border px-2 py-1.5 text-sm font-mono dark:border-gray-600 dark:bg-gray-700 dark:text-white">
+                                </div>
+                                <div>
+                                    <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">等待元素秒数</label>
+                                    <input v-model.number="action.timeout_sec" type="number" min="0.5" step="0.5"
+                                           class="w-full rounded border px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white">
+                                </div>
+                                <div class="flex items-center pt-5">
+                                    <label class="flex items-center gap-2 text-sm dark:text-gray-300">
+                                        <input type="checkbox" v-model="action.clear_first" class="rounded">
+                                        替换前先清空
+                                    </label>
+                                </div>
+                            </div>
+
+                            <p class="mt-2 text-xs text-emerald-700 dark:text-emerald-300">变量名只能用字母、数字和下划线，且不能以数字开头。</p>
+                        </div>
+
+                        <div v-for="(action, i) in editingCommand.actions.filter(a => a.type === 'read_element')"
+                             :key="'automation-read-' + i"
+                             class="mt-4 rounded-lg border border-teal-200 bg-teal-50 p-4 dark:border-teal-800 dark:bg-teal-900/20">
+                            <h5 class="mb-3 text-sm font-semibold text-teal-800 dark:text-teal-300">📖 自动化读取</h5>
+
+                            <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+                                <div class="md:col-span-2">
+                                    <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">元素选择器</label>
+                                    <input v-model.trim="action.selector" type="text"
+                                           placeholder="例如：input[type='email'] 或 .mail"
+                                           class="w-full rounded border px-2 py-1.5 text-sm font-mono dark:border-gray-600 dark:bg-gray-700 dark:text-white">
+                                </div>
+                                <div>
+                                    <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">读取模式</label>
+                                    <select v-model="action.read_mode"
+                                            class="w-full rounded border px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white">
+                                        <option value="auto">自动判断</option>
+                                        <option value="text">文本 / 输入值</option>
+                                        <option value="value">只读 value</option>
+                                        <option value="html">读 innerHTML</option>
+                                        <option value="attr">读取属性</option>
+                                    </select>
+                                </div>
+                                <div v-if="action.read_mode === 'attr'">
+                                    <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">属性名</label>
+                                    <input v-model.trim="action.attr_name" type="text"
+                                           placeholder="例如：href"
+                                           class="w-full rounded border px-2 py-1.5 text-sm font-mono dark:border-gray-600 dark:bg-gray-700 dark:text-white">
+                                </div>
+                            </div>
+
+                            <div class="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
+                                <div>
+                                    <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">保存成变量（可选）</label>
+                                    <input v-model.trim="action.save_as" type="text"
+                                           placeholder="例如：temp_email"
+                                           class="w-full rounded border px-2 py-1.5 text-sm font-mono dark:border-gray-600 dark:bg-gray-700 dark:text-white">
+                                </div>
+                                <div>
+                                    <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">等待元素秒数</label>
+                                    <input v-model.number="action.timeout_sec" type="number" min="0.5" step="0.5"
+                                           class="w-full rounded border px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white">
+                                </div>
+                                <div class="flex items-center pt-5">
+                                    <label class="flex items-center gap-2 text-sm dark:text-gray-300">
+                                        <input type="checkbox" v-model="action.trim" class="rounded">
+                                        自动去掉首尾空白
+                                    </label>
+                                </div>
+                            </div>
+
+                            <p class="mt-2 text-xs text-teal-700 dark:text-teal-300">读取后可在后续“写入元素 / 页面内请求 / 跳转 URL”里用模板引用，例如 <span v-pre>{{temp_email}}</span>。</p>
+                        </div>
+
+                        <div v-for="(action, i) in editingCommand.actions.filter(a => a.type === 'http_request')"
+                             :key="'automation-http-' + i"
+                             class="mt-4 rounded-lg border border-cyan-200 bg-cyan-50 p-4 dark:border-cyan-800 dark:bg-cyan-900/20">
+                            <h5 class="mb-3 text-sm font-semibold text-cyan-800 dark:text-cyan-300">🌐 页面内 GET / POST</h5>
+
+                            <div class="grid grid-cols-1 gap-3 md:grid-cols-4">
+                                <div>
+                                    <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">方法</label>
+                                    <select v-model="action.method"
+                                            class="w-full rounded border px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white">
+                                        <option value="GET">GET</option>
+                                        <option value="POST">POST</option>
+                                        <option value="PUT">PUT</option>
+                                        <option value="PATCH">PATCH</option>
+                                        <option value="DELETE">DELETE</option>
+                                        <option value="HEAD">HEAD</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">Body 类型</label>
+                                    <select v-model="action.body_mode"
+                                            class="w-full rounded border px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white">
+                                        <option value="json">JSON</option>
+                                        <option value="form">Form</option>
+                                        <option value="text">纯文本</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">返回值</label>
+                                    <select v-model="action.response_mode"
+                                            class="w-full rounded border px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white">
+                                        <option value="text">文本</option>
+                                        <option value="json">JSON 文本</option>
+                                        <option value="status">仅状态</option>
+                                        <option value="response">完整响应</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">凭据模式</label>
+                                    <select v-model="action.credentials"
+                                            class="w-full rounded border px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white">
+                                        <option value="include">include</option>
+                                        <option value="same-origin">same-origin</option>
+                                        <option value="omit">omit</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div class="mt-3">
+                                <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">请求 URL</label>
+                                <input v-model.trim="action.url" type="text"
+                                       placeholder="例如：/api/register 或 https://example.com/api"
+                                       class="w-full rounded border px-2 py-1.5 text-sm font-mono dark:border-gray-600 dark:bg-gray-700 dark:text-white">
+                            </div>
+
+                            <div class="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+                                <div>
+                                    <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">Headers（JSON）</label>
+                                    <textarea v-model="action.headers" rows="4"
+                                              placeholder='{"Accept":"application/json"}'
+                                              class="w-full rounded border px-2 py-1.5 text-sm font-mono dark:border-gray-600 dark:bg-gray-700 dark:text-white"></textarea>
+                                </div>
+                                <div>
+                                    <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">Body</label>
+                                    <textarea v-model="action.body" rows="4"
+                                              :placeholder="action.body_mode === 'json' ? '例如：{ email: temp_email }' : (action.body_mode === 'form' ? '例如：email=temp_email' : 'plain text')"
+                                              class="w-full rounded border px-2 py-1.5 text-sm font-mono dark:border-gray-600 dark:bg-gray-700 dark:text-white"></textarea>
+                                </div>
+                            </div>
+
+                            <div class="mt-3 grid grid-cols-1 gap-3 md:grid-cols-3">
+                                <div>
+                                    <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">保存成变量（可选）</label>
+                                    <input v-model.trim="action.save_as" type="text"
+                                           placeholder="例如：register_result"
+                                           class="w-full rounded border px-2 py-1.5 text-sm font-mono dark:border-gray-600 dark:bg-gray-700 dark:text-white">
+                                </div>
+                                <div>
+                                    <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">超时秒数</label>
+                                    <input v-model.number="action.timeout_sec" type="number" min="1" step="1"
+                                           class="w-full rounded border px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white">
+                                </div>
+                                <div class="flex items-center pt-5">
+                                    <label class="flex items-center gap-2 text-sm dark:text-gray-300">
+                                        <input type="checkbox" v-model="action.fail_on_http_error" class="rounded">
+                                        HTTP 4xx / 5xx 视为失败
+                                    </label>
+                                </div>
+                            </div>
+
+                            <p class="mt-2 text-xs text-cyan-700 dark:text-cyan-300">请求在当前页面上下文里执行，会尽量沿用当前标签页的 Cookie / 会话。URL、Headers、Body 都支持模板变量。</p>
+                        </div>
+
+                        <div v-for="(action, i) in editingCommand.actions.filter(a => a.type === 'append_file')"
+                             :key="'append-file-' + i"
+                             class="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-900/20">
+                            <h5 class="mb-3 text-sm font-semibold text-amber-800 dark:text-amber-300">📄 追加到文件</h5>
+
+                            <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+                                <div class="md:col-span-2">
+                                    <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">文件路径</label>
+                                    <input v-model.trim="action.file_path" type="text"
+                                           placeholder="例如：logs\\accounts.txt 或 C:\\data\\accounts.txt"
+                                           class="w-full rounded border px-2 py-1.5 text-sm font-mono dark:border-gray-600 dark:bg-gray-700 dark:text-white">
+                                </div>
+                                <div>
+                                    <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">编码</label>
+                                    <input v-model.trim="action.encoding" type="text"
+                                           placeholder="utf-8"
+                                           class="w-full rounded border px-2 py-1.5 text-sm font-mono dark:border-gray-600 dark:bg-gray-700 dark:text-white">
+                                </div>
+                                <div class="flex items-center gap-4 pt-5">
+                                    <label class="flex items-center gap-2 text-sm dark:text-gray-300">
+                                        <input type="checkbox" v-model="action.append_newline" class="rounded">
+                                        每次追加后自动换行
+                                    </label>
+                                    <label class="flex items-center gap-2 text-sm dark:text-gray-300">
+                                        <input type="checkbox" v-model="action.create_dirs" class="rounded">
+                                        自动创建目录
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div class="mt-3">
+                                <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">追加内容</label>
+                                <textarea v-model="action.content" rows="4"
+                                          placeholder="例如：账号：{{temp_email}}"
+                                          class="w-full rounded border px-2 py-1.5 text-sm font-mono dark:border-gray-600 dark:bg-gray-700 dark:text-white"></textarea>
+                            </div>
+
+                            <p class="mt-2 text-xs text-amber-700 dark:text-amber-300">支持模板变量。你可以分多步追加：先追加账号，再追加密码，再追加分隔线，不会覆盖之前内容。</p>
                         </div>
 
                         <!-- 代理切换详细配置（当某个 switch_proxy 动作时显示） -->

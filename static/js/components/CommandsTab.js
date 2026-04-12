@@ -78,6 +78,52 @@ window.CommandsTabComponent = {
                 reason: 'release_tab_lock_action',
                 clear_page: true,
                 stop_actions: true
+            },
+            automationWriteDefaults: {
+                selector: '',
+                write_mode: 'replace',
+                clear_first: true,
+                value_source: 'literal',
+                text: '',
+                template: '',
+                variable_name: '',
+                random_kind: 'alnum',
+                random_length: 8,
+                prefix: '',
+                suffix: '',
+                preset_name: 'name_cn',
+                date_format: 'YYYY-MM-DD',
+                min_age: 18,
+                max_age: 35,
+                save_as: '',
+                timeout_sec: 6
+            },
+            automationReadDefaults: {
+                selector: '',
+                read_mode: 'auto',
+                attr_name: '',
+                trim: true,
+                save_as: '',
+                timeout_sec: 6
+            },
+            httpRequestDefaults: {
+                method: 'GET',
+                url: '',
+                headers: '{"Accept":"application/json"}',
+                body: '',
+                body_mode: 'json',
+                response_mode: 'text',
+                credentials: 'include',
+                timeout_sec: 15,
+                fail_on_http_error: true,
+                save_as: ''
+            },
+            appendFileDefaults: {
+                file_path: '',
+                content: '',
+                append_newline: true,
+                create_dirs: true,
+                encoding: 'utf-8'
             }
         };
     },

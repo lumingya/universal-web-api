@@ -1272,5 +1272,103 @@
       }
     },
     "default_preset": "主预设"
+  },
+  "signup.live.com": {
+    "default_preset": "主预设",
+    "presets": {
+      "主预设": {
+        "selectors": {
+          "input_box": "textarea",
+          "send_btn": "button[type=\"submit\"]",
+          "result_container": "div",
+          "new_chat_btn": "button",
+          "message_wrapper": null,
+          "generating_indicator": null,
+          "upload_btn": null,
+          "file_input": "input[type=\"file\"]",
+          "drop_zone": null
+        },
+        "workflow": [
+          {
+            "action": "CLICK",
+            "target": "new_chat_btn",
+            "optional": true,
+            "value": null
+          },
+          {
+            "action": "WAIT",
+            "target": "",
+            "optional": false,
+            "value": 0.5
+          },
+          {
+            "action": "FILL_INPUT",
+            "target": "input_box",
+            "optional": false,
+            "value": null
+          },
+          {
+            "action": "CLICK",
+            "target": "send_btn",
+            "optional": true,
+            "value": null
+          },
+          {
+            "action": "STREAM_WAIT",
+            "target": "result_container",
+            "optional": false,
+            "value": null
+          },
+          {
+            "action": "WAIT",
+            "target": "",
+            "optional": false,
+            "value": 1
+          },
+          {
+            "action": "COORD_CLICK",
+            "target": "",
+            "optional": false,
+            "value": {
+              "x": 622,
+              "y": 507,
+              "random_radius": 10
+            }
+          }
+        ],
+        "stealth": false,
+        "stream_config": {
+          "mode": "dom",
+          "hard_timeout": 300,
+          "send_confirmation": {
+            "attachment_sensitivity": "medium",
+            "post_click_observe_window": 1.8,
+            "pre_retry_probe_window": 0.12,
+            "retry_observe_window": 0.9,
+            "attachment_observe_window": 6.0,
+            "trust_network_activity": true,
+            "trust_generating_indicator": true,
+            "trust_send_disabled_with_input_shrink": true
+          },
+          "network": null
+        },
+        "image_extraction": {
+          "enabled": false,
+          "selector": "img",
+          "container_selector": null,
+          "debounce_seconds": 2.0,
+          "wait_for_load": true,
+          "load_timeout_seconds": 5.0,
+          "download_blobs": true,
+          "max_size_mb": 10,
+          "mode": "all"
+        },
+        "file_paste": {
+          "enabled": false,
+          "threshold": 50000,
+          "hint_text": "完全专注于文件内容"
+        }
+      }
+    }
   }
 }
