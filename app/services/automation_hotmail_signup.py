@@ -117,7 +117,10 @@ PIN_PROMPT_TEXTS = [
     "PIN 码",
     "verify your identity",
 ]
-HOTMAIL_PASSKEY_PIN = "123456"
+HOTMAIL_PASSKEY_PIN_ENV_KEYS = (
+    "HOTMAIL_PASSKEY_PIN",
+    "WINDOWS_HELLO_PIN",
+)
 HOTMAIL_GOOGLE_PASSWORD_MANAGER_RATIO_POINTS = [
     (0.46, 0.49),
     (0.50, 0.49),
@@ -294,6 +297,33 @@ def _generate_birthday() -> Dict[str, str]:
 
 def _sleep(seconds: float) -> None:
     time.sleep(max(0.0, float(seconds)))
+
+
+def _resolve_hotmail_passkey_pin() -> Dict[str, Any]:
+    for key in HOTMAIL_PASSKEY_PIN_ENV_KEYS:
+        value = str(os.getenv(key, "") or "").strip()
+        if not value:
+            continue
+        if not value.isdigit():
+            return {
+                "ok": False,
+                "status": "pin_invalid_format",
+                "pin": "",
+                "env_key": key,
+                "raw_value": value,
+            }
+        return {
+            "ok": True,
+            "status": "ok",
+            "pin": value,
+            "env_key": key,
+        }
+    return {
+        "ok": False,
+        "status": "pin_not_configured",
+        "pin": "",
+        "env_key": "",
+    }
 
 
 def _human_delay(base: float = 1.5, spread: float = 0.5) -> None:
@@ -1404,7 +1434,13 @@ def _has_passkey_signal(tab: Any) -> bool:
     return False
 
 
-def _handle_hotmail_post_passkey_flow(tab: Any, logger: Any, mouse_pos: Optional[tuple] = None, check_cancelled=None) -> Dict[str, Any]:
+def _handle_hotmail_post_passkey_flow(
+    tab: Any,
+    logger: Any,
+    mouse_pos: Optional[tuple] = None,
+    check_cancelled=None,
+    passkey_pin: str = "",
+) -> Dict[str, Any]:
     result: Dict[str, Any] = {
         "ok": True,
         "status": "post_passkey_completed",
@@ -1553,7 +1589,36 @@ def _handle_hotmail_post_passkey_flow(tab: Any, logger: Any, mouse_pos: Optional
             logger.info("[HotmailWorkflow] 已通过坐标激活 PIN 输入框")
             mouse_pos = _human_wait_with_mouse(tab, random.uniform(0.4, 0.8), mouse_pos=mouse_pos, check_cancelled=check_cancelled)
 
-    if not _cdp_type_digits(tab, HOTMAIL_PASSKEY_PIN):
+    resolved_pin = str(passkey_pin or "").strip()
+    if not resolved_pin:
+        pin_info = _resolve_hotmail_passkey_pin()
+        if pin_info.get("ok"):
+            resolved_pin = str(pin_info.get("pin", "") or "").strip()
+        else:
+            status = str(pin_info.get("status", "") or "pin_not_configured")
+            if status == "pin_invalid_format":
+                logger.warning(
+                    f"[HotmailWorkflow] Windows Hello PIN 配置格式无效: env={pin_info.get('env_key')}, "
+                    f"value={pin_info.get('raw_value')!r}"
+                )
+            else:
+                logger.warning("[HotmailWorkflow] 未配置 Windows Hello PIN，无法继续通行密钥确认")
+            return {
+                "ok": False,
+                "status": status,
+                "mouse_pos": mouse_pos,
+                "steps": result["steps"],
+            }
+
+    if not resolved_pin:
+        return {
+            "ok": False,
+            "status": "pin_not_configured",
+            "mouse_pos": mouse_pos,
+            "steps": result["steps"],
+        }
+
+    if not _cdp_type_digits(tab, resolved_pin):
         return {
             "ok": False,
             "status": "pin_input_failed",
@@ -1713,14 +1778,32 @@ def _handle_accessibility_challenge(tab: Any, logger: Any, max_rounds: int = 6, 
 
 
 def run_hotmail_signup_workflow(tab: Any, session: Any, logger: Any, check_cancelled=None) -> Dict[str, Any]:
-    email_local = _generate_localpart()
-    email = f"{email_local}@hotmail.com"
-    password = _generate_password()
-    names = _generate_name()
-    birthday = _generate_birthday()
-    birth_year = birthday["year"]
-
     try:
+        pin_info = _resolve_hotmail_passkey_pin()
+        if not pin_info.get("ok"):
+            status = str(pin_info.get("status", "") or "pin_not_configured")
+            if status == "pin_invalid_format":
+                logger.warning(
+                    f"[HotmailWorkflow] Windows Hello PIN 配置格式无效: env={pin_info.get('env_key')}, "
+                    f"value={pin_info.get('raw_value')!r}"
+                )
+            else:
+                logger.warning("[HotmailWorkflow] 未配置 Windows Hello PIN，停止 Hotmail 注册流程")
+            return {
+                "ok": False,
+                "status": status,
+                "required_env_keys": list(HOTMAIL_PASSKEY_PIN_ENV_KEYS),
+                "env_key": pin_info.get("env_key", ""),
+            }
+
+        passkey_pin = str(pin_info.get("pin", "") or "")
+        email_local = _generate_localpart()
+        email = f"{email_local}@hotmail.com"
+        password = _generate_password()
+        names = _generate_name()
+        birthday = _generate_birthday()
+        birth_year = birthday["year"]
+
         logger.info(f"[HotmailWorkflow] 开始执行 Hotmail 注册测试流，目标账号={email}")
         _raise_if_cancelled(check_cancelled)
         _clear_microsoft_session(tab, logger)
@@ -1890,6 +1973,7 @@ def run_hotmail_signup_workflow(tab: Any, session: Any, logger: Any, check_cance
             logger,
             mouse_pos=mouse_pos,
             check_cancelled=check_cancelled,
+            passkey_pin=passkey_pin,
         )
         mouse_pos = post_passkey_result.get("mouse_pos")
         if not post_passkey_result.get("ok"):

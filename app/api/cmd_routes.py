@@ -382,6 +382,8 @@ async def test_command(command_id: str, authenticated: bool = Depends(verify_aut
             if tab_index is None:
                 continue
 
+            ctx = None
+            session = None
             try:
                 # Respect command scope even in manual test mode.
                 if not command_engine._matches_scope(cmd, candidate):
@@ -391,6 +393,8 @@ async def test_command(command_id: str, authenticated: bool = Depends(verify_aut
                 ctx = request_manager.create_request()
                 session = pool.acquire_by_index(tab_index, ctx.request_id, timeout=3)
                 if not session:
+                    ctx.mark_failed("acquire_failed")
+                    request_manager.finish_request(ctx, success=False)
                     failed_tabs.append({"tab_index": tab_index, "error": "acquire_failed"})
                     continue
 
@@ -403,6 +407,14 @@ async def test_command(command_id: str, authenticated: bool = Depends(verify_aut
                 worker.start()
                 scheduled_tabs.append(tab_index)
             except Exception as e:
+                if ctx is not None and not ctx.is_terminal():
+                    ctx.mark_failed(str(e))
+                    request_manager.finish_request(ctx, success=False)
+                if session is not None and getattr(getattr(session, "status", None), "value", "") == "busy":
+                    try:
+                        pool.release(session.id, check_triggers=False, rollback_request_count=True)
+                    except Exception as release_error:
+                        logger.debug(f"manual command test rollback release failed: {release_error}")
                 failed_tabs.append({"tab_index": tab_index, "error": str(e)})
 
         if not scheduled_tabs:

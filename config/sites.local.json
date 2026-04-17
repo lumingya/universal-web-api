@@ -1,6 +1,6 @@
 {
   "default_presets": {
-    "gemini.google.com": "主预设",
+    "gemini.google.com": "Pro",
     "chat.deepseek.com": "专家模式"
   }
 }

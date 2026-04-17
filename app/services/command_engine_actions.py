@@ -1187,18 +1187,16 @@ class CommandEngineActionsMixin:
                 }};
                 if (!['GET', 'HEAD'].includes(method)) {{
                     if (bodyMode === 'form') {{
-                        const params = new URLSearchParams();
+                        let formBody = rawBody;
                         try {{
                             const parsed = rawBody ? JSON.parse(rawBody) : {{}};
                             if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {{
+                                const params = new URLSearchParams();
                                 Object.entries(parsed).forEach(([key, value]) => params.append(String(key), String(value ?? '')));
-                            }} else if (rawBody) {{
-                                params.append('value', rawBody);
+                                formBody = params.toString();
                             }}
-                        }} catch (error) {{
-                            if (rawBody) params.append('value', rawBody);
-                        }}
-                        init.body = params.toString();
+                        }} catch (error) {{}}
+                        init.body = formBody;
                         if (!init.headers['Content-Type']) {{
                             init.headers['Content-Type'] = 'application/x-www-form-urlencoded;charset=UTF-8';
                         }}

@@ -151,6 +151,7 @@ class TabSession:
             self.current_task_id = None
             setattr(self, "_bound_request_id", None)
             setattr(self, "_command_request_id", None)
+            setattr(self, "_command_vars", {})
             self.last_used_at = time.time()
             
             if clear_page:
@@ -175,6 +176,7 @@ class TabSession:
             self.current_task_id = None
             setattr(self, "_bound_request_id", None)
             setattr(self, "_command_request_id", None)
+            setattr(self, "_command_vars", {})
             self.last_used_at = time.time()
 
         try:
