@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Optional, Any, Dict, List
 
 from fastapi import APIRouter, Request, HTTPException, Header, Depends, Query
+from fastapi.params import Param
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
 
@@ -42,6 +43,19 @@ from app.utils.site_url import normalize_route_domain, route_domain_matches
 logger = get_logger("API.TAB")
 
 router = APIRouter()
+
+
+def _unwrap_fastapi_param_value(value: Any) -> Any:
+    if isinstance(value, Param):
+        return value.default
+    return value
+
+
+def _normalize_optional_tab_index_value(value: Any) -> Optional[int]:
+    value = _unwrap_fastapi_param_value(value)
+    if value in (None, ""):
+        return None
+    return int(value)
 FOLLOW_DEFAULT_PRESET = "__DEFAULT__"
 STREAM_QUEUE_POLL_TIMEOUT = 0.5
 SSE_HEARTBEAT_INTERVAL = 15.0
@@ -623,6 +637,10 @@ async def chat_with_route_domain(
     authenticated: bool = Depends(verify_auth)
 ):
     """使用指定域名路由匹配的标签页进行聊天。"""
+    tab_index = _normalize_optional_tab_index_value(tab_index)
+    selector = str(_unwrap_fastapi_param_value(selector) or "first_idle").strip() or "first_idle"
+    preset_name = _unwrap_fastapi_param_value(preset_name)
+
     route_key = str(route_domain or "").strip()
     if not route_key:
         raise HTTPException(status_code=400, detail="域名路由不能为空")

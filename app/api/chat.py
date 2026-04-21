@@ -237,6 +237,9 @@ async def chat_completions(
             route_domain=route_domain,
             request=request,
             body=route_body,
+            tab_index=None,
+            selector="first_idle",
+            preset_name=body.preset_name,
             authenticated=authenticated,
         )
 

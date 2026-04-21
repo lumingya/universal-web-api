@@ -509,6 +509,8 @@ class TabPoolManager:
     SCAN_INTERVAL = 10
     ISOLATED_CONTEXT_ORPHAN_GRACE_SEC = 3.0
     ISOLATED_CONTEXT_REBIND_GRACE_SEC = 20.0
+    GET_TABS_FAILURE_COOLDOWN_SEC = 5.0
+    GET_TABS_WARNING_INTERVAL_SEC = 10.0
 
     @staticmethod
     def _to_bool(value: Any, default: bool = False) -> bool:
@@ -559,6 +561,8 @@ class TabPoolManager:
         self._tab_counter = 0
         
         self._last_scan_time: float = 0
+        self._get_tabs_retry_after: float = 0.0
+        self._last_get_tabs_warning_at: float = 0.0
         
         # 记录已知的标签页底层 ID（用于检测新标签页）
         self._known_tab_ids: set = set()
@@ -843,24 +847,42 @@ class TabPoolManager:
                 tab_ids.append(target_id)
         return tab_ids
 
+    def _log_get_tabs_warning(self, message: str) -> None:
+        now = time.time()
+        if now - self._last_get_tabs_warning_at < self.GET_TABS_WARNING_INTERVAL_SEC:
+            return
+        self._last_get_tabs_warning_at = now
+        logger.warning(message)
+
     def _list_current_tab_refs(self) -> List[Any]:
         browser = self._get_browser_handle()
         if browser is None:
             return []
 
-        try:
-            tabs = browser.get_tabs()
-            return list(tabs or [])
-        except Exception as e:
+        now = time.time()
+        if now < self._get_tabs_retry_after:
             cdp_tab_ids = self._list_current_tab_ids_via_cdp()
             if cdp_tab_ids:
-                logger.warning(
+                return cdp_tab_ids
+
+        try:
+            tabs = browser.get_tabs()
+            self._get_tabs_retry_after = 0.0
+            return list(tabs or [])
+        except Exception as e:
+            self._get_tabs_retry_after = max(
+                self._get_tabs_retry_after,
+                time.time() + self.GET_TABS_FAILURE_COOLDOWN_SEC,
+            )
+            cdp_tab_ids = self._list_current_tab_ids_via_cdp()
+            if cdp_tab_ids:
+                self._log_get_tabs_warning(
                     f"[TabPool] browser.get_tabs() 失败，回退到 Target.getTargets 扫描: {e}"
                 )
                 return cdp_tab_ids
             fallback_ids = list(getattr(browser, "tab_ids", []) or [])
             if fallback_ids:
-                logger.warning(
+                self._log_get_tabs_warning(
                     f"[TabPool] browser.get_tabs() 失败，回退到 tab_ids 扫描: {e}"
                 )
                 return fallback_ids

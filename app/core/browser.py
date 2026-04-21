@@ -102,6 +102,8 @@ class BrowserCore:
         self._watchdog_stop = threading.Event()
         self._last_watchdog_port_open: Optional[bool] = None
         self._last_watchdog_session_alive: Optional[bool] = None
+        self._get_tabs_retry_after: float = 0.0
+        self._last_get_tabs_fallback_log_at: float = 0.0
         
         self.formatter = SSEFormatter()
         self.config_engine = None
@@ -420,17 +422,56 @@ class BrowserCore:
         except Exception:
             return False
 
-    def _probe_browser_connection(self) -> bool:
-        """Lightweight liveness probe for the underlying browser session."""
+    def _probe_browser_connection_via_cdp(self) -> bool:
+        """Prefer the long-lived CDP session over spawning /json short connections."""
         browser = self.get_browser_handle()
-        if not browser:
+        if not browser or not hasattr(browser, "_run_cdp"):
             return False
 
         try:
-            browser.get_tabs()
-            return True
+            result = browser._run_cdp("Target.getTargets") or {}
+            target_infos = result.get("targetInfos")
+            return isinstance(target_infos, list)
         except Exception:
             return False
+
+    def _list_tabs_via_cdp(self) -> List[Any]:
+        browser = self.get_browser_handle()
+        if not browser or not hasattr(browser, "_run_cdp"):
+            return []
+
+        try:
+            result = browser._run_cdp("Target.getTargets") or {}
+            target_infos = result.get("targetInfos") or []
+        except Exception:
+            return []
+
+        tabs: List[Any] = []
+        for info in target_infos:
+            if not isinstance(info, dict):
+                continue
+            if str(info.get("type") or "").strip().lower() != "page":
+                continue
+            target_id = str(info.get("targetId") or "").strip()
+            if not target_id:
+                continue
+            try:
+                resolved = browser.get_tab(target_id)
+            except Exception:
+                resolved = None
+            tabs.append(resolved or target_id)
+        return tabs
+
+    def _log_get_tabs_fallback(self, message: str) -> None:
+        now = time.time()
+        if now - self._last_get_tabs_fallback_log_at < 10.0:
+            return
+        self._last_get_tabs_fallback_log_at = now
+        logger.warning(message)
+
+    def _probe_browser_connection(self) -> bool:
+        """Lightweight liveness probe for the underlying browser session."""
+        return self._probe_browser_connection_via_cdp()
 
     def get_browser_handle(self):
         if self.browser_handle is not None:
@@ -445,7 +486,24 @@ class BrowserCore:
         browser = self.get_browser_handle()
         if browser is None:
             raise BrowserConnectionError("无法连接到浏览器")
-        return browser.get_tabs()
+        now = time.time()
+        if now < self._get_tabs_retry_after:
+            fallback_tabs = self._list_tabs_via_cdp()
+            if fallback_tabs:
+                return fallback_tabs
+        try:
+            tabs = browser.get_tabs()
+            self._get_tabs_retry_after = 0.0
+            return tabs
+        except Exception as e:
+            self._get_tabs_retry_after = max(self._get_tabs_retry_after, time.time() + 5.0)
+            fallback_tabs = self._list_tabs_via_cdp()
+            if fallback_tabs:
+                self._log_get_tabs_fallback(
+                    f"[BrowserCore] browser.get_tabs() 失败，回退到 Target.getTargets: {e}"
+                )
+                return fallback_tabs
+            raise
 
     def get_tab_ids(self) -> List[str]:
         browser = self.get_browser_handle()
