@@ -249,9 +249,9 @@
         "selectors": {
           "input_box": "#prompt-textarea",
           "send_btn": "[data-testid=\"send-button\"]",
-          "result_container": ".agent-turn .markdown",
+          "result_container": "section[data-testid^=\"conversation-turn-\"] .markdown, section[data-testid^=\"conversation-turn-\"] div[id^=\"image-\"]",
           "new_chat_btn": "[data-testid=\"create-new-chat-button\"]",
-          "message_wrapper": "article[data-testid^=\"conversation-turn-\"]",
+          "message_wrapper": "section[data-testid^=\"conversation-turn-\"]",
           "generating_indicator": null,
           "temp_chat_btn": "button[aria-label=\"开启临时聊天\"]"
         },
