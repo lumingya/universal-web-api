@@ -46,7 +46,14 @@ window.ConfigTab = {
             // 默认配置
             defaultImageConfig: {
                 enabled: false,
+                modalities: {
+                    image: false,
+                    audio: false,
+                    video: false
+                },
                 selector: 'img',
+                audio_selector: 'audio, audio source',
+                video_selector: 'video, video source',
                 container_selector: null,
                 debounce_seconds: 2.0,
                 wait_for_load: true,
@@ -79,7 +86,15 @@ window.ConfigTab = {
         },
         imageConfig() {
             if (!this.presetConfig) return this.defaultImageConfig;
-            return { ...this.defaultImageConfig, ...(this.presetConfig.image_extraction || {}) };
+            const current = this.presetConfig.image_extraction || {};
+            return {
+                ...this.defaultImageConfig,
+                ...current,
+                modalities: {
+                    ...(this.defaultImageConfig.modalities || {}),
+                    ...((current && current.modalities) || {})
+                }
+            };
         },
         streamConfig() {
             if (!this.presetConfig) return this.defaultStreamConfig;

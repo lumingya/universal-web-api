@@ -1444,10 +1444,12 @@ class TabPoolManager:
             if self._initialized:
                 return
             
+            raw_target_count = 0
             try:
                 browser = self._get_browser_handle()
                 existing_tabs = self._list_current_tab_refs()
-                logger.debug(f"检测到 {len(existing_tabs)} 个标签页")
+                raw_target_count = len(existing_tabs)
+                logger.debug(f"[TabPool] 检测到 {raw_target_count} 个浏览器 page target")
                 
                 for tab_ref in existing_tabs:
                     if len(self._tabs) >= self.max_tabs:
@@ -1503,7 +1505,11 @@ class TabPoolManager:
             
             self._initialized = True
             self._last_scan_time = time.time()
-            logger.info(f"TabPool 就绪: {len(self._tabs)} 个标签页")
+            ignored_count = max(0, raw_target_count - len(self._tabs))
+            logger.info(
+                f"TabPool 就绪: {len(self._tabs)} 个远程网页"
+                + (f"（已忽略 {ignored_count} 个内部/无效 target）" if ignored_count else "")
+            )
             
     def _check_stuck_tabs(self):
         """检查并释放卡死的标签页"""

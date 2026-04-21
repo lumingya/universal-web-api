@@ -27,13 +27,20 @@
     "description": "Google Gemini AI",
     "image_extraction": {
       "enabled": true,
+      "modalities": {
+        "image": true,
+        "audio": true,
+        "video": true
+      },
       "selector": "img",
-      "container_selector": ".markdown-main-panel",
+      "audio_selector": "generated-music audio, generated-music source, audio, audio source",
+      "video_selector": "generated-music video, video-player video, response-element video, video",
+      "container_selector": "response-element, generated-image, generated-music, .attachment-container, .markdown-main-panel",
       "debounce_seconds": 2.5,
       "wait_for_load": true,
       "load_timeout_seconds": 6.0,
       "download_blobs": true,
-      "max_size_mb": 10,
+      "max_size_mb": 100,
       "mode": "all"
     },
     "notes": "Gemini 可能使用懒加载，建议稍长的 debounce 时间"
@@ -122,56 +129,5 @@
       "mode": "all"
     },
     "notes": "LMArena 可能有多个模型同时输出，使用 prose 容器"
-  },
-  
-  "_default": {
-    "name": "通用默认配置",
-    "description": "适用于未知站点的安全默认值",
-    "image_extraction": {
-      "enabled": false,
-      "selector": "img",
-      "container_selector": null,
-      "debounce_seconds": 2.0,
-      "wait_for_load": true,
-      "load_timeout_seconds": 5.0,
-      "download_blobs": true,
-      "max_size_mb": 10,
-      "mode": "all"
-    },
-    "notes": "默认禁用，避免未知站点出现异常"
-  },
-  
-  "_aggressive": {
-    "name": "激进模式",
-    "description": "尽可能抓取所有图片（用于测试）",
-    "image_extraction": {
-      "enabled": true,
-      "selector": "img, picture img, figure img",
-      "container_selector": null,
-      "debounce_seconds": 3.0,
-      "wait_for_load": true,
-      "load_timeout_seconds": 10.0,
-      "download_blobs": true,
-      "max_size_mb": 50,
-      "mode": "all"
-    },
-    "notes": "使用更宽松的选择器和更长的等待时间"
-  },
-  
-  "_minimal": {
-    "name": "最小模式",
-    "description": "只抓取第一张图片（节省资源）",
-    "image_extraction": {
-      "enabled": true,
-      "selector": "img",
-      "container_selector": null,
-      "debounce_seconds": 1.0,
-      "wait_for_load": false,
-      "load_timeout_seconds": 3.0,
-      "download_blobs": false,
-      "max_size_mb": 5,
-      "mode": "first"
-    },
-    "notes": "快速模式，只抓取第一张图片且不转换 blob"
   }
 }

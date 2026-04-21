@@ -21,10 +21,17 @@ logger = get_logger("IMG_EXT")
 
 
 def get_default_image_extraction_config() -> Dict:
-    """获取默认的图片提取配置"""
+    """获取默认的多模态提取配置"""
     return {
         "enabled": False,
+        "modalities": {
+            "image": False,
+            "audio": False,
+            "video": False,
+        },
         "selector": "img",
+        "audio_selector": "audio, audio source",
+        "video_selector": "video, video source",
         "container_selector": None,
         "debounce_seconds": 2.0,
         "wait_for_load": True,

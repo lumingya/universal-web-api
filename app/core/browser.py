@@ -705,6 +705,7 @@ class BrowserCore:
         messages: List[Dict],
         stream: bool = True,
         task_id: str = None,
+        preset_name: Optional[str] = None,
         stop_checker: Optional[Callable[[], bool]] = None,
         workflow_priority: Optional[int] = None,
     ) -> Generator[str, None, None]:
@@ -754,6 +755,7 @@ class BrowserCore:
                 yield from self._execute_workflow_stream(
                     session,
                     sanitized_messages,
+                    preset_name=preset_name,
                     stop_checker=effective_stop_checker,
                     workflow_priority=workflow_priority,
                 )
@@ -761,6 +763,7 @@ class BrowserCore:
                 yield from self._execute_workflow_non_stream(
                     session,
                     sanitized_messages,
+                    preset_name=preset_name,
                     stop_checker=effective_stop_checker,
                     workflow_priority=workflow_priority,
                 )
@@ -784,6 +787,7 @@ class BrowserCore:
         messages: List[Dict],
         stream: bool = True,
         task_id: str = None,
+        preset_name: Optional[str] = None,
         stop_checker: Optional[Callable[[], bool]] = None,
         workflow_priority: Optional[int] = None,
     ) -> Generator[str, None, None]:
@@ -839,6 +843,7 @@ class BrowserCore:
                 yield from self._execute_workflow_stream(
                     session,
                     sanitized_messages,
+                    preset_name=preset_name,
                     stop_checker=effective_stop_checker,
                     workflow_priority=workflow_priority,
                 )
@@ -846,6 +851,7 @@ class BrowserCore:
                 yield from self._execute_workflow_non_stream(
                     session,
                     sanitized_messages,
+                    preset_name=preset_name,
                     stop_checker=effective_stop_checker,
                     workflow_priority=workflow_priority,
                 )
@@ -1199,7 +1205,10 @@ class BrowserCore:
         stealth_mode = site_config.get("stealth", False)
         
         image_config = site_config.get("image_extraction", {})
-        image_extraction_enabled = image_config.get("enabled", False)
+        modalities = image_config.get("modalities") or {}
+        image_extraction_enabled = bool(image_config.get("enabled", False)) or any(
+            bool(modalities.get(key)) for key in ("image", "audio", "video")
+        )
         stream_config = site_config.get("stream_config", {}) or {}
         file_paste_config = site_config.get("file_paste", {}) or {}
 
@@ -1405,12 +1414,12 @@ class BrowserCore:
                 elif interrupt_result.get("handled"):
                     logger.info(f"[{session.id}] 工作流收尾阶段已执行挂起命令")
 
-            # 图片提取
+            # 多模态提取
             logger.debug(f"[PROBE] Workflow 循环结束，image_enabled={image_extraction_enabled}, should_stop={effective_stop_checker()}")
             if image_extraction_enabled and not effective_stop_checker() and not workflow_aborted:
-                logger.debug("[PROBE] 进入图片提取分支")
+                logger.debug("[PROBE] 进入多模态提取分支")
                 try:
-                    images = self._extract_images_after_stream(
+                    media_items = self._extract_media_after_stream(
                         tab=tab,
                         extractor=extractor,
                         image_config=image_config,
@@ -1419,41 +1428,43 @@ class BrowserCore:
                         stop_checker=_combined_stop_checker
                     )
                     
-                    if images:
+                    if media_items:
                         download_urls = image_config.get("download_urls", False)
                         if download_urls:
-                            images = self._download_url_images(images, tab=tab)
+                            image_items = [item for item in media_items if item.get("media_type") == "image"]
+                            other_items = [item for item in media_items if item.get("media_type") != "image"]
+                            image_items = self._download_url_images(image_items, tab=tab)
+                            media_items = image_items + other_items
+
+                        media_items = self._persist_remote_media_urls_to_local(
+                            media_items,
+                            tab=tab,
+                            max_size_mb=int(image_config.get("max_size_mb", 10) or 10),
+                        )
                         
-                        logger.debug(f"[PROBE] 即将发送图片（Markdown），数量={len(images)}")
+                        logger.debug(f"[PROBE] 即将发送多模态资源（Markdown），数量={len(media_items)}")
 
                         try:
-                            public_base = os.getenv("PUBLIC_BASE_URL", "").strip()
-                            image_refs = []
-                            for img in images:
-                                ref = str(img.get("url") or img.get("data_uri") or "").strip()
-                                if not ref:
-                                    continue
-                                if ref.startswith("/") and not ref.startswith("//"):
-                                    if public_base:
-                                        ref = public_base.rstrip("/") + ref
-                                    else:
-                                        ref = f"http://{AppConfig.get_host()}:{AppConfig.get_port()}{ref}"
-                                image_refs.append(ref)
-
-                            if image_refs:
-                                md = "".join(f"\n\n![image_{idx}]({ref})" for idx, ref in enumerate(image_refs))
-                                md += "\n\n"
+                            response_media = self._prepare_media_items_for_response(media_items)
+                            md = self._build_media_markdown_block(media_items)
+                            if md:
                                 yield self.formatter.pack_chunk(
                                     md,
                                     completion_id=executor._completion_id,
+                                    media=response_media,
                                 )
-                                logger.debug(f"[MD_IMAGE] 已发送结构化图片，共 {len(image_refs)} 张")
+                                logger.debug(f"[MD_MEDIA] 已发送结构化多模态资源，共 {len(media_items)} 项")
                             else:
-                                logger.warning("[MD_IMAGE] 未构建出任何图片引用，跳过 Markdown 输出")
+                                yield self.formatter.pack_chunk(
+                                    "",
+                                    completion_id=executor._completion_id,
+                                    media=response_media,
+                                )
+                                logger.debug(f"[MD_MEDIA] 已发送纯结构化多模态资源，共 {len(media_items)} 项")
                         except Exception as e:
-                            logger.warning(f"[MD_IMAGE] 发送 Markdown 图片链接失败: {e}")            
+                            logger.warning(f"[MD_MEDIA] 发送 Markdown 媒体链接失败: {e}")
                 except Exception as e:
-                    logger.warning(f"[{session.id}] 图片提取失败: {e}")
+                    logger.warning(f"[{session.id}] 多模态提取失败: {e}")
         
         finally:
             if command_engine is not None and workflow_runtime is not None:
@@ -1468,18 +1479,121 @@ class BrowserCore:
                     logger.debug(f"[{session.id}] 工作流运行时清理失败（忽略）: {e}")
             yield self.formatter.pack_finish()
     
-    def _extract_images_after_stream(
+    def _get_pending_detection_markers(
+        self,
+        image_config: Dict,
+        media_type: str,
+        marker_key: str,
+    ) -> List[str]:
+        default_markers = {
+            "audio": {
+                "text_contains": [
+                    "generated_music_content/",
+                    "googleusercontent.com/generated_music_content/",
+                ],
+                "url_contains": [
+                    "generated_music_content/",
+                    "googleusercontent.com/generated_music_content/",
+                ],
+                "label_contains": [],
+            },
+            "video": {
+                "text_contains": [
+                    "video_gen_chip/",
+                    "googleusercontent.com/video_gen_chip/",
+                    "正在生成视频",
+                    "视频已准备就绪",
+                    "come back later to check",
+                    "i'm generating your video",
+                    "your video is being generated",
+                    "your video is ready",
+                ],
+                "url_contains": [
+                    "video_gen_chip/",
+                    "googleusercontent.com/video_gen_chip/",
+                ],
+                "label_contains": [],
+            },
+        }
+
+        normalized_media_type = str(media_type or "").strip().lower()
+        normalized_marker_key = str(marker_key or "").strip()
+        config_root = dict((image_config or {}).get("pending_detection") or {})
+        type_config = dict(config_root.get(normalized_media_type) or {})
+        configured = type_config.get(normalized_marker_key)
+
+        if isinstance(configured, list):
+            markers = [str(item or "").strip().lower() for item in configured if str(item or "").strip()]
+            if markers:
+                return markers
+
+        return [
+            str(item or "").strip().lower()
+            for item in default_markers.get(normalized_media_type, {}).get(normalized_marker_key, [])
+            if str(item or "").strip()
+        ]
+
+    def _is_pending_media_text(self, text: str, image_config: Dict, media_type: str = "") -> bool:
+        lowered = str(text or "").strip().lower()
+        if not lowered:
+            return False
+
+        media_types = [str(media_type or "").strip().lower()] if media_type else ["audio", "video"]
+        for current_type in media_types:
+            markers = self._get_pending_detection_markers(
+                image_config,
+                current_type,
+                "text_contains",
+            )
+            if any(marker in lowered for marker in markers):
+                return True
+        return False
+
+    def _is_pending_media_item(self, media_item: Dict, image_config: Dict) -> bool:
+        media_type = str(media_item.get("media_type") or "").strip().lower()
+        ref = str(media_item.get("url") or media_item.get("data_uri") or "").strip().lower()
+        label = str(media_item.get("label") or "").strip().lower()
+
+        if not media_type:
+            return False
+
+        url_markers = self._get_pending_detection_markers(
+            image_config,
+            media_type,
+            "url_contains",
+        )
+        label_markers = self._get_pending_detection_markers(
+            image_config,
+            media_type,
+            "label_contains",
+        )
+
+        if media_type not in {"audio", "video"}:
+            return False
+
+        return any(marker in ref for marker in url_markers) or any(
+            marker in label for marker in label_markers
+        )
+
+    def _filter_ready_media_items(self, media_items: List[Dict], image_config: Dict) -> List[Dict]:
+        return [
+            item for item in (media_items or [])
+            if not self._is_pending_media_item(item, image_config)
+        ]
+
+    def _extract_media_after_stream(
         self,
         tab,
         extractor,
         image_config: Dict,
         result_selector: str,
         completion_id: str = None,
-        stop_checker: Optional[Callable[[], bool]] = None
+        stop_checker: Optional[Callable[[], bool]] = None,
+        response_text_hint: str = "",
     ) -> List[Dict]:
-        """流式输出结束后提取图片"""
+        """流式输出结束后提取多模态资源。"""
         from app.core.elements import ElementFinder
-        from app.core.extractors.image_extractor import image_extractor
+        from app.core.extractors.media_extractor import media_extractor
         
         debounce = image_config.get("debounce_seconds", 2.0)
         effective_stop_checker = stop_checker or self._should_stop_checker
@@ -1501,94 +1615,354 @@ class BrowserCore:
             
             last_element = elements[-1]
 
-            def _extract_images_once(target_element):
-                if hasattr(extractor, 'extract_images'):
-                    return extractor.extract_images(
+            def _extract_media_once(target_element):
+                if hasattr(extractor, 'extract_media'):
+                    return extractor.extract_media(
                         target_element,
                         config=image_config,
                         container_selector_fallback=result_selector
                     )
-                return image_extractor.extract(
+                if hasattr(extractor, 'extract_images'):
+                    return media_extractor.extract(
+                        target_element,
+                        config=image_config,
+                        container_selector_fallback=result_selector
+                    )
+                return media_extractor.extract(
                     target_element,
                     config=image_config,
                     container_selector_fallback=result_selector
                 )
 
-            images = _extract_images_once(last_element)
+            media_items = _extract_media_once(last_element)
+            ready_media_items = self._filter_ready_media_items(media_items, image_config)
+            pending_media_items = [
+                item for item in media_items
+                if self._is_pending_media_item(item, image_config)
+            ]
 
-            if not images and not effective_stop_checker():
-                placeholder_text = ""
-                try:
-                    if hasattr(extractor, 'extract_text'):
-                        placeholder_text = str(extractor.extract_text(last_element) or "")
-                    else:
-                        placeholder_text = str(
-                            last_element.run_js("return this.innerText || this.textContent || ''") or ""
-                        )
-                except Exception:
-                    placeholder_text = ""
+            image_items = [item for item in ready_media_items if item.get("media_type") == "image"]
+            audio_items = [item for item in ready_media_items if item.get("media_type") == "audio"]
+            video_items = [item for item in ready_media_items if item.get("media_type") == "video"]
 
-                has_generated_image_hint = any(
-                    marker in placeholder_text.lower()
-                    for marker in (
-                        "image_generation_content/",
-                        "googleusercontent.com/image_generation_content/",
+            placeholder_text = ""
+            try:
+                if hasattr(extractor, 'extract_text'):
+                    placeholder_text = str(extractor.extract_text(last_element) or "")
+                else:
+                    placeholder_text = str(
+                        last_element.run_js("return this.innerText || this.textContent || ''") or ""
                     )
+            except Exception:
+                placeholder_text = ""
+
+            placeholder_text_lower = placeholder_text.lower()
+            response_text_hint_lower = str(response_text_hint or "").strip().lower()
+            combined_pending_text = "\n".join(
+                text for text in (placeholder_text_lower, response_text_hint_lower)
+                if text
+            )
+
+            has_generated_image_hint = any(
+                marker in placeholder_text_lower
+                for marker in (
+                    "image_generation_content/",
+                    "googleusercontent.com/image_generation_content/",
+                )
+            )
+
+            if not has_generated_image_hint:
+                try:
+                    has_generated_image_hint = bool(
+                        last_element.run_js(
+                            """
+                            return !!this.querySelector(
+                                '.attachment-container.generated-images, '
+                                + '.generated-images, generated-image, single-image, '
+                                + '.image-button, img[src^="blob:"], img[src^="data:image"]'
+                            );
+                            """
+                        )
+                    )
+                except Exception:
+                    has_generated_image_hint = False
+
+            pending_audio_hint = self._is_pending_media_text(combined_pending_text, image_config, "audio")
+            pending_video_hint = self._is_pending_media_text(combined_pending_text, image_config, "video")
+
+            if pending_media_items:
+                pending_audio_hint = pending_audio_hint or any(
+                    item.get("media_type") == "audio" for item in pending_media_items
+                )
+                pending_video_hint = pending_video_hint or any(
+                    item.get("media_type") == "video" for item in pending_media_items
+                )
+                logger.debug(
+                    "检测到占位媒体，继续等待真实结果: "
+                    f"pending={len(pending_media_items)}, ready={len(ready_media_items)}"
                 )
 
-                if not has_generated_image_hint:
-                    try:
-                        has_generated_image_hint = bool(
-                            last_element.run_js(
-                                """
-                                return !!this.querySelector(
-                                    '.attachment-container.generated-images, '
-                                    + '.generated-images, generated-image, single-image, '
-                                    + '.image-button, img[src^="blob:"], img[src^="data:image"]'
-                                );
-                                """
-                            )
+            pending_kinds = set()
+            if has_generated_image_hint and not image_items:
+                pending_kinds.add("image")
+            if pending_audio_hint and not (audio_items or video_items):
+                pending_kinds.add("audio")
+            if pending_video_hint and not video_items:
+                pending_kinds.add("video")
+
+            if pending_kinds and not effective_stop_checker():
+                base_timeout = float(image_config.get("load_timeout_seconds", 5.0) or 5.0)
+                late_wait_timeout = float(
+                    image_config.get("late_render_timeout_seconds")
+                    or max(30.0, base_timeout * 6.0)
+                )
+                poll_interval = float(image_config.get("late_render_poll_seconds") or 1.0)
+                deadline = time.time() + late_wait_timeout
+
+                while time.time() < deadline and not effective_stop_checker():
+                    time.sleep(max(0.2, poll_interval))
+                    elements = finder.find_all(result_selector, timeout=0.5)
+                    if not elements:
+                        continue
+                    last_element = elements[-1]
+                    media_items = _extract_media_once(last_element)
+                    ready_media_items = self._filter_ready_media_items(media_items, image_config)
+                    image_items = [item for item in ready_media_items if item.get("media_type") == "image"]
+                    audio_items = [item for item in ready_media_items if item.get("media_type") == "audio"]
+                    video_items = [item for item in ready_media_items if item.get("media_type") == "video"]
+
+                    satisfied = True
+                    if "image" in pending_kinds and not image_items:
+                        satisfied = False
+                    if "audio" in pending_kinds and not (audio_items or video_items):
+                        satisfied = False
+                    if "video" in pending_kinds and not video_items:
+                        satisfied = False
+
+                    if satisfied:
+                        kinds_label = ",".join(sorted(pending_kinds))
+                        logger.debug(
+                            f"延迟媒体渲染已捕获: kinds={kinds_label} "
+                            f"(late_wait={late_wait_timeout:.1f}s)"
                         )
-                    except Exception:
-                        has_generated_image_hint = False
-
-                if has_generated_image_hint:
-                    late_wait_timeout = float(
-                        image_config.get("late_render_timeout_seconds")
-                        or max(8.0, float(image_config.get("load_timeout_seconds", 5.0)))
-                    )
-                    deadline = time.time() + late_wait_timeout
-
-                    while time.time() < deadline and not effective_stop_checker():
-                        time.sleep(0.5)
-                        elements = finder.find_all(result_selector, timeout=0.5)
-                        if not elements:
-                            continue
-                        last_element = elements[-1]
-                        images = _extract_images_once(last_element)
-                        if images:
-                            logger.debug(
-                                f"图片延迟渲染已捕获: {len(images)} 张 "
-                                f"(late_wait={late_wait_timeout:.1f}s)"
-                            )
-                            break
+                        break
             
             # 🆕 如果图片是不可直连的外链（如 googleusercontent），尝试截图落盘并替换为本地 URL
+            media_items = ready_media_items
+
             try:
-                images = self._try_screenshot_images_to_local(tab, last_element, images, image_config)
+                if image_items:
+                    converted_images = self._try_screenshot_images_to_local(tab, last_element, image_items, image_config)
+                    other_items = [item for item in media_items if item.get("media_type") != "image"]
+                    media_items = converted_images + other_items
             except Exception as e:
                 logger.warning(f"截图落盘失败（已忽略）: {e}")
 
             try:
-                images = self._persist_data_uri_images_to_local(images)
+                media_items = self._persist_data_uri_media_to_local(media_items)
             except Exception as e:
                 logger.warning(f"data uri 落盘失败（已忽略）: {e}")
 
-            return images
+            return media_items
             
         except Exception as e:
-            logger.warning(f"图片提取异常: {e}")
+            logger.warning(f"多模态提取异常: {e}")
             return []
+
+    def _resolve_media_ref(self, media_item: Dict) -> str:
+        ref = str(media_item.get("url") or media_item.get("data_uri") or "").strip()
+        if not ref:
+            return ""
+
+        if ref.startswith("/") and not ref.startswith("//"):
+            public_base = os.getenv("PUBLIC_BASE_URL", "").strip()
+            if public_base:
+                return public_base.rstrip("/") + ref
+            return f"http://{AppConfig.get_host()}:{AppConfig.get_port()}{ref}"
+
+        return ref
+
+    def _build_media_markdown_block(self, media_items: List[Dict]) -> str:
+        image_blocks = []
+        audio_lines = []
+        video_lines = []
+
+        for item in media_items or []:
+            ref = self._resolve_media_ref(item)
+            if not ref:
+                continue
+
+            media_type = str(item.get("media_type") or "image").lower()
+            if media_type == "image":
+                image_blocks.append(f"\n\n![image_{len(image_blocks)}]({ref})")
+                continue
+
+            label = item.get("label") or item.get("mime") or ""
+            label_suffix = f" - {label}" if label else ""
+            if media_type == "audio":
+                audio_lines.append(f"[audio_{len(audio_lines)}]({ref}){label_suffix}")
+            elif media_type == "video":
+                video_lines.append(f"[video_{len(video_lines)}]({ref}){label_suffix}")
+
+        blocks = []
+        if image_blocks:
+            blocks.append("".join(image_blocks))
+        if audio_lines:
+            blocks.append("\n\n" + "\n".join(audio_lines))
+        if video_lines:
+            blocks.append("\n\n" + "\n".join(video_lines))
+
+        if not blocks:
+            return ""
+
+        return "".join(blocks) + "\n\n"
+
+    def _prepare_media_items_for_response(self, media_items: List[Dict]) -> List[Dict]:
+        result = []
+        for item in media_items or []:
+            entry = dict(item)
+            ref = self._resolve_media_ref(item)
+            if entry.get("kind") == "url":
+                entry["url"] = ref or entry.get("url")
+            entry.pop("local_path", None)
+            result.append(entry)
+        return result
+
+    def _persist_remote_media_urls_to_local(
+        self,
+        media_items: List[Dict],
+        tab=None,
+        max_size_mb: int = 10,
+    ) -> List[Dict]:
+        """Download remote audio/video URLs to local files so downstream clients get stable local URLs."""
+        import time as time_module
+        import uuid
+        from pathlib import Path
+        from urllib.parse import urlparse
+        import requests
+
+        if not media_items or tab is None:
+            return media_items
+
+        save_dir = Path("download_images")
+        save_dir.mkdir(exist_ok=True)
+        max_bytes = max(1, int(max_size_mb)) * 1024 * 1024
+
+        ext_map = {
+            "audio/mpeg": ".mp3",
+            "audio/mp3": ".mp3",
+            "audio/wav": ".wav",
+            "audio/x-wav": ".wav",
+            "audio/ogg": ".ogg",
+            "audio/webm": ".webm",
+            "audio/mp4": ".m4a",
+            "video/mp4": ".mp4",
+            "video/webm": ".webm",
+            "video/ogg": ".ogv",
+            "video/quicktime": ".mov",
+        }
+
+        cookies_dict = {}
+        try:
+            cookies_list = tab.cookies()
+            if cookies_list:
+                for cookie in cookies_list:
+                    if isinstance(cookie, dict) and "name" in cookie and "value" in cookie:
+                        cookies_dict[cookie["name"]] = cookie["value"]
+        except Exception as exc:
+            logger.debug(f"媒体下载读取 cookies 失败（忽略）: {exc}")
+
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Referer": getattr(tab, "url", "") or "",
+            "Accept": "*/*",
+        }
+
+        result = []
+        for item in media_items:
+            filepath = None
+            if item.get("kind") != "url":
+                result.append(item)
+                continue
+
+            media_type = str(item.get("media_type") or "").lower()
+            if media_type not in {"audio", "video"}:
+                result.append(item)
+                continue
+
+            url = str(item.get("url") or "").strip()
+            if not (url.startswith("http://") or url.startswith("https://")):
+                result.append(item)
+                continue
+
+            try:
+                response = requests.get(
+                    url,
+                    cookies=cookies_dict,
+                    headers=headers,
+                    timeout=30,
+                    allow_redirects=True,
+                    stream=True,
+                )
+            except Exception as exc:
+                logger.warning(f"{media_type} 下载失败，保留远程链接: {exc}")
+                result.append(item)
+                continue
+
+            try:
+                if response.status_code != 200:
+                    logger.warning(f"{media_type} 下载失败，HTTP {response.status_code}")
+                    result.append(item)
+                    continue
+
+                content_type = str(response.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+                if media_type == "audio" and "audio" not in content_type:
+                    logger.warning(f"音频下载返回非音频类型，保留远程链接: {content_type or 'unknown'}")
+                    result.append(item)
+                    continue
+                if media_type == "video" and "video" not in content_type:
+                    logger.warning(f"视频下载返回非视频类型，保留远程链接: {content_type or 'unknown'}")
+                    result.append(item)
+                    continue
+
+                ext = ext_map.get(content_type)
+                if not ext:
+                    path_ext = Path(urlparse(url).path).suffix.lower()
+                    ext = path_ext or (".mp4" if media_type == "video" else ".mp3")
+
+                filename = f"{int(time_module.time())}_{uuid.uuid4().hex[:8]}{ext}"
+                filepath = save_dir / filename
+
+                written = 0
+                with filepath.open("wb") as handle:
+                    for chunk in response.iter_content(chunk_size=1024 * 64):
+                        if not chunk:
+                            continue
+                        written += len(chunk)
+                        if written > max_bytes:
+                            raise ValueError(f"media_too_large:{written}")
+                        handle.write(chunk)
+
+                new_item = dict(item)
+                new_item["url"] = f"/download_images/{filename}"
+                new_item["mime"] = content_type or item.get("mime")
+                new_item["byte_size"] = written
+                new_item["source"] = "local_file"
+                new_item["local_path"] = str(filepath)
+                result.append(new_item)
+                logger.debug(f"✅ {media_type} 已保存到本地: {filename} ({written} bytes)")
+            except Exception as exc:
+                logger.warning(f"{media_type} 落盘失败，保留远程链接: {exc}")
+                try:
+                    if filepath is not None and filepath.exists():
+                        filepath.unlink()
+                except Exception:
+                    pass
+                result.append(item)
+            finally:
+                response.close()
+
+        return result
 
     def _try_screenshot_images_to_local(self, tab, last_element, images: List[Dict], image_config: Dict = None) -> List[Dict]:
         """
@@ -1729,16 +2103,16 @@ class BrowserCore:
         logger.debug(f"✅ 图片已保存: {local_url} ({new0['byte_size']} bytes)")
         return new_images
 
-    def _persist_data_uri_images_to_local(self, images: List[Dict]) -> List[Dict]:
-        """Persist extracted data-uri images so downstream Markdown can reuse the existing URL flow."""
+    def _persist_data_uri_media_to_local(self, media_items: List[Dict]) -> List[Dict]:
+        """Persist extracted data-uri media so downstream Markdown can reuse the existing URL flow."""
         import base64
         import binascii
         import uuid
         from pathlib import Path
         from datetime import datetime
 
-        if not images:
-            return images
+        if not media_items:
+            return media_items
 
         save_dir = Path("download_images")
         save_dir.mkdir(exist_ok=True)
@@ -1750,27 +2124,37 @@ class BrowserCore:
             "image/webp": ".webp",
             "image/gif": ".gif",
             "image/bmp": ".bmp",
+            "audio/mpeg": ".mp3",
+            "audio/mp3": ".mp3",
+            "audio/wav": ".wav",
+            "audio/x-wav": ".wav",
+            "audio/ogg": ".ogg",
+            "audio/mp4": ".m4a",
+            "video/mp4": ".mp4",
+            "video/webm": ".webm",
+            "video/ogg": ".ogv",
+            "video/quicktime": ".mov",
         }
 
         result = []
-        for img in images:
-            if img.get("kind") != "data_uri":
-                result.append(img)
+        for item in media_items:
+            if item.get("kind") != "data_uri":
+                result.append(item)
                 continue
 
-            data_uri = str(img.get("data_uri") or "").strip()
-            if not data_uri.startswith("data:image"):
-                result.append(img)
+            data_uri = str(item.get("data_uri") or "").strip()
+            if not data_uri.startswith("data:"):
+                result.append(item)
                 continue
 
             try:
                 header, b64_data = data_uri.split(",", 1)
                 mime = header.split(";", 1)[0].split(":", 1)[1].lower()
                 ext = ext_map.get(mime, ".png")
-                image_bytes = base64.b64decode(b64_data)
+                media_bytes = base64.b64decode(b64_data)
             except (ValueError, IndexError, binascii.Error) as e:
-                logger.warning(f"data uri 解析失败，保留原图数据: {e}")
-                result.append(img)
+                logger.warning(f"data uri 解析失败，保留原媒体数据: {e}")
+                result.append(item)
                 continue
 
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1778,21 +2162,21 @@ class BrowserCore:
             filepath = save_dir / filename
 
             try:
-                filepath.write_bytes(image_bytes)
+                filepath.write_bytes(media_bytes)
             except Exception as e:
-                logger.warning(f"data uri 保存失败，保留原图数据: {e}")
-                result.append(img)
+                logger.warning(f"data uri 保存失败，保留原媒体数据: {e}")
+                result.append(item)
                 continue
 
-            new_img = dict(img)
-            new_img["kind"] = "url"
-            new_img["url"] = f"/download_images/{filename}"
-            new_img["data_uri"] = None
-            new_img["mime"] = mime
-            new_img["byte_size"] = len(image_bytes)
-            new_img["source"] = "local_file"
-            new_img["local_path"] = str(filepath)
-            result.append(new_img)
+            new_item = dict(item)
+            new_item["kind"] = "url"
+            new_item["url"] = f"/download_images/{filename}"
+            new_item["data_uri"] = None
+            new_item["mime"] = mime
+            new_item["byte_size"] = len(media_bytes)
+            new_item["source"] = "local_file"
+            new_item["local_path"] = str(filepath)
+            result.append(new_item)
 
         return result
     
@@ -1806,6 +2190,7 @@ class BrowserCore:
     ) -> Generator[str, None, None]:
         """非流式工作流执行"""
         collected_content = []
+        collected_media = []
         error_data = None
         
         stream = self._execute_workflow_stream(
@@ -1831,6 +2216,10 @@ class BrowserCore:
                         if "error" in data:
                             error_data = data
                             break
+
+                        media_items = data.get("media")
+                        if isinstance(media_items, list):
+                            collected_media.extend(media_items)
                         
                         if "choices" in data and data["choices"]:
                             delta = data["choices"][0].get("delta", {})
@@ -1851,8 +2240,97 @@ class BrowserCore:
             yield json.dumps(error_data, ensure_ascii=False)
         else:
             full_content = "".join(collected_content)
-            response = self.formatter.pack_non_stream(full_content)
+            if not collected_media and full_content.strip():
+                extra_media_items = self._retry_pending_media_from_response_text(
+                    session,
+                    full_content,
+                    preset_name=preset_name,
+                    stop_checker=stop_checker,
+                )
+                if extra_media_items:
+                    collected_media.extend(extra_media_items)
+            response = self.formatter.pack_non_stream(
+                full_content,
+                media=self._dedupe_media_items(collected_media),
+            )
             yield json.dumps(response, ensure_ascii=False)
+
+    def _dedupe_media_items(self, media_items: List[Dict]) -> List[Dict]:
+        result = []
+        seen = set()
+        for item in media_items or []:
+            media_type = str(item.get("media_type") or "")
+            ref = str(item.get("url") or item.get("data_uri") or "")
+            key = (media_type, ref)
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(item)
+        return result
+
+    def _retry_pending_media_from_response_text(
+        self,
+        session: TabSession,
+        full_content: str,
+        preset_name: Optional[str] = None,
+        stop_checker: Optional[Callable[[], bool]] = None,
+    ) -> List[Dict]:
+        hint_text = str(full_content or "").strip()
+        if not hint_text:
+            return []
+
+        try:
+            domain = str(getattr(session, "current_domain", "") or "").strip()
+            if not domain:
+                tab = getattr(session, "tab", None)
+                current_url = str(getattr(tab, "url", "") or "").strip()
+                domain = extract_remote_site_domain(current_url)
+            if not domain:
+                return []
+
+            config_engine = self._get_config_engine()
+            effective_preset_name = preset_name if preset_name is not None else session.preset_name
+            site_config = config_engine.get_site_config(domain, preset_name=effective_preset_name)
+            if not site_config:
+                return []
+
+            image_config = site_config.get("image_extraction", {}) or {}
+            modalities = image_config.get("modalities") or {}
+            image_extraction_enabled = bool(image_config.get("enabled", False)) or any(
+                bool(modalities.get(key)) for key in ("image", "audio", "video")
+            )
+            if not image_extraction_enabled:
+                return []
+
+            pending_hit = any(
+                self._is_pending_media_text(hint_text, image_config, media_type)
+                for media_type in ("audio", "video")
+            )
+            if not pending_hit:
+                return []
+
+            selectors = site_config.get("selectors", {}) or {}
+            result_selector = str(selectors.get("result_container", "") or "").strip()
+            if not result_selector:
+                return []
+
+            extractor = config_engine.get_site_extractor(domain, preset_name=effective_preset_name)
+            tab = getattr(session, "tab", None)
+            if tab is None:
+                return []
+
+            logger.debug(f"[{session.id}] 非流式响应命中占位媒体文本，触发二次提取等待")
+            return self._extract_media_after_stream(
+                tab=tab,
+                extractor=extractor,
+                image_config=image_config,
+                result_selector=result_selector,
+                stop_checker=stop_checker,
+                response_text_hint=hint_text,
+            )
+        except Exception as e:
+            logger.warning(f"[{session.id}] 非流式二次媒体提取失败（已忽略）: {e}")
+            return []
 
     def _download_url_images(self, images: List[Dict], tab=None) -> List[Dict]:
         """

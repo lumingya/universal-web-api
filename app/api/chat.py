@@ -60,6 +60,40 @@ def _extract_stream_error_message(chunk: Any) -> str:
         return ""
 
 
+def _extract_chunk_media_items(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    media_items: List[Dict[str, Any]] = []
+
+    top_level_media = data.get("media")
+    if isinstance(top_level_media, list):
+        media_items.extend(item for item in top_level_media if isinstance(item, dict))
+
+    choices = data.get("choices")
+    if isinstance(choices, list) and choices:
+        delta = choices[0].get("delta", {})
+        if isinstance(delta, dict):
+            delta_media = delta.get("media")
+            if isinstance(delta_media, list):
+                media_items.extend(item for item in delta_media if isinstance(item, dict))
+
+    return media_items
+
+
+def _dedupe_media_items(media_items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    deduped: List[Dict[str, Any]] = []
+    seen = set()
+
+    for item in media_items or []:
+        media_type = str(item.get("media_type") or "").strip().lower()
+        ref = str(item.get("url") or item.get("data_uri") or "").strip()
+        key = (media_type, ref)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+
+    return deduped
+
+
 # ================= 请求模型 =================
 
 class ChatRequest(BaseModel):
@@ -75,6 +109,7 @@ class ChatRequest(BaseModel):
     parallel_tool_calls: Optional[bool] = Field(default=None)
     functions: Optional[list] = Field(default=None)
     function_call: Optional[Any] = Field(default=None)
+    preset_name: Optional[str] = Field(default=None)
 
 
 # ================= response_format 转化 =================
@@ -446,6 +481,7 @@ async def _non_stream_with_lifecycle(
 ) -> JSONResponse:
     """非流式响应 + 生命周期管理"""
     collected_content = []
+    collected_media = []
     error_data = None
 
     async for chunk in _stream_with_lifecycle(request, body, ctx):
@@ -464,6 +500,8 @@ async def _non_stream_with_lifecycle(
                         error_data = data
                         break
 
+                    collected_media.extend(_extract_chunk_media_items(data))
+
                     if "choices" in data and data["choices"]:
                         delta = data["choices"][0].get("delta", {})
                         content = delta.get("content", "")
@@ -477,33 +515,17 @@ async def _non_stream_with_lifecycle(
 
     full_content = "".join(collected_content)
     placeholder_pattern = re.compile(
-        r"^\s*https?://(?:[\w.-]+\.)?googleusercontent\.com/image_generation_content/\d+\s*$",
+        r"^\s*https?://(?:[\w.-]+\.)?googleusercontent\.com/(?:image_generation_content|generated_music_content)/\d+\s*$",
         re.IGNORECASE | re.MULTILINE,
     )
     full_content = placeholder_pattern.sub("", full_content)
     full_content = re.sub(r"\n{3,}", "\n\n", full_content).strip()
-    
-    message = {
-        "role": "assistant",
-        "content": full_content
-    }
 
-    response = {
-        "id": f"chatcmpl-{int(time.time() * 1000)}",
-        "object": "chat.completion",
-        "created": int(time.time()),
-        "model": body.model,
-        "choices": [{
-            "index": 0,
-            "message": message,
-            "finish_reason": "stop"
-        }],
-        "usage": {
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0
-        }
-    }
+    response = SSEFormatter.pack_non_stream(
+        full_content,
+        model=body.model,
+        media=_dedupe_media_items(collected_media),
+    )
 
     return JSONResponse(content=response)
 

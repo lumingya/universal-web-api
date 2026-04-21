@@ -195,21 +195,31 @@ def get_default_file_paste_config() -> 'FilePasteConfig':
         "hint_text": "完全专注于文件内容"
     }
 
+class ExtractionModalitiesConfig(TypedDict, total=False):
+    """多模态提取开关"""
+    image: bool
+    audio: bool
+    video: bool
+
+
 class ImageExtractionConfig(TypedDict, total=False):
     """
-    图片提取配置
+    多模态提取配置
     
     用于 sites.json 中的 image_extraction 字段
     """
-    enabled: bool                    # 是否启用图片提取
+    enabled: bool                    # 是否启用多模态提取（兼容旧字段）
+    modalities: ExtractionModalitiesConfig  # 各模态开关
     selector: str                    # 图片选择器，默认 "img"
+    audio_selector: str              # 音频选择器
+    video_selector: str              # 视频选择器
     container_selector: Optional[str] # 容器选择器，限定查找范围
     debounce_seconds: float          # 文本稳定后等待时间
-    wait_for_load: bool              # 是否等待图片加载完成
+    wait_for_load: bool              # 是否等待媒体加载完成
     load_timeout_seconds: float      # 等待加载的超时时间
     download_blobs: bool             # 是否下载 blob 转 data_uri
     max_size_mb: int                 # blob 最大允许大小(MB)
-    mode: Literal["all", "first", "last"]  # 提取模式
+    mode: Literal["all", "first", "last"]  # 每种模态的提取模式
 # ================= 流式监控配置 =================
 
 class SendConfirmationConfig(TypedDict, total=False):
@@ -519,10 +529,17 @@ def validate_workflow_step(step: Dict[str, Any]) -> bool:
     return all(key in step for key in required_keys)
 
 def get_default_image_extraction_config() -> ImageExtractionConfig:
-    """获取默认的图片提取配置"""
+    """获取默认的多模态提取配置"""
     return {
         "enabled": False,
+        "modalities": {
+            "image": False,
+            "audio": False,
+            "video": False,
+        },
         "selector": "img",
+        "audio_selector": "audio, audio source",
+        "video_selector": "video, video source",
         "container_selector": None,
         "debounce_seconds": 2.0,
         "wait_for_load": True,

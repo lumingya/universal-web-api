@@ -509,4 +509,23 @@ class DeepBrowserExtractor(BaseExtractor):
             container_selector_fallback=container_selector_fallback
         )
 
+    def extract_media(
+        self,
+        element,
+        config: Optional[Dict] = None,
+        container_selector_fallback: Optional[str] = None
+    ) -> List[Dict]:
+        """从元素中提取多模态资源。"""
+        if not element:
+            return []
+
+        from app.core.extractors.media_extractor import media_extractor
+
+        target_ele = self.find_content_node(element)
+        return media_extractor.extract(
+            target_ele,
+            config=config,
+            container_selector_fallback=container_selector_fallback
+        )
+
 __all__ = ['DeepBrowserExtractor']

@@ -1253,9 +1253,15 @@ class ConfigEngine:
             
             for preset_name, preset_data in presets.items():
                 if "image_extraction" not in preset_data:
-                    preset_data["image_extraction"] = default_image_config.copy()
+                    preset_data["image_extraction"] = copy.deepcopy(default_image_config)
                     migrated_count += 1
                     logger.debug(f"迁移: {domain}/{preset_name} (添加 image_extraction)")
+                else:
+                    normalized_image_config = self._validate_image_config(preset_data.get("image_extraction", {}))
+                    if normalized_image_config != preset_data.get("image_extraction"):
+                        preset_data["image_extraction"] = normalized_image_config
+                        migrated_count += 1
+                        logger.debug(f"迁移: {domain}/{preset_name} (规范化 image_extraction)")
                 
                 if "file_paste" not in preset_data:
                     preset_data["file_paste"] = default_file_paste.copy()
@@ -1299,14 +1305,10 @@ class ConfigEngine:
         
         data = self._get_site_data(domain, preset_name)
         if data is None:
-            return default_config
+            return copy.deepcopy(default_config)
         
         image_config = data.get("image_extraction", {})
-        
-        result = copy.deepcopy(default_config)
-        result.update(image_config)
-        
-        return result
+        return self._validate_image_config(image_config)
     
     def set_site_image_config(self, domain: str, config: Dict, 
                               preset_name: str = None) -> bool:
@@ -1323,24 +1325,56 @@ class ConfigEngine:
         data["image_extraction"] = validated
         self._save_config()
         
-        logger.info(f"站点 {domain} [{preset_name or DEFAULT_PRESET_NAME}] 图片提取配置已更新")
+        logger.info(f"站点 {domain} [{preset_name or DEFAULT_PRESET_NAME}] 多模态提取配置已更新")
         return True
     
     def _validate_image_config(self, config: Dict) -> Dict:
-        """验证并规范化图片提取配置"""
+        """验证并规范化多模态提取配置"""
         default = get_default_image_extraction_config()
-        result = default.copy()
+        result = copy.deepcopy(default)
         
         if not config:
             return result
         
+        raw_modalities = config.get("modalities")
+        if isinstance(raw_modalities, dict):
+            normalized_modalities = copy.deepcopy(result.get("modalities") or {})
+            for key in ("image", "audio", "video"):
+                if key in raw_modalities:
+                    normalized_modalities[key] = bool(raw_modalities[key])
+            result["modalities"] = normalized_modalities
+
+        legacy_enabled = None
         if "enabled" in config:
-            result["enabled"] = bool(config["enabled"])
+            legacy_enabled = bool(config["enabled"])
+            result["enabled"] = legacy_enabled
+
+        if (
+            legacy_enabled is not None
+            and not isinstance(raw_modalities, dict)
+        ):
+            result["modalities"]["image"] = legacy_enabled
+        elif legacy_enabled is not None and isinstance(raw_modalities, dict):
+            if not legacy_enabled:
+                for key in ("image", "audio", "video"):
+                    result["modalities"][key] = False
+            elif not any(bool(result["modalities"].get(key)) for key in ("image", "audio", "video")):
+                result["modalities"]["image"] = True
         
         if "selector" in config and config["selector"]:
             result["selector"] = str(config["selector"]).strip()
             if not result["selector"]:
                 result["selector"] = "img"
+
+        if "audio_selector" in config and config["audio_selector"]:
+            result["audio_selector"] = str(config["audio_selector"]).strip()
+            if not result["audio_selector"]:
+                result["audio_selector"] = default["audio_selector"]
+
+        if "video_selector" in config and config["video_selector"]:
+            result["video_selector"] = str(config["video_selector"]).strip()
+            if not result["video_selector"]:
+                result["video_selector"] = default["video_selector"]
         
         if "container_selector" in config:
             val = config["container_selector"]
@@ -1377,6 +1411,11 @@ class ConfigEngine:
             val = str(config["mode"]).lower()
             if val in ("all", "first", "last"):
                 result["mode"] = val
+
+        result["enabled"] = any(
+            bool((result.get("modalities") or {}).get(key))
+            for key in ("image", "audio", "video")
+        )
         
         return result
         # ================= 文件粘贴配置管理 =================

@@ -2023,7 +2023,7 @@
             <a href="#presets" class="nav-link">🎛️ 预设系统</a>
             <a href="#selectors" class="nav-link">🔍 选择器配置</a>
             <a href="#extractors" class="nav-link">🧩 提取器配置</a>
-            <a href="#image-extraction" class="nav-link">🖼️ 图片提取配置</a>
+            <a href="#image-extraction" class="nav-link">🎞️ 多模态提取</a>
             <a href="#response-detection" class="nav-link">🌊 响应检测配置</a>
             <a href="#workflow" class="nav-link">🎬 工作流配置</a>
             <a href="#file-paste" class="nav-link">📄 文件粘贴</a>
@@ -2202,7 +2202,7 @@
                     <li><strong>选择器</strong>：告诉程序“输入框、发送按钮、结果容器”分别在哪。</li>
                     <li><strong>工作流</strong>：决定操作顺序，比如先新建对话、再填充输入，还是直接回车发送。</li>
                     <li><strong>响应检测</strong>：决定什么时候算回复结束。</li>
-                    <li><strong>图片提取 / 文件粘贴</strong>：分别对应识图场景和长文本场景。</li>
+                    <li><strong>多模态提取 / 文件粘贴</strong>：分别对应图片、音频、视频资源回传，以及长文本附件场景。</li>
                     <li><strong>预设</strong>：同一站点可以拆多套配置，适合“日常对话 / 识图 / 长文本 / 代码”等不同用途。</li>
                 </ul>
             </div>
@@ -2290,7 +2290,7 @@
                 <li>再测试 <code>send_btn</code></li>
                 <li>再测试 <code>result_container</code></li>
                 <li>跑最短工作流</li>
-                <li>最后再调流式阈值、提取器、图片提取、文件粘贴</li>
+                <li>最后再调流式阈值、提取器、多模态提取、文件粘贴</li>
             </ol>
 
         </section>
@@ -2320,6 +2320,163 @@
             <div class="success-box">
                 <p><strong>✅ 测试步骤：</strong>把上面的地址、密钥和模型名填好后，直接发一句正常的话进行测试即可；不建议只点客户端里的“测试 API”按钮。</p>
             </div>
+
+            <h3>调用方式速查</h3>
+            <table>
+                <tr><th>需求</th><th>推荐地址</th><th>说明</th></tr>
+                <tr>
+                    <td>让系统自动挑空闲标签页</td>
+                    <td><code>http://127.0.0.1:8199/v1/chat/completions</code></td>
+                    <td>不关心具体站点或标签页时使用</td>
+                </tr>
+                <tr>
+                    <td>固定走 Gemini 站点</td>
+                    <td><code>http://127.0.0.1:8199/url/gemini.com/v1/chat/completions</code></td>
+                    <td>会在 Gemini 相关标签页中选一个可用标签</td>
+                </tr>
+                <tr>
+                    <td>固定走某个标签页</td>
+                    <td><code>http://127.0.0.1:8199/tab/2/v1/chat/completions</code></td>
+                    <td>适合你已经给特定标签页绑定了特定预设</td>
+                </tr>
+                <tr>
+                    <td>固定走站点并强制指定预设</td>
+                    <td><code>http://127.0.0.1:8199/url/gemini.com/pro/v1/chat/completions</code></td>
+                    <td>适合同一站点有多个用途，例如 <code>主预设</code> / <code>pro</code> / <code>视频生成</code>；也适合直接作为 Base URL 使用</td>
+                </tr>
+            </table>
+
+            <h3>指定预设的三种方式</h3>
+            <p>现在聊天接口支持直接指定 <code>preset_name</code>。这不会改变站点默认预设，只对<strong>当前这一次请求</strong>生效。</p>
+
+            <p><strong>方式 A：直接写进路径</strong></p>
+<pre><code>curl "http://127.0.0.1:8199/url/gemini.com/pro/v1/chat/completions" ^
+  -H "Content-Type: application/json" ^
+  -d "{\"model\":\"any\",\"messages\":[{\"role\":\"user\",\"content\":\"你好\"}],\"stream\":false}"</code></pre>
+
+            <p><strong>方式 B：放到 URL 查询参数</strong></p>
+<pre><code>curl "http://127.0.0.1:8199/url/gemini.com/v1/chat/completions?preset_name=pro" ^
+  -H "Content-Type: application/json" ^
+  -d "{\"model\":\"any\",\"messages\":[{\"role\":\"user\",\"content\":\"你好\"}],\"stream\":false}"</code></pre>
+
+            <p><strong>方式 C：放到请求体</strong></p>
+<pre><code>{
+  "model": "any",
+  "messages": [
+    { "role": "user", "content": "你好" }
+  ],
+  "stream": false,
+  "preset_name": "pro"
+}</code></pre>
+
+            <div class="info-box">
+                <p><strong>优先级规则：</strong>如果三处都传了预设，则按 <strong>路径里的预设 &gt; URL 查询参数 &gt; 请求体</strong> 的顺序生效。</p>
+            </div>
+
+            <div class="note">
+                <p><strong>💡 实战建议：</strong>如果客户端允许你自定义 Base URL，最推荐直接写成 <code>http://127.0.0.1:8199/url/gemini.com/pro/v1</code> 这种路径风格；如果客户端不方便改 Base URL 结构，再退回 <code>?preset_name=pro</code> 或请求体字段。</p>
+            </div>
+
+            <h3>HTTP 方法与完整地址语法</h3>
+            <table>
+                <tr><th>方法</th><th>地址</th><th>用途</th></tr>
+                <tr>
+                    <td><code>GET</code></td>
+                    <td><code>/v1/models</code></td>
+                    <td>默认模型列表接口，给 OpenAI 兼容客户端做连通性检查</td>
+                </tr>
+                <tr>
+                    <td><code>POST</code></td>
+                    <td><code>/v1/chat/completions</code></td>
+                    <td>默认聊天接口，自动分配标签页</td>
+                </tr>
+                <tr>
+                    <td><code>GET</code></td>
+                    <td><code>/url/{domain}/v1/models</code></td>
+                    <td>按域名路由查看模型列表，可附带 <code>selector</code> / <code>tab_index</code></td>
+                </tr>
+                <tr>
+                    <td><code>POST</code></td>
+                    <td><code>/url/{domain}/v1/chat/completions</code></td>
+                    <td>按域名路由聊天，可附带 <code>selector</code> / <code>tab_index</code> / <code>preset_name</code></td>
+                </tr>
+                <tr>
+                    <td><code>GET</code></td>
+                    <td><code>/url/{domain}/{preset_name}/v1/models</code></td>
+                    <td>按域名 + 预设路径查看模型列表，适合把它直接当 Base URL</td>
+                </tr>
+                <tr>
+                    <td><code>POST</code></td>
+                    <td><code>/url/{domain}/{preset_name}/v1/chat/completions</code></td>
+                    <td>按域名 + 预设路径聊天，路径中的预设优先级最高</td>
+                </tr>
+                <tr>
+                    <td><code>GET</code></td>
+                    <td><code>/tab/{index}/v1/models</code></td>
+                    <td>固定标签页模型列表接口</td>
+                </tr>
+                <tr>
+                    <td><code>POST</code></td>
+                    <td><code>/tab/{index}/v1/chat/completions</code></td>
+                    <td>固定标签页聊天接口，可附带 <code>preset_name</code></td>
+                </tr>
+            </table>
+
+            <p><strong>当前支持的查询参数：</strong></p>
+            <ul>
+                <li><code>selector=first_idle</code>：优先选择空闲标签页，默认值。</li>
+                <li><code>selector=round_robin</code>：在匹配站点的标签页之间轮询。</li>
+                <li><code>selector=random</code>：在匹配站点的标签页之间随机选一个。</li>
+                <li><code>tab_index=2</code>：在域名路由下进一步指定某个固定标签页。</li>
+                <li><code>preset_name=pro</code>：本次请求强制使用指定预设。</li>
+            </ul>
+
+            <div class="highlight-box">
+                <p><strong>⚠️ 路径兼容性提醒：</strong>现在已经支持把预设名直接写进路径里，例如 <code>/url/gemini.com/pro/v1/chat/completions</code>。如果你的客户端会先请求 <code>/models</code>，也可以直接使用 <code>/url/gemini.com/pro/v1/models</code>。</p>
+            </div>
+
+            <h3>完整调用示例</h3>
+<pre><code># 1. 默认模型列表
+curl http://127.0.0.1:8199/v1/models
+
+# 2. 默认聊天接口（自动分配标签页）
+curl http://127.0.0.1:8199/v1/chat/completions ^
+  -H "Content-Type: application/json" ^
+  -d "{\"model\":\"any\",\"messages\":[{\"role\":\"user\",\"content\":\"你好\"}],\"stream\":false}"
+
+# 3. 按域名路由列出模型
+curl "http://127.0.0.1:8199/url/gemini.com/v1/models?selector=round_robin"
+
+# 4. 按域名路由聊天
+curl "http://127.0.0.1:8199/url/gemini.com/v1/chat/completions?selector=first_idle" ^
+  -H "Content-Type: application/json" ^
+  -d "{\"model\":\"any\",\"messages\":[{\"role\":\"user\",\"content\":\"你好\"}],\"stream\":false}"
+
+# 5. 按域名路由 + 固定标签页
+curl "http://127.0.0.1:8199/url/gemini.com/v1/chat/completions?tab_index=2" ^
+  -H "Content-Type: application/json" ^
+  -d "{\"model\":\"any\",\"messages\":[{\"role\":\"user\",\"content\":\"继续上一轮\"}],\"stream\":false}"
+
+# 6. 按域名 + 预设路径列出模型
+curl http://127.0.0.1:8199/url/gemini.com/pro/v1/models
+
+# 7. 按域名 + 预设路径聊天
+curl http://127.0.0.1:8199/url/gemini.com/pro/v1/chat/completions ^
+  -H "Content-Type: application/json" ^
+  -d "{\"model\":\"any\",\"messages\":[{\"role\":\"user\",\"content\":\"你好\"}],\"stream\":false}"
+
+# 8. 固定标签页列出模型
+curl http://127.0.0.1:8199/tab/2/v1/models
+
+# 9. 固定标签页聊天
+curl http://127.0.0.1:8199/tab/2/v1/chat/completions ^
+  -H "Content-Type: application/json" ^
+  -d "{\"model\":\"any\",\"messages\":[{\"role\":\"user\",\"content\":\"你好\"}],\"stream\":false}"
+
+# 10. 固定标签页聊天并强制指定预设
+curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
+  -H "Content-Type: application/json" ^
+  -d "{\"model\":\"any\",\"messages\":[{\"role\":\"user\",\"content\":\"继续上一轮\"}],\"stream\":false}"</code></pre>
 
             <h3>💡 关于登录状态</h3>
             <ul>
@@ -2443,6 +2600,30 @@
                 </ul>
             </div>
 
+            <h3>域名路由的高级参数</h3>
+            <table>
+                <tr><th>参数</th><th>示例</th><th>作用</th></tr>
+                <tr>
+                    <td><code>selector</code></td>
+                    <td><code>?selector=round_robin</code></td>
+                    <td>在匹配站点的多个标签页之间轮询、随机或优先空闲</td>
+                </tr>
+                <tr>
+                    <td><code>tab_index</code></td>
+                    <td><code>?tab_index=2</code></td>
+                    <td>在域名路由基础上进一步锁定某个标签页</td>
+                </tr>
+                <tr>
+                    <td><code>preset_name</code></td>
+                    <td><code>?preset_name=pro</code></td>
+                    <td>本次请求临时覆盖预设，不改标签页绑定和站点默认值</td>
+                </tr>
+            </table>
+
+            <div class="note">
+                <p><strong>💡 推荐理解方式：</strong><code>/url/gemini.com/...</code> 负责“去哪个站点”，<code>selector</code> / <code>tab_index</code> 负责“选哪个标签页”，<code>preset_name</code> 负责“这一轮用哪套配置”。三者是可以组合的。</p>
+            </div>
+
             <div class="note">
                 <p><strong>⚠️ 注意事项：</strong></p>
                 <ul style="margin-bottom: 0;">
@@ -2499,7 +2680,7 @@
             </ol>
 
             <p><strong>3. 通过 API 使用站点域名路由或指定标签页</strong></p>
-            <pre><code># 假设当前已有一个 Gemini 站点标签页，标签页 #2 使用"快速识图"预设
+<pre><code># 假设当前已有一个 Gemini 站点标签页，标签页 #2 使用"快速识图"预设
 
 # 使用 Gemini 站点标签页
 curl http://127.0.0.1:8199/url/gemini.com/v1/chat/completions
@@ -2507,8 +2688,33 @@ curl http://127.0.0.1:8199/url/gemini.com/v1/chat/completions
 # 使用固定编号的快速识图标签页
 curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
 
+            <p><strong>4. 在单次请求里临时覆盖预设</strong></p>
+<pre><code># 方式 A：路径指定预设（最适合直接配置成 Base URL）
+curl "http://127.0.0.1:8199/url/gemini.com/pro/v1/chat/completions" ^
+  -H "Content-Type: application/json" ^
+  -d "{\"model\":\"any\",\"messages\":[{\"role\":\"user\",\"content\":\"帮我写一段介绍\"}],\"stream\":false}"
+
+# 方式 B：查询参数指定预设
+curl "http://127.0.0.1:8199/url/gemini.com/v1/chat/completions?preset_name=pro" ^
+  -H "Content-Type: application/json" ^
+  -d "{\"model\":\"any\",\"messages\":[{\"role\":\"user\",\"content\":\"帮我写一段介绍\"}],\"stream\":false}"
+
+# 方式 C：请求体指定预设
+curl http://127.0.0.1:8199/url/gemini.com/v1/chat/completions ^
+  -H "Content-Type: application/json" ^
+  -d "{\"model\":\"any\",\"messages\":[{\"role\":\"user\",\"content\":\"帮我写一段介绍\"}],\"stream\":false,\"preset_name\":\"pro\"}"
+
+# 固定标签页 + 临时指定预设
+curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
+  -H "Content-Type: application/json" ^
+  -d "{\"model\":\"any\",\"messages\":[{\"role\":\"user\",\"content\":\"继续上一轮\"}],\"stream\":false}"</code></pre>
+
             <div class="info-box">
-                <p><strong>💡 提示：</strong>每个预设包含独立的选择器、工作流、流式配置、图片提取、文件粘贴等全套配置。修改一个预设不会影响其他预设。未手动指定时会自动使用站点默认预设（<code>default_preset</code>）。</p>
+                <p><strong>调用规则：</strong>显式传入 <code>preset_name</code> 时，本次请求会强制使用该预设；如果路径、查询参数、请求体都传了，则按<strong>路径 &gt; 查询参数 &gt; 请求体</strong> 生效。不传时，仍然按“标签页绑定预设 → 站点默认预设”的旧规则执行。</p>
+            </div>
+
+            <div class="info-box">
+                <p><strong>💡 提示：</strong>每个预设包含独立的选择器、工作流、流式配置、多模态提取、文件粘贴等全套配置。修改一个预设不会影响其他预设。未手动指定时会自动使用站点默认预设（<code>default_preset</code>）。</p>
             </div>
 
             <h3>预设配置结构</h3>
@@ -2627,26 +2833,48 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
             </div>
         </section>
 
-        <!-- ==================== 图片提取配置 ==================== -->
+        <!-- ==================== 多模态提取配置 ==================== -->
         <section id="image-extraction">
-            <h2>🖼️ 图片提取配置</h2>
-            <p>如果你希望系统能自动保存 AI 生成或返回的图片，就看这里。它负责从网页里找到图片节点，并决定是否下载到本地。</p>
+            <h2>🎞️ 多模态提取</h2>
+            <p>控制面板里这个功能现在叫<strong>多模态提取</strong>。它统一负责从网页中提取图片、音频、视频，并把结果整理成下游前端能直接使用的本地 URL / Markdown 引用。</p>
             <pre><code>"image_extraction": {
-  "enabled": true,                // 是否开启图片提取
-  "selector": "img",              // 图片元素的选择器
+  "enabled": true,                // 总开关；通常由内部选项自动拉起
+  "modalities": {
+    "image": true,                // 图片提取
+    "audio": true,                // 音频文件提取
+    "video": true                 // 视频提取
+  },
+  "selector": "img",              // 图片元素选择器
+  "audio_selector": "audio, audio source",
+  "video_selector": "video, video source",
   "container_selector": ".img-grid", // (可选) 限定在特定区域查找
-  "download_blobs": true,         // 是否下载 blob/src 图片到本地
-  "mode": "all",                  // all: 提取所有图; first: 仅第一张
+  "download_blobs": true,         // 是否下载 blob/src 或远程媒体到本地
+  "mode": "all",                  // all / first / last
   "max_size_mb": 10               // 最大允许大小
 }</code></pre>
+            <div class="info-box">
+                <p><strong>兼容性说明：</strong>当前配置键名仍然是 <code>image_extraction</code>，这是为了兼容已有配置；但控制面板和实际能力都已经扩展为“多模态提取”。</p>
+            </div>
+
+            <p><strong>界面上的使用方式：</strong></p>
+            <ul>
+                <li>先开启顶部的“多模态提取”总开关。</li>
+                <li>然后在内部按需勾选<strong>图片提取</strong>、<strong>音频文件提取</strong>、<strong>视频提取</strong>。</li>
+                <li>只开某一种时，只需要维护对应的选择器；其余选择器可以保留默认值。</li>
+            </ul>
+
             <p><strong>文件保存位置：</strong></p>
             <ul>
                 <li><strong>你发送给 AI 的图片</strong>: 保存在根目录 <code>image/</code>。</li>
-                <li><strong>AI 生成 / 返回的图片</strong>: 保存在根目录 <code>download_images/</code>。</li>
+                <li><strong>AI 生成 / 返回的图片、音频、视频</strong>: 统一保存在根目录 <code>download_images/</code>，并返回可访问的本地路径。</li>
             </ul>
 
             <div class="note">
-                <p><strong>💡 使用建议：</strong>大多数站点先把 <code>enabled</code> 打开，再确认 <code>selector</code> 能正确命中图片节点就够了。只有在页面里图片很多、容易误抓时，才需要再补 <code>container_selector</code> 来缩小范围。</p>
+                <p><strong>💡 返回效果：</strong>图片会以内嵌 Markdown 图片形式返回；音频和视频会以类似 <code>[audio_0](/download_images/xxx.mp3)</code>、<code>[video_0](/download_images/xxx.mp4)</code> 的链接形式返回，方便其他前端直接消费。</p>
+            </div>
+
+            <div class="note">
+                <p><strong>💡 使用建议：</strong>大多数站点先确定要开哪几种模态，再分别验证对应选择器能命中真实媒体节点。只有在页面里媒体很多、容易误抓时，才需要再补 <code>container_selector</code> 来缩小范围。</p>
             </div>
         </section>
 
@@ -4323,8 +4551,8 @@ BROWSER_PROFILE_NAME=Default</code></pre>
                     },
                     {
                         targetId: 'image-extraction',
-                        title: { zh: '图片与附件', en: 'Images and Files' },
-                        description: { zh: '图片提取和文件粘贴都在这里串起来看。', en: 'Follow image extraction and file attach behavior together from here.' }
+                        title: { zh: '多模态与附件', en: 'Multimodal and Files' },
+                        description: { zh: '多模态提取和文件粘贴都在这里串起来看。', en: 'Follow multimodal extraction and file attach behavior together from here.' }
                     }
                 ],
                 groups: [
@@ -4386,6 +4614,7 @@ BROWSER_PROFILE_NAME=Default</code></pre>
             'add-site-guide': '新增站点 新网站 接入站点 自动识别 手动新增',
             'selectors': '选择器 selector input_box send_btn result_container message_wrapper',
             'extractors': '提取器 extractor html markdown dom 文本提取',
+            'image-extraction': '多模态提取 图片提取 音频提取 视频提取 media audio video image',
             'response-detection': '解析器 parser 创建解析器 listen_pattern 网络拦截 stream streaming 响应检测',
             'workflow': '工作流 workflow click wait fill_input key_press stream_wait',
             'file-paste': '附件 上传 长文本 文件粘贴',

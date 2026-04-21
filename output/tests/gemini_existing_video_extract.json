@@ -1,0 +1,31 @@
+{
+  "page_url": "https://gemini.google.com/u/1/app?pageId=none",
+  "domain": "gemini.google.com",
+  "preset_name": null,
+  "result_selector": ".markdown-main-panel",
+  "media": [
+    {
+      "media_type": "video",
+      "kind": "url",
+      "url": "http://127.0.0.1:8199/download_images/1776419219_769f6322.mp4",
+      "data_uri": null,
+      "mime": "video/mp4",
+      "byte_size": 12501204,
+      "label": "",
+      "width": 1024,
+      "height": 1024,
+      "index": 0,
+      "detected_at": "2026-04-17T09:46:58.067526Z",
+      "source": "local_file"
+    }
+  ],
+  "checks": [
+    {
+      "url": "http://127.0.0.1:8199/download_images/1776419219_769f6322.mp4",
+      "status_code": 200,
+      "content_type": "video/mp4",
+      "sample_bytes": 8192,
+      "ok": true
+    }
+  ]
+}

@@ -109,6 +109,12 @@
       "group_name": "gemini"
     },
     {
+      "id": "cmd_gemsidebar001",
+      "name": "Gemini自动展开侧边栏",
+      "enabled": true,
+      "group_name": "gemini"
+    },
+    {
       "id": "cmd_arena_terms_refresh_abort",
       "name": "ARENA_AGREE_POPUP_CLICK_FIRST",
       "enabled": true,

@@ -155,18 +155,63 @@ def _get_local_startup_base_url() -> str:
     return f"http://{_resolve_local_startup_host()}:{AppConfig.get_port()}"
 
 
+def _count_existing_remote_pages(browser) -> int:
+    """只统计真实远程网页，排除空白页、本地页、扩展页等内部标签。"""
+    from app.utils.site_url import extract_remote_site_domain
+
+    count = 0
+    try:
+        tabs = browser.get_tabs() or []
+    except Exception as e:
+        logger.debug(f"读取浏览器标签页失败: {e}")
+        return 0
+
+    for tab in tabs:
+        try:
+            url = str(getattr(tab, "url", "") or "").strip()
+        except Exception:
+            url = ""
+
+        if not url or url in _STARTUP_EMPTY_URLS:
+            continue
+
+        try:
+            if extract_remote_site_domain(url):
+                count += 1
+        except Exception:
+            continue
+
+    return count
+
+
+def _get_tab_url(tab) -> str:
+    try:
+        return str(getattr(tab, "url", "") or "").strip()
+    except Exception:
+        return ""
+
+
+def _find_startup_blank_tab_id(browser) -> str:
+    """查找可复用的启动空白页，忽略内部 target 与异常 target。"""
+    try:
+        for raw_tab_id in browser.get_tab_ids() or []:
+            tab_id = str(raw_tab_id or "").strip()
+            if not tab_id:
+                continue
+            try:
+                tab = browser.get_tab(tab_id)
+            except Exception:
+                continue
+            if _get_tab_url(tab) in _STARTUP_EMPTY_URLS:
+                return tab_id
+    except Exception as e:
+        logger.debug(f"扫描启动空白标签页失败: {e}")
+    return ""
+
+
 def _should_open_startup_pages(browser) -> bool:
     try:
-        tab_ids = browser.get_tabs()
-        if len(tab_ids) == 0:
-            return True
-        if len(tab_ids) == 1:
-            url = ""
-            try:
-                url = str(getattr(browser.get_latest_tab(), "url", "") or "")
-            except Exception:
-                pass
-            return url in _STARTUP_EMPTY_URLS
+        return _count_existing_remote_pages(browser) == 0
     except Exception as e:
         logger.debug(f"检查标签页状态失败: {e}")
     return False
@@ -181,24 +226,7 @@ def _capture_startup_blank_tab_id(browser) -> str:
     - 只要最初那张 blank 页还在，就仍然把引导页打开到那张页里
     """
     try:
-        tab_ids = browser.get_tab_ids()
-        if len(tab_ids) != 1:
-            return ""
-
-        tab_id = str(tab_ids[0] or "").strip()
-        if not tab_id:
-            return ""
-
-        try:
-            tab = browser.get_tab(tab_id)
-            current_url = str(getattr(tab, "url", "") or "")
-        except Exception:
-            try:
-                current_url = str(getattr(browser.get_latest_tab(), "url", "") or "")
-            except Exception:
-                current_url = ""
-
-        return tab_id if current_url in _STARTUP_EMPTY_URLS else ""
+        return _find_startup_blank_tab_id(browser)
     except Exception as e:
         logger.debug(f"捕获启动空白标签页失败: {e}")
         return ""
@@ -244,10 +272,29 @@ def _open_controlled_browser_page_non_blocking(
                     logger.info(f"[startup] 受控浏览器已离开空白页，跳过打开{page_name}")
                     return
 
+                fallback_blank_tab_id = _find_startup_blank_tab_id(browser)
+                if fallback_blank_tab_id:
+                    try:
+                        target_tab = browser.get_tab(fallback_blank_tab_id)
+                    except Exception:
+                        target_tab = None
+
+                if target_tab is None:
+                    try:
+                        target_tab = browser.get_browser_handle().new_tab(
+                            url=page_url,
+                            background=False,
+                            new_window=True,
+                        )
+                        logger.info(f"[startup] {page_name}已在受控浏览器新标签页打开: {page_url}")
+                        return
+                    except Exception:
+                        target_tab = None
+
                 try:
-                    target_tab = browser.get_latest_tab()
+                    target_tab = target_tab or browser.get_latest_tab()
                 except Exception:
-                    target_tab = None
+                    target_tab = target_tab or None
                 if target_tab is None:
                     return
 
@@ -379,10 +426,10 @@ async def lifespan(app: FastAPI):
             else:
                 # 显示已连接状态
                 try:
-                    existing_tab_count = len(browser.get_tabs())
+                    existing_tab_count = _count_existing_remote_pages(browser)
                 except Exception:
                     existing_tab_count = "?"
-                logger.info(f"✅ 浏览器已连接 (检测到 {existing_tab_count} 个现有页面，跳过教程)")
+                logger.info(f"✅ 浏览器已连接 (检测到 {existing_tab_count} 个现有网页，跳过教程)")
         else:
             logger.warning(f"⚠️ 浏览器未连接: {health.get('error', '未知')}")
         

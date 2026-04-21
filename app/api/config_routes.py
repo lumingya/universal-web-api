@@ -613,7 +613,7 @@ async def get_site_image_config(
     preset_name: Optional[str] = None,
     authenticated: bool = Depends(verify_auth)
 ):
-    """获取站点的图片提取配置"""
+    """获取站点的多模态提取配置"""
     try:
         config = config_engine.get_site_image_config(domain, preset_name=preset_name)
         return {
@@ -632,7 +632,7 @@ async def set_site_image_config(
     request: Request,
     authenticated: bool = Depends(verify_auth)
 ):
-    """设置站点的图片提取配置"""
+    """设置站点的多模态提取配置"""
     try:
         data = await request.json()
         preset_name = data.pop("preset_name", None)
@@ -642,7 +642,7 @@ async def set_site_image_config(
         if success:
             return {
                 "status": "success",
-                "message": f"站点 {domain} 图片提取配置已更新",
+                "message": f"站点 {domain} 多模态提取配置已更新",
                 "domain": domain
             }
         else:
@@ -664,7 +664,7 @@ async def toggle_site_image_extraction(
     request: Request,
     authenticated: bool = Depends(verify_auth)
 ):
-    """快速开关站点的图片提取功能"""
+    """快速开关站点的多模态提取功能"""
     try:
         data = await request.json()
         enabled = data.get("enabled", False)
@@ -679,7 +679,7 @@ async def toggle_site_image_extraction(
             status = "已启用" if enabled else "已禁用"
             return {
                 "status": "success",
-                "message": f"站点 {domain} 图片提取{status}",
+                "message": f"站点 {domain} 多模态提取{status}",
                 "enabled": enabled
             }
         else:
@@ -694,7 +694,7 @@ async def toggle_site_image_extraction(
 
 @router.get("/api/settings/image-extraction-defaults")
 async def get_image_extraction_defaults(authenticated: bool = Depends(verify_auth)):
-    """获取图片提取的默认配置"""
+    """获取多模态提取的默认配置"""
     from app.models.schemas import get_default_image_extraction_config
     
     return {
@@ -704,7 +704,8 @@ async def get_image_extraction_defaults(authenticated: bool = Depends(verify_aut
             "load_timeout_seconds": {"min": 1, "max": 60},
             "max_size_mb": {"min": 1, "max": 100}
         },
-        "mode_options": ["all", "first", "last"]
+        "mode_options": ["all", "first", "last"],
+        "modalities": ["image", "audio", "video"]
     }
 
 

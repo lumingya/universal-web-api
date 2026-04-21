@@ -10,6 +10,7 @@ from app.core.extractors.deep_mode import DeepBrowserExtractor
 from app.core.extractors.dom_mode import DOMDirectExtractor
 from app.core.extractors.hybrid_mode import HybridExtractor
 from app.core.extractors.image_extractor import ImageExtractor, image_extractor  # 🆕 新增
+from app.core.extractors.media_extractor import MediaExtractor, media_extractor
 
 
 # 自动注册所有提取器
@@ -26,4 +27,6 @@ __all__ = [
     'HybridExtractor',
     'ImageExtractor',    
     'image_extractor',    
+    'MediaExtractor',
+    'media_extractor',
 ]

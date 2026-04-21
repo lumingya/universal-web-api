@@ -1758,14 +1758,17 @@ class SSEFormatter:
         model: str = "web-browser",
         completion_id: str = None,
         images: list[str] | None = None,
+        media: list[dict] | None = None,
     ) -> str:
         """打包流式 chunk。
 
-        注意：为了保持 OpenAI 兼容性，不再向 delta 注入自定义 images 字段。
-        图片应通过 content 中的 Markdown 链接传递。
+        为兼容现有前端，content 仍保留 Markdown 媒体链接。
+        同时补充自定义 media 字段，供需要结构化媒体数据的前端直接消费。
         """
         chunk_id = completion_id or cls._generate_id()
         delta = {"content": content}
+        if media:
+            delta["media"] = media
         data = {
             "id": chunk_id,
             "object": "chat.completion.chunk",
@@ -1777,6 +1780,8 @@ class SSEFormatter:
                 "finish_reason": None
             }]
         }
+        if media:
+            data["media"] = media
         return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
     
     @classmethod
@@ -1833,18 +1838,22 @@ class SSEFormatter:
         }
     
     @staticmethod
-    def pack_non_stream(content: str, model: str = "web-browser") -> Dict:
-        return {
+    def pack_non_stream(content: str, model: str = "web-browser", media: list | None = None) -> Dict:
+        message = {
+            "role": "assistant",
+            "content": content
+        }
+        if media:
+            message["media"] = media
+
+        data = {
             "id": f"chatcmpl-{int(time.time() * 1000)}",
             "object": "chat.completion",
             "created": int(time.time()),
             "model": model,
             "choices": [{
                 "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": content
-                },
+                "message": message,
                 "finish_reason": "stop"
             }],
             "usage": {
@@ -1853,6 +1862,9 @@ class SSEFormatter:
                 "total_tokens": 0
             }
         }
+        if media:
+            data["media"] = media
+        return data
 
     @staticmethod
     def _build_markdown_image_block(images: list) -> str:

@@ -778,8 +778,8 @@
       "group_name": "gemini",
       "script": "",
       "script_lang": "javascript",
-      "last_triggered": 1775815514.2925565,
-      "trigger_count": 2,
+      "last_triggered": 1776651468.7457976,
+      "trigger_count": 12,
       "stop_on_error": false,
       "log_enabled": true,
       "log_level": "GLOBAL"
@@ -919,15 +919,15 @@
       "actions": [
         {
           "type": "execute_preset",
-          "preset_name": "快速模型",
+          "preset_name": "思考",
           "action_id": "step_1_switch_preset"
         }
       ],
       "group_name": "gemini",
       "script": "",
       "script_lang": "javascript",
-      "last_triggered": 1773883775.3839626,
-      "trigger_count": 1,
+      "last_triggered": 1776656351.90576,
+      "trigger_count": 3,
       "log_enabled": true,
       "log_level": "GLOBAL",
       "stop_on_error": false
@@ -969,10 +969,59 @@
       "script": "",
       "script_lang": "javascript",
       "id": "cmd_0020e346",
-      "last_triggered": 1775378505.1375713,
-      "trigger_count": 1,
+      "last_triggered": 1776656345.3091698,
+      "trigger_count": 7,
       "log_enabled": true,
       "log_level": "GLOBAL"
+    },
+    {
+      "id": "cmd_gemsidebar001",
+      "name": "Gemini自动展开侧边栏",
+      "enabled": true,
+      "mode": "simple",
+      "trigger": {
+        "type": "page_check",
+        "value": "gemini",
+        "command_id": "",
+        "action_ref": "",
+        "match_rule": "equals",
+        "expected_value": "",
+        "match_mode": "keyword",
+        "status_codes": "403,429,500,502,503,504",
+        "abort_on_match": false,
+        "scope": "domain",
+        "domain": "gemini.google.com",
+        "tab_index": null,
+        "priority": 1,
+        "periodic_enabled": true,
+        "periodic_interval_sec": 6,
+        "periodic_jitter_sec": 1,
+        "fire_mode": "level",
+        "cooldown_sec": 8,
+        "command_ids": [],
+        "listen_all_commands": false,
+        "informative_only": true,
+        "allow_during_workflow": false,
+        "interrupt_policy": "auto",
+        "interrupt_message": "",
+        "stable_for_sec": 0,
+        "check_while_busy_workflow": false
+      },
+      "actions": [
+        {
+          "type": "run_js",
+          "action_id": "step_1_expand_sidebar",
+          "code": "return (() => { try { const norm = (v) => String(v || '').replace(/\\s+/g, ' ').trim().toLowerCase(); const isVisible = (el) => { if (!(el instanceof HTMLElement) || !el.isConnected) return false; const rect = el.getBoundingClientRect(); if (rect.width < 1 || rect.height < 1) return false; const style = window.getComputedStyle(el); return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity || '1') > 0.05; }; const sidebarExpanded = Array.from(document.querySelectorAll('nav, aside, [role=\"navigation\"]')).some((el) => { if (!isVisible(el)) return false; const rect = el.getBoundingClientRect(); if (rect.left > 60 || rect.width < 160) return false; const text = norm(el.innerText || el.textContent || ''); return text.includes('聊天历史记录') || text.includes('设置和帮助') || text.includes('升级vip') || text.includes('了解详情'); }); if (sidebarExpanded) return 'SIDEBAR_ALREADY_EXPANDED'; const target = document.querySelector('button[data-test-id=\"side-nav-menu-button\"][aria-label=\"主菜单\"]'); if (!(target instanceof HTMLElement) || !isVisible(target)) return 'SIDEBAR_TOGGLE_NOT_FOUND'; target.click(); return 'SIDEBAR_EXPANDED'; } catch (error) { return 'SIDEBAR_EXPAND_ERROR:' + String(error).slice(0, 120); } })()"
+        }
+      ],
+      "group_name": "gemini",
+      "script": "",
+      "script_lang": "javascript",
+      "last_triggered": 1776656411.5686898,
+      "trigger_count": 1673,
+      "log_enabled": false,
+      "log_level": "GLOBAL",
+      "stop_on_error": false
     },
     {
       "id": "cmd_arena_terms_refresh_abort",

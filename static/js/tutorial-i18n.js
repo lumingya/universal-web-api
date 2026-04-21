@@ -29,7 +29,7 @@
             'presets': '🎛️ Presets',
             'selectors': '🔍 Selectors',
             'extractors': '🧩 Extractors',
-            'image-extraction': '🖼️ Image Extraction',
+            'image-extraction': '🎞️ Multimodal Extraction',
             'response-detection': '🌊 Response Detection',
             'workflow': '🎬 Workflow',
             'file-paste': '📄 File Attach',
@@ -118,7 +118,7 @@
                 <li><strong>Selectors</strong>: where the input box, send button, and result container are.</li>
                 <li><strong>Workflow</strong>: the order of actions, such as opening a new chat, filling text, or pressing Enter.</li>
                 <li><strong>Response Detection</strong>: how the system decides the reply is finished.</li>
-                <li><strong>Image Extraction / File Attach</strong>: useful for image sites and long-text scenarios.</li>
+                <li><strong>Multimodal Extraction / File Attach</strong>: useful for returning image, audio, and video assets, plus long-text attachment scenarios.</li>
                 <li><strong>Presets</strong>: split one site into different configs for chat, vision, long text, code, and more.</li>
             </ul>
         </div>
@@ -194,7 +194,7 @@
             <li>Test <code>send_btn</code></li>
             <li>Test <code>result_container</code></li>
             <li>Run the shortest workflow</li>
-            <li>Only then tune stream thresholds, extractors, image extraction, and file attach</li>
+            <li>Only then tune stream thresholds, extractors, multimodal extraction, and file attach</li>
         </ol>
     `;
 
@@ -222,6 +222,163 @@
         <div class="success-box">
             <p><strong>✅ Test flow:</strong> once the site is open and logged in, enter the URL and provider settings in your client and you can start testing immediately.</p>
         </div>
+
+        <h3>Routing quick reference</h3>
+        <table>
+            <tr><th>Need</th><th>Recommended endpoint</th><th>Notes</th></tr>
+            <tr>
+                <td>Let the system choose an idle tab</td>
+                <td><code>http://127.0.0.1:8199/v1/chat/completions</code></td>
+                <td>Use this when you do not care which site tab handles the request</td>
+            </tr>
+            <tr>
+                <td>Always use Gemini tabs</td>
+                <td><code>http://127.0.0.1:8199/url/gemini.com/v1/chat/completions</code></td>
+                <td>Matches one available Gemini-related tab</td>
+            </tr>
+            <tr>
+                <td>Always use a specific tab</td>
+                <td><code>http://127.0.0.1:8199/tab/2/v1/chat/completions</code></td>
+                <td>Useful when that tab already has a dedicated role or preset</td>
+            </tr>
+            <tr>
+                <td>Use one site with a forced preset</td>
+                <td><code>http://127.0.0.1:8199/url/gemini.com/pro/v1/chat/completions</code></td>
+                <td>Useful when one site has multiple modes such as chat, pro, music, or video, and also works well as a direct Base URL</td>
+            </tr>
+        </table>
+
+        <h3>Three ways to specify a preset</h3>
+        <p>The chat endpoints now support <code>preset_name</code> directly. This does <strong>not</strong> change the site's default preset. It only affects the current request.</p>
+
+        <p><strong>Option A: put it directly in the path</strong></p>
+        <pre><code>curl "http://127.0.0.1:8199/url/gemini.com/pro/v1/chat/completions" ^
+  -H "Content-Type: application/json" ^
+  -d "{\"model\":\"any\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}],\"stream\":false}"</code></pre>
+
+        <p><strong>Option B: put it in the URL query</strong></p>
+        <pre><code>curl "http://127.0.0.1:8199/url/gemini.com/v1/chat/completions?preset_name=pro" ^
+  -H "Content-Type: application/json" ^
+  -d "{\"model\":\"any\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}],\"stream\":false}"</code></pre>
+
+        <p><strong>Option C: put it in the JSON body</strong></p>
+        <pre><code>{
+  "model": "any",
+  "messages": [
+    { "role": "user", "content": "Hello" }
+  ],
+  "stream": false,
+  "preset_name": "pro"
+}</code></pre>
+
+        <div class="info-box">
+            <p><strong>Priority rule:</strong> if all three are provided, the order is <strong>path preset &gt; URL query &gt; JSON body</strong>.</p>
+        </div>
+
+        <div class="note">
+            <p><strong>💡 Practical advice:</strong> if your client lets you customize the Base URL, the cleanest choice is usually <code>http://127.0.0.1:8199/url/gemini.com/pro/v1</code>. If that is inconvenient, fall back to <code>?preset_name=pro</code> or a JSON-body field.</p>
+        </div>
+
+        <h3>HTTP methods and full route syntax</h3>
+        <table>
+            <tr><th>Method</th><th>Route</th><th>Purpose</th></tr>
+            <tr>
+                <td><code>GET</code></td>
+                <td><code>/v1/models</code></td>
+                <td>Default model-list endpoint for OpenAI-compatible client checks</td>
+            </tr>
+            <tr>
+                <td><code>POST</code></td>
+                <td><code>/v1/chat/completions</code></td>
+                <td>Default chat endpoint with automatic tab allocation</td>
+            </tr>
+            <tr>
+                <td><code>GET</code></td>
+                <td><code>/url/{domain}/v1/models</code></td>
+                <td>Domain-routed model list, can use <code>selector</code> or <code>tab_index</code></td>
+            </tr>
+            <tr>
+                <td><code>POST</code></td>
+                <td><code>/url/{domain}/v1/chat/completions</code></td>
+                <td>Domain-routed chat, can use <code>selector</code>, <code>tab_index</code>, and <code>preset_name</code></td>
+            </tr>
+            <tr>
+                <td><code>GET</code></td>
+                <td><code>/url/{domain}/{preset_name}/v1/models</code></td>
+                <td>Domain + preset model-list route, useful when you want to use it directly as a Base URL</td>
+            </tr>
+            <tr>
+                <td><code>POST</code></td>
+                <td><code>/url/{domain}/{preset_name}/v1/chat/completions</code></td>
+                <td>Domain + preset chat route, where the preset in the path has the highest priority</td>
+            </tr>
+            <tr>
+                <td><code>GET</code></td>
+                <td><code>/tab/{index}/v1/models</code></td>
+                <td>Fixed-tab model-list endpoint</td>
+            </tr>
+            <tr>
+                <td><code>POST</code></td>
+                <td><code>/tab/{index}/v1/chat/completions</code></td>
+                <td>Fixed-tab chat endpoint, can use <code>preset_name</code></td>
+            </tr>
+        </table>
+
+        <p><strong>Supported query parameters:</strong></p>
+        <ul>
+            <li><code>selector=first_idle</code>: prefer an idle tab. This is the default.</li>
+            <li><code>selector=round_robin</code>: rotate across matching site tabs.</li>
+            <li><code>selector=random</code>: randomly choose one matching site tab.</li>
+            <li><code>tab_index=2</code>: on a domain route, lock the request to one specific tab.</li>
+            <li><code>preset_name=pro</code>: force one preset for the current request only.</li>
+        </ul>
+
+        <div class="highlight-box">
+            <p><strong>⚠️ Route compatibility note:</strong> the server now supports putting the preset directly into the path, such as <code>/url/gemini.com/pro/v1/chat/completions</code>. If your client checks <code>/models</code> first, you can also use <code>/url/gemini.com/pro/v1/models</code>.</p>
+        </div>
+
+        <h3>Full examples</h3>
+        <pre><code># 1. Default model list
+curl http://127.0.0.1:8199/v1/models
+
+# 2. Default chat endpoint
+curl http://127.0.0.1:8199/v1/chat/completions ^
+  -H "Content-Type: application/json" ^
+  -d "{\"model\":\"any\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}],\"stream\":false}"
+
+# 3. Domain-routed model list
+curl "http://127.0.0.1:8199/url/gemini.com/v1/models?selector=round_robin"
+
+# 4. Domain-routed chat
+curl "http://127.0.0.1:8199/url/gemini.com/v1/chat/completions?selector=first_idle" ^
+  -H "Content-Type: application/json" ^
+  -d "{\"model\":\"any\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}],\"stream\":false}"
+
+# 5. Domain route + fixed tab
+curl "http://127.0.0.1:8199/url/gemini.com/v1/chat/completions?tab_index=2" ^
+  -H "Content-Type: application/json" ^
+  -d "{\"model\":\"any\",\"messages\":[{\"role\":\"user\",\"content\":\"Continue the previous turn\"}],\"stream\":false}"
+
+# 6. Domain + preset model list
+curl http://127.0.0.1:8199/url/gemini.com/pro/v1/models
+
+# 7. Domain + preset chat
+curl http://127.0.0.1:8199/url/gemini.com/pro/v1/chat/completions ^
+  -H "Content-Type: application/json" ^
+  -d "{\"model\":\"any\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}],\"stream\":false}"
+
+# 8. Fixed-tab model list
+curl http://127.0.0.1:8199/tab/2/v1/models
+
+# 9. Fixed-tab chat
+curl http://127.0.0.1:8199/tab/2/v1/chat/completions ^
+  -H "Content-Type: application/json" ^
+  -d "{\"model\":\"any\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}],\"stream\":false}"
+
+# 10. Fixed-tab chat with a forced preset
+curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
+  -H "Content-Type: application/json" ^
+  -d "{\"model\":\"any\",\"messages\":[{\"role\":\"user\",\"content\":\"Continue the previous turn\"}],\"stream\":false}"</code></pre>
 
         <h3>💡 About login state</h3>
         <ul>
@@ -344,6 +501,30 @@
             </ul>
         </div>
 
+        <h3>Advanced parameters for domain routes</h3>
+        <table>
+            <tr><th>Parameter</th><th>Example</th><th>Effect</th></tr>
+            <tr>
+                <td><code>selector</code></td>
+                <td><code>?selector=round_robin</code></td>
+                <td>Choose how the server picks among multiple matching tabs</td>
+            </tr>
+            <tr>
+                <td><code>tab_index</code></td>
+                <td><code>?tab_index=2</code></td>
+                <td>Further pin a domain route to one specific tab</td>
+            </tr>
+            <tr>
+                <td><code>preset_name</code></td>
+                <td><code>?preset_name=pro</code></td>
+                <td>Temporarily override the preset for only this request</td>
+            </tr>
+        </table>
+
+        <div class="note">
+            <p><strong>💡 Recommended mental model:</strong> <code>/url/gemini.com/...</code> decides <em>which site</em>, <code>selector</code> or <code>tab_index</code> decides <em>which tab</em>, and <code>preset_name</code> decides <em>which config</em> for this one request.</p>
+        </div>
+
         <h3>Managing tabs in the dashboard</h3>
         <p>In the <strong>Tabs</strong> panel you can:</p>
         <ul>
@@ -379,7 +560,7 @@
             <tr>
                 <td>Tab #2</td>
                 <td>Fast vision</td>
-                <td>Simpler workflow, image extraction enabled, shorter timeout</td>
+                    <td>Simpler workflow, multimodal extraction enabled, shorter timeout</td>
             </tr>
             <tr>
                 <td>Tab #3</td>
@@ -416,8 +597,33 @@ curl http://127.0.0.1:8199/url/gemini.com/v1/chat/completions
 # Use the fixed vision tab
 curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
 
+        <p><strong>4. Override the preset for just one request</strong></p>
+        <pre><code># Option A: path-based preset (best when used directly as a Base URL)
+curl "http://127.0.0.1:8199/url/gemini.com/pro/v1/chat/completions" ^
+  -H "Content-Type: application/json" ^
+  -d "{\"model\":\"any\",\"messages\":[{\"role\":\"user\",\"content\":\"Write me a short intro\"}],\"stream\":false}"
+
+# Option B: query parameter
+curl "http://127.0.0.1:8199/url/gemini.com/v1/chat/completions?preset_name=pro" ^
+  -H "Content-Type: application/json" ^
+  -d "{\"model\":\"any\",\"messages\":[{\"role\":\"user\",\"content\":\"Write me a short intro\"}],\"stream\":false}"
+
+# Option C: JSON body
+curl http://127.0.0.1:8199/url/gemini.com/v1/chat/completions ^
+  -H "Content-Type: application/json" ^
+  -d "{\"model\":\"any\",\"messages\":[{\"role\":\"user\",\"content\":\"Write me a short intro\"}],\"stream\":false,\"preset_name\":\"pro\"}"
+
+# Fixed tab + forced preset
+curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
+  -H "Content-Type: application/json" ^
+  -d "{\"model\":\"any\",\"messages\":[{\"role\":\"user\",\"content\":\"Continue the previous turn\"}],\"stream\":false}"</code></pre>
+
         <div class="info-box">
-            <p><strong>💡 Tip:</strong> every preset contains its own selectors, workflow, stream config, image extraction, and file-attach settings. Editing one preset does not affect the others.</p>
+            <p><strong>Calling rule:</strong> if you explicitly pass <code>preset_name</code>, that preset is forced for the current request. If path, query, and body all provide one, the order is <strong>path &gt; query &gt; body</strong>. If you do not pass it, the old behavior remains: tab-bound preset first, then site default preset.</p>
+        </div>
+
+        <div class="info-box">
+        <p><strong>💡 Tip:</strong> every preset contains its own selectors, workflow, stream config, multimodal extraction, and file-attach settings. Editing one preset does not affect the others.</p>
         </div>
 
         <h3>Example structure</h3>
@@ -534,24 +740,44 @@ curl http://127.0.0.1:8199/tab/2/v1/chat/completions</code></pre>
     `;
 
     translations.sections['image-extraction'] = `
-        <h2>🖼️ Image Extraction</h2>
-        <p>If you want the system to automatically save images generated or returned by the AI, this is the section to use. It controls how image nodes are found on the page and whether they are downloaded locally.</p>
+        <h2>🎞️ Multimodal Extraction</h2>
+        <p>The control panel now calls this feature <strong>Multimodal Extraction</strong>. It is responsible for extracting images, audio, and video from the page, then returning stable local URLs or Markdown references that downstream clients can use directly.</p>
         <pre><code>"image_extraction": {
   "enabled": true,
+  "modalities": {
+    "image": true,
+    "audio": true,
+    "video": true
+  },
   "selector": "img",
+  "audio_selector": "audio, audio source",
+  "video_selector": "video, video source",
   "container_selector": ".img-grid",
   "download_blobs": true,
   "mode": "all",
   "max_size_mb": 10
 }</code></pre>
+        <div class="info-box">
+            <p><strong>Compatibility note:</strong> the stored config key is still <code>image_extraction</code> for backward compatibility, even though the UI and capability are now multimodal.</p>
+        </div>
+        <p><strong>How to use it in the UI:</strong></p>
+        <ul>
+            <li>Enable the top-level multimodal switch first.</li>
+            <li>Then enable the inner options for <strong>image</strong>, <strong>audio file</strong>, and <strong>video</strong> as needed.</li>
+            <li>If you only need one modality, you usually only need to maintain the selector for that specific modality.</li>
+        </ul>
         <p><strong>Saved locations:</strong></p>
         <ul>
             <li><strong>Images you send to the AI</strong>: stored in <code>image/</code>.</li>
-            <li><strong>Images generated or returned by the AI</strong>: stored in <code>download_images/</code>.</li>
+            <li><strong>Images, audio, and video generated or returned by the AI</strong>: all stored in <code>download_images/</code> and exposed through local URLs.</li>
         </ul>
 
         <div class="note">
-            <p><strong>💡 Practical advice:</strong> on most sites you can start by enabling the feature and making sure <code>selector</code> matches the image nodes correctly. Only add <code>container_selector</code> when the page has too many unrelated images and you need to narrow the search area.</p>
+            <p><strong>💡 Response shape:</strong> images are returned as embedded Markdown images, while audio and video are returned as Markdown links such as <code>[audio_0](/download_images/xxx.mp3)</code> or <code>[video_0](/download_images/xxx.mp4)</code>.</p>
+        </div>
+
+        <div class="note">
+            <p><strong>💡 Practical advice:</strong> decide which modalities you need first, then verify the corresponding selectors against real media nodes. Only add <code>container_selector</code> when the page contains too many unrelated media elements and you need to narrow the search area.</p>
         </div>
     `;
 

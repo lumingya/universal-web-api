@@ -8,6 +8,8 @@ app/api/tab_routes.py - 标签页路由
 """
 
 import json
+import random
+import re
 import time
 import asyncio
 import queue
@@ -15,7 +17,7 @@ import threading
 from pathlib import Path
 from typing import Optional, Any, Dict, List
 
-from fastapi import APIRouter, Request, HTTPException, Header, Depends
+from fastapi import APIRouter, Request, HTTPException, Header, Depends, Query
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
 
@@ -35,6 +37,7 @@ from app.services.tool_calling import (
     normalize_tool_request,
     summarize_messages_for_debug,
 )
+from app.utils.site_url import normalize_route_domain, route_domain_matches
 
 logger = get_logger("API.TAB")
 
@@ -46,6 +49,9 @@ TAB_POOL_ALLOCATION_OPTIONS = [
     {"value": "first_idle", "label": "优先空闲"},
     {"value": "round_robin", "label": "轮询"},
 ]
+TAB_SELECTOR_OPTIONS = {"first_idle", "round_robin", "random"}
+_route_round_robin_cursor: Dict[str, int] = {}
+_route_round_robin_lock = threading.Lock()
 
 
 def _read_browser_config() -> Dict[str, Any]:
@@ -81,6 +87,185 @@ def _extract_stream_error_message(chunk: Any) -> str:
     except Exception:
         return ""
 
+
+def _extract_chunk_media_items(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    media_items: List[Dict[str, Any]] = []
+
+    top_level_media = data.get("media")
+    if isinstance(top_level_media, list):
+        media_items.extend(item for item in top_level_media if isinstance(item, dict))
+
+    choices = data.get("choices")
+    if isinstance(choices, list) and choices:
+        delta = choices[0].get("delta", {})
+        if isinstance(delta, dict):
+            delta_media = delta.get("media")
+            if isinstance(delta_media, list):
+                media_items.extend(item for item in delta_media if isinstance(item, dict))
+
+    return media_items
+
+
+def _dedupe_media_items(media_items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    deduped: List[Dict[str, Any]] = []
+    seen = set()
+
+    for item in media_items or []:
+        media_type = str(item.get("media_type") or "").strip().lower()
+        ref = str(item.get("url") or item.get("data_uri") or "").strip()
+        key = (media_type, ref)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+
+    return deduped
+
+
+def _cleanup_non_stream_content(content: str) -> str:
+    placeholder_pattern = re.compile(
+        r"^\s*https?://(?:[\w.-]+\.)?googleusercontent\.com/(?:image_generation_content|generated_music_content)/\d+\s*$",
+        re.IGNORECASE | re.MULTILINE,
+    )
+    cleaned = placeholder_pattern.sub("", content or "")
+    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+
+def _normalize_tab_selector(value: str, default: str = "first_idle") -> str:
+    selector = str(value or "").strip().lower()
+    if selector in TAB_SELECTOR_OPTIONS:
+        return selector
+    return default
+
+
+def _get_tab_info_by_index(browser, tab_index: int) -> Optional[Dict[str, Any]]:
+    tabs = browser.tab_pool.get_tabs_with_index()
+    for item in tabs:
+        if int(item.get("persistent_index") or 0) == int(tab_index):
+            return item
+    return None
+
+
+def _list_candidate_tabs(browser, route_domain: str = "") -> List[Dict[str, Any]]:
+    tabs = browser.tab_pool.get_tabs_with_index()
+    target = normalize_route_domain(route_domain)
+    if not target:
+        return tabs
+
+    result: List[Dict[str, Any]] = []
+    for item in tabs:
+        actual_domain = str(item.get("current_domain") or item.get("route_domain") or "").strip()
+        if actual_domain and route_domain_matches(target, actual_domain):
+            result.append(item)
+    return result
+
+
+def _select_round_robin_tab(candidates: List[Dict[str, Any]], cursor_key: str) -> Dict[str, Any]:
+    ordered = sorted(candidates, key=lambda item: int(item.get("persistent_index") or 0))
+    if not ordered:
+        raise HTTPException(status_code=404, detail="没有可用标签页")
+
+    with _route_round_robin_lock:
+        last_index = _route_round_robin_cursor.get(cursor_key, -1)
+        next_pos = 0
+        for idx, item in enumerate(ordered):
+            current_index = int(item.get("persistent_index") or 0)
+            if current_index > last_index:
+                next_pos = idx
+                break
+        else:
+            next_pos = 0
+
+        chosen = ordered[next_pos]
+        _route_round_robin_cursor[cursor_key] = int(chosen.get("persistent_index") or 0)
+        return chosen
+
+
+def _resolve_target_tab(
+    browser,
+    *,
+    route_domain: str = "",
+    tab_index: Optional[int] = None,
+    selector: str = "first_idle",
+) -> Dict[str, Any]:
+    target_route = normalize_route_domain(route_domain)
+
+    if tab_index is not None:
+        tab_info = _get_tab_info_by_index(browser, int(tab_index))
+        if tab_info is None:
+            raise HTTPException(status_code=404, detail=f"标签页 #{tab_index} 不存在")
+        actual_domain = str(tab_info.get("current_domain") or tab_info.get("route_domain") or "").strip()
+        if target_route and not route_domain_matches(target_route, actual_domain):
+            raise HTTPException(
+                status_code=400,
+                detail=f"标签页 #{tab_index} 不属于域名路由 '{target_route}'",
+            )
+        return tab_info
+
+    candidates = _list_candidate_tabs(browser, target_route)
+    if not candidates:
+        if target_route:
+            raise HTTPException(status_code=404, detail=f"域名路由 '{target_route}' 没有匹配的标签页")
+        raise HTTPException(status_code=404, detail="没有匹配的标签页")
+
+    idle_candidates = [
+        item for item in candidates
+        if str(item.get("status") or "").strip().lower() == "idle"
+    ]
+    pool = idle_candidates or candidates
+    selector = _normalize_tab_selector(selector)
+
+    if selector == "random":
+        return random.choice(pool)
+    if selector == "round_robin":
+        cursor_key = target_route or "__all__"
+        return _select_round_robin_tab(pool, cursor_key)
+
+    return sorted(pool, key=lambda item: int(item.get("persistent_index") or 0))[0]
+
+
+def _build_tab_resolution_headers(
+    tab_info: Optional[Dict[str, Any]],
+    *,
+    route_domain: str = "",
+    selector: str = "",
+) -> Dict[str, str]:
+    headers: Dict[str, str] = {}
+    if not tab_info:
+        return headers
+
+    tab_index = int(tab_info.get("persistent_index") or 0)
+    if tab_index > 0:
+        headers["X-Resolved-Tab-Index"] = str(tab_index)
+
+    tab_id = str(tab_info.get("id") or "").strip()
+    if tab_id:
+        headers["X-Resolved-Tab-Id"] = tab_id
+
+    current_url = str(tab_info.get("url") or "").strip()
+    if current_url:
+        headers["X-Resolved-Tab-Url"] = current_url
+
+    current_domain = str(tab_info.get("current_domain") or tab_info.get("route_domain") or route_domain or "").strip()
+    if current_domain:
+        headers["X-Resolved-Route-Domain"] = current_domain
+
+    if selector:
+        headers["X-Tab-Selection-Mode"] = selector
+
+    return headers
+
+
+def _build_stream_headers(extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
+    }
+    if extra:
+        headers.update(extra)
+    return headers
+
 # ================= 请求模型 =================
 
 class ChatRequest(BaseModel):
@@ -95,6 +280,7 @@ class ChatRequest(BaseModel):
     parallel_tool_calls: Optional[bool] = Field(default=None)
     functions: Optional[list] = Field(default=None)
     function_call: Optional[Any] = Field(default=None)
+    preset_name: Optional[str] = Field(default=None)
 
 
 class TabPoolConfigRequest(BaseModel):
@@ -293,6 +479,8 @@ async def list_models_with_tab(
 @router.get("/url/{route_domain}/v1/models")
 async def list_models_with_route_domain(
     route_domain: str,
+    tab_index: Optional[int] = Query(default=None, ge=1),
+    selector: str = Query(default="first_idle"),
     authenticated: bool = Depends(verify_auth)
 ):
     """为域名路由提供 OpenAI 兼容模型列表接口。"""
@@ -300,22 +488,16 @@ async def list_models_with_route_domain(
     if not route_key:
         raise HTTPException(status_code=400, detail="域名路由不能为空")
 
-    try:
-        browser = get_browser(auto_connect=False)
-        session = browser.tab_pool.acquire_by_route_domain(
-            route_key,
-            task_id=f"models_url_{route_key}_{int(time.time() * 1000)}",
-            timeout=0.1,
-        )
-        if session is None:
-            raise HTTPException(status_code=404, detail=f"域名路由 '{route_key}' 没有可用标签页")
-        browser.tab_pool.release(session.id)
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.debug(f"域名路由模型列表校验失败（忽略）: {e}")
+    browser = get_browser(auto_connect=False)
+    normalized_selector = _normalize_tab_selector(selector, default="first_idle")
+    tab_info = _resolve_target_tab(
+        browser,
+        route_domain=route_key,
+        tab_index=tab_index,
+        selector=normalized_selector,
+    )
 
-    return {
+    payload = {
         "object": "list",
         "data": [
             {
@@ -326,12 +508,77 @@ async def list_models_with_route_domain(
             }
         ]
     }
+    response = JSONResponse(content=payload)
+    response.headers.update(
+        _build_tab_resolution_headers(
+            tab_info,
+            route_domain=route_key,
+            selector=("tab_index" if tab_index is not None else normalized_selector),
+        )
+    )
+    return response
+
+
+@router.get("/url/{route_domain}/{preset_name}/v1/models")
+async def list_models_with_route_domain_and_preset(
+    route_domain: str,
+    preset_name: str,
+    tab_index: Optional[int] = Query(default=None, ge=1),
+    selector: str = Query(default="first_idle"),
+    authenticated: bool = Depends(verify_auth)
+):
+    """为域名+预设路径风格提供 OpenAI 兼容模型列表接口。"""
+    _ = str(preset_name or "").strip()
+    return await list_models_with_route_domain(
+        route_domain=route_domain,
+        tab_index=tab_index,
+        selector=selector,
+        authenticated=authenticated,
+    )
+
+
+async def _chat_with_resolved_tab(
+    request: Request,
+    body: ChatRequest,
+    ctx: RequestContext,
+    *,
+    tab_index: int,
+    resolved_headers: Optional[Dict[str, str]] = None,
+):
+    headers = resolved_headers or {}
+
+    if has_tool_calling_request(
+        messages=body.messages,
+        tools=body.tools,
+        functions=body.functions,
+    ):
+        if body.stream:
+            return StreamingResponse(
+                _stream_tool_calling_with_tab_index(request, body, ctx, tab_index),
+                media_type="text/event-stream",
+                headers=_build_stream_headers(headers),
+            )
+        response = await _non_stream_tool_calling_with_tab_index(request, body, ctx, tab_index)
+        response.headers.update(headers)
+        return response
+
+    if body.stream:
+        return StreamingResponse(
+            _stream_with_tab_index(request, body, ctx, tab_index),
+            media_type="text/event-stream",
+            headers=_build_stream_headers(headers),
+        )
+
+    response = await _non_stream_with_tab_index(request, body, ctx, tab_index)
+    response.headers.update(headers)
+    return response
 
 @router.post("/tab/{tab_index}/v1/chat/completions")
 async def chat_with_tab(
     tab_index: int,
     request: Request,
     body: ChatRequest,
+    preset_name: Optional[str] = Query(default=None),
     authenticated: bool = Depends(verify_auth)
 ):
     """
@@ -342,41 +589,27 @@ async def chat_with_tab(
     """
     if tab_index < 1:
         raise HTTPException(status_code=400, detail="标签页编号必须大于 0")
+
+    resolved_preset_name = str(preset_name or body.preset_name or "").strip() or None
+    if resolved_preset_name != body.preset_name:
+        body = body.model_copy(update={"preset_name": resolved_preset_name})
     
     ctx = request_manager.create_request()
     with logger.context(ctx.request_id):
-        logger.info(f"开始 (标签页 #{tab_index})")
-        
-        if has_tool_calling_request(
-            messages=body.messages,
-            tools=body.tools,
-            functions=body.functions,
-        ):
-            if body.stream:
-                return StreamingResponse(
-                    _stream_tool_calling_with_tab_index(request, body, ctx, tab_index),
-                    media_type="text/event-stream",
-                    headers={
-                        "Cache-Control": "no-cache",
-                        "Connection": "keep-alive",
-                        "X-Accel-Buffering": "no"
-                    }
-                )
-            else:
-                return await _non_stream_tool_calling_with_tab_index(request, body, ctx, tab_index)
-
-        if body.stream:
-            return StreamingResponse(
-                _stream_with_tab_index(request, body, ctx, tab_index),
-                media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache",
-                    "Connection": "keep-alive",
-                    "X-Accel-Buffering": "no"
-                }
-            )
-        else:
-            return await _non_stream_with_tab_index(request, body, ctx, tab_index)
+        logger.info(f"开始 (标签页 #{tab_index}, preset={resolved_preset_name or '<follow-tab/default>'})")
+        browser = get_browser(auto_connect=False)
+        tab_info = _get_tab_info_by_index(browser, tab_index)
+        resolved_headers = _build_tab_resolution_headers(
+            tab_info,
+            selector="fixed",
+        )
+        return await _chat_with_resolved_tab(
+            request,
+            body,
+            ctx,
+            tab_index=tab_index,
+            resolved_headers=resolved_headers,
+        )
 
 
 @router.post("/url/{route_domain}/v1/chat/completions")
@@ -384,6 +617,9 @@ async def chat_with_route_domain(
     route_domain: str,
     request: Request,
     body: ChatRequest,
+    tab_index: Optional[int] = Query(default=None, ge=1),
+    selector: str = Query(default="first_idle"),
+    preset_name: Optional[str] = Query(default=None),
     authenticated: bool = Depends(verify_auth)
 ):
     """使用指定域名路由匹配的标签页进行聊天。"""
@@ -391,40 +627,67 @@ async def chat_with_route_domain(
     if not route_key:
         raise HTTPException(status_code=400, detail="域名路由不能为空")
 
+    resolved_preset_name = str(preset_name or body.preset_name or "").strip() or None
+    if resolved_preset_name != body.preset_name:
+        body = body.model_copy(update={"preset_name": resolved_preset_name})
+
+    browser = get_browser(auto_connect=False)
+    normalized_selector = _normalize_tab_selector(selector, default="first_idle")
+    tab_info = _resolve_target_tab(
+        browser,
+        route_domain=route_key,
+        tab_index=tab_index,
+        selector=normalized_selector,
+    )
+    resolved_headers = _build_tab_resolution_headers(
+        tab_info,
+        route_domain=route_key,
+        selector=("tab_index" if tab_index is not None else normalized_selector),
+    )
+    resolved_tab_index = int(tab_info.get("persistent_index") or 0)
+    if resolved_tab_index < 1:
+        raise HTTPException(status_code=500, detail="resolved_tab_index_invalid")
+
     ctx = request_manager.create_request()
     with logger.context(ctx.request_id):
-        logger.info(f"开始 (域名路由 {route_key})")
+        logger.info(
+            f"开始 (域名路由 {route_key} -> 标签页 #{resolved_tab_index}, "
+            f"selector={'tab_index' if tab_index is not None else normalized_selector}, "
+            f"preset={resolved_preset_name or '<follow-tab/default>'})"
+        )
+        return await _chat_with_resolved_tab(
+            request,
+            body,
+            ctx,
+            tab_index=resolved_tab_index,
+            resolved_headers=resolved_headers,
+        )
 
-        if has_tool_calling_request(
-            messages=body.messages,
-            tools=body.tools,
-            functions=body.functions,
-        ):
-            if body.stream:
-                return StreamingResponse(
-                    _stream_tool_calling_with_route_domain(request, body, ctx, route_key),
-                    media_type="text/event-stream",
-                    headers={
-                        "Cache-Control": "no-cache",
-                        "Connection": "keep-alive",
-                        "X-Accel-Buffering": "no"
-                    }
-                )
-            else:
-                return await _non_stream_tool_calling_with_route_domain(request, body, ctx, route_key)
 
-        if body.stream:
-            return StreamingResponse(
-                _stream_with_route_domain(request, body, ctx, route_key),
-                media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache",
-                    "Connection": "keep-alive",
-                    "X-Accel-Buffering": "no"
-                }
-            )
-        else:
-            return await _non_stream_with_route_domain(request, body, ctx, route_key)
+@router.post("/url/{route_domain}/{preset_name}/v1/chat/completions")
+async def chat_with_route_domain_and_preset(
+    route_domain: str,
+    preset_name: str,
+    request: Request,
+    body: ChatRequest,
+    tab_index: Optional[int] = Query(default=None, ge=1),
+    selector: str = Query(default="first_idle"),
+    authenticated: bool = Depends(verify_auth)
+):
+    """使用域名+预设路径风格进行聊天。路径中的预设优先级最高。"""
+    forced_preset_name = str(preset_name or "").strip() or None
+    if forced_preset_name != body.preset_name:
+        body = body.model_copy(update={"preset_name": forced_preset_name})
+
+    return await chat_with_route_domain(
+        route_domain=route_domain,
+        request=request,
+        body=body,
+        tab_index=tab_index,
+        selector=selector,
+        preset_name=forced_preset_name,
+        authenticated=authenticated,
+    )
 
 
 async def _stream_with_tab_index(
@@ -458,6 +721,7 @@ async def _stream_with_tab_index(
                     body.messages,
                     stream=True,
                     task_id=ctx.request_id,
+                    preset_name=body.preset_name,
                     stop_checker=ctx.should_stop,
                 )
 
@@ -562,6 +826,7 @@ async def _non_stream_with_tab_index(
 ) -> JSONResponse:
     """使用指定标签页的非流式响应"""
     collected_content = []
+    collected_media = []
     error_data = None
 
     async for chunk in _stream_with_tab_index(request, body, ctx, tab_index):
@@ -580,6 +845,8 @@ async def _non_stream_with_tab_index(
                         error_data = data
                         break
 
+                    collected_media.extend(_extract_chunk_media_items(data))
+
                     if "choices" in data and data["choices"]:
                         delta = data["choices"][0].get("delta", {})
                         content = delta.get("content", "")
@@ -592,19 +859,12 @@ async def _non_stream_with_tab_index(
     if error_data:
         return JSONResponse(content=error_data, status_code=500)
 
-    full_content = "".join(collected_content)
-    response = {
-        "id": f"chatcmpl-{int(time.time() * 1000)}",
-        "object": "chat.completion",
-        "created": int(time.time()),
-        "model": body.model,
-        "choices": [{
-            "index": 0,
-            "message": {"role": "assistant", "content": full_content},
-            "finish_reason": "stop"
-        }],
-        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-    }
+    full_content = _cleanup_non_stream_content("".join(collected_content))
+    response = SSEFormatter.pack_non_stream(
+        full_content,
+        model=body.model,
+        media=_dedupe_media_items(collected_media),
+    )
 
     return JSONResponse(content=response)
 
@@ -639,6 +899,7 @@ async def _stream_with_route_domain(
                     body.messages,
                     stream=True,
                     task_id=ctx.request_id,
+                    preset_name=body.preset_name,
                     stop_checker=ctx.should_stop,
                 )
 
@@ -743,6 +1004,7 @@ async def _non_stream_with_route_domain(
 ) -> JSONResponse:
     """使用指定域名路由的非流式响应"""
     collected_content = []
+    collected_media = []
     error_data = None
 
     async for chunk in _stream_with_route_domain(request, body, ctx, route_domain):
@@ -761,6 +1023,8 @@ async def _non_stream_with_route_domain(
                         error_data = data
                         break
 
+                    collected_media.extend(_extract_chunk_media_items(data))
+
                     if "choices" in data and data["choices"]:
                         delta = data["choices"][0].get("delta", {})
                         content = delta.get("content", "")
@@ -773,19 +1037,12 @@ async def _non_stream_with_route_domain(
     if error_data:
         return JSONResponse(content=error_data, status_code=500)
 
-    full_content = "".join(collected_content)
-    response = {
-        "id": f"chatcmpl-{int(time.time() * 1000)}",
-        "object": "chat.completion",
-        "created": int(time.time()),
-        "model": body.model,
-        "choices": [{
-            "index": 0,
-            "message": {"role": "assistant", "content": full_content},
-            "finish_reason": "stop"
-        }],
-        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-    }
+    full_content = _cleanup_non_stream_content("".join(collected_content))
+    response = SSEFormatter.pack_non_stream(
+        full_content,
+        model=body.model,
+        media=_dedupe_media_items(collected_media),
+    )
 
     return JSONResponse(content=response)
 
@@ -795,6 +1052,7 @@ def _execute_browser_non_stream_for_tab(
     tab_index: int,
     messages: List[Dict[str, Any]],
     request_id: str,
+    preset_name: Optional[str] = None,
     stop_checker=None,
 ) -> Dict[str, Any]:
     payload = None
@@ -803,6 +1061,7 @@ def _execute_browser_non_stream_for_tab(
         messages,
         stream=False,
         task_id=request_id,
+        preset_name=preset_name,
         stop_checker=stop_checker,
     ):
         payload = chunk
@@ -822,6 +1081,7 @@ def _execute_browser_non_stream_for_route_domain(
     route_domain: str,
     messages: List[Dict[str, Any]],
     request_id: str,
+    preset_name: Optional[str] = None,
     stop_checker=None,
 ) -> Dict[str, Any]:
     payload = None
@@ -830,6 +1090,7 @@ def _execute_browser_non_stream_for_route_domain(
         messages,
         stream=False,
         task_id=request_id,
+        preset_name=preset_name,
         stop_checker=stop_checker,
     ):
         payload = chunk
@@ -889,6 +1150,7 @@ def _run_tool_calling_sync_for_tab(
                 tab_index=tab_index,
                 messages=browser_messages,
                 request_id=request_id,
+                preset_name=body.preset_name,
                 stop_checker=stop_checker,
             )
         ),
@@ -930,6 +1192,7 @@ def _run_tool_calling_sync_for_route_domain(
                 route_domain=route_domain,
                 messages=browser_messages,
                 request_id=request_id,
+                preset_name=body.preset_name,
                 stop_checker=stop_checker,
             )
         ),

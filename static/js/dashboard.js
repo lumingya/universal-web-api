@@ -1434,10 +1434,10 @@ const app = createApp({
                     method: 'PUT',
                     body: JSON.stringify(payload)
                 });
-                this.notify('图片配置已保存', 'success');
+                this.notify('多模态提取配置已保存', 'success');
             } catch (error) {
                 console.error('保存图片配置失败:', error);
-                this.notify('保存图片配置失败: ' + error.message, 'error');
+                this.notify('保存多模态提取配置失败: ' + error.message, 'error');
             }
         },
 

@@ -257,14 +257,12 @@ class ImagePresetsManager:
                 "description": data.get("description", ""),
                 "enabled": config.get("enabled", False),
                 "notes": data.get("notes", ""),
-                "is_special": domain.startswith("_"),
                 "config": config
             }
             
             result.append(item)
         
-        # 排序：特殊预设在后
-        result.sort(key=lambda x: (x["is_special"], x["domain"]))
+        result.sort(key=lambda x: x["domain"])
         
         return result
     

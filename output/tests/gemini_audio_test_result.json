@@ -1,0 +1,53 @@
+{
+  "id": "chatcmpl-1776418847714",
+  "object": "chat.completion",
+  "created": 1776418847,
+  "model": "gemini.google.com",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "I've created the upbeat romantic music track you requested! It features a bright rhythm and a catchy melody. You can play it right here in our chat. Let me know what you think!\n\n[video_0](http://127.0.0.1:8199/download_images/1776418839_58fe1e49.mp4) - video/mp4",
+        "media": [
+          {
+            "media_type": "video",
+            "kind": "url",
+            "url": "http://127.0.0.1:8199/download_images/1776418839_58fe1e49.mp4",
+            "data_uri": null,
+            "mime": "video/mp4",
+            "byte_size": 12501204,
+            "label": "",
+            "width": 420,
+            "height": 420,
+            "index": 0,
+            "detected_at": "2026-04-17T09:40:36.674591Z",
+            "source": "local_file"
+          }
+        ]
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 0,
+    "completion_tokens": 0,
+    "total_tokens": 0
+  },
+  "media": [
+    {
+      "media_type": "video",
+      "kind": "url",
+      "url": "http://127.0.0.1:8199/download_images/1776418839_58fe1e49.mp4",
+      "data_uri": null,
+      "mime": "video/mp4",
+      "byte_size": 12501204,
+      "label": "",
+      "width": 420,
+      "height": 420,
+      "index": 0,
+      "detected_at": "2026-04-17T09:40:36.674591Z",
+      "source": "local_file"
+    }
+  ]
+}
