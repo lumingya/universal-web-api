@@ -485,7 +485,7 @@ async def execute_command_group(
                     session=session,
                     include_disabled=include_disabled,
                 )
-                if not plan.get("fully_runnable", False):
+                if int(plan.get("runnable_count", 0) or 0) <= 0:
                     skipped_tabs.append({
                         "tab_index": tab_index,
                         "runnable_count": plan.get("runnable_count", 0),
@@ -493,17 +493,24 @@ async def execute_command_group(
                     })
                     continue
 
+                effective_acquire_policy = (
+                    "inherit_session" if acquire_policy == "require_acquire" else acquire_policy
+                )
                 result = command_engine.execute_command_group(
                     group_name=normalized_name,
                     session=session,
                     include_disabled=include_disabled,
-                    acquire_policy=acquire_policy,
+                    acquire_policy=effective_acquire_policy,
                 )
-                if not result.get("ok"):
+                if not result.get("ok") and not result.get("partial_ok"):
                     raise HTTPException(status_code=400, detail=result.get("error", "命令组执行失败"))
+                result["requested_acquire_policy"] = acquire_policy
+                message = f"命令组已在标签页 #{tab_index} 执行"
+                if result.get("partial_ok") and not result.get("ok"):
+                    message += "（部分命令被跳过或执行失败）"
                 return {
                     "success": True,
-                    "message": f"命令组已在标签页 #{tab_index} 执行",
+                    "message": message,
                     "tab_index": tab_index,
                     **result,
                 }

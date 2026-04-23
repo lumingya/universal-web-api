@@ -96,7 +96,7 @@ async def get_marketplace_review_status(
 @router.post("/api/marketplace/review/issues/{issue_number}/approve")
 async def approve_marketplace_issue(
     issue_number: int,
-    body: MarketplaceReviewRequest,
+    body: Optional[MarketplaceReviewRequest] = None,
     x_github_token: Optional[str] = Header(None),
     authenticated: bool = Depends(verify_auth),
 ):
@@ -110,7 +110,7 @@ async def approve_marketplace_issue(
 @router.post("/api/marketplace/review/issues/{issue_number}/reject")
 async def reject_marketplace_issue(
     issue_number: int,
-    body: MarketplaceReviewRequest,
+    body: Optional[MarketplaceReviewRequest] = None,
     x_github_token: Optional[str] = Header(None),
     authenticated: bool = Depends(verify_auth),
 ):
@@ -124,7 +124,7 @@ async def reject_marketplace_issue(
 @router.post("/api/marketplace/review/items/{item_id}/remove")
 async def remove_marketplace_item(
     item_id: str,
-    body: MarketplaceReviewRequest,
+    body: Optional[MarketplaceReviewRequest] = None,
     x_github_token: Optional[str] = Header(None),
     authenticated: bool = Depends(verify_auth),
 ):

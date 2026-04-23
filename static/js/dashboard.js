@@ -243,6 +243,21 @@ const BROWSER_CONSTANTS_SCHEMA = {
             }
         }
     },
+    text_input: {
+        label: '文本输入',
+        icon: '⌨️',
+        items: {
+            TEXT_INPUT_CHUNK_SIZE: {
+                label: '长文本分块大小',
+                unit: '字符',
+                desc: '普通模式下，长文本会按这个大小分块写入输入框。值越大越快，但更容易触发页面限制；值越小更稳，但输入更慢。不影响文件粘贴阈值。',
+                type: 'number',
+                min: 1000,
+                step: 1000,
+                default: 30000
+            }
+        }
+    },
     logging: {
         label: '日志',
         icon: '🪄',
@@ -1425,6 +1440,10 @@ const app = createApp({
             if (!this.currentDomain || !this.currentConfig) return;
 
             const pc = this.getActivePresetConfig()
+            const previousImageConfig = pc
+                ? JSON.parse(JSON.stringify(pc.image_extraction || {}))
+                : null
+
             if (pc) pc.image_extraction = newConfig;
 
             try {
@@ -1436,6 +1455,9 @@ const app = createApp({
                 });
                 this.notify('多模态提取配置已保存', 'success');
             } catch (error) {
+                if (pc) {
+                    pc.image_extraction = previousImageConfig || {}
+                }
                 console.error('保存图片配置失败:', error);
                 this.notify('保存多模态提取配置失败: ' + error.message, 'error');
             }
@@ -3561,66 +3583,6 @@ const app = createApp({
             this.loadConfig(true)
         },
 
-        // ========== Toast 通知 ==========
-
-        async apiRequest(url, options = {}) {
-            const token = localStorage.getItem('api_token')
-            const timeoutMs = Number(options.timeoutMs || 0)
-            const headers = {
-                'Content-Type': 'application/json',
-                ...options.headers
-            }
-
-            if (token) {
-                headers['Authorization'] = 'Bearer ' + token
-            }
-
-            const fetchOptions = { ...options }
-            delete fetchOptions.timeoutMs
-
-            let timeoutId = null
-            let controller = null
-            if (timeoutMs > 0 && typeof AbortController !== 'undefined') {
-                controller = new AbortController()
-                fetchOptions.signal = controller.signal
-                timeoutId = setTimeout(() => {
-                    controller.abort()
-                }, timeoutMs)
-            }
-
-            try {
-                const response = await fetch(url, {
-                    ...fetchOptions,
-                    headers
-                })
-
-                if (!response.ok) {
-                    if (response.status === 401) {
-                        this.notify('认证失败，请检查 Token', 'error')
-                        this.showTokenDialog = true
-                        throw new Error('UNAUTHORIZED')
-                    }
-
-                    const errorData = await response.json().catch(() => ({}))
-                    throw new Error(errorData.detail || '请求失败 (' + response.status + ')')
-                }
-
-                return await response.json()
-            } catch (error) {
-                if (error && error.name === 'AbortError') {
-                    throw new Error('REQUEST_TIMEOUT')
-                }
-                if (error.message !== 'UNAUTHORIZED') {
-                    console.error('API 请求错误:', error)
-                }
-                throw error
-            } finally {
-                if (timeoutId) {
-                    clearTimeout(timeoutId)
-                }
-            }
-        },
-
         restoreSitesCache() {
             const cached = loadStoredSitesCache()
             if (!cached || !cached.sites) {
@@ -3637,36 +3599,6 @@ const app = createApp({
             }
             if (!this.currentDomain) {
                 this.currentDomain = domains[0]
-            }
-        },
-
-        async loadConfig(silent) {
-            if (typeof silent !== 'boolean') {
-                silent = false
-            }
-
-            this.isLoading = true
-            try {
-                const data = await this.apiRequest('/api/config', { timeoutMs: 5000 })
-                this.sites = this.normalizeConfig(data)
-
-                if (!this.currentDomain && Object.keys(this.sites).length > 0) {
-                    this.currentDomain = Object.keys(this.sites)[0]
-                }
-                saveStoredSitesCache(this.sites, this.currentDomain)
-
-                if (!silent) {
-                    this.notify('配置已刷新 (' + Object.keys(this.sites).length + ' 个站点)', 'success')
-                }
-                return true
-            } catch (error) {
-                this.notify('加载配置失败: ' + error.message, 'error')
-                if (Object.keys(this.sites || {}).length === 0) {
-                    this.sites = {}
-                }
-                return false
-            } finally {
-                this.isLoading = false
             }
         },
 

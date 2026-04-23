@@ -1,4 +1,4 @@
-﻿"""
+"""
 app/core/browser.py - 浏览器核心连接和调度（v2.0 多标签页版）
 
 职责：
@@ -348,6 +348,91 @@ class BrowserCore:
         }
         return reason in manual_reasons
 
+    def _build_task_ownership_stop_checker(
+        self,
+        session: Optional[TabSession],
+        task_id: str,
+        base_checker: Optional[Callable[[], bool]] = None,
+    ) -> Callable[[], bool]:
+        expected_task_id = str(task_id or "").strip()
+        base = base_checker or self._should_stop_checker
+        ownership_lost_logged = False
+
+        def _checker() -> bool:
+            nonlocal ownership_lost_logged
+            if base():
+                return True
+            if not session or not expected_task_id:
+                return False
+
+            try:
+                current_task_id = str(getattr(session, "current_task_id", "") or "").strip()
+                session_status = getattr(getattr(session, "status", None), "value", "")
+            except Exception:
+                current_task_id = ""
+                session_status = ""
+
+            ownership_lost = False
+            detail = ""
+            if current_task_id and current_task_id != expected_task_id:
+                ownership_lost = True
+                detail = f"current_task={current_task_id}"
+            elif session_status in {"error", "closed"}:
+                ownership_lost = True
+                detail = f"status={session_status}"
+            elif not current_task_id:
+                ownership_lost = True
+                detail = f"missing_task_id,status={session_status or 'unknown'}"
+
+            if ownership_lost:
+                if not ownership_lost_logged:
+                    self._cancel_request_due_to_ownership_loss(
+                        expected_task_id,
+                        session,
+                        detail=detail,
+                    )
+                    logger.warning(
+                        f"[{session.id}] 检测到工作流所有权丢失，停止当前任务 "
+                        f"(expected_task={expected_task_id}, {detail})"
+                    )
+                    ownership_lost_logged = True
+                return True
+
+            return False
+
+        return _checker
+
+    def _cancel_request_due_to_ownership_loss(
+        self,
+        task_id: str,
+        session: Optional[TabSession],
+        detail: str = "",
+    ) -> None:
+        request_id = str(task_id or "").strip()
+        if session is not None:
+            try:
+                setattr(session, "_workflow_stop_reason", "ownership_lost")
+            except Exception:
+                pass
+        if not request_id:
+            return
+
+        try:
+            from app.services.request_manager import request_manager
+            cancelled = bool(request_manager.cancel_request(request_id, "task_ownership_lost"))
+            logger.warning(
+                f"[{getattr(session, 'id', '-')}] 所有权丢失后取消请求: "
+                f"request={request_id}, cancelled={cancelled}, detail={detail or '-'}, "
+                f"current_task={str(getattr(session, 'current_task_id', '') or '').strip() or '-'}, "
+                f"bound_req={str(getattr(session, '_bound_request_id', '') or '').strip() or '-'}, "
+                f"status={getattr(getattr(session, 'status', None), 'value', '') or '-'}"
+            )
+        except Exception as e:
+            logger.debug(
+                f"[{getattr(session, 'id', '-')}] 所有权丢失后取消请求失败（忽略）: {e}"
+                + (f" ({detail})" if detail else "")
+            )
+
     def _release_workflow_session(
         self,
         session: TabSession,
@@ -355,6 +440,33 @@ class BrowserCore:
         effective_stop_checker: Optional[Callable[[], bool]] = None,
         task_id: str = "",
     ):
+        expected_task_id = str(task_id or "").strip()
+        current_task_id = str(getattr(session, "current_task_id", "") or "").strip()
+        session_status = getattr(getattr(session, "status", None), "value", "")
+        if expected_task_id:
+            if current_task_id and current_task_id != expected_task_id:
+                self._cancel_request_due_to_ownership_loss(
+                    expected_task_id,
+                    session,
+                    detail=f"current_task={current_task_id}",
+                )
+                logger.warning(
+                    f"[{session.id}] 跳过释放：标签页已被其他任务接管 "
+                    f"(expected_task={expected_task_id}, current_task={current_task_id})"
+                )
+                return
+            if not current_task_id:
+                self._cancel_request_due_to_ownership_loss(
+                    expected_task_id,
+                    session,
+                    detail=f"missing_task_id,status={session_status or 'unknown'}",
+                )
+                logger.warning(
+                    f"[{session.id}] 跳过释放：标签页 task_id 已丢失 "
+                    f"(expected_task={expected_task_id}, status={session_status or 'unknown'})"
+                )
+                return
+
         cancelled = bool(effective_stop_checker and effective_stop_checker())
         rollback_request_count = cancelled and self._should_rollback_request_count_on_cancel(task_id)
         if cancelled and not rollback_request_count:
@@ -363,10 +475,18 @@ class BrowserCore:
                 f"(task={task_id or '-'}, reason={self._get_request_cancel_reason(task_id) or 'unknown'})"
             )
 
+        logger.debug(
+            f"[{session.id}] 工作流释放请求: expected_task={expected_task_id or '-'}, "
+            f"current_task={current_task_id or '-'}, session_status={session_status or '-'}, "
+            f"cancelled={cancelled}, rollback_request_count={rollback_request_count}, "
+            f"bound_req={str(getattr(session, '_bound_request_id', '') or '').strip() or '-'}"
+        )
+
         self.tab_pool.release(
             session.id,
             check_triggers=not rollback_request_count,
             rollback_request_count=rollback_request_count,
+            expected_task_id=expected_task_id,
         )
     
     @property
@@ -726,7 +846,12 @@ class BrowserCore:
                 return
 
             self._bind_request_tab_id(task_id, session)
-            
+            effective_stop_checker = self._build_task_ownership_stop_checker(
+                session,
+                task_id,
+                effective_stop_checker,
+            )
+             
             # 执行工作流
             if stream:
                 yield from self._execute_workflow_stream(
@@ -807,7 +932,12 @@ class BrowserCore:
                 return
 
             self._bind_request_tab_id(task_id, session)
-            
+            effective_stop_checker = self._build_task_ownership_stop_checker(
+                session,
+                task_id,
+                effective_stop_checker,
+            )
+             
             # 执行工作流
             if stream:
                 yield from self._execute_workflow_stream(
@@ -896,6 +1026,11 @@ class BrowserCore:
                 return
 
             self._bind_request_tab_id(task_id, session)
+            effective_stop_checker = self._build_task_ownership_stop_checker(
+                session,
+                task_id,
+                effective_stop_checker,
+            )
 
             if stream:
                 yield from self._execute_workflow_stream(
@@ -936,7 +1071,13 @@ class BrowserCore:
         try:
             setattr(session, "_bound_request_id", request_id)
             from app.services.request_manager import request_manager
-            request_manager.bind_tab(request_id, session.id)
+            bind_ok = bool(request_manager.bind_tab(request_id, session.id))
+            logger.debug(
+                f"[{session.id}] 绑定请求标签页: request={request_id}, "
+                f"bind_ok={bind_ok}, current_task={str(getattr(session, 'current_task_id', '') or '').strip() or '-'}, "
+                f"status={getattr(getattr(session, 'status', None), 'value', '') or '-'}, "
+                f"idx=#{getattr(session, 'persistent_index', 0) or '-'}"
+            )
         except Exception as e:
             logger.debug(f"[{session.id}] 绑定请求标签页失败（忽略）: {e}")
    
@@ -2030,29 +2171,40 @@ class BrowserCore:
         from pathlib import Path
         import time as time_module
         import uuid
+        from urllib.parse import urlparse
         import requests
 
         if not images:
             return images
 
-        img0 = images[0]
-        url0 = (img0.get("url") or "").strip()
+        remote_indexes = []
+        for idx, item in enumerate(images):
+            if str(item.get("kind") or "").strip().lower() != "url":
+                continue
+            url = str(item.get("url") or "").strip()
+            if url.startswith("http://") or url.startswith("https://"):
+                remote_indexes.append(idx)
 
-        # 仅当是 http(s) 外链时才处理
-        if not (url0.startswith("http://") or url0.startswith("https://")):
+        if not remote_indexes:
             return images
 
-        # 准备目录与文件名
         out_dir = Path("download_images")
         out_dir.mkdir(exist_ok=True)
-        filename = f"{int(time_module.time())}_{uuid.uuid4().hex[:8]}.png"
-        out_path = out_dir / filename
 
-        # 从站点配置获取图片选择器
         image_config = image_config or {}
         selector = image_config.get("selector", "img")
+        ext_map = {
+            "image/jpeg": ".jpg",
+            "image/jpg": ".jpg",
+            "image/png": ".png",
+            "image/webp": ".webp",
+            "image/gif": ".gif",
+            "image/bmp": ".bmp",
+            "image/svg+xml": ".svg",
+            "image/avif": ".avif",
+        }
 
-        # ===== 1. 定位图片元素 =====
+        img_eles = []
         try:
             if selector and selector != "img":
                 img_eles = tab.eles(f"css:{selector}", timeout=0.5)
@@ -2060,46 +2212,94 @@ class BrowserCore:
             else:
                 img_eles = last_element.eles("css:img", timeout=0.5)
                 logger.debug(f"图片定位：使用默认选择器，找到 {len(img_eles) if img_eles else 0} 个")
-
-            if not img_eles:
-                logger.warning(f"图片定位：未找到元素 (selector: {selector})")
-                return images
-
-            img_ele = img_eles[-1]
         except Exception as e:
-            logger.warning(f"图片定位失败: {e}")
-            return images
+            logger.warning(f"图片定位失败，将仅尝试直连下载: {e}")
+            img_eles = []
 
-        saved = False
-
-        # ===== 2. 优先下载图片（精准且小文件）=====
+        cookies_dict = {}
         try:
-            # 获取图片 URL（实测：attr 和 link 都可用）
-            img_src = img_ele.attr('src') or img_ele.link
+            cookies_list = tab.cookies()
+            if cookies_list:
+                for c in cookies_list:
+                    if isinstance(c, dict) and 'name' in c and 'value' in c:
+                        cookies_dict[c['name']] = c['value']
+        except Exception:
+            pass
 
-            if img_src and img_src.startswith('http'):
-                logger.debug(f"尝试下载: {img_src[:80]}...")
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Referer': tab.url,
+            'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+        }
 
-                # 获取 cookies（实测：返回字典列表）
-                cookies_dict = {}
-                try:
-                    cookies_list = tab.cookies()
-                    if cookies_list:
-                        for c in cookies_list:
-                            if isinstance(c, dict) and 'name' in c and 'value' in c:
-                                cookies_dict[c['name']] = c['value']
-                except:
-                    pass
+        img_ele_entries = []
+        for ele in img_eles or []:
+            try:
+                img_src = str(ele.attr('src') or ele.link or "").strip()
+            except Exception as e:
+                logger.debug(f"读取图片元素地址失败（忽略）: {e}")
+                img_src = ""
+            img_ele_entries.append({
+                "element": ele,
+                "src": img_src,
+                "used": False,
+            })
 
-                # 下载图片
-                headers = {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                    'Referer': tab.url,
-                    'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
-                }
+        def _claim_image_element(target_url: str):
+            normalized_target = str(target_url or "").strip()
+            if normalized_target:
+                for entry in reversed(img_ele_entries):
+                    if entry["used"]:
+                        continue
+                    src = entry["src"]
+                    if src and src == normalized_target:
+                        entry["used"] = True
+                        return entry["element"]
 
+                for entry in reversed(img_ele_entries):
+                    if entry["used"]:
+                        continue
+                    src = entry["src"]
+                    if src and (normalized_target in src or src in normalized_target):
+                        entry["used"] = True
+                        return entry["element"]
+
+                target_path = urlparse(normalized_target).path or ""
+                for entry in reversed(img_ele_entries):
+                    if entry["used"]:
+                        continue
+                    src_path = urlparse(entry["src"]).path if entry["src"] else ""
+                    if src_path and target_path and src_path == target_path:
+                        entry["used"] = True
+                        return entry["element"]
+
+            for entry in reversed(img_ele_entries):
+                if entry["used"]:
+                    continue
+                entry["used"] = True
+                return entry["element"]
+
+            return None
+
+        new_images = list(images)
+        localized_count = 0
+
+        for target_index in reversed(remote_indexes):
+            target_image = images[target_index]
+            target_url = str(target_image.get("url") or "").strip()
+            img_ele = _claim_image_element(target_url)
+            saved = False
+
+            base_name = f"{int(time_module.time())}_{uuid.uuid4().hex[:8]}"
+            ext = ".png"
+            filename = f"{base_name}{ext}"
+            out_path = out_dir / filename
+
+            response = None
+            try:
+                logger.debug(f"尝试下载图片[{target_index}]: {target_url[:80]}...")
                 response = requests.get(
-                    img_src,
+                    target_url,
                     cookies=cookies_dict,
                     headers=headers,
                     timeout=15,
@@ -2108,18 +2308,12 @@ class BrowserCore:
 
                 if response.status_code == 200:
                     content = response.content
-                    content_type = response.headers.get('Content-Type', '')
+                    content_type = str(response.headers.get('Content-Type') or '').split(";", 1)[0].strip().lower()
 
-                    # 检查是否是有效图片
                     if len(content) > 1000 and 'image' in content_type:
-                        # 根据 Content-Type 调整扩展名
-                        if 'jpeg' in content_type or 'jpg' in content_type:
-                            filename = filename.replace('.png', '.jpg')
-                            out_path = out_dir / filename
-                        elif 'webp' in content_type:
-                            filename = filename.replace('.png', '.webp')
-                            out_path = out_dir / filename
-
+                        ext = ext_map.get(content_type, ext)
+                        filename = f"{base_name}{ext}"
+                        out_path = out_dir / filename
                         out_path.write_bytes(content)
                         saved = True
                         logger.debug(f"✅ 下载成功: {filename} ({len(content)} bytes)")
@@ -2127,38 +2321,42 @@ class BrowserCore:
                         logger.debug(f"下载内容无效: {len(content)} bytes, type: {content_type}")
                 else:
                     logger.debug(f"下载失败: HTTP {response.status_code}")
-
-        except Exception as e:
-            logger.debug(f"下载异常，将尝试截图: {str(e)[:100]}")
-
-        # ===== 3. 回退到截图（文件更大但稳定）=====
-        if not saved:
-            logger.debug("回退到截图方式")
-            try:
-                # 实测：get_screenshot(path) 返回路径字符串
-                result = img_ele.get_screenshot(str(out_path))
-                if out_path.exists() and out_path.stat().st_size > 0:
-                    saved = True
-                    logger.debug(f"✅ 截图成功: {filename} ({out_path.stat().st_size} bytes)")
             except Exception as e:
-                logger.warning(f"截图失败: {e}")
+                logger.debug(f"下载异常，将尝试截图: {str(e)[:100]}")
+            finally:
+                if response is not None:
+                    try:
+                        response.close()
+                    except Exception:
+                        pass
 
-        if not saved:
-            logger.warning("图片保存失败：下载和截图均失败")
-            return images
+            if not saved and img_ele is not None:
+                logger.debug(f"图片[{target_index}] 回退到截图方式")
+                try:
+                    img_ele.get_screenshot(str(out_path))
+                    if out_path.exists() and out_path.stat().st_size > 0:
+                        saved = True
+                        logger.debug(f"✅ 截图成功: {filename} ({out_path.stat().st_size} bytes)")
+                except Exception as e:
+                    logger.warning(f"截图失败: {e}")
 
-        local_url = f"/download_images/{filename}"
+            if not saved:
+                logger.warning(f"图片[{target_index}] 保存失败：下载和截图均失败")
+                continue
 
-        # 覆写第 1 张图片为本地 URL
-        new0 = dict(img0)
-        new0["kind"] = "url"
-        new0["url"] = local_url
-        new0["source"] = "local_file"
-        new0["local_path"] = str(out_path)
-        new0["byte_size"] = out_path.stat().st_size
+            local_url = f"/download_images/{filename}"
+            new_item = dict(target_image)
+            new_item["kind"] = "url"
+            new_item["url"] = local_url
+            new_item["source"] = "local_file"
+            new_item["local_path"] = str(out_path)
+            new_item["byte_size"] = out_path.stat().st_size
+            new_images[target_index] = new_item
+            localized_count += 1
 
-        new_images = [new0] + images[1:]
-        logger.debug(f"✅ 图片已保存: {local_url} ({new0['byte_size']} bytes)")
+        if localized_count > 0:
+            logger.debug(f"✅ 图片本地化完成: {localized_count}/{len(remote_indexes)} 张")
+
         return new_images
 
     def _persist_data_uri_media_to_local(self, media_items: List[Dict]) -> List[Dict]:

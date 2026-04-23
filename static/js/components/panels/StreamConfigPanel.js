@@ -102,6 +102,15 @@ window.StreamConfigPanel = {
         }
     },
     methods: {
+        buildAuthHeaders(extraHeaders = {}) {
+            const token = String(localStorage.getItem('api_token') || '').trim();
+            const headers = { ...extraHeaders };
+            if (token) {
+                headers['Authorization'] = 'Bearer ' + token;
+            }
+            return headers;
+        },
+
         toggle() {
             this.$emit('update:collapsed', !this.collapsed);
         },
@@ -209,12 +218,16 @@ window.StreamConfigPanel = {
             if (this.loadingParsers) return;
             this.loadingParsers = true;
             try {
-                const response = await fetch('/api/parsers');
-                if (response.ok) {
-                    const data = await response.json();
-                    this.availableParsers = data.parsers || [];
-                    this.autofillListenPatternFromCurrentParser();
+                const response = await fetch('/api/parsers', {
+                    headers: this.buildAuthHeaders()
+                });
+                if (!response.ok) {
+                    const err = await response.json().catch(() => ({}));
+                    throw new Error(err.detail || ('HTTP ' + response.status));
                 }
+                const data = await response.json();
+                this.availableParsers = data.parsers || [];
+                this.autofillListenPatternFromCurrentParser();
             } catch (e) {
                 console.error('加载解析器失败:', e);
             } finally {

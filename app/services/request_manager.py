@@ -67,9 +67,12 @@ class RequestContext:
     
     def mark_running(self, tab_id: str = None):
         with self._lock:
-            self.status = RequestStatus.RUNNING
             self.started_at = time.time()
             self.tab_id = tab_id
+            if self._cancel_flag:
+                self.status = RequestStatus.CANCELLED
+            else:
+                self.status = RequestStatus.RUNNING
     
     def mark_completed(self):
         with self._lock:
@@ -232,7 +235,12 @@ class RequestManager:
             return False
 
         with ctx._lock:
+            previous_tab_id = str(ctx.tab_id or "").strip()
             ctx.tab_id = tab_id
+            logger.debug(
+                f"[{request_id}] 绑定标签页: {previous_tab_id or '-'} -> {tab_id} "
+                f"(status={ctx.status.value}, cancel_reason={ctx.cancel_reason or '-'})"
+            )
         return True
     
     def finish_request(self, ctx: RequestContext, success: bool = True):
@@ -247,7 +255,10 @@ class RequestManager:
         # 设置上下文后记录日志
         token = _request_context.set(ctx.request_id)
         try:
-            logger.info(f"完成 ({duration:.1f}s)")
+            logger.info(
+                f"完成 ({duration:.1f}s, status={ctx.status.value}, "
+                f"tab={ctx.tab_id or '-'}, reason={ctx.cancel_reason or '-'})"
+            )
         finally:
             _request_context.reset(token)
     

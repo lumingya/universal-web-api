@@ -348,6 +348,7 @@ class BrowserConstants:
         'STREAM_SILENCE_THRESHOLD_FALLBACK': 10.0,
         'MAX_MESSAGE_LENGTH': 100000,
         'MAX_MESSAGES_COUNT': 100,
+        'TEXT_INPUT_CHUNK_SIZE': 30000,
         'STREAM_USER_MSG_WAIT': 1.5,
         'STREAM_PRE_BASELINE_DELAY': 0.3,
         'GLOBAL_NETWORK_INTERCEPTION_ENABLED': False,
@@ -398,6 +399,9 @@ class BrowserConstants:
     # 输入验证
     MAX_MESSAGE_LENGTH = 100000
     MAX_MESSAGES_COUNT = 100
+
+    # 文本输入
+    TEXT_INPUT_CHUNK_SIZE = 30000
     
     # 两阶段 baseline 配置
     STREAM_USER_MSG_WAIT = 1.5

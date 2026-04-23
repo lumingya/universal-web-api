@@ -46,6 +46,15 @@ window.ImageConfigPanel = {
         if (this.currentDomain) this.checkCurrentPreset();
     },
     methods: {
+        buildAuthHeaders(extraHeaders = {}) {
+            const token = String(localStorage.getItem('api_token') || '').trim();
+            const headers = { ...extraHeaders };
+            if (token) {
+                headers['Authorization'] = 'Bearer ' + token;
+            }
+            return headers;
+        },
+
         toggle() {
             this.$emit('update:collapsed', !this.collapsed);
         },
@@ -90,11 +99,15 @@ window.ImageConfigPanel = {
             if (this.loadingPresets) return;
             this.loadingPresets = true;
             try {
-                const response = await fetch('/api/image-presets');
-                if (response.ok) {
-                    const data = await response.json();
-                    this.availablePresets = data.presets || [];
+                const response = await fetch('/api/image-presets', {
+                    headers: this.buildAuthHeaders()
+                });
+                if (!response.ok) {
+                    const err = await response.json().catch(() => ({}));
+                    throw new Error(err.detail || ('HTTP ' + response.status));
                 }
+                const data = await response.json();
+                this.availablePresets = data.presets || [];
             } catch (e) {
                 console.error('加载预设失败:', e);
             } finally {
@@ -105,12 +118,17 @@ window.ImageConfigPanel = {
         async checkCurrentPreset() {
             if (!this.currentDomain) return;
             try {
-                const response = await fetch('/api/sites/' + this.currentDomain + '/image-preset');
-                if (response.ok) {
-                    const data = await response.json();
-                    this.currentPreset = data.available ? data : null;
+                const response = await fetch('/api/sites/' + encodeURIComponent(this.currentDomain) + '/image-preset', {
+                    headers: this.buildAuthHeaders()
+                });
+                if (!response.ok) {
+                    const err = await response.json().catch(() => ({}));
+                    throw new Error(err.detail || ('HTTP ' + response.status));
                 }
+                const data = await response.json();
+                this.currentPreset = data.available ? data : null;
             } catch (e) {
+                console.error('读取当前图片预设失败:', e);
                 this.currentPreset = null;
             }
         },
@@ -118,16 +136,20 @@ window.ImageConfigPanel = {
         async applyPreset(presetDomain) {
             if (!this.currentDomain) return;
             try {
-                const response = await fetch('/api/sites/' + this.currentDomain + '/apply-image-preset', {
+                const response = await fetch('/api/sites/' + encodeURIComponent(this.currentDomain) + '/apply-image-preset', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: this.buildAuthHeaders({ 'Content-Type': 'application/json' }),
                     body: JSON.stringify({ preset_domain: presetDomain })
                 });
-                if (response.ok) {
-                    this.showPresetMenu = false;
-                    this.$emit('reload-config');
-                    await this.checkCurrentPreset();
+
+                if (!response.ok) {
+                    const err = await response.json().catch(() => ({}));
+                    throw new Error(err.detail || ('HTTP ' + response.status));
                 }
+
+                this.showPresetMenu = false;
+                this.$emit('reload-config');
+                await this.checkCurrentPreset();
             } catch (e) {
                 alert('应用预设失败: ' + e.message);
             }

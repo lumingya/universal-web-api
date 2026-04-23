@@ -125,6 +125,15 @@ window.ConfigTab = {
         }
     },
     methods: {
+        buildAuthHeaders(extraHeaders = {}) {
+            const token = String(localStorage.getItem('api_token') || '').trim();
+            const headers = { ...extraHeaders };
+            if (token) {
+                headers['Authorization'] = 'Bearer ' + token;
+            }
+            return headers;
+        },
+
         // 选择器值更新
         updateSelectorValue(key, value) {
             const pc = this.presetConfig;
@@ -138,15 +147,19 @@ window.ConfigTab = {
             if (!this.currentDomain) return;
             try {
                 const payload = { ...config, preset_name: this.selectedPreset };
-                const response = await fetch('/api/sites/' + this.currentDomain + '/stream-config', {
+                const response = await fetch('/api/sites/' + encodeURIComponent(this.currentDomain) + '/stream-config', {
                     method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: this.buildAuthHeaders({ 'Content-Type': 'application/json' }),
                     body: JSON.stringify(payload)
                 });
-                if (response.ok) {
-                    const pc = this.presetConfig;
-                    if (pc) pc.stream_config = config;
+
+                if (!response.ok) {
+                    const err = await response.json().catch(() => ({}));
+                    throw new Error(err.detail || ('HTTP ' + response.status));
                 }
+
+                const pc = this.presetConfig;
+                if (pc) pc.stream_config = config;
             } catch (e) {
                 console.error('保存流式配置失败:', e);
                 alert('保存失败: ' + e.message);
@@ -315,30 +328,36 @@ window.ConfigTab = {
             if (!this.currentDomain) return;
             this.presetLoading = true;
             try {
-                const response = await fetch('/api/presets/' + encodeURIComponent(this.currentDomain));
-                if (response.ok) {
-                    const data = await response.json();
-                    this.availablePresets = data.presets || ['主预设'];
-                    const apiDefault = data.default_preset;
-                    if (apiDefault && this.availablePresets.includes(apiDefault)) {
-                        this.defaultPreset = apiDefault;
-                    } else if (this.availablePresets.includes('主预设')) {
-                        this.defaultPreset = '主预设';
-                    } else {
-                        this.defaultPreset = this.availablePresets[0] || '主预设';
-                    }
-                } else {
-                    this.availablePresets = ['主预设'];
-                    this.defaultPreset = '主预设';
+                const response = await fetch('/api/presets/' + encodeURIComponent(this.currentDomain), {
+                    headers: this.buildAuthHeaders()
+                });
+                if (!response.ok) {
+                    const err = await response.json().catch(() => ({}));
+                    throw new Error(err.detail || ('HTTP ' + response.status));
                 }
+
+                const data = await response.json();
+                this.availablePresets = data.presets || ['主预设'];
+                const apiDefault = data.default_preset;
+                if (apiDefault && this.availablePresets.includes(apiDefault)) {
+                    this.defaultPreset = apiDefault;
+                } else if (this.availablePresets.includes('主预设')) {
+                    this.defaultPreset = '主预设';
+                } else {
+                    this.defaultPreset = this.availablePresets[0] || '主预设';
+                }
+
                 // 确保选中的预设仍然有效
                 if (!this.availablePresets.includes(this.selectedPreset)) {
                     this.selectedPreset = this.defaultPreset || this.availablePresets[0] || '主预设';
                 }
             } catch (e) {
                 console.error('加载预设列表失败:', e);
-                this.availablePresets = ['主预设'];
-                this.defaultPreset = '主预设';
+                if (!this.availablePresets.length) {
+                    this.availablePresets = ['主预设'];
+                    this.defaultPreset = '主预设';
+                    this.selectedPreset = '主预设';
+                }
             } finally {
                 this.presetLoading = false;
             }
@@ -355,7 +374,7 @@ window.ConfigTab = {
             try {
                 const response = await fetch('/api/presets/' + encodeURIComponent(this.currentDomain) + '/default', {
                     method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: this.buildAuthHeaders({ 'Content-Type': 'application/json' }),
                     body: JSON.stringify({
                         preset_name: this.selectedPreset
                     })
@@ -383,7 +402,7 @@ window.ConfigTab = {
             try {
                 const response = await fetch('/api/presets/' + encodeURIComponent(this.currentDomain), {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: this.buildAuthHeaders({ 'Content-Type': 'application/json' }),
                     body: JSON.stringify({
                         new_name: name,
                         source_name: sourcePreset
@@ -420,7 +439,7 @@ window.ConfigTab = {
             try {
                 const response = await fetch('/api/presets/' + encodeURIComponent(this.currentDomain) + '/rename', {
                     method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: this.buildAuthHeaders({ 'Content-Type': 'application/json' }),
                     body: JSON.stringify({
                         old_name: this.selectedPreset,
                         new_name: newName
@@ -455,7 +474,10 @@ window.ConfigTab = {
             try {
                 const response = await fetch(
                     '/api/presets/' + encodeURIComponent(this.currentDomain) + '/' + encodeURIComponent(this.selectedPreset),
-                    { method: 'DELETE' }
+                    {
+                        method: 'DELETE',
+                        headers: this.buildAuthHeaders()
+                    }
                 );
 
                 if (response.ok) {

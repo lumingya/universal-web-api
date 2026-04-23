@@ -94,6 +94,57 @@ def _dedupe_media_items(media_items: List[Dict[str, Any]]) -> List[Dict[str, Any
     return deduped
 
 
+def _validate_image_inputs(messages: list) -> None:
+    try:
+        has_image_declared = False
+        has_any_valid_image = False
+
+        for m in messages or []:
+            content = m.get("content")
+
+            if isinstance(content, str):
+                s = content.strip()
+                if "image_url" in s:
+                    has_image_declared = True
+                if "data:image" in s and "base64," in s and not s.endswith("base64,"):
+                    has_any_valid_image = True
+                continue
+
+            if isinstance(content, list):
+                for item in content:
+                    if not isinstance(item, dict):
+                        continue
+                    if item.get("type") != "image_url":
+                        continue
+
+                    has_image_declared = True
+                    image_url = item.get("image_url") or {}
+                    url = image_url.get("url") if isinstance(image_url, dict) else str(image_url)
+
+                    if not isinstance(url, str):
+                        continue
+
+                    u = url.strip()
+                    if u.startswith("data:image") and "base64," in u and not u.endswith("base64,"):
+                        has_any_valid_image = True
+                    elif u.startswith("http://") or u.startswith("https://"):
+                        has_any_valid_image = True
+                    elif os.path.exists(u):
+                        has_any_valid_image = True
+
+        if has_image_declared and not has_any_valid_image:
+            raise HTTPException(
+                status_code=400,
+                detail="检测到图片输入，但未收到任何可用图片数据。"
+                       "上游发送的是空的 data:image/...;base64, 前缀（或缺失图片 URL/base64）。"
+                       "请让上游客户端透传完整 base64 或可访问的图片 URL。"
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"图片输入校验异常（已放行）: {e}")
+
+
 # ================= 请求模型 =================
 
 class ChatRequest(BaseModel):
@@ -220,6 +271,14 @@ async def chat_completions(
     """
     OpenAI 兼容的聊天补全接口
     """
+    _validate_image_inputs(body.messages)
+
+    if body.response_format:
+        format_type = body.response_format.get("type", "text")
+        if format_type != "text":
+            logger.debug(f"检测到 response_format.type={format_type}，转化为提示词")
+            body.messages = _apply_response_format(body.messages, body.response_format)
+
     try:
         browser = get_browser(auto_connect=False)
         tabs = browser.tab_pool.get_tabs_with_index()
@@ -246,62 +305,7 @@ async def chat_completions(
     ctx = request_manager.create_request()
     with logger.context(ctx.request_id):
         logger.info("开始")
-        
-        # 图片输入校验
-        try:
-            has_image_declared = False
-            has_any_valid_image = False
 
-            for m in body.messages or []:
-                content = m.get("content")
-
-                if isinstance(content, str):
-                    s = content.strip()
-                    if "image_url" in s:
-                        has_image_declared = True
-                    if "data:image" in s and "base64," in s and not s.endswith("base64,"):
-                        has_any_valid_image = True
-                    continue
-
-                if isinstance(content, list):
-                    for item in content:
-                        if not isinstance(item, dict):
-                            continue
-                        if item.get("type") != "image_url":
-                            continue
-
-                        has_image_declared = True
-                        image_url = item.get("image_url") or {}
-                        url = image_url.get("url") if isinstance(image_url, dict) else str(image_url)
-
-                        if isinstance(url, str):
-                            u = url.strip()
-                            if u.startswith("data:image") and "base64," in u and not u.endswith("base64,"):
-                                has_any_valid_image = True
-                            elif u.startswith("http://") or u.startswith("https://"):
-                                has_any_valid_image = True
-                            elif os.path.exists(u):
-                                has_any_valid_image = True
-
-            if has_image_declared and not has_any_valid_image:
-                raise HTTPException(
-                    status_code=400,
-                    detail="检测到图片输入，但未收到任何可用图片数据。"
-                           "上游发送的是空的 data:image/...;base64, 前缀（或缺失图片 URL/base64）。"
-                           "请让上游客户端透传完整 base64 或可访问的图片 URL。"
-                )
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.warning(f"图片输入校验异常（已放行）: {e}")
-
-        # 🆕 处理 response_format 参数（直接修改 body.messages）
-        if body.response_format:
-            format_type = body.response_format.get("type", "text")
-            if format_type != "text":
-                logger.debug(f"检测到 response_format.type={format_type}，转化为提示词")
-                body.messages = _apply_response_format(body.messages, body.response_format)
-        
         try:
             logger.debug(
                 "[chat] 请求消息摘要: "
@@ -349,17 +353,17 @@ async def _stream_with_lifecycle(
     """流式响应 + 完整生命周期管理"""
     disconnect_task = None
     worker_thread = None
+    chunk_queue: Optional[queue.Queue] = None
 
     try:
+        request_manager.start_request(ctx)
         disconnect_task = asyncio.create_task(
             watch_client_disconnect(request, ctx, check_interval=0.3)
         )
 
         browser = get_browser(auto_connect=False)
 
-        request_manager.start_request(ctx)
-
-        chunk_queue: queue.Queue = queue.Queue(maxsize=100)
+        chunk_queue = queue.Queue(maxsize=100)
 
         def worker():
             gen = None
@@ -461,11 +465,12 @@ async def _stream_with_lifecycle(
             ctx.request_cancel("cleanup")
             worker_thread.join(timeout=2.0)
 
-        try:
-            while not chunk_queue.empty():
-                chunk_queue.get_nowait()
-        except:
-            pass
+        if chunk_queue is not None:
+            try:
+                while not chunk_queue.empty():
+                    chunk_queue.get_nowait()
+            except Exception:
+                pass
 
         if disconnect_task:
             disconnect_task.cancel()

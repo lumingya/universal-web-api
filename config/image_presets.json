@@ -86,10 +86,10 @@
     "image_extraction": {
       "enabled": true,
       "selector": "img",
-      "container_selector": "[data-testid=\"message_content\"]",
+      "container_selector": null,
       "debounce_seconds": 2.0,
       "wait_for_load": true,
-      "load_timeout_seconds": 5.0,
+      "load_timeout_seconds": 10.0,
       "download_blobs": true,
       "max_size_mb": 10,
       "mode": "all"

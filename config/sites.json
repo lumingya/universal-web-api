@@ -880,19 +880,19 @@
         ],
         "stealth": false,
         "image_extraction": {
-          "enabled": false,
+          "enabled": true,
           "modalities": {
-            "image": false,
+            "image": true,
             "audio": false,
             "video": false
           },
           "selector": "img",
           "audio_selector": "audio, audio source",
           "video_selector": "video, video source",
-          "container_selector": ".image-box-grid-EYaIcP img.image-Q7dBqW",
+          "container_selector": null,
           "debounce_seconds": 2,
           "wait_for_load": true,
-          "load_timeout_seconds": 60,
+          "load_timeout_seconds": 10,
           "download_blobs": true,
           "max_size_mb": 10,
           "mode": "all"
@@ -1003,7 +1003,7 @@
         "selectors": {
           "input_box": "textarea[name=\"message\"]",
           "send_btn": "button[type=\"submit\"]",
-          "result_container": "div.min-w-0:not([class*=\"bg-surface\"]) > .prose-sm",
+          "result_container": "main ol > div.w-full:not(.flex) .flex.flex-col.gap-3",
           "new_chat_btn": "a[data-sidebar=\"menu-button\"][href*=\"direct\"]",
           "message_wrapper": null,
           "generating_indicator": null
@@ -1066,9 +1066,9 @@
           }
         },
         "image_extraction": {
-          "enabled": false,
+          "enabled": true,
           "modalities": {
-            "image": false,
+            "image": true,
             "audio": false,
             "video": false
           },
@@ -1160,7 +1160,7 @@
         "selectors": {
           "input_box": "textarea[name=\"message\"]",
           "send_btn": "button[type=\"submit\"]",
-          "result_container": "div.min-w-0:not([class*=\"bg-surface\"]) > .prose-sm",
+          "result_container": "main ol > div.w-full:not(.flex) .flex.flex-col.gap-3",
           "new_chat_btn": "a[data-sidebar=\"menu-button\"][href*=\"direct\"]",
           "message_wrapper": null,
           "generating_indicator": null
@@ -1218,7 +1218,7 @@
         "selectors": {
           "input_box": "textarea[name=\"message\"]",
           "send_btn": "button[type=\"submit\"]",
-          "result_container": "div.min-w-0:not([class*=\"bg-surface\"]) > .prose-sm",
+          "result_container": "main ol > div.w-full:not(.flex) .flex.flex-col.gap-3",
           "new_chat_btn": "a[href*=\"/text/side-by-side\"], a[data-sidebar=\"menu-button\"][href*=\"side-by-side\"], button[aria-label*=\"side by side\" i]",
           "message_wrapper": null,
           "generating_indicator": null

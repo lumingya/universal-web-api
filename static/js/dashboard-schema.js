@@ -145,6 +145,21 @@ const BROWSER_CONSTANTS_SCHEMA = {
             }
         }
     },
+    text_input: {
+        label: '文本输入',
+        icon: '⌨️',
+        items: {
+            TEXT_INPUT_CHUNK_SIZE: {
+                label: '长文本分块大小',
+                unit: '字符',
+                desc: '普通模式下，长文本会按这个大小分块写入输入框。值越大越快，但更容易触发页面限制；值越小更稳，但输入更慢。不影响文件粘贴阈值。',
+                type: 'number',
+                min: 1000,
+                step: 1000,
+                default: 30000
+            }
+        }
+    },
     stream: {
         label: '流式监控',
         icon: '📡',

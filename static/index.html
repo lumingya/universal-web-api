@@ -237,7 +237,7 @@
                 </marketplace-tab>
 
                 <!-- 标签页池 Tab -->
-                <tabpool-tab v-show="activeTab === 'tabpool'"
+                <tabpool-tab v-if="activeTab === 'tabpool'"
                              :dark-mode="darkMode"
                              @notify="notify($event.message, $event.type)">
                 </tabpool-tab>

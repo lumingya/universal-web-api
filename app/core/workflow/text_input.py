@@ -22,7 +22,9 @@ from app.utils.human_mouse import smooth_move_mouse
 
 # ================= 常量配置 =================
 
-CHUNK_SIZE_THRESHOLD = 30000
+TEXT_INPUT_CHUNK_SIZE_DEFAULT = 30000
+TEXT_INPUT_CHUNK_SIZE_MIN = 1000
+TEXT_INPUT_CHUNK_SIZE_MAX = 1000000
 
 
 # ================= 文本输入处理器 =================
@@ -85,6 +87,21 @@ class TextInputHandler:
         except Exception:
             value = float(default or 0.0)
         return max(0.0, value)
+
+    def _sanitize_text_chunk_size(self, raw_value, default: int = TEXT_INPUT_CHUNK_SIZE_DEFAULT) -> int:
+        """Normalize long-text chunk size from config/user input."""
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError):
+            value = int(default or TEXT_INPUT_CHUNK_SIZE_DEFAULT)
+        return max(TEXT_INPUT_CHUNK_SIZE_MIN, min(value, TEXT_INPUT_CHUNK_SIZE_MAX))
+
+    def get_text_input_chunk_size(self, default: int = TEXT_INPUT_CHUNK_SIZE_DEFAULT) -> int:
+        """Long-text JS input chunk size from browser constants."""
+        return self._sanitize_text_chunk_size(
+            BrowserConstants.get("TEXT_INPUT_CHUNK_SIZE"),
+            default=default,
+        )
 
     def probe_recent_upload_signal(self) -> dict:
         """Probe the latest file-upload signal for the most recent temp file."""
@@ -395,18 +412,52 @@ class TextInputHandler:
         if actual_core == expected_core:
             return True
 
+        if expected_core and expected_core in actual_core:
+            return True
+
         expected_len = len(expected_core)
         actual_len = len(actual_core)
         ratio = (actual_len / expected_len) if expected_len > 0 else 1.0
 
-        if actual_len == 0 or ratio < 0.5:
+        prefix_len = min(64, expected_len, actual_len)
+        suffix_len = min(64, expected_len, actual_len)
+        prefix_match = (
+            prefix_len == 0
+            or actual_core[:prefix_len] == expected_core[:prefix_len]
+        )
+        suffix_match = (
+            suffix_len == 0
+            or actual_core[-suffix_len:] == expected_core[-suffix_len:]
+        )
+        length_gap = abs(expected_len - actual_len)
+        max_gap = max(4, expected_len // 100)
+
+        if (
+            actual_len > 0
+            and ratio >= 0.98
+            and length_gap <= max_gap
+            and prefix_match
+            and suffix_match
+        ):
+            logger.debug(
+                "[PASTE_VERIFY] 接受近似匹配结果 "
+                f"(actual={actual_len}, expected={expected_len}, ratio={ratio:.2f}, gap={length_gap})"
+            )
+            return True
+
+        if actual_len == 0 or ratio < 0.98 or not prefix_match or not suffix_match:
             logger.warning(
                 "[PASTE_VERIFY] 检测到异常粘贴结果 "
-                f"(actual={actual_len}, expected={expected_len}, ratio={ratio:.2f})"
+                f"(actual={actual_len}, expected={expected_len}, ratio={ratio:.2f}, "
+                f"prefix_match={prefix_match}, suffix_match={suffix_match})"
             )
             return False
 
-        return True
+        logger.warning(
+            "[PASTE_VERIFY] 粘贴结果长度偏差过大 "
+            f"(actual={actual_len}, expected={expected_len}, gap={length_gap})"
+        )
+        return False
 
     def _input_contains_text_loose(self, ele, expected_text: str) -> bool:
         """宽松检查输入框中是否已包含指定文本。"""
@@ -654,8 +705,13 @@ class TextInputHandler:
         except Exception:
             return False
     
-    def chunked_input(self, ele, text: str, chunk_size: int = CHUNK_SIZE_THRESHOLD) -> bool:
+    def chunked_input(self, ele, text: str, chunk_size: int = None) -> bool:
         """分块写入逻辑（普通模式用）"""
+        chunk_size = (
+            self.get_text_input_chunk_size()
+            if chunk_size is None
+            else self._sanitize_text_chunk_size(chunk_size)
+        )
         total_len = len(text)
         total_chunks = max(1, (total_len + max(1, chunk_size) - 1) // max(1, chunk_size))
         
@@ -885,7 +941,8 @@ class TextInputHandler:
         self.clear_input_safely(ele)
         
         # 分块写入
-        success = self.chunked_input(ele, text, chunk_size=CHUNK_SIZE_THRESHOLD)
+        chunk_size = self.get_text_input_chunk_size()
+        success = self.chunked_input(ele, text, chunk_size=chunk_size)
 
         if not success:
             logger.debug("JS 分块输入遇到问题，准备进行后续修正...")

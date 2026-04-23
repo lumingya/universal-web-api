@@ -116,16 +116,41 @@ class TabSession:
         
         except Exception:
             return False
+
+    def _debug_summary_unlocked(self) -> str:
+        status_value = getattr(self.status, "value", str(self.status))
+        return (
+            f"idx=#{self.persistent_index or '-'}, "
+            f"status={status_value}, "
+            f"task={str(self.current_task_id or '').strip() or '-'}, "
+            f"bound_req={str(getattr(self, '_bound_request_id', '') or '').strip() or '-'}, "
+            f"cmd_req={str(getattr(self, '_command_request_id', '') or '').strip() or '-'}, "
+            f"req_count={self.request_count}, "
+            f"domain={str(self.current_domain or '').strip() or '-'}"
+        )
+
+    def debug_summary(self) -> str:
+        with self._lock:
+            return self._debug_summary_unlocked()
     
     def acquire(self, task_id: str) -> bool:
         with self._lock:
             if self.status != TabStatus.IDLE:
                 return False
-            
+
+            prev_status = self.status.value
+            prev_task = str(self.current_task_id or "").strip()
+            prev_request_count = self.request_count
             self.status = TabStatus.BUSY
             self.current_task_id = task_id
             self.last_used_at = time.time()
             self.request_count += 1
+            logger.debug(
+                f"[{self.id}] 会话占用: mode=request, idx=#{self.persistent_index or '-'}, "
+                f"prev_status={prev_status}, prev_task={prev_task or '-'}, "
+                f"new_task={str(task_id or '').strip() or '-'}, "
+                f"req_count={prev_request_count}->{self.request_count}"
+            )
             return True
 
     def acquire_for_command(self, task_id: str) -> bool:
@@ -133,9 +158,17 @@ class TabSession:
         with self._lock:
             if self.status != TabStatus.IDLE:
                 return False
+            prev_status = self.status.value
+            prev_task = str(self.current_task_id or "").strip()
             self.status = TabStatus.BUSY
             self.current_task_id = task_id
             self.last_used_at = time.time()
+            logger.debug(
+                f"[{self.id}] 会话占用: mode=command, idx=#{self.persistent_index or '-'}, "
+                f"prev_status={prev_status}, prev_task={prev_task or '-'}, "
+                f"new_task={str(task_id or '').strip() or '-'}, "
+                f"req_count={self.request_count}"
+            )
             return True
     
     def release(
@@ -145,6 +178,11 @@ class TabSession:
         rollback_request_count: bool = False
     ):
         with self._lock:
+            prev_status = self.status.value
+            prev_task = str(self.current_task_id or "").strip()
+            prev_bound_request_id = str(getattr(self, "_bound_request_id", "") or "").strip()
+            prev_command_request_id = str(getattr(self, "_command_request_id", "") or "").strip()
+            prev_request_count = self.request_count
             if rollback_request_count and self.request_count > 0:
                 self.request_count -= 1
             self.status = TabStatus.IDLE
@@ -153,6 +191,7 @@ class TabSession:
             setattr(self, "_command_request_id", None)
             setattr(self, "_command_vars", {})
             self.last_used_at = time.time()
+            new_request_count = self.request_count
             
             if clear_page:
                 try:
@@ -160,6 +199,16 @@ class TabSession:
                     self.current_domain = None
                 except Exception as e:
                     logger.debug(f"clear page failed: {e}")
+
+        logger.debug(
+            f"[{self.id}] 会话释放: idx=#{self.persistent_index or '-'}, "
+            f"prev_status={prev_status}, prev_task={prev_task or '-'}, "
+            f"prev_bound_req={prev_bound_request_id or '-'}, "
+            f"prev_cmd_req={prev_command_request_id or '-'}, "
+            f"clear_page={clear_page}, check_triggers={check_triggers}, "
+            f"rollback_request_count={rollback_request_count}, "
+            f"req_count={prev_request_count}->{new_request_count}"
+        )
         
         # Trigger command checks outside the lock to avoid blocking
         try:
@@ -172,12 +221,26 @@ class TabSession:
     def force_release(self, clear_page: bool = False, check_triggers: bool = False):
         """Force release tab lock and optionally refresh current page."""
         with self._lock:
+            prev_status = self.status.value
+            prev_task = str(self.current_task_id or "").strip()
+            prev_bound_request_id = str(getattr(self, "_bound_request_id", "") or "").strip()
+            prev_command_request_id = str(getattr(self, "_command_request_id", "") or "").strip()
+            prev_request_count = self.request_count
             self.status = TabStatus.IDLE
             self.current_task_id = None
             setattr(self, "_bound_request_id", None)
             setattr(self, "_command_request_id", None)
             setattr(self, "_command_vars", {})
             self.last_used_at = time.time()
+
+        logger.warning(
+            f"[{self.id}] 强制释放开始: idx=#{self.persistent_index or '-'}, "
+            f"prev_status={prev_status}, prev_task={prev_task or '-'}, "
+            f"prev_bound_req={prev_bound_request_id or '-'}, "
+            f"prev_cmd_req={prev_command_request_id or '-'}, "
+            f"req_count={prev_request_count}, clear_page={clear_page}, "
+            f"check_triggers={check_triggers}"
+        )
 
         try:
             if hasattr(self.tab, "stop_loading"):
@@ -197,10 +260,19 @@ class TabSession:
         with self._lock:
             if reset_success:
                 self.status = TabStatus.IDLE
-                logger.info(f"[{self.id}] force_release done")
+                logger.info(
+                    f"[{self.id}] force_release done "
+                    f"(idx=#{self.persistent_index or '-'}, final_status={self.status.value}, "
+                    f"task={str(self.current_task_id or '').strip() or '-'}, req_count={self.request_count})"
+                )
             else:
+                self.status = TabStatus.ERROR
                 self.error_count += 1
-                logger.warning(f"[{self.id}] force_release failed, set ERROR")
+                logger.warning(
+                    f"[{self.id}] force_release failed, set ERROR "
+                    f"(idx=#{self.persistent_index or '-'}, req_count={self.request_count}, "
+                    f"error_count={self.error_count})"
+                )
 
         if check_triggers:
             try:
@@ -1367,6 +1439,11 @@ class TabPoolManager:
                         continue
 
                 if session.status == TabStatus.BUSY:
+                    self._cancel_active_request_for_session(
+                        session,
+                        "tab_closed",
+                        detail=f"raw={raw_id}",
+                    )
                     logger.warning(f"[{session_id}] 标签页已关闭但仍在忙碌，标记为错误")
                     session.mark_error("标签页已被关闭")
                 else:
@@ -1555,6 +1632,40 @@ class TabPoolManager:
                         f"(task={task_id or '-'}, cancelled={cancelled})"
                     )
                     session.force_release(clear_page=False, check_triggers=False)
+
+    def _cancel_active_request_for_session(
+        self,
+        session: Optional[TabSession],
+        reason: str,
+        *,
+        detail: str = "",
+    ) -> bool:
+        """Request the bound workflow to stop when a session becomes unusable."""
+        if session is None:
+            return False
+
+        task_id = str(getattr(session, "current_task_id", "") or "").strip()
+        if not task_id:
+            return False
+
+        try:
+            setattr(session, "_workflow_stop_reason", reason)
+        except Exception:
+            pass
+
+        cancelled = False
+        try:
+            from app.services.request_manager import request_manager
+
+            cancelled = bool(request_manager.cancel_request(task_id, reason))
+        except Exception as e:
+            logger.debug(f"[{session.id}] cancel on invalid session failed (ignored): {e}")
+
+        logger.warning(
+            f"[{session.id}] 会话失效，已请求取消任务 "
+            f"(task={task_id}, reason={reason}, cancelled={cancelled}, detail={detail or '-'})"
+        )
+        return cancelled
     
     def _cleanup_unhealthy_tabs(self):
         """清理不健康的空闲标签页和错误状态的标签页"""
@@ -1582,6 +1693,11 @@ class TabPoolManager:
     
         for tab_id in to_remove:
             session = self._tabs[tab_id]
+            self._cancel_active_request_for_session(
+                session,
+                "tab_unhealthy",
+                detail=f"status={getattr(getattr(session, 'status', None), 'value', 'unknown')}",
+            )
             logger.warning(f"[{tab_id}] 不健康或错误状态，从池中移除")
             self._stop_global_monitor_for_session(tab_id, reason="unhealthy")
             
@@ -1661,6 +1777,15 @@ class TabPoolManager:
         if removed:
             self._condition.notify_all()
         return removed
+
+    @staticmethod
+    def _describe_session(session: Optional[TabSession]) -> str:
+        if session is None:
+            return "session=-"
+        try:
+            return session.debug_summary()
+        except Exception as e:
+            return f"session={getattr(session, 'id', '-')}, snapshot_error={e}"
 
     def acquire(self, task_id: str, timeout: float = None) -> Optional[TabSession]:
         """获取一个可用的标签页（增强版）"""
@@ -1747,12 +1872,32 @@ class TabPoolManager:
         tab_id: str,
         clear_page: bool = False,
         check_triggers: bool = True,
-        rollback_request_count: bool = False
+        rollback_request_count: bool = False,
+        expected_task_id: str = "",
     ):
         """释放标签页"""
         with self._condition:
             session = self._tabs.get(tab_id)
             if session:
+                before_snapshot = self._describe_session(session)
+                expected_task = str(expected_task_id or "").strip()
+                current_task = str(getattr(session, "current_task_id", "") or "").strip()
+                session_status = getattr(getattr(session, "status", None), "value", "")
+                if expected_task:
+                    if current_task and current_task != expected_task:
+                        logger.warning(
+                            f"[{tab_id}] 跳过释放：标签页已被其他任务接管 "
+                            f"(expected_task={expected_task}, current_task={current_task}, "
+                            f"snapshot={before_snapshot})"
+                        )
+                        return
+                    if not current_task:
+                        logger.warning(
+                            f"[{tab_id}] 跳过释放：标签页 task_id 已丢失 "
+                            f"(expected_task={expected_task}, status={session_status or 'unknown'}, "
+                            f"snapshot={before_snapshot})"
+                        )
+                        return
                 session.release(
                     clear_page=clear_page,
                     check_triggers=check_triggers,
@@ -1760,7 +1905,12 @@ class TabPoolManager:
                 )
                 self._start_global_monitor_for_session(session)
                 self._condition.notify_all()
-                logger.debug(f"[{tab_id}] 已释放")
+                logger.debug(
+                    f"[{tab_id}] 已释放 "
+                    f"(expected_task={expected_task or '-'}, clear_page={clear_page}, "
+                    f"check_triggers={check_triggers}, rollback_request_count={rollback_request_count}, "
+                    f"before={before_snapshot}, after={self._describe_session(session)})"
+                )
     
     def force_release_all(self):
         """强制释放所有标签页（调试用）"""
@@ -1884,14 +2034,18 @@ class TabPoolManager:
                             session.activate()
                             self._active_session_id = session.id
                         logger.debug(
-                            f"TabPool → {session.id} (raw_tab_id={raw_tab_id}, idx=#{persistent_index})"
+                            f"TabPool → {session.id} "
+                            f"(task={task_id}, raw_tab_id={raw_tab_id}, idx=#{persistent_index}, "
+                            f"count_request={count_request}, snapshot={self._describe_session(session)})"
                         )
                         return session
 
                 remaining = deadline - time.time()
                 if remaining <= 0:
                     logger.warning(
-                        f"获取底层标签页 {raw_tab_id} 超时（当前状态: {session.status.value}）"
+                        f"获取底层标签页 {raw_tab_id} 超时 "
+                        f"(task={task_id}, 当前状态: {session.status.value}, "
+                        f"snapshot={self._describe_session(session)})"
                     )
                     return None
 
@@ -2379,7 +2533,7 @@ class TabPoolManager:
                                 if s.status == TabStatus.IDLE and not s.is_healthy()
                             )
                             logger.warning(
-                                f"Acquire tab timed out (busy: {', '.join(busy_info) or 'none'}, "
+                                f"Acquire tab timed out (task={task_id}, busy: {', '.join(busy_info) or 'none'}, "
                                 f"unhealthy: {unhealthy_count})"
                             )
                             return None
@@ -2415,9 +2569,15 @@ class TabPoolManager:
                             self._unregister_waiter(self._acquire_waiters, waiter_token)
 
                             if logged_waiting:
-                                logger.debug(f"Acquire finished -> {session.id}")
+                                logger.debug(
+                                    f"Acquire finished -> {session.id} "
+                                    f"(task={task_id}, snapshot={self._describe_session(session)})"
+                                )
                             else:
-                                logger.debug(f"TabPool -> {session.id}")
+                                logger.debug(
+                                    f"TabPool -> {session.id} "
+                                    f"(task={task_id}, snapshot={self._describe_session(session)})"
+                                )
                             return session
 
                     remaining = deadline - time.time()
@@ -2432,7 +2592,7 @@ class TabPoolManager:
                             if s.status == TabStatus.IDLE and not s.is_healthy()
                         )
                         logger.warning(
-                            f"Acquire tab timed out (busy: {', '.join(busy_info) or 'none'}, "
+                            f"Acquire tab timed out (task={task_id}, busy: {', '.join(busy_info) or 'none'}, "
                             f"unhealthy: {unhealthy_count})"
                         )
                         return None
@@ -2467,7 +2627,9 @@ class TabPoolManager:
                     if not self._is_waiter_turn(waiters, waiter_token):
                         remaining = deadline - time.time()
                         if remaining <= 0:
-                            logger.warning(f"Timed out waiting for tab #{persistent_index}")
+                            logger.warning(
+                                f"Timed out waiting for tab #{persistent_index} (task={task_id})"
+                            )
                             return None
                         logger.debug_throttled(
                             f"tab_pool.wait_index.{persistent_index}",
@@ -2511,13 +2673,19 @@ class TabPoolManager:
                             owner_map=self._index_waiters,
                             owner_key=persistent_index,
                         )
-                        logger.debug(f"TabPool -> {session.id} (#{persistent_index})")
+                        logger.debug(
+                            f"TabPool -> {session.id} "
+                            f"(task={task_id}, idx=#{persistent_index}, "
+                            f"snapshot={self._describe_session(session)})"
+                        )
                         return session
 
                     remaining = deadline - time.time()
                     if remaining <= 0:
                         logger.warning(
-                            f"Timed out waiting for tab #{persistent_index} (status: {session.status.value})"
+                            f"Timed out waiting for tab #{persistent_index} "
+                            f"(task={task_id}, status: {session.status.value}, "
+                            f"snapshot={self._describe_session(session)})"
                         )
                         return None
 
@@ -2563,7 +2731,9 @@ class TabPoolManager:
                     if not self._is_waiter_turn(waiters, waiter_token):
                         remaining = deadline - time.time()
                         if remaining <= 0:
-                            logger.warning(f"Timed out waiting for route domain '{target}'")
+                            logger.warning(
+                                f"Timed out waiting for route domain '{target}' (task={task_id})"
+                            )
                             return None
                         logger.debug_throttled(
                             f"tab_pool.wait_route.{target}",
@@ -2601,7 +2771,9 @@ class TabPoolManager:
                                 owner_key=target,
                             )
                             logger.debug(
-                                f"TabPool -> {session.id} (route_domain={target}, idx=#{session.persistent_index})"
+                                f"TabPool -> {session.id} "
+                                f"(task={task_id}, route_domain={target}, "
+                                f"idx=#{session.persistent_index}, snapshot={self._describe_session(session)})"
                             )
                             return session
 
@@ -2613,7 +2785,7 @@ class TabPoolManager:
                         ]
                         logger.warning(
                             f"Timed out waiting for route domain '{target}' "
-                            f"(matching tabs: {', '.join(busy_info) or 'none'})"
+                            f"(task={task_id}, matching tabs: {', '.join(busy_info) or 'none'})"
                         )
                         return None
 
@@ -2655,6 +2827,8 @@ class TabPoolManager:
             if not session:
                 return {"ok": False, "error": "tab_not_found", "tab_index": persistent_index}
 
+            before_snapshot = self._describe_session(session)
+
             task_id = session.current_task_id or ""
             cancelled = False
             cancel_error = ""
@@ -2686,7 +2860,8 @@ class TabPoolManager:
             logger.warning(
                 f"[{session.id}] 手动终止: idx=#{persistent_index}, "
                 f"task={task_id or '-'}, cancelled={cancelled}, "
-                f"status={session.status.value}, reason={reason}"
+                f"status={session.status.value}, reason={reason}, "
+                f"before={before_snapshot}, after={self._describe_session(session)}"
             )
 
             result = {

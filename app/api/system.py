@@ -234,6 +234,7 @@ DEFAULT_BROWSER_CONSTANTS: Dict[str, Any] = {
     "STREAM_SILENCE_THRESHOLD_FALLBACK": 12,
     "MAX_MESSAGE_LENGTH": 100000,
     "MAX_MESSAGES_COUNT": 100,
+    "TEXT_INPUT_CHUNK_SIZE": 30000,
     "GLOBAL_NETWORK_INTERCEPTION_ENABLED": False,
     "GLOBAL_NETWORK_INTERCEPTION_LISTEN_PATTERN": "http",
     "GLOBAL_NETWORK_INTERCEPTION_WAIT_TIMEOUT": 0.5,
@@ -723,16 +724,37 @@ async def force_release(authenticated: bool = Depends(verify_auth)):
         raise HTTPException(status_code=403, detail="调试功能未启用")
 
     was_locked = request_manager.is_locked()
-    released = request_manager.force_release()
+    cancelled_requests = request_manager.force_release()
+    released_tabs = 0
+    release_error = ""
+
+    try:
+        browser = get_browser(auto_connect=False)
+        pool = getattr(browser, "tab_pool", None)
+        if pool is not None and hasattr(pool, "force_release_all"):
+            released_tabs = int(pool.force_release_all() or 0)
+    except Exception as e:
+        release_error = str(e)
+        logger.warning(f"调试强制释放标签页失败: {e}")
+
+    released = bool(cancelled_requests or released_tabs)
     is_now_locked = request_manager.is_locked()
 
-    logger.warning(f"手动解锁: was={was_locked}, released={released}, now={is_now_locked}")
+    logger.warning(
+        f"手动解锁: was={was_locked}, cancelled={cancelled_requests}, "
+        f"released_tabs={released_tabs}, released={released}, now={is_now_locked}"
+    )
 
-    return {
+    result = {
         "was_locked": was_locked,
         "released": released,
+        "cancelled_requests": cancelled_requests,
+        "released_tabs": released_tabs,
         "is_now_locked": is_now_locked
     }
+    if release_error:
+        result["release_error"] = release_error
+    return result
 
 
 @router.post("/api/debug/cancel-current")

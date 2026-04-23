@@ -575,11 +575,15 @@ class StreamMonitor:
 
                     if ctx.pending_new_anchor_seen >= 2:
                         ctx.reset_for_new_target()
+                        ctx.output_target_anchor = current_anchor
+                        ctx.output_target_count = current_count
+                        ctx.pending_new_anchor = None
+                        ctx.pending_new_anchor_seen = 0
                         peak_text_len = 0
                         silence_start = time.time()
                         has_output = False
                         last_text_len = 0
-                        last_image_count = 0  # 🆕
+                        last_image_count = current_image_count
 
                         if not current_text:
                             time.sleep(0.2)
@@ -673,8 +677,12 @@ class StreamMonitor:
                 elif silence_duration > silence_threshold_fallback * 3:
                     logger.info(f"[Exit] 生成结束（超长静默 {silence_duration:.1f}s）")
                     break
-                elif ctx.images_detected and silence_duration > 3.0:
-                    # 有图片且静默超过 3 秒，认为生成完成
+                elif (
+                    ctx.images_detected
+                    and not still_generating
+                    and silence_duration > max(3.0, silence_threshold)
+                ):
+                    # 图片流式响应要等到生成指示器消失后，再按正常静默阈值退出
                     logger.debug(f"[Exit] 图片生成完成（静默 {silence_duration:.1f}s）")
                     break
             else:
