@@ -47,6 +47,19 @@ _POOL_SKIP_URL_CONTAINS = (
 )
 
 
+def _looks_like_transient_local_debug_error(error: Any) -> bool:
+    text = str(error or "").strip().lower()
+    if not text:
+        return False
+    if "winerror 10048" in text:
+        return True
+    if "max retries exceeded" in text and "127.0.0.1" in text and "/json" in text:
+        return True
+    if "failed to establish a new connection" in text and "127.0.0.1" in text:
+        return True
+    return False
+
+
 def _should_skip_pool_url(url: str) -> bool:
     raw = str(url or "").strip()
     if not raw:
@@ -579,6 +592,7 @@ class TabPoolManager:
     
     # 新标签页扫描间隔（秒）
     SCAN_INTERVAL = 10
+    QUERY_SCAN_MIN_INTERVAL_SEC = 1.0
     ISOLATED_CONTEXT_ORPHAN_GRACE_SEC = 3.0
     ISOLATED_CONTEXT_REBIND_GRACE_SEC = 20.0
     GET_TABS_FAILURE_COOLDOWN_SEC = 5.0
@@ -931,11 +945,14 @@ class TabPoolManager:
         if browser is None:
             return []
 
+        cdp_tab_ids = self._list_current_tab_ids_via_cdp()
+        if cdp_tab_ids:
+            self._get_tabs_retry_after = 0.0
+            return cdp_tab_ids
+
         now = time.time()
         if now < self._get_tabs_retry_after:
-            cdp_tab_ids = self._list_current_tab_ids_via_cdp()
-            if cdp_tab_ids:
-                return cdp_tab_ids
+            return []
 
         try:
             tabs = browser.get_tabs()
@@ -948,15 +965,19 @@ class TabPoolManager:
             )
             cdp_tab_ids = self._list_current_tab_ids_via_cdp()
             if cdp_tab_ids:
-                self._log_get_tabs_warning(
-                    f"[TabPool] browser.get_tabs() 失败，回退到 Target.getTargets 扫描: {e}"
-                )
+                message = f"[TabPool] browser.get_tabs() 失败，回退到 Target.getTargets 扫描: {e}"
+                if _looks_like_transient_local_debug_error(e):
+                    logger.debug(message)
+                else:
+                    self._log_get_tabs_warning(message)
                 return cdp_tab_ids
             fallback_ids = list(getattr(browser, "tab_ids", []) or [])
             if fallback_ids:
-                self._log_get_tabs_warning(
-                    f"[TabPool] browser.get_tabs() 失败，回退到 tab_ids 扫描: {e}"
-                )
+                message = f"[TabPool] browser.get_tabs() 失败，回退到 tab_ids 扫描: {e}"
+                if _looks_like_transient_local_debug_error(e):
+                    logger.debug(message)
+                else:
+                    self._log_get_tabs_warning(message)
                 return fallback_ids
             raise
 
@@ -1326,6 +1347,12 @@ class TabPoolManager:
     def _should_scan(self) -> bool:
         """检查是否需要扫描新标签页"""
         return time.time() - self._last_scan_time >= self.SCAN_INTERVAL
+
+    def _should_scan_for_query(self) -> bool:
+        """读接口节流扫描，避免高频查询放大浏览器探测压力。"""
+        if not self._tabs:
+            return True
+        return time.time() - self._last_scan_time >= self.QUERY_SCAN_MIN_INTERVAL_SEC
     
     def _scan_new_tabs(self):
         """扫描并添加新标签页（已持有锁）"""
@@ -2881,9 +2908,8 @@ class TabPoolManager:
     def get_tabs_with_index(self) -> List[Dict]:
         """获取所有标签页及其持久编号（供 API 调用）"""
         with self._lock:
-            # 每次查询都扫描，确保前端看到最新状态
-            self._scan_new_tabs()
-            self._last_scan_time = time.time()
+            if self._should_scan_for_query():
+                self._scan_new_tabs()
             
             result = []
             for session in self._tabs.values():

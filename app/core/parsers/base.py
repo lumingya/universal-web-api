@@ -78,6 +78,26 @@ class ResponseParser(ABC):
         默认仅记录并继续，交给具体解析器按需升级为硬失败。
         """
         return False
+
+    def get_media_generation_state(
+        self,
+        raw_response: str = "",
+        parse_result: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        提取通用的媒体生成状态。
+
+        返回约定：
+            {
+                "pending": bool,
+                "media_type": "image" | "audio" | "video" | "",
+                "hint_text": str,
+                "wait_timeout_seconds": float | int | None,
+            }
+
+        通用工作流层只消费这些字段，不关心站点私有协议细节。
+        """
+        return {}
     
     # ============ 元数据接口 ============
     

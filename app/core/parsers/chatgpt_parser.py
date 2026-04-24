@@ -9,7 +9,7 @@ chatgpt_parser.py - ChatGPT 响应解析器
 """
 
 import json
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 from app.core.config import logger
 from .base import ResponseParser
@@ -75,34 +75,44 @@ class ChatGPTParser(ResponseParser):
     def _parse_sse_chunk(self, chunk: str) -> str:
         """解析SSE数据块，提取文本增量"""
         content = ""
+        
+        for current_event, data in self._iter_sse_json_events(chunk):
+            if current_event != "delta" or not isinstance(data, dict):
+                continue
+            extracted = self._extract_delta_content(data)
+            if extracted:
+                content += extracted
+        
+        return content
+
+    def _iter_sse_json_events(self, chunk: str):
+        """遍历 SSE 中可解析为 JSON 的事件。"""
         current_event = None
-       
-        
-        lines = chunk.split('\n')
-        
-        for line in lines:
-            line = line.strip()
-            
+
+        for raw_line in str(chunk or "").split('\n'):
+            line = raw_line.strip()
+
             if not line:
                 current_event = None
                 continue
-            
+
             if line.startswith('event:'):
                 current_event = line[6:].strip()
                 continue
-            
-            if line.startswith('data:') and current_event == "delta":
-                data_str = line[5:].strip()
-                
-                try:
-                    data = json.loads(data_str)
-                    extracted = self._extract_delta_content(data)
-                    if extracted:
-                        content += extracted
-                except json.JSONDecodeError:
-                    continue
-        
-        return content
+
+            if not line.startswith('data:'):
+                continue
+
+            data_str = line[5:].strip()
+            if not data_str or data_str == "[DONE]":
+                continue
+
+            try:
+                payload = json.loads(data_str)
+            except json.JSONDecodeError:
+                continue
+
+            yield current_event, payload
     
     def _extract_delta_content(self, data: Dict[str, Any]) -> str:
         """从delta事件中提取文本内容"""
@@ -150,6 +160,86 @@ class ChatGPTParser(ResponseParser):
         self._accumulated_content = ""
         self._last_raw_length = 0
         self._is_appending_text = False
+
+    def get_media_generation_state(
+        self,
+        raw_response: str = "",
+        parse_result: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        pending = False
+        media_type = ""
+        hint_parts: List[str] = []
+        wait_timeout_seconds = None
+
+        try:
+            for event_name, payload in self._iter_sse_json_events(raw_response):
+                if not isinstance(payload, dict):
+                    continue
+
+                payload_type = str(payload.get("type") or "").strip().lower()
+                if payload_type == "server_ste_metadata":
+                    metadata = payload.get("metadata") or {}
+                    if str(metadata.get("turn_use_case") or "").strip().lower() == "image gen":
+                        pending = True
+                        media_type = media_type or "image"
+                        wait_timeout_seconds = max(float(wait_timeout_seconds or 0), 90.0)
+
+                message = None
+                if event_name == "delta":
+                    value = payload.get("v")
+                    if isinstance(value, dict) and isinstance(value.get("message"), dict):
+                        message = value.get("message") or {}
+                elif isinstance(payload.get("message"), dict):
+                    message = payload.get("message") or {}
+
+                if not isinstance(message, dict):
+                    continue
+
+                metadata = message.get("metadata") or {}
+                content = message.get("content") or {}
+
+                if str(metadata.get("image_gen_task_id") or "").strip():
+                    pending = True
+                    media_type = media_type or "image"
+                    wait_timeout_seconds = max(float(wait_timeout_seconds or 0), 90.0)
+
+                if bool(metadata.get("image_gen_multi_stream")):
+                    pending = True
+                    media_type = media_type or "image"
+                    wait_timeout_seconds = max(float(wait_timeout_seconds or 0), 90.0)
+
+                for field in ("ui_card_title", "ui_card_description"):
+                    value = str(metadata.get(field) or "").strip()
+                    if value:
+                        hint_parts.append(value)
+
+                if isinstance(content, dict):
+                    parts = content.get("parts")
+                    if isinstance(parts, list):
+                        for item in parts:
+                            if isinstance(item, str) and item.strip():
+                                hint_parts.append(item.strip())
+
+        except Exception as e:
+            logger.debug(f"[ChatGPTParser] 媒体状态解析异常: {e}")
+
+        if not pending or not media_type:
+            return {}
+
+        deduped_hint_parts = []
+        seen = set()
+        for item in hint_parts:
+            if item in seen:
+                continue
+            seen.add(item)
+            deduped_hint_parts.append(item)
+
+        return {
+            "pending": True,
+            "media_type": media_type,
+            "hint_text": "\n\n".join(deduped_hint_parts[:3]),
+            "wait_timeout_seconds": wait_timeout_seconds,
+        }
     
     @classmethod
     def get_id(cls) -> str:

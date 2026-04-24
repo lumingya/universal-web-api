@@ -279,12 +279,6 @@
             "value": "0.5"
           },
           {
-            "action": "CLICK",
-            "target": "temp_chat_btn",
-            "optional": false,
-            "value": null
-          },
-          {
             "action": "FILL_INPUT",
             "target": "input_box",
             "optional": false,
@@ -469,7 +463,7 @@
             "action": "WAIT",
             "target": "",
             "optional": false,
-            "value": 0.5
+            "value": 0.2
           },
           {
             "action": "CLICK",
@@ -493,7 +487,7 @@
             "action": "WAIT",
             "target": "",
             "optional": false,
-            "value": 0.5
+            "value": 0.3
           },
           {
             "action": "FILL_INPUT",

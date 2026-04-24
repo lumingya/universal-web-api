@@ -38,6 +38,19 @@ from app.core.workflow import WorkflowExecutor
 from app.core.tab_pool import TabPoolManager, TabSession, get_clipboard_lock
 
 
+def _looks_like_transient_local_debug_error(error: Any) -> bool:
+    text = str(error or "").strip().lower()
+    if not text:
+        return False
+    if "winerror 10048" in text:
+        return True
+    if "max retries exceeded" in text and "127.0.0.1" in text and "/json" in text:
+        return True
+    if "failed to establish a new connection" in text and "127.0.0.1" in text:
+        return True
+    return False
+
+
 # ================= 配置加载 =================
 
 def _load_tab_pool_config() -> Dict:
@@ -102,6 +115,8 @@ class BrowserCore:
         self._watchdog_stop = threading.Event()
         self._last_watchdog_port_open: Optional[bool] = None
         self._last_watchdog_session_alive: Optional[bool] = None
+        self._last_watchdog_health: Optional[str] = None
+        self._last_debug_port_error: str = ""
         self._get_tabs_retry_after: float = 0.0
         self._last_get_tabs_fallback_log_at: float = 0.0
         
@@ -538,8 +553,10 @@ class BrowserCore:
     def _is_debug_port_open(self, timeout: float = 0.4) -> bool:
         try:
             with socket.create_connection(("127.0.0.1", int(self.port)), timeout=float(timeout)):
+                self._last_debug_port_error = ""
                 return True
-        except Exception:
+        except Exception as e:
+            self._last_debug_port_error = str(e)
             return False
 
     def _probe_browser_connection_via_cdp(self) -> bool:
@@ -582,12 +599,15 @@ class BrowserCore:
             tabs.append(resolved or target_id)
         return tabs
 
-    def _log_get_tabs_fallback(self, message: str) -> None:
+    def _log_get_tabs_fallback(self, message: str, error: Any = None) -> None:
         now = time.time()
         if now - self._last_get_tabs_fallback_log_at < 10.0:
             return
         self._last_get_tabs_fallback_log_at = now
-        logger.warning(message)
+        if _looks_like_transient_local_debug_error(error):
+            logger.debug(message)
+        else:
+            logger.warning(message)
 
     def _probe_browser_connection(self) -> bool:
         """Lightweight liveness probe for the underlying browser session."""
@@ -606,11 +626,13 @@ class BrowserCore:
         browser = self.get_browser_handle()
         if browser is None:
             raise BrowserConnectionError("无法连接到浏览器")
+        cdp_tabs = self._list_tabs_via_cdp()
+        if cdp_tabs:
+            self._get_tabs_retry_after = 0.0
+            return cdp_tabs
         now = time.time()
         if now < self._get_tabs_retry_after:
-            fallback_tabs = self._list_tabs_via_cdp()
-            if fallback_tabs:
-                return fallback_tabs
+            return []
         try:
             tabs = browser.get_tabs()
             self._get_tabs_retry_after = 0.0
@@ -620,7 +642,8 @@ class BrowserCore:
             fallback_tabs = self._list_tabs_via_cdp()
             if fallback_tabs:
                 self._log_get_tabs_fallback(
-                    f"[BrowserCore] browser.get_tabs() 失败，回退到 Target.getTargets: {e}"
+                    f"[BrowserCore] browser.get_tabs() 失败，回退到 Target.getTargets: {e}",
+                    error=e,
                 )
                 return fallback_tabs
             raise
@@ -667,32 +690,45 @@ class BrowserCore:
     def _connection_watchdog_loop(self) -> None:
         while not self._watchdog_stop.wait(1.0):
             port_open = self._is_debug_port_open()
-            session_alive = self._probe_browser_connection() if port_open else False
+            session_alive = self._probe_browser_connection()
+            health = "alive" if session_alive else ("port_only" if port_open else "dead")
 
-            if (
-                port_open == self._last_watchdog_port_open
-                and session_alive == self._last_watchdog_session_alive
-            ):
+            if health == self._last_watchdog_health:
                 continue
 
             snapshot = self._get_watchdog_tab_snapshot()
-            if port_open and session_alive:
-                logger.info(
-                    f"[BrowserWatchdog] 受控浏览器连接正常 (port={self.port}, session=alive, {snapshot})"
-                )
-            elif port_open and not session_alive:
+            if health == "alive":
+                if port_open:
+                    logger.info(
+                        f"[BrowserWatchdog] 受控浏览器连接正常 (port={self.port}, session=alive, {snapshot})"
+                    )
+                elif _looks_like_transient_local_debug_error(self._last_debug_port_error):
+                    logger.debug(
+                        f"[BrowserWatchdog] 长连接正常，已忽略瞬时调试端口探测失败 "
+                        f"(port={self.port}, session=alive, {snapshot})"
+                    )
+                else:
+                    logger.info(
+                        f"[BrowserWatchdog] 受控浏览器连接正常 "
+                        f"(port={self.port}, session=alive, port_probe=failed, {snapshot})"
+                    )
+            elif health == "port_only":
                 logger.warning(
                     f"[BrowserWatchdog] 调试端口可达，但当前页面会话已失效 "
                     f"(port={self.port}, session=dead, connected={self._connected}, {snapshot})"
                 )
             else:
+                detail = ""
+                if self._last_debug_port_error and not _looks_like_transient_local_debug_error(self._last_debug_port_error):
+                    detail = f", probe_error={self._last_debug_port_error}"
                 logger.error(
                     f"[BrowserWatchdog] 受控浏览器调试端口不可达 "
-                    f"(port={self.port}, connected={self._connected}, {snapshot})"
+                    f"(port={self.port}, connected={self._connected}, {snapshot}{detail})"
                 )
 
             self._last_watchdog_port_open = port_open
             self._last_watchdog_session_alive = session_alive
+            self._last_watchdog_health = health
 
     def _start_connection_watchdog(self) -> None:
         if self._watchdog_thread and self._watchdog_thread.is_alive():
@@ -701,6 +737,7 @@ class BrowserCore:
         self._watchdog_stop.clear()
         self._last_watchdog_port_open = None
         self._last_watchdog_session_alive = None
+        self._last_watchdog_health = None
         self._watchdog_thread = threading.Thread(
             target=self._connection_watchdog_loop,
             daemon=True,
@@ -1623,8 +1660,10 @@ class BrowserCore:
                         extractor=extractor,
                         image_config=image_config,
                         result_selector=result_container_selector,
+                        message_wrapper_selector=selectors.get("message_wrapper", ""),
                         completion_id=executor._completion_id,
-                        stop_checker=_combined_stop_checker
+                        stop_checker=_combined_stop_checker,
+                        media_generation_state=getattr(executor, "_last_stream_media_state", None),
                     )
                     
                     if media_items:
@@ -1786,9 +1825,11 @@ class BrowserCore:
         extractor,
         image_config: Dict,
         result_selector: str,
+        message_wrapper_selector: str = "",
         completion_id: str = None,
         stop_checker: Optional[Callable[[], bool]] = None,
         response_text_hint: str = "",
+        media_generation_state: Optional[Dict[str, Any]] = None,
     ) -> List[Dict]:
         """流式输出结束后提取多模态资源。"""
         from app.core.elements import ElementFinder
@@ -1806,9 +1847,39 @@ class BrowserCore:
                 elapsed += step
         
         finder = ElementFinder(tab)
+
+        def _find_candidate_elements(timeout: float = 1.0):
+            primary_elements = []
+            fallback_elements = []
+
+            try:
+                if result_selector:
+                    primary_elements = finder.find_all(result_selector, timeout=timeout) or []
+            except Exception as e:
+                logger.debug(f"主结果容器查找失败（忽略）: {e}")
+                primary_elements = []
+
+            if primary_elements:
+                return primary_elements, "result_container"
+
+            try:
+                if message_wrapper_selector:
+                    fallback_elements = finder.find_all(message_wrapper_selector, timeout=timeout) or []
+            except Exception as e:
+                logger.debug(f"消息包装容器查找失败（忽略）: {e}")
+                fallback_elements = []
+
+            if fallback_elements:
+                logger.debug(
+                    "主结果容器为空，回退到消息包装容器继续等待媒体渲染: "
+                    f"primary={result_selector!r}, fallback={message_wrapper_selector!r}"
+                )
+                return fallback_elements, "message_wrapper"
+
+            return [], ""
         
         try:
-            elements = finder.find_all(result_selector, timeout=1)
+            elements, container_mode = _find_candidate_elements(timeout=1)
             if not elements:
                 return []
             
@@ -1857,8 +1928,12 @@ class BrowserCore:
 
             placeholder_text_lower = placeholder_text.lower()
             response_text_hint_lower = str(response_text_hint or "").strip().lower()
+            media_state = dict(media_generation_state or {})
+            media_state_pending = bool(media_state.get("pending"))
+            media_state_type = str(media_state.get("media_type") or "").strip().lower()
+            media_state_hint_text = str(media_state.get("hint_text") or "").strip().lower()
             combined_pending_text = "\n".join(
-                text for text in (placeholder_text_lower, response_text_hint_lower)
+                text for text in (placeholder_text_lower, response_text_hint_lower, media_state_hint_text)
                 if text
             )
 
@@ -1902,8 +1977,12 @@ class BrowserCore:
                 )
 
             pending_kinds = set()
-            if has_generated_image_hint and not image_items:
+            if (has_generated_image_hint or (media_state_pending and media_state_type == "image")) and not image_items:
                 pending_kinds.add("image")
+            if media_state_pending and media_state_type == "audio" and not (audio_items or video_items):
+                pending_kinds.add("audio")
+            if media_state_pending and media_state_type == "video" and not video_items:
+                pending_kinds.add("video")
             if pending_audio_hint and not (audio_items or video_items):
                 pending_kinds.add("audio")
             if pending_video_hint and not video_items:
@@ -1915,12 +1994,24 @@ class BrowserCore:
                     image_config.get("late_render_timeout_seconds")
                     or max(30.0, base_timeout * 6.0)
                 )
+                state_wait_timeout = media_state.get("wait_timeout_seconds")
+                try:
+                    if state_wait_timeout is not None:
+                        late_wait_timeout = max(late_wait_timeout, float(state_wait_timeout))
+                except Exception:
+                    pass
+                if media_state_pending and media_state_type in pending_kinds:
+                    logger.debug(
+                        "检测到解析器上报的待渲染媒体任务，延长媒体渲染等待窗口: "
+                        f"{late_wait_timeout:.1f}s"
+                    )
                 poll_interval = float(image_config.get("late_render_poll_seconds") or 1.0)
                 deadline = time.time() + late_wait_timeout
+                wait_satisfied = False
 
                 while time.time() < deadline and not effective_stop_checker():
                     time.sleep(max(0.2, poll_interval))
-                    elements = finder.find_all(result_selector, timeout=0.5)
+                    elements, container_mode = _find_candidate_elements(timeout=0.5)
                     if not elements:
                         continue
                     last_element = elements[-1]
@@ -1942,9 +2033,16 @@ class BrowserCore:
                         kinds_label = ",".join(sorted(pending_kinds))
                         logger.debug(
                             f"延迟媒体渲染已捕获: kinds={kinds_label} "
-                            f"(late_wait={late_wait_timeout:.1f}s)"
+                            f"(late_wait={late_wait_timeout:.1f}s, container={container_mode or 'unknown'})"
                         )
+                        wait_satisfied = True
                         break
+
+                if pending_kinds and not wait_satisfied and not effective_stop_checker():
+                    logger.warning(
+                        "等待待渲染媒体超时，仍未拿到最终结果: "
+                        f"kinds={','.join(sorted(pending_kinds))}, late_wait={late_wait_timeout:.1f}s"
+                    )
             
             # 🆕 如果图片是不可直连的外链（如 googleusercontent），尝试截图落盘并替换为本地 URL
             media_items = ready_media_items
@@ -2581,6 +2679,7 @@ class BrowserCore:
                 extractor=extractor,
                 image_config=image_config,
                 result_selector=result_selector,
+                message_wrapper_selector=str(selectors.get("message_wrapper", "") or "").strip(),
                 stop_checker=stop_checker,
                 response_text_hint=hint_text,
             )

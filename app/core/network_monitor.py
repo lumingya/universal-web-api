@@ -153,6 +153,10 @@ class NetworkMonitor:
         self._total_content_chars = 0
         self._prefetched_responses = []
         self._debug_capture_counter = 0
+        self._last_stream_event: Dict[str, Any] = {}
+        self._last_stream_raw_body: str = ""
+        self._last_stream_parse_result: Dict[str, Any] = {}
+        self._last_media_generation_state: Dict[str, Any] = {}
         
         logger.debug(
             f"[NetworkMonitor] 初始化完成 "
@@ -756,6 +760,10 @@ class NetworkMonitor:
         self.parser.reset()
         self._total_chunks = 0
         self._total_content_chars = 0
+        self._last_stream_event = {}
+        self._last_stream_raw_body = ""
+        self._last_stream_parse_result = {}
+        self._last_media_generation_state = {}
         
         # 兜底：如果 pre_start 未被调用，在此启动（可能错过首包）
         if not self._is_listening or not self._listen_is_active():
@@ -967,6 +975,19 @@ class NetworkMonitor:
             parse_result = self._handle_parse_result(parse_result)
             if parse_result.get("error"):
                 continue
+            self._last_stream_event = dict(event or {})
+            self._last_stream_raw_body = str(raw_body or "")
+            self._last_stream_parse_result = dict(parse_result or {})
+            try:
+                media_state = self.parser.get_media_generation_state(
+                    raw_response=raw_body,
+                    parse_result=parse_result,
+                )
+                self._last_media_generation_state = (
+                    dict(media_state) if isinstance(media_state, dict) else {}
+                )
+            except Exception as parser_exc:
+                logger.debug(f"[NetworkMonitor] 媒体状态提取失败（忽略）: {parser_exc}")
             self._write_parser_debug_dump(
                 raw_body,
                 event,
@@ -1006,6 +1027,9 @@ class NetworkMonitor:
             f"non_target={non_target_skips}, empty_body={empty_body_skips}, "
             f"duration={time.time() - phase_start:.1f}s)"
         )
+
+    def get_media_generation_state(self) -> Dict[str, Any]:
+        return dict(self._last_media_generation_state or {})
         
     def _cleanup(self):
         """

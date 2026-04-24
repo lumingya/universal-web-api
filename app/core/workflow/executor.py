@@ -180,6 +180,7 @@ class WorkflowExecutor:
         self._stream_monitor = None
         self._last_input_element = None
         self._last_input_target_key = ""
+        self._last_stream_media_state = {}
         
         # 检查是否启用网络监听模式
         self._stream_mode = stream_config.get("mode", "dom") if stream_config else "dom"
@@ -702,6 +703,8 @@ class WorkflowExecutor:
         
         logger.debug(f"执行: {action} -> {target_key}")
         self._context = context
+        if action in ("STREAM_WAIT", "STREAM_OUTPUT"):
+            self._last_stream_media_state = {}
         
         try:
             if action == "WAIT":
@@ -796,6 +799,11 @@ class WorkflowExecutor:
                                 user_input=user_input,
                                 completion_id=self._completion_id
                             )
+                            self._last_stream_media_state = (
+                                self._network_monitor.get_media_generation_state()
+                                if self._network_monitor is not None
+                                else {}
+                            )
                             monitor_used = "network"
 
                     except NetworkInterceptionTriggered as e:
@@ -816,6 +824,7 @@ class WorkflowExecutor:
                             user_input=user_input,
                             completion_id=self._completion_id
                         )
+                        self._last_stream_media_state = {}
                         monitor_used = "dom_fallback"
                     
                     except NetworkMonitorError as e:
@@ -828,6 +837,7 @@ class WorkflowExecutor:
                             user_input=user_input,
                             completion_id=self._completion_id
                         )
+                        self._last_stream_media_state = {}
                         monitor_used = "dom_fallback"
                 
                 else:
@@ -868,6 +878,7 @@ class WorkflowExecutor:
                             user_input=user_input,
                             completion_id=self._completion_id
                         )
+                        self._last_stream_media_state = {}
                         monitor_used = "dom"
                     finally:
                         if event_thread is not None:
