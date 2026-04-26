@@ -39,6 +39,7 @@ logs/
 
 # 运行时统计（持久化请求计数等）
 config/app_stats.json
+config/marketplace_cache.json
 
 # 系统文件
 .DS_Store
