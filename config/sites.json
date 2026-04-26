@@ -520,11 +520,11 @@
           "audio_selector": "generated-music audio, generated-music source, audio, audio source",
           "video_selector": "generated-music video, video-player video, response-element video, video",
           "container_selector": "response-element, generated-image, generated-music, .attachment-container, .markdown-main-panel",
-          "debounce_seconds": 1,
+          "debounce_seconds": 1.0,
           "wait_for_load": true,
-          "load_timeout_seconds": 10,
+          "load_timeout_seconds": 10.0,
           "download_blobs": true,
-          "max_size_mb": 100,
+          "max_size_mb": 50,
           "mode": "first"
         },
         "file_paste": {
