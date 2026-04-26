@@ -47,18 +47,6 @@ logger.debug(f"[startup] Python executable: {sys.executable}")
 
 
 _STARTUP_EMPTY_URLS = ("", "about:blank", "chrome://newtab/", "chrome://new-tab-page/")
-_GUIDE_SITE_ORDER = [
-    "chatgpt.com",
-    "chat.deepseek.com",
-    "gemini.google.com",
-    "claude.ai",
-    "www.kimi.com",
-    "chat.qwen.ai",
-    "grok.com",
-    "www.doubao.com",
-    "aistudio.google.com",
-    "arena.ai",
-]
 
 def _setup_windows_event_loop_policy():
     """
@@ -313,33 +301,33 @@ def _open_controlled_browser_page_non_blocking(
 def _build_controlled_browser_guide_data() -> Dict[str, Any]:
     from app.services.config_engine import config_engine
 
-    all_sites = config_engine.list_sites()
+    all_sites = config_engine.list_site_catalog()
     local_patterns = ("127.0.0.1", "localhost", "0.0.0.0", "::1")
-    priority = {domain: index for index, domain in enumerate(_GUIDE_SITE_ORDER)}
 
-    domains = []
-    for domain in all_sites.keys():
-        normalized = str(domain or "").strip()
+    sites = []
+    for site in all_sites:
+        normalized = str((site or {}).get("domain") or "").strip()
         lowered = normalized.lower()
         if not normalized or normalized.startswith("_"):
             continue
         if any(pattern in lowered for pattern in local_patterns):
             continue
-        domains.append(normalized)
+        startup_url = str((site or {}).get("url") or "").strip()
+        if not startup_url:
+            startup_url = f"https://{normalized}"
+        sites.append({
+            "domain": normalized,
+            "name": str((site or {}).get("display_name") or normalized).strip() or normalized,
+            "id": str((site or {}).get("card_id") or "").strip(),
+            "url": startup_url,
+        })
 
-    domains.sort(key=lambda item: (priority.get(item, len(priority)), item))
     base_url = _get_local_startup_base_url()
 
     return {
         "dashboard_url": f"{base_url}/",
         "guide_url": f"{base_url}/static/controlled-browser-guide.html",
-        "sites": [
-            {
-                "domain": domain,
-                "url": f"https://{domain}",
-            }
-            for domain in domains
-        ],
+        "sites": sites,
     }
 def _resolve_dashboard_path():
     configured = (AppConfig.get_dashboard_file() or "").strip()

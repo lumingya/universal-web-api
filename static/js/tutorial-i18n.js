@@ -17,7 +17,8 @@
             hamburgerCloseLabel: 'Close navigation menu',
             siteCardHint: 'Click to copy the URL, then open it in the controlled browser',
             siteCardCopied: 'URL copied. Paste it into the controlled browser',
-            siteCardCopyFailed: 'Copy failed. Please copy it manually and open it in the controlled browser'
+            siteCardCopyFailed: 'Copy failed. Please copy it manually and open it in the controlled browser',
+            siteCardEmpty: 'No site list was loaded. Use the current dashboard config as the source of truth.'
         },
         nav: {
             'quick-start': '🚀 Quick Start',
@@ -87,7 +88,7 @@
 
         <div class="note">
             <p><strong>Sites highlighted in the current docs:</strong> ChatGPT, DeepSeek, Gemini, Claude, Kimi, Qwen, Grok, Doubao, AI Studio, and Arena AI.</p>
-            <p style="margin-bottom: 0;">This page matches the current <code>config/sites.json</code>: Kimi uses <code>www.kimi.com</code>, Doubao uses <code>www.doubao.com</code>, and Qwen uses <code>chat.qwen.ai</code>.</p>
+            <p style="margin-bottom: 0;">The site cards below refresh from the current runtime config after the page loads. If you changed a domain or startup URL locally, trust the cards and the dashboard over any older screenshots.</p>
         </div>
 
         <div class="highlight-box">
@@ -124,11 +125,12 @@
         </div>
 
         <div class="config-group">
-            <h4><span class="icon">🗂️</span> Tabs, Extractors, Logs, and Settings</h4>
+            <h4><span class="icon">🗂️</span> Tabs, Logs, Settings, and Extractor Troubleshooting</h4>
             <ul>
                 <li><strong>Tab Pool</strong>: manage tab indexes, states, routes, and assigned presets.</li>
-                <li><strong>Extractors</strong>: fix cases where the page clearly has an answer but extraction is wrong.</li>
+                <li><strong>Extractors</strong>: they are mainly configured as preset fields right now. When the page clearly shows an answer but extraction is wrong, use the extractor section later in this guide to debug it.</li>
                 <li><strong>Logs</strong>: locate whether a problem happened before sending, during waiting, or during extraction. If raw DEBUG text feels too dense, you can enable cute <code>INFO / DEBUG</code> log phrasing in settings.</li>
+                <li><strong>Commands</strong>: define triggers and automated recovery actions for failures, periodic checks, and operational workflows.</li>
                 <li><strong>Settings</strong>: manage environment values, browser constants, AI recognition, and update rules.</li>
             </ul>
         </div>

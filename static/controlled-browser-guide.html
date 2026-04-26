@@ -364,19 +364,6 @@
         const guideBackgroundCandidates = ['jpg', 'jpeg', 'png', 'webp']
             .map(ext => `/static/images/controlled-browser-guide-bg.${ext}?v=${backgroundStamp}`);
 
-        const fallbackSites = [
-            { domain: 'chatgpt.com', url: 'https://chatgpt.com' },
-            { domain: 'chat.deepseek.com', url: 'https://chat.deepseek.com' },
-            { domain: 'gemini.google.com', url: 'https://gemini.google.com' },
-            { domain: 'claude.ai', url: 'https://claude.ai' },
-            { domain: 'www.kimi.com', url: 'https://www.kimi.com' },
-            { domain: 'chat.qwen.ai', url: 'https://chat.qwen.ai' },
-            { domain: 'grok.com', url: 'https://grok.com' },
-            { domain: 'www.doubao.com', url: 'https://www.doubao.com' },
-            { domain: 'aistudio.google.com', url: 'https://aistudio.google.com' },
-            { domain: 'arena.ai', url: 'https://arena.ai' }
-        ];
-
         const translations = {
             zh: {
                 lang: 'zh-CN',
@@ -452,7 +439,7 @@
 
         const state = {
             currentLanguage: normalizeLanguage(localStorage.getItem('controlled-browser-guide-language') || 'zh'),
-            sites: fallbackSites.slice(),
+            sites: [],
             dashboardUrl: `${window.location.origin}/`,
             dashboardCopyStatus: ''
         };
@@ -560,7 +547,7 @@
 
             els.siteGrid.innerHTML = sites.map(site => `
                 <article class="site-card">
-                    <h3 class="site-title">${escapeHtml(site.domain)}</h3>
+                    <h3 class="site-title">${escapeHtml(site.name || site.domain)}</h3>
                     <p class="site-url">${escapeHtml(site.url)}</p>
                     <button type="button" class="action-btn secondary" data-site-url="${escapeHtml(site.url)}">${escapeHtml(texts.siteOpen)}</button>
                 </article>
@@ -661,7 +648,6 @@
             els.confirmDisciplineBtn.style.opacity = '0.78';
             els.stepTwoStatus.hidden = false;
             setRevealVisible(els.finalStage);
-            loadGuideData();
         });
 
         els.copyDashboardBtn.addEventListener('click', async () => {
@@ -681,6 +667,7 @@
         });
 
         applyLanguage(state.currentLanguage);
+        loadGuideData();
         loadGuideBackground();
     </script>
 </body>

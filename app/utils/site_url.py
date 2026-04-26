@@ -8,6 +8,8 @@ import ipaddress
 from typing import Optional, List
 from urllib.parse import urlparse
 
+from app.utils.site_rules import build_route_alias_groups
+
 
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
 _LOCAL_SUFFIXES = (
@@ -19,10 +21,6 @@ _LOCAL_SUFFIXES = (
     ".example",
     ".invalid",
     ".home.arpa",
-)
-
-_ROUTE_DOMAIN_GROUPS = (
-    ("gemini.com", "gemini.google.com"),
 )
 
 
@@ -115,7 +113,7 @@ def build_route_domain_aliases(value: str) -> List[str]:
     else:
         _add(f"www.{normalized}")
 
-    for group in _ROUTE_DOMAIN_GROUPS:
+    for group in build_route_alias_groups():
         if normalized in group:
             for alias in group:
                 _add(alias)
@@ -129,7 +127,7 @@ def get_preferred_route_domain(value: str) -> str:
     if not normalized:
         return ""
 
-    for group in _ROUTE_DOMAIN_GROUPS:
+    for group in build_route_alias_groups():
         if normalized in group:
             return group[0]
 

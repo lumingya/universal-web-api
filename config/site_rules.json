@@ -1,0 +1,24 @@
+{
+  "sites": {
+    "chatgpt.com": {
+      "stealth_default": true
+    },
+    "gemini.google.com": {
+      "route_aliases": [
+        "gemini.com"
+      ]
+    },
+    "arena.ai": {
+      "stealth_default": true
+    },
+    "lmarena.ai": {
+      "stealth_default": true
+    },
+    "poe.com": {
+      "stealth_default": true
+    },
+    "you.com": {
+      "stealth_default": true
+    }
+  }
+}

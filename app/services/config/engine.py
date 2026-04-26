@@ -11,8 +11,10 @@ app/services/config/engine.py - 配置引擎主类
 import json
 import os
 import copy
+import re
 from app.core.config import get_logger
 from typing import Dict, Optional, List, Any
+from urllib.parse import urljoin
 from app.core.parsers import ParserRegistry
 from app.models.schemas import (
     SiteConfig,
@@ -25,6 +27,7 @@ from app.models.schemas import (
 )
 from app.services.extractor_manager import extractor_manager
 from app.services.parser_manager import parser_manager
+from app.utils.site_rules import derive_site_card_id, get_site_rule
 from .managers import GlobalConfigManager, ImagePresetsManager
 from .processors import HTMLCleaner, SelectorValidator, AIAnalyzer
 
@@ -50,8 +53,6 @@ class ConfigConstants:
     AI_RETRY_BASE_DELAY = 1.0
     AI_RETRY_MAX_DELAY = 10.0
     AI_REQUEST_TIMEOUT = 120
-    
-    STEALTH_DOMAINS = ['lmarena.ai', 'poe.com', 'you.com', 'chatgpt.com']
 
 # ================= 预设常量 =================
 
@@ -95,6 +96,12 @@ def get_default_network_config() -> Dict[str, Any]:
         "response_interval": 0.5        # 轮询间隔（秒）
     }
 
+
+_SITE_STARTUP_JS_PATTERNS = (
+    re.compile(r"""location\.(?:assign|replace)\(\s*['"]([^'"]+)['"]\s*\)""", re.IGNORECASE),
+    re.compile(r"""location\.href\s*=\s*['"]([^'"]+)['"]""", re.IGNORECASE),
+)
+
 # ================= 配置引擎主类 =================
 
 class ConfigEngine:
@@ -108,6 +115,7 @@ class ConfigEngine:
         self.sites: Dict[str, SiteConfig] = {}
         self._global_default_presets: Dict[str, str] = {}
         self._local_default_presets: Dict[str, str] = {}
+        self._local_sites_payload: Dict[str, Any] = {}
         
         # 子管理器
         self.global_config = GlobalConfigManager()
@@ -275,9 +283,10 @@ class ConfigEngine:
             return False
 
     def _load_local_site_overrides(self) -> Dict[str, str]:
-        """加载本地站点覆盖配置，目前仅记录默认预设选择。"""
+        """加载本地站点覆盖配置，并保留未识别字段。"""
         if not os.path.exists(self.local_sites_file):
             self.last_local_mtime = 0.0
+            self._local_sites_payload = {}
             return {}
 
         try:
@@ -285,7 +294,8 @@ class ConfigEngine:
                 data = json.load(f)
 
             self.last_local_mtime = os.path.getmtime(self.local_sites_file)
-            defaults = data.get("default_presets", {}) if isinstance(data, dict) else {}
+            self._local_sites_payload = data if isinstance(data, dict) else {}
+            defaults = self._local_sites_payload.get("default_presets", {})
             if not isinstance(defaults, dict):
                 return {}
 
@@ -296,9 +306,11 @@ class ConfigEngine:
             }
         except json.JSONDecodeError as e:
             logger.error(f"本地站点覆盖配置格式错误: {e}")
+            self._local_sites_payload = {}
             return {}
         except Exception as e:
             logger.error(f"加载本地站点覆盖配置失败: {e}")
+            self._local_sites_payload = {}
             return {}
 
     def _prune_default_preset_maps(self) -> None:
@@ -409,9 +421,16 @@ class ConfigEngine:
             if isinstance(presets, dict) and preset_value and preset_value in presets:
                 defaults[domain] = preset_value
 
-        payload = {
-            "default_presets": defaults
-        }
+        payload = dict(self._local_sites_payload or {})
+        if os.path.exists(self.local_sites_file):
+            try:
+                with open(self.local_sites_file, "r", encoding="utf-8-sig") as f:
+                    latest_payload = json.load(f)
+                if isinstance(latest_payload, dict):
+                    payload.update(latest_payload)
+            except Exception:
+                pass
+        payload["default_presets"] = defaults
 
         try:
             os.makedirs(os.path.dirname(self.local_sites_file), exist_ok=True)
@@ -422,6 +441,7 @@ class ConfigEngine:
 
             os.replace(tmp_file, self.local_sites_file)
             self.last_local_mtime = os.path.getmtime(self.local_sites_file)
+            self._local_sites_payload = payload
             return True
         except Exception as e:
             logger.error(f"保存本地站点覆盖配置失败: {e}")
@@ -757,6 +777,90 @@ class ConfigEngine:
             return None
 
         return self._resolve_default_preset_name(site)
+
+    def _extract_startup_url_from_script(self, script: str) -> str:
+        text = str(script or "").strip()
+        if not text:
+            return ""
+
+        for pattern in _SITE_STARTUP_JS_PATTERNS:
+            match = pattern.search(text)
+            if match:
+                return str(match.group(1) or "").strip()
+        return ""
+
+    def _normalize_startup_url(self, domain: str, raw_url: str) -> str:
+        normalized_domain = str(domain or "").strip().lower().strip(".")
+        text = str(raw_url or "").strip()
+        if not normalized_domain:
+            return text
+        if not text:
+            return f"https://{normalized_domain}"
+        if text.startswith(("http://", "https://")):
+            return text
+        return urljoin(f"https://{normalized_domain}", text)
+
+    def _infer_site_startup_url(self, domain: str, site: Dict[str, Any]) -> str:
+        preset_name = self._resolve_default_preset_name(site)
+        preset_data = self._get_site_data_readonly(domain, preset_name)
+        workflow = preset_data.get("workflow", []) if isinstance(preset_data, dict) else []
+
+        if isinstance(workflow, list):
+            for step in workflow:
+                if str((step or {}).get("action") or "").strip().upper() != "JS_EXEC":
+                    continue
+                startup_url = self._extract_startup_url_from_script((step or {}).get("value"))
+                if startup_url:
+                    return self._normalize_startup_url(domain, startup_url)
+
+        return self._normalize_startup_url(domain, "")
+
+    def get_site_catalog_entry(self, domain: str, fallback_order: int = 0) -> Optional[Dict[str, Any]]:
+        self.refresh_if_changed()
+
+        site = self.sites.get(domain)
+        if not isinstance(site, dict) or str(domain or "").startswith("_"):
+            return None
+
+        rule = get_site_rule(domain)
+        startup_url = rule.get("startup_url") or self._infer_site_startup_url(domain, site)
+        display_name = str(rule.get("display_name") or domain).strip() or str(domain)
+        card_id = str(rule.get("card_id") or derive_site_card_id(domain)).strip() or derive_site_card_id(domain)
+        guide_priority = rule.get("guide_priority")
+        if not isinstance(guide_priority, int):
+            guide_priority = int(fallback_order)
+
+        entry = {
+            "domain": str(domain),
+            "display_name": display_name,
+            "url": self._normalize_startup_url(domain, startup_url),
+            "card_id": card_id,
+            "guide_priority": guide_priority,
+        }
+
+        if isinstance(rule.get("route_aliases"), list):
+            entry["route_aliases"] = [str(item) for item in rule.get("route_aliases", [])]
+        if "stealth_default" in rule:
+            entry["stealth_default"] = bool(rule.get("stealth_default"))
+
+        return entry
+
+    def list_site_catalog(self) -> List[Dict[str, Any]]:
+        self.refresh_if_changed()
+
+        ordered_domains = [
+            domain for domain, site in self.sites.items()
+            if not domain.startswith("_") and isinstance(site, dict)
+        ]
+        entries: List[Dict[str, Any]] = []
+
+        for index, domain in enumerate(ordered_domains):
+            entry = self.get_site_catalog_entry(domain, fallback_order=index)
+            if entry:
+                entries.append(entry)
+
+        entries.sort(key=lambda item: (int(item.get("guide_priority", 0)), str(item.get("domain") or "")))
+        return entries
 
     def get_site_advanced_config(self, domain: str) -> Dict[str, Any]:
         """获取站点级高级配置。"""
@@ -1224,11 +1328,13 @@ class ConfigEngine:
         return False
     
     def _guess_stealth(self, domain: str) -> bool:
-        """推测是否需要隐身模式"""
-        for stealth_domain in ConfigConstants.STEALTH_DOMAINS:
-            if stealth_domain in domain:
-                logger.info(f"检测到需要隐身模式的域名: {domain}")
-                return True
+        """Guess whether stealth mode should default to enabled."""
+        rule = get_site_rule(domain)
+        if "stealth_default" in rule:
+            enabled = bool(rule.get("stealth_default"))
+            if enabled:
+                logger.info(f"检测到默认启用隐身模式的域名: {domain}")
+            return enabled
         return False
     
     def migrate_site_configs(self):

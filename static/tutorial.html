@@ -2169,7 +2169,7 @@
 
             <div class="note">
                 <p><strong>当前文档重点覆盖的站点：</strong>ChatGPT、DeepSeek、Gemini、Claude、Kimi、通义千问、Grok、豆包、AI Studio、Arena AI。</p>
-                <p style="margin-bottom: 0;">本页内容按当前 <code>config/sites.json</code> 同步：Kimi 当前以 <code>www.kimi.com</code> 为准；豆包当前以 <code>www.doubao.com</code> 为主；通义千问站点为 <code>chat.qwen.ai</code>。</p>
+                <p style="margin-bottom: 0;">下方站点卡片会在页面加载后按当前配置动态刷新；如果你本地改了站点域名或启动地址，以卡片和控制面板里的实际内容为准。</p>
             </div>
 
             <div class="highlight-box">
@@ -2192,7 +2192,7 @@
                     <li>查看浏览器连接状态、认证状态、站点数量。</li>
                     <li>搜索站点、切换站点。</li>
                     <li>新增站点、导入配置、导出配置。</li>
-                    <li>切换主功能页：站点、标签页、提取器、日志、设置。</li>
+                    <li>切换主功能页：站点、标签页、日志、命令、设置。</li>
                 </ul>
             </div>
 
@@ -2208,11 +2208,12 @@
             </div>
 
             <div class="config-group">
-                <h4><span class="icon">🗂️</span> 标签页池、提取器、日志、设置</h4>
+                <h4><span class="icon">🗂️</span> 标签页池、日志、设置与提取器排查</h4>
                 <ul>
                     <li><strong>标签页池</strong>：查看所有标签页的编号、状态、当前 URL、请求计数；也可以复制指定标签页的 API 端点或切换预设。</li>
-                    <li><strong>提取器</strong>：解决“网页明明有回复，但抓出来内容不对”的问题。</li>
+                    <li><strong>提取器</strong>：当前主要作为站点预设中的配置字段使用；当“网页明明有回复，但抓出来内容不对”时，再按本页后面的提取器章节排查。</li>
                     <li><strong>日志</strong>：定位问题到底卡在发送前、等待中还是提取阶段；如果你觉得 DEBUG 原文太硬，也可以在设置里打开 <code>INFO / DEBUG</code> 日志可爱化。</li>
+                    <li><strong>命令</strong>：为异常状态、周期检查和自动恢复动作配置触发器与执行逻辑。</li>
                     <li><strong>设置</strong>：管理环境配置、浏览器常量、AI 元素识别等全局参数。</li>
                 </ul>
             </div>
@@ -4012,18 +4013,7 @@ BROWSER_PROFILE_NAME=Default</code></pre>
 <script src="./js/tutorial-i18n.js?v=2.7.5"></script>
     <script>
         // 站点配置数据（域名已更新）
-        const sites = [
-            { url: "https://chatgpt.com", name: "chatgpt.com", id: "chatgpt" },
-            { url: "https://chat.deepseek.com", name: "chat.deepseek.com", id: "deepseek" },
-            { url: "https://gemini.google.com", name: "gemini.google.com", id: "gemini" },
-            { url: "https://claude.ai", name: "claude.ai", id: "claude" },
-            { url: "https://www.kimi.com", name: "www.kimi.com", id: "kimi-www" },
-            { url: "https://chat.qwen.ai", name: "chat.qwen.ai", id: "qwen" },
-            { url: "https://grok.com", name: "grok.com", id: "grok" },
-            { url: "https://www.doubao.com", name: "doubao.com", id: "doubao" },
-            { url: "https://aistudio.google.com", name: "aistudio.google.com", id: "aistudio" },
-            { url: "https://arena.ai", name: "arena.ai", id: "arena" }
-        ];
+        let sites = [];
 
         const tutorialState = {
             currentLanguage: 'zh',
@@ -4098,7 +4088,8 @@ BROWSER_PROFILE_NAME=Default</code></pre>
                     hamburgerCloseLabel: '关闭导航菜单',
                     siteCardHint: '点击复制网址，去受控浏览器打开',
                     siteCardCopied: '已复制网址，请到受控浏览器粘贴打开',
-                    siteCardCopyFailed: '复制失败，请手动复制并到受控浏览器打开'
+                    siteCardCopyFailed: '复制失败，请手动复制并到受控浏览器打开',
+                    siteCardEmpty: '当前没有读取到站点列表，请直接以控制面板中的站点配置为准。'
                 },
                 nav: navContent,
                 sections: sectionContent
@@ -4117,7 +4108,8 @@ BROWSER_PROFILE_NAME=Default</code></pre>
             return {
                 hint: bundleUi.siteCardHint || fallbackUi.siteCardHint || '点击复制网址，去受控浏览器打开',
                 copied: bundleUi.siteCardCopied || fallbackUi.siteCardCopied || '已复制网址，请到受控浏览器粘贴打开',
-                copyFailed: bundleUi.siteCardCopyFailed || fallbackUi.siteCardCopyFailed || '复制失败，请手动复制并到受控浏览器打开'
+                copyFailed: bundleUi.siteCardCopyFailed || fallbackUi.siteCardCopyFailed || '复制失败，请手动复制并到受控浏览器打开',
+                empty: bundleUi.siteCardEmpty || fallbackUi.siteCardEmpty || '当前没有读取到站点列表，请直接以控制面板中的站点配置为准。'
             };
         }
 
@@ -4178,6 +4170,29 @@ BROWSER_PROFILE_NAME=Default</code></pre>
             }
         }
 
+        async function loadSiteCatalog() {
+            try {
+                const response = await fetch('/api/startup/controlled-browser-guide-data', { cache: 'no-store' });
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                const payload = await response.json();
+                sites = Array.isArray(payload.sites)
+                    ? payload.sites.map(site => ({
+                        url: String(site?.url || '').trim(),
+                        name: String(site?.name || site?.domain || '').trim(),
+                        id: String(site?.id || site?.domain || '').trim(),
+                        domain: String(site?.domain || '').trim()
+                    })).filter(site => site.url && site.name)
+                    : [];
+            } catch (error) {
+                console.warn('loadSiteCatalog failed:', error);
+                sites = [];
+            }
+
+            renderSiteGrid();
+        }
+
         async function getRequestGeneratorText() {
             const scriptUrl = new URL('./%E6%8B%A6%E6%88%AA%E8%AF%B7%E6%B1%82%E5%8F%91%E7%94%9F%E5%99%A8.txt', window.location.href);
 
@@ -4224,6 +4239,10 @@ BROWSER_PROFILE_NAME=Default</code></pre>
                 return;
             }
             const texts = getSiteCardTexts();
+            if (!sites.length) {
+                grid.innerHTML = `<div class="site-card site-card-empty">${texts.empty}</div>`;
+                return;
+            }
             grid.innerHTML = sites.map(site => `
                 <button type="button" class="site-card site-card-button" data-site-url="${site.url}">
                     <span class="site-card-main">
@@ -5704,6 +5723,7 @@ BROWSER_PROFILE_NAME=Default</code></pre>
         captureChineseBundle();
         initTheme();
         applyLanguage(normalizeLanguage(localStorage.getItem('tutorial-language') || 'zh'));
+        loadSiteCatalog();
     </script>
 </body>
 </html>

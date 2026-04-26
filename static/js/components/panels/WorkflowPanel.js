@@ -39,9 +39,6 @@ window.WorkflowPanel = {
             customKeyModes: {}
         };
     },
-    mounted() {
-        this.startEditorBridgePolling();
-    },
     beforeUnmount() {
         this.stopEditorBridgePolling();
     },

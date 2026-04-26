@@ -803,7 +803,6 @@ const app = createApp({
             toastCounter: 0,
             hasLoadedSettings: false,
             hasLoadedMarketplace: false,
-            hasLoadedExtractors: false,
             isSaving: false,
             isLoading: false,
             showJsonPreview: false,
@@ -2431,9 +2430,6 @@ const app = createApp({
         },
 
         changeTab(tab) {
-            if (tab === 'extractors') {
-                tab = 'config';
-            }
             this.activeTab = tab;
         },
 
