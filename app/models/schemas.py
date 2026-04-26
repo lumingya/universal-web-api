@@ -234,8 +234,21 @@ class SendConfirmationConfig(TypedDict, total=False):
     trust_send_disabled_with_input_shrink: bool
 
 
+class NetworkConfig(TypedDict, total=False):
+    """Network stream capture configuration."""
+    listen_pattern: str
+    stream_match_mode: Literal["keyword", "regex"]
+    stream_match_pattern: str
+    parser: str
+    silence_threshold: float
+    response_interval: float
+
+
 class StreamConfig(TypedDict, total=False):
     """流式监控配置（可选字段）"""
+    mode: Literal["dom", "network"]
+    hard_timeout: float
+    network: NetworkConfig
     send_confirmation: SendConfirmationConfig
 
 
@@ -568,6 +581,42 @@ def validate_site_config(config: Dict[str, Any]) -> bool:
             return False
         
         stream_config = config["stream_config"]
+
+        if "mode" in stream_config:
+            mode = str(stream_config["mode"]).strip().lower()
+            if mode not in {"dom", "network"}:
+                return False
+
+        if "hard_timeout" in stream_config and not isinstance(stream_config["hard_timeout"], (int, float)):
+            return False
+
+        if "network" in stream_config:
+            if not isinstance(stream_config["network"], dict):
+                return False
+
+            network_config = stream_config["network"]
+            string_fields = [
+                "listen_pattern",
+                "stream_match_pattern",
+                "parser",
+            ]
+            numeric_fields = [
+                "silence_threshold",
+                "response_interval",
+            ]
+
+            for key in string_fields:
+                if key in network_config and not isinstance(network_config[key], str):
+                    return False
+
+            for key in numeric_fields:
+                if key in network_config and not isinstance(network_config[key], (int, float)):
+                    return False
+
+            if "stream_match_mode" in network_config:
+                mode = str(network_config["stream_match_mode"]).strip().lower()
+                if mode not in {"keyword", "regex"}:
+                    return False
         
         if "send_confirmation" in stream_config:
             if not isinstance(stream_config["send_confirmation"], dict):
@@ -663,6 +712,7 @@ __all__ = [
     'SelectorDefinition',
     'GlobalConfig',
     'StreamConfig',
+    'NetworkConfig',
     'SiteConfig',
     'SelectorValidationResult',
     'AIAnalysisResult',

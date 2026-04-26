@@ -260,6 +260,8 @@
           "hard_timeout": 600,
           "network": {
             "listen_pattern": "backend-api/f/conversation",
+            "stream_match_mode": "regex",
+            "stream_match_pattern": "/backend-api/f/conversation(?:$|[?#])",
             "parser": "chatgpt",
             "silence_threshold": 2,
             "response_interval": 0.5

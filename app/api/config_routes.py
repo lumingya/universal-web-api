@@ -1605,5 +1605,6 @@ async def get_stream_config_defaults(authenticated: bool = Depends(verify_auth))
             "silence_threshold": {"min": 0.5, "max": 30},
             "response_interval": {"min": 0.1, "max": 5}
         },
-        "mode_options": ["dom", "network"]
+        "mode_options": ["dom", "network"],
+        "stream_match_mode_options": ["keyword", "regex"]
     }

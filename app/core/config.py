@@ -358,6 +358,8 @@ class BrowserConstants:
         'NETWORK_DEBUG_CAPTURE_ENABLED': False,
         'NETWORK_DEBUG_CAPTURE_MAX_BODY_CHARS': 200000,
         'NETWORK_DEBUG_CAPTURE_PARSER_FILTER': '',
+        'ATTACHMENT_READY_IDLE_TIMEOUT': 8.0,
+        'ATTACHMENT_READY_HARD_MAX_WAIT': 90.0,
     }
     
     # ===== 类属性（会被配置文件覆盖）=====
@@ -399,6 +401,10 @@ class BrowserConstants:
     # 输入验证
     MAX_MESSAGE_LENGTH = 100000
     MAX_MESSAGES_COUNT = 100
+
+    # 附件/图片上传就绪判定
+    ATTACHMENT_READY_IDLE_TIMEOUT = 8.0
+    ATTACHMENT_READY_HARD_MAX_WAIT = 90.0
 
     # 文本输入
     TEXT_INPUT_CHUNK_SIZE = 30000

@@ -522,6 +522,43 @@ class AttachmentMonitor:
         return True
 
     @staticmethod
+    def _has_meaningful_progress(previous: Dict[str, Any], current: Dict[str, Any]) -> bool:
+        """Whether the attachment flow is still making observable progress."""
+        if not previous:
+            return bool(current)
+        if not current:
+            return False
+
+        comparable_keys = (
+            "attachmentCount",
+            "previewCount",
+            "fileInputCount",
+            "pendingCount",
+            "pendingText",
+            "sendDisabled",
+            "sendBusy",
+            "matchedExpectedName",
+            "attachmentChanged",
+            "pendingChanged",
+            "sendTransition",
+            "attachmentObserved",
+            "attachmentFingerprint",
+            "rootText",
+            "attachmentText",
+        )
+        for key in comparable_keys:
+            if previous.get(key) != current.get(key):
+                return True
+
+        try:
+            if int(current.get("mutationCount", 0) or 0) > int(previous.get("mutationCount", 0) or 0):
+                return True
+        except Exception:
+            return True
+
+        return False
+
+    @staticmethod
     def summarize(state: Dict[str, Any]) -> str:
         if not state:
             return "no_state"
@@ -558,6 +595,17 @@ class AttachmentMonitor:
         settle_window = float(
             stable_window or getattr(BrowserConstants, "ATTACHMENT_READY_STABLE_WINDOW", 0.8)
         )
+        idle_timeout = float(
+            getattr(BrowserConstants, "ATTACHMENT_READY_IDLE_TIMEOUT", max(wait_timeout, 8.0))
+        )
+        hard_max_wait = float(
+            getattr(
+                BrowserConstants,
+                "ATTACHMENT_READY_HARD_MAX_WAIT",
+                max(wait_timeout * 3.0, wait_timeout + 30.0),
+            )
+        )
+        hard_max_wait = max(wait_timeout, hard_max_wait)
 
         state = self.begin_tracking(expected_names) if start_new_tracking else self.snapshot(expected_names)
         if not state:
@@ -573,22 +621,50 @@ class AttachmentMonitor:
         observed_once = bool(state.get("attachmentObserved"))
         activity_seen = observed_once or int(state.get("mutationCount", 0) or 0) > 0
         last_state = state
+        last_progress_at = start
+        idle_deadline = start + max(0.5, idle_timeout)
+        hard_deadline = start + max(0.5, hard_max_wait)
+        activity_deadline = start + max(0.5, wait_timeout)
 
-        while time.time() - start <= wait_timeout:
+        while time.time() <= hard_deadline:
             if self._check_cancelled():
                 break
 
+            previous_state = dict(last_state or {})
             state = self.snapshot(expected_names)
             if state:
                 last_state = state
 
+            now = time.time()
+            progress = self._has_meaningful_progress(previous_state, last_state)
+            if progress:
+                last_progress_at = now
+                idle_deadline = min(hard_deadline, now + max(0.5, idle_timeout))
+                if activity_seen or bool(last_state.get("attachmentObserved")):
+                    activity_deadline = min(hard_deadline, now + max(0.5, wait_timeout))
+
             observed = bool(last_state.get("attachmentObserved"))
             if observed:
                 observed_once = True
+                activity_deadline = min(hard_deadline, now + max(0.5, wait_timeout))
 
             activity_seen = activity_seen or observed or bool(last_state.get("pendingChanged")) or bool(
                 last_state.get("sendTransition")
             ) or int(last_state.get("mutationCount", 0) or 0) > 0
+
+            active_pending = (
+                int(last_state.get("pendingCount", 0) or 0) > 0
+                or bool(last_state.get("pendingText"))
+                or bool(last_state.get("sendBusy"))
+            )
+
+            if active_pending and (observed_once or activity_seen):
+                last_progress_at = now
+                idle_deadline = min(hard_deadline, now + max(0.5, idle_timeout))
+
+            if activity_seen and not progress:
+                if active_pending:
+                    activity_deadline = min(hard_deadline, now + max(0.5, check_interval * 2.0))
 
             ready = self._is_ready_state(last_state, require_send_enabled=require_send_enabled)
             attachment_present = (
@@ -619,7 +695,13 @@ class AttachmentMonitor:
             else:
                 stable_since = None
 
-            remaining = wait_timeout - (time.time() - start)
+            if now >= idle_deadline:
+                break
+
+            if now >= activity_deadline and not progress:
+                break
+
+            remaining = min(idle_deadline, activity_deadline, hard_deadline) - now
             if remaining <= 0:
                 break
             time.sleep(min(check_interval, remaining))
@@ -630,11 +712,14 @@ class AttachmentMonitor:
                 "success": False,
                 "attachmentObserved": observed_once,
                 "activitySeen": activity_seen,
-                "reason": "timeout",
+                "reason": "idle_timeout" if time.time() >= idle_deadline else "timeout",
+                "waitedSeconds": round(max(0.0, time.time() - start), 3),
+                "idleSeconds": round(max(0.0, time.time() - last_progress_at), 3),
             }
         )
         logger.warning(
-            f"[ATTACHMENT] {label} not ready after {wait_timeout:.1f}s: {self.summarize(result)}"
+            f"[ATTACHMENT] {label} not ready after {time.time() - start:.1f}s: {self.summarize(result)} "
+            f"(reason={result.get('reason')}, idle={result.get('idleSeconds')})"
         )
         return result
 

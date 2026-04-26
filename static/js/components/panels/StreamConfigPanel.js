@@ -31,8 +31,22 @@ window.StreamConfigPanel = {
                     description: '更早接受附件发送成功信号，适合文件或图片上传后页面反馈较慢的站点。'
                 }
             ],
+            streamMatchModeOptions: [
+                {
+                    value: 'keyword',
+                    label: '关键词',
+                    description: '直接判断 URL 是否包含指定文本，适合大多数站点。'
+                },
+                {
+                    value: 'regex',
+                    label: '正则',
+                    description: '用正则精确筛选目标 URL，适合需要排除 prepare 之类噪音请求的站点。'
+                }
+            ],
             defaultNetworkConfig: {
                 listen_pattern: '',
+                stream_match_mode: 'keyword',
+                stream_match_pattern: '',
                 parser: '',
                 silence_threshold: 3.0,
                 response_interval: 0.5
@@ -77,6 +91,12 @@ window.StreamConfigPanel = {
                 return '';
             }
             return this.getPreferredListenPattern(parserId);
+        },
+
+        selectedStreamMatchModeMeta() {
+            return this.streamMatchModeOptions.find(
+                option => option.value === this.networkConfig.stream_match_mode
+            ) || this.streamMatchModeOptions[0];
         },
 
         networkChecklist() {
@@ -379,6 +399,31 @@ window.StreamConfigPanel = {
                             <p v-if="selectedParserMeta && Array.isArray(selectedParserMeta.patterns) && selectedParserMeta.patterns.length"
                                class="mt-1 text-xs text-gray-500 dark:text-gray-400">
                                 这个解析器常见监听关键词：<code>{{ preferredPattern }}</code>
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">流目标匹配模式</label>
+                            <select :value="networkConfig.stream_match_mode"
+                                    @change="updateNetworkField('stream_match_mode', $event.target.value)"
+                                    class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-purple-400 focus:border-transparent">
+                                <option v-for="option in streamMatchModeOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+                            </select>
+                            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                {{ selectedStreamMatchModeMeta.description }}
+                            </p>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">流目标匹配表达式</label>
+                            <input type="text"
+                                   :value="networkConfig.stream_match_pattern"
+                                   @input="updateNetworkField('stream_match_pattern', $event.target.value)"
+                                   placeholder="留空时默认沿用 listen_pattern"
+                                   class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm font-mono bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-purple-400 focus:border-transparent">
+                            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                <code>keyword</code> 模式下填 URL 子串，<code>regex</code> 模式下填正则；留空时回退到 <code>listen_pattern</code>。
                             </p>
                         </div>
                     </div>

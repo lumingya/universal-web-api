@@ -221,10 +221,12 @@ class WorkflowExecutor:
                     effective_stream_config = copy.deepcopy(stream_config or {})
                     effective_network_config = dict(effective_stream_config.get("network") or {})
                     effective_network_config["listen_pattern"] = merged_pattern
-                    effective_network_config["stream_match_pattern"] = (
-                        network_listen_pattern or merged_pattern
-                    )
-                    effective_network_config["stream_match_mode"] = "keyword"
+                    if not str(effective_network_config.get("stream_match_pattern") or "").strip():
+                        effective_network_config["stream_match_pattern"] = (
+                            network_listen_pattern or merged_pattern
+                        )
+                    if not str(effective_network_config.get("stream_match_mode") or "").strip():
+                        effective_network_config["stream_match_mode"] = "keyword"
                     effective_stream_config["network"] = effective_network_config
 
                 self._network_monitor = create_network_monitor(

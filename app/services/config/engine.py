@@ -91,6 +91,8 @@ def get_default_network_config() -> Dict[str, Any]:
     """获取默认网络监听配置"""
     return {
         "listen_pattern": "",           # URL 匹配模式（必填）
+        "stream_match_mode": "keyword", # 流目标匹配模式（keyword / regex）
+        "stream_match_pattern": "",     # 流目标匹配表达式（为空时回退到 listen_pattern）
         "parser": "",                   # 解析器 ID（必填）
         "silence_threshold": 3.0,       # 静默超时（秒）
         "response_interval": 0.5        # 轮询间隔（秒）
@@ -1719,7 +1721,14 @@ class ConfigEngine:
             network_config = stream_config["network"]
             
             result["network"] = network_default.copy()
-            for key in ["listen_pattern", "parser", "silence_threshold", "response_interval"]:
+            for key in [
+                "listen_pattern",
+                "stream_match_mode",
+                "stream_match_pattern",
+                "parser",
+                "silence_threshold",
+                "response_interval",
+            ]:
                 if key in network_config:
                     result["network"][key] = network_config[key]
         
@@ -1870,7 +1879,15 @@ class ConfigEngine:
             pattern = str(config["listen_pattern"]).strip()
             if pattern:
                 result["listen_pattern"] = pattern
-        
+
+        if "stream_match_mode" in config:
+            match_mode = str(config["stream_match_mode"]).strip().lower()
+            if match_mode in {"keyword", "regex"}:
+                result["stream_match_mode"] = match_mode
+
+        if "stream_match_pattern" in config:
+            result["stream_match_pattern"] = str(config["stream_match_pattern"]).strip()
+
         # parser（必填，需验证存在性）
         if "parser" in config:
             parser_id = str(config["parser"]).strip()
