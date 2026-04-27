@@ -38,6 +38,7 @@ def get_default_image_extraction_config() -> Dict:
         "load_timeout_seconds": 5.0,
         "download_blobs": True,
         "max_size_mb": 10,
+        "src_allow_patterns": [],
         "mode": "all"
     }
 
@@ -71,6 +72,7 @@ class ImageExtractor:
             loadTimeoutMs = 5000,
             downloadBlobs = true,
             maxBytes = 10485760,
+            srcAllowPatterns = [],
             mode = "all"
         } = opts || {};
 
@@ -243,6 +245,8 @@ class ImageExtractor:
             };
         }
 
+        const warnings = [];
+
         let items = nodes.map((img, i) => {
             const src = pickSrc(img);
             return {
@@ -256,6 +260,38 @@ class ImageExtractor:
                 naturalWidth: img.naturalWidth || 0
             };
         }).filter(x => x.src);  // 过滤无 src 的
+
+        const beforeAllowFilterCount = items.length;
+        const beforeAllowFilterSamples = items.slice(0, 5).map((item) => String(item.src || ""));
+
+        // ===== 4.5 可选：按 src 白名单过滤 =====
+        const allowRegexes = Array.isArray(srcAllowPatterns)
+            ? srcAllowPatterns
+                .map((pattern) => {
+                    try {
+                        const text = String(pattern || "").trim();
+                        if (!text) return null;
+                        return new RegExp(text, "i");
+                    } catch {
+                        return null;
+                    }
+                })
+                .filter(Boolean)
+            : [];
+
+        if (allowRegexes.length > 0) {
+            items = items.filter((item) => allowRegexes.some((regex) => regex.test(item.src)));
+        }
+
+        if (allowRegexes.length > 0 && beforeAllowFilterCount > 0 && items.length === 0) {
+            warnings.push(
+                "all_filtered_by_src_allow_patterns:" + JSON.stringify({
+                    count: beforeAllowFilterCount,
+                    sample_srcs: beforeAllowFilterSamples,
+                    patterns: allowRegexes.map((regex) => String(regex))
+                })
+            );
+        }
 
         // ===== 5. 按模式筛选 =====
         if (mode === "first") items = items.slice(0, 1);
@@ -278,7 +314,6 @@ class ImageExtractor:
         }).filter(x => !x._bad);
 
         const out = [];
-        const warnings = [];
 
         // ===== 7. 处理 blob URL =====
         if (downloadBlobs) {
@@ -396,6 +431,7 @@ class ImageExtractor:
             "loadTimeoutMs": int(final_config.get("load_timeout_seconds", 5) * 1000),
             "downloadBlobs": final_config.get("download_blobs", True),
             "maxBytes": final_config.get("max_size_mb", 10) * 1024 * 1024,
+            "srcAllowPatterns": final_config.get("src_allow_patterns", []) or [],
             "mode": final_config.get("mode", "all")
         }
         

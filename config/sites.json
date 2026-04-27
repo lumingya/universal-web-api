@@ -145,11 +145,12 @@
           "audio_selector": "audio, audio source",
           "video_selector": "video, video source",
           "container_selector": null,
-          "debounce_seconds": 2,
+          "debounce_seconds": 2.0,
           "wait_for_load": true,
-          "load_timeout_seconds": 5,
+          "load_timeout_seconds": 5.0,
           "download_blobs": true,
           "max_size_mb": 100,
+          "src_allow_patterns": [],
           "mode": "all"
         },
         "file_paste": {
@@ -227,11 +228,12 @@
           "audio_selector": "audio, audio source",
           "video_selector": "video, video source",
           "container_selector": null,
-          "debounce_seconds": 2,
+          "debounce_seconds": 2.0,
           "wait_for_load": true,
-          "load_timeout_seconds": 5,
+          "load_timeout_seconds": 5.0,
           "download_blobs": true,
           "max_size_mb": 100,
+          "src_allow_patterns": [],
           "mode": "all"
         },
         "file_paste": {
@@ -311,11 +313,19 @@
           "audio_selector": "audio, audio source",
           "video_selector": "video, video source",
           "container_selector": "div[id^=\"image-\"]",
-          "debounce_seconds": 2,
+          "debounce_seconds": 2.0,
           "wait_for_load": true,
-          "load_timeout_seconds": 8,
+          "load_timeout_seconds": 8.0,
           "download_blobs": true,
           "max_size_mb": 20,
+          "src_allow_patterns": [
+            "^data:image/",
+            "^blob:",
+            "^https?://[^/]*chatgpt\\.com/backend-api/estuary/content\\b",
+            "^https?://[^/]*oaiusercontent\\.com/",
+            "^https?://[^/]*oaistatic\\.com/",
+            "^https?://cdn\\.openai\\.com/"
+          ],
           "mode": "all"
         },
         "file_paste": {
@@ -419,11 +429,12 @@
           "audio_selector": "generated-music audio, generated-music source, audio, audio source",
           "video_selector": "generated-music video, video-player video, response-element video, video",
           "container_selector": "response-element, generated-image, generated-music, .attachment-container, .markdown-main-panel",
-          "debounce_seconds": 1,
+          "debounce_seconds": 1.0,
           "wait_for_load": true,
-          "load_timeout_seconds": 10,
+          "load_timeout_seconds": 10.0,
           "download_blobs": true,
           "max_size_mb": 100,
+          "src_allow_patterns": [],
           "mode": "first"
         },
         "file_paste": {
@@ -527,6 +538,7 @@
           "load_timeout_seconds": 10.0,
           "download_blobs": true,
           "max_size_mb": 50,
+          "src_allow_patterns": [],
           "mode": "first"
         },
         "file_paste": {
@@ -625,11 +637,12 @@
           "audio_selector": "generated-music audio, generated-music source, audio, audio source",
           "video_selector": "generated-music video, video-player video, response-element video, video",
           "container_selector": "response-element, generated-image, generated-music, .attachment-container, .markdown-main-panel",
-          "debounce_seconds": 1,
+          "debounce_seconds": 1.0,
           "wait_for_load": true,
-          "load_timeout_seconds": 10,
+          "load_timeout_seconds": 10.0,
           "download_blobs": true,
           "max_size_mb": 100,
+          "src_allow_patterns": [],
           "mode": "first"
         },
         "file_paste": {
@@ -715,11 +728,12 @@
           "audio_selector": "audio, audio source",
           "video_selector": "video, video source",
           "container_selector": null,
-          "debounce_seconds": 2,
+          "debounce_seconds": 2.0,
           "wait_for_load": true,
-          "load_timeout_seconds": 5,
+          "load_timeout_seconds": 5.0,
           "download_blobs": true,
           "max_size_mb": 10,
+          "src_allow_patterns": [],
           "mode": "all"
         },
         "file_paste": {
@@ -807,11 +821,12 @@
           "audio_selector": "audio, audio source",
           "video_selector": "video, video source",
           "container_selector": null,
-          "debounce_seconds": 2,
+          "debounce_seconds": 2.0,
           "wait_for_load": true,
-          "load_timeout_seconds": 5,
+          "load_timeout_seconds": 5.0,
           "download_blobs": true,
           "max_size_mb": 10,
+          "src_allow_patterns": [],
           "mode": "all"
         },
         "file_paste": {
@@ -886,11 +901,12 @@
           "audio_selector": "audio, audio source",
           "video_selector": "video, video source",
           "container_selector": null,
-          "debounce_seconds": 2,
+          "debounce_seconds": 2.0,
           "wait_for_load": true,
-          "load_timeout_seconds": 10,
+          "load_timeout_seconds": 10.0,
           "download_blobs": true,
           "max_size_mb": 10,
+          "src_allow_patterns": [],
           "mode": "all"
         },
         "file_paste": {
@@ -977,11 +993,12 @@
           "audio_selector": "audio, audio source",
           "video_selector": "video, video source",
           "container_selector": null,
-          "debounce_seconds": 2,
+          "debounce_seconds": 2.0,
           "wait_for_load": true,
-          "load_timeout_seconds": 5,
+          "load_timeout_seconds": 5.0,
           "download_blobs": true,
           "max_size_mb": 10,
+          "src_allow_patterns": [],
           "mode": "all"
         },
         "file_paste": {
@@ -1072,11 +1089,12 @@
           "audio_selector": "audio, audio source",
           "video_selector": "video, video source",
           "container_selector": null,
-          "debounce_seconds": 2,
+          "debounce_seconds": 2.0,
           "wait_for_load": true,
-          "load_timeout_seconds": 5,
+          "load_timeout_seconds": 5.0,
           "download_blobs": true,
           "max_size_mb": 10,
+          "src_allow_patterns": [],
           "mode": "all"
         },
         "file_paste": {
@@ -1139,11 +1157,12 @@
           "audio_selector": "audio, audio source",
           "video_selector": "video, video source",
           "container_selector": null,
-          "debounce_seconds": 2,
+          "debounce_seconds": 2.0,
           "wait_for_load": true,
-          "load_timeout_seconds": 5,
+          "load_timeout_seconds": 5.0,
           "download_blobs": true,
           "max_size_mb": 10,
+          "src_allow_patterns": [],
           "mode": "all"
         },
         "file_paste": {
@@ -1197,11 +1216,12 @@
           "audio_selector": "audio, audio source",
           "video_selector": "video, video source",
           "container_selector": null,
-          "debounce_seconds": 2,
+          "debounce_seconds": 2.0,
           "wait_for_load": true,
-          "load_timeout_seconds": 5,
+          "load_timeout_seconds": 5.0,
           "download_blobs": true,
           "max_size_mb": 10,
+          "src_allow_patterns": [],
           "mode": "all"
         },
         "file_paste": {
@@ -1287,11 +1307,12 @@
           "audio_selector": "audio, audio source",
           "video_selector": "video, video source",
           "container_selector": null,
-          "debounce_seconds": 2,
+          "debounce_seconds": 2.0,
           "wait_for_load": true,
-          "load_timeout_seconds": 5,
+          "load_timeout_seconds": 5.0,
           "download_blobs": true,
           "max_size_mb": 10,
+          "src_allow_patterns": [],
           "mode": "all"
         },
         "file_paste": {
@@ -1374,11 +1395,12 @@
           "audio_selector": "audio, audio source",
           "video_selector": "video, video source",
           "container_selector": null,
-          "debounce_seconds": 2,
+          "debounce_seconds": 2.0,
           "wait_for_load": true,
-          "load_timeout_seconds": 5,
+          "load_timeout_seconds": 5.0,
           "download_blobs": true,
           "max_size_mb": 10,
+          "src_allow_patterns": [],
           "mode": "all"
         },
         "file_paste": {
@@ -1461,11 +1483,12 @@
           "audio_selector": "audio, audio source",
           "video_selector": "video, video source",
           "container_selector": null,
-          "debounce_seconds": 2,
+          "debounce_seconds": 2.0,
           "wait_for_load": true,
-          "load_timeout_seconds": 5,
+          "load_timeout_seconds": 5.0,
           "download_blobs": true,
           "max_size_mb": 10,
+          "src_allow_patterns": [],
           "mode": "all"
         },
         "file_paste": {

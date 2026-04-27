@@ -34,6 +34,12 @@ window.ImageConfigPanel = {
             if (this.modalities.audio) labels.push('音频');
             if (this.modalities.video) labels.push('视频');
             return labels;
+        },
+        srcAllowPatternsText() {
+            const patterns = Array.isArray(this.imageConfig.src_allow_patterns)
+                ? this.imageConfig.src_allow_patterns
+                : [];
+            return patterns.join('\n');
         }
     },
     watch: {
@@ -75,6 +81,14 @@ window.ImageConfigPanel = {
         updateField(field, value) {
             const newConfig = this.buildNextConfig({ [field]: value });
             this.$emit('update-image-config', newConfig);
+        },
+
+        updateSrcAllowPatterns(text) {
+            const patterns = String(text || '')
+                .split(/\r?\n/)
+                .map(line => line.trim())
+                .filter(Boolean);
+            this.updateField('src_allow_patterns', patterns);
         },
 
         toggleModality(type) {
@@ -307,6 +321,15 @@ window.ImageConfigPanel = {
                             <option value="last">仅最后一项</option>
                         </select>
                     </div>
+                </div>
+
+                <div :class="inputWrapClass(modalities.image)">
+                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">图片来源白名单 <span class="text-gray-400 font-normal">(可选)</span></label>
+                    <textarea :value="srcAllowPatternsText" @input="updateSrcAllowPatterns($event.target.value)" rows="5"
+                              placeholder="^data:image/\n^blob:\n^https?://[^/]*oaiusercontent\\.com/\n^https?://[^/]*oaistatic\\.com/\n^https?://cdn\\.openai\\.com/"
+                              :disabled="!modalities.image"
+                              class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm font-mono bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent disabled:cursor-not-allowed"></textarea>
+                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">每行一个正则，仅提取匹配这些 <code>src</code> 的图片。留空表示不过滤。</p>
                 </div>
 
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-4">

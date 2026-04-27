@@ -219,6 +219,7 @@ class ImageExtractionConfig(TypedDict, total=False):
     load_timeout_seconds: float      # 等待加载的超时时间
     download_blobs: bool             # 是否下载 blob 转 data_uri
     max_size_mb: int                 # blob 最大允许大小(MB)
+    src_allow_patterns: List[str]    # 可选：按 src 正则白名单过滤
     mode: Literal["all", "first", "last"]  # 每种模态的提取模式
 # ================= 流式监控配置 =================
 
@@ -559,6 +560,7 @@ def get_default_image_extraction_config() -> ImageExtractionConfig:
         "load_timeout_seconds": 5.0,
         "download_blobs": True,
         "max_size_mb": 10,
+        "src_allow_patterns": [],
         "mode": "all"
     }
 def validate_site_config(config: Dict[str, Any]) -> bool:

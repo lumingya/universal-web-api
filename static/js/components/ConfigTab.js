@@ -59,6 +59,7 @@ window.ConfigTab = {
                 wait_for_load: true,
                 load_timeout_seconds: 5.0,
                 download_blobs: true,
+                src_allow_patterns: [],
                 max_size_mb: 10,
                 mode: 'all'
             },
