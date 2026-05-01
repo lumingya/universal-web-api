@@ -290,9 +290,14 @@ class WorkflowExecutor:
                 
         # 🆕 隐身模式鼠标位置追踪（CDP 绝对坐标）
         self._mouse_pos = None
+        self._attachment_monitor_config = self._build_attachment_monitor_config(
+            stream_config=stream_config,
+            file_paste_config=file_paste_config,
+        )
         self._attachment_monitor = AttachmentMonitor(
             tab=tab,
             selectors=self._selectors,
+            config=self._attachment_monitor_config,
             check_cancelled_fn=self._check_cancelled,
         )
         # 初始化输入处理器
@@ -304,6 +309,7 @@ class WorkflowExecutor:
             file_paste_config=file_paste_config,
             selectors=self._selectors,
             attachment_monitor=self._attachment_monitor,
+            attachment_monitor_config=self._attachment_monitor_config,
         )
         
         self._image_handler = ImageInputHandler(
@@ -312,6 +318,7 @@ class WorkflowExecutor:
             smart_delay_fn=self._smart_delay,
             check_cancelled_fn=self._check_cancelled,
             attachment_monitor=self._attachment_monitor,
+            focus_input_fn=self._focus_last_input_for_attachment_paste,
         )
         
         if extractor:
@@ -322,6 +329,58 @@ class WorkflowExecutor:
         
         if self.stealth_mode:
             logger.debug("[STEALTH] 隐身模式已启用")
+
+    @staticmethod
+    def _normalize_attachment_rule_list(raw_value) -> list:
+        if not isinstance(raw_value, list):
+            return []
+        cleaned = []
+        for item in raw_value:
+            value = str(item or "").strip()
+            if value and value not in cleaned:
+                cleaned.append(value)
+        return cleaned
+
+    def _build_attachment_monitor_config(
+        self,
+        *,
+        stream_config: Optional[Dict[str, Any]] = None,
+        file_paste_config: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        config = {}
+        if isinstance(stream_config, dict):
+            raw_config = stream_config.get("attachment_monitor", {}) or {}
+            if isinstance(raw_config, dict):
+                config.update(raw_config)
+
+        attachment_selectors = self._normalize_attachment_rule_list(
+            config.get("attachment_selectors", [])
+        )
+        legacy_selectors = self._normalize_attachment_rule_list(
+            (file_paste_config or {}).get("upload_signal_selectors", [])
+        )
+        for selector in legacy_selectors:
+            if selector not in attachment_selectors:
+                attachment_selectors.append(selector)
+        if attachment_selectors:
+            config["attachment_selectors"] = attachment_selectors
+
+        return config
+
+    def _get_attachment_monitor_flag(self, key: str, default: bool = False) -> bool:
+        raw_value = {}
+        if isinstance(self._attachment_monitor_config, dict):
+            raw_value = self._attachment_monitor_config
+        value = raw_value.get(key, default)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in ("1", "true", "yes", "on"):
+                return True
+            if lowered in ("0", "false", "no", "off"):
+                return False
+        return bool(value)
 
     def _handle_network_event(self, event: Dict[str, Any]) -> bool:
         """
@@ -349,6 +408,32 @@ class WorkflowExecutor:
             return matched
         except Exception as e:
             logger.debug(f"[Executor] 网络事件上报失败（忽略）: {e}")
+            return False
+
+    def _focus_last_input_for_attachment_paste(self) -> bool:
+        """Re-focus the active composer before Ctrl+V image paste."""
+        ele = getattr(self, "_last_input_element", None)
+        if ele is None:
+            selector = str(self._selectors.get("input_box") or "").strip()
+            if selector:
+                try:
+                    ele = self.finder.find_with_fallback(selector, "input_box")
+                except Exception as e:
+                    logger.debug(f"[IMAGE] 重新定位输入框失败: {e}")
+                    ele = None
+                if ele is not None:
+                    self._last_input_element = ele
+                    self._last_input_target_key = "input_box"
+
+        if ele is None:
+            logger.warning("[IMAGE] 粘贴前无法定位输入框")
+            return False
+
+        try:
+            self._text_handler.focus_to_end(ele)
+            return bool(self._text_handler.ensure_input_focus(ele, attempts=2, log_failure=False))
+        except Exception as e:
+            logger.debug(f"[IMAGE] 粘贴前聚焦输入框失败: {e}")
             return False
 
     @staticmethod
@@ -1606,6 +1691,16 @@ class WorkflowExecutor:
             if result.get("success"):
                 return
 
+            continue_once = self._get_attachment_monitor_flag(
+                "continue_once_on_unconfirmed_send",
+                True,
+            )
+            if not continue_once:
+                logger.warning(
+                    "[SEND] Attachment readiness was not confirmed before submit; blocking send "
+                    f"({AttachmentMonitor.summarize(result)})"
+                )
+                raise WorkflowError("attachment_ready_unconfirmed_before_send")
             logger.warning(
                 "[SEND] Attachment readiness was not confirmed before submit; continuing once "
                 f"({AttachmentMonitor.summarize(result)})"
@@ -2357,7 +2452,8 @@ class WorkflowExecutor:
         if hasattr(self, '_context') and self._context:
             images = self._context.get('images', [])
             if images:
-                self._image_handler.paste_images(images)
+                if not self._image_handler.paste_images(images):
+                    raise WorkflowError("image_paste_unconfirmed")
         
         # ===== 隐身模式：粘贴后模拟"人类阅读/检查"延迟（带微漂移）=====
         if self.stealth_mode and len(text) > 0:

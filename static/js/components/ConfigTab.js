@@ -69,6 +69,17 @@ window.ConfigTab = {
                 send_confirmation: {
                     attachment_sensitivity: 'medium'
                 },
+                attachment_monitor: {
+                    root_selectors: [],
+                    attachment_selectors: [],
+                    pending_selectors: [],
+                    busy_text_markers: [],
+                    send_button_disabled_markers: [],
+                    require_attachment_present: false,
+                    continue_once_on_unconfirmed_send: true,
+                    idle_timeout: 8.0,
+                    hard_max_wait: 90.0
+                },
                 network: null
             }
         };
@@ -108,6 +119,10 @@ window.ConfigTab = {
                 send_confirmation: {
                     ...(this.defaultStreamConfig.send_confirmation || {}),
                     ...(streamConfig.send_confirmation || {})
+                },
+                attachment_monitor: {
+                    ...(this.defaultStreamConfig.attachment_monitor || {}),
+                    ...(streamConfig.attachment_monitor || {})
                 }
             };
         },

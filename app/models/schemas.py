@@ -235,6 +235,19 @@ class SendConfirmationConfig(TypedDict, total=False):
     trust_send_disabled_with_input_shrink: bool
 
 
+class AttachmentMonitorConfig(TypedDict, total=False):
+    """Per-site attachment readiness heuristics."""
+    root_selectors: List[str]
+    attachment_selectors: List[str]
+    pending_selectors: List[str]
+    busy_text_markers: List[str]
+    send_button_disabled_markers: List[str]
+    require_attachment_present: bool
+    continue_once_on_unconfirmed_send: bool
+    idle_timeout: float
+    hard_max_wait: float
+
+
 class NetworkConfig(TypedDict, total=False):
     """Network stream capture configuration."""
     listen_pattern: str
@@ -251,6 +264,7 @@ class StreamConfig(TypedDict, total=False):
     hard_timeout: float
     network: NetworkConfig
     send_confirmation: SendConfirmationConfig
+    attachment_monitor: AttachmentMonitorConfig
 
 
 # ================= 站点高级配置 =================
@@ -654,6 +668,44 @@ def validate_site_config(config: Dict[str, Any]) -> bool:
                 value = str(send_confirmation[key]).strip().lower()
                 if value not in allowed_values:
                     return False
+
+        if "attachment_monitor" in stream_config:
+            if not isinstance(stream_config["attachment_monitor"], dict):
+                return False
+
+            attachment_monitor = stream_config["attachment_monitor"]
+            numeric_fields = [
+                "idle_timeout",
+                "hard_max_wait",
+            ]
+            bool_fields = [
+                "require_attachment_present",
+                "continue_once_on_unconfirmed_send",
+            ]
+            list_fields = [
+                "root_selectors",
+                "attachment_selectors",
+                "pending_selectors",
+                "busy_text_markers",
+                "send_button_disabled_markers",
+            ]
+
+            for key in numeric_fields:
+                if key in attachment_monitor and not isinstance(attachment_monitor[key], (int, float)):
+                    return False
+
+            for key in bool_fields:
+                if key in attachment_monitor and not isinstance(attachment_monitor[key], bool):
+                    return False
+
+            for key in list_fields:
+                if key not in attachment_monitor:
+                    continue
+                value = attachment_monitor[key]
+                if not isinstance(value, list):
+                    return False
+                if any(not isinstance(item, str) for item in value):
+                    return False
     
     return True
 
@@ -672,10 +724,26 @@ def get_default_send_confirmation_config() -> SendConfirmationConfig:
     }
 
 
+def get_default_attachment_monitor_config() -> AttachmentMonitorConfig:
+    """Get default per-site attachment monitor rules."""
+    return {
+        "root_selectors": [],
+        "attachment_selectors": [],
+        "pending_selectors": [],
+        "busy_text_markers": [],
+        "send_button_disabled_markers": [],
+        "require_attachment_present": False,
+        "continue_once_on_unconfirmed_send": True,
+        "idle_timeout": 8.0,
+        "hard_max_wait": 90.0,
+    }
+
+
 def get_default_stream_config() -> StreamConfig:
     """获取默认的流式监控配置"""
     return {
         "send_confirmation": get_default_send_confirmation_config(),
+        "attachment_monitor": get_default_attachment_monitor_config(),
     }
 
 
@@ -701,6 +769,15 @@ def merge_stream_config(
             result["send_confirmation"].update(site_send_confirmation)
     elif isinstance(site_send_confirmation, dict):
         result["send_confirmation"] = site_send_confirmation.copy()
+
+    default_attachment_monitor = defaults.get("attachment_monitor")
+    site_attachment_monitor = site_config.get("attachment_monitor")
+    if isinstance(default_attachment_monitor, dict):
+        result["attachment_monitor"] = default_attachment_monitor.copy()
+        if isinstance(site_attachment_monitor, dict):
+            result["attachment_monitor"].update(site_attachment_monitor)
+    elif isinstance(site_attachment_monitor, dict):
+        result["attachment_monitor"] = site_attachment_monitor.copy()
     
     return result
 
@@ -754,7 +831,9 @@ __all__ = [
     'validate_workflow_step',
     'validate_site_config',
     'SendConfirmationConfig',
+    'AttachmentMonitorConfig',
     'get_default_send_confirmation_config',
+    'get_default_attachment_monitor_config',
     'get_default_stream_config',
     'merge_stream_config',
     'ImageData',

@@ -145,9 +145,9 @@
           "audio_selector": "audio, audio source",
           "video_selector": "video, video source",
           "container_selector": null,
-          "debounce_seconds": 2.0,
+          "debounce_seconds": 2,
           "wait_for_load": true,
-          "load_timeout_seconds": 5.0,
+          "load_timeout_seconds": 5,
           "download_blobs": true,
           "max_size_mb": 100,
           "src_allow_patterns": [],
@@ -228,9 +228,9 @@
           "audio_selector": "audio, audio source",
           "video_selector": "video, video source",
           "container_selector": null,
-          "debounce_seconds": 2.0,
+          "debounce_seconds": 2,
           "wait_for_load": true,
-          "load_timeout_seconds": 5.0,
+          "load_timeout_seconds": 5,
           "download_blobs": true,
           "max_size_mb": 100,
           "src_allow_patterns": [],
@@ -313,19 +313,12 @@
           "audio_selector": "audio, audio source",
           "video_selector": "video, video source",
           "container_selector": "div[id^=\"image-\"]",
-          "debounce_seconds": 2.0,
+          "debounce_seconds": 2,
           "wait_for_load": true,
-          "load_timeout_seconds": 8.0,
+          "load_timeout_seconds": 8,
           "download_blobs": true,
           "max_size_mb": 20,
-          "src_allow_patterns": [
-            "^data:image/",
-            "^blob:",
-            "^https?://[^/]*chatgpt\\.com/backend-api/estuary/content\\b",
-            "^https?://[^/]*oaiusercontent\\.com/",
-            "^https?://[^/]*oaistatic\\.com/",
-            "^https?://cdn\\.openai\\.com/"
-          ],
+          "src_allow_patterns": [],
           "mode": "all"
         },
         "file_paste": {
@@ -354,6 +347,39 @@
         "stream_config": {
           "mode": "network",
           "hard_timeout": 600,
+          "send_confirmation": {
+            "attachment_sensitivity": "high",
+            "attachment_observe_window": 8,
+            "trust_network_activity": true,
+            "trust_generating_indicator": true,
+            "trust_send_disabled_with_input_shrink": true
+          },
+          "attachment_monitor": {
+            "root_selectors": [
+              ".input-area",
+              ".text-input-field"
+            ],
+            "attachment_selectors": [
+              ".attachment-preview-wrapper",
+              ".uploader-file-preview-container",
+              ".file-preview-chip",
+              ".file-preview-container",
+              "button.image-preview",
+              "button.cancel-button",
+              "img[aria-label=\"图片预览\"]"
+            ],
+            "pending_selectors": [
+              ".loading-content-spinner-container",
+              "mat-progress-spinner[role=\"progressbar\"]",
+              ".mdc-circular-progress--indeterminate"
+            ],
+            "busy_text_markers": [],
+            "send_button_disabled_markers": [],
+            "require_attachment_present": true,
+            "continue_once_on_unconfirmed_send": false,
+            "idle_timeout": 12,
+            "hard_max_wait": 120
+          },
           "network": {
             "listen_pattern": "StreamGenerate",
             "parser": "gemini",
@@ -429,9 +455,9 @@
           "audio_selector": "generated-music audio, generated-music source, audio, audio source",
           "video_selector": "generated-music video, video-player video, response-element video, video",
           "container_selector": "response-element, generated-image, generated-music, .attachment-container, .markdown-main-panel",
-          "debounce_seconds": 1.0,
+          "debounce_seconds": 1,
           "wait_for_load": true,
-          "load_timeout_seconds": 10.0,
+          "load_timeout_seconds": 10,
           "download_blobs": true,
           "max_size_mb": 100,
           "src_allow_patterns": [],
@@ -458,6 +484,39 @@
         "stream_config": {
           "mode": "network",
           "hard_timeout": 600,
+          "send_confirmation": {
+            "attachment_sensitivity": "high",
+            "attachment_observe_window": 8,
+            "trust_network_activity": true,
+            "trust_generating_indicator": true,
+            "trust_send_disabled_with_input_shrink": true
+          },
+          "attachment_monitor": {
+            "root_selectors": [
+              ".input-area",
+              ".text-input-field"
+            ],
+            "attachment_selectors": [
+              ".attachment-preview-wrapper",
+              ".uploader-file-preview-container",
+              ".file-preview-chip",
+              ".file-preview-container",
+              "button.image-preview",
+              "button.cancel-button",
+              "img[aria-label=\"图片预览\"]"
+            ],
+            "pending_selectors": [
+              ".loading-content-spinner-container",
+              "mat-progress-spinner[role=\"progressbar\"]",
+              ".mdc-circular-progress--indeterminate"
+            ],
+            "busy_text_markers": [],
+            "send_button_disabled_markers": [],
+            "require_attachment_present": true,
+            "continue_once_on_unconfirmed_send": false,
+            "idle_timeout": 12,
+            "hard_max_wait": 120
+          },
           "network": {
             "listen_pattern": "StreamGenerate",
             "parser": "gemini",
@@ -533,9 +592,9 @@
           "audio_selector": "generated-music audio, generated-music source, audio, audio source",
           "video_selector": "generated-music video, video-player video, response-element video, video",
           "container_selector": "response-element, generated-image, generated-music, .attachment-container, .markdown-main-panel",
-          "debounce_seconds": 1.0,
+          "debounce_seconds": 1,
           "wait_for_load": true,
-          "load_timeout_seconds": 10.0,
+          "load_timeout_seconds": 10,
           "download_blobs": true,
           "max_size_mb": 50,
           "src_allow_patterns": [],
@@ -567,6 +626,37 @@
             "parser": "gemini",
             "silence_threshold": 3,
             "response_interval": 1
+          },
+          "send_confirmation": {
+            "attachment_sensitivity": "high",
+            "attachment_observe_window": 8,
+            "trust_network_activity": true,
+            "trust_generating_indicator": true,
+            "trust_send_disabled_with_input_shrink": true
+          },
+          "attachment_monitor": {
+            "root_selectors": [
+              ".input-area",
+              ".text-input-field"
+            ],
+            "attachment_selectors": [
+              ".attachment-preview-wrapper",
+              ".uploader-file-preview-container",
+              ".file-preview-chip",
+              ".file-preview-container",
+              "button.image-preview",
+              "button.cancel-button",
+              "img[aria-label=\"图片预览\"]"
+            ],
+            "pending_selectors": [
+              ".loading-content-spinner-container",
+              "mat-progress-spinner[role=\"progressbar\"]",
+              ".mdc-circular-progress--indeterminate"
+            ],
+            "require_attachment_present": true,
+            "continue_once_on_unconfirmed_send": false,
+            "idle_timeout": 12,
+            "hard_max_wait": 120
           }
         },
         "workflow": [
@@ -637,9 +727,9 @@
           "audio_selector": "generated-music audio, generated-music source, audio, audio source",
           "video_selector": "generated-music video, video-player video, response-element video, video",
           "container_selector": "response-element, generated-image, generated-music, .attachment-container, .markdown-main-panel",
-          "debounce_seconds": 1.0,
+          "debounce_seconds": 1,
           "wait_for_load": true,
-          "load_timeout_seconds": 10.0,
+          "load_timeout_seconds": 10,
           "download_blobs": true,
           "max_size_mb": 100,
           "src_allow_patterns": [],
@@ -728,9 +818,9 @@
           "audio_selector": "audio, audio source",
           "video_selector": "video, video source",
           "container_selector": null,
-          "debounce_seconds": 2.0,
+          "debounce_seconds": 2,
           "wait_for_load": true,
-          "load_timeout_seconds": 5.0,
+          "load_timeout_seconds": 5,
           "download_blobs": true,
           "max_size_mb": 10,
           "src_allow_patterns": [],
@@ -821,9 +911,9 @@
           "audio_selector": "audio, audio source",
           "video_selector": "video, video source",
           "container_selector": null,
-          "debounce_seconds": 2.0,
+          "debounce_seconds": 2,
           "wait_for_load": true,
-          "load_timeout_seconds": 5.0,
+          "load_timeout_seconds": 5,
           "download_blobs": true,
           "max_size_mb": 10,
           "src_allow_patterns": [],
@@ -901,9 +991,9 @@
           "audio_selector": "audio, audio source",
           "video_selector": "video, video source",
           "container_selector": null,
-          "debounce_seconds": 2.0,
+          "debounce_seconds": 2,
           "wait_for_load": true,
-          "load_timeout_seconds": 10.0,
+          "load_timeout_seconds": 10,
           "download_blobs": true,
           "max_size_mb": 10,
           "src_allow_patterns": [],
@@ -993,9 +1083,9 @@
           "audio_selector": "audio, audio source",
           "video_selector": "video, video source",
           "container_selector": null,
-          "debounce_seconds": 2.0,
+          "debounce_seconds": 2,
           "wait_for_load": true,
-          "load_timeout_seconds": 5.0,
+          "load_timeout_seconds": 5,
           "download_blobs": true,
           "max_size_mb": 10,
           "src_allow_patterns": [],
@@ -1089,9 +1179,9 @@
           "audio_selector": "audio, audio source",
           "video_selector": "video, video source",
           "container_selector": null,
-          "debounce_seconds": 2.0,
+          "debounce_seconds": 2,
           "wait_for_load": true,
-          "load_timeout_seconds": 5.0,
+          "load_timeout_seconds": 5,
           "download_blobs": true,
           "max_size_mb": 10,
           "src_allow_patterns": [],
@@ -1157,9 +1247,9 @@
           "audio_selector": "audio, audio source",
           "video_selector": "video, video source",
           "container_selector": null,
-          "debounce_seconds": 2.0,
+          "debounce_seconds": 2,
           "wait_for_load": true,
-          "load_timeout_seconds": 5.0,
+          "load_timeout_seconds": 5,
           "download_blobs": true,
           "max_size_mb": 10,
           "src_allow_patterns": [],
@@ -1216,9 +1306,9 @@
           "audio_selector": "audio, audio source",
           "video_selector": "video, video source",
           "container_selector": null,
-          "debounce_seconds": 2.0,
+          "debounce_seconds": 2,
           "wait_for_load": true,
-          "load_timeout_seconds": 5.0,
+          "load_timeout_seconds": 5,
           "download_blobs": true,
           "max_size_mb": 10,
           "src_allow_patterns": [],
@@ -1307,9 +1397,9 @@
           "audio_selector": "audio, audio source",
           "video_selector": "video, video source",
           "container_selector": null,
-          "debounce_seconds": 2.0,
+          "debounce_seconds": 2,
           "wait_for_load": true,
-          "load_timeout_seconds": 5.0,
+          "load_timeout_seconds": 5,
           "download_blobs": true,
           "max_size_mb": 10,
           "src_allow_patterns": [],
@@ -1395,9 +1485,9 @@
           "audio_selector": "audio, audio source",
           "video_selector": "video, video source",
           "container_selector": null,
-          "debounce_seconds": 2.0,
+          "debounce_seconds": 2,
           "wait_for_load": true,
-          "load_timeout_seconds": 5.0,
+          "load_timeout_seconds": 5,
           "download_blobs": true,
           "max_size_mb": 10,
           "src_allow_patterns": [],
@@ -1483,6 +1573,114 @@
           "audio_selector": "audio, audio source",
           "video_selector": "video, video source",
           "container_selector": null,
+          "debounce_seconds": 2,
+          "wait_for_load": true,
+          "load_timeout_seconds": 5,
+          "download_blobs": true,
+          "max_size_mb": 10,
+          "src_allow_patterns": [],
+          "mode": "all"
+        },
+        "file_paste": {
+          "enabled": false,
+          "threshold": 50000,
+          "hint_text": "完全专注于文件内容"
+        }
+      }
+    },
+    "default_preset": "主预设"
+  },
+  "www.google.com": {
+    "default_preset": "主预设",
+    "presets": {
+      "主预设": {
+        "selectors": {
+          "input_box": "textarea",
+          "send_btn": "button[type=\"submit\"]",
+          "result_container": "div",
+          "new_chat_btn": null,
+          "message_wrapper": null,
+          "generating_indicator": null,
+          "upload_btn": null,
+          "file_input": "input[type=\"file\"]",
+          "drop_zone": null
+        },
+        "workflow": [
+          {
+            "action": "CLICK",
+            "target": "new_chat_btn",
+            "optional": true,
+            "value": null
+          },
+          {
+            "action": "WAIT",
+            "target": "",
+            "optional": false,
+            "value": "0.5"
+          },
+          {
+            "action": "FILL_INPUT",
+            "target": "input_box",
+            "optional": false,
+            "value": null
+          },
+          {
+            "action": "CLICK",
+            "target": "send_btn",
+            "optional": true,
+            "value": null
+          },
+          {
+            "action": "KEY_PRESS",
+            "target": "Enter",
+            "optional": true,
+            "value": null
+          },
+          {
+            "action": "STREAM_WAIT",
+            "target": "result_container",
+            "optional": false,
+            "value": null
+          }
+        ],
+        "stealth": false,
+        "stream_config": {
+          "mode": "dom",
+          "hard_timeout": 300,
+          "send_confirmation": {
+            "attachment_sensitivity": "medium",
+            "post_click_observe_window": 1.8,
+            "pre_retry_probe_window": 0.12,
+            "retry_observe_window": 0.9,
+            "attachment_observe_window": 6.0,
+            "trust_network_activity": true,
+            "trust_generating_indicator": true,
+            "trust_send_disabled_with_input_shrink": true
+          },
+          "attachment_monitor": {
+            "root_selectors": [],
+            "attachment_selectors": [],
+            "pending_selectors": [],
+            "busy_text_markers": [],
+            "send_button_disabled_markers": [],
+            "require_attachment_present": false,
+            "continue_once_on_unconfirmed_send": true,
+            "idle_timeout": 8.0,
+            "hard_max_wait": 90.0
+          },
+          "network": null
+        },
+        "image_extraction": {
+          "enabled": false,
+          "modalities": {
+            "image": false,
+            "audio": false,
+            "video": false
+          },
+          "selector": "img",
+          "audio_selector": "audio, audio source",
+          "video_selector": "video, video source",
+          "container_selector": null,
           "debounce_seconds": 2.0,
           "wait_for_load": true,
           "load_timeout_seconds": 5.0,
@@ -1497,7 +1695,6 @@
           "hint_text": "完全专注于文件内容"
         }
       }
-    },
-    "default_preset": "主预设"
+    }
   }
 }

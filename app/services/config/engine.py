@@ -23,6 +23,7 @@ from app.models.schemas import (
     get_default_image_extraction_config,
     get_default_file_paste_config,
     get_default_site_advanced_config,
+    get_default_attachment_monitor_config,
     get_default_send_confirmation_config,
 )
 from app.services.extractor_manager import extractor_manager
@@ -81,6 +82,7 @@ def get_default_stream_config() -> Dict[str, Any]:
         "mode": "dom",              # dom / network
         "hard_timeout": 300,        # 全局硬超时（秒）
         "send_confirmation": get_default_send_confirmation_config(),
+        "attachment_monitor": get_default_attachment_monitor_config(),
         
         # 网络监听配置（可选）
         "network": None
@@ -1714,6 +1716,10 @@ class ConfigEngine:
         # 处理 send_confirmation 配置
         if isinstance(stream_config.get("send_confirmation"), dict):
             result["send_confirmation"].update(stream_config["send_confirmation"])
+
+        # 处理 attachment_monitor 配置
+        if isinstance(stream_config.get("attachment_monitor"), dict):
+            result["attachment_monitor"].update(stream_config["attachment_monitor"])
         
         # 处理 network 配置
         if stream_config.get("network"):
@@ -1778,11 +1784,14 @@ class ConfigEngine:
         if not config:
             return result
         
+        mode_explicitly_set = False
+
         # 验证 mode
         if "mode" in config:
             mode = str(config["mode"]).lower()
             if mode in ("dom", "network"):
                 result["mode"] = mode
+                mode_explicitly_set = True
         
         # 验证数值字段
         for key in ["hard_timeout"]:
@@ -1799,14 +1808,25 @@ class ConfigEngine:
             result["send_confirmation"] = self._validate_send_confirmation_config(
                 config["send_confirmation"]
             )
+
+        # 验证 attachment_monitor 配置
+        if isinstance(config.get("attachment_monitor"), dict):
+            result["attachment_monitor"] = self._validate_attachment_monitor_config(
+                config["attachment_monitor"]
+            )
         
         # 验证 network 配置
         if config.get("network"):
             network_config = self._validate_network_config(config["network"])
             if network_config:
                 result["network"] = network_config
-                # 如果有有效的 network 配置，自动设置 mode
-                if network_config.get("parser") and network_config.get("listen_pattern"):
+                # 仅在调用方没有显式指定 mode 时，才根据 network 配置自动切到 network。
+                # 这样切回 DOM 时可以保留 parser/listen_pattern，而不会被后端强制改回 network。
+                if (
+                    not mode_explicitly_set
+                    and network_config.get("parser")
+                    and network_config.get("listen_pattern")
+                ):
                     result["mode"] = "network"
         
         return result
@@ -1856,6 +1876,67 @@ class ConfigEngine:
         sensitivity = str(config.get("attachment_sensitivity") or "").strip().lower()
         if sensitivity in {"low", "medium", "high"}:
             result["attachment_sensitivity"] = sensitivity
+
+        return result
+
+    def _validate_attachment_monitor_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """验证附件上传/发送前判定规则。"""
+        result = get_default_attachment_monitor_config()
+
+        if not isinstance(config, dict):
+            return result
+
+        list_fields = [
+            "root_selectors",
+            "attachment_selectors",
+            "pending_selectors",
+            "busy_text_markers",
+            "send_button_disabled_markers",
+        ]
+        for key in list_fields:
+            raw_value = config.get(key)
+            if raw_value is None:
+                continue
+            if not isinstance(raw_value, list):
+                continue
+            cleaned = []
+            for item in raw_value:
+                value = str(item or "").strip()
+                if value and value not in cleaned:
+                    cleaned.append(value)
+            result[key] = cleaned
+
+        numeric_ranges = {
+            "idle_timeout": (0.5, 60.0),
+            "hard_max_wait": (1.0, 300.0),
+        }
+        for key, (minimum, maximum) in numeric_ranges.items():
+            if key not in config:
+                continue
+            try:
+                value = float(config[key])
+            except (TypeError, ValueError):
+                continue
+            result[key] = max(minimum, min(value, maximum))
+
+        bool_fields = [
+            "require_attachment_present",
+            "continue_once_on_unconfirmed_send",
+        ]
+        for key in bool_fields:
+            if key not in config:
+                continue
+            raw_value = config[key]
+            if isinstance(raw_value, str):
+                lowered = raw_value.strip().lower()
+                if lowered in ("1", "true", "yes", "on"):
+                    result[key] = True
+                    continue
+                if lowered in ("0", "false", "no", "off"):
+                    result[key] = False
+                    continue
+                continue
+            result[key] = bool(raw_value)
 
         return result
     

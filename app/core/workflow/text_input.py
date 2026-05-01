@@ -35,7 +35,8 @@ class TextInputHandler:
     def __init__(self, tab, stealth_mode: bool, smart_delay_fn, check_cancelled_fn,
                  file_paste_config: dict = None,
                  selectors: dict = None,
-                 attachment_monitor = None):
+                 attachment_monitor = None,
+                 attachment_monitor_config: dict = None):
         """
         Args:
             tab: 浏览器标签页
@@ -51,6 +52,7 @@ class TextInputHandler:
         self._file_paste_config = file_paste_config or {}
         self._selectors = selectors or {}
         self._attachment_monitor = attachment_monitor
+        self._attachment_monitor_config = attachment_monitor_config or {}
         self._recent_file_upload_at = 0.0
         self._last_file_upload_path = ""
         self._last_upload_signal_wait = {
@@ -114,6 +116,17 @@ class TextInputHandler:
         """Whether the current upload state is strong enough to trust as attached."""
         signal_state = state or self.probe_recent_upload_signal()
         return self._has_upload_signal(signal_state)
+
+    def _attachment_monitor_list(self, key: str) -> list:
+        raw_value = self._attachment_monitor_config.get(key) if isinstance(self._attachment_monitor_config, dict) else None
+        if not isinstance(raw_value, list):
+            return []
+        cleaned = []
+        for item in raw_value:
+            value = str(item or "").strip()
+            if value and value not in cleaned:
+                cleaned.append(value)
+        return cleaned
     
     # ================= 工具方法 =================
     
@@ -1092,6 +1105,7 @@ class TextInputHandler:
         configured_upload_signal_selectors = self._file_paste_config.get("upload_signal_selectors") or []
         if not isinstance(configured_upload_signal_selectors, list):
             configured_upload_signal_selectors = [configured_upload_signal_selectors]
+        attachment_monitor_selectors = self._attachment_monitor_list("attachment_selectors")
 
         upload_signal_selectors = [
             ".file-card-list",
@@ -1113,14 +1127,63 @@ class TextInputHandler:
             selector = str(selector or "").strip()
             if selector and selector not in upload_signal_selectors:
                 upload_signal_selectors.append(selector)
+        for selector in attachment_monitor_selectors:
+            if selector and selector not in upload_signal_selectors:
+                upload_signal_selectors.append(selector)
 
         upload_selectors_js = json.dumps(upload_signal_selectors, ensure_ascii=False)
+        pending_selectors = [
+            "progress",
+            '[role="progressbar"]',
+            '[aria-busy="true"]',
+            '[class*="uploading"]',
+            '[class*="pending"]',
+            '[class*="loading"]',
+            '[class*="progress"]',
+            '[class*="processing"]',
+        ]
+        for selector in self._attachment_monitor_list("pending_selectors"):
+            if selector and selector not in pending_selectors:
+                pending_selectors.append(selector)
+        pending_selectors_js = json.dumps(pending_selectors, ensure_ascii=False)
+
+        busy_markers = [
+            "上传中",
+            "处理中",
+            "解析中",
+            "分析中",
+            "loading",
+            "uploading",
+            "processing",
+            "preparing",
+            "analyzing",
+            "reading",
+        ]
+        for marker in self._attachment_monitor_list("busy_text_markers"):
+            if marker and marker not in busy_markers:
+                busy_markers.append(marker)
+        busy_markers_js = json.dumps(busy_markers, ensure_ascii=False)
+
+        send_disabled_markers = [
+            "disabled",
+            "loading",
+            "uploading",
+            "sending",
+            "processing",
+        ]
+        for marker in self._attachment_monitor_list("send_button_disabled_markers"):
+            if marker and marker not in send_disabled_markers:
+                send_disabled_markers.append(marker)
+        send_disabled_markers_js = json.dumps(send_disabled_markers, ensure_ascii=False)
 
         js = """
         return (function() {
             try {
                 const expectedNames = __EXPECTED_NAMES__;
                 const uploadSelectors = __UPLOAD_SIGNAL_SELECTORS__;
+                const pendingSelectors = __PENDING_SELECTORS__;
+                const busyMarkers = __BUSY_MARKERS__;
+                const sendDisabledMarkers = __SEND_DISABLED_MARKERS__;
                 const sendSelector = __SEND_SELECTOR__;
                 const inputs = Array.from(document.querySelectorAll('input[type="file"]'));
                 const fileCount = inputs.reduce((sum, input) => {
@@ -1132,6 +1195,14 @@ class TextInputHandler:
                     + '#dropzone-container, form:has(button[type=\"submit\"]), rich-textarea, '
                     + '[class*=\"message-input\"], [class*=\"input-container\"], [class*=\"input-wrapper\"]'
                 ) || document.body;
+
+                const includesAny = (text, markers) => {
+                    const haystack = String(text || '').toLowerCase();
+                    return Array.isArray(markers) && markers.some(marker => {
+                        const needle = String(marker || '').toLowerCase().trim();
+                        return needle && haystack.includes(needle);
+                    });
+                };
 
                 const text = (root && root.innerText)
                     ? String(root.innerText).toLowerCase()
@@ -1148,18 +1219,9 @@ class TextInputHandler:
                 const matchedFileNode = Array.isArray(expectedNames)
                     && expectedNames.some(name => name && fileText.includes(name));
                 const fileNodeCount = uploadNodes.length;
-                const pendingSelectors = [
-                    'progress',
-                    '[role="progressbar"]',
-                    '[aria-busy="true"]',
-                    '[class*="uploading"]',
-                    '[class*="pending"]',
-                    '[class*="loading"]',
-                    '[class*="progress"]',
-                    '[class*="processing"]'
-                ].join(',');
-                const pendingCount = root.querySelectorAll(pendingSelectors).length;
-                const pendingText = /上传中|处理中|解析中|分析中|loading|uploading|processing|preparing|analyzing|reading/.test(text);
+                const pendingSelectorText = Array.isArray(pendingSelectors) ? pendingSelectors.join(',') : '';
+                const pendingCount = pendingSelectorText ? root.querySelectorAll(pendingSelectorText).length : 0;
+                const pendingText = includesAny(text, busyMarkers);
 
                 let sendBtn = null;
                 if (sendSelector) {
@@ -1170,7 +1232,17 @@ class TextInputHandler:
                 const sendDisabled = !!sendBtn && (
                     !!sendBtn.disabled
                     || sendBtn.getAttribute('aria-disabled') === 'true'
-                    || /disabled|loading|uploading|sending|processing/.test(String(sendBtn.className || '').toLowerCase())
+                    || includesAny(
+                        [
+                            sendBtn.className,
+                            sendBtn.innerText,
+                            sendBtn.textContent,
+                            sendBtn.getAttribute('title'),
+                            sendBtn.getAttribute('aria-label'),
+                            sendBtn.getAttribute('data-testid')
+                        ].join(' '),
+                        sendDisabledMarkers
+                    )
                 );
 
                 return { ok: true, fileCount, matchedName, matchedFileNode, fileNodeCount, pendingCount, pendingText, sendDisabled };
@@ -1188,7 +1260,12 @@ class TextInputHandler:
                 };
             }
         })();
-        """.replace("__EXPECTED_NAMES__", expected_names_js).replace("__UPLOAD_SIGNAL_SELECTORS__", upload_selectors_js).replace("__SEND_SELECTOR__", send_selector_js)
+        """.replace("__EXPECTED_NAMES__", expected_names_js)\
+            .replace("__UPLOAD_SIGNAL_SELECTORS__", upload_selectors_js)\
+            .replace("__PENDING_SELECTORS__", pending_selectors_js)\
+            .replace("__BUSY_MARKERS__", busy_markers_js)\
+            .replace("__SEND_DISABLED_MARKERS__", send_disabled_markers_js)\
+            .replace("__SEND_SELECTOR__", send_selector_js)
 
         try:
             result = self.tab.run_js(js) or {}

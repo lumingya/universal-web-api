@@ -1027,14 +1027,27 @@ Attached:
         </table>
 
         <div class="info-box">
-            <p><strong>💡 Upload order:</strong> the system tries <code>file_input</code> first, then generic <code>input[type=file]</code>, then <code>upload_btn</code>, then <code>drop_zone</code>. Only after all of those fail does it fall back to the Windows clipboard path, and it will only continue sending after the attachment state looks stable.</p>
+            <p><strong>💡 Upload order:</strong> the system tries <code>file_input</code> first, then generic <code>input[type=file]</code>, then <code>upload_btn</code>, then <code>drop_zone</code>. Only after all of those fail does it fall back to the Windows clipboard path, and it will only continue sending after the attachment state looks stable. That readiness check is now also configurable per site.</p>
         </div>
 
         <h3>What to configure</h3>
-        <p>For new sites, do not stop at <code>enabled: true</code>. You still need to confirm that the site has a usable <code>upload_btn</code>, <code>file_input</code>, or <code>drop_zone</code> selector, or the feature will not be stable.</p>
+        <p>For new sites, do not stop at <code>enabled: true</code>. You still need to confirm that the site has a usable <code>upload_btn</code>, <code>file_input</code>, or <code>drop_zone</code> selector, and also how the site signals that the attachment is really present in the composer.</p>
+        <p>You can now open <strong>Config -&gt; Network listener mode -&gt; Attachment send confirmation -&gt; Advanced attachment rules</strong> and define site-specific readiness rules. The most useful fields are:</p>
+        <ul>
+            <li><code>attachment_selectors</code>: preview nodes, chips, or attachment cards that count as a successful upload</li>
+            <li><code>pending_selectors</code>: spinners, progress bars, and loading states that mean the upload is still in progress</li>
+            <li><code>busy_text_markers</code>: text markers on the composer or container that still indicate a busy state</li>
+            <li><code>send_button_disabled_markers</code>: class / aria tokens on the send button that mean the site still does not allow sending</li>
+            <li><code>require_attachment_present</code>: require a real attachment preview before the workflow can continue</li>
+            <li><code>continue_once_on_unconfirmed_send</code>: whether the system may still risk a one-time send when readiness was not confirmed</li>
+        </ul>
 
         <div class="note">
             <p><strong>⚠️ Why the hint text matters:</strong> after the upload succeeds, the system appends a short reminder such as “focus entirely on the file content” so the model does not ignore the attachment and only react to the short text in the box.</p>
+        </div>
+
+        <div class="note">
+            <p><strong>Gemini example:</strong> on sites like <code>gemini.google.com</code>, a preview chip or image preview is usually a stronger success signal than “the network looks idle”. If failed uploads leave the send button gray or disabled, add those button tokens to <code>send_button_disabled_markers</code> and disable <code>continue_once_on_unconfirmed_send</code> to avoid sending before the attachment is really there.</p>
         </div>
 
         <h3>Enabled by default in built-in presets</h3>

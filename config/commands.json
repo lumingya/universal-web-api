@@ -2,7 +2,7 @@
   "commands": [
     {
       "name": "自动清除 Cookie",
-      "enabled": true,
+      "enabled": false,
       "mode": "simple",
       "trigger": {
         "type": "request_count",
@@ -70,7 +70,7 @@
     },
     {
       "name": "网络错误闭环恢复",
-      "enabled": true,
+      "enabled": false,
       "mode": "simple",
       "trigger": {
         "type": "network_request_error",
@@ -155,7 +155,7 @@
     },
     {
       "name": "清除cookie后恢复",
-      "enabled": true,
+      "enabled": false,
       "mode": "simple",
       "trigger": {
         "type": "command_result_match",
@@ -197,7 +197,7 @@
     },
     {
       "name": "黑屏后恢复1",
-      "enabled": true,
+      "enabled": false,
       "mode": "simple",
       "trigger": {
         "type": "command_result_match",
@@ -258,7 +258,7 @@
     },
     {
       "name": "ARENA_RECOVER_VERIFY_AFTER_COOKIE_CLEAR",
-      "enabled": true,
+      "enabled": false,
       "mode": "simple",
       "trigger": {
         "type": "command_result_match",
@@ -320,7 +320,7 @@
     {
       "id": "cmd_cf_pagecheck_arena_verify",
       "name": "自动过cf盾",
-      "enabled": true,
+      "enabled": false,
       "mode": "simple",
       "trigger": {
         "type": "page_check",
@@ -374,7 +374,7 @@
     {
       "id": "cmd_arena_human_verify_clear_cookie",
       "name": "人机验证即清Cookie",
-      "enabled": true,
+      "enabled": false,
       "mode": "simple",
       "trigger": {
         "type": "page_check",
@@ -439,7 +439,7 @@
     {
       "id": "cmd_arena_cookie_accept",
       "name": "自动接受Cookie弹窗",
-      "enabled": true,
+      "enabled": false,
       "mode": "simple",
       "trigger": {
         "type": "page_check",
@@ -495,7 +495,7 @@
     },
     {
       "name": "黑屏后恢复",
-      "enabled": true,
+      "enabled": false,
       "mode": "simple",
       "trigger": {
         "type": "command_result_match",
@@ -535,7 +535,7 @@
     },
     {
       "name": "选择模型中",
-      "enabled": true,
+      "enabled": false,
       "mode": "simple",
       "trigger": {
         "type": "page_check",
@@ -577,7 +577,7 @@
     },
     {
       "name": "人机验证后恢复",
-      "enabled": true,
+      "enabled": false,
       "mode": "simple",
       "trigger": {
         "type": "command_result_match",
@@ -618,7 +618,7 @@
     {
       "id": "cmd_arena_notify_qq",
       "name": "ARENA关键恢复QQ通知",
-      "enabled": true,
+      "enabled": false,
       "mode": "simple",
       "trigger": {
         "type": "command_result_event",
@@ -682,7 +682,7 @@
     },
     {
       "name": "网络错误后选择模型",
-      "enabled": true,
+      "enabled": false,
       "mode": "simple",
       "trigger": {
         "type": "command_result_match",
@@ -778,8 +778,8 @@
       "group_name": "gemini",
       "script": "",
       "script_lang": "javascript",
-      "last_triggered": 1776651468.7457976,
-      "trigger_count": 12,
+      "last_triggered": 1777533632.8937123,
+      "trigger_count": 1,
       "stop_on_error": false,
       "log_enabled": true,
       "log_level": "GLOBAL"
@@ -876,8 +876,8 @@
       "group_name": "gemini",
       "script": "",
       "script_lang": "javascript",
-      "last_triggered": null,
-      "trigger_count": 0,
+      "last_triggered": 1777537123.1885848,
+      "trigger_count": 1,
       "stop_on_error": false,
       "log_enabled": true,
       "log_level": "GLOBAL"
@@ -885,7 +885,7 @@
     {
       "id": "cmd_gemsw001",
       "name": "自动切换预设",
-      "enabled": true,
+      "enabled": false,
       "mode": "simple",
       "trigger": {
         "type": "page_check",
@@ -926,8 +926,8 @@
       "group_name": "gemini",
       "script": "",
       "script_lang": "javascript",
-      "last_triggered": 1776656351.90576,
-      "trigger_count": 3,
+      "last_triggered": 1777537503.8788562,
+      "trigger_count": 1,
       "log_enabled": true,
       "log_level": "GLOBAL",
       "stop_on_error": false
@@ -969,8 +969,8 @@
       "script": "",
       "script_lang": "javascript",
       "id": "cmd_0020e346",
-      "last_triggered": 1776656345.3091698,
-      "trigger_count": 7,
+      "last_triggered": 1777537443.4464617,
+      "trigger_count": 2,
       "log_enabled": true,
       "log_level": "GLOBAL"
     },
@@ -1017,8 +1017,8 @@
       "group_name": "gemini",
       "script": "",
       "script_lang": "javascript",
-      "last_triggered": 1776656411.5686898,
-      "trigger_count": 1673,
+      "last_triggered": 1777537453.8116539,
+      "trigger_count": 16,
       "log_enabled": false,
       "log_level": "GLOBAL",
       "stop_on_error": false
@@ -1026,7 +1026,7 @@
     {
       "id": "cmd_arena_terms_refresh_abort",
       "name": "ARENA_AGREE_POPUP_CLICK_FIRST",
-      "enabled": true,
+      "enabled": false,
       "mode": "simple",
       "trigger": {
         "type": "page_check",
@@ -1091,7 +1091,7 @@
     {
       "id": "cmd_arena_login_popup_clear_cookies",
       "name": "ARENA_LOGIN_POPUP_CLEAR_COOKIES",
-      "enabled": true,
+      "enabled": false,
       "mode": "simple",
       "trigger": {
         "type": "page_check",
@@ -1151,7 +1151,7 @@
     {
       "id": "cmd_arena_terms_refresh_followup",
       "name": "ARENA_AGREE_POPUP_REFRESH_ABORT",
-      "enabled": true,
+      "enabled": false,
       "mode": "simple",
       "trigger": {
         "type": "command_result_match",
@@ -1202,7 +1202,7 @@
     {
       "id": "cmd_hotmail_signup_test",
       "name": "Hotmail注册测试工作流",
-      "enabled": true,
+      "enabled": false,
       "log_enabled": true,
       "log_level": "GLOBAL",
       "mode": "advanced",
@@ -1288,7 +1288,9 @@
       "group_name": "ds",
       "script": "",
       "script_lang": "javascript",
-      "id": "cmd_72ae0f7d"
+      "id": "cmd_72ae0f7d",
+      "last_triggered": 1777533881.7545376,
+      "trigger_count": 1
     }
   ]
 }

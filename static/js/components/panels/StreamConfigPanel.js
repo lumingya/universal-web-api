@@ -14,6 +14,7 @@ window.StreamConfigPanel = {
             loadingParsers: false,
             guideExpanded: false,
             networkStepsExpanded: false,
+            attachmentRulesExpanded: false,
             attachmentSensitivityOptions: [
                 {
                     value: 'low',
@@ -53,6 +54,17 @@ window.StreamConfigPanel = {
             },
             defaultSendConfirmationConfig: {
                 attachment_sensitivity: 'medium'
+            },
+            defaultAttachmentMonitorConfig: {
+                root_selectors: [],
+                attachment_selectors: [],
+                pending_selectors: [],
+                busy_text_markers: [],
+                send_button_disabled_markers: [],
+                require_attachment_present: false,
+                continue_once_on_unconfirmed_send: true,
+                idle_timeout: 8.0,
+                hard_max_wait: 90.0
             }
         };
     },
@@ -72,6 +84,13 @@ window.StreamConfigPanel = {
             return {
                 ...this.defaultSendConfirmationConfig,
                 ...(this.streamConfig.send_confirmation || {})
+            };
+        },
+
+        attachmentMonitorConfig() {
+            return {
+                ...this.defaultAttachmentMonitorConfig,
+                ...(this.streamConfig.attachment_monitor || {})
             };
         },
 
@@ -153,6 +172,31 @@ window.StreamConfigPanel = {
             };
             const newConfig = { ...this.streamConfig, send_confirmation };
             this.$emit('save-stream-config', newConfig);
+        },
+
+        updateAttachmentMonitorField(field, value) {
+            const attachment_monitor = {
+                ...this.attachmentMonitorConfig,
+                [field]: value
+            };
+            const newConfig = { ...this.streamConfig, attachment_monitor };
+            this.$emit('save-stream-config', newConfig);
+        },
+
+        normalizeAttachmentRuleList(value) {
+            const lines = String(value || '')
+                .split(/\r?\n/)
+                .map(item => item.trim())
+                .filter(Boolean);
+            return [...new Set(lines)];
+        },
+
+        updateAttachmentMonitorListField(field, value) {
+            this.updateAttachmentMonitorField(field, this.normalizeAttachmentRuleList(value));
+        },
+
+        formatAttachmentRuleList(value) {
+            return Array.isArray(value) ? value.join('\n') : '';
         },
 
         openInNewTab(url) {
@@ -525,6 +569,136 @@ window.StreamConfigPanel = {
                             </div>
                             <div class="md:col-span-2 text-xs leading-6 text-gray-600 dark:text-gray-300 bg-white/70 dark:bg-gray-900/40 rounded-lg border border-blue-100 dark:border-blue-900/60 px-3 py-2">
                                 {{ attachmentSensitivityMeta.description }}
+                            </div>
+                        </div>
+
+                        <div class="mt-4 border-t border-blue-100 dark:border-blue-900/60 pt-4">
+                            <button v-if="!attachmentRulesExpanded"
+                                    @click="attachmentRulesExpanded = true"
+                                    type="button"
+                                    class="dashboard-guide-toggle dashboard-guide-toggle--violet w-full justify-between">
+                                <span>高级附件规则</span>
+                                <span class="text-xs text-slate-500 dark:text-slate-400">按站点补 selector / token</span>
+                            </button>
+
+                            <div v-else class="space-y-4">
+                                <div class="flex items-center justify-between gap-3">
+                                    <div>
+                                        <div class="text-sm font-medium text-gray-800 dark:text-gray-100">高级附件规则</div>
+                                        <p class="mt-1 text-xs leading-5 text-gray-600 dark:text-gray-300">
+                                            这部分会直接影响图片上传确认、文件粘贴确认，以及发送前的附件 gate。像 Gemini 这类站点，可以在这里补发送按钮灰态 token、附件预览 selector 和 pending 文案。
+                                        </p>
+                                    </div>
+                                    <button @click="attachmentRulesExpanded = false"
+                                            type="button"
+                                            class="dashboard-guide-toggle dashboard-guide-toggle--violet">
+                                        <span>收起</span>
+                                        <span v-html="$icons.chevronUp"></span>
+                                    </button>
+                                </div>
+
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <label class="flex items-center gap-3 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
+                                        <input type="checkbox"
+                                               class="rounded"
+                                               :checked="attachmentMonitorConfig.require_attachment_present"
+                                               @change="updateAttachmentMonitorField('require_attachment_present', $event.target.checked)">
+                                        <span>发送前必须看到附件已挂上页面</span>
+                                    </label>
+                                    <label class="flex items-center gap-3 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
+                                        <input type="checkbox"
+                                               class="rounded"
+                                               :checked="attachmentMonitorConfig.continue_once_on_unconfirmed_send"
+                                               @change="updateAttachmentMonitorField('continue_once_on_unconfirmed_send', $event.target.checked)">
+                                        <span>未确认时仍允许继续点一次发送</span>
+                                    </label>
+                                </div>
+
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">空闲超时</label>
+                                        <div class="flex items-center gap-2">
+                                            <input type="number"
+                                                   :value="attachmentMonitorConfig.idle_timeout"
+                                                   @input="updateAttachmentMonitorField('idle_timeout', parseFloat($event.target.value) || 8)"
+                                                   min="0.5"
+                                                   max="60"
+                                                   step="0.5"
+                                                   class="flex-1 border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent">
+                                            <span class="text-sm text-gray-500 dark:text-gray-400">秒</span>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">附件最长等待</label>
+                                        <div class="flex items-center gap-2">
+                                            <input type="number"
+                                                   :value="attachmentMonitorConfig.hard_max_wait"
+                                                   @input="updateAttachmentMonitorField('hard_max_wait', parseFloat($event.target.value) || 90)"
+                                                   min="1"
+                                                   max="300"
+                                                   step="1"
+                                                   class="flex-1 border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent">
+                                            <span class="text-sm text-gray-500 dark:text-gray-400">秒</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">附件预览 selector</label>
+                                        <textarea
+                                            :value="formatAttachmentRuleList(attachmentMonitorConfig.attachment_selectors)"
+                                            @input="updateAttachmentMonitorListField('attachment_selectors', $event.target.value)"
+                                            rows="5"
+                                            placeholder="[class*='attachment']&#10;.upload-preview"
+                                            class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm font-mono bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent"></textarea>
+                                        <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">每行一个 selector，命中后会被视为“附件已挂上页面”。</p>
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">上传中 selector</label>
+                                        <textarea
+                                            :value="formatAttachmentRuleList(attachmentMonitorConfig.pending_selectors)"
+                                            @input="updateAttachmentMonitorListField('pending_selectors', $event.target.value)"
+                                            rows="5"
+                                            placeholder="[aria-busy='true']&#10;.uploading"
+                                            class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm font-mono bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent"></textarea>
+                                        <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">每行一个 selector，命中后会继续等待，不会急着发送。</p>
+                                    </div>
+                                </div>
+
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">忙碌文本 / token</label>
+                                        <textarea
+                                            :value="formatAttachmentRuleList(attachmentMonitorConfig.busy_text_markers)"
+                                            @input="updateAttachmentMonitorListField('busy_text_markers', $event.target.value)"
+                                            rows="5"
+                                            placeholder="uploading&#10;处理中&#10;解析中"
+                                            class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm font-mono bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent"></textarea>
+                                        <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">会同时用于附件区域文本和发送按钮 busy 文案匹配。</p>
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">发送按钮灰态 token</label>
+                                        <textarea
+                                            :value="formatAttachmentRuleList(attachmentMonitorConfig.send_button_disabled_markers)"
+                                            @input="updateAttachmentMonitorListField('send_button_disabled_markers', $event.target.value)"
+                                            rows="5"
+                                            placeholder="is-disabled&#10;cursor-not-allowed&#10;upload failed"
+                                            class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm font-mono bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent"></textarea>
+                                        <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">填发送按钮 class / title / aria-label 里会出现的关键字，命中后视为按钮不可发。</p>
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">根容器 selector</label>
+                                    <textarea
+                                        :value="formatAttachmentRuleList(attachmentMonitorConfig.root_selectors)"
+                                        @input="updateAttachmentMonitorListField('root_selectors', $event.target.value)"
+                                        rows="4"
+                                        placeholder=".composer-shell&#10;.input-area"
+                                        class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm font-mono bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent"></textarea>
+                                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">当通用根容器猜错时再填。这里会限制附件节点和 pending 节点的查找范围。</p>
+                                </div>
                             </div>
                         </div>
                     </div>

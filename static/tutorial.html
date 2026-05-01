@@ -3115,14 +3115,27 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
             </table>
 
             <div class="info-box">
-                <p><strong>💡 工作逻辑：</strong>系统会依次尝试 <code>file_input</code> -> 通用 <code>input[type=file]</code> -> <code>upload_btn</code> -> <code>drop_zone</code>。这些入口都失败后，才会回退到 Windows 剪贴板文件粘贴；只有在附件状态稳定后，系统才会继续发送。</p>
+                <p><strong>💡 工作逻辑：</strong>系统会依次尝试 <code>file_input</code> -> 通用 <code>input[type=file]</code> -> <code>upload_btn</code> -> <code>drop_zone</code>。这些入口都失败后，才会回退到 Windows 剪贴板文件粘贴；只有在附件状态稳定后，系统才会继续发送，而“稳定”的判断现在也支持按站点单独配置。</p>
             </div>
 
             <h3>配置方式</h3>
-            <p>在控制面板的「配置」选项卡中找到「文件粘贴」面板，可以针对每个站点（的每个预设）独立配置。给新站点开这个功能时，不要只改一个 <code>enabled: true</code> 就结束，真正需要一起确认的，是该站点有没有可用的 <code>upload_btn</code>、<code>file_input</code> 或 <code>drop_zone</code> 选择器。</p>
+            <p>在控制面板的「配置」选项卡中找到「文件粘贴」面板，可以针对每个站点（的每个预设）独立配置。给新站点开这个功能时，不要只改一个 <code>enabled: true</code> 就结束，真正需要一起确认的，不只是该站点有没有可用的 <code>upload_btn</code>、<code>file_input</code> 或 <code>drop_zone</code> 选择器，还要确认它是如何判断“附件已经成功挂到输入区”的。</p>
+            <p>现在可以继续到「配置 -> 网络监听模式 -> 附件发送判定 -> 高级附件规则」里，为每个站点单独定义附件判定规则。常用字段如下：</p>
+            <ul>
+                <li><code>attachment_selectors</code>：哪些预览图、文件 chip、附件卡片算上传成功</li>
+                <li><code>pending_selectors</code>：哪些转圈、进度条、加载态代表仍在处理中</li>
+                <li><code>busy_text_markers</code>：输入区或容器上哪些文本状态说明附件还没稳定</li>
+                <li><code>send_button_disabled_markers</code>：发送按钮上哪些 class / aria token 代表当前仍不可发送</li>
+                <li><code>require_attachment_present</code>：是否必须真的看到附件预览后才允许继续</li>
+                <li><code>continue_once_on_unconfirmed_send</code>：未确认成功时，是否还允许系统冒险发送一次</li>
+            </ul>
 
             <div class="note">
                 <p><strong>⚠️ 引导文本的作用：</strong>附件上传完成后，系统会自动在输入框补一段提示语，例如“请完全专注于文件内容”，避免模型忽略附件，只看输入框里那句很短的文字。</p>
+            </div>
+
+            <div class="note">
+                <p><strong>Gemini 实战建议：</strong>像 <code>gemini.google.com</code> 这类站点，图片预览、文件预览 chip 往往比“网络安静了”更可靠。如果上传失败时发送按钮会变灰，就把对应的按钮 token 配进 <code>send_button_disabled_markers</code>，并关闭 <code>continue_once_on_unconfirmed_send</code>，避免系统在附件其实没挂上去时误发。</p>
             </div>
 
             <h3>当前默认预设里已开启的站点</h3>
@@ -4636,7 +4649,7 @@ BROWSER_PROFILE_NAME=Default</code></pre>
             'image-extraction': '多模态提取 图片提取 音频提取 视频提取 media audio video image',
             'response-detection': '解析器 parser 创建解析器 listen_pattern 网络拦截 stream streaming 响应检测',
             'workflow': '工作流 workflow click wait fill_input key_press stream_wait',
-            'file-paste': '附件 上传 长文本 文件粘贴',
+            'file-paste': '附件 上传 长文本 文件粘贴 附件发送判定 高级附件规则 attachment_monitor attachment_selectors pending_selectors Gemini',
             'commands': '命令 自动化 代理 切换命令',
             'ai-recognition': 'AI识别 element detection 自动分析',
             'env-config': '环境变量 helper api key base url model'

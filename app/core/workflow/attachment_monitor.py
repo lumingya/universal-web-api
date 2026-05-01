@@ -17,7 +17,7 @@ _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
   const KEY = "__ATTACHMENT_MONITOR__";
   const W = window;
 
-  const rootSelectors = [
+  const defaultRootSelectors = [
     ".message-input-wrapper",
     ".message-input-container",
     ".chat-layout-input-container",
@@ -31,7 +31,7 @@ _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
     "form",
   ];
 
-  const attachmentSelectors = [
+  const defaultAttachmentSelectors = [
     ".file-card-list",
     ".fileitem-btn",
     ".fileitem-file-name",
@@ -60,7 +60,7 @@ _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
     "img[src^='data:image']",
   ];
 
-  const pendingSelectors = [
+  const defaultPendingSelectors = [
     "progress",
     "[role='progressbar']",
     "[aria-busy='true']",
@@ -74,7 +74,7 @@ _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
     "[class*='reading']",
   ];
 
-  const busyWords = [
+  const defaultBusyWords = [
     "loading",
     "uploading",
     "sending",
@@ -131,6 +131,22 @@ _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
     }
   }
 
+  function getInputText(node) {
+    if (!node) return "";
+    try {
+      const tag = String(node.tagName || "").toLowerCase();
+      if (tag === "textarea" || tag === "input") {
+        return String(node.value || "");
+      }
+      if (node.isContentEditable || node.getAttribute("contenteditable") === "true") {
+        return String(node.innerText || node.textContent || "");
+      }
+      return String(node.textContent || "");
+    } catch (error) {
+      return "";
+    }
+  }
+
   function joinSelectors(items) {
     const cleaned = [];
     for (const item of items || []) {
@@ -140,6 +156,61 @@ _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
       }
     }
     return cleaned.join(",");
+  }
+
+  function mergeUnique(defaultItems, extraItems) {
+    const merged = [];
+    for (const source of [defaultItems || [], extraItems || []]) {
+      for (const item of source) {
+        const value = String(item || "").trim();
+        if (value && !merged.includes(value)) {
+          merged.push(value);
+        }
+      }
+    }
+    return merged;
+  }
+
+  function prioritizeUnique(primaryItems, fallbackItems) {
+    const merged = [];
+    for (const source of [primaryItems || [], fallbackItems || []]) {
+      for (const item of source) {
+        const value = String(item || "").trim();
+        if (value && !merged.includes(value)) {
+          merged.push(value);
+        }
+      }
+    }
+    return merged;
+  }
+
+  function includesAny(text, items) {
+    const haystack = lower(text);
+    return (items || []).some((item) => {
+      const needle = lower(item);
+      return needle && haystack.includes(needle);
+    });
+  }
+
+  function compactText(value, maxLen) {
+    const normalized = String(value || "").replace(/\s+/g, " ").trim();
+    if (!normalized) return "";
+    const limit = Math.max(16, Number(maxLen || 0) || 120);
+    return normalized.length > limit ? normalized.slice(0, limit) + "…" : normalized;
+  }
+
+  function describeNode(node) {
+    if (!node || !node.tagName) return "";
+    const parts = [lower(node.tagName || "")];
+    const cls = compactText(node.className || "", 80);
+    const aria = compactText(node.getAttribute && node.getAttribute("aria-label"), 60);
+    const role = compactText(node.getAttribute && node.getAttribute("role"), 40);
+    const title = compactText(node.getAttribute && node.getAttribute("title"), 60);
+    if (cls) parts.push("class=" + cls);
+    if (aria) parts.push("aria=" + aria);
+    if (role) parts.push("role=" + role);
+    if (title) parts.push("title=" + title);
+    return parts.join("|");
   }
 
   function findInput(opts) {
@@ -183,7 +254,7 @@ _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
     return null;
   }
 
-  function findRoot(input, sendBtn) {
+  function findRoot(input, sendBtn, rootSelectors) {
     const anchors = [];
     if (input) anchors.push(input);
     if (sendBtn) anchors.push(sendBtn);
@@ -213,10 +284,44 @@ _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
     return document.body;
   }
 
+  function getRootStatusText(root, input) {
+    if (!root) return "";
+    try {
+      const clone = root.cloneNode(true);
+      const removalSelectors = [
+        "textarea",
+        "input",
+        "[contenteditable='true']",
+        "[role='textbox']",
+        ".ql-editor",
+      ];
+      for (const selector of removalSelectors) {
+        try {
+          clone.querySelectorAll(selector).forEach((node) => node.remove());
+        } catch (error) {}
+      }
+      const text = String(clone.innerText || clone.textContent || "");
+      if (text.trim()) return text;
+    } catch (error) {}
+
+    const raw = String((root && (root.innerText || root.textContent)) || "");
+    const inputText = getInputText(input).trim();
+    if (!inputText) return raw;
+    return raw.replace(inputText, " ");
+  }
+
   function collectState(opts) {
+    const rootSelectors = prioritizeUnique(opts && opts.rootSelectors, defaultRootSelectors);
+    const attachmentSelectors = mergeUnique(defaultAttachmentSelectors, opts && opts.attachmentSelectors);
+    const pendingSelectors = mergeUnique(defaultPendingSelectors, opts && opts.pendingSelectors);
+    const busyWords = mergeUnique(defaultBusyWords, opts && opts.busyTextMarkers);
+    const disabledMarkers = mergeUnique(
+      ["disabled", "unavailable", "inactive", "readonly", "upload failed"],
+      opts && opts.sendButtonDisabledMarkers
+    );
     const input = findInput(opts);
     let sendBtn = findSendButton(null, opts);
-    const root = findRoot(input, sendBtn);
+    const root = findRoot(input, sendBtn, rootSelectors);
     if (!sendBtn) {
       sendBtn = findSendButton(root, opts);
     }
@@ -234,23 +339,23 @@ _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
       }
     }, 0);
 
-    const rootText = lower(root && root.innerText);
-    const attachmentText = lower(
-      uploadNodes
-        .map((node) =>
-          [
-            node.textContent,
-            node.getAttribute && node.getAttribute("aria-label"),
-            node.getAttribute && node.getAttribute("title"),
-            node.getAttribute && node.getAttribute("data-testid"),
-            node.getAttribute && node.getAttribute("data-test-id"),
-            node.getAttribute && node.getAttribute("alt"),
-          ]
-            .filter(Boolean)
-            .join(" ")
-        )
-        .join("\n")
-    );
+    const rawRootText = getRootStatusText(root, input);
+    const rootText = lower(rawRootText);
+    const rawAttachmentText = uploadNodes
+      .map((node) =>
+        [
+          node.textContent,
+          node.getAttribute && node.getAttribute("aria-label"),
+          node.getAttribute && node.getAttribute("title"),
+          node.getAttribute && node.getAttribute("data-testid"),
+          node.getAttribute && node.getAttribute("data-test-id"),
+          node.getAttribute && node.getAttribute("alt"),
+        ]
+          .filter(Boolean)
+          .join(" ")
+      )
+      .join("\n");
+    const attachmentText = lower(rawAttachmentText);
     const previewCount = uploadNodes.filter((node) => {
       try {
         if (!node || !node.tagName) return false;
@@ -296,15 +401,27 @@ _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
         )
       : "";
 
+    const matchedBusyWords = busyWords.filter((word) => {
+      const needle = lower(word);
+      return needle && rootText.includes(needle);
+    }).slice(0, 8);
+
+    const matchedDisabledMarkers = disabledMarkers.filter((word) => {
+      const needle = lower(word);
+      return needle && sendMeta.includes(needle);
+    }).slice(0, 8);
+
     const sendDisabled = !!sendBtn && (
-      !!sendBtn.disabled || sendBtn.getAttribute("aria-disabled") === "true"
+      !!sendBtn.disabled
+      || sendBtn.getAttribute("aria-disabled") === "true"
+      || matchedDisabledMarkers.length > 0
     );
     const sendBusy = !!sendBtn && (
       sendBtn.getAttribute("aria-busy") === "true" ||
-      busyWords.some((word) => sendMeta.includes(lower(word)))
+      includesAny(sendMeta, busyWords)
     );
 
-    const pendingText = busyWords.some((word) => rootText.includes(lower(word)));
+    const pendingText = matchedBusyWords.length > 0;
 
     return {
       ok: true,
@@ -322,6 +439,15 @@ _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
       rootText,
       attachmentText,
       attachmentFingerprint: fingerprint,
+      rootSummary: describeNode(root),
+      inputSummary: describeNode(input),
+      sendSummary: describeNode(sendBtn),
+      rootTextSample: compactText(rawRootText, 160),
+      attachmentTextSample: compactText(rawAttachmentText, 160),
+      matchedBusyWords,
+      matchedDisabledMarkers,
+      pendingNodeSummary: pendingNodes.slice(0, 4).map(describeNode).filter(Boolean),
+      attachmentNodeSummary: uploadNodes.slice(0, 6).map(describeNode).filter(Boolean),
     };
   }
 
@@ -355,12 +481,20 @@ _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
       ((mutationCount || 0) > 0 &&
         (pendingChanged || sendTransition || state.attachmentCount > 0 || state.previewCount > 0));
 
+    const observationReasons = [];
+    if (attachmentChanged) observationReasons.push("attachment_changed");
+    if (matchedExpectedName) observationReasons.push("expected_name_matched");
+    if (pendingChanged) observationReasons.push("pending_changed");
+    if (sendTransition) observationReasons.push("send_transition");
+    if ((mutationCount || 0) > 0) observationReasons.push("mutation:" + String(mutationCount));
+
     return {
       matchedExpectedName,
       attachmentChanged,
       pendingChanged,
       sendTransition,
       attachmentObserved,
+      observationReasons,
     };
   }
 
@@ -391,7 +525,11 @@ _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
 
     const current = collectState(monitor.options);
     monitor.baseline = current;
-    monitor.root = findRoot(findInput(monitor.options), findSendButton(null, monitor.options));
+    monitor.root = findRoot(
+      findInput(monitor.options),
+      findSendButton(null, monitor.options),
+      prioritizeUnique(monitor.options && monitor.options.rootSelectors, defaultRootSelectors)
+    );
     monitor.send = findSendButton(monitor.root, monitor.options);
 
     if (monitor.root && typeof MutationObserver === "function") {
@@ -461,15 +599,47 @@ class AttachmentMonitor:
         self,
         tab,
         selectors: Optional[Dict[str, Any]] = None,
+        config: Optional[Dict[str, Any]] = None,
         check_cancelled_fn: Optional[Callable[[], bool]] = None,
     ):
         self.tab = tab
         self._selectors = selectors or {}
+        self._config = config or {}
         self._check_cancelled = check_cancelled_fn or (lambda: False)
 
     def _selector_value(self, key: str) -> str:
         value = self._selectors.get(key)
         return str(value).strip() if value else ""
+
+    def _config_list(self, key: str):
+        raw_value = self._config.get(key) if isinstance(self._config, dict) else None
+        if not isinstance(raw_value, list):
+            return []
+        cleaned = []
+        for item in raw_value:
+            value = str(item or "").strip()
+            if value and value not in cleaned:
+                cleaned.append(value)
+        return cleaned
+
+    def _config_flag(self, key: str, default: bool = False) -> bool:
+        raw_value = self._config.get(key, default) if isinstance(self._config, dict) else default
+        if isinstance(raw_value, bool):
+            return raw_value
+        if isinstance(raw_value, str):
+            lowered = raw_value.strip().lower()
+            if lowered in ("1", "true", "yes", "on"):
+                return True
+            if lowered in ("0", "false", "no", "off"):
+                return False
+        return bool(raw_value)
+
+    def _config_float(self, key: str, default: float) -> float:
+        raw_value = self._config.get(key, default) if isinstance(self._config, dict) else default
+        try:
+            return float(raw_value)
+        except Exception:
+            return float(default)
 
     def _run_js(self, script: str):
         try:
@@ -492,6 +662,11 @@ class AttachmentMonitor:
             "inputSelector": self._selector_value("input_box"),
             "sendSelector": self._selector_value("send_btn"),
             "expectedNames": names,
+            "rootSelectors": self._config_list("root_selectors"),
+            "attachmentSelectors": self._config_list("attachment_selectors"),
+            "pendingSelectors": self._config_list("pending_selectors"),
+            "busyTextMarkers": self._config_list("busy_text_markers"),
+            "sendButtonDisabledMarkers": self._config_list("send_button_disabled_markers"),
         }
 
     def begin_tracking(self, expected_names: Optional[Iterable[str]] = None) -> Dict[str, Any]:
@@ -514,7 +689,16 @@ class AttachmentMonitor:
 
     @staticmethod
     def _is_ready_state(state: Dict[str, Any], require_send_enabled: bool) -> bool:
-        pending = int(state.get("pendingCount", 0) or 0) > 0 or bool(state.get("pendingText"))
+        pending_count = int(state.get("pendingCount", 0) or 0)
+        pending_text = bool(state.get("pendingText"))
+        attachment_present = AttachmentMonitor._attachment_present(state)
+        corroborated_pending_text = pending_text and (
+            pending_count > 0
+            or bool(state.get("sendBusy"))
+            or bool(state.get("sendDisabled"))
+            or attachment_present
+        )
+        pending = pending_count > 0 or corroborated_pending_text
         if pending or bool(state.get("sendBusy")):
             return False
         if require_send_enabled and bool(state.get("sendFound")) and bool(state.get("sendDisabled")):
@@ -562,7 +746,7 @@ class AttachmentMonitor:
     def summarize(state: Dict[str, Any]) -> str:
         if not state:
             return "no_state"
-        return (
+        parts = [
             f"attachments={int(state.get('attachmentCount', 0) or 0)}, "
             f"previews={int(state.get('previewCount', 0) or 0)}, "
             f"file_inputs={int(state.get('fileInputCount', 0) or 0)}, "
@@ -573,6 +757,108 @@ class AttachmentMonitor:
             f"observed={bool(state.get('attachmentObserved'))}, "
             f"mutations={int(state.get('mutationCount', 0) or 0)}, "
             f"idle_ms={int(state.get('idleMs', 0) or 0)}"
+        ]
+
+        matched_busy = state.get("matchedBusyWords") or []
+        if matched_busy:
+            parts.append(f"busy_words={matched_busy}")
+
+        matched_disabled = state.get("matchedDisabledMarkers") or []
+        if matched_disabled:
+            parts.append(f"disabled_markers={matched_disabled}")
+
+        pending_nodes = state.get("pendingNodeSummary") or []
+        if pending_nodes:
+            parts.append(f"pending_nodes={pending_nodes}")
+
+        attachment_nodes = state.get("attachmentNodeSummary") or []
+        if attachment_nodes:
+            parts.append(f"attachment_nodes={attachment_nodes}")
+
+        observed_by = state.get("observationReasons") or []
+        if observed_by:
+            parts.append(f"observed_by={observed_by}")
+
+        mutation_types = str(state.get("lastMutationSummary") or "").strip()
+        if mutation_types:
+            parts.append(f"mutation_types={mutation_types}")
+
+        root_text = str(state.get("rootTextSample") or "").strip()
+        if root_text and (bool(state.get("pendingText")) or int(state.get("attachmentCount", 0) or 0) == 0):
+            parts.append(f"root_text={root_text!r}")
+
+        send_summary = str(state.get("sendSummary") or "").strip()
+        if send_summary:
+            parts.append(f"send={send_summary!r}")
+
+        root_summary = str(state.get("rootSummary") or "").strip()
+        if root_summary:
+            parts.append(f"root={root_summary!r}")
+
+        return ", ".join(parts)
+
+    @classmethod
+    def explain_not_ready(
+        cls,
+        state: Dict[str, Any],
+        *,
+        require_observed: bool,
+        require_send_enabled: bool,
+        require_attachment_present: bool,
+        observed_once: bool,
+        accept_existing: bool,
+    ) -> str:
+        if not state:
+            return "no_state"
+
+        reasons = []
+        attachment_present = cls._attachment_present(state)
+
+        if require_attachment_present and not attachment_present:
+            reasons.append("attachment_missing")
+
+        if require_observed and not (observed_once or (accept_existing and attachment_present)):
+            reasons.append("attachment_not_observed")
+
+        if int(state.get("pendingCount", 0) or 0) > 0:
+            reasons.append("pending_nodes_present")
+
+        if bool(state.get("pendingText")):
+            busy_words = state.get("matchedBusyWords") or []
+            pending_text_blocks = (
+                int(state.get("pendingCount", 0) or 0) > 0
+                or bool(state.get("sendBusy"))
+                or bool(state.get("sendDisabled"))
+                or attachment_present
+            )
+            prefix = "pending_text_blocking" if pending_text_blocks else "pending_text_raw"
+            if busy_words:
+                reasons.append(f"{prefix}:{busy_words}")
+            else:
+                reasons.append(prefix)
+
+        if bool(state.get("sendBusy")):
+            reasons.append("send_busy")
+
+        if require_send_enabled and bool(state.get("sendFound")) and bool(state.get("sendDisabled")):
+            disabled_markers = state.get("matchedDisabledMarkers") or []
+            if disabled_markers:
+                reasons.append(f"send_disabled:{disabled_markers}")
+            else:
+                reasons.append("send_disabled")
+
+        if not reasons:
+            reasons.append("not_stable_yet")
+
+        return "; ".join(reasons)
+
+    @staticmethod
+    def _attachment_present(state: Dict[str, Any]) -> bool:
+        return (
+            int(state.get("attachmentCount", 0) or 0) > 0
+            or int(state.get("previewCount", 0) or 0) > 0
+            or int(state.get("fileInputCount", 0) or 0) > 0
+            or bool(state.get("matchedExpectedName"))
         )
 
     def wait_until_ready(
@@ -586,6 +872,9 @@ class AttachmentMonitor:
         max_wait: Optional[float] = None,
         poll_interval: Optional[float] = None,
         stable_window: Optional[float] = None,
+        require_attachment_present: Optional[bool] = None,
+        idle_timeout: Optional[float] = None,
+        hard_max_wait: Optional[float] = None,
         label: str = "attachment",
     ) -> Dict[str, Any]:
         wait_timeout = float(max_wait or getattr(BrowserConstants, "ATTACHMENT_READY_MAX_WAIT", 20.0))
@@ -595,17 +884,34 @@ class AttachmentMonitor:
         settle_window = float(
             stable_window or getattr(BrowserConstants, "ATTACHMENT_READY_STABLE_WINDOW", 0.8)
         )
-        idle_timeout = float(
-            getattr(BrowserConstants, "ATTACHMENT_READY_IDLE_TIMEOUT", max(wait_timeout, 8.0))
-        )
-        hard_max_wait = float(
-            getattr(
-                BrowserConstants,
-                "ATTACHMENT_READY_HARD_MAX_WAIT",
-                max(wait_timeout * 3.0, wait_timeout + 30.0),
+        if idle_timeout is None:
+            idle_timeout = float(
+                self._config_float(
+                    "idle_timeout",
+                    getattr(BrowserConstants, "ATTACHMENT_READY_IDLE_TIMEOUT", max(wait_timeout, 8.0)),
+                )
             )
-        )
+        else:
+            idle_timeout = float(idle_timeout)
+        if hard_max_wait is None:
+            hard_max_wait = float(
+                self._config_float(
+                    "hard_max_wait",
+                    getattr(
+                        BrowserConstants,
+                        "ATTACHMENT_READY_HARD_MAX_WAIT",
+                        max(wait_timeout * 3.0, wait_timeout + 30.0),
+                    ),
+                )
+            )
+        else:
+            hard_max_wait = float(hard_max_wait)
         hard_max_wait = max(wait_timeout, hard_max_wait)
+        require_attachment_present = (
+            self._config_flag("require_attachment_present", False)
+            if require_attachment_present is None
+            else bool(require_attachment_present)
+        )
 
         state = self.begin_tracking(expected_names) if start_new_tracking else self.snapshot(expected_names)
         if not state:
@@ -667,13 +973,11 @@ class AttachmentMonitor:
                     activity_deadline = min(hard_deadline, now + max(0.5, check_interval * 2.0))
 
             ready = self._is_ready_state(last_state, require_send_enabled=require_send_enabled)
-            attachment_present = (
-                int(last_state.get("attachmentCount", 0) or 0) > 0
-                or int(last_state.get("previewCount", 0) or 0) > 0
-                or int(last_state.get("fileInputCount", 0) or 0) > 0
-                or bool(last_state.get("matchedExpectedName"))
+            attachment_present = self._attachment_present(last_state)
+            presence_ok = attachment_present or not require_attachment_present
+            gate_ok = presence_ok and (
+                observed_once or (accept_existing and attachment_present) or not require_observed
             )
-            gate_ok = observed_once or (accept_existing and attachment_present) or not require_observed
 
             if gate_ok and ready:
                 if stable_since is None:
@@ -717,9 +1021,17 @@ class AttachmentMonitor:
                 "idleSeconds": round(max(0.0, time.time() - last_progress_at), 3),
             }
         )
+        blockers = self.explain_not_ready(
+            result,
+            require_observed=require_observed,
+            require_send_enabled=require_send_enabled,
+            require_attachment_present=require_attachment_present,
+            observed_once=observed_once,
+            accept_existing=accept_existing,
+        )
         logger.warning(
             f"[ATTACHMENT] {label} not ready after {time.time() - start:.1f}s: {self.summarize(result)} "
-            f"(reason={result.get('reason')}, idle={result.get('idleSeconds')})"
+            f"(reason={result.get('reason')}, idle={result.get('idleSeconds')}, blockers={blockers})"
         )
         return result
 
