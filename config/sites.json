@@ -260,6 +260,34 @@
         "stream_config": {
           "mode": "network",
           "hard_timeout": 600,
+          "send_confirmation": {
+            "attachment_sensitivity": "medium",
+            "post_click_observe_window": 1.8,
+            "pre_retry_probe_window": 0.12,
+            "retry_observe_window": 0.9,
+            "attachment_observe_window": 6,
+            "trust_network_activity": true,
+            "trust_generating_indicator": true,
+            "trust_send_disabled_with_input_shrink": true
+          },
+          "attachment_monitor": {
+            "root_selectors": [
+              "form:has(#prompt-textarea)",
+              ".shadow-short-composer"
+            ],
+            "attachment_selectors": [
+              "div[role='group'][aria-label]",
+              "button[aria-label='以全视图打开图片']",
+              "button[aria-label^='移除文件']"
+            ],
+            "pending_selectors": [],
+            "busy_text_markers": [],
+            "send_button_disabled_markers": [],
+            "require_attachment_present": true,
+            "continue_once_on_unconfirmed_send": false,
+            "idle_timeout": 8,
+            "hard_max_wait": 90
+          },
           "network": {
             "listen_pattern": "backend-api/f/conversation",
             "stream_match_mode": "regex",
@@ -602,7 +630,7 @@
         },
         "file_paste": {
           "enabled": false,
-          "threshold": 50000,
+          "threshold": 30000,
           "hint_text": "完全专注于文件内容"
         }
       },
@@ -1113,10 +1141,10 @@
         },
         "workflow": [
           {
-            "action": "JS_EXEC",
-            "target": "",
+            "action": "CLICK",
+            "target": "new_chat_btn",
             "optional": false,
-            "value": "window.location.assign('https://arena.ai/text/direct');"
+            "value": null
           },
           {
             "action": "WAIT",
@@ -1591,7 +1619,6 @@
     "default_preset": "主预设"
   },
   "www.google.com": {
-    "default_preset": "主预设",
     "presets": {
       "主预设": {
         "selectors": {
@@ -1652,7 +1679,7 @@
             "post_click_observe_window": 1.8,
             "pre_retry_probe_window": 0.12,
             "retry_observe_window": 0.9,
-            "attachment_observe_window": 6.0,
+            "attachment_observe_window": 6,
             "trust_network_activity": true,
             "trust_generating_indicator": true,
             "trust_send_disabled_with_input_shrink": true
@@ -1665,8 +1692,8 @@
             "send_button_disabled_markers": [],
             "require_attachment_present": false,
             "continue_once_on_unconfirmed_send": true,
-            "idle_timeout": 8.0,
-            "hard_max_wait": 90.0
+            "idle_timeout": 8,
+            "hard_max_wait": 90
           },
           "network": null
         },
@@ -1681,9 +1708,9 @@
           "audio_selector": "audio, audio source",
           "video_selector": "video, video source",
           "container_selector": null,
-          "debounce_seconds": 2.0,
+          "debounce_seconds": 2,
           "wait_for_load": true,
-          "load_timeout_seconds": 5.0,
+          "load_timeout_seconds": 5,
           "download_blobs": true,
           "max_size_mb": 10,
           "src_allow_patterns": [],
@@ -1695,6 +1722,7 @@
           "hint_text": "完全专注于文件内容"
         }
       }
-    }
+    },
+    "default_preset": "主预设"
   }
 }
