@@ -31,6 +31,7 @@ from app.services.request_manager import (
 from app.services.tool_calling import (
     build_tool_completion_response,
     complete_tool_calling_roundtrip,
+    decode_browser_non_stream_payload,
     has_tool_calling_request,
     iter_tool_stream_chunks,
     normalize_tool_request,
@@ -297,7 +298,7 @@ async def chat_completions(
             request=request,
             body=route_body,
             tab_index=None,
-            selector="first_idle",
+            selector=None,
             preset_name=body.preset_name,
             authenticated=authenticated,
         )
@@ -556,7 +557,7 @@ def _execute_browser_non_stream_messages(
     if not payload:
         raise RuntimeError("empty_browser_response")
 
-    data = json.loads(payload)
+    data = decode_browser_non_stream_payload(payload)
     if "error" in data:
         error = data.get("error") or {}
         raise RuntimeError(str(error.get("message") or "browser_execution_failed"))

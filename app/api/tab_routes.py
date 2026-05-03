@@ -33,6 +33,7 @@ from app.services.request_manager import (
 from app.services.tool_calling import (
     build_tool_completion_response,
     complete_tool_calling_roundtrip,
+    decode_browser_non_stream_payload,
     has_tool_calling_request,
     iter_tool_stream_chunks,
     normalize_tool_request,
@@ -150,6 +151,19 @@ def _normalize_tab_selector(value: str, default: str = "first_idle") -> str:
     if selector in TAB_SELECTOR_OPTIONS:
         return selector
     return default
+
+
+def _get_pool_default_selector(browser) -> str:
+    """当路由接口未显式传 selector 时，跟随标签页池当前分配模式。"""
+    try:
+        pool_status = browser.tab_pool.get_status()
+        return _normalize_tab_selector(
+            str(pool_status.get("allocation_mode") or "").strip(),
+            default="first_idle",
+        )
+    except Exception as e:
+        logger.debug(f"读取标签页池默认分配模式失败，回退 first_idle: {e}")
+        return "first_idle"
 
 
 def _get_tab_info_by_index(browser, tab_index: int) -> Optional[Dict[str, Any]]:
@@ -494,7 +508,7 @@ async def list_models_with_tab(
 async def list_models_with_route_domain(
     route_domain: str,
     tab_index: Optional[int] = Query(default=None, ge=1),
-    selector: str = Query(default="first_idle"),
+    selector: Optional[str] = Query(default=None),
     authenticated: bool = Depends(verify_auth)
 ):
     """为域名路由提供 OpenAI 兼容模型列表接口。"""
@@ -503,7 +517,10 @@ async def list_models_with_route_domain(
         raise HTTPException(status_code=400, detail="域名路由不能为空")
 
     browser = get_browser(auto_connect=False)
-    normalized_selector = _normalize_tab_selector(selector, default="first_idle")
+    normalized_selector = _normalize_tab_selector(
+        selector,
+        default=_get_pool_default_selector(browser),
+    )
     tab_info = _resolve_target_tab(
         browser,
         route_domain=route_key,
@@ -538,7 +555,7 @@ async def list_models_with_route_domain_and_preset(
     route_domain: str,
     preset_name: str,
     tab_index: Optional[int] = Query(default=None, ge=1),
-    selector: str = Query(default="first_idle"),
+    selector: Optional[str] = Query(default=None),
     authenticated: bool = Depends(verify_auth)
 ):
     """为域名+预设路径风格提供 OpenAI 兼容模型列表接口。"""
@@ -632,13 +649,13 @@ async def chat_with_route_domain(
     request: Request,
     body: ChatRequest,
     tab_index: Optional[int] = Query(default=None, ge=1),
-    selector: str = Query(default="first_idle"),
+    selector: Optional[str] = Query(default=None),
     preset_name: Optional[str] = Query(default=None),
     authenticated: bool = Depends(verify_auth)
 ):
     """使用指定域名路由匹配的标签页进行聊天。"""
     tab_index = _normalize_optional_tab_index_value(tab_index)
-    selector = str(_unwrap_fastapi_param_value(selector) or "first_idle").strip() or "first_idle"
+    selector = _unwrap_fastapi_param_value(selector)
     preset_name = _unwrap_fastapi_param_value(preset_name)
 
     route_key = str(route_domain or "").strip()
@@ -650,7 +667,10 @@ async def chat_with_route_domain(
         body = body.model_copy(update={"preset_name": resolved_preset_name})
 
     browser = get_browser(auto_connect=False)
-    normalized_selector = _normalize_tab_selector(selector, default="first_idle")
+    normalized_selector = _normalize_tab_selector(
+        selector,
+        default=_get_pool_default_selector(browser),
+    )
     tab_info = _resolve_target_tab(
         browser,
         route_domain=route_key,
@@ -689,7 +709,7 @@ async def chat_with_route_domain_and_preset(
     request: Request,
     body: ChatRequest,
     tab_index: Optional[int] = Query(default=None, ge=1),
-    selector: str = Query(default="first_idle"),
+    selector: Optional[str] = Query(default=None),
     authenticated: bool = Depends(verify_auth)
 ):
     """使用域名+预设路径风格进行聊天。路径中的预设优先级最高。"""
@@ -1087,7 +1107,7 @@ def _execute_browser_non_stream_for_tab(
     if not payload:
         raise RuntimeError("empty_browser_response")
 
-    data = json.loads(payload)
+    data = decode_browser_non_stream_payload(payload)
     if "error" in data:
         error = data.get("error") or {}
         raise RuntimeError(str(error.get("message") or "browser_execution_failed"))
@@ -1116,7 +1136,7 @@ def _execute_browser_non_stream_for_route_domain(
     if not payload:
         raise RuntimeError("empty_browser_response")
 
-    data = json.loads(payload)
+    data = decode_browser_non_stream_payload(payload)
     if "error" in data:
         error = data.get("error") or {}
         raise RuntimeError(str(error.get("message") or "browser_execution_failed"))

@@ -31,6 +31,43 @@ def _debug_preview(value: Any, limit: int = 240) -> str:
     return text[: limit - 3] + "..."
 
 
+def _get_max_tool_result_chars() -> int:
+    raw_value = str(os.getenv("TOOL_CALLING_MAX_TOOL_RESULT_CHARS", "300000") or "300000").strip()
+    try:
+        value = int(raw_value)
+    except Exception:
+        value = 300000
+    return max(1, value)
+
+
+def _trim_middle_text(text: str, limit: int) -> str:
+    value = str(text or "")
+    if limit <= 0 or len(value) <= limit:
+        return value
+    marker = f"\n\n[... omitted {len(value) - limit} characters from the middle ...]\n\n"
+    available = max(0, limit - len(marker))
+    if available <= 0:
+        return value[:limit]
+    head = max(1, int(available * 0.65))
+    tail = max(1, available - head)
+    return value[:head] + marker + value[-tail:]
+
+
+def _prepare_tool_result_content(name: str, content: str) -> str:
+    text = str(content or "")
+    limit = _get_max_tool_result_chars()
+    if len(text) <= limit:
+        return text
+    message = (
+        "tool_result_too_large: single tool result exceeds proxy limit; "
+        f"name={name or 'tool'}; chars={len(text)}; limit={limit}. "
+        "Reduce the requested result size, use narrower filters, timeline summaries, "
+        "keyword scans, or even sampling instead of returning full raw logs."
+    )
+    logger.error(f"[tool_calling] {message}")
+    raise RuntimeError(message)
+
+
 def normalize_tool_request(
     tools: Optional[List[Dict[str, Any]]] = None,
     tool_choice: Any = None,
@@ -143,6 +180,7 @@ def build_browser_messages_for_tools(
         if role == "tool":
             name = str(msg.get("name", "") or "").strip() or "tool"
             tool_call_id = str(msg.get("tool_call_id", "") or "").strip()
+            content = _prepare_tool_result_content(name, content)
             payload = _format_tool_result_message(
                 name=name,
                 tool_call_id=tool_call_id,
@@ -538,6 +576,48 @@ def _serialize_content(content: Any) -> str:
     return str(content)
 
 
+def decode_browser_non_stream_payload(payload: Any) -> Dict[str, Any]:
+    text = str(payload or "").strip()
+    if not text:
+        raise RuntimeError("empty_browser_response")
+
+    candidates = _extract_sse_json_payloads(text) if text.startswith("data:") else [text]
+    last_error: Optional[Exception] = None
+    for candidate in candidates:
+        try:
+            data = json.loads(candidate)
+        except Exception as exc:
+            last_error = exc
+            continue
+        if isinstance(data, dict):
+            return data
+        raise RuntimeError(f"browser_response_not_object: {_debug_preview(data)}")
+
+    preview = _debug_preview(text, 500)
+    if last_error:
+        raise RuntimeError(
+            f"invalid_browser_json_response: {last_error}; payload_preview={preview}"
+        )
+    raise RuntimeError(f"invalid_browser_json_response: payload_preview={preview}")
+
+
+def _extract_sse_json_payloads(text: str) -> List[str]:
+    payloads: List[str] = []
+    blocks = re.split(r"\r?\n\r?\n", text.strip())
+    for block in blocks:
+        data_lines: List[str] = []
+        for line in block.splitlines():
+            if not line.startswith("data:"):
+                continue
+            value = line[5:].strip()
+            if not value or value == "[DONE]":
+                continue
+            data_lines.append(value)
+        if data_lines:
+            payloads.append("\n".join(data_lines))
+    return payloads
+
+
 def _try_parse_json_payload(text: str, allowed_tools: Dict[str, Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     candidates = _extract_json_candidates(text)
     for candidate in candidates:
@@ -928,10 +1008,19 @@ def _decode_tool_arguments(tool_call: Dict[str, Any]) -> Optional[Dict[str, Any]
     if isinstance(raw_arguments, dict):
         return raw_arguments
     if isinstance(raw_arguments, str):
+        stripped = raw_arguments.strip()
+        if not stripped:
+            return {}
         try:
-            parsed = json.loads(raw_arguments)
+            parsed = json.loads(stripped)
         except Exception:
-            return None
+            repaired = _repair_json_like_argument_string(stripped)
+            if repaired == stripped:
+                return None
+            try:
+                parsed = json.loads(repaired)
+            except Exception:
+                return None
         if isinstance(parsed, dict):
             return parsed
     return None
@@ -1820,6 +1909,7 @@ def _pack_sse_chunk(data: Dict[str, Any]) -> str:
 __all__ = [
     "build_browser_messages_for_tools",
     "build_tool_completion_response",
+    "decode_browser_non_stream_payload",
     "complete_tool_calling_roundtrip",
     "has_tool_calling_request",
     "iter_tool_stream_chunks",

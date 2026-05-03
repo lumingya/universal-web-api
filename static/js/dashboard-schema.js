@@ -472,6 +472,41 @@ const ENV_CONFIG_SCHEMA = {
             }
         }
     },
+    toolCalling: {
+        apply: 'service',
+        label: '函数调用',
+        icon: '🧰',
+        desc: '控制函数调用的内部修复、重试策略与工具结果上限。',
+        items: {
+            TOOL_CALLING_RETRY_STRATEGY: {
+                label: '重试策略',
+                desc: '聚焦修复只发送必要的修复信息；完整上下文会把原对话和修复反馈一起发给模型。',
+                type: 'select',
+                options: [
+                    { label: '聚焦修复（推荐）', value: 'focused_repair' },
+                    { label: '完整上下文', value: 'full_context' }
+                ],
+                default: 'focused_repair'
+            },
+            TOOL_CALLING_INTERNAL_RETRY_MAX: {
+                label: '内部修复重试次数',
+                desc: '函数调用结果校验失败时，自动修复后再次重试的次数。0 表示关闭自动修复；默认 2；最大 5。',
+                type: 'number',
+                min: 0,
+                max: 5,
+                default: 2
+            },
+            TOOL_CALLING_MAX_TOOL_RESULT_CHARS: {
+                label: '单条 Tool Result 上限',
+                unit: '字符',
+                desc: '单条函数调用结果超过此字符数时，后端会直接返回明确错误，避免把超大结果继续塞给网页模型。默认 300000，可按需要调大。',
+                type: 'number',
+                min: 1,
+                step: 10000,
+                default: 300000
+            }
+        }
+    },
     files: {
         label: '配置文件',
         icon: '📁',

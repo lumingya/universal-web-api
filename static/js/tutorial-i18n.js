@@ -328,9 +328,10 @@
 
         <p><strong>Supported query parameters:</strong></p>
         <ul>
-            <li><code>selector=first_idle</code>: prefer an idle tab. This is the default.</li>
+            <li><code>selector=first_idle</code>: explicitly prefer an idle tab.</li>
             <li><code>selector=round_robin</code>: rotate across matching site tabs.</li>
             <li><code>selector=random</code>: randomly choose one matching site tab.</li>
+            <li>If <code>selector</code> is omitted on domain-routed endpoints, the server follows the current tab-pool allocation mode.</li>
             <li><code>tab_index=2</code>: on a domain route, lock the request to one specific tab.</li>
             <li><code>preset_name=pro</code>: force one preset for the current request only.</li>
         </ul>

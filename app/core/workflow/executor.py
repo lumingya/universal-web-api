@@ -14,6 +14,7 @@ import time
 import random
 import threading
 import uuid
+from contextlib import contextmanager
 from typing import Generator, Dict, Any, Callable, Optional
 
 from app.core.config import (
@@ -44,6 +45,88 @@ from app.core.network_monitor import (
 from .attachment_monitor import AttachmentMonitor
 from .text_input import TextInputHandler
 from .image_input import ImageInputHandler
+
+
+class _PageInteractionGate:
+    """Throttle active page interactions across tabs to reduce renderer spikes."""
+
+    def __init__(self):
+        self._condition = threading.Condition()
+        self._active_count = 0
+        self._next_slot_at = 0.0
+
+    @contextmanager
+    def hold(
+        self,
+        *,
+        label: str,
+        session_id: str = "",
+        max_concurrent: int = 1,
+        timeout: float = 20.0,
+        min_interval: float = 0.25,
+        cancel_checker: Optional[Callable[[], bool]] = None,
+    ):
+        acquired = self._acquire(
+            label=label,
+            session_id=session_id,
+            max_concurrent=max_concurrent,
+            timeout=timeout,
+            cancel_checker=cancel_checker,
+        )
+        try:
+            yield acquired
+        finally:
+            if acquired:
+                self._release(min_interval=min_interval)
+
+    def _acquire(
+        self,
+        *,
+        label: str,
+        session_id: str,
+        max_concurrent: int,
+        timeout: float,
+        cancel_checker: Optional[Callable[[], bool]] = None,
+    ) -> bool:
+        limit = max(1, int(max_concurrent or 1))
+        wait_timeout = max(0.0, float(timeout or 0.0))
+        deadline = time.time() + wait_timeout if wait_timeout > 0 else None
+
+        while True:
+            if cancel_checker and cancel_checker():
+                return False
+
+            with self._condition:
+                now = time.time()
+                if self._active_count < limit and now >= self._next_slot_at:
+                    self._active_count += 1
+                    return True
+
+                if deadline is not None:
+                    remaining = deadline - now
+                    if remaining <= 0:
+                        self._active_count += 1
+                        logger.warning(
+                            f"[INTERACT] throttle wait exceeded for {session_id or '-'}:{label}, "
+                            "continuing fail-open"
+                        )
+                        return True
+                else:
+                    remaining = 0.25
+
+                next_gap = max(0.0, self._next_slot_at - now)
+                wait_for = min(max(0.05, next_gap), remaining) if deadline is not None else max(0.05, next_gap)
+                self._condition.wait(timeout=max(0.05, min(wait_for, 0.25)))
+
+    def _release(self, *, min_interval: float):
+        with self._condition:
+            if self._active_count > 0:
+                self._active_count -= 1
+            self._next_slot_at = max(self._next_slot_at, time.time() + max(0.0, float(min_interval or 0.0)))
+            self._condition.notify_all()
+
+
+_PAGE_INTERACTION_GATE = _PageInteractionGate()
 
 
 # ================= 工作流执行器 =================
@@ -331,6 +414,213 @@ class WorkflowExecutor:
             logger.debug("[STEALTH] 隐身模式已启用")
 
     @staticmethod
+    def _coerce_bool(value: Any, default: bool = False) -> bool:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return default
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in ("1", "true", "yes", "on"):
+                return True
+            if lowered in ("0", "false", "no", "off"):
+                return False
+        return default
+
+    @staticmethod
+    def _coerce_float(value: Any, default: float, minimum: Optional[float] = None) -> float:
+        try:
+            result = float(value)
+        except Exception:
+            result = float(default)
+        if minimum is not None:
+            result = max(float(minimum), result)
+        return result
+
+    @staticmethod
+    def _coerce_int(value: Any, default: int, minimum: Optional[int] = None) -> int:
+        try:
+            result = int(value)
+        except Exception:
+            result = int(default)
+        if minimum is not None:
+            result = max(int(minimum), result)
+        return result
+
+    def _get_page_interaction_settings(self) -> Dict[str, Any]:
+        return {
+            "enabled": self._coerce_bool(
+                BrowserConstants.get("PAGE_INTERACTION_THROTTLE_ENABLED"),
+                True,
+            ),
+            "max_concurrent": self._coerce_int(
+                BrowserConstants.get("PAGE_INTERACTION_MAX_CONCURRENT"),
+                3,
+                minimum=1,
+            ),
+            "max_wait": self._coerce_float(
+                BrowserConstants.get("PAGE_INTERACTION_MAX_WAIT"),
+                20.0,
+                minimum=0.0,
+            ),
+            "min_interval": self._coerce_float(
+                BrowserConstants.get("PAGE_INTERACTION_MIN_INTERVAL"),
+                0.25,
+                minimum=0.0,
+            ),
+            "ready_timeout": self._coerce_float(
+                BrowserConstants.get("PAGE_INTERACTION_READY_TIMEOUT"),
+                1.5,
+                minimum=0.0,
+            ),
+            "stable_samples": self._coerce_int(
+                BrowserConstants.get("PAGE_INTERACTION_STABLE_SAMPLES"),
+                2,
+                minimum=1,
+            ),
+            "sample_interval": self._coerce_float(
+                BrowserConstants.get("PAGE_INTERACTION_SAMPLE_INTERVAL"),
+                0.12,
+                minimum=0.02,
+            ),
+            "rect_tolerance": self._coerce_int(
+                BrowserConstants.get("PAGE_INTERACTION_RECT_TOLERANCE"),
+                3,
+                minimum=0,
+            ),
+        }
+
+    @contextmanager
+    def _page_interaction_slot(self, action: str, target_key: str = ""):
+        settings = self._get_page_interaction_settings()
+        if not settings["enabled"]:
+            yield True
+            return
+
+        label = f"{action}:{target_key}" if target_key else str(action or "interaction")
+        session_id = str(getattr(self.session, "id", "") or "")
+        with _PAGE_INTERACTION_GATE.hold(
+            label=label,
+            session_id=session_id,
+            max_concurrent=settings["max_concurrent"],
+            timeout=settings["max_wait"],
+            min_interval=settings["min_interval"],
+            cancel_checker=self._check_cancelled,
+        ) as acquired:
+            yield acquired
+
+    @staticmethod
+    def _is_rect_stable(previous: Dict[str, Any], current: Dict[str, Any], tolerance: int) -> bool:
+        if not previous or not current:
+            return False
+        previous_rect = previous.get("rect") or {}
+        current_rect = current.get("rect") or {}
+        for key in ("x", "y", "width", "height"):
+            if abs(int(previous_rect.get(key, 0)) - int(current_rect.get(key, 0))) > tolerance:
+                return False
+        return True
+
+    def _sample_element_interactable_state(self, ele) -> Dict[str, Any]:
+        try:
+            state = ele.run_js(
+                """
+                try {
+                    const el = this;
+                    if (!el || !el.isConnected) {
+                        return { interactable: false, connected: false };
+                    }
+                    const rect = el.getBoundingClientRect();
+                    const style = window.getComputedStyle(el);
+                    const text = [
+                        el.getAttribute('aria-label'),
+                        el.getAttribute('title'),
+                        el.getAttribute('data-testid'),
+                        el.className,
+                        el.innerText,
+                        el.textContent
+                    ].join(' ').toLowerCase();
+                    const disabled = !!el.disabled || el.getAttribute('aria-disabled') === 'true';
+                    const hidden = style.display === 'none'
+                        || style.visibility === 'hidden'
+                        || Number(style.opacity || '1') < 0.05;
+                    const pointerEventsNone = style.pointerEvents === 'none';
+                    const busy = el.getAttribute('aria-busy') === 'true'
+                        || /loading|pending|sending|uploading|disabled/.test(text);
+                    const sizeOk = rect.width >= 1 && rect.height >= 1;
+                    const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+                    const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+                    const viewportOk = rect.bottom >= 0
+                        && rect.right >= 0
+                        && rect.top <= viewportHeight
+                        && rect.left <= viewportWidth;
+                    return {
+                        interactable: !disabled && !hidden && !pointerEventsNone && !busy && sizeOk && viewportOk,
+                        connected: true,
+                        disabled,
+                        hidden,
+                        busy,
+                        pointerEventsNone,
+                        rect: {
+                            x: Math.round(rect.x || 0),
+                            y: Math.round(rect.y || 0),
+                            width: Math.round(rect.width || 0),
+                            height: Math.round(rect.height || 0)
+                        }
+                    };
+                } catch (error) {
+                    return {
+                        interactable: false,
+                        connected: false,
+                        error: String(error && error.message ? error.message : error || '')
+                    };
+                }
+                """
+            )
+        except Exception as e:
+            return {
+                "interactable": False,
+                "connected": False,
+                "error": str(e),
+            }
+        return state if isinstance(state, dict) else {"interactable": False, "connected": False}
+
+    def _wait_for_element_interactable(self, ele, target_key: str = "") -> None:
+        settings = self._get_page_interaction_settings()
+        timeout = settings["ready_timeout"]
+        if timeout <= 0:
+            return
+
+        stable_needed = settings["stable_samples"]
+        sample_interval = settings["sample_interval"]
+        tolerance = settings["rect_tolerance"]
+        stable_count = 0
+        last_state: Optional[Dict[str, Any]] = None
+        deadline = time.time() + timeout
+
+        while time.time() < deadline:
+            if self._check_cancelled():
+                return
+
+            current_state = self._sample_element_interactable_state(ele)
+            if current_state.get("interactable"):
+                stable_count = stable_count + 1 if self._is_rect_stable(last_state, current_state, tolerance) else 1
+                if stable_count >= stable_needed:
+                    return
+            else:
+                stable_count = 0
+
+            last_state = current_state
+            time.sleep(sample_interval)
+
+        logger.debug_throttled(
+            f"interaction.wait.{target_key or 'element'}",
+            f"[INTERACT] 元素稳定等待超时: target={target_key or '-'}, state={last_state}",
+            interval_sec=5.0,
+        )
+
+    @staticmethod
     def _normalize_attachment_rule_list(raw_value) -> list:
         if not isinstance(raw_value, list):
             return []
@@ -464,21 +754,24 @@ class WorkflowExecutor:
 
         self._ensure_kimi_page_capture_init_js()
         token = f"kimi_{uuid.uuid4().hex[:12]}"
-        install_result = self.tab.run_js(
-            f"return {self._KIMI_CAPTURE_BOOTSTRAP_JS.strip()}"
-        )
-        reset_result = self.tab.run_js(
-            """
-            return (function(token) {
-              const cap = window.__KIMI_CAPTURE__ = window.__KIMI_CAPTURE__ || {};
-              cap.currentToken = token;
-              cap.requests = [];
-              cap.lastResetAt = Date.now();
-              return { ok: true, token: cap.currentToken };
-            })(arguments[0]);
-            """,
-            token,
-        )
+        with self._page_interaction_slot("JS_EXEC", "kimi_capture_prepare") as acquired:
+            if not acquired or self._check_cancelled():
+                return
+            install_result = self.tab.run_js(
+                f"return {self._KIMI_CAPTURE_BOOTSTRAP_JS.strip()}"
+            )
+            reset_result = self.tab.run_js(
+                """
+                return (function(token) {
+                  const cap = window.__KIMI_CAPTURE__ = window.__KIMI_CAPTURE__ || {};
+                  cap.currentToken = token;
+                  cap.requests = [];
+                  cap.lastResetAt = Date.now();
+                  return { ok: true, token: cap.currentToken };
+                })(arguments[0]);
+                """,
+                token,
+            )
         self._kimi_capture_token = token
         if install_result is not None:
             logger.debug(f"[Executor] Kimi 页面抓流已准备: {install_result}")
@@ -1003,13 +1296,15 @@ class WorkflowExecutor:
         if self._check_cancelled():
             return
        
-        
-        if self.stealth_mode:
-            self.tab.actions.key_down(key)
-            time.sleep(random.uniform(0.05, 0.13))
-            self.tab.actions.key_up(key)
-        else:
-            self.tab.actions.key_down(key).key_up(key)
+        with self._page_interaction_slot("KEY_PRESS", str(key or "")) as acquired:
+            if not acquired or self._check_cancelled():
+                return
+            if self.stealth_mode:
+                self.tab.actions.key_down(key)
+                time.sleep(random.uniform(0.05, 0.13))
+                self.tab.actions.key_up(key)
+            else:
+                self.tab.actions.key_down(key).key_up(key)
         
         self._smart_delay(0.1, 0.2)
     
@@ -1022,19 +1317,23 @@ class WorkflowExecutor:
         if not keys:
             return
 
-        if self.stealth_mode:
-            for item in keys:
-                self.tab.actions.key_down(item)
-                time.sleep(random.uniform(0.03, 0.09))
-            time.sleep(random.uniform(0.05, 0.13))
-            for item in reversed(keys):
-                self.tab.actions.key_up(item)
-                time.sleep(random.uniform(0.02, 0.08))
-        else:
-            for item in keys:
-                self.tab.actions.key_down(item)
-            for item in reversed(keys):
-                self.tab.actions.key_up(item)
+        with self._page_interaction_slot("KEY_PRESS", "+".join(keys)) as acquired:
+            if not acquired or self._check_cancelled():
+                return
+
+            if self.stealth_mode:
+                for item in keys:
+                    self.tab.actions.key_down(item)
+                    time.sleep(random.uniform(0.03, 0.09))
+                time.sleep(random.uniform(0.05, 0.13))
+                for item in reversed(keys):
+                    self.tab.actions.key_up(item)
+                    time.sleep(random.uniform(0.02, 0.08))
+            else:
+                for item in keys:
+                    self.tab.actions.key_down(item)
+                for item in reversed(keys):
+                    self.tab.actions.key_up(item)
 
         self._smart_delay(0.1, 0.2)
 
@@ -1047,7 +1346,10 @@ class WorkflowExecutor:
         if not script:
             raise WorkflowError("js_exec_empty")
 
-        result = self.tab.run_js(script)
+        with self._page_interaction_slot("JS_EXEC", "workflow_js") as acquired:
+            if not acquired or self._check_cancelled():
+                return
+            result = self.tab.run_js(script)
         logger.debug(f"[JS_EXEC] 执行完成: {str(result)[:120]}")
 
     def _combo_contains_submit_key(self, key: Any) -> bool:
@@ -1119,39 +1421,57 @@ class WorkflowExecutor:
         """执行点击操作（v5.7 隐身模式人类化点击）"""
         if self._check_cancelled():
             return
-        
-        ele = self.finder.find_with_fallback(selector, target_key)
-        
-        if ele:
+
+        last_error = None
+        found_element = False
+        for attempt in range(2):
             try:
-                if self.stealth_mode:
-                    # 发送按钮前额外犹豫（50% 概率，带微漂移）
-                    if target_key == "send_btn" and random.random() < 0.5:
-                        hesitate = random.uniform(0.5, 1.2)
-                        logger.debug(f"[STEALTH] 发送前犹豫 {hesitate:.2f}s")
-                        self._idle_wait(hesitate)
-                    
-                    # 🆕 人类化点击（平滑移动 + CDP mousedown/mouseup 带间隔）
-                    self._stealth_click_element(ele)
-                else:
-                    if self._check_cancelled():
+                with self._page_interaction_slot("CLICK", target_key) as acquired:
+                    if not acquired or self._check_cancelled():
                         return
-                    ele.click()
-                
+
+                    ele = self.finder.find_with_fallback(selector, target_key)
+                    if not ele:
+                        break
+                    found_element = True
+
+                    self._wait_for_element_interactable(ele, target_key)
+
+                    if self.stealth_mode:
+                        if target_key == "send_btn" and random.random() < 0.5:
+                            hesitate = random.uniform(0.5, 1.2)
+                            logger.debug(f"[STEALTH] 发送前犹豫 {hesitate:.2f}s")
+                            self._idle_wait(hesitate)
+
+                        self._stealth_click_element(ele)
+                    else:
+                        if self._check_cancelled():
+                            return
+                        ele.click()
+
                 self._smart_delay(
                     BrowserConstants.ACTION_DELAY_MIN,
                     BrowserConstants.ACTION_DELAY_MAX
                 )
-            
+                return
+
             except Exception as click_err:
+                last_error = click_err
                 logger.debug(f"点击异常: {click_err}")
-                if target_key == "send_btn":
-                    logger.warning(f"[CLICK] 发送按钮点击失败，降级到 Enter 键: {click_err}")
-                    self._execute_keypress("Enter")
-                elif self.stealth_mode:
-                    # 隐身模式下非发送按钮点击失败，向上抛出（不偷偷用 ele.click）
-                    raise
-        
+                if attempt == 0 and target_key != "send_btn":
+                    logger.warning(
+                        f"[CLICK] {target_key or selector} 点击失败，等待后重试一次: {click_err}"
+                    )
+                    time.sleep(0.12)
+                    continue
+                break
+
+        if found_element:
+            if target_key == "send_btn":
+                logger.warning(f"[CLICK] 发送按钮点击失败，降级到 Enter 键: {last_error}")
+                self._execute_keypress("Enter")
+            elif self.stealth_mode and last_error is not None:
+                raise last_error
         elif target_key == "send_btn":
             self._execute_keypress("Enter")
         
@@ -1183,7 +1503,10 @@ class WorkflowExecutor:
         click_y = y + random.randint(-radius, radius) if radius > 0 else y
 
         try:
-            self._human_cdp_click_at(click_x, click_y)
+            with self._page_interaction_slot("COORD_CLICK", "coord_click") as acquired:
+                if not acquired or self._check_cancelled():
+                    return
+                self._human_cdp_click_at(click_x, click_y)
             self._smart_delay(
                 BrowserConstants.ACTION_DELAY_MIN,
                 BrowserConstants.ACTION_DELAY_MAX
@@ -1217,10 +1540,13 @@ class WorkflowExecutor:
             raise WorkflowError("coord_scroll_invalid_position")
 
         try:
-            if self.stealth_mode:
-                self._human_scroll_at(start_x, start_y, end_x, end_y)
-            else:
-                self._direct_scroll_at(start_x, start_y, end_x, end_y)
+            with self._page_interaction_slot("COORD_SCROLL", "coord_scroll") as acquired:
+                if not acquired or self._check_cancelled():
+                    return
+                if self.stealth_mode:
+                    self._human_scroll_at(start_x, start_y, end_x, end_y)
+                else:
+                    self._direct_scroll_at(start_x, start_y, end_x, end_y)
 
             self._smart_delay(
                 BrowserConstants.ACTION_DELAY_MIN,
@@ -2431,29 +2757,33 @@ class WorkflowExecutor:
         if self._check_cancelled():
             return
 
-        ele = self.finder.find_with_fallback(selector, target_key)
-        if not ele:
-            if not optional:
-                raise ElementNotFoundError("找不到输入框")
-            return
+        with self._page_interaction_slot("FILL_INPUT", target_key) as acquired:
+            if not acquired or self._check_cancelled():
+                return
 
-        self._last_input_element = ele
-        self._last_input_target_key = target_key or ""
+            ele = self.finder.find_with_fallback(selector, target_key)
+            if not ele:
+                if not optional:
+                    raise ElementNotFoundError("找不到输入框")
+                return
 
-        # 🆕 隐身模式：人类化点击聚焦输入框 + 剪贴板粘贴
-        if self.stealth_mode:
-            self._stealth_click_element(ele)
-            time.sleep(random.uniform(0.1, 0.25))
-            self._text_handler.fill_via_clipboard_no_click(ele, text)
-        else:
-            self._text_handler.fill_via_js(ele, text)   
-        
-        # 粘贴图片
-        if hasattr(self, '_context') and self._context:
-            images = self._context.get('images', [])
-            if images:
-                if not self._image_handler.paste_images(images):
-                    raise WorkflowError("image_paste_unconfirmed")
+            self._last_input_element = ele
+            self._last_input_target_key = target_key or ""
+
+            self._wait_for_element_interactable(ele, target_key)
+
+            if self.stealth_mode:
+                self._stealth_click_element(ele)
+                time.sleep(random.uniform(0.1, 0.25))
+                self._text_handler.fill_via_clipboard_no_click(ele, text)
+            else:
+                self._text_handler.fill_via_js(ele, text)
+
+            if hasattr(self, '_context') and self._context:
+                images = self._context.get('images', [])
+                if images:
+                    if not self._image_handler.paste_images(images):
+                        raise WorkflowError("image_paste_unconfirmed")
         
         # ===== 隐身模式：粘贴后模拟"人类阅读/检查"延迟（带微漂移）=====
         if self.stealth_mode and len(text) > 0:

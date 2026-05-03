@@ -727,7 +727,7 @@
       "mode": "simple",
       "trigger": {
         "type": "page_check",
-        "value": "出了点问题 || 重试",
+        "value": "出了点问题",
         "command_id": "",
         "action_ref": "",
         "match_rule": "equals",
@@ -751,7 +751,8 @@
         "interrupt_policy": "auto",
         "interrupt_message": "",
         "stable_for_sec": 0,
-        "check_while_busy_workflow": true
+        "check_while_busy_workflow": true,
+        "probe_js": ""
       },
       "actions": [
         {
@@ -778,8 +779,8 @@
       "group_name": "gemini",
       "script": "",
       "script_lang": "javascript",
-      "last_triggered": 1777533632.8937123,
-      "trigger_count": 1,
+      "last_triggered": 1777786374.5675476,
+      "trigger_count": 16,
       "stop_on_error": false,
       "log_enabled": true,
       "log_level": "GLOBAL"
@@ -969,8 +970,8 @@
       "script": "",
       "script_lang": "javascript",
       "id": "cmd_0020e346",
-      "last_triggered": 1777537443.4464617,
-      "trigger_count": 2,
+      "last_triggered": 1777737008.433228,
+      "trigger_count": 5,
       "log_enabled": true,
       "log_level": "GLOBAL"
     },
@@ -1017,8 +1018,8 @@
       "group_name": "gemini",
       "script": "",
       "script_lang": "javascript",
-      "last_triggered": 1777537453.8116539,
-      "trigger_count": 16,
+      "last_triggered": 1777787257.24123,
+      "trigger_count": 20750,
       "log_enabled": false,
       "log_level": "GLOBAL",
       "stop_on_error": false

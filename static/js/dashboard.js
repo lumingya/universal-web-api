@@ -752,7 +752,7 @@ const ENV_CONFIG_SCHEMA = {
         apply: 'service',
         label: '函数调用',
         icon: '🧰',
-        desc: '控制函数调用的内部修复提示词与重试策略。',
+        desc: '控制函数调用的内部修复、重试策略与工具结果上限。',
         items: {
             TOOL_CALLING_RETRY_STRATEGY: {
                 label: '重试策略',
@@ -771,6 +771,15 @@ const ENV_CONFIG_SCHEMA = {
                 min: 0,
                 max: 5,
                 default: 2
+            },
+            TOOL_CALLING_MAX_TOOL_RESULT_CHARS: {
+                label: '单条 Tool Result 上限',
+                unit: '字符',
+                desc: '单条函数调用结果超过此字符数时，后端会直接返回明确错误，避免把超大结果继续塞给网页模型。默认 300000，可按需要调大。',
+                type: 'number',
+                min: 1,
+                step: 10000,
+                default: 300000
             }
         }
     },

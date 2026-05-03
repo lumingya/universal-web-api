@@ -155,7 +155,7 @@
         },
         "file_paste": {
           "enabled": true,
-          "threshold": 50000,
+          "threshold": 129999,
           "hint_text": "完全专注于文件内容",
           "post_upload_settle": 5
         }
@@ -948,8 +948,8 @@
           "mode": "all"
         },
         "file_paste": {
-          "enabled": false,
-          "threshold": 50000,
+          "enabled": true,
+          "threshold": 150000,
           "hint_text": "完全专注于文件内容"
         }
       }
