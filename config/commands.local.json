@@ -133,12 +133,6 @@
       "group_name": "arena"
     },
     {
-      "id": "cmd_hotmail_signup_test",
-      "name": "Hotmail注册测试工作流",
-      "enabled": false,
-      "group_name": "自动化"
-    },
-    {
       "id": "cmd_72ae0f7d",
       "name": "ds刷新",
       "enabled": true,

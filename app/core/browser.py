@@ -2706,7 +2706,8 @@ class BrowserCore:
         # 确保目录存在
         save_dir = Path("download_images")
         save_dir.mkdir(exist_ok=True)
-        
+        canvas_image_max_size = AppConfig.get_canvas_image_max_size()
+
         for img in images:
             if img.get('kind') != 'url':
                 result.append(img)
@@ -2724,15 +2725,15 @@ class BrowserCore:
             try:
                 # 🔑 在浏览器中用 Canvas 加载并压缩图片
                 js_code = """
-                (async function(imageUrl) {
+                (async function(imageUrl, configuredMaxSize) {
                     return new Promise((resolve) => {
                         const img = new Image();
                         img.crossOrigin = 'anonymous';
-                        
+
                         img.onload = function() {
                             try {
                                 // 限制最大尺寸
-                                const MAX_SIZE = 1024;
+                                const MAX_SIZE = Math.max(1, Math.floor(Number(configuredMaxSize) || 1024));
                                 let width = img.naturalWidth;
                                 let height = img.naturalHeight;
                                 
@@ -2774,7 +2775,7 @@ class BrowserCore:
                         setTimeout(() => resolve({ success: false, error: 'Timeout' }), 15000);
                         img.src = imageUrl;
                     });
-                })(arguments[0]);
+                })(arguments[0], arguments[1]);
                 """
                 
                 # ===== PROBE: 验证 run_js 是否等待 Promise，并检查图片/Fetch 可用性 =====
@@ -2841,7 +2842,7 @@ class BrowserCore:
                 probe_result = tab.run_js(probe_js, url)
                 logger.info(f"[PROBE_JS] probe_result_type={type(probe_result).__name__}, value={str(probe_result)[:500]}")
 
-                download_result = tab.run_js(js_code, url)
+                download_result = tab.run_js(js_code, url, canvas_image_max_size)
 
                 logger.info(f"[PROBE_JS] canvas_result_type={type(download_result).__name__}, value={str(download_result)[:300]}")                
                 if download_result and download_result.get('success'):

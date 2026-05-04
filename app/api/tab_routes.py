@@ -32,7 +32,7 @@ from app.services.request_manager import (
 )
 from app.services.tool_calling import (
     build_tool_completion_response,
-    complete_tool_calling_roundtrip,
+    complete_tool_calling_roundtrip_async,
     decode_browser_non_stream_payload,
     has_tool_calling_request,
     iter_tool_stream_chunks,
@@ -1155,7 +1155,7 @@ def _extract_assistant_content(response: Dict[str, Any]) -> str:
         return ""
 
 
-def _run_tool_calling_sync_for_tab(
+async def _run_tool_calling_async_for_tab(
     browser,
     tab_index: int,
     body: ChatRequest,
@@ -1177,27 +1177,32 @@ def _run_tool_calling_sync_for_tab(
     except Exception as e:
         logger.debug(f"[tab] 请求消息摘要生成失败: {e}")
 
-    parsed = complete_tool_calling_roundtrip(
+    async def _round_executor(browser_messages: List[Dict[str, str]]) -> str:
+        return await asyncio.to_thread(
+            lambda: _extract_assistant_content(
+                _execute_browser_non_stream_for_tab(
+                    browser=browser,
+                    tab_index=tab_index,
+                    messages=browser_messages,
+                    request_id=request_id,
+                    preset_name=body.preset_name,
+                    stop_checker=stop_checker,
+                )
+            )
+        )
+
+    parsed = await complete_tool_calling_roundtrip_async(
         messages=body.messages,
         tools=tools,
         tool_choice=tool_choice,
         parallel_tool_calls=body.parallel_tool_calls,
-        round_executor=lambda browser_messages: _extract_assistant_content(
-            _execute_browser_non_stream_for_tab(
-                browser=browser,
-                tab_index=tab_index,
-                messages=browser_messages,
-                request_id=request_id,
-                preset_name=body.preset_name,
-                stop_checker=stop_checker,
-            )
-        ),
+        round_executor=_round_executor,
         stop_checker=stop_checker,
     )
     return build_tool_completion_response(body.model, parsed)
 
 
-def _run_tool_calling_sync_for_route_domain(
+async def _run_tool_calling_async_for_route_domain(
     browser,
     route_domain: str,
     body: ChatRequest,
@@ -1219,21 +1224,26 @@ def _run_tool_calling_sync_for_route_domain(
     except Exception as e:
         logger.debug(f"[route] 请求消息摘要生成失败: {e}")
 
-    parsed = complete_tool_calling_roundtrip(
+    async def _round_executor(browser_messages: List[Dict[str, str]]) -> str:
+        return await asyncio.to_thread(
+            lambda: _extract_assistant_content(
+                _execute_browser_non_stream_for_route_domain(
+                    browser=browser,
+                    route_domain=route_domain,
+                    messages=browser_messages,
+                    request_id=request_id,
+                    preset_name=body.preset_name,
+                    stop_checker=stop_checker,
+                )
+            )
+        )
+
+    parsed = await complete_tool_calling_roundtrip_async(
         messages=body.messages,
         tools=tools,
         tool_choice=tool_choice,
         parallel_tool_calls=body.parallel_tool_calls,
-        round_executor=lambda browser_messages: _extract_assistant_content(
-            _execute_browser_non_stream_for_route_domain(
-                browser=browser,
-                route_domain=route_domain,
-                messages=browser_messages,
-                request_id=request_id,
-                preset_name=body.preset_name,
-                stop_checker=stop_checker,
-            )
-        ),
+        round_executor=_round_executor,
         stop_checker=stop_checker,
     )
     return build_tool_completion_response(body.model, parsed)
@@ -1254,8 +1264,7 @@ async def _complete_tool_calling_with_tab_index(
         browser = get_browser(auto_connect=False)
         request_manager.start_request(ctx)
 
-        response = await asyncio.to_thread(
-            _run_tool_calling_sync_for_tab,
+        response = await _run_tool_calling_async_for_tab(
             browser,
             tab_index,
             body,
@@ -1300,8 +1309,7 @@ async def _complete_tool_calling_with_route_domain(
         browser = get_browser(auto_connect=False)
         request_manager.start_request(ctx)
 
-        response = await asyncio.to_thread(
-            _run_tool_calling_sync_for_route_domain,
+        response = await _run_tool_calling_async_for_route_domain(
             browser,
             route_domain,
             body,

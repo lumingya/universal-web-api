@@ -153,7 +153,15 @@ class AppConfig:
     @staticmethod
     def get_max_html_chars() -> int:
         return int(os.getenv("MAX_HTML_CHARS", "120000"))
-    
+
+    @staticmethod
+    def get_canvas_image_max_size() -> int:
+        try:
+            value = int(os.getenv("CANVAS_IMAGE_MAX_SIZE", "1024"))
+        except Exception:
+            value = 1024
+        return max(1, value)
+
     # ===== 配置文件路径 =====
     @staticmethod
     def get_sites_config_file() -> str:

@@ -1543,10 +1543,10 @@
         },
         "workflow": [
           {
-            "action": "JS_EXEC",
-            "target": "",
+            "action": "KEY_PRESS",
+            "target": "Ctrl+K",
             "optional": false,
-            "value": "window.location.assign('https://www.kimi.com/?chat_enter_method=new_chat');"
+            "value": null
           },
           {
             "action": "WAIT",
@@ -1589,113 +1589,6 @@
             "silence_threshold": 3,
             "response_interval": 0.5
           }
-        },
-        "image_extraction": {
-          "enabled": false,
-          "modalities": {
-            "image": false,
-            "audio": false,
-            "video": false
-          },
-          "selector": "img",
-          "audio_selector": "audio, audio source",
-          "video_selector": "video, video source",
-          "container_selector": null,
-          "debounce_seconds": 2,
-          "wait_for_load": true,
-          "load_timeout_seconds": 5,
-          "download_blobs": true,
-          "max_size_mb": 10,
-          "src_allow_patterns": [],
-          "mode": "all"
-        },
-        "file_paste": {
-          "enabled": false,
-          "threshold": 50000,
-          "hint_text": "完全专注于文件内容"
-        }
-      }
-    },
-    "default_preset": "主预设"
-  },
-  "www.google.com": {
-    "presets": {
-      "主预设": {
-        "selectors": {
-          "input_box": "textarea",
-          "send_btn": "button[type=\"submit\"]",
-          "result_container": "div",
-          "new_chat_btn": null,
-          "message_wrapper": null,
-          "generating_indicator": null,
-          "upload_btn": null,
-          "file_input": "input[type=\"file\"]",
-          "drop_zone": null
-        },
-        "workflow": [
-          {
-            "action": "CLICK",
-            "target": "new_chat_btn",
-            "optional": true,
-            "value": null
-          },
-          {
-            "action": "WAIT",
-            "target": "",
-            "optional": false,
-            "value": "0.5"
-          },
-          {
-            "action": "FILL_INPUT",
-            "target": "input_box",
-            "optional": false,
-            "value": null
-          },
-          {
-            "action": "CLICK",
-            "target": "send_btn",
-            "optional": true,
-            "value": null
-          },
-          {
-            "action": "KEY_PRESS",
-            "target": "Enter",
-            "optional": true,
-            "value": null
-          },
-          {
-            "action": "STREAM_WAIT",
-            "target": "result_container",
-            "optional": false,
-            "value": null
-          }
-        ],
-        "stealth": false,
-        "stream_config": {
-          "mode": "dom",
-          "hard_timeout": 300,
-          "send_confirmation": {
-            "attachment_sensitivity": "medium",
-            "post_click_observe_window": 1.8,
-            "pre_retry_probe_window": 0.12,
-            "retry_observe_window": 0.9,
-            "attachment_observe_window": 6,
-            "trust_network_activity": true,
-            "trust_generating_indicator": true,
-            "trust_send_disabled_with_input_shrink": true
-          },
-          "attachment_monitor": {
-            "root_selectors": [],
-            "attachment_selectors": [],
-            "pending_selectors": [],
-            "busy_text_markers": [],
-            "send_button_disabled_markers": [],
-            "require_attachment_present": false,
-            "continue_once_on_unconfirmed_send": true,
-            "idle_timeout": 8,
-            "hard_max_wait": 90
-          },
-          "network": null
         },
         "image_extraction": {
           "enabled": false,

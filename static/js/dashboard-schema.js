@@ -469,6 +469,15 @@ const ENV_CONFIG_SCHEMA = {
                 type: 'number',
                 min: 10000,
                 default: 120000
+            },
+            CANVAS_IMAGE_MAX_SIZE: {
+                label: 'Canvas 图片最大边长',
+                unit: 'px',
+                desc: '浏览器内下载 URL 图片时，Canvas 压缩后的最长边。默认 1024；调大可保留更多细节，但会增加返回体和内存占用。',
+                type: 'number',
+                min: 1,
+                step: 256,
+                default: 1024
             }
         }
     },

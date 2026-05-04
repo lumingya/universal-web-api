@@ -1362,7 +1362,22 @@ class WorkflowExecutor:
 
         parts = [part.strip() for part in raw.split("+") if part.strip()]
         normalized_parts = [self._normalize_key_name(part) for part in parts]
-        return [part for part in normalized_parts if part]
+        normalized_parts = [part for part in normalized_parts if part]
+        if not normalized_parts:
+            return []
+
+        modifiers = {part for part in normalized_parts if part in {"Ctrl", "Alt", "Meta", "Shift"}}
+        if not modifiers:
+            return normalized_parts
+
+        allow_uppercase_letters = "Shift" in modifiers
+        adjusted_parts = []
+        for part in normalized_parts:
+            if len(part) == 1 and part.isalpha():
+                adjusted_parts.append(part.upper() if allow_uppercase_letters else part.lower())
+            else:
+                adjusted_parts.append(part)
+        return adjusted_parts
 
     def _normalize_key_name(self, key: str) -> str:
         normalized = str(key or "").strip()
@@ -1410,7 +1425,7 @@ class WorkflowExecutor:
             return key_map[lower_name]
 
         if len(normalized) == 1:
-            return normalized.upper()
+            return normalized
 
         if lower_name.startswith("f") and lower_name[1:].isdigit():
             return lower_name.upper()
