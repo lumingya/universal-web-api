@@ -55,7 +55,7 @@ def _trim_middle_text(text: str, limit: int) -> str:
 
 
 def _prepare_tool_result_content(name: str, content: str) -> str:
-    text = str(content or "")
+    text = _sanitize_tool_result_content(str(content or ""))
     limit = _get_max_tool_result_chars()
     if len(text) <= limit:
         return text
@@ -67,6 +67,47 @@ def _prepare_tool_result_content(name: str, content: str) -> str:
     )
     logger.error(f"[tool_calling] {message}")
     raise RuntimeError(message)
+
+
+def _sanitize_tool_result_content(content: str) -> str:
+    text = str(content or "")
+    if not text:
+        return text
+
+    text = re.sub(
+        r"data:image/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/=_-]{80,}",
+        "[image omitted: data_uri]",
+        text,
+    )
+    text = re.sub(
+        r"!\[[^\]\r\n]{0,120}\]\((?:data:image/[^\s)]+|https?://[^\s)]{80,})\)",
+        "[image omitted]",
+        text,
+    )
+    text = re.sub(
+        r"\[CQ:image[^\]\r\n]*\]",
+        "[image omitted]",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"\[(?:图片|image)\s*:\s*[^\]\r\n]{16,}\]",
+        "[image omitted]",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"\bhttps?://[^\s\"'<>()\]]{80,}\.(?:png|jpe?g|webp|gif|bmp|avif)(?:\?[^\s\"'<>()\]]*)?",
+        "[image omitted: url]",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"\b[A-Za-z0-9+/=_-]{512,}\b",
+        "[base64 omitted]",
+        text,
+    )
+    return text
 
 
 def normalize_tool_request(

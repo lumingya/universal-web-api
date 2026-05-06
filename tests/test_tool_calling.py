@@ -46,6 +46,20 @@ class ToolCallingTests(unittest.TestCase):
         self.assertIn("Tool call example:", prompt)
         self.assertIn('"name": "search"', prompt)
 
+    def test_tool_result_image_placeholders_are_shortened(self):
+        raw = (
+            "before [图片: 385ECD79A605068752A50B63013EB98E.jpg] "
+            "data:image/png;base64," + ("A" * 600) + " "
+            "[CQ:image,file=abc,url=https://example.com/signed-image.jpg?token=" + ("x" * 120) + "] after"
+        )
+        cleaned = tc._prepare_tool_result_content("search", raw)
+        self.assertIn("before", cleaned)
+        self.assertIn("after", cleaned)
+        self.assertNotIn("385ECD79A605068752A50B63013EB98E.jpg", cleaned)
+        self.assertNotIn("data:image/png;base64", cleaned)
+        self.assertNotIn("[CQ:image", cleaned)
+        self.assertLess(len(cleaned), 140)
+
     def test_additional_properties_are_stripped(self):
         parsed = tc.complete_tool_calling_roundtrip(
             messages=[{"role": "user", "content": "find docs"}],
