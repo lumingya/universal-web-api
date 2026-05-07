@@ -5,6 +5,7 @@ window.FilePastePanel = {
     props: {
         sites: { type: Object, required: true },
         currentDomain: { type: String, default: null },
+        selectedPreset: { type: String, default: null },
         collapsed: { type: Boolean, default: true }
     },
     emits: ['update:collapsed'],
@@ -14,8 +15,24 @@ window.FilePastePanel = {
                 enabled: false,
                 threshold: 50000,
                 hint_text: '完全专注于文件内容'
-            }
+            },
+            domainPresetSelections: {}
         };
+    },
+    watch: {
+        sites: {
+            handler() {
+                this.syncPresetSelections();
+            },
+            deep: true,
+            immediate: true
+        },
+        currentDomain() {
+            this.syncPresetSelections();
+        },
+        selectedPreset() {
+            this.syncPresetSelections();
+        }
     },
     computed: {
         domains() {
@@ -35,6 +52,90 @@ window.FilePastePanel = {
             this.$emit('update:collapsed', !this.collapsed);
         },
 
+        syncPresetSelections() {
+            const nextSelections = {};
+            for (const domain of this.domains) {
+                const presetNames = this.getPresetNames(domain);
+                if (!presetNames.length) continue;
+
+                if (domain === this.currentDomain) {
+                    const currentPreset = this._normalizePresetName(domain, this.selectedPreset);
+                    if (currentPreset) {
+                        nextSelections[domain] = currentPreset;
+                        continue;
+                    }
+                }
+
+                const existing = this._normalizePresetName(domain, this.domainPresetSelections[domain]);
+                if (existing) {
+                    nextSelections[domain] = existing;
+                    continue;
+                }
+
+                const fallback = this._getDefaultPresetName(domain);
+                if (fallback) {
+                    nextSelections[domain] = fallback;
+                }
+            }
+            this.domainPresetSelections = nextSelections;
+        },
+
+        getPresetNames(domain) {
+            const site = this.sites[domain];
+            if (!site || !site.presets || typeof site.presets !== 'object') {
+                return [];
+            }
+            return Object.keys(site.presets);
+        },
+
+        _normalizePresetName(domain, presetName) {
+            const presetNames = this.getPresetNames(domain);
+            const candidate = typeof presetName === 'string' ? presetName.trim() : '';
+            if (candidate && presetNames.includes(candidate)) {
+                return candidate;
+            }
+            return '';
+        },
+
+        _getDefaultPresetName(domain) {
+            const site = this.sites[domain];
+            const presetNames = this.getPresetNames(domain);
+            if (!site || !presetNames.length) return '';
+
+            const defaultPreset = this._normalizePresetName(domain, site.default_preset);
+            if (defaultPreset) return defaultPreset;
+            if (presetNames.includes('主预设')) return '主预设';
+            return presetNames[0] || '';
+        },
+
+        getResolvedPresetName(domain) {
+            if (domain === this.currentDomain) {
+                const currentPreset = this._normalizePresetName(domain, this.selectedPreset);
+                if (currentPreset) return currentPreset;
+            }
+
+            const localPreset = this._normalizePresetName(domain, this.domainPresetSelections[domain]);
+            if (localPreset) return localPreset;
+
+            return this._getDefaultPresetName(domain);
+        },
+
+        setViewedPreset(domain, presetName) {
+            if (domain === this.currentDomain) return;
+
+            const normalized = this._normalizePresetName(domain, presetName);
+            if (!normalized) return;
+
+            this.domainPresetSelections = {
+                ...this.domainPresetSelections,
+                [domain]: normalized
+            };
+        },
+
+        getRowKey(domain) {
+            return `${domain}::${this.getResolvedPresetName(domain) || 'flat'}`;
+        },
+
         /**
          * 获取指定站点的活跃预设配置（可变引用）
          * 查找顺序：ConfigTab 选中的预设 → 站点默认预设 → 主预设 → 第一个预设
@@ -46,14 +147,9 @@ window.FilePastePanel = {
             const presets = site.presets;
             if (!presets) return site; // 兼容旧格式（无 presets 的扁平结构）
 
-            // 如果是当前选中的站点，尝试使用 ConfigTab 选中的预设
-            if (domain === this.currentDomain) {
-                try {
-                    const configTab = this.$parent?.$refs?.configTab;
-                    if (configTab && configTab.selectedPreset && presets[configTab.selectedPreset]) {
-                        return presets[configTab.selectedPreset];
-                    }
-                } catch (e) { /* 忽略 */ }
+            const resolvedPreset = this.getResolvedPresetName(domain);
+            if (resolvedPreset && presets[resolvedPreset]) {
+                return presets[resolvedPreset];
             }
 
             // 回退：默认预设 → 主预设 → 第一个预设
@@ -152,7 +248,7 @@ window.FilePastePanel = {
 
                 <!-- 站点列表 -->
                 <div v-else class="space-y-2 max-h-96 overflow-auto">
-                    <div v-for="domain in domains" :key="domain"
+                    <div v-for="domain in domains" :key="getRowKey(domain)"
                          :class="['border dark:border-gray-700 rounded-lg p-3 transition-colors bg-gray-50/50 dark:bg-gray-900/30',
                                   domain === currentDomain ? 'border-blue-400 dark:border-blue-500 ring-1 ring-blue-200 dark:ring-blue-800' : 'hover:border-blue-300 dark:hover:border-blue-600']">
                         <div class="flex items-center gap-4">
@@ -165,6 +261,22 @@ window.FilePastePanel = {
                             <!-- 域名 -->
                             <div class="flex-1 min-w-0">
                                 <span class="text-sm font-medium text-gray-900 dark:text-white truncate block">{{ domain }}</span>
+                                <div v-if="getPresetNames(domain).length > 0" class="mt-1 flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+                                    <span class="whitespace-nowrap">预设</span>
+                                    <span v-if="domain === currentDomain"
+                                          class="inline-flex items-center rounded border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/20 px-2 py-0.5 text-blue-700 dark:text-blue-300">
+                                        {{ getResolvedPresetName(domain) || '主预设' }}
+                                    </span>
+                                    <select v-else-if="getPresetNames(domain).length > 1"
+                                            :value="getResolvedPresetName(domain)"
+                                            @change="setViewedPreset(domain, $event.target.value)"
+                                            class="border dark:border-gray-600 px-2 py-0.5 rounded text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent">
+                                        <option v-for="preset in getPresetNames(domain)" :key="preset" :value="preset">{{ preset }}</option>
+                                    </select>
+                                    <span v-else class="inline-flex items-center rounded border border-gray-200 dark:border-gray-700 bg-white/70 dark:bg-gray-800/70 px-2 py-0.5">
+                                        {{ getResolvedPresetName(domain) || '主预设' }}
+                                    </span>
+                                </div>
                             </div>
 
                             <!-- 阈值输入 -->

@@ -672,6 +672,7 @@ window.ConfigTab = {
                 <file-paste-panel v-if="presetConfig"
                     :sites="$parent.sites"
                     :current-domain="currentDomain"
+                    :selected-preset="selectedPreset"
                     :collapsed="filePasteCollapsed"
                     @update:collapsed="filePasteCollapsed = $event"
                 />
