@@ -949,7 +949,7 @@
         },
         "file_paste": {
           "enabled": true,
-          "threshold": 150000,
+          "threshold": 163840,
           "hint_text": "完全专注于文件内容"
         }
       }
