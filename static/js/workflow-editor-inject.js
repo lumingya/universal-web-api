@@ -18,14 +18,20 @@
         COORD_SCROLL: { color: 'rgba(14, 165, 233, 0.18)', border: '#0EA5E9', name: '模拟滑动' },
         CLICK: { color: 'rgba(59, 130, 246, 0.15)', border: '#3B82F6', name: '点击' },
         INPUT: { color: 'rgba(16, 185, 129, 0.15)', border: '#10B981', name: '输入' },
-        READ: { color: 'rgba(139, 92, 246, 0.15)', border: '#8B5CF6', name: '读取' }
+        READ: { color: 'rgba(139, 92, 246, 0.15)', border: '#8B5CF6', name: '读取' },
+        WAIT: { color: 'rgba(245, 158, 11, 0.18)', border: '#F59E0B', name: '等待' },
+        KEY: { color: 'rgba(236, 72, 153, 0.18)', border: '#EC4899', name: '按键' },
+        SCRIPT: { color: 'rgba(99, 102, 241, 0.18)', border: '#6366F1', name: '脚本' }
     };
     const VISUAL_ACTION_DEFS = [
         { ballType: 'COORD_CLICK', workflowAction: 'COORD_CLICK', toolbarAction: 'add-coord-click', toolbarLabel: '+ 坐标点击', menuLabel: '坐标点击' },
         { ballType: 'COORD_SCROLL', workflowAction: 'COORD_SCROLL', toolbarAction: 'add-coord-scroll', toolbarLabel: '+ 滑动', menuLabel: '滑动' },
         { ballType: 'CLICK', workflowAction: 'CLICK', toolbarAction: 'add-click', toolbarLabel: '+ 点击', menuLabel: '点击' },
         { ballType: 'INPUT', workflowAction: 'FILL_INPUT', toolbarAction: 'add-input', toolbarLabel: '+ 输入', menuLabel: '输入' },
-        { ballType: 'READ', workflowAction: 'STREAM_WAIT', toolbarAction: 'add-read', toolbarLabel: '+ 读取', menuLabel: '读取' }
+        { ballType: 'READ', workflowAction: 'STREAM_WAIT', toolbarAction: 'add-read', toolbarLabel: '+ 读取', menuLabel: '读取' },
+        { ballType: 'WAIT', workflowAction: 'WAIT', toolbarAction: 'add-wait', toolbarLabel: '+ 等待', menuLabel: '等待' },
+        { ballType: 'KEY', workflowAction: 'KEY_PRESS', toolbarAction: 'add-key', toolbarLabel: '+ 按键', menuLabel: '按键' },
+        { ballType: 'SCRIPT', workflowAction: 'JS_EXEC', toolbarAction: 'add-script', toolbarLabel: '+ 脚本', menuLabel: '脚本' }
     ];
     const VISUAL_ACTION_BY_TOOLBAR_ACTION = Object.fromEntries(
         VISUAL_ACTION_DEFS.map(def => [def.toolbarAction, def])
@@ -173,6 +179,18 @@
       }
       .wfe-menu-input:focus { outline: none; border-color: #3b82f6; }
       .wfe-menu-input.wide { width: 140px; text-align: left; }
+      .wfe-menu-textarea {
+        width: 100%;
+        min-height: 108px;
+        border: 1px solid #d1d5db;
+        border-radius: 8px;
+        padding: 8px 10px;
+        font-size: 12px;
+        line-height: 1.55;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        resize: vertical;
+      }
+      .wfe-menu-textarea:focus { outline: none; border-color: #3b82f6; }
       
       .wfe-divider { height: 1px; background: #f3f4f6; margin: 4px 0; }
       .wfe-menu-item.danger { color: #dc2626; }
@@ -678,7 +696,14 @@
         });
       }
 
-      if (ball.type === 'CLICK') {
+      if (ball.type === 'WAIT') {
+        newWorkflow.push({
+          action: 'WAIT',
+          target: '',
+          optional: !!ball.config.optional,
+          value: Number(ball.config.wait_seconds || 0)
+        });
+      } else if (ball.type === 'CLICK') {
         if (ball.config.selector && targetKey) {
           selectors[targetKey] = ball.config.selector;
         }
@@ -717,6 +742,20 @@
           target: targetKey || 'input_box',
           optional: !!ball.config.optional,
           value: ball.config.text || null
+        });
+      } else if (ball.type === 'KEY') {
+        newWorkflow.push({
+          action: 'KEY_PRESS',
+          target: String(ball.config.key || '').trim() || 'Enter',
+          optional: !!ball.config.optional,
+          value: null
+        });
+      } else if (ball.type === 'SCRIPT') {
+        newWorkflow.push({
+          action: 'JS_EXEC',
+          target: '',
+          optional: !!ball.config.optional,
+          value: String(ball.config.script || '').trim() || 'return document.title;'
         });
       } else if (ball.type === 'READ') {
         newWorkflow.push({
@@ -1021,11 +1060,17 @@
                 endX: '',
                 endY: '',
                 text: '',
+                wait_seconds: 1,
+                key: 'Enter',
+                script: 'return document.title;',
                 selector: '',
                 targetKey: '',
                 optional: false,
                 ...opts.config
             };
+            if (this.type === 'WAIT' && opts.config?.delay_ms == null) {
+                this.config.delay_ms = 0;
+            }
 
             this.element = null;
             this.endElement = null;
@@ -1202,6 +1247,12 @@
           if (this.type === 'COORD_SCROLL') {
               this.element.textContent = `S${n}`;
               this.endElement.textContent = `E${n}`;
+          } else if (this.type === 'WAIT') {
+              this.element.textContent = `W${n}`;
+          } else if (this.type === 'KEY') {
+              this.element.textContent = `K${n}`;
+          } else if (this.type === 'SCRIPT') {
+              this.element.textContent = `J${n}`;
           } else {
               this.element.textContent = String(n);
           }
@@ -1281,6 +1332,12 @@
         data.x = Math.round(this.x + BALL_RADIUS);
         data.y = Math.round(this.y + BALL_RADIUS);
         data.text = this.config.text;
+      } else if (this.type === 'WAIT') {
+        data.wait_seconds = Number(this.config.wait_seconds || 0);
+      } else if (this.type === 'KEY') {
+        data.key = this.config.key;
+      } else if (this.type === 'SCRIPT') {
+        data.script = this.config.script;
       } else if (this.type === 'READ') {
         data.selector = this.config.selector;
       }
@@ -1316,6 +1373,9 @@
     
     const tc = TYPES[ball.type];
     const menu = el('div', { className: 'wfe-menu' });
+    if (ball.type === 'SCRIPT') {
+      menu.style.minWidth = '360px';
+    }
     
     menu.appendChild(el('div', { className: 'wfe-menu-header' }, [
       el('div', { className: 'wfe-menu-title' }, [`步骤 #${ball.seq}：${tc.name}`]),
@@ -1354,7 +1414,7 @@
     body.appendChild(el('div', { className: 'wfe-divider' }));
     
     // 类型特定
-    if (!['COORD_CLICK', 'COORD_SCROLL'].includes(ball.type)) {
+    if (['CLICK', 'INPUT', 'READ'].includes(ball.type)) {
       const keyInput = el('input', {
         type: 'text',
         className: 'wfe-menu-input wide',
@@ -1387,7 +1447,23 @@
 
     body.appendChild(el('div', { className: 'wfe-divider' }));
 
-    if (ball.type === 'CLICK' || ball.type === 'COORD_CLICK') {
+    if (ball.type === 'WAIT') {
+      const waitInput = el('input', {
+        type: 'number',
+        className: 'wfe-menu-input',
+        value: Number(ball.config.wait_seconds || 0),
+        min: 0,
+        step: 0.1
+      });
+      waitInput.addEventListener('change', () => {
+        ball.config.wait_seconds = parseFloat(waitInput.value) || 0;
+      });
+      waitInput.addEventListener('click', e => e.stopPropagation());
+      body.appendChild(el('div', { className: 'wfe-menu-item' }, [
+        el('span', { className: 'wfe-menu-label' }, ['⏳ 等待时长 (秒)']),
+        waitInput
+      ]));
+    } else if (ball.type === 'CLICK' || ball.type === 'COORD_CLICK') {
       const radiusInput = el('input', {
         type: 'number',
         className: 'wfe-menu-input',
@@ -1479,6 +1555,43 @@
         startPicker(ball);
       });
       body.appendChild(inputPickBtn);
+    } else if (ball.type === 'KEY') {
+      const keyValueInput = el('input', {
+        type: 'text',
+        className: 'wfe-menu-input wide',
+        value: ball.config.key || '',
+        placeholder: 'Enter / Ctrl+Enter / Escape'
+      });
+      keyValueInput.addEventListener('input', () => {
+        ball.config.key = String(keyValueInput.value || '').trim();
+      });
+      keyValueInput.addEventListener('click', e => e.stopPropagation());
+
+      body.appendChild(el('div', { className: 'wfe-menu-item' }, [
+        el('span', { className: 'wfe-menu-label' }, ['⌨️ 按键 / 组合键']),
+        keyValueInput
+      ]));
+      body.appendChild(el('div', { className: 'wfe-menu-item disabled' }, [
+        el('span', { className: 'wfe-menu-label' }, ['例如：Enter、Ctrl+Enter、Shift+Enter、Escape'])
+      ]));
+    } else if (ball.type === 'SCRIPT') {
+      const scriptInput = el('textarea', {
+        className: 'wfe-menu-textarea',
+        value: ball.config.script || '',
+        placeholder: 'return document.title;'
+      });
+      scriptInput.addEventListener('input', () => {
+        ball.config.script = scriptInput.value;
+      });
+      scriptInput.addEventListener('click', e => e.stopPropagation());
+
+      body.appendChild(el('div', { className: 'wfe-menu-item disabled' }, [
+        el('span', { className: 'wfe-menu-label' }, ['🧠 JavaScript 脚本步骤'])
+      ]));
+      body.appendChild(el('div', { className: 'wfe-menu-item' }, [
+        el('span', { className: 'wfe-menu-label' }, ['代码'])
+      ]));
+      body.appendChild(scriptInput);
     } else if (ball.type === 'READ') {
       body.appendChild(el('div', { className: 'wfe-menu-item disabled' }, [
         el('span', { className: 'wfe-menu-label' }, [`🔍 ${ball.config.selector || '(未设置)'}`])
@@ -1684,19 +1797,9 @@
         };
 
         const workflow = state.siteConfig.workflow;
-        let pendingDelay = 0; // 累积前面 WAIT 步骤的延迟
 
         workflow.forEach((step, idx) => {
             const action = step.action;
-
-            // 处理 WAIT 步骤：累积延迟给下一个动作
-            if (action === 'WAIT') {
-                const waitValue = parseFloat(step.value) || 0;
-                pendingDelay += waitValue * 1000; // 转为毫秒
-                return;
-            }
-
-            // 跳过 KEY_PRESS 等其他步骤
             if (!SUPPORTED_VISUAL_WORKFLOW_ACTIONS.has(action)) {
                 console.log(`[WorkflowEditor] 跳过步骤类型: ${action}`);
                 return;
@@ -1707,10 +1810,17 @@
 
             let type, stepConfig = {};
 
-            if (action === 'CLICK') {
+            if (action === 'WAIT') {
+                type = 'WAIT';
+                stepConfig = {
+                    delay_ms: 0,
+                    wait_seconds: Number(step.value || 0),
+                    optional: !!step.optional
+                };
+            } else if (action === 'CLICK') {
                 type = 'CLICK';
                 stepConfig = {
-                    delay_ms: pendingDelay,
+                    delay_ms: 0,
                     random_radius: 10,
                     selector: selector,
                     targetKey: targetKey,
@@ -1719,7 +1829,7 @@
             } else if (action === 'COORD_CLICK') {
                 type = 'COORD_CLICK';
                 stepConfig = {
-                    delay_ms: pendingDelay,
+                    delay_ms: 0,
                     x: Number(step.value?.x ?? 100),
                     y: Number(step.value?.y ?? (window.innerHeight / 2)),
                     random_radius: Number(step.value?.random_radius ?? 10),
@@ -1729,7 +1839,7 @@
             } else if (action === 'COORD_SCROLL') {
                 type = 'COORD_SCROLL';
                 stepConfig = {
-                    delay_ms: pendingDelay,
+                    delay_ms: 0,
                     x: Number(step.value?.start_x ?? 100),
                     y: Number(step.value?.start_y ?? (window.innerHeight / 2)),
                     endX: Number(step.value?.end_x ?? 100),
@@ -1739,16 +1849,30 @@
             } else if (action === 'FILL_INPUT') {
                 type = 'INPUT';
                 stepConfig = {
-                    delay_ms: pendingDelay,
+                    delay_ms: 0,
                     text: step.value || '',
                     selector: selector,
                     targetKey: targetKey,
                     optional: !!step.optional
                 };
+            } else if (action === 'KEY_PRESS') {
+                type = 'KEY';
+                stepConfig = {
+                    delay_ms: 0,
+                    key: String(step.target || '').trim() || 'Enter',
+                    optional: !!step.optional
+                };
+            } else if (action === 'JS_EXEC') {
+                type = 'SCRIPT';
+                stepConfig = {
+                    delay_ms: 0,
+                    script: String(step.value || '').trim() || 'return document.title;',
+                    optional: !!step.optional
+                };
             } else if (action === 'STREAM_WAIT') {
                 type = 'READ';
                 stepConfig = {
-                    delay_ms: pendingDelay,
+                    delay_ms: 0,
                     selector: selector || '',
                     targetKey: targetKey,
                     optional: !!step.optional
@@ -1756,7 +1880,6 @@
             }
 
             addBall(type, stepConfig);
-            pendingDelay = 0; // 重置延迟
         });
 
         console.log(`[WorkflowEditor] ✅ 已加载 ${state.steps.length} 个步骤`);
@@ -2123,6 +2246,9 @@
     addCoordScroll: () => addBall('COORD_SCROLL'),
     addInput: () => addBall('INPUT'),
     addRead: () => addBall('READ'),
+    addWait: () => addBall('WAIT'),
+    addKey: () => addBall('KEY'),
+    addScript: () => addBall('SCRIPT'),
     clear: clearAll,
     export: exportConfig,
     show: showEditor,

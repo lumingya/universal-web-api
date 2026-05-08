@@ -325,14 +325,14 @@ window.SelectorPanel = {
                             <strong>第 1 步</strong>
                             <span>打开教程章节，先看字段各自负责什么。</span>
                         </div>
-                        <div class="dashboard-guide-step">
-                            <strong>第 2 步</strong>
-                            <span>打开本地练习站，对着假页面练一遍，熟悉输入框、发送按钮、回复容器各长什么样。</span>
-                        </div>
-                        <div class="dashboard-guide-step">
-                            <strong>第 3 步</strong>
-                            <span>回到真实站点，填一个测一个。只要“测试”能稳定命中，后面工作流就会轻松很多。</span>
-                        </div>
+                <div class="dashboard-guide-step">
+                    <strong>第 2 步</strong>
+                    <span>打开本地选择器工作台，先在模拟页面里练一遍，再直接看候选写法和命中详情。</span>
+                </div>
+                <div class="dashboard-guide-step">
+                    <strong>第 3 步</strong>
+                    <span>回到真实站点，填一个测一个。测试工作台会直接告诉你命中了几个、为什么不稳、有没有更好的候选。</span>
+                </div>
                     </div>
 
                     <div class="dashboard-checklist">
@@ -364,7 +364,7 @@ window.SelectorPanel = {
                         </button>
                         <button @click="openPracticeLab()" class="dashboard-guide-btn dashboard-guide-btn--secondary">
                             <span v-html="$icons.folderOpen"></span>
-                            打开本地练习站
+                            打开选择器工作台
                         </button>
                     </div>
                 </div>

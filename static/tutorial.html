@@ -2519,6 +2519,7 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
             </div>
 
             <p>项目现在兼容 <strong>OpenAI 标准 <code>tools</code> 格式</strong>，也兼容旧字段 <code>functions</code> / <code>function_call</code>，所以大多数支持 OpenAI Tool Calling 的客户端都能直接接进来。</p>
+            <p>和旧版本相比，这一块已经不是“只能硬撞一次”的状态了。后端现在内置了 <strong>函数调用校验失败后的内部修复重试</strong>，而且你可以直接在 <strong>控制面板 → 设置 → 环境配置 → 函数调用</strong> 里切换策略、控制重试次数和结果长度上限。</p>
 
             <div class="info-box">
                 <p><strong>这是什么：</strong>兼容 OpenAI 标准的 <code>tools</code> 调用格式，让你继续用熟悉的方式定义工具。</p>
@@ -2527,6 +2528,21 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
             <div class="highlight-box">
                 <p><strong>⚠️ 先看清边界：</strong>这<strong>不是原生 API 的函数调用</strong>。实际工作方式是：后端把工具定义、工具历史和调用约束整理成提示词 -> 网页端模型按格式输出 -> 后端再尝试把结果解析回 <code>tool_calls</code>。所以它的稳定性核心取决于<strong>模型自己的理解能力</strong>，而不是官方 API 层的强制执行。</p>
             </div>
+
+            <h3>控制台里能调什么</h3>
+            <table>
+                <tr><th>配置项</th><th>位置</th><th>作用</th></tr>
+                <tr><td><strong>重试策略</strong></td><td>设置 → 环境配置 → 函数调用</td><td>决定校验失败后，是只发最小修复上下文，还是把原始上下文一并发回模型。</td></tr>
+                <tr><td><strong>内部修复重试次数</strong></td><td>设置 → 环境配置 → 函数调用</td><td>控制自动修复后再试多少轮；设为 0 相当于关闭内部修复。</td></tr>
+                <tr><td><strong>单条 Tool Result 上限</strong></td><td>设置 → 环境配置 → 函数调用</td><td>防止工具结果过长，直接把网页模型撑爆。</td></tr>
+            </table>
+
+            <h3>两种内部修复策略</h3>
+            <table>
+                <tr><th>策略</th><th>适合场景</th><th>特点</th></tr>
+                <tr><td><strong>聚焦修复</strong>（默认，推荐）</td><td>大多数常规 Tool Calling</td><td>只把“这次哪里错了”和必要的最小上下文发回去，改动更集中，通常更稳。</td></tr>
+                <tr><td><strong>完整上下文</strong></td><td>模型老是修不对，怀疑缺上下文</td><td>把原对话和修复反馈一起发回去，信息更全，但也更容易把模型注意力重新拉散。</td></tr>
+            </table>
 
             <h3>成功率影响因素</h3>
             <table>
@@ -2762,10 +2778,10 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
                     </div>
                 </div>
                 <div class="tutorial-cta-card">
-                    <h4>先去练习页走一遍</h4>
-                    <p>项目里已经放了一个本地模拟站，页面结构简单、字段标得清楚，适合第一次练手。先在那里熟悉概念，再回真实站点会轻松很多。</p>
+                    <h4>先去可视化工作台走一遍</h4>
+                    <p>本地页面现在不只是演示，而是一个真正能用的选择器工作台。你可以切换目标字段、修改页面状态、查看推荐候选、验证动态 class 会不会把你的写法搞崩。</p>
                     <div class="tutorial-callout-actions">
-                        <a class="btn" href="./selector-practice.html" target="_blank" rel="noopener">打开本地练习站</a>
+                        <a class="btn" href="./selector-practice.html" target="_blank" rel="noopener">打开选择器工作台</a>
                     </div>
                 </div>
             </div>
@@ -2802,8 +2818,17 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
                 <li>前三项稳定之后，再看要不要补 <code>new_chat_btn</code>、<code>message_wrapper</code>、上传相关字段。</li>
             </ol>
 
+            <h3>新的可视化工作台怎么用</h3>
+            <ol>
+                <li>先在右侧选择你要练的字段，左侧模拟页面会直接高亮真正目标。</li>
+                <li>把你自己的选择器输进去，看它是“唯一命中正确目标”“命中了但太宽”，还是“命中了别的元素”。</li>
+                <li>直接查看下方的推荐候选，优先挑 <strong>唯一命中</strong> 的写法继续复测。</li>
+                <li>点一次「刷新随机 class」，确认你的写法不是靠动态类名碰巧命中。</li>
+                <li>如果命中了多个元素，就去看“命中元素详情”，先搞清楚它到底选到了谁，再回头收敛。</li>
+            </ol>
+
             <div class="success-box">
-                <p><strong>🧪 测试选择器：</strong>在控制面板的选择器配置项中点击「测试」按钮可以验证选择器是否生效，也可以在「工作流可视化」中查看配置是否正确。练习页里给了推荐写法和高亮按钮，第一次上手时很适合边看边填。</p>
+                <p><strong>🧪 测试选择器：</strong>控制台里的测试按钮现在已经升级成“选择器测试工作台”了，不只是告诉你找到了没，还会返回命中详情、推荐候选、风险提示，并且可以直接把候选回填到当前字段。建议每填一项就顺手点一次测试。</p>
             </div>
 
             <div class="note">
@@ -3091,8 +3116,13 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
                 <tr><td><code>FILL_INPUT</code></td><td>在输入框填入用户问题</td></tr>
                 <tr><td><code>WAIT</code></td><td>等待固定时间 (value 为秒数)</td></tr>
                 <tr><td><code>KEY_PRESS</code></td><td>模拟按键 (如 Enter)</td></tr>
+                <tr><td><code>JS_EXEC</code></td><td>在当前页面上下文执行 JavaScript。适合处理“纯点按钮不够，还得直接跑脚本”的场景。</td></tr>
                 <tr><td><code>STREAM_WAIT</code></td><td>等待 AI 回复完成。<code>target</code> 字段填选择器 key（如 <code>result_container</code>）可让系统优先监听该元素；留空则自动使用站点配置里的 <code>result_container</code>。这是每条工作流必须有的最后一步。</td></tr>
             </table>
+
+            <div class="info-box">
+                <p><strong>🧩 可视化编辑器更新：</strong>现在工作流可视化不再只保留点击、输入、读取这类贴着页面元素的步骤。<code>WAIT</code>、<code>KEY_PRESS</code>、<code>JS_EXEC</code> 这类抽象动作也会保留成独立小球，保存回 JSON 时顺序不会再被吞掉或自动合并。</p>
+            </div>
 
             <div class="note">
                 <p><strong>📸 工作流可视化截图：</strong><code>static/workflow-visualization.png</code></p>

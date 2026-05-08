@@ -1640,6 +1640,7 @@ class TabPoolManager:
     def _check_stuck_tabs(self):
         """检查并释放卡死的标签页"""
         now = time.time()
+        released_any = False
         
         for session in self._tabs.values():
             if session.status == TabStatus.BUSY:
@@ -1659,6 +1660,20 @@ class TabPoolManager:
                         f"(task={task_id or '-'}, cancelled={cancelled})"
                     )
                     session.force_release(clear_page=False, check_triggers=False)
+                    if session.status == TabStatus.IDLE:
+                        self._start_global_monitor_for_session(session)
+                        released_any = True
+
+        if released_any:
+            self._condition.notify_all()
+        return released_any
+
+    def run_watchdog_tick(self) -> bool:
+        """Run periodic stuck-tab maintenance from an external watchdog thread."""
+        with self._condition:
+            if self._shutdown:
+                return False
+            return bool(self._check_stuck_tabs())
 
     def _cancel_active_request_for_session(
         self,

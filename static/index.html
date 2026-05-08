@@ -318,11 +318,13 @@
 
         <test-dialog :show="showTestDialog"
                      :selector="testSelectorInput"
+                     :selector-key="currentTestingSelectorKey"
                      :timeout-value="testTimeout"
                      :highlight-enabled="testHighlight"
                      :result="testResult"
                      :testing="isTesting"
                      @close="showTestDialog = false"
+                     @apply-selector="applyTestSelectorCandidate"
                      @test="testSelectorInput = $event.selector; testTimeout = $event.timeout; testHighlight = $event.highlight; runTest()">
         </test-dialog>
 
@@ -626,18 +628,18 @@
     <script src="/static/js/icons.js?v=2.6.9"></script>
     <script src="/static/js/components/Sidebar.js?v=2.6.7"></script>
     <!-- 子组件（在 ConfigTab 之前） -->
-    <script src="static/js/components/panels/SelectorPanel.js?v=2.6.11"></script>
+    <script src="static/js/components/panels/SelectorPanel.js?v=2.6.12"></script>
     <script src="static/js/components/panels/ImageConfigPanel.js?v=2.6.11"></script>
     <script src="static/js/components/panels/StreamConfigPanel.js?v=2.6.10"></script>
     <script src="static/js/components/panels/WorkflowPanel.js?v=2.6.7"></script>
-    <script src="static/js/components/panels/FilePastePanel.js?v=2.6.7"></script>
+    <script src="static/js/components/panels/FilePastePanel.js?v=2.6.8"></script>
 
     <!-- 主组件 -->
-    <script src="static/js/components/ConfigTab.js?v=2.6.11"></script>
+    <script src="static/js/components/ConfigTab.js?v=2.6.12"></script>
     <script src="/static/js/components/MarketplaceTab.js?v=2.6.9"></script>
     <script src="/static/js/components/LogsTab.js?v=2.6.7"></script>
     <script src="/static/js/components/SettingsTab.js?v=2.6.7"></script>
-    <script src="/static/js/components/Dialogs.js?v=2.6.8"></script>
+    <script src="/static/js/components/Dialogs.js?v=2.6.9"></script>
     <script src="/static/js/components/TabPoolTab.js?v=2.6.7"></script>
     <script src="/static/js/components/commands/CommandsTabComputed.js?v=2.6.7"></script>
     <script src="/static/js/components/commands/CommandsTabMethods.js?v=2.6.7"></script>
@@ -645,6 +647,6 @@
     <script src="/static/js/components/CommandsTab.js?v=2.6.7"></script>
 
     <!-- 主应用逻辑 -->
-    <script src="/static/js/dashboard.js?v=2.6.14"></script>
+    <script src="/static/js/dashboard.js?v=2.6.15"></script>
 </body>
 </html>

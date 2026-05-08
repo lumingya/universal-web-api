@@ -856,6 +856,7 @@ const app = createApp({
             tempToken: '',
 
             // 选择器测试
+            currentTestingSelectorKey: '',
             testSelectorInput: '',
             testTimeout: 2,
             testResult: null,
@@ -1340,14 +1341,15 @@ const app = createApp({
         },
 
         async testSelector(key, selector) {
-            if (!selector) {
-                this.notify('选择器为空', 'warning')
-                return
-            }
-
-            this.testSelectorInput = selector
+            this.currentTestingSelectorKey = key || ''
+            this.testSelectorInput = selector || ''
             this.showTestDialog = true
             this.testResult = null
+
+            if (!String(this.testSelectorInput || '').trim()) {
+                this.notify('当前字段还没填，先在测试工作台里输入一个选择器再测。', 'info')
+                return
+            }
 
             await this.runTest()
         },
@@ -1387,6 +1389,28 @@ const app = createApp({
                 this.notify('测试失败: ' + error.message, 'error')
             } finally {
                 this.isTesting = false
+            }
+        },
+
+        async applyTestSelectorCandidate(payload) {
+            const selector = String(payload && payload.selector || '').trim()
+            if (!selector) {
+                return
+            }
+
+            this.testSelectorInput = selector
+
+            const key = String(this.currentTestingSelectorKey || '').trim()
+            const preset = this.getActivePresetConfig()
+            if (key && preset && preset.selectors) {
+                preset.selectors[key] = selector
+                this.notify('候选选择器已回填到当前字段', 'success')
+            } else {
+                this.notify('已代入当前测试输入框', 'info')
+            }
+
+            if (payload && payload.rerun) {
+                await this.runTest()
             }
         },
 

@@ -422,6 +422,7 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
         </div>
 
         <p>The project supports the <strong>OpenAI-style <code>tools</code> format</strong> and also the older <code>functions</code> / <code>function_call</code> fields, so most clients that already support Tool Calling can connect directly.</p>
+        <p>Unlike the earliest versions, this no longer has to fail in a single shot. The backend now includes <strong>internal repair retries</strong> after invalid tool-call output, and you can tune the strategy directly in <strong>Dashboard → Settings → Environment Settings → Function Calling</strong>.</p>
 
         <div class="info-box">
             <p><strong>What this is:</strong> a compatibility layer that lets you keep using familiar OpenAI-style tool definitions.</p>
@@ -430,6 +431,21 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
         <div class="highlight-box">
             <p><strong>⚠️ Important boundary:</strong> this is <strong>not native API tool calling</strong>. The backend rewrites your tool definitions into prompt instructions, the website model tries to follow them, and the backend then parses the result back into <code>tool_calls</code>. Reliability depends heavily on the model's own reasoning and formatting discipline.</p>
         </div>
+
+        <h3>What you can tune in the dashboard</h3>
+        <table>
+            <tr><th>Setting</th><th>Where</th><th>What it controls</th></tr>
+            <tr><td><strong>Retry strategy</strong></td><td>Settings → Environment Settings → Function Calling</td><td>Whether the repair round sends only minimal correction feedback or the original conversation plus feedback.</td></tr>
+            <tr><td><strong>Internal repair retries</strong></td><td>Settings → Environment Settings → Function Calling</td><td>How many repair rounds are allowed after validation fails. Set it to 0 to disable internal repair.</td></tr>
+            <tr><td><strong>Single Tool Result limit</strong></td><td>Settings → Environment Settings → Function Calling</td><td>Stops oversized tool output from being pushed back into the website model.</td></tr>
+        </table>
+
+        <h3>The two retry strategies</h3>
+        <table>
+            <tr><th>Strategy</th><th>Best for</th><th>Behavior</th></tr>
+            <tr><td><strong>Focused repair</strong> (default, recommended)</td><td>Most normal tool-calling flows</td><td>Sends only the validation errors and a compact repair context. Usually the most stable option.</td></tr>
+            <tr><td><strong>Full context</strong></td><td>Cases where the model keeps repairing incorrectly because it lacks broader context</td><td>Sends the original conversation together with repair feedback. More context, but also more room for the model to drift again.</td></tr>
+        </table>
 
         <h3>What affects success rate</h3>
         <table>
@@ -672,10 +688,10 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
                 </div>
             </div>
             <div class="tutorial-cta-card">
-                <h4>Use the local practice page first</h4>
-                <p>The project now ships with a local mock site built for selector practice. It is a much easier place to learn the field mapping before you inspect a real website.</p>
+                <h4>Use the visual workbench first</h4>
+                <p>The local page is no longer just a toy demo. It now acts as a real selector workbench where you can switch target fields, change page state, inspect suggested candidates, and test whether dynamic classes break your selector.</p>
                 <div class="tutorial-callout-actions">
-                    <a class="btn" href="./selector-practice.html" target="_blank" rel="noopener">Open the local practice page</a>
+                    <a class="btn" href="./selector-practice.html" target="_blank" rel="noopener">Open the selector workbench</a>
                 </div>
             </div>
         </div>
@@ -712,8 +728,17 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
             <li>After the first three fields are stable, add <code>new_chat_btn</code>, <code>message_wrapper</code>, and upload-related selectors when needed.</li>
         </ol>
 
+        <h3>How to use the new visual workbench</h3>
+        <ol>
+            <li>Select the field you want to practice on the right. The real target will be highlighted on the mock page.</li>
+            <li>Paste or type your selector and check whether it uniquely hits the correct target, hits too many nodes, or hits the wrong element.</li>
+            <li>Use the suggested candidates below and prefer selectors that uniquely match the target.</li>
+            <li>Click “refresh dynamic class” and test again. If the selector breaks immediately, it was depending on unstable classes.</li>
+            <li>If a selector matches multiple nodes, inspect the matched element details first before trying to patch the selector blindly.</li>
+        </ol>
+
         <div class="success-box">
-            <p><strong>🧪 Test selectors:</strong> use the <strong>Test</strong> button in the dashboard to confirm whether a selector really works. The local practice page also includes highlight and copy actions, which helps a lot during the first setup.</p>
+            <p><strong>🧪 Test selectors:</strong> the dashboard test button now opens a richer selector testing workbench. It shows not just hit count, but also matched element details, suggested candidates, and stability warnings, and it can feed a candidate back into the current field.</p>
         </div>
 
         <div class="note">
@@ -1005,8 +1030,13 @@ Attached:
             <tr><td><code>FILL_INPUT</code></td><td>Fill the input box with the user prompt</td></tr>
             <tr><td><code>WAIT</code></td><td>Wait for a fixed number of seconds</td></tr>
             <tr><td><code>KEY_PRESS</code></td><td>Simulate a key press such as Enter</td></tr>
+            <tr><td><code>JS_EXEC</code></td><td>Run JavaScript inside the current page when simple clicks are not enough</td></tr>
             <tr><td><code>STREAM_WAIT</code></td><td>Wait until the reply is finished</td></tr>
         </table>
+
+        <div class="info-box">
+            <p><strong>Visual editor update:</strong> the workflow visualizer now keeps abstract steps such as <code>WAIT</code>, <code>KEY_PRESS</code>, and <code>JS_EXEC</code> as their own balls instead of silently dropping or merging them. The saved JSON order now matches the visual order much more closely.</p>
+        </div>
 
         <div class="note">
             <p><strong>📸 Workflow visualization:</strong> <code>static/workflow-visualization.png</code></p>

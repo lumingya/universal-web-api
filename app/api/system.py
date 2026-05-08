@@ -257,6 +257,316 @@ DEFAULT_BROWSER_CONSTANTS: Dict[str, Any] = {
 }
 
 
+_DYNAMIC_SELECTOR_CLASS_RE = re.compile(r"^(?:_?[A-Fa-f0-9_-]{8,}|[A-Za-z0-9_-]{16,})$")
+
+
+def _build_selector_test_diagnosis(
+    selector: str,
+    match_count: int,
+    top_candidates: Optional[list[dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    normalized = str(selector or "").strip()
+    warnings: list[str] = []
+    tips: list[str] = []
+
+    if ":nth-child" in normalized or ":nth-of-type" in normalized:
+        warnings.append("当前写法用了 nth-child / nth-of-type，页面结构稍微变化就容易失效。")
+    if normalized.count(">") >= 3 or len(re.split(r"\s+", normalized)) >= 5:
+        warnings.append("当前选择器层级比较深，维护成本会偏高，建议优先收敛到稳定属性。")
+    if ":has(" in normalized:
+        warnings.append("当前选择器包含 :has()，兼容性和稳定性通常都不如稳定属性写法。")
+    if re.search(r"\.[A-Za-z0-9_-]{14,}", normalized):
+        warnings.append("当前写法里有很长的 class 名，看起来像动态类名，页面一改就可能失效。")
+
+    status = "missing"
+    if match_count <= 0:
+        summary = "当前没有命中任何元素。"
+        tips.extend([
+            "先检查是不是还停在正确页面，很多站点切到聊天页前后 DOM 差别很大。",
+            "优先试试 id、data-testid、aria-label、name 这类稳定属性，不要先从随机 class 开始。",
+            "如果页面刚切换完，适当把超时时间调高一点再测一次。",
+        ])
+    elif match_count == 1:
+        status = "unique"
+        summary = "已经唯一命中 1 个元素，可以继续判断是不是命中了你真正想要的目标。"
+        tips.extend([
+            "下一步看元素摘要和候选选择器，确认它是不是你真正要找的输入框、发送按钮或回复容器。",
+            "如果当前写法能命中，但很依赖深层结构或长 class，优先换成下方更稳的候选。",
+        ])
+    else:
+        status = "multiple"
+        summary = f"当前命中了 {match_count} 个元素，范围还不够收敛。"
+        tips.extend([
+            "先看下方每个命中元素的候选选择器，优先挑唯一命中的那种。",
+            "如果都是 button / div 这类大范围匹配，通常要补上 aria-label、data-testid、name 或更具体的父级信息。",
+        ])
+
+    if top_candidates:
+        unique_count = sum(1 for item in top_candidates if item.get("unique"))
+        if unique_count > 0:
+            tips.insert(0, f"下面已经生成了 {unique_count} 个唯一候选，可以直接挑一个更稳的写法继续复测。")
+
+    return {
+        "status": status,
+        "summary": summary,
+        "warnings": warnings,
+        "tips": tips,
+    }
+
+
+def _collect_selector_test_element_snapshot(ele: Any) -> Dict[str, Any]:
+    try:
+        snapshot = ele.run_js(
+            """
+            return (function () {
+                const target = this;
+                const tag = String(target.tagName || '').toLowerCase();
+                const textValue = String(target.innerText || target.textContent || '')
+                    .replace(/\\s+/g, ' ')
+                    .trim();
+                const attrKeys = ['id', 'class', 'name', 'data-testid', 'aria-label', 'role', 'type', 'placeholder', 'href'];
+                const attributes = {};
+                for (const key of attrKeys) {
+                    try {
+                        const value = target.getAttribute ? target.getAttribute(key) : null;
+                        if (value) {
+                            attributes[key] = String(value).trim().slice(0, 160);
+                        }
+                    } catch (error) {}
+                }
+
+                function cssEscapeIdent(value) {
+                    const raw = String(value || '');
+                    if (!raw) return raw;
+                    if (window.CSS && typeof window.CSS.escape === 'function') {
+                        return window.CSS.escape(raw);
+                    }
+                    return raw.replace(/[^a-zA-Z0-9_-]/g, function (char) {
+                        return '\\\\' + char;
+                    });
+                }
+
+                function cssEscapeString(value) {
+                    return String(value || '')
+                        .replace(/\\\\/g, '\\\\\\\\')
+                        .replace(/"/g, '\\\\\\"');
+                }
+
+                function looksStableClass(token) {
+                    const cls = String(token || '').trim();
+                    if (!cls || cls.length > 40) return false;
+                    if (/^(css|jsx)-/i.test(cls)) return false;
+                    if (/^_[A-Za-z0-9-]{8,}$/.test(cls)) return false;
+                    if (/^[A-Fa-f0-9_-]{10,}$/.test(cls)) return false;
+                    if (/[A-Z]/.test(cls) && /\\d/.test(cls) && cls.length >= 12) return false;
+                    return /^[A-Za-z][A-Za-z0-9_-]*$/.test(cls);
+                }
+
+                function pushCandidate(bucket, selector, reason, score) {
+                    if (!selector) return;
+                    bucket.push({
+                        selector,
+                        reason,
+                        score,
+                    });
+                }
+
+                const candidates = [];
+                const rawClasses = String(attributes['class'] || '')
+                    .split(/\\s+/)
+                    .map(item => String(item || '').trim())
+                    .filter(Boolean);
+                const stableClasses = rawClasses.filter(looksStableClass).slice(0, 3);
+
+                if (attributes.id) {
+                    pushCandidate(candidates, `#${cssEscapeIdent(attributes.id)}`, 'ID 精确匹配', 120);
+                    if (tag) {
+                        pushCandidate(candidates, `${tag}#${cssEscapeIdent(attributes.id)}`, '标签 + ID', 112);
+                    }
+                }
+
+                if (attributes['data-testid']) {
+                    pushCandidate(candidates, `[data-testid="${cssEscapeString(attributes['data-testid'])}"]`, 'data-testid', 110);
+                    if (tag) {
+                        pushCandidate(candidates, `${tag}[data-testid="${cssEscapeString(attributes['data-testid'])}"]`, '标签 + data-testid', 104);
+                    }
+                }
+
+                if (attributes['aria-label']) {
+                    pushCandidate(candidates, `[aria-label="${cssEscapeString(attributes['aria-label'])}"]`, 'aria-label', 96);
+                    if (tag) {
+                        pushCandidate(candidates, `${tag}[aria-label="${cssEscapeString(attributes['aria-label'])}"]`, '标签 + aria-label', 92);
+                    }
+                }
+
+                if (attributes.name) {
+                    pushCandidate(candidates, `[name="${cssEscapeString(attributes.name)}"]`, 'name', 92);
+                    if (tag) {
+                        pushCandidate(candidates, `${tag}[name="${cssEscapeString(attributes.name)}"]`, '标签 + name', 88);
+                    }
+                }
+
+                if (attributes.placeholder) {
+                    pushCandidate(candidates, `[placeholder="${cssEscapeString(attributes.placeholder)}"]`, 'placeholder', 76);
+                    if (tag) {
+                        pushCandidate(candidates, `${tag}[placeholder="${cssEscapeString(attributes.placeholder)}"]`, '标签 + placeholder', 72);
+                    }
+                }
+
+                if (attributes.type && ['input', 'button', 'textarea'].includes(tag)) {
+                    pushCandidate(candidates, `${tag}[type="${cssEscapeString(attributes.type)}"]`, '标签 + type', 74);
+                }
+
+                if (attributes.role) {
+                    pushCandidate(candidates, `[role="${cssEscapeString(attributes.role)}"]`, 'role', 62);
+                    if (tag) {
+                        pushCandidate(candidates, `${tag}[role="${cssEscapeString(attributes.role)}"]`, '标签 + role', 58);
+                    }
+                }
+
+                if (attributes.href && tag === 'a') {
+                    pushCandidate(candidates, `a[href="${cssEscapeString(attributes.href)}"]`, '精确 href', 82);
+                }
+
+                if (stableClasses.length > 0) {
+                    const classSelector = stableClasses.map(item => `.${cssEscapeIdent(item)}`).join('');
+                    pushCandidate(candidates, classSelector, '稳定 class 组合', 54);
+                    if (tag) {
+                        pushCandidate(candidates, `${tag}${classSelector}`, '标签 + 稳定 class 组合', 56);
+                    }
+                }
+
+                if (tag) {
+                    pushCandidate(candidates, tag, '仅标签名（通常过宽）', 8);
+                }
+
+                function evaluateSelector(selector) {
+                    try {
+                        const matches = Array.from(document.querySelectorAll(selector));
+                        return {
+                            count: matches.length,
+                            exact: matches.includes(target),
+                        };
+                    } catch (error) {
+                        return {
+                            count: -1,
+                            exact: false,
+                            error: String(error && error.message ? error.message : error),
+                        };
+                    }
+                }
+
+                const seen = new Set();
+                const evaluated = [];
+                for (const candidate of candidates) {
+                    if (!candidate.selector || seen.has(candidate.selector)) continue;
+                    seen.add(candidate.selector);
+                    const stats = evaluateSelector(candidate.selector);
+                    if (stats.error || !stats.exact) continue;
+                    evaluated.push({
+                        ...candidate,
+                        count: stats.count,
+                        unique: stats.count === 1,
+                    });
+                }
+
+                evaluated.sort((left, right) => {
+                    if (left.unique !== right.unique) {
+                        return left.unique ? -1 : 1;
+                    }
+                    if (left.score !== right.score) {
+                        return right.score - left.score;
+                    }
+                    if (left.count !== right.count) {
+                        return left.count - right.count;
+                    }
+                    return String(left.selector).length - String(right.selector).length;
+                });
+
+                const rect = target.getBoundingClientRect ? target.getBoundingClientRect() : { x: 0, y: 0, width: 0, height: 0 };
+                const style = window.getComputedStyle ? window.getComputedStyle(target) : null;
+                const visible = !!(
+                    rect.width > 0 &&
+                    rect.height > 0 &&
+                    (!style || (style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0'))
+                );
+
+                const warnings = [];
+                if (rawClasses.some(item => !looksStableClass(item))) {
+                    warnings.push('这个元素带有疑似动态 class，优先考虑 id、data-testid、aria-label 这类属性。');
+                }
+                if (!evaluated.some(item => item.unique)) {
+                    warnings.push('候选里还没有唯一命中的写法，通常需要加稳定属性或更具体的父级范围。');
+                }
+
+                return {
+                    tag,
+                    text: textValue.slice(0, 120),
+                    visible,
+                    rect: {
+                        x: Math.round(rect.x || 0),
+                        y: Math.round(rect.y || 0),
+                        width: Math.round(rect.width || 0),
+                        height: Math.round(rect.height || 0),
+                    },
+                    attributes,
+                    html_preview: String(target.outerHTML || '').replace(/\\s+/g, ' ').trim().slice(0, 400),
+                    candidate_selectors: evaluated.slice(0, 8),
+                    warnings,
+                };
+            }).call(this);
+            """
+        )
+        if isinstance(snapshot, dict):
+            return snapshot
+    except Exception as e:
+        logger.debug(f"收集元素快照失败: {e}")
+
+    return {}
+
+
+def _build_selector_top_candidates(elements: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
+    merged: Dict[str, Dict[str, Any]] = {}
+    for element_index, element in enumerate(elements):
+        for candidate in element.get("candidate_selectors") or []:
+            selector = str(candidate.get("selector") or "").strip()
+            if not selector:
+                continue
+
+            normalized = {
+                "selector": selector,
+                "reason": str(candidate.get("reason") or "").strip(),
+                "score": int(candidate.get("score") or 0),
+                "count": int(candidate.get("count") or 0),
+                "unique": bool(candidate.get("unique")),
+                "element_index": element_index,
+            }
+
+            existing = merged.get(selector)
+            if existing is None:
+                merged[selector] = normalized
+                continue
+
+            if normalized["unique"] and not existing["unique"]:
+                merged[selector] = normalized
+                continue
+
+            if normalized["score"] > existing["score"]:
+                merged[selector] = normalized
+
+    ranked = list(merged.values())
+    ranked.sort(
+        key=lambda item: (
+            0 if item.get("unique") else 1,
+            -int(item.get("score") or 0),
+            int(item.get("count") or 0),
+            int(item.get("element_index") or 0),
+            len(str(item.get("selector") or "")),
+        )
+    )
+    return ranked[:10]
+
+
 # ================= 健康检查 =================
 
 @router.get("/health")
@@ -623,19 +933,30 @@ async def test_selector(
                 except Exception as e:
                     logger.debug(f"激活调试标签页失败: {e}")
 
+            detail_limit = 6
             result = {
                 "success": True,
+                "selector": selector,
+                "locator_used": query_selector,
                 "count": len(valid_elements),
-                "elements": []
+                "elements": [],
+                "inspected_count": min(len(valid_elements), detail_limit),
+                "truncated": len(valid_elements) > detail_limit,
             }
 
-            for idx, ele in enumerate(valid_elements):
+            for idx, ele in enumerate(valid_elements[:detail_limit]):
                 try:
                     ele_info = {
                         "index": idx,
                         "tag": ele.tag if hasattr(ele, 'tag') else "unknown",
-                        "text": ""
+                        "text": "",
+                        "candidate_selectors": [],
+                        "warnings": [],
                     }
+
+                    snapshot = _collect_selector_test_element_snapshot(ele)
+                    if snapshot:
+                        ele_info.update(snapshot)
 
                     try:
                         text = ele.text
@@ -692,6 +1013,13 @@ async def test_selector(
                 except Exception as e:
                     logger.debug(f"处理元素 {idx} 失败: {e}")
                     continue
+
+            result["top_candidates"] = _build_selector_top_candidates(result["elements"])
+            result["diagnosis"] = _build_selector_test_diagnosis(
+                selector,
+                len(valid_elements),
+                result["top_candidates"],
+            )
 
             if result["elements"]:
                 first = result["elements"][0]

@@ -336,19 +336,45 @@ class BrowserCore:
         """设置停止检查器"""
         self._should_stop_checker = checker or (lambda: False)
 
-    def _get_request_cancel_reason(self, task_id: str = "") -> str:
+    def _get_request_state_snapshot(self, task_id: str = "") -> Dict[str, Any]:
         task = str(task_id or "").strip()
+        snapshot = {
+            "exists": False,
+            "status": "",
+            "cancel_reason": "",
+            "terminal": False,
+        }
         if not task:
-            return ""
+            return snapshot
+
         try:
             from app.services.request_manager import request_manager
 
             ctx = request_manager.get_request(task)
-            if ctx is None:
-                return ""
-            return str(getattr(ctx, "cancel_reason", "") or "").strip().lower()
         except Exception:
-            return ""
+            return snapshot
+
+        if ctx is None:
+            return snapshot
+
+        snapshot["exists"] = True
+        try:
+            status = getattr(getattr(ctx, "status", None), "value", "")
+            snapshot["status"] = str(status or "").strip().lower()
+        except Exception:
+            snapshot["status"] = ""
+        try:
+            snapshot["cancel_reason"] = str(getattr(ctx, "cancel_reason", "") or "").strip().lower()
+        except Exception:
+            snapshot["cancel_reason"] = ""
+        try:
+            snapshot["terminal"] = bool(ctx.is_terminal())
+        except Exception:
+            snapshot["terminal"] = snapshot["status"] in {"completed", "cancelled", "failed"}
+        return snapshot
+
+    def _get_request_cancel_reason(self, task_id: str = "") -> str:
+        return str(self._get_request_state_snapshot(task_id).get("cancel_reason", "") or "").strip().lower()
 
     def _should_rollback_request_count_on_cancel(self, task_id: str = "") -> bool:
         reason = self._get_request_cancel_reason(task_id)
@@ -424,24 +450,56 @@ class BrowserCore:
         detail: str = "",
     ) -> None:
         request_id = str(task_id or "").strip()
-        if session is not None:
-            try:
-                setattr(session, "_workflow_stop_reason", "ownership_lost")
-            except Exception:
-                pass
         if not request_id:
             return
+
+        request_state = self._get_request_state_snapshot(request_id)
+        if request_state.get("terminal"):
+            logger.debug(
+                f"[{getattr(session, 'id', '-')}] 请求已结束，跳过所有权丢失取消: "
+                f"request={request_id}, detail={detail or '-'}, "
+                f"request_status={request_state.get('status') or '-'}, "
+                f"request_reason={request_state.get('cancel_reason') or '-'}"
+            )
+            return
+
+        if session is not None:
+            try:
+                current_task_id = str(getattr(session, "current_task_id", "") or "").strip()
+                if not current_task_id or current_task_id == request_id:
+                    setattr(session, "_workflow_stop_reason", "ownership_lost")
+            except Exception:
+                pass
 
         try:
             from app.services.request_manager import request_manager
             cancelled = bool(request_manager.cancel_request(request_id, "task_ownership_lost"))
-            logger.warning(
-                f"[{getattr(session, 'id', '-')}] 所有权丢失后取消请求: "
-                f"request={request_id}, cancelled={cancelled}, detail={detail or '-'}, "
-                f"current_task={str(getattr(session, 'current_task_id', '') or '').strip() or '-'}, "
-                f"bound_req={str(getattr(session, '_bound_request_id', '') or '').strip() or '-'}, "
-                f"status={getattr(getattr(session, 'status', None), 'value', '') or '-'}"
-            )
+            if cancelled:
+                logger.warning(
+                    f"[{getattr(session, 'id', '-')}] 所有权丢失后取消请求: "
+                    f"request={request_id}, cancelled={cancelled}, detail={detail or '-'}, "
+                    f"current_task={str(getattr(session, 'current_task_id', '') or '').strip() or '-'}, "
+                    f"bound_req={str(getattr(session, '_bound_request_id', '') or '').strip() or '-'}, "
+                    f"status={getattr(getattr(session, 'status', None), 'value', '') or '-'}"
+                )
+                return
+
+            refreshed_state = self._get_request_state_snapshot(request_id)
+            if refreshed_state.get("terminal"):
+                logger.debug(
+                    f"[{getattr(session, 'id', '-')}] 所有权丢失时请求已结束，忽略重复取消: "
+                    f"request={request_id}, detail={detail or '-'}, "
+                    f"request_status={refreshed_state.get('status') or '-'}, "
+                    f"request_reason={refreshed_state.get('cancel_reason') or '-'}"
+                )
+            else:
+                logger.warning(
+                    f"[{getattr(session, 'id', '-')}] 所有权丢失后取消请求: "
+                    f"request={request_id}, cancelled={cancelled}, detail={detail or '-'}, "
+                    f"current_task={str(getattr(session, 'current_task_id', '') or '').strip() or '-'}, "
+                    f"bound_req={str(getattr(session, '_bound_request_id', '') or '').strip() or '-'}, "
+                    f"status={getattr(getattr(session, 'status', None), 'value', '') or '-'}"
+                )
         except Exception as e:
             logger.debug(
                 f"[{getattr(session, 'id', '-')}] 所有权丢失后取消请求失败（忽略）: {e}"
@@ -458,8 +516,17 @@ class BrowserCore:
         expected_task_id = str(task_id or "").strip()
         current_task_id = str(getattr(session, "current_task_id", "") or "").strip()
         session_status = getattr(getattr(session, "status", None), "value", "")
+        request_state = self._get_request_state_snapshot(expected_task_id) if expected_task_id else {}
         if expected_task_id:
             if current_task_id and current_task_id != expected_task_id:
+                if request_state.get("terminal"):
+                    logger.debug(
+                        f"[{session.id}] 请求已结束，跳过迟到的释放收尾 "
+                        f"(expected_task={expected_task_id}, current_task={current_task_id}, "
+                        f"request_status={request_state.get('status') or '-'}, "
+                        f"request_reason={request_state.get('cancel_reason') or '-'})"
+                    )
+                    return
                 self._cancel_request_due_to_ownership_loss(
                     expected_task_id,
                     session,
@@ -471,6 +538,14 @@ class BrowserCore:
                 )
                 return
             if not current_task_id:
+                if request_state.get("terminal"):
+                    logger.debug(
+                        f"[{session.id}] 请求已结束，跳过迟到的释放收尾 "
+                        f"(expected_task={expected_task_id}, status={session_status or 'unknown'}, "
+                        f"request_status={request_state.get('status') or '-'}, "
+                        f"request_reason={request_state.get('cancel_reason') or '-'})"
+                    )
+                    return
                 self._cancel_request_due_to_ownership_loss(
                     expected_task_id,
                     session,
@@ -689,6 +764,13 @@ class BrowserCore:
 
     def _connection_watchdog_loop(self) -> None:
         while not self._watchdog_stop.wait(1.0):
+            try:
+                pool = self._tab_pool
+                if pool is not None:
+                    pool.run_watchdog_tick()
+            except Exception as e:
+                logger.debug(f"[BrowserWatchdog] 标签页巡检异常（忽略）: {e}")
+
             port_open = self._is_debug_port_open()
             session_alive = self._probe_browser_connection()
             health = "alive" if session_alive else ("port_only" if port_open else "dead")
