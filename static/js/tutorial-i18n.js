@@ -76,7 +76,7 @@
 
         <div class="note">
             <p><strong>Dashboard entry:</strong></p>
-            <a href="/" class="btn" target="_blank">Open Dashboard</a>
+            <a href="http://127.0.0.1:8199/" class="btn" target="_blank" data-dashboard-link="true">Open Dashboard</a>
             <p style="margin-top: 10px;">Dashboard URL: <code>http://127.0.0.1:8199/</code>. You can edit configs and inspect logs there.</p>
         </div>
 
@@ -152,7 +152,7 @@
 
         <h3>Path A: AI-based automatic recognition</h3>
         <ol>
-            <li>Open the <a href="/">dashboard</a> → Settings → Environment, then fill in <code>HELPER_API_KEY</code>, <code>HELPER_BASE_URL</code>, and <code>HELPER_MODEL</code>.</li>
+            <li>Open the <a href="http://127.0.0.1:8199/" data-dashboard-link="true">dashboard</a> → Settings → Environment, then fill in <code>HELPER_API_KEY</code>, <code>HELPER_BASE_URL</code>, and <code>HELPER_MODEL</code>.</li>
             <li>Open the target site in the controlled browser and stay on the real chat page. Before sending the request, make sure the controlled browser contains nothing except the target site.</li>
             <li>Send the <strong>first real API request</strong> to that site.</li>
             <li>If the domain is still missing from <code>config/sites.json</code>, the backend reads the page HTML, asks the helper AI to analyze it, and writes a generated preset into the site config.</li>
@@ -407,19 +407,6 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
 
     translations.sections['function-calling'] = `
         <h2>🧰 Function Calling (Tool Calling)</h2>
-
-        <div class="info-box">
-            <p><strong>🎯 Quick navigation</strong></p>
-            <table>
-                <tr><th>What you need</th><th>Recommended feature</th><th>Jump</th></tr>
-                <tr><td>Let the model call tools such as search or calculators</td><td>Function calling</td><td><a href="#function-calling">View</a></td></tr>
-                <tr><td>Reduce Cloudflare challenges</td><td>Stealth mode</td><td><a href="#stealth-mode">View</a></td></tr>
-                <tr><td>Clear cookies every 10 turns</td><td>Automation commands</td><td><a href="#commands">View</a></td></tr>
-                <tr><td>Switch proxy when a captcha appears</td><td>Commands + proxy switching</td><td><a href="#proxy-switching">View</a></td></tr>
-                <tr><td>You do not know how to write selectors for a new site</td><td>AI recognition</td><td><a href="#ai-recognition">View</a></td></tr>
-                <tr><td>Change port, proxy, timeout, or other global settings</td><td>Environment settings</td><td><a href="#env-config">View</a></td></tr>
-            </table>
-        </div>
 
         <p>The project supports the <strong>OpenAI-style <code>tools</code> format</strong> and also the older <code>functions</code> / <code>function_call</code> fields, so most clients that already support Tool Calling can connect directly.</p>
         <p>Unlike the earliest versions, this no longer has to fail in a single shot. The backend now includes <strong>internal repair retries</strong> after invalid tool-call output, and you can tune the strategy directly in <strong>Dashboard → Settings → Environment Settings → Function Calling</strong>.</p>
@@ -1143,7 +1130,7 @@ Attached:
         <p>The command system lets you define <strong>triggers</strong> and <strong>actions</strong> so tabs can recover automatically, switch routes, or send alerts.</p>
 
         <div class="info-box">
-            <p><strong>📍 Where to configure it:</strong> open the <a href="/">dashboard</a> → <strong>Commands</strong>.</p>
+            <p><strong>📍 Where to configure it:</strong> open the <a href="http://127.0.0.1:8199/" data-dashboard-link="true">dashboard</a> → <strong>Commands</strong>.</p>
         </div>
 
         <div class="highlight-box">
@@ -1258,7 +1245,7 @@ if session.error_count > 2:
         <p>For sites outside the supported list, the system can call a helper AI to analyze the page and identify key elements such as the input box, send button, and reply container.</p>
 
         <div class="info-box">
-            <p><strong>📍 Where to configure it:</strong> open the <a href="/">dashboard</a> → Settings → <strong>AI Recognition</strong>.</p>
+            <p><strong>📍 Where to configure it:</strong> open the <a href="http://127.0.0.1:8199/" data-dashboard-link="true">dashboard</a> → Settings → <strong>AI Recognition</strong>.</p>
         </div>
 
         <h3>When you need it</h3>

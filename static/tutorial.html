@@ -969,6 +969,8 @@
             --docs-search-border: rgba(148, 163, 184, 0.26);
             --docs-mark-bg: #fef08a;
             --docs-mark-text: #854d0e;
+            --docs-link-color: #2563eb;
+            --docs-link-hover: #1d4ed8;
         }
 
         [data-theme="dark"] {
@@ -983,6 +985,8 @@
             --docs-search-border: rgba(71, 85, 105, 0.85);
             --docs-mark-bg: rgba(250, 204, 21, 0.16);
             --docs-mark-text: #fde68a;
+            --docs-link-color: #93c5fd;
+            --docs-link-hover: #dbeafe;
         }
 
         html {
@@ -1163,6 +1167,7 @@
             align-items: center;
             justify-content: flex-end;
             gap: 12px;
+            min-width: 0;
         }
 
         .docs-actions .language-dropdown {
@@ -1181,6 +1186,17 @@
             text-overflow: ellipsis;
             white-space: nowrap;
             text-align: left;
+        }
+
+        section a:not(.project-link-button),
+        section a:not(.project-link-button):visited {
+            color: var(--docs-link-color);
+            text-decoration-thickness: 1.5px;
+            text-underline-offset: 0.16em;
+        }
+
+        section a:not(.project-link-button):hover {
+            color: var(--docs-link-hover);
         }
 
         .search-trigger kbd {
@@ -1908,9 +1924,38 @@
             }
         }
 
+        @media (max-width: 1380px) {
+            .docs-topbar-inner {
+                grid-template-columns: auto minmax(0, 1fr);
+                grid-template-areas:
+                    "brand actions"
+                    "tabs tabs";
+                align-items: center;
+            }
+
+            .docs-brand {
+                grid-area: brand;
+            }
+
+            .top-tabs {
+                grid-area: tabs;
+                padding-top: 4px;
+            }
+
+            .docs-actions {
+                grid-area: actions;
+            }
+
+            .search-trigger {
+                min-width: 0;
+                flex: 1 1 260px;
+            }
+        }
+
         @media (max-width: 1080px) {
             .docs-topbar-inner {
                 grid-template-columns: 1fr;
+                grid-template-areas: none;
                 align-items: stretch;
             }
 
@@ -2098,12 +2143,12 @@
 
             <div class="config-group">
                 <h4><span class="icon">2️⃣</span> 各站点的维护覆盖范围</h4>
-                <p><strong>Gemini</strong> 是作者日常使用最多、维护也最及时的站点。其它站点并不保证第一时间跟进；如果遇到问题，更推荐<strong>加 QQ 群反馈</strong>，通常会比单纯提 Issue 更快拿到回应。</p>
+                <p><strong>Gemini、deepseek</strong> 是作者日常使用最多、维护也最及时的站点。其它站点并不保证第一时间跟进；如果遇到问题，更推荐<strong>加 QQ 群反馈</strong>，通常会比单纯提 Issue 更快拿到回应。</p>
             </div>
 
             <div class="config-group">
                 <h4><span class="icon">3️⃣</span> Function Calling 目前还不稳定</h4>
-                <p><code>Function Calling</code> 这块目前依然<strong>极其依赖 AI 本身的理解能力</strong>。它不是一个已经完全收敛、可以闭眼依赖的稳定功能；如果你要用这块能力，请降低预期，多做实测。</p>
+                <p><code>Function Calling</code> 这块目前较为<strong>依赖 AI 本身的理解能力</strong>。可能仍然存在一定问题。</p>
             </div>
 
             <div class="config-group">
@@ -2157,7 +2202,7 @@
 
             <div class="note">
                 <p><strong>控制面板入口：</strong></p>
-                <a href="/" class="btn" target="_blank">打开控制面板</a>
+                <a href="http://127.0.0.1:8199/" class="btn" target="_blank" data-dashboard-link="true">打开控制面板</a>
                 <p style="margin-top: 10px;">控制面板地址：<code>http://127.0.0.1:8199/</code>，可在这里可视化地修改所有配置、查看实时日志。</p>
             </div>
 
@@ -2236,7 +2281,7 @@
 
             <h3>路线 A：AI 自动识别</h3>
             <ol>
-                <li>进入 <a href="/">控制面板</a> → 设置 → 环境配置，填好 <code>HELPER_API_KEY</code>、<code>HELPER_BASE_URL</code>、<code>HELPER_MODEL</code>。</li>
+                    <li>进入 <a href="http://127.0.0.1:8199/" data-dashboard-link="true">控制面板</a> → 设置 → 环境配置，填好 <code>HELPER_API_KEY</code>、<code>HELPER_BASE_URL</code>、<code>HELPER_MODEL</code>。</li>
                 <li>在脚本控制的浏览器里打开目标站点，并停留在真正可聊天的页面。准备发起请求前，请确认受控浏览器里没有除了目标网站之外的其它网站或无关标签页。</li>
                 <li>对该站点发起<strong>第一次真实 API 请求</strong>。</li>
                 <li>如果这个域名还不在 <code>config/sites.json</code> 中，后端会自动抓取 HTML 并调用辅助 AI 做页面分析。</li>
@@ -2505,31 +2550,18 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
         <section id="function-calling">
             <h2>🧰 函数调用（Tool Calling）</h2>
 
-            <div class="info-box">
-                <p><strong>🎯 快速导航：我该看哪个功能？</strong></p>
-                <table>
-                    <tr><th>你的需求</th><th>推荐功能</th><th>跳转</th></tr>
-                    <tr><td>让模型自动调用工具（如搜索、计算器）</td><td>函数调用</td><td><a href="#function-calling">查看</a></td></tr>
-                    <tr><td>突破 Cloudflare 验证</td><td>隐身模式</td><td><a href="#stealth-mode">查看</a></td></tr>
-                    <tr><td>每 10 次对话自动清理 Cookie</td><td>自动化命令</td><td><a href="#commands">查看</a></td></tr>
-                    <tr><td>检测到验证码自动切换代理</td><td>命令 + 代理切换</td><td><a href="#proxy-switching">查看</a></td></tr>
-                    <tr><td>新站点不知道选择器怎么写</td><td>AI 元素识别</td><td><a href="#ai-recognition">查看</a></td></tr>
-                    <tr><td>修改端口、超时、代理等全局设置</td><td>环境配置</td><td><a href="#env-config">查看</a></td></tr>
-                </table>
-            </div>
-
-            <p>项目现在兼容 <strong>OpenAI 标准 <code>tools</code> 格式</strong>，也兼容旧字段 <code>functions</code> / <code>function_call</code>，所以大多数支持 OpenAI Tool Calling 的客户端都能直接接进来。</p>
-            <p>和旧版本相比，这一块已经不是“只能硬撞一次”的状态了。后端现在内置了 <strong>函数调用校验失败后的内部修复重试</strong>，而且你可以直接在 <strong>控制面板 → 设置 → 环境配置 → 函数调用</strong> 里切换策略、控制重试次数和结果长度上限。</p>
+            <p>项目兼容 <strong>OpenAI 标准 <code>tools</code> 格式</strong>，也兼容 <code>functions</code> / <code>function_call</code></p>
+            <p>后端内置了 <strong>函数调用校验失败后的内部修复重试</strong>，可以直接在 <strong>控制面板 → 设置 → 环境配置 → 函数调用</strong> 里切换策略、控制重试次数和结果长度上限。</p>
 
             <div class="info-box">
                 <p><strong>这是什么：</strong>兼容 OpenAI 标准的 <code>tools</code> 调用格式，让你继续用熟悉的方式定义工具。</p>
             </div>
 
             <div class="highlight-box">
-                <p><strong>⚠️ 先看清边界：</strong>这<strong>不是原生 API 的函数调用</strong>。实际工作方式是：后端把工具定义、工具历史和调用约束整理成提示词 -> 网页端模型按格式输出 -> 后端再尝试把结果解析回 <code>tool_calls</code>。所以它的稳定性核心取决于<strong>模型自己的理解能力</strong>，而不是官方 API 层的强制执行。</p>
+                <p><strong>注意：</strong>这<strong>不是原生 API 的函数调用</strong>。实际工作方式是：后端把工具定义、工具历史和调用约束整理成提示词 -> 网页端模型按格式输出 -> 后端再尝试把结果解析回 <code>tool_calls</code>。所以它的稳定性核心取决于<strong>模型自己的理解能力</strong>，而不是官方 API 层的强制执行。</p>
             </div>
 
-            <h3>控制台里能调什么</h3>
+            <h3>控制台参数解释</h3>
             <table>
                 <tr><th>配置项</th><th>位置</th><th>作用</th></tr>
                 <tr><td><strong>重试策略</strong></td><td>设置 → 环境配置 → 函数调用</td><td>决定校验失败后，是只发最小修复上下文，还是把原始上下文一并发回模型。</td></tr>
@@ -2547,7 +2579,7 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
             <h3>成功率影响因素</h3>
             <table>
                 <tr><th>因素</th><th>高成功率</th><th>低成功率</th></tr>
-                <tr><td><strong>模型能力</strong></td><td>GPT-5、Claude 4.5 等强模型</td><td>小模型、专用模型</td></tr>
+                <tr><td><strong>模型能力</strong></td><td>GPT-5.5、Claude 4.6 等强模型</td><td>小模型、专用模型</td></tr>
                 <tr><td><strong>工具数量</strong></td><td>1 到 3 个工具</td><td>10+ 个工具</td></tr>
                 <tr><td><strong>参数复杂度</strong></td><td>扁平结构、简单类型</td><td>深层嵌套、复杂对象</td></tr>
                 <tr><td><strong>命名清晰度</strong></td><td><code>search_web</code>、<code>get_weather</code></td><td><code>func1</code>、<code>tool_x</code></td></tr>
@@ -3231,7 +3263,7 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
             <p>命令系统的核心思路很简单：<strong>触发条件 + 执行动作</strong>。你可以用它来自动清理 Cookie、自动切代理、自动刷新页面，或者在检测到异常时走一整套恢复流程。</p>
 
             <div class="info-box">
-                <p><strong>📍 配置位置：</strong>进入 <a href="/">控制面板</a> → 命令</p>
+                <p><strong>📍 配置位置：</strong>进入 <a href="http://127.0.0.1:8199/" data-dashboard-link="true">控制面板</a> → 命令</p>
             </div>
 
             <div class="highlight-box">
@@ -3629,7 +3661,7 @@ if session.error_count > 2:
             <p>当目标站点不在已适配列表中时，系统可以调用辅助 AI 自动分析网页结构，尝试识别输入框、发送按钮、回复容器等关键元素。</p>
 
             <div class="info-box">
-                <p><strong>📍 配置位置：</strong>进入 <a href="/">控制面板</a> → 设置 → AI 元素识别</p>
+                <p><strong>📍 配置位置：</strong>进入 <a href="http://127.0.0.1:8199/" data-dashboard-link="true">控制面板</a> → 设置 → AI 元素识别</p>
             </div>
 
             <h3>什么时候需要</h3>
@@ -4763,6 +4795,20 @@ BROWSER_PROFILE_NAME=Default</code></pre>
             return docsUiCopy[tutorialState.currentLanguage] || docsUiCopy.zh;
         }
 
+        function getTutorialDashboardUrl() {
+            if (window.location.protocol === 'http:' || window.location.protocol === 'https:') {
+                return `${window.location.origin}/`;
+            }
+            return 'http://127.0.0.1:8199/';
+        }
+
+        function syncDashboardLinks() {
+            const dashboardUrl = getTutorialDashboardUrl();
+            document.querySelectorAll('[data-dashboard-link="true"]').forEach(link => {
+                link.setAttribute('href', dashboardUrl);
+            });
+        }
+
         function normalizeDocsCategory(categoryId) {
             return docsCategories.some(category => category.id === categoryId) ? categoryId : docsCategories[0].id;
         }
@@ -5725,6 +5771,7 @@ BROWSER_PROFILE_NAME=Default</code></pre>
                 }
             });
 
+            syncDashboardLinks();
             renderSiteGrid();
             updateLanguageButtons();
             updateThemeButton(document.documentElement.getAttribute('data-theme') || 'light');
@@ -5748,6 +5795,11 @@ BROWSER_PROFILE_NAME=Default</code></pre>
                 persist: false,
                 skipScroll: true
             });
+
+            const currentTocTitle = document.getElementById('pageTocTitle');
+            if (currentTocTitle) {
+                currentTocTitle.dataset.sectionId = '';
+            }
 
             if (hashMeta) {
                 requestAnimationFrame(() => {
