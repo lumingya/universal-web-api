@@ -195,19 +195,56 @@ class NetworkMonitor:
 
     def _listen_is_active(self) -> bool:
         try:
+            listen = getattr(self.tab, "listen", None)
+            driver = getattr(listen, "_driver", None) if listen is not None else None
             return bool(
-                hasattr(self.tab, "listen")
-                and getattr(self.tab.listen, "listening", False)
+                listen is not None
+                and getattr(listen, "listening", False)
+                and driver is not None
+                and getattr(driver, "is_running", False)
             )
         except Exception:
             return False
 
-    def _safe_stop_listen(self):
+    def _force_reset_listen_state(self):
+        listen = getattr(self.tab, "listen", None)
+        if listen is None:
+            return
+
         try:
-            if self._listen_is_active():
-                self.tab.listen.stop()
+            setattr(listen, "listening", False)
         except Exception:
             pass
+
+        try:
+            if hasattr(listen, "_network_enabled"):
+                setattr(listen, "_network_enabled", False)
+        except Exception:
+            pass
+
+        try:
+            if hasattr(listen, "_driver"):
+                setattr(listen, "_driver", None)
+        except Exception:
+            pass
+
+        try:
+            clear = getattr(listen, "clear", None)
+            if callable(clear):
+                clear()
+        except Exception:
+            pass
+
+    def _safe_stop_listen(self):
+        listen = getattr(self.tab, "listen", None)
+        if listen is None:
+            return
+
+        try:
+            if getattr(listen, "listening", False):
+                listen.stop()
+        except Exception:
+            self._force_reset_listen_state()
 
     @staticmethod
     def _is_restartable_listen_error(err_text: str) -> bool:
@@ -224,6 +261,8 @@ class NetworkMonitor:
         self._prefetched_responses = []
         self.tab.listen._reuse_driver = True
         self.tab.listen.start(self._listen_pattern)
+        if not self._listen_is_active():
+            raise NetworkMonitorError("监听启动后未进入活动状态")
         self._pre_started = True
         self._is_listening = True
 
@@ -275,6 +314,7 @@ class NetworkMonitor:
         self._is_listening = False
         self._pre_started = False
         self._safe_stop_listen()
+        self._force_reset_listen_state()
         try:
             self._start_listen()
             logger.debug(f"[NetworkMonitor] 已重建监听 ({reason})")
