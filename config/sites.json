@@ -167,6 +167,95 @@
       "independent_cookies_auto_takeover": false
     }
   },
+  "aistudio.xiaomimimo.com": {
+    "presets": {
+      "主预设": {
+        "selectors": {
+          "input_box": "textarea[rows=\"1\"], textarea",
+          "send_btn": "button[data-track-id=\"home_send_btn\"]",
+          "result_container": ".markdown-prose.select-text, [class*=\"Markdown_markdown__\"]",
+          "new_chat_btn": "button[data-track-id$=\"new_chat_btn\"]",
+          "message_wrapper": ".markdown-prose.select-text, [class*=\"Markdown_markdown__\"]",
+          "generating_indicator": "button[data-track-id=\"home_send_btn\"][disabled]",
+          "file_input": "input[type=\"file\"]"
+        },
+        "stream_config": {
+          "mode": "network",
+          "hard_timeout": 300,
+          "network": {
+            "listen_pattern": "open-apis/bot/chat",
+            "stream_match_mode": "keyword",
+            "stream_match_pattern": "open-apis/bot/chat",
+            "parser": "mimo",
+            "silence_threshold": 3,
+            "response_interval": 0.5
+          }
+        },
+        "workflow": [
+          {
+            "action": "CLICK",
+            "target": "new_chat_btn",
+            "optional": true,
+            "value": null
+          },
+          {
+            "action": "WAIT",
+            "target": "",
+            "optional": false,
+            "value": 0.5
+          },
+          {
+            "action": "FILL_INPUT",
+            "target": "input_box",
+            "optional": false,
+            "value": null
+          },
+          {
+            "action": "CLICK",
+            "target": "send_btn",
+            "optional": false,
+            "value": null
+          },
+          {
+            "action": "STREAM_WAIT",
+            "target": "result_container",
+            "optional": false,
+            "value": null
+          }
+        ],
+        "stealth": false,
+        "image_extraction": {
+          "enabled": false,
+          "modalities": {
+            "image": false,
+            "audio": false,
+            "video": false
+          },
+          "selector": "img",
+          "audio_selector": "audio, audio source",
+          "video_selector": "video, video source",
+          "container_selector": null,
+          "debounce_seconds": 2,
+          "wait_for_load": true,
+          "load_timeout_seconds": 5,
+          "download_blobs": true,
+          "max_size_mb": 100,
+          "src_allow_patterns": [],
+          "mode": "all"
+        },
+        "file_paste": {
+          "enabled": false,
+          "threshold": 50000,
+          "hint_text": "完全专注于文件内容"
+        }
+      }
+    },
+    "default_preset": "主预设",
+    "advanced": {
+      "independent_cookies": false,
+      "independent_cookies_auto_takeover": false
+    }
+  },
   "grok.com": {
     "presets": {
       "主预设": {
@@ -248,112 +337,112 @@
   "chatgpt.com": {
     "presets": {
       "主预设": {
+        "file_paste": {
+          "enabled": false,
+          "hint_text": "完全专注于文件内容",
+          "threshold": 180000
+        },
+        "image_extraction": {
+          "audio_selector": "audio, audio source",
+          "container_selector": "div[id^=\"image-\"]",
+          "debounce_seconds": 2,
+          "download_blobs": true,
+          "enabled": true,
+          "load_timeout_seconds": 8,
+          "max_size_mb": 20,
+          "modalities": {
+            "audio": false,
+            "image": true,
+            "video": false
+          },
+          "mode": "all",
+          "selector": "img:not([aria-hidden=\"true\"])",
+          "src_allow_patterns": [],
+          "video_selector": "video, video source",
+          "wait_for_load": true
+        },
         "selectors": {
-          "input_box": "#prompt-textarea",
-          "send_btn": "[data-testid=\"send-button\"]",
-          "result_container": "section[data-testid^=\"conversation-turn-\"] .markdown, section[data-testid^=\"conversation-turn-\"] div[id^=\"image-\"]",
-          "new_chat_btn": "[data-testid=\"create-new-chat-button\"]",
-          "message_wrapper": "section[data-testid^=\"conversation-turn-\"]",
           "generating_indicator": null,
+          "input_box": "#prompt-textarea",
+          "message_wrapper": "section[data-testid^=\"conversation-turn-\"]",
+          "new_chat_btn": "[data-testid=\"create-new-chat-button\"]",
+          "result_container": "section[data-testid^=\"conversation-turn-\"] .markdown, section[data-testid^=\"conversation-turn-\"] div[id^=\"image-\"]",
+          "send_btn": "[data-testid=\"send-button\"]",
           "temp_chat_btn": "button[aria-label=\"开启临时聊天\"]"
         },
+        "stealth": false,
         "stream_config": {
-          "mode": "network",
-          "hard_timeout": 600,
-          "send_confirmation": {
-            "attachment_sensitivity": "medium",
-            "post_click_observe_window": 1.8,
-            "pre_retry_probe_window": 0.12,
-            "retry_observe_window": 0.9,
-            "attachment_observe_window": 6,
-            "trust_network_activity": true,
-            "trust_generating_indicator": true,
-            "trust_send_disabled_with_input_shrink": true
-          },
           "attachment_monitor": {
-            "root_selectors": [
-              "form:has(#prompt-textarea)",
-              ".shadow-short-composer"
-            ],
             "attachment_selectors": [
               "div[role='group'][aria-label]",
               "button[aria-label='以全视图打开图片']",
               "button[aria-label^='移除文件']"
             ],
-            "pending_selectors": [],
             "busy_text_markers": [],
-            "send_button_disabled_markers": [],
-            "require_attachment_present": true,
             "continue_once_on_unconfirmed_send": false,
+            "hard_max_wait": 90,
             "idle_timeout": 8,
-            "hard_max_wait": 90
+            "pending_selectors": [],
+            "require_attachment_present": true,
+            "root_selectors": [
+              "form:has(#prompt-textarea)",
+              ".shadow-short-composer"
+            ],
+            "send_button_disabled_markers": []
           },
+          "hard_timeout": 600,
+          "mode": "network",
           "network": {
             "listen_pattern": "backend-api/f/conversation",
-            "stream_match_mode": "regex",
-            "stream_match_pattern": "/backend-api/f/conversation(?:$|[?#])",
             "parser": "chatgpt",
+            "response_interval": 0.5,
             "silence_threshold": 2,
-            "response_interval": 0.5
+            "stream_match_mode": "regex",
+            "stream_match_pattern": "/backend-api/f/conversation(?:$|[?#])"
+          },
+          "send_confirmation": {
+            "attachment_observe_window": 6,
+            "attachment_sensitivity": "medium",
+            "post_click_observe_window": 1.8,
+            "pre_retry_probe_window": 0.12,
+            "retry_observe_window": 0.9,
+            "trust_generating_indicator": true,
+            "trust_network_activity": true,
+            "trust_send_disabled_with_input_shrink": true
           }
         },
         "workflow": [
           {
             "action": "CLICK",
-            "target": "new_chat_btn",
             "optional": true,
+            "target": "new_chat_btn",
             "value": null
           },
           {
             "action": "WAIT",
-            "target": "",
             "optional": false,
+            "target": "",
             "value": "0.5"
           },
           {
             "action": "FILL_INPUT",
-            "target": "input_box",
             "optional": false,
+            "target": "input_box",
             "value": null
           },
           {
             "action": "CLICK",
-            "target": "send_btn",
             "optional": true,
+            "target": "send_btn",
             "value": null
           },
           {
             "action": "STREAM_WAIT",
-            "target": "result_container",
             "optional": false,
+            "target": "result_container",
             "value": null
           }
-        ],
-        "stealth": false,
-        "image_extraction": {
-          "enabled": true,
-          "modalities": {
-            "image": true,
-            "audio": false,
-            "video": false
-          },
-          "selector": "img:not([aria-hidden=\"true\"])",
-          "audio_selector": "audio, audio source",
-          "video_selector": "video, video source",
-          "container_selector": "div[id^=\"image-\"]",
-          "debounce_seconds": 2,
-          "wait_for_load": true,
-          "load_timeout_seconds": 8,
-          "download_blobs": true,
-          "max_size_mb": 20,
-          "src_allow_patterns": [],
-          "mode": "all"
-        },
-        "file_paste": {
-          "enabled": false,
-          "threshold": 180000,
-          "hint_text": "完全专注于文件内容"
-        }
+        ]
       }
     },
     "default_preset": "主预设"
@@ -556,7 +645,7 @@
           {
             "action": "CLICK",
             "target": "new_chat_btn",
-            "optional": true,
+            "optional": false,
             "value": null
           },
           {
@@ -1153,7 +1242,7 @@
           "input_box": "textarea[name=\"message\"]",
           "send_btn": "button[type=\"submit\"]",
           "result_container": "main ol > div.w-full:not(.flex) .flex.flex-col.gap-3",
-          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href*=\"direct\"]",
+          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href*=\"direct\"], a[data-sidebar=\"menu-button\"][href=\"/\"]",
           "message_wrapper": null,
           "generating_indicator": null
         },
@@ -1312,7 +1401,7 @@
           "input_box": "textarea[name=\"message\"]",
           "send_btn": "button[type=\"submit\"]",
           "result_container": "main ol > div.w-full:not(.flex) .flex.flex-col.gap-3",
-          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href*=\"direct\"]",
+          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href*=\"direct\"], a[data-sidebar=\"menu-button\"][href=\"/\"]",
           "message_wrapper": null,
           "generating_indicator": null
         },
@@ -1466,16 +1555,18 @@
   },
   "chat.qwen.ai": {
     "presets": {
-      "主预设": {
+      "1": {
         "selectors": {
           "input_box": "textarea.message-input-textarea, textarea#chat-input, textarea[data-testid=\"yuntu-textarea\"], textarea[placeholder], div[role=\"textbox\"][contenteditable=\"true\"]",
           "send_btn": "button.send-button, .send-button, .message-input-right-button-send, .chat-prompt-send-button, #send-message-button, button[type=\"submit\"], button[aria-label*=\"发送\"], button[aria-label*=\"Send\"]",
           "result_container": ".chat-response-message .qwen-markdown, .chat-response-message-right .qwen-markdown, .response-message-content, .custom-qwen-markdown, .qwen-markdown",
-          "new_chat_btn": "xpath://div[@id=\"sidebar\"]//div[contains(@class, \"sidebar-entry-list-content\")][.//div[contains(@class, \"sidebar-entry-list-text\") and normalize-space(.)=\"新建对话\"]][1]",
+          "new_chat_btn": "//div[contains(@class, 'sidebar-entry-fixed-list-text') and normalize-space()='新建对话']",
           "message_wrapper": ".qwen-chat-message, .chat-response-message, .chat-user-message, .chat-item, [data-role]",
           "generating_indicator": "button[aria-label*=\"停止\"], button[aria-label*=\"Stop\"]",
           "file_input": "input[type=\"file\"]",
-          "drop_zone": "body"
+          "drop_zone": "body",
+          "下拉框": "#qwen-chat-header-left .ant-dropdown-trigger",
+          "3.6max": "//div[contains(@class, 'model-item') and .//span[text()='Qwen3.6-Max-Preview']]"
         },
         "workflow": [
           {
@@ -1514,7 +1605,7 @@
           "mode": "network",
           "hard_timeout": 300,
           "send_confirmation": {
-            "attachment_sensitivity": "medium",
+            "attachment_sensitivity": "high",
             "post_click_observe_window": 1.8,
             "pre_retry_probe_window": 0.12,
             "retry_observe_window": 0.9,
@@ -1550,7 +1641,7 @@
               "loading"
             ],
             "require_attachment_present": true,
-            "continue_once_on_unconfirmed_send": true,
+            "continue_once_on_unconfirmed_send": false,
             "idle_timeout": 8,
             "hard_max_wait": 90
           },
@@ -1585,7 +1676,147 @@
         "file_paste": {
           "enabled": true,
           "threshold": 40000,
-          "hint_text": "完全专注于文件内容"
+          "hint_text": "继续"
+        }
+      },
+      "主预设": {
+        "selectors": {
+          "input_box": "textarea.message-input-textarea, textarea#chat-input, textarea[data-testid=\"yuntu-textarea\"], textarea[placeholder], div[role=\"textbox\"][contenteditable=\"true\"]",
+          "send_btn": "button.send-button, .send-button, .message-input-right-button-send, .chat-prompt-send-button, #send-message-button, button[type=\"submit\"], button[aria-label*=\"发送\"], button[aria-label*=\"Send\"]",
+          "result_container": ".chat-response-message .qwen-markdown, .chat-response-message-right .qwen-markdown, .response-message-content, .custom-qwen-markdown, .qwen-markdown",
+          "new_chat_btn": "//div[contains(@class, 'sidebar-entry-fixed-list-text') and normalize-space()='新建对话']",
+          "message_wrapper": ".qwen-chat-message, .chat-response-message, .chat-user-message, .chat-item, [data-role]",
+          "generating_indicator": "button[aria-label*=\"停止\"], button[aria-label*=\"Stop\"]",
+          "file_input": "input[type=\"file\"]",
+          "drop_zone": "body",
+          "下拉框": "#qwen-chat-header-left .ant-dropdown-trigger",
+          "3.6max": "//div[contains(@class, 'model-item') and .//span[text()='Qwen3.6-Max-Preview']]"
+        },
+        "workflow": [
+          {
+            "action": "CLICK",
+            "target": "new_chat_btn",
+            "optional": true,
+            "value": null
+          },
+          {
+            "action": "CLICK",
+            "target": "下拉框",
+            "optional": false,
+            "value": null
+          },
+          {
+            "action": "CLICK",
+            "target": "3.6max",
+            "optional": false,
+            "value": null
+          },
+          {
+            "action": "WAIT",
+            "target": "",
+            "optional": false,
+            "value": "0.5"
+          },
+          {
+            "action": "FILL_INPUT",
+            "target": "input_box",
+            "optional": false,
+            "value": null
+          },
+          {
+            "action": "KEY_PRESS",
+            "target": "Enter",
+            "optional": true,
+            "value": null
+          },
+          {
+            "action": "STREAM_WAIT",
+            "target": "result_container",
+            "optional": false,
+            "value": null
+          }
+        ],
+        "stealth": false,
+        "stream_config": {
+          "mode": "network",
+          "hard_timeout": 300,
+          "send_confirmation": {
+            "attachment_sensitivity": "high",
+            "post_click_observe_window": 1.8,
+            "pre_retry_probe_window": 0.12,
+            "retry_observe_window": 0.9,
+            "attachment_observe_window": 6,
+            "trust_network_activity": true,
+            "trust_generating_indicator": true,
+            "trust_send_disabled_with_input_shrink": true
+          },
+          "attachment_monitor": {
+            "root_selectors": [
+              ".message-input-container"
+            ],
+            "attachment_selectors": [
+              ".message-input-column-file",
+              ".message-input-column-file .file-card-list",
+              ".message-input-column-file .fileitem-btn"
+            ],
+            "pending_selectors": [
+              ".message-input-column-file .vision-spinner",
+              ".message-input-column-file .circle-spinner",
+              ".message-input-column-file .spinner_ajPY",
+              ".message-input-column-file [class*='spinner']",
+              ".message-input-column-file [aria-busy='true']",
+              ".message-input-column-file .ant-spin",
+              ".message-input-column-file [class*='loading']"
+            ],
+            "busy_text_markers": [
+              "上传中",
+              "处理中",
+              "解析中",
+              "uploading",
+              "loading"
+            ],
+            "send_button_disabled_markers": [
+              "disabled",
+              "not-allowed",
+              "loading"
+            ],
+            "require_attachment_present": true,
+            "continue_once_on_unconfirmed_send": false,
+            "idle_timeout": 8,
+            "hard_max_wait": 90
+          },
+          "network": {
+            "listen_pattern": "api/v2/chat/completions",
+            "stream_match_mode": "keyword",
+            "stream_match_pattern": "",
+            "parser": "qwen",
+            "silence_threshold": 3,
+            "response_interval": 0.5
+          }
+        },
+        "image_extraction": {
+          "enabled": false,
+          "modalities": {
+            "image": false,
+            "audio": false,
+            "video": false
+          },
+          "selector": "img",
+          "audio_selector": "audio, audio source",
+          "video_selector": "video, video source",
+          "container_selector": null,
+          "debounce_seconds": 2,
+          "wait_for_load": true,
+          "load_timeout_seconds": 5,
+          "download_blobs": true,
+          "max_size_mb": 10,
+          "src_allow_patterns": [],
+          "mode": "all"
+        },
+        "file_paste": {
+          "enabled": true,
+          "threshold": 40000,
+          "hint_text": "继续"
         }
       }
     },

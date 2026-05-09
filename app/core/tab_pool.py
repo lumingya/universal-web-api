@@ -1655,9 +1655,11 @@ class TabPoolManager:
                             cancelled = bool(request_manager.cancel_request(task_id, "stuck_timeout"))
                         except Exception as e:
                             logger.debug(f"[{session.id}] stuck cancel failed (ignored): {e}")
+                    snapshot = self._describe_session(session)
                     logger.warning(
                         f"[{session.id}] stuck for {busy_duration:.0f}s, force release "
-                        f"(task={task_id or '-'}, cancelled={cancelled})"
+                        f"(task={task_id or '-'}, cancelled={cancelled}, "
+                        f"snapshot={snapshot})"
                     )
                     session.force_release(clear_page=False, check_triggers=False)
                     if session.status == TabStatus.IDLE:
@@ -1828,6 +1830,29 @@ class TabPoolManager:
             return session.debug_summary()
         except Exception as e:
             return f"session={getattr(session, 'id', '-')}, snapshot_error={e}"
+
+    def _describe_index_wait_state(
+        self,
+        persistent_index: int,
+        waiters: deque[str],
+        waiter_token: str,
+    ) -> str:
+        session_id = self._persistent_to_session_id.get(persistent_index)
+        session = self._tabs.get(session_id) if session_id else None
+        ahead = self._count_waiters_ahead(waiters, waiter_token)
+        busy_for = "-"
+        if session is not None:
+            try:
+                if getattr(session, "status", None) == TabStatus.BUSY:
+                    busy_for = (
+                        f"{max(0.0, time.time() - float(getattr(session, 'last_used_at', 0.0) or 0.0)):.1f}s"
+                    )
+            except Exception:
+                busy_for = "?"
+        return (
+            f"idx=#{persistent_index}, ahead={ahead}, waiters={len(waiters)}, "
+            f"busy_for={busy_for}, holder={self._describe_session(session)}"
+        )
 
     def acquire(self, task_id: str, timeout: float = None) -> Optional[TabSession]:
         """获取一个可用的标签页（增强版）"""
@@ -2666,16 +2691,28 @@ class TabPoolManager:
                     if self._should_scan():
                         self._scan_new_tabs()
 
+                    # Keep fixed-index acquisition aligned with other wait paths so a wedged
+                    # holder can be cancelled and released instead of blocking the queue.
+                    released_stuck = self._check_stuck_tabs()
+                    self._cleanup_unhealthy_tabs()
+                    if released_stuck:
+                        logger.debug(
+                            f"Rechecking tab #{persistent_index} after stuck-tab maintenance "
+                            f"(task={task_id}, wait_state={self._describe_index_wait_state(persistent_index, waiters, waiter_token)})"
+                        )
+
                     if not self._is_waiter_turn(waiters, waiter_token):
                         remaining = deadline - time.time()
                         if remaining <= 0:
                             logger.warning(
-                                f"Timed out waiting for tab #{persistent_index} (task={task_id})"
+                                f"Timed out waiting for tab #{persistent_index} "
+                                f"(task={task_id}, wait_state={self._describe_index_wait_state(persistent_index, waiters, waiter_token)})"
                             )
                             return None
                         logger.debug_throttled(
                             f"tab_pool.wait_index.{persistent_index}",
-                            f"Waiting for tab #{persistent_index} release...",
+                            f"Waiting for tab #{persistent_index} release... "
+                            f"({self._describe_index_wait_state(persistent_index, waiters, waiter_token)})",
                             interval_sec=5.0,
                         )
                         self._condition.wait(timeout=min(remaining, 1.0))
@@ -2692,11 +2729,17 @@ class TabPoolManager:
                         return None
 
                     if not session.is_healthy():
-                        logger.warning(f"[{session.id}] tab is unhealthy")
+                        logger.warning(
+                            f"[{session.id}] tab is unhealthy "
+                            f"(task={task_id}, snapshot={self._describe_session(session)})"
+                        )
                         return None
 
                     if self._should_defer_to_command(session, task_id):
-                        logger.debug(f"[{session.id}] defer by index acquire to high-priority command")
+                        logger.debug(
+                            f"[{session.id}] defer by index acquire to high-priority command "
+                            f"(task={task_id}, snapshot={self._describe_session(session)})"
+                        )
                         remaining = deadline - time.time()
                         if remaining <= 0:
                             return None
@@ -2727,13 +2770,15 @@ class TabPoolManager:
                         logger.warning(
                             f"Timed out waiting for tab #{persistent_index} "
                             f"(task={task_id}, status: {session.status.value}, "
+                            f"wait_state={self._describe_index_wait_state(persistent_index, waiters, waiter_token)}, "
                             f"snapshot={self._describe_session(session)})"
                         )
                         return None
 
                     logger.debug_throttled(
                         f"tab_pool.wait_index.{persistent_index}",
-                        f"Waiting for tab #{persistent_index} release...",
+                        f"Waiting for tab #{persistent_index} release... "
+                        f"({self._describe_index_wait_state(persistent_index, waiters, waiter_token)})",
                         interval_sec=5.0,
                     )
                     self._condition.wait(timeout=min(remaining, 1.0))

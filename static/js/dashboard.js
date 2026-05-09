@@ -829,6 +829,20 @@ const app = createApp({
             showTestDialog: false,
             showSelectorMenu: false,
             darkMode: false,
+            showMainCompareSummaryDialog: false,
+            mainCompareSummaryLoading: false,
+            mainCompareSummaryError: '',
+            mainCompareSummaryItems: [],
+            mainCompareSummaryCounts: {
+                same: 0,
+                different: 0,
+                local_only_preset: 0,
+                local_only_site: 0,
+                main_only_preset: 0,
+                main_only_site: 0
+            },
+            mainCompareSummaryPath: 'config/sites.json',
+            mainCompareShowSame: false,
 
             // Tab 切换（新增 settings）
             activeTab: 'config',  // 'config' | 'logs' | 'settings'
@@ -1016,6 +1030,21 @@ const app = createApp({
         // 检测更新白名单是否有变更
         updatePreserveChanged() {
             return JSON.stringify(this.updatePreserveSelected) !== JSON.stringify(this.updatePreserveSelectedOriginal);
+        },
+
+        mainCompareVisibleItems() {
+            const items = Array.isArray(this.mainCompareSummaryItems) ? this.mainCompareSummaryItems : [];
+            if (this.mainCompareShowSame) {
+                return items;
+            }
+            return items.filter(item => String(item && item.status || '') !== 'same');
+        },
+
+        mainCompareDifferentTotal() {
+            const counts = this.mainCompareSummaryCounts || {};
+            return Number(counts.different || 0)
+                + Number(counts.local_only_preset || 0)
+                + Number(counts.local_only_site || 0);
         }
     },
 
@@ -1521,6 +1550,92 @@ const app = createApp({
                 console.error('重新加载配置失败:', error);
                 this.notify('加载失败: ' + error.message, 'error');
             }
+        },
+
+        async openMainCompareSummaryDialog() {
+            this.showMainCompareSummaryDialog = true;
+            await this.loadMainCompareSummary();
+        },
+
+        closeMainCompareSummaryDialog() {
+            this.showMainCompareSummaryDialog = false;
+        },
+
+        async loadMainCompareSummary() {
+            this.mainCompareSummaryLoading = true;
+            this.mainCompareSummaryError = '';
+            try {
+                const data = await this.apiRequest('/api/config/compare-main-summary');
+                this.mainCompareSummaryItems = Array.isArray(data.items) ? data.items : [];
+                this.mainCompareSummaryCounts = {
+                    same: 0,
+                    different: 0,
+                    local_only_preset: 0,
+                    local_only_site: 0,
+                    main_only_preset: 0,
+                    main_only_site: 0,
+                    ...(data.counts || {})
+                };
+                this.mainCompareSummaryPath = String(data.path || 'config/sites.json').trim() || 'config/sites.json';
+                return true;
+            } catch (error) {
+                this.mainCompareSummaryItems = [];
+                this.mainCompareSummaryError = error.message;
+                return false;
+            } finally {
+                this.mainCompareSummaryLoading = false;
+            }
+        },
+
+        getMainCompareStatusClass(status) {
+            if (status === 'different') {
+                return 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300';
+            }
+            if (status === 'local_only_preset') {
+                return 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-900/30 dark:text-blue-300';
+            }
+            if (status === 'local_only_site') {
+                return 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-800 dark:bg-rose-900/30 dark:text-rose-300';
+            }
+            return 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300';
+        },
+
+        getMainCompareStatusText(status) {
+            if (status === 'different') return '字段不同';
+            if (status === 'local_only_preset') return '本地自定义预设';
+            if (status === 'local_only_site') return '本地自定义站点';
+            return '与官方一致';
+        },
+
+        async waitForConfigTabRef() {
+            for (let attempt = 0; attempt < 30; attempt++) {
+                await this.$nextTick();
+                const ref = this.$refs.configTab;
+                if (ref && typeof ref.openConfigCompareForPreset === 'function') {
+                    return ref;
+                }
+                await new Promise(resolve => setTimeout(resolve, 60));
+            }
+            return null;
+        },
+
+        async openMainCompareDetail(item) {
+            if (!item || !item.domain) {
+                return;
+            }
+
+            this.showMainCompareSummaryDialog = false;
+            this.activeTab = 'config';
+            this.currentDomain = item.domain;
+
+            const configTab = await this.waitForConfigTabRef();
+            if (!configTab) {
+                this.notify('配置面板尚未准备好', 'error');
+                return;
+            }
+
+            const targetPreset = String(item.local_preset_name || '').trim();
+            await configTab.openConfigCompareForPreset(targetPreset);
         },
         // ========== 日志相关 ==========
 

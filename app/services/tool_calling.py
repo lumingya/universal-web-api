@@ -62,11 +62,13 @@ def _prepare_tool_result_content(name: str, content: str) -> str:
     message = (
         "tool_result_too_large: single tool result exceeds proxy limit; "
         f"name={name or 'tool'}; chars={len(text)}; limit={limit}. "
+        "The actual tool output was omitted and not forwarded. "
         "Reduce the requested result size, use narrower filters, timeline summaries, "
-        "keyword scans, or even sampling instead of returning full raw logs."
+        "keyword scans, or even sampling instead of returning full raw logs. "
+        "If you still need this data, call the tool again with a narrower request."
     )
-    logger.error(f"[tool_calling] {message}")
-    raise RuntimeError(message)
+    logger.warning(f"[tool_calling] {message}")
+    return message
 
 
 def _sanitize_tool_result_content(content: str) -> str:

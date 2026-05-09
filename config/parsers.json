@@ -1,4 +1,19 @@
 {
   "version": "1.0",
-  "parsers": {}
+  "parsers": {
+    "mimo": {
+      "id": "mimo",
+      "name": "Xiaomi MiMo",
+      "description": "Parse Xiaomi MiMo SSE streams and ignore think-phase text",
+      "module": "app.core.parsers.mimo_runtime_parser",
+      "class": "MimoParser",
+      "module_name": "mimo_runtime_parser",
+      "filename": "mimo_runtime_parser.py",
+      "enabled": true,
+      "installed_at": "2026-05-08T10:40:36Z",
+      "supported_patterns": [
+        "**/open-apis/bot/chat**"
+      ]
+    }
+  }
 }

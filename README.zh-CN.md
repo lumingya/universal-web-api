@@ -44,6 +44,7 @@
 | 豆包 | www.doubao.com | 已适配新版域名 |
 | AI Studio | aistudio.google.com | — |
 | Arena AI | arena.ai | IP 质量敏感，详见注意事项 |
+| 小米mimo | aistudio.xiaomimimo.com | - |
 
 > 未收录的网站支持通过 AI 自动分析网页结构进行适配，详见 [新增站点指南](./static/tutorial.html#add-site-guide)。
 

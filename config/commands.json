@@ -954,10 +954,17 @@
         "periodic_interval_sec": 8,
         "periodic_jitter_sec": 2,
         "priority": 1,
-        "fire_mode": "edge",
+        "fire_mode": "level",
         "cooldown_sec": 6,
         "stable_for_sec": 1.5,
-        "check_while_busy_workflow": false
+        "check_while_busy_workflow": false,
+        "command_ids": [],
+        "listen_all_commands": false,
+        "informative_only": true,
+        "allow_during_workflow": false,
+        "interrupt_policy": "auto",
+        "interrupt_message": "",
+        "probe_js": ""
       },
       "actions": [
         {
@@ -970,10 +977,11 @@
       "script": "",
       "script_lang": "javascript",
       "id": "cmd_0020e346",
-      "last_triggered": 1777737008.433228,
-      "trigger_count": 5,
+      "last_triggered": 1778290523.421722,
+      "trigger_count": 2,
       "log_enabled": true,
-      "log_level": "GLOBAL"
+      "log_level": "GLOBAL",
+      "stop_on_error": false
     },
     {
       "id": "cmd_gemsidebar001",
@@ -1018,8 +1026,8 @@
       "group_name": "gemini",
       "script": "",
       "script_lang": "javascript",
-      "last_triggered": 1777830040.698916,
-      "trigger_count": 278,
+      "last_triggered": 1778290580.6932435,
+      "trigger_count": 25,
       "log_enabled": false,
       "log_level": "GLOBAL",
       "stop_on_error": false

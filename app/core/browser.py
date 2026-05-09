@@ -2726,7 +2726,15 @@ class BrowserCore:
 
             config_engine = self._get_config_engine()
             effective_preset_name = preset_name if preset_name is not None else session.preset_name
-            site_config = config_engine.get_site_config(domain, preset_name=effective_preset_name)
+            tab = getattr(session, "tab", None)
+            if tab is None:
+                return []
+
+            site_config = config_engine.get_site_config(
+                domain,
+                getattr(tab, "html", "") or "",
+                preset_name=effective_preset_name,
+            )
             if not site_config:
                 return []
 
@@ -2751,9 +2759,6 @@ class BrowserCore:
                 return []
 
             extractor = config_engine.get_site_extractor(domain, preset_name=effective_preset_name)
-            tab = getattr(session, "tab", None)
-            if tab is None:
-                return []
 
             logger.debug(f"[{session.id}] 非流式响应命中占位媒体文本，触发二次提取等待")
             return self._extract_media_after_stream(
