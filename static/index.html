@@ -359,12 +359,12 @@
         <div v-if="showMainCompareSummaryDialog"
              class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm"
              @click.self="closeMainCompareSummaryDialog">
-            <div class="flex h-[52vh] w-[72vw] min-w-[880px] max-w-[980px] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900">
+            <div class="flex h-[78vh] w-[72vw] min-w-[880px] max-w-[980px] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900">
                 <div class="flex items-start justify-between gap-4 border-b border-slate-200 px-4 py-3 dark:border-slate-700">
                     <div>
                         <h3 class="text-base font-bold text-slate-900 dark:text-white">本地配置与官方预设差异清单</h3>
                         <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                            这里汇总你当前工作区配置与 Git main 分支中已提交的 config/sites.json 的差异。需要深入看某一项时，再点“打开详细对比”进入对应站点。
+                            对比当前配置与官方配置的差异。若需要深入看某一项，点“打开详细对比”进入对应站点。
                         </p>
                     </div>
                     <div class="flex items-center gap-2">
@@ -756,6 +756,6 @@
     <script src="/static/js/components/CommandsTab.js?v=2.6.7"></script>
 
     <!-- 主应用逻辑 -->
-    <script src="/static/js/dashboard.js?v=2.6.18"></script>
+    <script src="/static/js/dashboard.js?v=2.6.19"></script>
 </body>
 </html>

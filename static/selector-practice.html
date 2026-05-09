@@ -1,1101 +1,1150 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>选择器可视化工作台</title>
-    <script src="/static/vendor/tailwindcss.js?v=2.6.7"></script>
-    <script>
-        window.tailwind = window.tailwind || {};
-        window.tailwind.config = { darkMode: 'class' };
-    </script>
-    <style>
-        :root {
-            color-scheme: light;
-        }
-        .dark {
-            color-scheme: dark;
-        }
-        body {
-            font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-        }
-        .panel {
-            border-radius: 1.25rem;
-            border: 1px solid rgba(148, 163, 184, 0.22);
-            background: rgba(255, 255, 255, 0.92);
-            box-shadow: 0 18px 38px rgba(15, 23, 42, 0.08);
-            backdrop-filter: blur(10px);
-        }
-        .dark .panel {
-            background: rgba(15, 23, 42, 0.82);
-            border-color: rgba(71, 85, 105, 0.56);
-            box-shadow: 0 18px 42px rgba(2, 6, 23, 0.34);
-        }
-        .selector-badge {
-            position: absolute;
-            top: -0.7rem;
-            left: 0.8rem;
-            display: none;
-            padding: 0.2rem 0.55rem;
-            border-radius: 9999px;
-            background: rgba(15, 23, 42, 0.92);
-            color: #f8fafc;
-            font-size: 0.72rem;
-            font-weight: 700;
-            z-index: 20;
-            box-shadow: 0 6px 12px rgba(15, 23, 42, 0.18);
-        }
-        .dark .selector-badge {
-            background: rgba(226, 232, 240, 0.96);
-            color: #0f172a;
-        }
-        .show-selector-labels [data-demo] > .selector-badge {
-            display: inline-flex;
-            align-items: center;
-        }
-        .target-focus {
-            position: relative;
-            outline: 3px solid rgba(59, 130, 246, 0.95) !important;
-            outline-offset: 3px;
-            box-shadow: 0 0 0 8px rgba(59, 130, 246, 0.2) !important;
-            z-index: 8;
-        }
-        .spotlight {
-            position: relative;
-            outline: 3px solid rgba(249, 115, 22, 0.95) !important;
-            outline-offset: 3px;
-            box-shadow: 0 0 0 8px rgba(251, 191, 36, 0.24) !important;
-            z-index: 9;
-        }
-        .spotlight-target {
-            outline-color: rgba(16, 185, 129, 0.95) !important;
-            box-shadow: 0 0 0 8px rgba(16, 185, 129, 0.22) !important;
-        }
-        .toast {
-            position: fixed;
-            right: 1.5rem;
-            bottom: 1.5rem;
-            padding: 0.8rem 1rem;
-            border-radius: 0.95rem;
-            background: rgba(15, 23, 42, 0.94);
-            color: #f8fafc;
-            font-size: 0.86rem;
-            box-shadow: 0 16px 38px rgba(15, 23, 42, 0.22);
-            opacity: 0;
-            transform: translateY(0.8rem);
-            pointer-events: none;
-            transition: opacity 0.2s ease, transform 0.2s ease;
-            z-index: 80;
-        }
-        .toast.visible {
-            opacity: 1;
-            transform: translateY(0);
-        }
-        .toast.error {
-            background: rgba(153, 27, 27, 0.96);
-        }
-        .field-card.is-active {
-            border-color: rgba(59, 130, 246, 0.7);
-            background: rgba(59, 130, 246, 0.08);
-            box-shadow: 0 10px 22px rgba(59, 130, 246, 0.16);
-        }
-        .dark .field-card.is-active {
-            background: rgba(30, 64, 175, 0.22);
-        }
-        .scenario-chip.is-active {
-            border-color: rgba(16, 185, 129, 0.55);
-            background: rgba(16, 185, 129, 0.12);
-            color: #047857;
-        }
-        .dark .scenario-chip.is-active {
-            color: #6ee7b7;
-            background: rgba(6, 95, 70, 0.32);
-        }
-        .candidate-code {
-            word-break: break-all;
-            white-space: pre-wrap;
-        }
-        .scroll-shell::-webkit-scrollbar {
-            width: 7px;
-            height: 7px;
-        }
-        .scroll-shell::-webkit-scrollbar-thumb {
-            background: rgba(148, 163, 184, 0.55);
-            border-radius: 999px;
-        }
-        .volatile-dot {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            width: 1.45rem;
-            height: 1.45rem;
-            border-radius: 999px;
-            background: rgba(14, 165, 233, 0.1);
-            color: #0284c7;
-            font-weight: 700;
-            font-size: 0.74rem;
-        }
-        .dark .volatile-dot {
-            background: rgba(14, 165, 233, 0.22);
-            color: #7dd3fc;
-        }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>选择器工作台</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,wght@0,400;0,500;1,400&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+
+:root{
+  --bg:#0c0c0f;
+  --s1:#111115;
+  --s2:#18181d;
+  --s3:#1f1f26;
+  --bd:rgba(255,255,255,.07);
+  --bd2:rgba(255,255,255,.13);
+  --bd3:rgba(255,255,255,.22);
+  --t1:#ebebf0;
+  --t2:#8e8e9a;
+  --t3:#55555f;
+  --accent:#f97316;
+  --accent-d:rgba(249,115,22,.14);
+  --accent-d2:rgba(249,115,22,.28);
+  --blue:#60a5fa;
+  --blue-d:rgba(96,165,250,.13);
+  --green:#4ade80;
+  --green-d:rgba(74,222,128,.12);
+  --yellow:#fbbf24;
+  --yellow-d:rgba(251,191,36,.12);
+  --red:#f87171;
+  --red-d:rgba(248,113,113,.12);
+  --r:6px;
+  --r2:10px;
+}
+
+html,body{height:100%}
+body{
+  font-family:'DM Sans',sans-serif;
+  background:var(--bg);
+  color:var(--t1);
+  font-size:14px;
+  line-height:1.6;
+  overflow:hidden;
+}
+
+/* ── scrollbars ── */
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--s3);border-radius:99px}
+
+/* ── layout ── */
+#app{display:grid;grid-template-rows:48px 1fr;height:100vh}
+
+/* ── topbar ── */
+#topbar{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:0 16px;
+  border-bottom:1px solid var(--bd);
+  background:var(--s1);
+  gap:12px;
+}
+.topbar-left{display:flex;align-items:center;gap:10px}
+.logo-mark{
+  width:26px;height:26px;border-radius:5px;
+  background:var(--accent);
+  display:flex;align-items:center;justify-content:center;
+}
+.logo-mark svg{color:#fff}
+.logo-title{font-family:'Syne',sans-serif;font-weight:700;font-size:14px;letter-spacing:.01em;color:var(--t1)}
+.logo-tag{font-size:11px;color:var(--t3);padding:2px 7px;border:1px solid var(--bd2);border-radius:4px;font-family:'JetBrains Mono',monospace}
+.topbar-right{display:flex;align-items:center;gap:6px}
+
+.tb-btn{
+  display:flex;align-items:center;gap:5px;
+  padding:4px 10px;border-radius:var(--r);
+  border:1px solid var(--bd2);background:transparent;
+  color:var(--t2);font-size:12px;font-family:'DM Sans',sans-serif;
+  cursor:pointer;transition:all .15s;white-space:nowrap;
+}
+.tb-btn:hover{background:var(--s3);color:var(--t1);border-color:var(--bd3)}
+.tb-btn svg{width:13px;height:13px;flex-shrink:0}
+
+/* ── main columns ── */
+#main{display:grid;grid-template-columns:1fr 360px;overflow:hidden}
+
+/* ── demo pane ── */
+#demoPane{
+  display:grid;grid-template-rows:auto 1fr auto;
+  border-right:1px solid var(--bd);
+  overflow:hidden;
+  background:var(--s1);
+}
+
+/* fake browser chrome */
+#browserChrome{
+  display:flex;align-items:center;gap:10px;
+  padding:8px 14px;border-bottom:1px solid var(--bd);
+  background:var(--bg);flex-shrink:0;
+}
+.chrome-dots{display:flex;gap:5px}
+.chrome-dot{width:10px;height:10px;border-radius:50%}
+.chrome-dot:nth-child(1){background:#f97171}
+.chrome-dot:nth-child(2){background:#fbbf24}
+.chrome-dot:nth-child(3){background:#4ade80}
+.chrome-bar{
+  flex:1;max-width:300px;
+  background:var(--s2);border:1px solid var(--bd);border-radius:5px;
+  padding:3px 10px;font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--t3);
+}
+
+/* ── chat mock ── */
+#chatMock{
+  display:grid;grid-template-rows:52px 1fr;
+  overflow:hidden;
+  position:relative;
+}
+
+/* chat topbar */
+#chatTopbar{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:0 20px;border-bottom:1px solid var(--bd);flex-shrink:0;
+}
+.chat-title{font-family:'Syne',sans-serif;font-size:13px;font-weight:700;color:var(--t1)}
+.chat-subtitle{font-size:11px;color:var(--t3);margin-top:1px}
+
+/* messages */
+#resultContainer{
+  overflow-y:auto;
+  padding:20px 20px;
+  display:flex;flex-direction:column;gap:16px;
+  position:relative;
+}
+
+.msg{display:flex;flex-direction:column;gap:6px}
+.msg-meta{display:flex;align-items:center;gap:7px;font-size:11px;color:var(--t3)}
+.avatar{
+  width:22px;height:22px;border-radius:5px;
+  display:flex;align-items:center;justify-content:center;
+  font-size:10px;font-weight:700;font-family:'JetBrains Mono',monospace;
+  flex-shrink:0;
+}
+.avatar.ai{background:rgba(74,222,128,.15);color:var(--green)}
+.avatar.user{background:rgba(96,165,250,.15);color:var(--blue)}
+
+.bubble{
+  padding:12px 16px;
+  border-radius:var(--r2);
+  font-size:13.5px;line-height:1.65;
+  max-width:82%;
+}
+.bubble.ai{
+  background:var(--s2);border:1px solid var(--bd);
+  color:var(--t1);border-top-left-radius:3px;
+}
+.bubble.user{
+  background:rgba(96,165,250,.15);
+  border:1px solid rgba(96,165,250,.2);
+  color:#c8deff;
+  border-top-right-radius:3px;
+  align-self:flex-end;
+}
+.msg.user{align-items:flex-end}
+.msg.user .msg-meta{flex-direction:row-reverse}
+
+/* composer */
+#composerWrap{
+  padding:12px 20px 16px;border-top:1px solid var(--bd);
+  background:var(--s1);flex-shrink:0;
+}
+#dropZone{
+  display:none;
+  border:1.5px dashed var(--bd2);border-radius:var(--r);
+  padding:12px;text-align:center;font-size:12px;color:var(--t3);
+  margin-bottom:10px;position:relative;
+}
+#composerShell{
+  display:flex;flex-direction:column;gap:0;
+  border:1px solid var(--bd2);border-radius:var(--r2);
+  background:var(--s2);overflow:hidden;position:relative;
+}
+#inputBox{
+  width:100%;background:transparent;border:0;resize:none;
+  padding:11px 14px 6px;
+  font-family:'DM Sans',sans-serif;font-size:13.5px;color:var(--t1);
+  outline:none;
+}
+#inputBox::placeholder{color:var(--t3)}
+.composer-footer{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:5px 8px 8px;
+}
+#uploadBtn{
+  width:30px;height:30px;border-radius:var(--r);border:none;background:transparent;
+  display:flex;align-items:center;justify-content:center;
+  color:var(--t3);cursor:pointer;transition:all .15s;position:relative;
+}
+#uploadBtn:hover{background:var(--s3);color:var(--t2)}
+#sendBtn{
+  display:flex;align-items:center;gap:6px;
+  padding:6px 14px;border-radius:var(--r);
+  background:var(--accent);border:none;color:#fff;
+  font-family:'DM Sans',sans-serif;font-size:13px;font-weight:500;
+  cursor:pointer;transition:all .15s;position:relative;
+}
+#sendBtn:hover{background:#ea6b0d}
+#generatingIndicator{
+  display:none;align-items:center;gap:8px;
+  margin-top:10px;padding:8px 12px;
+  background:var(--yellow-d);border:1px solid rgba(251,191,36,.2);border-radius:var(--r);
+  font-size:12px;color:var(--yellow);position:relative;
+}
+.gen-dots{display:flex;gap:3px;align-items:center}
+.gen-dot{
+  width:5px;height:5px;border-radius:50%;background:currentColor;
+  animation:genBounce 1.2s infinite ease-in-out;
+}
+.gen-dot:nth-child(2){animation-delay:.15s}
+.gen-dot:nth-child(3){animation-delay:.3s}
+@keyframes genBounce{0%,80%,100%{transform:scale(.7);opacity:.5}40%{transform:scale(1);opacity:1}}
+
+/* ── new chat btn ── */
+#newChatBtn{
+  display:flex;align-items:center;gap:6px;
+  padding:5px 12px;border-radius:var(--r);
+  border:1px solid var(--bd2);background:transparent;
+  color:var(--t2);font-size:12px;font-family:'DM Sans',sans-serif;
+  cursor:pointer;transition:all .15s;position:relative;
+}
+#newChatBtn:hover{background:var(--s3);color:var(--t1)}
+
+/* ── selector labels overlay ── */
+.label-badge{
+  display:none;position:absolute;z-index:20;
+  top:-9px;left:8px;
+  padding:1px 7px;border-radius:3px;
+  background:var(--accent);color:#fff;
+  font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:600;
+  pointer-events:none;white-space:nowrap;
+}
+.show-labels [data-demo] > .label-badge{display:inline-flex}
+
+/* ── highlights ── */
+.target-focus{
+  outline:2px solid var(--accent) !important;
+  outline-offset:3px;
+  box-shadow:0 0 0 6px var(--accent-d) !important;
+  position:relative;z-index:8;
+}
+.spotlight{
+  outline:2px solid var(--blue) !important;
+  outline-offset:3px;
+  box-shadow:0 0 0 6px var(--blue-d) !important;
+  position:relative;z-index:9;
+}
+.spotlight-target{
+  outline-color:var(--green) !important;
+  box-shadow:0 0 0 6px var(--green-d) !important;
+}
+
+/* ── right control panel ── */
+#ctrlPane{
+  overflow-y:auto;
+  background:var(--bg);
+}
+
+.ctrl-section{
+  padding:16px;
+  border-bottom:1px solid var(--bd);
+}
+.ctrl-section:last-child{border-bottom:none}
+
+.section-header{
+  display:flex;align-items:center;justify-content:space-between;
+  margin-bottom:12px;
+}
+.section-num{
+  font-family:'JetBrains Mono',monospace;font-size:10px;font-weight:600;
+  color:var(--accent);margin-right:6px;
+}
+.section-title{
+  font-family:'Syne',sans-serif;font-size:13px;font-weight:700;color:var(--t1);
+}
+.section-note{font-size:11px;color:var(--t3);line-height:1.5;margin-top:3px}
+
+/* ── field picker ── */
+#fieldPicker{display:flex;flex-direction:column;gap:4px}
+.field-chip{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:7px 10px;border-radius:var(--r);
+  border:1px solid var(--bd);background:var(--s1);
+  cursor:pointer;transition:all .15s;text-align:left;
+}
+.field-chip:hover{border-color:var(--bd2);background:var(--s2)}
+.field-chip.is-active{border-color:var(--accent);background:var(--accent-d)}
+.field-chip-key{
+  font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:500;
+  color:var(--t1);
+}
+.field-chip.is-active .field-chip-key{color:var(--accent)}
+.field-chip-tag{font-size:11px;color:var(--t3)}
+
+/* ── scenario toggles ── */
+#scenarioToggles{display:flex;flex-direction:column;gap:5px}
+.scenario-row{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:7px 10px;border-radius:var(--r);
+  border:1px solid var(--bd);background:var(--s1);
+  cursor:pointer;transition:all .15s;
+}
+.scenario-row:hover{border-color:var(--bd2);background:var(--s2)}
+.scenario-row.is-active{border-color:rgba(74,222,128,.3);background:var(--green-d)}
+.scenario-label{font-size:12px;color:var(--t2)}
+.scenario-row.is-active .scenario-label{color:var(--green)}
+.toggle-pill{
+  width:30px;height:16px;border-radius:99px;background:var(--s3);
+  position:relative;transition:background .2s;flex-shrink:0;
+}
+.toggle-pill::after{
+  content:'';position:absolute;top:2px;left:2px;
+  width:12px;height:12px;border-radius:50%;background:var(--t3);
+  transition:all .2s;
+}
+.scenario-row.is-active .toggle-pill{background:var(--green)}
+.scenario-row.is-active .toggle-pill::after{left:16px;background:#fff}
+
+/* ── selector input ── */
+#selectorBox{
+  border:1px solid var(--bd2);border-radius:var(--r);
+  background:var(--s1);overflow:hidden;margin-top:2px;
+}
+#selectorBox:focus-within{border-color:var(--accent)}
+#selectorInput{
+  width:100%;background:transparent;border:0;resize:none;
+  padding:10px 12px;
+  font-family:'JetBrains Mono',monospace;font-size:12.5px;color:var(--t1);
+  outline:none;line-height:1.6;
+}
+#selectorInput::placeholder{color:var(--t3)}
+.selector-footer{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:5px 8px 7px;border-top:1px solid var(--bd);
+}
+.selector-hint{font-size:10px;color:var(--t3);font-family:'JetBrains Mono',monospace}
+
+.btn-row{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap}
+
+.btn-primary{
+  padding:6px 14px;border-radius:var(--r);
+  background:var(--accent);border:none;color:#fff;
+  font-family:'DM Sans',sans-serif;font-size:13px;font-weight:500;
+  cursor:pointer;transition:all .15s;
+}
+.btn-primary:hover{background:#ea6b0d}
+.btn-ghost{
+  padding:6px 12px;border-radius:var(--r);
+  background:transparent;border:1px solid var(--bd2);color:var(--t2);
+  font-family:'DM Sans',sans-serif;font-size:12px;
+  cursor:pointer;transition:all .15s;
+}
+.btn-ghost:hover{background:var(--s2);color:var(--t1);border-color:var(--bd3)}
+
+.highlight-row{
+  display:flex;align-items:center;gap:7px;
+  margin-top:9px;font-size:12px;color:var(--t2);
+}
+.highlight-row input[type=checkbox]{accent-color:var(--accent)}
+
+/* ── diagnosis ── */
+#diagnosisPanel{margin-top:2px}
+.diag-empty{
+  padding:16px;border-radius:var(--r);border:1.5px dashed var(--bd2);
+  font-size:12px;color:var(--t3);text-align:center;
+}
+.diag-card{
+  padding:12px 14px;border-radius:var(--r);border:1px solid;
+}
+.diag-card.ok{background:var(--green-d);border-color:rgba(74,222,128,.25)}
+.diag-card.partial{background:var(--yellow-d);border-color:rgba(251,191,36,.25)}
+.diag-card.error{background:var(--red-d);border-color:rgba(248,113,113,.25)}
+.diag-badge{
+  font-family:'Syne',sans-serif;font-size:13px;font-weight:700;margin-bottom:4px;
+}
+.diag-card.ok .diag-badge{color:var(--green)}
+.diag-card.partial .diag-badge{color:var(--yellow)}
+.diag-card.error .diag-badge{color:var(--red)}
+.diag-meta{font-size:11px;margin-bottom:6px}
+.diag-card.ok .diag-meta{color:rgba(74,222,128,.7)}
+.diag-card.partial .diag-meta{color:rgba(251,191,36,.7)}
+.diag-card.error .diag-meta{color:rgba(248,113,113,.7)}
+.diag-summary{font-size:12.5px;color:var(--t2)}
+.diag-tips{margin-top:8px;display:flex;flex-direction:column;gap:4px}
+.diag-tip{
+  font-size:11.5px;color:var(--t3);padding:5px 8px;
+  border-radius:4px;background:var(--s1);border-left:2px solid var(--bd3);
+  line-height:1.5;
+}
+.diag-warnings{margin-top:6px;display:flex;flex-direction:column;gap:4px}
+.diag-warn{
+  font-size:11.5px;color:var(--yellow);padding:5px 8px;
+  border-radius:4px;background:var(--yellow-d);
+  border-left:2px solid rgba(251,191,36,.4);line-height:1.5;
+}
+
+/* ── candidates ── */
+#candidatePanel{margin-top:2px;display:flex;flex-direction:column;gap:6px;max-height:300px;overflow-y:auto}
+.cand-empty{
+  padding:16px;border-radius:var(--r);border:1.5px dashed var(--bd2);
+  font-size:12px;color:var(--t3);text-align:center;
+}
+.cand-item{
+  padding:10px 12px;border-radius:var(--r);
+  border:1px solid var(--bd);background:var(--s1);
+}
+.cand-header{display:flex;align-items:center;gap:6px;margin-bottom:7px;flex-wrap:wrap}
+.cand-idx{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--t3);font-weight:600}
+.tag{
+  padding:2px 8px;border-radius:3px;font-size:10.5px;font-weight:600;
+  font-family:'JetBrains Mono',monospace;
+}
+.tag.unique{background:rgba(74,222,128,.15);color:var(--green)}
+.tag.multi{background:var(--s2);color:var(--t3)}
+.tag.reason{background:var(--s2);color:var(--t2);font-weight:400}
+.cand-code{
+  display:block;font-family:'JetBrains Mono',monospace;font-size:11.5px;
+  background:var(--bg);padding:7px 10px;border-radius:4px;
+  color:#c8deff;word-break:break-all;white-space:pre-wrap;line-height:1.6;
+}
+.cand-actions{display:flex;gap:5px;margin-top:8px}
+.cand-btn{
+  padding:4px 10px;border-radius:4px;
+  border:1px solid var(--bd2);background:transparent;
+  color:var(--t2);font-size:11px;font-family:'DM Sans',sans-serif;
+  cursor:pointer;transition:all .15s;
+}
+.cand-btn:hover{background:var(--s3);color:var(--t1);border-color:var(--bd3)}
+
+/* ── match panel ── */
+#matchPanel{margin-top:2px;display:flex;flex-direction:column;gap:6px;max-height:360px;overflow-y:auto}
+.match-empty{
+  padding:16px;border-radius:var(--r);border:1.5px dashed var(--bd2);
+  font-size:12px;color:var(--t3);text-align:center;
+}
+.match-item{
+  border:1px solid var(--bd);border-radius:var(--r);background:var(--s1);
+  overflow:hidden;
+}
+.match-head{
+  display:flex;align-items:center;gap:6px;flex-wrap:wrap;
+  padding:8px 12px;border-bottom:1px solid var(--bd);
+}
+.match-body{padding:8px 12px}
+.match-text{font-size:12px;color:var(--t2);margin-bottom:6px;line-height:1.5}
+.match-attrs{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px}
+.match-attr{
+  display:flex;align-items:center;gap:4px;
+  padding:2px 8px;border-radius:3px;border:1px solid var(--bd2);background:var(--s2);
+  font-size:10.5px;max-width:100%;
+}
+.attr-key{color:var(--t3);font-family:'JetBrains Mono',monospace;font-size:10px}
+.attr-val{color:var(--t1);font-family:'JetBrains Mono',monospace;font-size:10px;word-break:break-all;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.match-warn{
+  font-size:11px;color:var(--yellow);padding:4px 8px;
+  border-radius:4px;background:var(--yellow-d);margin-bottom:5px;line-height:1.5;
+}
+details summary{
+  cursor:pointer;font-size:11px;color:var(--blue);
+  list-style:none;display:inline-flex;align-items:center;gap:4px;
+}
+details summary::before{content:'▶';font-size:8px;transition:transform .15s}
+details[open] summary::before{transform:rotate(90deg)}
+details pre{
+  margin-top:6px;padding:8px 10px;border-radius:4px;
+  background:var(--bg);font-family:'JetBrains Mono',monospace;
+  font-size:10.5px;color:var(--t2);white-space:pre-wrap;word-break:break-all;
+  line-height:1.6;border:1px solid var(--bd);
+}
+
+/* ── toast ── */
+#toast{
+  position:fixed;right:16px;bottom:16px;z-index:100;
+  padding:9px 14px;border-radius:var(--r);
+  background:var(--s3);border:1px solid var(--bd3);color:var(--t1);
+  font-size:12.5px;box-shadow:0 8px 24px rgba(0,0,0,.5);
+  opacity:0;transform:translateY(6px);pointer-events:none;
+  transition:opacity .18s,transform .18s;
+}
+#toast.visible{opacity:1;transform:none}
+#toast.error{background:rgba(153,27,27,.9);border-color:rgba(248,113,113,.3)}
+
+/* ── volatile dot ── */
+.v-dot{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:16px;height:16px;border-radius:3px;
+  background:var(--accent-d);color:var(--accent);
+  font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:700;
+}
+</style>
 </head>
-<body class="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(56,189,248,0.18),_transparent_28%),linear-gradient(180deg,_#f8fafc_0%,_#e2e8f0_100%)] dark:bg-[radial-gradient(circle_at_top,_rgba(37,99,235,0.18),_transparent_28%),linear-gradient(180deg,_#020617_0%,_#0f172a_100%)] text-slate-900 dark:text-slate-100 transition-colors duration-300">
-    <div class="max-w-7xl mx-auto px-4 py-5 md:px-6 md:py-6 space-y-5">
-        <header class="panel p-5 md:p-6">
-            <div class="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-5">
-                <div class="max-w-3xl">
-                    <div class="inline-flex items-center gap-2 rounded-full border border-sky-200/70 dark:border-sky-900/60 bg-sky-50/80 dark:bg-sky-900/20 px-3 py-1 text-xs font-semibold text-sky-700 dark:text-sky-300">
-                        选择器可视化工作台
-                    </div>
-                    <h1 class="mt-3 text-2xl md:text-3xl font-black tracking-tight text-slate-900 dark:text-white">
-                        别只看“找到了没”，要看它为什么稳、为什么不稳
-                    </h1>
-                    <p class="mt-3 text-sm md:text-base leading-7 text-slate-600 dark:text-slate-300">
-                        这页不再是单纯的演示玩具。你可以切换目标字段、改场景、测试任意选择器、直接查看推荐候选、再顺手复制回控制台。
-                        重点是练“收敛思路”：先命中，再唯一，再从动态 class 收敛到稳定属性。
-                    </p>
-                </div>
-                <div class="grid gap-3 sm:grid-cols-3 lg:w-[27rem]">
-                    <div class="rounded-2xl border border-slate-200 dark:border-slate-700 bg-white/70 dark:bg-slate-900/40 px-4 py-3">
-                        <div class="text-xs uppercase tracking-[0.18em] text-slate-400 dark:text-slate-500">核心字段</div>
-                        <div class="mt-2 text-lg font-black text-slate-900 dark:text-white">3 个</div>
-                        <div class="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">先把 input_box / send_btn / result_container 收紧到可用。</div>
-                    </div>
-                    <div class="rounded-2xl border border-slate-200 dark:border-slate-700 bg-white/70 dark:bg-slate-900/40 px-4 py-3">
-                        <div class="text-xs uppercase tracking-[0.18em] text-slate-400 dark:text-slate-500">可视化反馈</div>
-                        <div class="mt-2 text-lg font-black text-slate-900 dark:text-white">实时</div>
-                        <div class="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">命中数量、目标偏差、候选稳定性和 HTML 摘要都会直接展开。</div>
-                    </div>
-                    <div class="rounded-2xl border border-slate-200 dark:border-slate-700 bg-white/70 dark:bg-slate-900/40 px-4 py-3">
-                        <div class="text-xs uppercase tracking-[0.18em] text-slate-400 dark:text-slate-500">动态 class 训练</div>
-                        <div class="mt-2 text-lg font-black text-slate-900 dark:text-white">一键刷新</div>
-                        <div class="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">随手刷新随机 class，马上就能看出哪些写法只是碰巧命中。</div>
-                    </div>
-                </div>
+<body>
+<div id="app">
+
+  <!-- topbar -->
+  <div id="topbar">
+    <div class="topbar-left">
+      <div class="logo-mark">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M4 6h16M4 12h10M4 18h7"/>
+        </svg>
+      </div>
+      <span class="logo-title">选择器工作台</span>
+      <span class="logo-tag">CSS Selector Inspector</span>
+    </div>
+    <div class="topbar-right">
+      <button id="toggleOverlayBtn" class="tb-btn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+        显示标签
+      </button>
+      <button id="refreshVolatileBtn" class="tb-btn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg>
+        刷新随机 class
+      </button>
+      <button id="resetStageBtn" class="tb-btn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg>
+        重置
+      </button>
+    </div>
+  </div>
+
+  <!-- main -->
+  <div id="main">
+
+    <!-- demo pane -->
+    <div id="demoPane">
+      <div id="browserChrome">
+        <div class="chrome-dots">
+          <div class="chrome-dot"></div>
+          <div class="chrome-dot"></div>
+          <div class="chrome-dot"></div>
+        </div>
+        <div class="chrome-bar">https://demo.local/chat</div>
+        <span class="v-dot" title="V 标记的元素有随机 class，每次刷新会变">V</span>
+        <span style="font-size:11px;color:var(--t3);margin-left:4px">标注随机 class 的元素，刷新后类名会变</span>
+      </div>
+
+      <div id="chatMock">
+        <div id="chatTopbar">
+          <div>
+            <div class="chat-title">模拟聊天页</div>
+            <div class="chat-subtitle">特意混入了动态 class，靠 class 命中的写法刷新后就会失效</div>
+          </div>
+          <button data-demo="new-chat-btn" id="newChatBtn" data-volatile-group="new-chat">
+            <span class="label-badge">new_chat_btn</span>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 4v16m8-8H4"/></svg>
+            新建对话
+          </button>
+        </div>
+
+        <div id="resultContainer" data-demo="result-container" data-volatile-group="result-container">
+          <span class="label-badge" style="top:8px;left:8px">result_container</span>
+
+          <div class="msg assistant message-wrapper" data-demo="message-wrapper" data-role="assistant-message" data-volatile-group="assistant-wrapper-main">
+            <span class="label-badge">message_wrapper</span>
+            <div class="msg-meta">
+              <div class="avatar ai">AI</div>
+              <span>助手</span>
             </div>
-        </header>
+            <div class="bubble ai message-content" data-volatile-group="assistant-bubble-main">
+              欢迎来到选择器工作台。右侧选一个字段，左侧会高亮真正目标；再输入一条选择器，实时看命中情况。
+            </div>
+          </div>
 
-        <main class="grid grid-cols-1 xl:grid-cols-[minmax(0,1.18fr)_minmax(360px,0.82fr)] gap-5 items-start">
-            <section class="panel overflow-hidden">
-                <div class="px-4 py-3 md:px-5 border-b border-slate-200/70 dark:border-slate-700/70 bg-slate-50/70 dark:bg-slate-900/35 flex flex-col gap-3">
-                    <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
-                        <div class="flex items-center gap-3">
-                            <div class="flex gap-2">
-                                <div class="w-3 h-3 rounded-full bg-rose-400"></div>
-                                <div class="w-3 h-3 rounded-full bg-amber-400"></div>
-                                <div class="w-3 h-3 rounded-full bg-emerald-400"></div>
-                            </div>
-                            <div class="rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 text-xs text-slate-400 dark:text-slate-500 font-mono w-full max-w-[22rem]">
-                                https://demo.local/chat
-                            </div>
-                        </div>
-                        <div class="flex flex-wrap items-center gap-2">
-                            <button id="toggleOverlayBtn" class="rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 text-xs font-medium hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors">
-                                显示字段标签
-                            </button>
-                            <button id="refreshVolatileBtn" class="rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 text-xs font-medium hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors">
-                                刷新随机 class
-                            </button>
-                            <button id="resetStageBtn" class="rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-1.5 text-xs font-medium hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors">
-                                重置场景
-                            </button>
-                        </div>
-                    </div>
-                    <div class="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-                        <span class="inline-flex items-center gap-2 rounded-full bg-slate-100 dark:bg-slate-800 px-3 py-1">
-                            <span class="volatile-dot">V</span>
-                            标了随机 class 的元素会在每次刷新后换一批类名
-                        </span>
-                    </div>
-                </div>
+          <div class="msg user" data-role="user-message" data-volatile-group="user-wrapper">
+            <div class="msg-meta">
+              <div class="avatar user">U</div>
+              <span>用户</span>
+            </div>
+            <div class="bubble user message-content" data-volatile-group="user-bubble">
+              我要把 send_btn 和 result_container 都配稳，不想再靠碰运气。
+            </div>
+          </div>
 
-                <div id="practiceRoot" class="relative h-[680px] overflow-hidden bg-white dark:bg-slate-900">
-                    <div class="px-6 py-4 flex items-center justify-between border-b border-slate-100 dark:border-slate-800">
-                        <div class="flex items-center gap-4">
-                            <button class="w-10 h-10 rounded-xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-500 dark:text-slate-300">
-                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>
-                            </button>
-                            <div>
-                                <h2 class="font-bold text-lg text-slate-900 dark:text-white">模拟聊天页</h2>
-                                <p class="text-xs text-slate-500 dark:text-slate-400">右侧选字段，左侧看真实命中范围。这里特意混入了一些“会变的 class”。</p>
-                            </div>
-                        </div>
-                        <button data-demo="new-chat-btn" id="newChatBtn" data-volatile-group="new-chat" class="relative group flex items-center gap-2 px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors text-sm font-medium">
-                            <span class="selector-badge">new_chat_btn</span>
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
-                            新建对话
-                        </button>
-                    </div>
+          <div class="msg assistant message-wrapper" data-role="assistant-message" data-volatile-group="assistant-wrapper-secondary">
+            <div class="msg-meta">
+              <div class="avatar ai">AI</div>
+              <span>助手</span>
+            </div>
+            <div class="bubble ai message-content" data-volatile-group="assistant-bubble-secondary">
+              先试 <code style="font-family:'JetBrains Mono',monospace;font-size:12px;background:var(--s3);padding:1px 5px;border-radius:3px">id</code>、<code style="font-family:'JetBrains Mono',monospace;font-size:12px;background:var(--s3);padding:1px 5px;border-radius:3px">data-testid</code>、<code style="font-family:'JetBrains Mono',monospace;font-size:12px;background:var(--s3);padding:1px 5px;border-radius:3px">aria-label</code>、<code style="font-family:'JetBrains Mono',monospace;font-size:12px;background:var(--s3);padding:1px 5px;border-radius:3px">placeholder</code>，命中之后再收紧到唯一。别一开始就赌动态 class。
+            </div>
+          </div>
+        </div>
 
-                    <div id="resultContainer" data-demo="result-container" data-volatile-group="result-container" class="relative h-[456px] overflow-y-auto px-5 py-5 flex flex-col gap-4 bg-[linear-gradient(180deg,_rgba(248,250,252,0.9),_rgba(255,255,255,0.95))] dark:bg-[linear-gradient(180deg,_rgba(15,23,42,0.9),_rgba(2,6,23,0.95))] scroll-shell">
-                        <span class="selector-badge !top-3 !left-3">result_container</span>
-
-                        <div class="relative group flex flex-col items-start message-wrapper assistant" data-demo="message-wrapper" data-role="assistant-message" data-volatile-group="assistant-wrapper-main">
-                            <span class="selector-badge">message_wrapper</span>
-                            <div class="flex items-center gap-2 mb-1 pl-1">
-                                <div class="w-6 h-6 rounded bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center text-emerald-600 dark:text-emerald-400 text-xs font-bold">A</div>
-                                <span class="text-xs font-medium text-slate-500 dark:text-slate-400">助手</span>
-                            </div>
-                            <div class="message-content rounded-2xl rounded-tl-sm px-5 py-3 text-sm leading-7 max-w-[85%] bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-100" data-volatile-group="assistant-bubble-main">
-                                欢迎来到选择器工作台。你可以先在右侧切换字段，再输入一条选择器，看看它到底命中了谁。
-                            </div>
-                        </div>
-
-                        <div class="relative group flex flex-col items-end message-wrapper user" data-role="user-message" data-volatile-group="user-wrapper">
-                            <div class="flex items-center gap-2 mb-1 pr-1 flex-row-reverse">
-                                <div class="w-6 h-6 rounded bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center text-blue-600 dark:text-blue-400 text-xs font-bold">U</div>
-                                <span class="text-xs font-medium text-slate-500 dark:text-slate-400">用户</span>
-                            </div>
-                            <div class="message-content rounded-2xl rounded-tr-sm px-5 py-3 text-sm leading-7 max-w-[85%] bg-blue-600 text-white" data-volatile-group="user-bubble">
-                                我要把 send_btn 和 result_container 都配稳，不想再靠碰运气。
-                            </div>
-                        </div>
-
-                        <div class="relative group flex flex-col items-start message-wrapper assistant" data-role="assistant-message" data-volatile-group="assistant-wrapper-secondary">
-                            <div class="flex items-center gap-2 mb-1 pl-1">
-                                <div class="w-6 h-6 rounded bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center text-emerald-600 dark:text-emerald-400 text-xs font-bold">A</div>
-                                <span class="text-xs font-medium text-slate-500 dark:text-slate-400">助手</span>
-                            </div>
-                            <div class="message-content rounded-2xl rounded-tl-sm px-5 py-3 text-sm leading-7 max-w-[85%] bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-100" data-volatile-group="assistant-bubble-secondary">
-                                那就别一上来盯着长 class。先试 id、data-testid、aria-label、name、placeholder，命中之后再收紧。
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="px-5 py-4 border-t border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900">
-                        <div id="dropZone" data-demo="drop-zone" class="hidden relative group border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-2xl p-4 mb-4 text-center text-sm text-slate-500 dark:text-slate-400 transition-colors">
-                            <span class="selector-badge">drop_zone</span>
-                            把文件拖到这里，页面会显示上传高亮区
-                        </div>
-
-                        <div class="flex items-end gap-3">
-                            <div id="composerShell" data-volatile-group="composer-shell" class="relative group flex-1 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 shadow-sm p-2 flex flex-col">
-                                <span class="selector-badge !-top-3 !left-2">input_box</span>
-                                <textarea id="inputBox" data-demo="input-box" rows="2" placeholder="这里就是 input_box。你也可以试试 placeholder / role / textarea 这些方向。" class="w-full bg-transparent border-0 focus:ring-0 resize-none px-3 py-2 text-sm text-slate-900 dark:text-slate-100 placeholder-slate-400"></textarea>
-                                <div class="flex justify-between items-center px-2 pb-1 pt-2">
-                                    <div class="flex gap-1 items-center">
-                                        <button id="uploadBtn" data-demo="upload-btn" data-volatile-group="upload-button" class="relative group p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors" title="上传文件">
-                                            <span class="selector-badge">upload_btn</span>
-                                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/></svg>
-                                        </button>
-                                        <input type="file" hidden data-demo="file-input" id="fileInput">
-                                    </div>
-                                    <button id="sendBtn" data-demo="send-btn" data-volatile-group="send-button" class="relative group bg-blue-600 hover:bg-blue-700 text-white p-2 rounded-xl shadow-md transition-transform hover:-translate-y-0.5 flex items-center gap-2 px-4">
-                                        <span class="selector-badge right-0 left-auto !-top-3">send_btn</span>
-                                        <span class="text-sm font-medium">发送</span>
-                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/></svg>
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div id="generatingIndicator" data-demo="generating-indicator" class="hidden relative group items-center gap-3 mt-3 px-4 py-2 bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400 rounded-lg text-sm font-medium">
-                            <span class="selector-badge">generating_indicator</span>
-                            <div class="flex gap-1 items-center">
-                                <span class="w-1.5 h-1.5 rounded-full bg-current animate-bounce"></span>
-                                <span class="w-1.5 h-1.5 rounded-full bg-current animate-bounce [animation-delay:120ms]"></span>
-                                <span class="w-1.5 h-1.5 rounded-full bg-current animate-bounce [animation-delay:240ms]"></span>
-                            </div>
-                            <span>模拟生成中...</span>
-                        </div>
-                    </div>
-                </div>
-            </section>
-
-            <aside class="space-y-4">
-                <section class="panel p-4 md:p-5">
-                    <div class="flex items-start justify-between gap-3">
-                        <div>
-                            <h3 class="text-base font-bold text-slate-900 dark:text-white">1. 选择当前要练的字段</h3>
-                            <p class="mt-1 text-xs leading-6 text-slate-500 dark:text-slate-400">选中后，左侧会高亮真正目标；右侧会直接给你这个目标的推荐写法。</p>
-                        </div>
-                        <span class="inline-flex items-center rounded-full bg-slate-100 dark:bg-slate-800 px-2.5 py-1 text-[11px] text-slate-500 dark:text-slate-400">目标定位</span>
-                    </div>
-                    <div id="fieldPicker" class="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-2.5"></div>
-                </section>
-
-                <section class="panel p-4 md:p-5">
-                    <div class="flex items-start justify-between gap-3">
-                        <div>
-                            <h3 class="text-base font-bold text-slate-900 dark:text-white">2. 场景切换</h3>
-                            <p class="mt-1 text-xs leading-6 text-slate-500 dark:text-slate-400">把页面状态改得更像真实网页，再看你的选择器会不会立刻露馅。</p>
-                        </div>
-                        <span class="inline-flex items-center rounded-full bg-slate-100 dark:bg-slate-800 px-2.5 py-1 text-[11px] text-slate-500 dark:text-slate-400">状态模拟</span>
-                    </div>
-                    <div id="scenarioToggles" class="mt-4 flex flex-wrap gap-2"></div>
-                </section>
-
-                <section class="panel p-4 md:p-5">
-                    <div class="flex items-start justify-between gap-3">
-                        <div>
-                            <h3 class="text-base font-bold text-slate-900 dark:text-white">3. 测试你的选择器</h3>
-                            <p class="mt-1 text-xs leading-6 text-slate-500 dark:text-slate-400">不仅看命中数量，还会判断是不是命中了你当前选中的真正目标。</p>
-                        </div>
-                        <span class="inline-flex items-center rounded-full bg-slate-100 dark:bg-slate-800 px-2.5 py-1 text-[11px] text-slate-500 dark:text-slate-400">实时分析</span>
-                    </div>
-
-                    <textarea id="selectorInput" rows="3" spellcheck="false" class="mt-4 w-full rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 px-3 py-3 font-mono text-sm text-slate-800 dark:text-slate-100 resize-none focus:outline-none focus:ring-2 focus:ring-blue-400" placeholder='例如：button[data-testid="send-button"]'></textarea>
-
-                    <div class="mt-3 flex flex-wrap items-center gap-3">
-                        <label class="inline-flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
-                            <input id="highlightMatches" type="checkbox" class="rounded" checked>
-                            测试时高亮命中元素
-                        </label>
-                    </div>
-
-                    <div class="mt-4 flex flex-wrap gap-2">
-                        <button id="analyzeBtn" class="rounded-xl bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 text-sm font-semibold shadow-lg shadow-blue-600/20 transition-colors">
-                            分析这个选择器
-                        </button>
-                        <button id="clearSelectorBtn" class="rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 px-4 py-2 text-sm font-medium transition-colors">
-                            清空输入
-                        </button>
-                        <button id="useTopCandidateBtn" class="rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 px-4 py-2 text-sm font-medium transition-colors">
-                            代入最佳候选
-                        </button>
-                    </div>
-                </section>
-
-                <section class="panel p-4 md:p-5">
-                    <div class="flex items-start justify-between gap-3">
-                        <div>
-                            <h3 class="text-base font-bold text-slate-900 dark:text-white">4. 诊断结果</h3>
-                            <p class="mt-1 text-xs leading-6 text-slate-500 dark:text-slate-400">命中数量只是第一层，更重要的是有没有命中到正确目标。</p>
-                        </div>
-                    </div>
-                    <div id="diagnosisPanel" class="mt-4 space-y-3"></div>
-                </section>
-
-                <section class="panel p-4 md:p-5">
-                    <div class="flex items-start justify-between gap-3">
-                        <div>
-                            <h3 class="text-base font-bold text-slate-900 dark:text-white">5. 推荐候选</h3>
-                            <p class="mt-1 text-xs leading-6 text-slate-500 dark:text-slate-400">这些候选是根据当前真实目标元素现场生成的，优先拿唯一命中的那种。</p>
-                        </div>
-                    </div>
-                    <div id="candidatePanel" class="mt-4 space-y-3 max-h-[24rem] overflow-auto scroll-shell"></div>
-                </section>
-
-                <section class="panel p-4 md:p-5">
-                    <div class="flex items-start justify-between gap-3">
-                        <div>
-                            <h3 class="text-base font-bold text-slate-900 dark:text-white">6. 命中元素详情</h3>
-                            <p class="mt-1 text-xs leading-6 text-slate-500 dark:text-slate-400">当你的写法命中过多，优先在这里看每个元素到底是谁。</p>
-                        </div>
-                    </div>
-                    <div id="matchPanel" class="mt-4 space-y-3 max-h-[26rem] overflow-auto scroll-shell"></div>
-                </section>
-            </aside>
-        </main>
+        <div id="composerWrap">
+          <div id="dropZone" data-demo="drop-zone">
+            <span class="label-badge">drop_zone</span>
+            拖拽上传区域
+          </div>
+          <div id="composerShell" data-volatile-group="composer-shell">
+            <span class="label-badge" style="top:-9px;left:10px">input_box</span>
+            <textarea id="inputBox" data-demo="input-box" rows="2" placeholder="这里是 input_box，试试 placeholder / role / textarea 方向的选择器"></textarea>
+            <div class="composer-footer">
+              <button id="uploadBtn" data-demo="upload-btn" data-volatile-group="upload-button" title="上传文件">
+                <span class="label-badge">upload_btn</span>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
+              </button>
+              <input type="file" hidden data-demo="file-input" id="fileInput">
+              <button id="sendBtn" data-demo="send-btn" data-volatile-group="send-button">
+                <span class="label-badge" style="left:auto;right:0">send_btn</span>
+                <span>发送</span>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/></svg>
+              </button>
+            </div>
+          </div>
+          <div id="generatingIndicator" data-demo="generating-indicator">
+            <span class="label-badge">generating_indicator</span>
+            <div class="gen-dots">
+              <div class="gen-dot"></div>
+              <div class="gen-dot"></div>
+              <div class="gen-dot"></div>
+            </div>
+            <span>模型生成中…</span>
+          </div>
+        </div>
+      </div>
     </div>
 
-    <div class="toast" id="toast"></div>
+    <!-- control pane -->
+    <div id="ctrlPane">
 
-    <script>
-        function syncDarkMode() {
-            const isDark = localStorage.getItem('darkMode') === 'true';
-            document.documentElement.classList.toggle('dark', isDark);
-        }
-        syncDarkMode();
-        window.addEventListener('storage', (event) => {
-            if (event.key === 'darkMode') {
-                syncDarkMode();
-            }
-        });
+      <!-- 1. field picker -->
+      <div class="ctrl-section">
+        <div class="section-header">
+          <div>
+            <span class="section-num">01</span>
+            <span class="section-title">目标字段</span>
+            <div class="section-note">选中后左侧高亮目标，右侧刷新候选写法</div>
+          </div>
+        </div>
+        <div id="fieldPicker"></div>
+      </div>
 
-        const toastEl = document.getElementById('toast');
-        const practiceRoot = document.getElementById('practiceRoot');
-        const resultContainer = document.getElementById('resultContainer');
-        const generatingIndicator = document.getElementById('generatingIndicator');
-        const dropZone = document.getElementById('dropZone');
-        const selectorInput = document.getElementById('selectorInput');
-        const highlightMatchesInput = document.getElementById('highlightMatches');
-        const fieldPicker = document.getElementById('fieldPicker');
-        const scenarioToggles = document.getElementById('scenarioToggles');
-        const diagnosisPanel = document.getElementById('diagnosisPanel');
-        const candidatePanel = document.getElementById('candidatePanel');
-        const matchPanel = document.getElementById('matchPanel');
-        const toggleOverlayBtn = document.getElementById('toggleOverlayBtn');
+      <!-- 2. scenarios -->
+      <div class="ctrl-section">
+        <div class="section-header">
+          <div>
+            <span class="section-num">02</span>
+            <span class="section-title">场景切换</span>
+            <div class="section-note">模拟真实页面状态，测试选择器的稳健性</div>
+          </div>
+        </div>
+        <div id="scenarioToggles"></div>
+      </div>
 
-        let toastTimer = null;
-        let overlayVisible = false;
-        let selectedFieldKey = 'input_box';
-        let lastTopCandidate = '';
-        const scenarioState = {
-            extraReply: false,
-            generating: false,
-            dropZone: false
-        };
+      <!-- 3. selector input -->
+      <div class="ctrl-section">
+        <div class="section-header">
+          <div>
+            <span class="section-num">03</span>
+            <span class="section-title">测试选择器</span>
+            <div class="section-note">⌘/Ctrl + Enter 执行</div>
+          </div>
+        </div>
+        <div id="selectorBox">
+          <textarea id="selectorInput" rows="3" spellcheck="false" placeholder='例：button[data-testid="send-button"]'></textarea>
+          <div class="selector-footer">
+            <span class="selector-hint">CSS selector</span>
+          </div>
+        </div>
+        <div class="highlight-row">
+          <input id="highlightMatches" type="checkbox" checked>
+          <label for="highlightMatches" style="cursor:pointer">高亮命中元素</label>
+        </div>
+        <div class="btn-row">
+          <button id="analyzeBtn" class="btn-primary">分析</button>
+          <button id="useTopCandidateBtn" class="btn-ghost">代入最佳候选</button>
+          <button id="clearSelectorBtn" class="btn-ghost">清空</button>
+        </div>
+      </div>
 
-        const fieldConfig = {
-            input_box: {
-                title: '输入框',
-                description: '真正打字的地方。常见是 textarea、contenteditable 或 role=textbox。',
-                target: () => document.getElementById('inputBox')
-            },
-            send_btn: {
-                title: '发送按钮',
-                description: '点一下就会真正把消息发出去的按钮。',
-                target: () => document.getElementById('sendBtn')
-            },
-            result_container: {
-                title: '回复容器',
-                description: '包住 AI 回复内容的外层区域，不能只选到一个段落。',
-                target: () => document.getElementById('resultContainer')
-            },
-            new_chat_btn: {
-                title: '新建对话按钮',
-                description: '开始新会话时要点击的入口。',
-                target: () => document.getElementById('newChatBtn')
-            },
-            message_wrapper: {
-                title: '消息外层容器',
-                description: '单条消息最外层的包装盒，适合多节点拼接。',
-                target: () => document.querySelector('.message-wrapper.assistant')
-            },
-            generating_indicator: {
-                title: '生成中指示器',
-                description: '表示模型还在继续输出的标记。',
-                target: () => document.getElementById('generatingIndicator')
-            },
-            upload_btn: {
-                title: '上传按钮',
-                description: '点一下会拉起上传入口的按钮。',
-                target: () => document.getElementById('uploadBtn')
-            },
-            file_input: {
-                title: '原生文件输入框',
-                description: '真正的 input[type=file]，很多站点会把它藏起来。',
-                target: () => document.getElementById('fileInput')
-            },
-            drop_zone: {
-                title: '拖拽上传区域',
-                description: '支持拖拽上传时，文件放下去的落点。',
-                target: () => document.getElementById('dropZone')
-            }
-        };
+      <!-- 4. diagnosis -->
+      <div class="ctrl-section">
+        <div class="section-header">
+          <div>
+            <span class="section-num">04</span>
+            <span class="section-title">诊断结果</span>
+          </div>
+        </div>
+        <div id="diagnosisPanel"></div>
+      </div>
 
-        const scenarioConfig = {
-            extraReply: {
-                title: '追加第二条 AI 回复',
-                description: '让 result_container 里多一条助手消息，测试范围过小的写法会不会漏内容。'
-            },
-            generating: {
-                title: '显示生成中提示',
-                description: '把 generating_indicator 打开，方便练这个字段。'
-            },
-            dropZone: {
-                title: '显示拖拽上传区',
-                description: '把 drop_zone 展开出来，方便练上传相关选择器。'
-            }
-        };
+      <!-- 5. candidates -->
+      <div class="ctrl-section">
+        <div class="section-header">
+          <div>
+            <span class="section-num">05</span>
+            <span class="section-title">推荐候选</span>
+            <div class="section-note">优先选唯一命中、依赖稳定属性的写法</div>
+          </div>
+        </div>
+        <div id="candidatePanel"></div>
+      </div>
 
-        function escapeHtml(value) {
-            return String(value || '')
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/"/g, '&quot;')
-                .replace(/'/g, '&#39;');
-        }
+      <!-- 6. match details -->
+      <div class="ctrl-section">
+        <div class="section-header">
+          <div>
+            <span class="section-num">06</span>
+            <span class="section-title">命中元素详情</span>
+          </div>
+        </div>
+        <div id="matchPanel"></div>
+      </div>
 
-        function showToast(message, isError = false) {
-            toastEl.textContent = message;
-            toastEl.classList.toggle('error', !!isError);
-            toastEl.classList.add('visible');
-            clearTimeout(toastTimer);
-            toastTimer = setTimeout(() => {
-                toastEl.classList.remove('visible');
-                toastEl.classList.remove('error');
-            }, 1800);
-        }
+    </div>
+  </div>
+</div>
 
-        function clearHighlights() {
-            document.querySelectorAll('.spotlight, .spotlight-target, .target-focus').forEach((node) => {
-                node.classList.remove('spotlight', 'spotlight-target', 'target-focus');
-            });
-        }
+<div id="toast"></div>
 
-        function highlightTargetField() {
-            document.querySelectorAll('.target-focus').forEach((node) => node.classList.remove('target-focus'));
-            const target = getSelectedTarget();
-            if (target) {
-                target.classList.add('target-focus');
-            }
-        }
+<script>
+function syncDarkMode(){
+  const d=localStorage.getItem('darkMode')==='true';
+  document.documentElement.classList.toggle('dark',d);
+}
+syncDarkMode();
+window.addEventListener('storage',e=>{if(e.key==='darkMode')syncDarkMode()});
 
-        function highlightMatches(matches, target) {
-            document.querySelectorAll('.spotlight, .spotlight-target').forEach((node) => {
-                node.classList.remove('spotlight', 'spotlight-target');
-            });
-            matches.forEach((node) => {
-                node.classList.add('spotlight');
-                if (node === target) {
-                    node.classList.add('spotlight-target');
-                }
-            });
-        }
+const practiceRoot=document.getElementById('chatMock');
+const resultContainer=document.getElementById('resultContainer');
+const generatingIndicator=document.getElementById('generatingIndicator');
+const dropZone=document.getElementById('dropZone');
+const selectorInput=document.getElementById('selectorInput');
+const highlightMatchesInput=document.getElementById('highlightMatches');
+const fieldPicker=document.getElementById('fieldPicker');
+const scenarioToggles=document.getElementById('scenarioToggles');
+const diagnosisPanel=document.getElementById('diagnosisPanel');
+const candidatePanel=document.getElementById('candidatePanel');
+const matchPanel=document.getElementById('matchPanel');
+const toggleOverlayBtn=document.getElementById('toggleOverlayBtn');
+const toastEl=document.getElementById('toast');
 
-        function openOverlay(forceValue) {
-            overlayVisible = typeof forceValue === 'boolean' ? forceValue : !overlayVisible;
-            practiceRoot.classList.toggle('show-selector-labels', overlayVisible);
-            toggleOverlayBtn.textContent = overlayVisible ? '隐藏字段标签' : '显示字段标签';
-        }
+let toastTimer=null;
+let overlayVisible=false;
+let selectedFieldKey='input_box';
+let lastTopCandidate='';
+const scenarioState={extraReply:false,generating:false,dropZone:false};
 
-        function getSelectedTarget() {
-            const config = fieldConfig[selectedFieldKey];
-            return config && typeof config.target === 'function' ? config.target() : null;
-        }
+const fieldConfig={
+  input_box:{title:'输入框',description:'真正打字的地方。textarea、contenteditable 或 role=textbox。',target:()=>document.getElementById('inputBox')},
+  send_btn:{title:'发送按钮',description:'点一下就会真正把消息发出去的按钮。',target:()=>document.getElementById('sendBtn')},
+  result_container:{title:'回复容器',description:'包住 AI 回复内容的外层区域，不能只选到一个段落。',target:()=>document.getElementById('resultContainer')},
+  new_chat_btn:{title:'新建对话按钮',description:'开始新会话时要点击的入口。',target:()=>document.getElementById('newChatBtn')},
+  message_wrapper:{title:'消息外层容器',description:'单条消息最外层的包装盒。',target:()=>document.querySelector('.message-wrapper.assistant')},
+  generating_indicator:{title:'生成中指示器',description:'表示模型还在继续输出的标记。',target:()=>document.getElementById('generatingIndicator')},
+  upload_btn:{title:'上传按钮',description:'点一下会拉起上传入口的按钮。',target:()=>document.getElementById('uploadBtn')},
+  file_input:{title:'原生文件输入框',description:'真正的 input[type=file]，很多站点会把它藏起来。',target:()=>document.getElementById('fileInput')},
+  drop_zone:{title:'拖拽上传区域',description:'支持拖拽上传时，文件放下去的落点。',target:()=>document.getElementById('dropZone')}
+};
 
-        function generateVolatileClass() {
-            const alphabet = 'abcdefghijklmnopqrstuvwxyz0123456789';
-            let output = 'vf-';
-            for (let i = 0; i < 10; i += 1) {
-                output += alphabet[Math.floor(Math.random() * alphabet.length)];
-            }
-            return output;
-        }
+const scenarioConfig={
+  extraReply:{title:'追加第二条 AI 回复',description:'让 result_container 里多一条助手消息，测试范围过小的写法会不会漏内容。'},
+  generating:{title:'显示生成中提示',description:'把 generating_indicator 打开，方便练这个字段。'},
+  dropZone:{title:'显示拖拽上传区',description:'把 drop_zone 展开出来，方便练上传相关选择器。'}
+};
 
-        function refreshVolatileClasses() {
-            document.querySelectorAll('[data-volatile-group]').forEach((node) => {
-                const previous = node.dataset.volatileClass;
-                if (previous) {
-                    node.classList.remove(previous);
-                }
-                const nextClass = generateVolatileClass();
-                node.classList.add(nextClass);
-                node.dataset.volatileClass = nextClass;
-            });
-            showToast('随机 class 已刷新，拿现有选择器再测一次');
-            analyzeSelector(true);
-        }
+function escapeHtml(v){return String(v||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;')}
 
-        function createAssistantReply(idSuffix, text) {
-            return `
-                <div class="relative group flex flex-col items-start message-wrapper assistant" data-role="assistant-message" data-volatile-group="assistant-wrapper-${idSuffix}">
-                    <div class="flex items-center gap-2 mb-1 pl-1">
-                        <div class="w-6 h-6 rounded bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center text-emerald-600 dark:text-emerald-400 text-xs font-bold">A</div>
-                        <span class="text-xs font-medium text-slate-500 dark:text-slate-400">助手</span>
-                    </div>
-                    <div class="message-content rounded-2xl rounded-tl-sm px-5 py-3 text-sm leading-7 max-w-[85%] bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-100" data-volatile-group="assistant-bubble-${idSuffix}">
-                        ${escapeHtml(text)}
-                    </div>
-                </div>
-            `;
-        }
+function showToast(msg,isError=false){
+  toastEl.textContent=msg;
+  toastEl.classList.toggle('error',!!isError);
+  toastEl.classList.add('visible');
+  clearTimeout(toastTimer);
+  toastTimer=setTimeout(()=>{toastEl.classList.remove('visible','error')},1800);
+}
 
-        function renderScenarioState() {
-            dropZone.classList.toggle('hidden', !scenarioState.dropZone);
-            generatingIndicator.classList.toggle('hidden', !scenarioState.generating);
-            generatingIndicator.style.display = scenarioState.generating ? 'flex' : 'none';
+function clearHighlights(){
+  document.querySelectorAll('.spotlight,.spotlight-target,.target-focus').forEach(n=>{
+    n.classList.remove('spotlight','spotlight-target','target-focus');
+  });
+}
 
-            const extraNode = document.getElementById('extraAssistantReply');
-            if (scenarioState.extraReply && !extraNode) {
-                resultContainer.insertAdjacentHTML(
-                    'beforeend',
-                    createAssistantReply('extra', '这里是额外加出来的第二条 AI 回复。范围太小的 result_container 往往会在这种场景里露馅。')
-                        .replace('message-wrapper assistant"', 'message-wrapper assistant" id="extraAssistantReply"')
-                );
-            }
-            if (!scenarioState.extraReply && extraNode) {
-                extraNode.remove();
-            }
+function highlightTargetField(){
+  document.querySelectorAll('.target-focus').forEach(n=>n.classList.remove('target-focus'));
+  const t=getSelectedTarget();
+  if(t)t.classList.add('target-focus');
+}
 
-            if (scenarioState.extraReply) {
-                resultContainer.scrollTop = resultContainer.scrollHeight;
-            }
-            refreshVolatileClassesSilently();
-            highlightTargetField();
-            renderScenarioToggles();
-        }
+function highlightMatches(matches,target){
+  document.querySelectorAll('.spotlight,.spotlight-target').forEach(n=>{
+    n.classList.remove('spotlight','spotlight-target');
+  });
+  matches.forEach(n=>{
+    n.classList.add('spotlight');
+    if(n===target)n.classList.add('spotlight-target');
+  });
+}
 
-        function refreshVolatileClassesSilently() {
-            document.querySelectorAll('[data-volatile-group]').forEach((node) => {
-                const previous = node.dataset.volatileClass;
-                if (previous) {
-                    node.classList.remove(previous);
-                }
-                const nextClass = generateVolatileClass();
-                node.classList.add(nextClass);
-                node.dataset.volatileClass = nextClass;
-            });
-        }
+function openOverlay(forceValue){
+  overlayVisible=typeof forceValue==='boolean'?forceValue:!overlayVisible;
+  practiceRoot.classList.toggle('show-labels',overlayVisible);
+  toggleOverlayBtn.innerHTML=overlayVisible
+    ?`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19m-6.72-1.07a3 3 0 11-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>隐藏标签`
+    :`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>显示标签`;
+}
 
-        function resetStage() {
-            scenarioState.extraReply = false;
-            scenarioState.generating = false;
-            scenarioState.dropZone = false;
-            renderScenarioState();
-            clearHighlights();
-            highlightTargetField();
-            showToast('场景已重置');
-        }
+function getSelectedTarget(){
+  const c=fieldConfig[selectedFieldKey];
+  return c&&typeof c.target==='function'?c.target():null;
+}
 
-        function renderFieldPicker() {
-            fieldPicker.innerHTML = Object.entries(fieldConfig).map(([key, config]) => `
-                <button type="button"
-                        data-field-key="${key}"
-                        class="field-card text-left rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-900/40 px-3.5 py-3 transition-all hover:border-blue-300 dark:hover:border-blue-600 ${key === selectedFieldKey ? 'is-active' : ''}">
-                    <div class="flex items-center justify-between gap-3">
-                        <div class="font-semibold text-sm text-slate-900 dark:text-white">${escapeHtml(key)}</div>
-                        <div class="text-[11px] rounded-full bg-slate-100 dark:bg-slate-800 px-2 py-0.5 text-slate-500 dark:text-slate-400">${escapeHtml(config.title)}</div>
-                    </div>
-                    <div class="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">${escapeHtml(config.description)}</div>
-                </button>
-            `).join('');
+function generateVolatileClass(){
+  const a='abcdefghijklmnopqrstuvwxyz0123456789';
+  let o='vf-';
+  for(let i=0;i<10;i++)o+=a[Math.floor(Math.random()*a.length)];
+  return o;
+}
 
-            fieldPicker.querySelectorAll('[data-field-key]').forEach((button) => {
-                button.addEventListener('click', () => {
-                    selectedFieldKey = button.dataset.fieldKey;
-                    renderFieldPicker();
-                    highlightTargetField();
-                    renderCandidatePanel();
-                    analyzeSelector(true);
-                });
-            });
-        }
+function refreshVolatileClasses(){
+  document.querySelectorAll('[data-volatile-group]').forEach(n=>{
+    const p=n.dataset.volatileClass;
+    if(p)n.classList.remove(p);
+    const c=generateVolatileClass();
+    n.classList.add(c);
+    n.dataset.volatileClass=c;
+  });
+  showToast('随机 class 已刷新，重新测试一次');
+  analyzeSelector(true);
+}
 
-        function renderScenarioToggles() {
-            scenarioToggles.innerHTML = Object.entries(scenarioConfig).map(([key, config]) => `
-                <button type="button"
-                        data-scenario-key="${key}"
-                        class="scenario-chip rounded-full border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/40 px-3 py-1.5 text-xs font-medium transition-colors ${scenarioState[key] ? 'is-active' : 'text-slate-600 dark:text-slate-300'}"
-                        title="${escapeHtml(config.description)}">
-                    ${escapeHtml(config.title)}
-                </button>
-            `).join('');
+function createAssistantReply(idSuffix,text){
+  return `<div class="msg assistant message-wrapper" data-role="assistant-message" data-volatile-group="assistant-wrapper-${idSuffix}" id="extraAssistantReply">
+    <div class="msg-meta"><div class="avatar ai">AI</div><span>助手</span></div>
+    <div class="bubble ai message-content" data-volatile-group="assistant-bubble-${idSuffix}">${escapeHtml(text)}</div>
+  </div>`;
+}
 
-            scenarioToggles.querySelectorAll('[data-scenario-key]').forEach((button) => {
-                button.addEventListener('click', () => {
-                    const key = button.dataset.scenarioKey;
-                    scenarioState[key] = !scenarioState[key];
-                    renderScenarioState();
-                    analyzeSelector(true);
-                });
-            });
-        }
+function renderScenarioState(){
+  dropZone.style.display=scenarioState.dropZone?'block':'none';
+  if(scenarioState.generating){
+    generatingIndicator.style.display='flex';
+  }else{
+    generatingIndicator.style.display='none';
+  }
+  const extraNode=document.getElementById('extraAssistantReply');
+  if(scenarioState.extraReply&&!extraNode){
+    resultContainer.insertAdjacentHTML('beforeend',createAssistantReply('extra','这是额外追加的第二条 AI 回复。范围太小的 result_container 会在这种场景里漏掉这条内容。'));
+  }
+  if(!scenarioState.extraReply&&extraNode)extraNode.remove();
+  if(scenarioState.extraReply)resultContainer.scrollTop=resultContainer.scrollHeight;
+  refreshVolatileClassesSilently();
+  highlightTargetField();
+  renderScenarioToggles();
+}
 
-        function cssEscapeIdent(value) {
-            const raw = String(value || '');
-            if (!raw) return raw;
-            if (window.CSS && typeof window.CSS.escape === 'function') {
-                return window.CSS.escape(raw);
-            }
-            return raw.replace(/[^a-zA-Z0-9_-]/g, (char) => '\\' + char);
-        }
+function refreshVolatileClassesSilently(){
+  document.querySelectorAll('[data-volatile-group]').forEach(n=>{
+    const p=n.dataset.volatileClass;
+    if(p)n.classList.remove(p);
+    const c=generateVolatileClass();
+    n.classList.add(c);
+    n.dataset.volatileClass=c;
+  });
+}
 
-        function cssEscapeString(value) {
-            return String(value || '')
-                .replace(/\\/g, '\\\\')
-                .replace(/"/g, '\\"');
-        }
+function resetStage(){
+  scenarioState.extraReply=false;
+  scenarioState.generating=false;
+  scenarioState.dropZone=false;
+  renderScenarioState();
+  clearHighlights();
+  highlightTargetField();
+  showToast('场景已重置');
+}
 
-        function looksStableClass(token) {
-            const cls = String(token || '').trim();
-            if (!cls || cls.length > 40) return false;
-            if (/^(css|jsx)-/i.test(cls)) return false;
-            if (/^_[A-Za-z0-9-]{8,}$/.test(cls)) return false;
-            if (/^[A-Fa-f0-9_-]{10,}$/.test(cls)) return false;
-            if (/[A-Z]/.test(cls) && /\d/.test(cls) && cls.length >= 12) return false;
-            return /^[A-Za-z][A-Za-z0-9_-]*$/.test(cls);
-        }
+function renderFieldPicker(){
+  fieldPicker.innerHTML=Object.entries(fieldConfig).map(([key,config])=>`
+    <button type="button" data-field-key="${key}" class="field-chip${key===selectedFieldKey?' is-active':''}">
+      <span class="field-chip-key">${escapeHtml(key)}</span>
+      <span class="field-chip-tag">${escapeHtml(config.title)}</span>
+    </button>
+  `).join('');
+  fieldPicker.querySelectorAll('[data-field-key]').forEach(btn=>{
+    btn.addEventListener('click',()=>{
+      selectedFieldKey=btn.dataset.fieldKey;
+      renderFieldPicker();
+      highlightTargetField();
+      renderCandidatePanel();
+      analyzeSelector(true);
+    });
+  });
+}
 
-        function buildElementCandidates(target) {
-            if (!target) return [];
-            const tag = String(target.tagName || '').toLowerCase();
-            const attrs = {};
-            ['id', 'class', 'name', 'data-testid', 'aria-label', 'role', 'type', 'placeholder', 'href'].forEach((key) => {
-                const value = target.getAttribute && target.getAttribute(key);
-                if (value) {
-                    attrs[key] = String(value).trim();
-                }
-            });
+function renderScenarioToggles(){
+  scenarioToggles.innerHTML=Object.entries(scenarioConfig).map(([key,config])=>`
+    <button type="button" data-scenario-key="${key}" class="scenario-row${scenarioState[key]?' is-active':''}">
+      <span class="scenario-label">${escapeHtml(config.title)}</span>
+      <div class="toggle-pill"></div>
+    </button>
+  `).join('');
+  scenarioToggles.querySelectorAll('[data-scenario-key]').forEach(btn=>{
+    btn.addEventListener('click',()=>{
+      scenarioState[btn.dataset.scenarioKey]=!scenarioState[btn.dataset.scenarioKey];
+      renderScenarioState();
+      analyzeSelector(true);
+    });
+  });
+}
 
-            const candidates = [];
-            const pushCandidate = (selector, reason, score) => {
-                if (!selector) return;
-                candidates.push({ selector, reason, score });
-            };
+function cssEscapeIdent(v){
+  const r=String(v||'');
+  if(!r)return r;
+  if(window.CSS&&typeof window.CSS.escape==='function')return window.CSS.escape(r);
+  return r.replace(/[^a-zA-Z0-9_-]/g,c=>'\\'+c);
+}
+function cssEscapeString(v){return String(v||'').replace(/\\/g,'\\\\').replace(/"/g,'\\"')}
 
-            const rawClasses = String(attrs.class || '').split(/\s+/).map((item) => item.trim()).filter(Boolean);
-            const stableClasses = rawClasses.filter(looksStableClass).slice(0, 3);
+function looksStableClass(t){
+  const c=String(t||'').trim();
+  if(!c||c.length>40)return false;
+  if(/^(css|jsx)-/i.test(c))return false;
+  if(/^_[A-Za-z0-9-]{8,}$/.test(c))return false;
+  if(/^[A-Fa-f0-9_-]{10,}$/.test(c))return false;
+  if(/[A-Z]/.test(c)&&/\d/.test(c)&&c.length>=12)return false;
+  return /^[A-Za-z][A-Za-z0-9_-]*$/.test(c);
+}
 
-            if (attrs.id) {
-                pushCandidate(`#${cssEscapeIdent(attrs.id)}`, 'ID 精确匹配', 120);
-                pushCandidate(`${tag}#${cssEscapeIdent(attrs.id)}`, '标签 + ID', 112);
-            }
-            if (attrs['data-testid']) {
-                pushCandidate(`[data-testid="${cssEscapeString(attrs['data-testid'])}"]`, 'data-testid', 110);
-                pushCandidate(`${tag}[data-testid="${cssEscapeString(attrs['data-testid'])}"]`, '标签 + data-testid', 104);
-            }
-            if (attrs['aria-label']) {
-                pushCandidate(`[aria-label="${cssEscapeString(attrs['aria-label'])}"]`, 'aria-label', 96);
-                pushCandidate(`${tag}[aria-label="${cssEscapeString(attrs['aria-label'])}"]`, '标签 + aria-label', 92);
-            }
-            if (attrs.name) {
-                pushCandidate(`[name="${cssEscapeString(attrs.name)}"]`, 'name', 92);
-                pushCandidate(`${tag}[name="${cssEscapeString(attrs.name)}"]`, '标签 + name', 88);
-            }
-            if (attrs.placeholder) {
-                pushCandidate(`[placeholder="${cssEscapeString(attrs.placeholder)}"]`, 'placeholder', 76);
-                pushCandidate(`${tag}[placeholder="${cssEscapeString(attrs.placeholder)}"]`, '标签 + placeholder', 72);
-            }
-            if (attrs.type && ['input', 'button', 'textarea'].includes(tag)) {
-                pushCandidate(`${tag}[type="${cssEscapeString(attrs.type)}"]`, '标签 + type', 74);
-            }
-            if (attrs.role) {
-                pushCandidate(`[role="${cssEscapeString(attrs.role)}"]`, 'role', 62);
-                pushCandidate(`${tag}[role="${cssEscapeString(attrs.role)}"]`, '标签 + role', 58);
-            }
-            if (attrs.href && tag === 'a') {
-                pushCandidate(`a[href="${cssEscapeString(attrs.href)}"]`, '精确 href', 82);
-            }
-            if (stableClasses.length) {
-                const classSelector = stableClasses.map((item) => `.${cssEscapeIdent(item)}`).join('');
-                pushCandidate(classSelector, '稳定 class 组合', 54);
-                pushCandidate(`${tag}${classSelector}`, '标签 + 稳定 class 组合', 56);
-            }
-            if (tag) {
-                pushCandidate(tag, '仅标签名（通常过宽）', 8);
-            }
+function buildElementCandidates(target){
+  if(!target)return[];
+  const tag=String(target.tagName||'').toLowerCase();
+  const attrs={};
+  ['id','class','name','data-testid','aria-label','role','type','placeholder','href'].forEach(k=>{
+    const v=target.getAttribute&&target.getAttribute(k);
+    if(v)attrs[k]=String(v).trim();
+  });
+  const candidates=[];
+  const push=(selector,reason,score)=>{if(selector)candidates.push({selector,reason,score})};
+  const rawClasses=String(attrs.class||'').split(/\s+/).map(i=>i.trim()).filter(Boolean);
+  const stableClasses=rawClasses.filter(looksStableClass).slice(0,3);
+  if(attrs.id){push(`#${cssEscapeIdent(attrs.id)}`,'ID',120);push(`${tag}#${cssEscapeIdent(attrs.id)}`,'标签+ID',112)}
+  if(attrs['data-testid']){push(`[data-testid="${cssEscapeString(attrs['data-testid'])}"]`,'data-testid',110);push(`${tag}[data-testid="${cssEscapeString(attrs['data-testid'])}"]`,'标签+data-testid',104)}
+  if(attrs['aria-label']){push(`[aria-label="${cssEscapeString(attrs['aria-label'])}"]`,'aria-label',96);push(`${tag}[aria-label="${cssEscapeString(attrs['aria-label'])}"]`,'标签+aria-label',92)}
+  if(attrs.name){push(`[name="${cssEscapeString(attrs.name)}"]`,'name',92);push(`${tag}[name="${cssEscapeString(attrs.name)}"]`,'标签+name',88)}
+  if(attrs.placeholder){push(`[placeholder="${cssEscapeString(attrs.placeholder)}"]`,'placeholder',76);push(`${tag}[placeholder="${cssEscapeString(attrs.placeholder)}"]`,'标签+placeholder',72)}
+  if(attrs.type&&['input','button','textarea'].includes(tag)){push(`${tag}[type="${cssEscapeString(attrs.type)}"]`,'标签+type',74)}
+  if(attrs.role){push(`[role="${cssEscapeString(attrs.role)}"]`,'role',62);push(`${tag}[role="${cssEscapeString(attrs.role)}"]`,'标签+role',58)}
+  if(attrs.href&&tag==='a'){push(`a[href="${cssEscapeString(attrs.href)}"]`,'精确href',82)}
+  if(stableClasses.length){const cs=stableClasses.map(i=>`.${cssEscapeIdent(i)}`).join('');push(cs,'稳定class',54);push(`${tag}${cs}`,'标签+稳定class',56)}
+  if(tag)push(tag,'仅标签名',8);
+  const seen=new Set();
+  const evaluated=[];
+  candidates.forEach(c=>{
+    if(!c.selector||seen.has(c.selector))return;
+    seen.add(c.selector);
+    try{
+      const m=Array.from(document.querySelectorAll(c.selector));
+      if(!m.includes(target))return;
+      evaluated.push({...c,count:m.length,unique:m.length===1});
+    }catch(e){}
+  });
+  evaluated.sort((a,b)=>{
+    if(a.unique!==b.unique)return a.unique?-1:1;
+    if(a.score!==b.score)return b.score-a.score;
+    if(a.count!==b.count)return a.count-b.count;
+    return a.selector.length-b.selector.length;
+  });
+  return evaluated.slice(0,8);
+}
 
-            const seen = new Set();
-            const evaluated = [];
-            candidates.forEach((candidate) => {
-                if (!candidate.selector || seen.has(candidate.selector)) return;
-                seen.add(candidate.selector);
-                try {
-                    const matches = Array.from(document.querySelectorAll(candidate.selector));
-                    if (!matches.includes(target)) return;
-                    evaluated.push({
-                        ...candidate,
-                        count: matches.length,
-                        unique: matches.length === 1
-                    });
-                } catch (error) {}
-            });
+function getElementSummary(node){
+  const rect=node.getBoundingClientRect();
+  const style=window.getComputedStyle(node);
+  const visible=rect.width>0&&rect.height>0&&style.display!=='none'&&style.visibility!=='hidden'&&style.opacity!=='0';
+  const attributes={};
+  ['id','class','name','data-testid','aria-label','role','type','placeholder','href'].forEach(k=>{
+    const v=node.getAttribute&&node.getAttribute(k);
+    if(v)attributes[k]=String(v).trim().slice(0,140);
+  });
+  const text=String(node.innerText||node.textContent||'').replace(/\s+/g,' ').trim().slice(0,160);
+  const warnings=[];
+  const classTokens=String(attributes.class||'').split(/\s+/).filter(Boolean);
+  if(classTokens.some(t=>!looksStableClass(t)))warnings.push('包含疑似动态 class，不建议作为长期主依据。');
+  return{
+    tag:String(node.tagName||'').toLowerCase(),text,visible,
+    rect:{width:Math.round(rect.width),height:Math.round(rect.height)},
+    attributes,html:String(node.outerHTML||'').replace(/\s+/g,' ').trim().slice(0,360),
+    candidates:buildElementCandidates(node),warnings
+  };
+}
 
-            evaluated.sort((left, right) => {
-                if (left.unique !== right.unique) return left.unique ? -1 : 1;
-                if (left.score !== right.score) return right.score - left.score;
-                if (left.count !== right.count) return left.count - right.count;
-                return left.selector.length - right.selector.length;
-            });
-            return evaluated.slice(0, 8);
-        }
+function selectorInputWarnings(selector){
+  const warnings=[];
+  const n=String(selector||'').trim();
+  if(!n)return warnings;
+  if(n.includes(':nth-child')||n.includes(':nth-of-type'))warnings.push('用了 nth-child / nth-of-type，结构一变就容易炸。');
+  if(n.includes(':has('))warnings.push('用了 :has()，兼容性和稳定性通常不理想。');
+  if(n.split('>').length>=4||n.split(/\s+/).length>=5)warnings.push('层级很深，依赖页面结构，维护成本高。');
+  if(/\.[A-Za-z0-9_-]{14,}/.test(n))warnings.push('包含很长的 class，看起来像动态类名。');
+  return warnings;
+}
 
-        function getElementSummary(node) {
-            const rect = node.getBoundingClientRect();
-            const style = window.getComputedStyle(node);
-            const visible = rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
-            const attributes = {};
-            ['id', 'class', 'name', 'data-testid', 'aria-label', 'role', 'type', 'placeholder', 'href'].forEach((key) => {
-                const value = node.getAttribute && node.getAttribute(key);
-                if (value) {
-                    attributes[key] = String(value).trim().slice(0, 140);
-                }
-            });
-            const text = String(node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 160);
-            const warnings = [];
-            const classTokens = String(attributes.class || '').split(/\s+/).filter(Boolean);
-            if (classTokens.some((token) => !looksStableClass(token))) {
-                warnings.push('这个元素有疑似动态 class，别把它当成长期稳定的主依据。');
-            }
-            return {
-                tag: String(node.tagName || '').toLowerCase(),
-                text,
-                visible,
-                rect: {
-                    width: Math.round(rect.width),
-                    height: Math.round(rect.height)
-                },
-                attributes,
-                html: String(node.outerHTML || '').replace(/\s+/g, ' ').trim().slice(0, 360),
-                candidates: buildElementCandidates(node),
-                warnings
-            };
-        }
+function renderDiagnosis(result){
+  if(!result){
+    diagnosisPanel.innerHTML=`<div class="diag-empty">先选一个字段，再输入选择器</div>`;
+    return;
+  }
+  const cls=result.status==='ok'?'ok':result.status==='partial'?'partial':'error';
+  const warningsHtml=result.warnings.length?`<div class="diag-warnings">${result.warnings.map(w=>`<div class="diag-warn">${escapeHtml(w)}</div>`).join('')}</div>`:'';
+  const tipsHtml=result.tips.length?`<div class="diag-tips">${result.tips.map(t=>`<div class="diag-tip">${escapeHtml(t)}</div>`).join('')}</div>`:'';
+  diagnosisPanel.innerHTML=`
+    <div class="diag-card ${cls}">
+      <div class="diag-badge">${escapeHtml(result.badge)}</div>
+      <div class="diag-meta">${escapeHtml(result.meta)}</div>
+      <div class="diag-summary">${escapeHtml(result.summary)}</div>
+    </div>
+    ${warningsHtml}${tipsHtml}
+  `;
+}
 
-        function selectorInputWarnings(selector) {
-            const warnings = [];
-            const normalized = String(selector || '').trim();
-            if (!normalized) return warnings;
-            if (normalized.includes(':nth-child') || normalized.includes(':nth-of-type')) {
-                warnings.push('你当前用了 nth-child / nth-of-type，结构一变就容易炸。');
-            }
-            if (normalized.includes(':has(')) {
-                warnings.push('你当前用了 :has()，兼容性和稳定性通常都不理想。');
-            }
-            if (normalized.split('>').length >= 4 || normalized.split(/\s+/).length >= 5) {
-                warnings.push('当前选择器层级很深，说明你在依赖页面结构，维护成本会偏高。');
-            }
-            if (/\.[A-Za-z0-9_-]{14,}/.test(normalized)) {
-                warnings.push('当前写法里有很长的 class，看起来像动态类名。');
-            }
-            return warnings;
-        }
+function renderCandidatePanel(target){
+  if(!target){
+    candidatePanel.innerHTML=`<div class="cand-empty">当前字段没有可分析的目标元素</div>`;
+    lastTopCandidate='';return;
+  }
+  const candidates=buildElementCandidates(target);
+  lastTopCandidate=candidates.length?candidates[0].selector:'';
+  if(!candidates.length){
+    candidatePanel.innerHTML=`<div class="cand-empty">没有生成出可用候选，给目标元素更多稳定属性</div>`;
+    return;
+  }
+  candidatePanel.innerHTML=candidates.map((c,i)=>`
+    <div class="cand-item">
+      <div class="cand-header">
+        <span class="cand-idx">#${i+1}</span>
+        <span class="tag ${c.unique?'unique':'multi'}">${c.unique?'唯一命中':`${c.count} 个`}</span>
+        <span class="tag reason">${escapeHtml(c.reason)}</span>
+      </div>
+      <code class="cand-code">${escapeHtml(c.selector)}</code>
+      <div class="cand-actions">
+        <button class="cand-btn" data-action="use-candidate" data-selector="${escapeHtml(c.selector)}">代入输入框</button>
+        <button class="cand-btn" data-action="copy-candidate" data-selector="${escapeHtml(c.selector)}">复制</button>
+      </div>
+    </div>
+  `).join('');
+  candidatePanel.querySelectorAll('[data-action="use-candidate"]').forEach(btn=>{
+    btn.addEventListener('click',()=>{selectorInput.value=btn.dataset.selector||'';analyzeSelector(true);showToast('候选已代入')});
+  });
+  candidatePanel.querySelectorAll('[data-action="copy-candidate"]').forEach(btn=>{
+    btn.addEventListener('click',async()=>{
+      try{await navigator.clipboard.writeText(btn.dataset.selector||'');showToast('已复制')}
+      catch(e){showToast('复制失败',true)}
+    });
+  });
+}
 
-        function renderDiagnosis(result) {
-            if (!result) {
-                diagnosisPanel.innerHTML = `
-                    <div class="rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 px-4 py-6 text-sm text-slate-500 dark:text-slate-400">
-                        还没开始分析。先选一个字段，再输入选择器。
-                    </div>
-                `;
-                return;
-            }
+function renderMatchPanel(matches){
+  if(!matches||!matches.length){
+    matchPanel.innerHTML=`<div class="match-empty">没有命中任何元素</div>`;return;
+  }
+  matchPanel.innerHTML=matches.map((item,i)=>`
+    <div class="match-item">
+      <div class="match-head">
+        <span class="cand-idx">#${i+1}</span>
+        <span class="tag reason">&lt;${escapeHtml(item.tag)}&gt;</span>
+        <span class="tag ${item.visible?'unique':'multi'}">${item.visible?'可见':'不可见'}</span>
+        <span class="tag reason">${item.rect.width}×${item.rect.height}</span>
+      </div>
+      <div class="match-body">
+        ${item.text?`<div class="match-text">${escapeHtml(item.text)}</div>`:''}
+        ${Object.keys(item.attributes).length?`<div class="match-attrs">${Object.entries(item.attributes).map(([k,v])=>`<div class="match-attr"><span class="attr-key">${escapeHtml(k)}</span><span class="attr-val">${escapeHtml(v)}</span></div>`).join('')}</div>`:''}
+        ${item.warnings.map(w=>`<div class="match-warn">${escapeHtml(w)}</div>`).join('')}
+        <details><summary>查看 HTML 摘要</summary><pre>${escapeHtml(item.html)}</pre></details>
+      </div>
+    </div>
+  `).join('');
+}
 
-            const toneClass = result.status === 'ok'
-                ? 'border-emerald-200 bg-emerald-50/80 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-200'
-                : result.status === 'partial'
-                    ? 'border-amber-200 bg-amber-50/80 text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-200'
-                    : 'border-rose-200 bg-rose-50/80 text-rose-800 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-200';
+function analyzeSelector(silent=false){
+  const selector=String(selectorInput.value||'').trim();
+  const target=getSelectedTarget();
+  renderCandidatePanel(target);
+  if(!selector){
+    renderDiagnosis(null);renderMatchPanel([]);
+    clearHighlights();highlightTargetField();return;
+  }
+  let matches=[];let parseError='';
+  try{matches=Array.from(document.querySelectorAll(selector))}
+  catch(e){parseError=String(e&&e.message?e.message:e)}
+  if(parseError){
+    renderDiagnosis({status:'error',badge:'❌ 语法错误',meta:'浏览器无法解析',summary:parseError,warnings:['先把语法改到浏览器能接受。'],tips:['如果从 DevTools 复制出的内容带了太多父级链路，先删一部分。']});
+    renderMatchPanel([]);clearHighlights();highlightTargetField();
+    if(!silent)showToast('选择器语法错误',true);
+    return;
+  }
+  const exactHit=!!(target&&matches.includes(target));
+  const matchSummaries=matches.slice(0,6).map(n=>getElementSummary(n));
+  const warnings=selectorInputWarnings(selector);
+  const tips=[];
+  let status='error',badge='❌ 没有命中',meta='0 个命中',summary='当前写法没有命中任何元素。';
+  if(matches.length===0){
+    tips.push('先确认页面状态是否正确。很多选择器不是写错，而是页面还没切到聊天区域。');
+    tips.push('优先尝试 id、data-testid、aria-label、name、placeholder，别一开始就赌随机 class。');
+  }else if(exactHit&&matches.length===1){
+    status='ok';badge='✅ 唯一命中正确目标';meta='1 个命中，目标正确';
+    summary='这条写法已经唯一命中了当前目标。';
+    tips.push('再点一次"刷新随机 class"复测，如果还稳说明没踩到动态类名。');
+    tips.push('如果下方有更短、更依赖稳定属性的候选，优先换成它。');
+  }else if(exactHit&&matches.length>1){
+    status='partial';badge='⚠️ 命中了正确目标，但范围过宽';meta=`${matches.length} 个命中，目标包含在内`;
+    summary='这条写法能碰到目标，但同时命中了别的元素，容易误操作。';
+    tips.push('从下方候选里挑唯一命中的写法，或补上 aria-label / data-testid / name 之类的稳定属性。');
+  }else if(!exactHit&&matches.length>0){
+    status='error';badge='❌ 命中了别的元素';meta=`${matches.length} 个命中，目标不在里面`;
+    summary='这条写法命中了其他元素，不是当前选中的真正目标。';
+    tips.push('看"命中元素详情"确认选到了谁。很多时候不是没这个元素，而是选到了兄弟节点。');
+  }
+  renderDiagnosis({status,badge,meta,summary,warnings,tips});
+  renderMatchPanel(matchSummaries);
+  clearHighlights();
+  if(highlightMatchesInput.checked)highlightMatches(matches.slice(0,12),target);
+  highlightTargetField();
+  if(!silent)showToast(status==='ok'?'唯一命中正确目标':status==='partial'?'命中目标，但范围过宽':'命中有误',status==='error');
+}
 
-            const warningHtml = result.warnings.length
-                ? `<div class="space-y-2">${result.warnings.map((item) => `
-                    <div class="rounded-xl border border-white/80 dark:border-slate-700 bg-white/75 dark:bg-slate-900/40 px-3 py-2 text-xs leading-6">${escapeHtml(item)}</div>
-                `).join('')}</div>`
-                : '';
+document.getElementById('analyzeBtn').addEventListener('click',()=>analyzeSelector(false));
+document.getElementById('clearSelectorBtn').addEventListener('click',()=>{selectorInput.value='';analyzeSelector(true)});
+document.getElementById('useTopCandidateBtn').addEventListener('click',()=>{
+  if(!lastTopCandidate){showToast('当前字段还没有可用候选',true);return}
+  selectorInput.value=lastTopCandidate;analyzeSelector(false);
+});
+document.getElementById('refreshVolatileBtn').addEventListener('click',refreshVolatileClasses);
+document.getElementById('resetStageBtn').addEventListener('click',resetStage);
+toggleOverlayBtn.addEventListener('click',()=>openOverlay());
 
-            const tipHtml = result.tips.length
-                ? `<div class="space-y-2">${result.tips.map((item) => `
-                    <div class="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/80 dark:bg-slate-900/40 px-3 py-2 text-xs leading-6 text-slate-600 dark:text-slate-300">${escapeHtml(item)}</div>
-                `).join('')}</div>`
-                : '';
+selectorInput.addEventListener('keydown',e=>{
+  if((e.ctrlKey||e.metaKey)&&e.key==='Enter'){e.preventDefault();analyzeSelector(false)}
+});
+selectorInput.addEventListener('input',()=>analyzeSelector(true));
 
-            diagnosisPanel.innerHTML = `
-                <div class="rounded-2xl border px-4 py-4 ${toneClass}">
-                    <div class="flex flex-wrap items-center gap-2 mb-2">
-                        <span class="text-sm font-bold">${escapeHtml(result.badge)}</span>
-                        <span class="inline-flex items-center rounded-full bg-white/70 dark:bg-slate-900/40 px-2.5 py-1 text-[11px]">${escapeHtml(result.meta)}</span>
-                    </div>
-                    <div class="text-sm leading-7">${escapeHtml(result.summary)}</div>
-                </div>
-                ${warningHtml}
-                ${tipHtml}
-            `;
-        }
-
-        function renderCandidatePanel(target) {
-            if (!target) {
-                candidatePanel.innerHTML = `<div class="rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 px-4 py-6 text-sm text-slate-500 dark:text-slate-400">当前字段没有可分析的目标元素。</div>`;
-                lastTopCandidate = '';
-                return;
-            }
-
-            const candidates = buildElementCandidates(target);
-            lastTopCandidate = candidates.length ? candidates[0].selector : '';
-            if (!candidates.length) {
-                candidatePanel.innerHTML = `<div class="rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 px-4 py-6 text-sm text-slate-500 dark:text-slate-400">还没生成出可用候选，通常要给目标元素更多稳定属性。</div>`;
-                return;
-            }
-
-            candidatePanel.innerHTML = candidates.map((candidate, index) => `
-                <div class="rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-900/40 p-3">
-                    <div class="flex flex-wrap items-center gap-2 mb-2">
-                        <span class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">候选 ${index + 1}</span>
-                        <span class="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${candidate.unique ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300' : 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300'}">
-                            ${candidate.unique ? '唯一命中' : `匹配 ${candidate.count} 个`}
-                        </span>
-                        <span class="inline-flex items-center rounded-full bg-slate-100 dark:bg-slate-800 px-2 py-0.5 text-[11px] text-slate-500 dark:text-slate-400">${escapeHtml(candidate.reason)}</span>
-                    </div>
-                    <code class="candidate-code block rounded-xl bg-slate-950 px-3 py-2 text-xs leading-6 text-slate-100">${escapeHtml(candidate.selector)}</code>
-                    <div class="mt-3 flex flex-wrap gap-2">
-                        <button type="button" data-action="use-candidate" data-selector="${escapeHtml(candidate.selector)}" class="rounded-lg border border-slate-200 dark:border-slate-700 px-3 py-1 text-xs font-medium hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">代入输入框</button>
-                        <button type="button" data-action="copy-candidate" data-selector="${escapeHtml(candidate.selector)}" class="rounded-lg border border-slate-200 dark:border-slate-700 px-3 py-1 text-xs font-medium hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">复制</button>
-                    </div>
-                </div>
-            `).join('');
-
-            candidatePanel.querySelectorAll('[data-action="use-candidate"]').forEach((button) => {
-                button.addEventListener('click', () => {
-                    selectorInput.value = button.dataset.selector || '';
-                    analyzeSelector(true);
-                    showToast('候选选择器已代入');
-                });
-            });
-            candidatePanel.querySelectorAll('[data-action="copy-candidate"]').forEach((button) => {
-                button.addEventListener('click', async () => {
-                    try {
-                        await navigator.clipboard.writeText(button.dataset.selector || '');
-                        showToast('候选选择器已复制');
-                    } catch (error) {
-                        showToast('复制失败', true);
-                    }
-                });
-            });
-        }
-
-        function renderMatchPanel(matches) {
-            if (!matches || !matches.length) {
-                matchPanel.innerHTML = `<div class="rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 px-4 py-6 text-sm text-slate-500 dark:text-slate-400">当前没有命中任何元素。</div>`;
-                return;
-            }
-
-            matchPanel.innerHTML = matches.map((item, index) => `
-                <div class="rounded-2xl border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-900/40 p-3">
-                    <div class="flex flex-wrap items-center gap-2 mb-2">
-                        <span class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">命中 ${index + 1}</span>
-                        <span class="inline-flex items-center rounded-full bg-slate-100 dark:bg-slate-800 px-2 py-0.5 text-[11px] text-slate-600 dark:text-slate-300">&lt;${escapeHtml(item.tag)}&gt;</span>
-                        <span class="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] ${item.visible ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300' : 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300'}">${item.visible ? '可见' : '不可见/尺寸为 0'}</span>
-                        <span class="inline-flex items-center rounded-full bg-slate-100 dark:bg-slate-800 px-2 py-0.5 text-[11px] text-slate-600 dark:text-slate-300">${item.rect.width}×${item.rect.height}</span>
-                    </div>
-                    ${item.text ? `<div class="text-sm leading-6 text-slate-700 dark:text-slate-200 mb-2">${escapeHtml(item.text)}</div>` : ''}
-                    ${Object.keys(item.attributes).length ? `
-                        <div class="flex flex-wrap gap-2 mb-2">
-                            ${Object.entries(item.attributes).map(([key, value]) => `
-                                <span class="inline-flex items-center max-w-full rounded-full border border-slate-200 dark:border-slate-700 bg-white/80 dark:bg-slate-900/70 px-2.5 py-1 text-[11px] text-slate-600 dark:text-slate-300">
-                                    <strong class="mr-1">${escapeHtml(key)}</strong>
-                                    <span class="truncate">${escapeHtml(value)}</span>
-                                </span>
-                            `).join('')}
-                        </div>
-                    ` : ''}
-                    ${item.warnings.length ? `
-                        <div class="space-y-2 mb-2">
-                            ${item.warnings.map((warning) => `
-                                <div class="rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50/80 dark:bg-amber-900/20 px-3 py-2 text-xs leading-6 text-amber-700 dark:text-amber-300">${escapeHtml(warning)}</div>
-                            `).join('')}
-                        </div>
-                    ` : ''}
-                    <details>
-                        <summary class="cursor-pointer text-xs font-medium text-blue-600 dark:text-blue-300">查看 HTML 摘要</summary>
-                        <pre class="mt-2 whitespace-pre-wrap break-all rounded-xl bg-slate-950 px-3 py-2 text-[11px] leading-5 text-slate-100">${escapeHtml(item.html)}</pre>
-                    </details>
-                </div>
-            `).join('');
-        }
-
-        function analyzeSelector(silent = false) {
-            const selector = String(selectorInput.value || '').trim();
-            const target = getSelectedTarget();
-            renderCandidatePanel(target);
-
-            if (!selector) {
-                renderDiagnosis(null);
-                renderMatchPanel([]);
-                clearHighlights();
-                highlightTargetField();
-                return;
-            }
-
-            let matches = [];
-            let parseError = '';
-            try {
-                matches = Array.from(document.querySelectorAll(selector));
-            } catch (error) {
-                parseError = String(error && error.message ? error.message : error);
-            }
-
-            if (parseError) {
-                renderDiagnosis({
-                    status: 'error',
-                    badge: '❌ 语法错误',
-                    meta: '浏览器无法解析这条选择器',
-                    summary: parseError,
-                    warnings: ['先把语法改到浏览器能接受，再谈稳定性。'],
-                    tips: ['如果你从 DevTools 复制出的内容带了太多父级链路，先删掉一部分再试。']
-                });
-                renderMatchPanel([]);
-                clearHighlights();
-                highlightTargetField();
-                if (!silent) {
-                    showToast('选择器语法错误', true);
-                }
-                return;
-            }
-
-            const exactHit = !!(target && matches.includes(target));
-            const matchSummaries = matches.slice(0, 6).map((node) => getElementSummary(node));
-            const warnings = selectorInputWarnings(selector);
-            const tips = [];
-            let status = 'error';
-            let badge = '❌ 没有命中';
-            let meta = '0 个命中';
-            let summary = '当前写法没有命中任何元素。';
-
-            if (matches.length === 0) {
-                tips.push('先确认页面状态是不是对的。很多选择器不是写错，而是页面还没切到真正的聊天区域。');
-                tips.push('优先尝试 id、data-testid、aria-label、name、placeholder，不要一上来就赌随机 class。');
-            } else if (exactHit && matches.length === 1) {
-                status = 'ok';
-                badge = '✅ 唯一命中正确目标';
-                meta = '1 个命中，目标正确';
-                summary = '这条写法已经唯一命中了当前目标，可以继续看它是不是足够稳定。';
-                tips.push('再点一次“刷新随机 class”复测。如果还稳，说明你没踩到动态类名。');
-                tips.push('如果下方有更短、更依赖稳定属性的候选，优先换成它。');
-            } else if (exactHit && matches.length > 1) {
-                status = 'partial';
-                badge = '⚠️ 命中了正确目标，但范围过宽';
-                meta = `${matches.length} 个命中，目标包含在内`;
-                summary = '这条写法能碰到目标，但同时命中了别的元素，后面很容易误点或误读。';
-                tips.push('优先从下方候选里挑唯一命中的写法，或者补上 aria-label / data-testid / name 之类的稳定属性。');
-            } else if (!exactHit && matches.length > 0) {
-                status = 'error';
-                badge = '❌ 命中了别的元素';
-                meta = `${matches.length} 个命中，但目标不在里面`;
-                summary = '这条写法命中了页面里的其他元素，不是你当前选中的真正目标。';
-                tips.push('直接看“命中元素详情”，确认它到底选到了谁。很多时候不是页面没这个元素，而是你写到了兄弟节点。');
-            }
-
-            renderDiagnosis({
-                status,
-                badge,
-                meta,
-                summary,
-                warnings,
-                tips
-            });
-            renderMatchPanel(matchSummaries);
-
-            clearHighlights();
-            if (highlightMatchesInput.checked) {
-                highlightMatches(matches.slice(0, 12), target);
-            }
-            highlightTargetField();
-
-            if (!silent) {
-                showToast(status === 'ok' ? '已经唯一命中正确目标' : status === 'partial' ? '命中了正确目标，但范围还太宽' : '这条写法还不对', status === 'error');
-            }
-        }
-
-        document.getElementById('analyzeBtn').addEventListener('click', () => analyzeSelector(false));
-        document.getElementById('clearSelectorBtn').addEventListener('click', () => {
-            selectorInput.value = '';
-            analyzeSelector(true);
-        });
-        document.getElementById('useTopCandidateBtn').addEventListener('click', () => {
-            if (!lastTopCandidate) {
-                showToast('当前字段还没有可用候选', true);
-                return;
-            }
-            selectorInput.value = lastTopCandidate;
-            analyzeSelector(false);
-        });
-        document.getElementById('refreshVolatileBtn').addEventListener('click', refreshVolatileClasses);
-        document.getElementById('resetStageBtn').addEventListener('click', resetStage);
-        toggleOverlayBtn.addEventListener('click', () => openOverlay());
-
-        selectorInput.addEventListener('keydown', (event) => {
-            if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
-                event.preventDefault();
-                analyzeSelector(false);
-            }
-        });
-
-        selectorInput.addEventListener('input', () => {
-            analyzeSelector(true);
-        });
-
-        renderFieldPicker();
-        renderScenarioToggles();
-        openOverlay(false);
-        renderScenarioState();
-        selectorInput.value = 'textarea';
-        highlightTargetField();
-        analyzeSelector(true);
-    </script>
+renderFieldPicker();
+renderScenarioToggles();
+openOverlay(false);
+renderScenarioState();
+selectorInput.value='textarea';
+highlightTargetField();
+analyzeSelector(true);
+</script>
 </body>
 </html>
