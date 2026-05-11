@@ -456,7 +456,7 @@
           "result_container": ".markdown-main-panel",
           "new_chat_btn": "[data-test-id=\"expanded-button\"]",
           "message_wrapper": null,
-          "generating_indicator": "",
+          "generating_indicator": ".blue-circle.stop-icon mat-icon[data-mat-icon-name=\"stop\"]",
           "点击模型选择": "[data-test-id=\"logo-pill-label-container\"]",
           "选择模型": "//button[.//span[contains(text(), \"快速\")]]",
           "临时对话按钮": "button.temp-chat-button"
@@ -479,16 +479,23 @@
             "attachment_selectors": [
               ".attachment-preview-wrapper",
               ".uploader-file-preview-container",
+              "uploader-file-preview",
               ".file-preview-chip",
               ".file-preview-container",
-              "button.image-preview",
+              ".image-preview",
               "button.cancel-button",
+              "[data-test-id=\"image-loading-preview\"]",
               "img[aria-label=\"图片预览\"]"
             ],
             "pending_selectors": [
+              ".image-preview.loading",
+              "[data-test-id=\"image-loading-preview\"]",
+              ".progress-spinner",
               ".loading-content-spinner-container",
+              "mat-spinner[role=\"progressbar\"]",
               "mat-progress-spinner[role=\"progressbar\"]",
-              ".mdc-circular-progress--indeterminate"
+              ".mdc-circular-progress--indeterminate",
+              ".mdc-circular-progress"
             ],
             "busy_text_markers": [],
             "send_button_disabled_markers": [],
@@ -499,6 +506,8 @@
           },
           "network": {
             "listen_pattern": "StreamGenerate",
+            "stream_match_mode": "regex",
+            "stream_match_pattern": "/_/BardChatUi/data/assistant\\.lamda\\.BardFrontendService/StreamGenerate(?:$|[?#])",
             "parser": "gemini",
             "silence_threshold": 3,
             "response_interval": 1
@@ -593,7 +602,7 @@
           "result_container": ".markdown-main-panel",
           "new_chat_btn": "[data-test-id=\"expanded-button\"]",
           "message_wrapper": null,
-          "generating_indicator": "",
+          "generating_indicator": ".blue-circle.stop-icon mat-icon[data-mat-icon-name=\"stop\"]",
           "点击模型选择": "[data-test-id=\"logo-pill-label-container\"]",
           "选择模型": "//button[.//span[contains(text(), \"Pro\")]]",
           "临时对话按钮": "button.temp-chat-button"
@@ -603,6 +612,9 @@
           "hard_timeout": 600,
           "send_confirmation": {
             "attachment_sensitivity": "high",
+            "post_click_observe_window": 1.8,
+            "pre_retry_probe_window": 0.12,
+            "retry_observe_window": 0.9,
             "attachment_observe_window": 8,
             "trust_network_activity": true,
             "trust_generating_indicator": true,
@@ -616,16 +628,23 @@
             "attachment_selectors": [
               ".attachment-preview-wrapper",
               ".uploader-file-preview-container",
+              "uploader-file-preview",
               ".file-preview-chip",
               ".file-preview-container",
-              "button.image-preview",
+              ".image-preview",
               "button.cancel-button",
+              "[data-test-id=\"image-loading-preview\"]",
               "img[aria-label=\"图片预览\"]"
             ],
             "pending_selectors": [
+              ".image-preview.loading",
+              "[data-test-id=\"image-loading-preview\"]",
+              ".progress-spinner",
               ".loading-content-spinner-container",
+              "mat-spinner[role=\"progressbar\"]",
               "mat-progress-spinner[role=\"progressbar\"]",
-              ".mdc-circular-progress--indeterminate"
+              ".mdc-circular-progress--indeterminate",
+              ".mdc-circular-progress"
             ],
             "busy_text_markers": [],
             "send_button_disabled_markers": [],
@@ -636,6 +655,8 @@
           },
           "network": {
             "listen_pattern": "StreamGenerate",
+            "stream_match_mode": "regex",
+            "stream_match_pattern": "/_/BardChatUi/data/assistant\\.lamda\\.BardFrontendService/StreamGenerate(?:$|[?#])",
             "parser": "gemini",
             "silence_threshold": 3,
             "response_interval": 1
@@ -730,7 +751,7 @@
           "result_container": ".markdown-main-panel",
           "new_chat_btn": "[data-test-id=\"expanded-button\"]",
           "message_wrapper": null,
-          "generating_indicator": "",
+          "generating_indicator": ".blue-circle.stop-icon mat-icon[data-mat-icon-name=\"stop\"]",
           "点击模型选择": "[data-test-id=\"logo-pill-label-container\"]",
           "选择模型": "//button[.//span[contains(text(), \"思考\")]]",
           "临时对话按钮": "button.temp-chat-button"
@@ -740,6 +761,8 @@
           "hard_timeout": 600,
           "network": {
             "listen_pattern": "StreamGenerate",
+            "stream_match_mode": "regex",
+            "stream_match_pattern": "/_/BardChatUi/data/assistant\\.lamda\\.BardFrontendService/StreamGenerate(?:$|[?#])",
             "parser": "gemini",
             "silence_threshold": 3,
             "response_interval": 1
@@ -759,16 +782,23 @@
             "attachment_selectors": [
               ".attachment-preview-wrapper",
               ".uploader-file-preview-container",
+              "uploader-file-preview",
               ".file-preview-chip",
               ".file-preview-container",
-              "button.image-preview",
+              ".image-preview",
               "button.cancel-button",
+              "[data-test-id=\"image-loading-preview\"]",
               "img[aria-label=\"图片预览\"]"
             ],
             "pending_selectors": [
+              ".image-preview.loading",
+              "[data-test-id=\"image-loading-preview\"]",
+              ".progress-spinner",
               ".loading-content-spinner-container",
+              "mat-spinner[role=\"progressbar\"]",
               "mat-progress-spinner[role=\"progressbar\"]",
-              ".mdc-circular-progress--indeterminate"
+              ".mdc-circular-progress--indeterminate",
+              ".mdc-circular-progress"
             ],
             "require_attachment_present": true,
             "continue_once_on_unconfirmed_send": false,

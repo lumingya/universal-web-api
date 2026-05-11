@@ -1118,44 +1118,173 @@ import os as _os
 import psutil as _psutil
 
 
-def _get_project_memory_mb() -> float:
-    """计算本项目总内存占用（Python 进程 + 浏览器子进程树）"""
+def _get_process_private_memory_bytes(proc: _psutil.Process) -> int:
+    """优先读取进程私有内存，避免多进程浏览器按 RSS 累加后虚高。"""
     try:
+        full_info = proc.memory_full_info()
+        for attr_name in ("uss", "private", "private_bytes"):
+            value = getattr(full_info, attr_name, None)
+            if isinstance(value, (int, float)) and value > 0:
+                return int(value)
+    except (_psutil.NoSuchProcess, _psutil.AccessDenied, AttributeError):
+        pass
+
+    try:
+        return int(proc.memory_info().rss)
+    except (_psutil.NoSuchProcess, _psutil.AccessDenied, AttributeError):
+        return 0
+
+
+def _collect_process_tree_memory_bytes(proc: _psutil.Process, seen_pids: set[int]) -> int:
+    """统计进程树内存，并避免重复累计已经见过的 PID。"""
+    total_bytes = 0
+
+    try:
+        processes = [proc]
+        processes.extend(proc.children(recursive=True))
+    except (_psutil.NoSuchProcess, _psutil.AccessDenied):
+        processes = [proc]
+
+    for item in processes:
+        try:
+            pid = int(item.pid)
+        except (_psutil.NoSuchProcess, _psutil.AccessDenied, AttributeError, TypeError, ValueError):
+            continue
+
+        if pid in seen_pids:
+            continue
+
+        seen_pids.add(pid)
+        total_bytes += _get_process_private_memory_bytes(item)
+
+    return total_bytes
+
+
+def _extract_process_flag_value(cmdline: list[str], flag_name: str) -> str:
+    """从命令行参数中提取浏览器 flag 的值，兼容 --flag value / --flag=value。"""
+    normalized_flag = str(flag_name or "").strip()
+    if not normalized_flag:
+        return ""
+
+    for index, raw_part in enumerate(cmdline or []):
+        part = str(raw_part or "").strip().strip('"')
+        if not part:
+            continue
+
+        if part == normalized_flag:
+            if index + 1 < len(cmdline):
+                return str(cmdline[index + 1] or "").strip().strip('"')
+            return ""
+
+        prefix = f"{normalized_flag}="
+        if part.startswith(prefix):
+            return part[len(prefix):].strip().strip('"')
+
+    return ""
+
+
+def _normalize_path_for_compare(path_value: Any) -> str:
+    """路径比较前统一大小写和绝对路径，降低命令行写法差异的影响。"""
+    raw_text = str(path_value or "").strip().strip('"')
+    if not raw_text:
+        return ""
+
+    try:
+        return str(Path(raw_text).expanduser().resolve()).casefold()
+    except Exception:
+        try:
+            return str(Path(raw_text).expanduser().absolute()).casefold()
+        except Exception:
+            return raw_text.casefold()
+
+
+def _is_chromium_family_process(process_name: str) -> bool:
+    lowered = str(process_name or "").strip().lower()
+    if not lowered:
+        return False
+
+    return any(
+        token in lowered
+        for token in ("chrome", "msedge", "brave", "vivaldi", "opera")
+    )
+
+
+def _find_project_browser_root_processes(
+    main_proc: _psutil.Process,
+    *,
+    project_dir: Path,
+    python_descendant_pids: set[int],
+) -> list[_psutil.Process]:
+    """
+    只匹配当前项目启动的调试浏览器主进程。
+    必须同时命中项目 profile 目录和调试端口，避免把普通 Chrome 窗口算进来。
+    """
+    profile_root = _resolve_browser_profile_root(project_dir)
+    profile_root_norm = _normalize_path_for_compare(profile_root)
+    debug_port = str(AppConfig.get_browser_port() or "").strip()
+    matched_processes: list[_psutil.Process] = []
+
+    for proc in _psutil.process_iter(['pid', 'name', 'cmdline']):
+        try:
+            pid = int(proc.pid)
+            if pid == main_proc.pid or pid in python_descendant_pids:
+                continue
+
+            proc_name = proc.info.get('name') or ""
+            if not _is_chromium_family_process(proc_name):
+                continue
+
+            cmdline = proc.info.get('cmdline') or []
+            if not cmdline:
+                continue
+
+            process_type = _extract_process_flag_value(cmdline, "--type")
+            if process_type:
+                continue
+
+            user_data_dir = _extract_process_flag_value(cmdline, "--user-data-dir")
+            proc_profile_norm = _normalize_path_for_compare(user_data_dir)
+            proc_debug_port = _extract_process_flag_value(cmdline, "--remote-debugging-port")
+            if not (
+                profile_root_norm
+                and proc_profile_norm
+                and proc_profile_norm == profile_root_norm
+                and debug_port
+                and proc_debug_port == debug_port
+            ):
+                continue
+
+            matched_processes.append(proc)
+        except (_psutil.NoSuchProcess, _psutil.AccessDenied, ValueError, TypeError):
+            continue
+
+    return matched_processes
+
+
+def _get_project_memory_mb() -> float:
+    """估算本项目相关进程的私有内存，尽量避免浏览器多进程重复计数。"""
+    try:
+        project_dir = Path(__file__).resolve().parents[2]
         main_proc = _psutil.Process(_os.getpid())
-        total_rss = main_proc.memory_info().rss
+        python_descendants = main_proc.children(recursive=True)
+        python_descendant_pids = {
+            int(child.pid)
+            for child in python_descendants
+            if getattr(child, "pid", None) is not None
+        }
 
-        # 收集 Python 进程的所有子进程（包括浏览器）
-        for child in main_proc.children(recursive=True):
-            try:
-                total_rss += child.memory_info().rss
-            except (_psutil.NoSuchProcess, _psutil.AccessDenied):
-                pass
+        seen_pids: set[int] = set()
+        total_bytes = _collect_process_tree_memory_bytes(main_proc, seen_pids)
 
-        # 额外：尝试通过调试端口找到独立启动的 Chrome 进程
-        debug_port = str(AppConfig.get_browser_port())
-        for proc in _psutil.process_iter(['pid', 'name', 'cmdline']):
-            try:
-                if proc.pid == main_proc.pid:
-                    continue
-                # 跳过已统计的子进程
-                if proc.pid in {c.pid for c in main_proc.children(recursive=True)}:
-                    continue
-                cmdline = proc.info.get('cmdline') or []
-                cmdline_str = ' '.join(cmdline)
-                if ('chrome' in (proc.info.get('name') or '').lower() or
-                    'msedge' in (proc.info.get('name') or '').lower()):
-                    if f'--remote-debugging-port={debug_port}' in cmdline_str:
-                        # 找到主浏览器进程，加上它和它的子进程
-                        total_rss += proc.memory_info().rss
-                        for bchild in proc.children(recursive=True):
-                            try:
-                                total_rss += bchild.memory_info().rss
-                            except (_psutil.NoSuchProcess, _psutil.AccessDenied):
-                                pass
-            except (_psutil.NoSuchProcess, _psutil.AccessDenied):
-                pass
+        browser_roots = _find_project_browser_root_processes(
+            main_proc,
+            project_dir=project_dir,
+            python_descendant_pids=python_descendant_pids,
+        )
+        for browser_proc in browser_roots:
+            total_bytes += _collect_process_tree_memory_bytes(browser_proc, seen_pids)
 
-        return round(total_rss / (1024 * 1024), 1)
+        return round(total_bytes / (1024 * 1024), 1)
     except Exception:
         return 0.0
 
