@@ -26,6 +26,12 @@ from app.core.config import (
 )
 from app.core.elements import ElementFinder
 from app.core.parsers import ParserRegistry
+from app.core.request_transport import (
+    REQUEST_TRANSPORT_MODE_PAGE_FETCH,
+    execute_request_transport,
+    get_default_request_transport_config,
+    normalize_request_transport_config,
+)
 from app.utils.human_mouse import (
     smooth_move_mouse,
     idle_drift,
@@ -264,6 +270,11 @@ class WorkflowExecutor:
         self._last_input_element = None
         self._last_input_target_key = ""
         self._last_stream_media_state = {}
+        self._request_transport = normalize_request_transport_config(
+            (stream_config or {}).get("request_transport")
+        )
+        self._pending_request_transport_state: Optional[Dict[str, Any]] = None
+        self._request_transport_bypass = False
         
         # 检查是否启用网络监听模式
         self._stream_mode = stream_config.get("mode", "dom") if stream_config else "dom"
@@ -448,6 +459,140 @@ class WorkflowExecutor:
         if minimum is not None:
             result = max(int(minimum), result)
         return result
+
+    def _get_request_transport_mode(self) -> str:
+        return str(self._request_transport.get("mode") or get_default_request_transport_config().get("mode") or "workflow").strip().lower()
+
+    def _get_request_transport_profile(self) -> str:
+        return str(self._request_transport.get("profile") or "").strip()
+
+    def _get_request_transport_options(self) -> Dict[str, Any]:
+        options = self._request_transport.get("options") or {}
+        return dict(options) if isinstance(options, dict) else {}
+
+    def _get_request_transport_fallback_mode(self) -> str:
+        fallback_mode = str(self._get_request_transport_options().get("fallback_mode") or "workflow").strip().lower()
+        return fallback_mode if fallback_mode in {"workflow", "error"} else "workflow"
+
+    def _request_transport_enabled(self) -> bool:
+        return (
+            not self._request_transport_bypass
+            and self._get_request_transport_mode() == REQUEST_TRANSPORT_MODE_PAGE_FETCH
+            and bool(self._get_request_transport_profile())
+            and self._stream_mode == "network"
+            and self._network_monitor is not None
+        )
+
+    def _context_has_non_text_inputs(self, prompt: str = "") -> bool:
+        context = getattr(self, "_context", None) or {}
+        if bool(context.get("images")):
+            return True
+        try:
+            if prompt and self._text_handler._should_use_file_paste(prompt):
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _can_stage_request_transport(self, prompt: str = "") -> bool:
+        effective_prompt = str(prompt or "").strip()
+        if not effective_prompt:
+            return False
+        if not self._request_transport_enabled():
+            return False
+        if self._context_has_non_text_inputs(effective_prompt):
+            return False
+        return True
+
+    def _queue_request_transport_prompt(
+        self,
+        *,
+        selector: str,
+        target_key: str,
+        optional: bool,
+        prompt: str,
+    ) -> None:
+        self._pending_request_transport_state = {
+            "selector": str(selector or ""),
+            "target_key": str(target_key or ""),
+            "optional": bool(optional),
+            "prompt": str(prompt or ""),
+        }
+
+    def _has_pending_request_transport_prompt(self) -> bool:
+        return bool(
+            isinstance(self._pending_request_transport_state, dict)
+            and str(self._pending_request_transport_state.get("prompt") or "").strip()
+        )
+
+    def _clear_request_transport_state(self) -> None:
+        self._pending_request_transport_state = None
+
+    def _reset_request_transport_monitor_if_needed(self) -> None:
+        if self._network_monitor is None:
+            return
+        try:
+            self._network_monitor._cleanup()
+        except Exception as e:
+            logger.debug(f"[REQUEST_TRANSPORT] 清理网络监听失败（忽略）: {e}")
+
+    def _ensure_cached_prompt_filled(self) -> None:
+        pending = self._pending_request_transport_state or {}
+        prompt = str(pending.get("prompt") or "").strip()
+        selector = str(pending.get("selector") or "")
+        target_key = str(pending.get("target_key") or "")
+        optional = bool(pending.get("optional", False))
+        if not prompt:
+            return
+
+        self._request_transport_bypass = True
+        try:
+            self._execute_fill(selector, prompt, target_key, optional)
+        finally:
+            self._request_transport_bypass = False
+            self._clear_request_transport_state()
+
+    def _attempt_request_transport_send(self) -> bool:
+        if not self._has_pending_request_transport_prompt():
+            return False
+        if not self._request_transport_enabled():
+            return False
+
+        pending = self._pending_request_transport_state or {}
+        prompt = str(pending.get("prompt") or "").strip()
+        if not prompt:
+            return False
+
+        result = execute_request_transport(
+            self.tab,
+            self._request_transport,
+            prompt=prompt,
+            consume_response=False,
+        )
+        if result.get("ok"):
+            logger.info(
+                "[REQUEST_TRANSPORT] 页面直发已触发 "
+                f"(profile={self._get_request_transport_profile()}, status={result.get('status')}, "
+                f"session_id={result.get('session_id') or '-'})"
+            )
+            self._clear_request_transport_state()
+            return True
+
+        fallback_mode = self._get_request_transport_fallback_mode()
+        logger.warning(
+            "[REQUEST_TRANSPORT] 页面直发失败: "
+            f"profile={self._get_request_transport_profile()}, "
+            f"error={result.get('error')}, status={result.get('status')}, "
+            f"fallback={fallback_mode}"
+        )
+        if fallback_mode == "workflow":
+            self._reset_request_transport_monitor_if_needed()
+            return False
+
+        self._clear_request_transport_state()
+        raise WorkflowError(
+            f"request_transport_failed:{result.get('error') or result.get('status') or 'unknown'}"
+        )
 
     def _get_page_interaction_settings(self) -> Dict[str, Any]:
         return {
@@ -925,42 +1070,41 @@ class WorkflowExecutor:
     
     def _smart_delay(self, min_sec: float = None, max_sec: float = None):
         """
-        智能延迟（v5.5 增强版）
-        
-        改进：
-        - 正态分布（更像人类）
-        - 10% 概率额外停顿（模拟走神）
-        - 可被取消中断
+        隐身模式下的短延迟。
+
+        目标是保留动作衔接的自然感，不再为了“像人”而故意放慢。
         """
         if not self.stealth_mode:
             return
-        
-        min_sec = min_sec or BrowserConstants.STEALTH_DELAY_MIN
-        max_sec = max_sec or BrowserConstants.STEALTH_DELAY_MAX
-        
-        # 正态分布参数
-        mean = (min_sec + max_sec) / 2
-        std = (max_sec - min_sec) / 4
-        
-        # 生成延迟时间
-        total_delay = random.gauss(mean, std)
-        
-        # 限制范围
-        total_delay = max(min_sec, min(total_delay, max_sec))
-        
-        # 10% 概率"走神"（额外停顿）
-        pause_prob = getattr(BrowserConstants, 'STEALTH_PAUSE_PROBABILITY', 0.1)
-        pause_max = getattr(BrowserConstants, 'STEALTH_PAUSE_EXTRA_MAX', 0.8)
-        
-        if random.random() < pause_prob:
-            extra = random.uniform(0.2, pause_max)
-            total_delay = min(total_delay + extra, 1.0)  # 不超过 1s
+
+        if min_sec is None:
+            min_sec = BrowserConstants.get("STEALTH_DELAY_MIN")
+        if max_sec is None:
+            max_sec = BrowserConstants.get("STEALTH_DELAY_MAX")
+
+        min_sec = max(0.0, float(min_sec or 0.0))
+        max_sec = max(min_sec, float(max_sec or 0.0))
+        if max_sec <= 0:
+            return
+
+        spread = max_sec - min_sec
+        if spread <= 0:
+            total_delay = min_sec
+        else:
+            mean = min_sec + spread * 0.38
+            std = max(0.004, spread / 5)
+            total_delay = random.gauss(mean, std)
+            total_delay = max(min_sec, min(total_delay, max_sec))
+
+        pause_prob = float(BrowserConstants.get("STEALTH_PAUSE_PROBABILITY") or 0.0)
+        pause_max = max(0.0, float(BrowserConstants.get("STEALTH_PAUSE_EXTRA_MAX") or 0.0))
+        if pause_prob > 0 and pause_max > 0 and random.random() < pause_prob:
+            extra = random.uniform(min(0.03, pause_max), pause_max)
+            total_delay = min(total_delay + extra, max_sec + pause_max)
             logger.debug(f"[STEALTH] 随机停顿 +{extra:.2f}s")
-        
-        # 可中断的等待
-        elapsed = 0
-        step = 0.05
-        
+
+        elapsed = 0.0
+        step = 0.02
         while elapsed < total_delay:
             if self._check_cancelled():
                 return
@@ -1100,6 +1244,13 @@ class WorkflowExecutor:
                 key = target_key or value
                 # 包含 Enter 的按键（Enter、Ctrl+Enter 等）可能触发提交
                 if self._combo_contains_submit_key(key):
+                    if self._network_monitor is not None:
+                        self._prepare_kimi_page_capture()
+                        self._network_monitor.pre_start()
+                    if self._attempt_request_transport_send():
+                        return
+                    if self._has_pending_request_transport_prompt():
+                        self._ensure_cached_prompt_filled()
                     self._wait_for_attachments_ready_before_send(
                         self._selectors.get("send_btn", "")
                     )
@@ -1110,6 +1261,10 @@ class WorkflowExecutor:
 
             elif action == "JS_EXEC":
                 self._execute_javascript(value)
+
+            elif action == "READONLY_HINT":
+                logger.debug(f"[WORKFLOW_HINT] {str(value or '')[:160]}")
+                return
             
             elif action == "CLICK":
                 # ===== 隐身模式：首次交互前执行人类行为预热 =====
@@ -1118,12 +1273,19 @@ class WorkflowExecutor:
                     self._page_warmed_up = True
                 
                 if target_key == "send_btn":
-                    self._wait_for_attachments_ready_before_send(selector)
                     # 🆕 发送前启动网络监听（如果已配置）
                     if self._network_monitor is not None:
                         self._prepare_kimi_page_capture()
                         self._network_monitor.pre_start()
-                    
+                    if self._attempt_request_transport_send():
+                        return
+                    if self._has_pending_request_transport_prompt():
+                        self._ensure_cached_prompt_filled()
+                    self._wait_for_attachments_ready_before_send(selector)
+                    if self._network_monitor is not None:
+                        self._prepare_kimi_page_capture()
+                        self._network_monitor.pre_start()
+
                     self._execute_click_send_reliably(
                         selector=selector,
                         target_key=target_key,
@@ -1149,6 +1311,18 @@ class WorkflowExecutor:
             elif action == "FILL_INPUT":
                 
                 prompt = context.get("prompt", "") if context else ""
+                if self._can_stage_request_transport(prompt):
+                    self._queue_request_transport_prompt(
+                        selector=selector,
+                        target_key=target_key,
+                        optional=optional,
+                        prompt=prompt,
+                    )
+                    logger.debug(
+                        f"[REQUEST_TRANSPORT] 已缓存页面直发 prompt "
+                        f"(profile={self._get_request_transport_profile()}, chars={len(prompt)})"
+                    )
+                    return
                 self._execute_fill(selector, prompt, target_key, optional)
             
             elif action in ("STREAM_WAIT", "STREAM_OUTPUT"):
@@ -1453,11 +1627,6 @@ class WorkflowExecutor:
                     self._wait_for_element_interactable(ele, target_key)
 
                     if self.stealth_mode:
-                        if target_key == "send_btn" and random.random() < 0.5:
-                            hesitate = random.uniform(0.5, 1.2)
-                            logger.debug(f"[STEALTH] 发送前犹豫 {hesitate:.2f}s")
-                            self._idle_wait(hesitate)
-
                         self._stealth_click_element(ele)
                     else:
                         if self._check_cancelled():
@@ -1593,7 +1762,7 @@ class WorkflowExecutor:
 
         _dispatch_mouse_move(self.tab, origin_x, origin_y)
         self._mouse_pos = (origin_x, origin_y)
-        time.sleep(random.uniform(0.03, 0.10))
+        time.sleep(random.uniform(0.01, 0.04))
         return self._mouse_pos
 
     def _flash_click_marker(self, x: int, y: int):
@@ -1657,14 +1826,14 @@ class WorkflowExecutor:
         if random.random() < 0.65:
             self._mouse_pos = idle_drift(
                 tab=self.tab,
-                duration=random.uniform(0.04, 0.12),
+                duration=random.uniform(0.02, 0.05),
                 center_pos=self._mouse_pos,
                 check_cancelled=self._check_cancelled,
-                drift_radius=random.uniform(1.2, 2.8),
-                freq_hz=random.uniform(6.0, 10.0)
+                drift_radius=random.uniform(0.8, 1.8),
+                freq_hz=random.uniform(7.0, 11.0)
             )
         else:
-            time.sleep(random.uniform(0.04, 0.10))
+            time.sleep(random.uniform(0.015, 0.035))
 
         if self._check_cancelled():
             return
@@ -1677,7 +1846,7 @@ class WorkflowExecutor:
         )
         if not success:
             logger.warning(f"[CDP_CLICK] 首次坐标点击失败，重试一次: ({x}, {y})")
-            time.sleep(random.uniform(0.08, 0.18))
+            time.sleep(random.uniform(0.03, 0.08))
             success = cdp_precise_click(
                 tab=self.tab,
                 x=x,
@@ -1764,14 +1933,14 @@ class WorkflowExecutor:
         if random.random() < 0.6:
             self._mouse_pos = idle_drift(
                 tab=self.tab,
-                duration=random.uniform(0.05, 0.12),
+                duration=random.uniform(0.02, 0.05),
                 center_pos=self._mouse_pos,
                 check_cancelled=self._check_cancelled,
-                drift_radius=random.uniform(1.0, 2.4),
-                freq_hz=random.uniform(6.0, 9.0)
+                drift_radius=random.uniform(0.8, 1.8),
+                freq_hz=random.uniform(7.0, 10.0)
             )
         else:
-            time.sleep(random.uniform(0.04, 0.10))
+            time.sleep(random.uniform(0.015, 0.035))
 
         if self._check_cancelled():
             return
@@ -1835,8 +2004,18 @@ class WorkflowExecutor:
         if self._check_cancelled():
             return
         
-        # 3. 短暂停顿（模拟"确认要点击"）
-        time.sleep(random.uniform(0.05, 0.15))
+        # 3. 极短停顿/微漂移，让点击衔接自然但不拖节奏
+        if random.random() < 0.6:
+            self._mouse_pos = idle_drift(
+                tab=self.tab,
+                duration=random.uniform(0.02, 0.05),
+                center_pos=self._mouse_pos,
+                check_cancelled=self._check_cancelled,
+                drift_radius=random.uniform(0.8, 1.6),
+                freq_hz=random.uniform(7.0, 11.0)
+            )
+        else:
+            time.sleep(random.uniform(0.015, 0.035))
         
         # 4. 精确 CDP 点击（含 force=0.5 修复）
         success = cdp_precise_click(
@@ -1849,7 +2028,7 @@ class WorkflowExecutor:
         if not success:
             # 🔴 CDP 点击失败也不降级到 ele.click()，而是重试一次
             logger.warning("[STEALTH] CDP 精确点击失败，重试一次...")
-            time.sleep(random.uniform(0.1, 0.3))
+            time.sleep(random.uniform(0.04, 0.10))
             success = cdp_precise_click(
                 tab=self.tab,
                 x=click_x,
@@ -2613,8 +2792,8 @@ class WorkflowExecutor:
             logger.info("[STEALTH] 发送完成（无图片）")
             return
         
-        max_wait = getattr(BrowserConstants, 'STEALTH_SEND_IMAGE_WAIT', 8.0)
-        retry_interval = getattr(BrowserConstants, 'STEALTH_SEND_IMAGE_RETRY_INTERVAL', 1.5)
+        max_wait = float(BrowserConstants.get('STEALTH_SEND_IMAGE_WAIT') or 8.0)
+        retry_interval = float(BrowserConstants.get('STEALTH_SEND_IMAGE_RETRY_INTERVAL') or 1.2)
         
         logger.info(f"[STEALTH] 有图片，发送后等待上传 (max_wait={max_wait}s)")
         
@@ -2708,13 +2887,10 @@ class WorkflowExecutor:
     
     def _warmup_page_for_stealth(self):
         """
-        页面预热（v5.8 — 简化版，降低行为指纹风险）
-        
-        改进：
-        - 修复死代码（_dispatch_mouse_move = None 覆盖导入）
-        - 减少随机扫视次数（1-2 次，真实用户打开熟悉页面不会大量扫视）
-        - 移除随机滚动（在已登录的对话页面滚动不自然）
-        - 保留微漂移（等待期间的手部抖动仍有价值）
+        页面预热（极速简化版）
+
+        仅建立一个合理的鼠标起点，避免首个动作过于突兀，
+        不再为了“拟人”加入明显的停顿和扫视。
         """
         logger.debug("[STEALTH] 执行页面预热")
         
@@ -2729,21 +2905,21 @@ class WorkflowExecutor:
             self._mouse_pos = (init_x, init_y)
             _dispatch_mouse_move(self.tab, init_x, init_y)
             
-            # 短暂停顿（模拟"看到页面内容"）
-            self._idle_wait(random.uniform(0.4, 0.9))
+            # 仅保留极短缓冲，避免首个动作过于生硬
+            self._idle_wait(random.uniform(0.08, 0.18))
             
             if self._check_cancelled():
                 return
             
-            # 1-2 次轻微移动（模拟目光扫过，不是大幅扫视）
-            move_count = random.randint(1, 2)
+            # 最多一次轻微修正，保持动作连贯
+            move_count = 1 if random.random() < 0.45 else 0
             for i in range(move_count):
                 if self._check_cancelled():
                     return
                 
-                # 小幅移动（不超过视口 30%）
-                dx = random.randint(-int(vw * 0.15), int(vw * 0.15))
-                dy = random.randint(-int(vh * 0.12), int(vh * 0.12))
+                # 小幅移动（仅做起手姿态修正）
+                dx = random.randint(-int(vw * 0.08), int(vw * 0.08))
+                dy = random.randint(-int(vh * 0.06), int(vh * 0.06))
                 target_x = max(50, min(vw - 50, self._mouse_pos[0] + dx))
                 target_y = max(50, min(vh - 50, self._mouse_pos[1] + dy))
                 
@@ -2754,11 +2930,9 @@ class WorkflowExecutor:
                     check_cancelled=self._check_cancelled
                 )
                 
-                # 微漂移停留
-                self._idle_wait(random.uniform(0.3, 0.6))
-            
-            # 最后停顿
-            self._idle_wait(random.uniform(0.3, 0.7))
+                self._idle_wait(random.uniform(0.04, 0.10))
+
+            self._idle_wait(random.uniform(0.05, 0.12))
             
             logger.debug(f"[STEALTH] 页面预热完成（{move_count} 次移动）")
             
@@ -2789,7 +2963,7 @@ class WorkflowExecutor:
 
             if self.stealth_mode:
                 self._stealth_click_element(ele)
-                time.sleep(random.uniform(0.1, 0.25))
+                time.sleep(random.uniform(0.04, 0.10))
                 self._text_handler.fill_via_clipboard_no_click(ele, text)
             else:
                 self._text_handler.fill_via_js(ele, text)
@@ -2800,16 +2974,13 @@ class WorkflowExecutor:
                     if not self._image_handler.paste_images(images):
                         raise WorkflowError("image_paste_unconfirmed")
         
-        # ===== 隐身模式：粘贴后模拟"人类阅读/检查"延迟（带微漂移）=====
+        # ===== 隐身模式：粘贴后仅保留极短缓冲，避免节奏被故意拖慢 =====
         if self.stealth_mode and len(text) > 0:
-            base_delay = random.uniform(1.0, 2.0)
-            extra_per_chunk = len(text) / 5000.0
-            extra_delay = extra_per_chunk * random.uniform(0.3, 0.6)
-            total_review = min(base_delay + extra_delay, 3.0)
-            
+            base_delay = random.uniform(0.10, 0.22)
+            extra_delay = min(0.22, (len(text) / 12000.0) * random.uniform(0.04, 0.08))
+            total_review = min(base_delay + extra_delay, 0.45)
+
             logger.debug(f"[STEALTH] 粘贴后阅读延迟 {total_review:.1f}s (文本长度={len(text)})")
-            
-            # 🆕 等待期间保持微漂移（消灭"事件沙漠"）
             self._idle_wait(total_review)
 
 

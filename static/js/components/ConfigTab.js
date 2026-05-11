@@ -76,6 +76,11 @@ window.ConfigTab = {
             },
             defaultStreamConfig: {
                 mode: 'dom',
+                request_transport: {
+                    mode: 'workflow',
+                    profile: '',
+                    options: {}
+                },
                 hard_timeout: 300,
                 send_confirmation: {
                     attachment_sensitivity: 'medium'
@@ -125,6 +130,14 @@ window.ConfigTab = {
             return {
                 ...this.defaultStreamConfig,
                 mode: streamConfig.mode || this.defaultStreamConfig.mode,
+                request_transport: {
+                    ...(this.defaultStreamConfig.request_transport || {}),
+                    ...((streamConfig && streamConfig.request_transport) || {}),
+                    options: {
+                        ...((this.defaultStreamConfig.request_transport && this.defaultStreamConfig.request_transport.options) || {}),
+                        ...((streamConfig && streamConfig.request_transport && streamConfig.request_transport.options) || {})
+                    }
+                },
                 hard_timeout: streamConfig.hard_timeout || this.defaultStreamConfig.hard_timeout,
                 network: streamConfig.network || this.defaultStreamConfig.network,
                 send_confirmation: {

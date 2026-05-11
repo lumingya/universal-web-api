@@ -87,7 +87,7 @@ const BROWSER_CONSTANTS_SCHEMA = {
                 type: 'number',
                 step: 0.05,
                 min: 0,
-                default: 0.1
+                default: 0.03
             },
             STEALTH_DELAY_MAX: {
                 label: '隐身延迟上限',
@@ -95,7 +95,7 @@ const BROWSER_CONSTANTS_SCHEMA = {
                 type: 'number',
                 step: 0.05,
                 min: 0,
-                default: 0.3
+                default: 0.1
             },
             ACTION_DELAY_MIN: {
                 label: '动作延迟下限',
@@ -103,7 +103,7 @@ const BROWSER_CONSTANTS_SCHEMA = {
                 type: 'number',
                 step: 0.05,
                 min: 0,
-                default: 0.15
+                default: 0.06
             },
             ACTION_DELAY_MAX: {
                 label: '动作延迟上限',
@@ -111,7 +111,7 @@ const BROWSER_CONSTANTS_SCHEMA = {
                 type: 'number',
                 step: 0.05,
                 min: 0,
-                default: 0.3
+                default: 0.14
             }
         }
     },

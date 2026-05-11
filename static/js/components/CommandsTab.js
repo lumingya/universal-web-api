@@ -109,11 +109,18 @@ window.CommandsTabComponent = {
             httpRequestDefaults: {
                 method: 'GET',
                 url: '',
+                request_profile: '',
                 headers: '{"Accept":"application/json"}',
+                prompt: '',
                 body: '',
                 body_mode: 'json',
                 response_mode: 'text',
                 credentials: 'include',
+                model_type: 'auto',
+                search_enabled: 'auto',
+                thinking_enabled: 'auto',
+                client_version: '2.0.0',
+                app_version: '2.0.0',
                 timeout_sec: 15,
                 fail_on_http_error: true,
                 save_as: ''

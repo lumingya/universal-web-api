@@ -17,6 +17,10 @@ except ImportError:
     HAS_REQUESTS = False
 
 from app.core.config import get_logger
+from app.core.request_transport import (
+    execute_request_transport,
+    get_default_request_transport_config,
+)
 from app.services.command_defs import ACTION_TYPES, TRIGGER_TYPES, CommandFlowAbort
 from app.utils.site_url import extract_remote_site_domain
 
@@ -1145,6 +1149,10 @@ class CommandEngineActionsMixin:
 
     def _execute_http_request_action(self, action: Dict, session: 'TabSession') -> Any:
         ctx = self._build_template_context(session)
+        request_profile = str(action.get("request_profile", "") or "").strip().lower()
+        if request_profile == "deepseek_completion":
+            return self._execute_http_request_deepseek_completion(action, session, ctx)
+
         method = str(action.get("method", "GET") or "GET").strip().upper()
         url = self._render_template(action.get("url", ""), ctx).strip()
         if not url:
@@ -1285,6 +1293,136 @@ class CommandEngineActionsMixin:
         except Exception as e:
             logger.warning(f"[CMD] 页面内请求失败: {e}")
             return {"ok": False, "error": str(e)}
+
+    def _execute_http_request_deepseek_completion(
+        self,
+        action: Dict,
+        session: 'TabSession',
+        ctx: Dict[str, Any],
+    ) -> Any:
+        prompt = self._render_template(action.get("prompt", action.get("body", "")), ctx).strip()
+        if not prompt:
+            return {"ok": False, "error": "empty_prompt"}
+
+        response_mode = str(action.get("response_mode", "text") or "text").strip().lower()
+        transport_defaults = get_default_request_transport_config()
+        transport_options = {
+            **(transport_defaults.get("options") or {}),
+            "model_type": self._render_template(action.get("model_type", ""), ctx).strip() or "auto",
+            "context_mode": "full_prompt",
+            "search_enabled": self._render_template(str(action.get("search_enabled", "auto") or "auto"), ctx).strip() or "auto",
+            "thinking_enabled": self._render_template(str(action.get("thinking_enabled", "auto") or "auto"), ctx).strip() or "auto",
+            "fallback_mode": "workflow",
+            "client_version": self._render_template(str(action.get("client_version", "2.0.0") or "2.0.0"), ctx).strip() or "2.0.0",
+            "app_version": self._render_template(
+                str(action.get("app_version", action.get("client_version", "2.0.0")) or action.get("client_version", "2.0.0")),
+                ctx,
+            ).strip() or self._render_template(str(action.get("client_version", "2.0.0") or "2.0.0"), ctx).strip() or "2.0.0",
+        }
+        transport_config = {
+            "mode": "page_fetch",
+            "profile": "deepseek_completion",
+            "options": transport_options,
+        }
+
+        result = execute_request_transport(
+            session.tab,
+            transport_config,
+            prompt=prompt,
+            consume_response=True,
+        )
+
+        if not isinstance(result, dict):
+            logger.warning(f"[CMD] DeepSeek 直发返回格式异常: {type(result).__name__}")
+            return {"ok": False, "error": "invalid_result_type"}
+
+        if not result.get("ok"):
+            logger.warning(
+                "[CMD] DeepSeek 直发失败: "
+                f"status={result.get('status')}, error={result.get('error')}, "
+                f"preview={self._preview_text(result.get('responsePreview') or result.get('raw_text') or '')!r}"
+            )
+            return {
+                "ok": False,
+                "error": str(result.get("error") or "deepseek_completion_failed"),
+                "status": result.get("status"),
+                "response": result,
+            }
+
+        raw_text = str(result.get("raw_text", "") or "")
+        content_type = str(result.get("content_type", "") or "")
+        parsed_content = raw_text
+        parse_error = ""
+
+        if raw_text and "text/event-stream" in content_type.lower():
+            try:
+                from app.core.parsers.deepseek_parser import DeepSeekParser
+
+                parser = DeepSeekParser()
+                parsed = parser.parse_chunk(raw_text)
+                parsed_content = str(parsed.get("content", "") or "")
+                parse_error = str(parsed.get("error", "") or "")
+                if not parsed_content and not parse_error:
+                    parsed_content = raw_text
+            except Exception as e:
+                parse_error = str(e)
+                parsed_content = raw_text
+
+        response_payload = {
+            "ok": True,
+            "status": result.get("status"),
+            "url": result.get("url") or "/api/v0/chat/completion",
+            "content_type": content_type,
+            "session_id": result.get("session_id") or "",
+            "model_type": result.get("model_type") or "",
+            "body": parsed_content,
+            "raw_text": raw_text,
+        }
+        if parse_error:
+            response_payload["parse_error"] = parse_error
+
+        saved_as = self._save_generated_value(
+            session,
+            action.get("save_as"),
+            parsed_content,
+            extras={
+                "session_id": response_payload["session_id"],
+                "model_type": response_payload["model_type"],
+                "status": response_payload["status"],
+            },
+        )
+
+        logger.info(
+            "[CMD] DeepSeek 页面直发完成: "
+            f"status={response_payload['status']}, session_id={response_payload['session_id'] or '-'}, "
+            f"save_as={saved_as or '-'}, preview={self._preview_text(parsed_content)!r}"
+        )
+
+        if response_mode == "status":
+            return {
+                "ok": True,
+                "status": response_payload["status"],
+                "url": response_payload["url"],
+                "session_id": response_payload["session_id"],
+                "model_type": response_payload["model_type"],
+            }
+
+        if response_mode == "response":
+            return response_payload
+
+        if response_mode == "json":
+            return {
+                "content": parsed_content,
+                "session_id": response_payload["session_id"],
+                "model_type": response_payload["model_type"],
+                "status": response_payload["status"],
+                "raw_text": raw_text,
+            }
+
+        if response_mode == "raw":
+            return raw_text
+
+        return parsed_content
 
     def _execute_append_file_action(self, action: Dict, session: 'TabSession') -> Any:
         ctx = self._build_template_context(session)

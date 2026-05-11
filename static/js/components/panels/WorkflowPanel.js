@@ -36,8 +36,28 @@ window.WorkflowPanel = {
             editorBridgeTimer: null,
             keyPresets: WORKFLOW_KEY_PRESETS,
             expandedJsEditors: {},
-            customKeyModes: {}
+            customKeyModes: {},
+            expandedHintEditors: {},
+            hintToneOptions: [
+                { value: 'info', label: '提示' },
+                { value: 'success', label: '成功' },
+                { value: 'warning', label: '警告' },
+                { value: 'danger', label: '注意' }
+            ]
         };
+    },
+    watch: {
+        workflow: {
+            handler() {
+                this.syncHintEditorState();
+            },
+            deep: true,
+            immediate: true
+        },
+        selectedPreset() {
+            this.expandedHintEditors = {};
+            this.syncHintEditorState();
+        }
     },
     beforeUnmount() {
         this.stopEditorBridgePolling();
@@ -183,6 +203,81 @@ window.WorkflowPanel = {
             const target = String(step.target || '').trim();
             if (!target) return '';
             return this.keyPresets.some(item => item.value === target) ? target : '__custom__';
+        },
+
+        normalizeHintStepValue(step) {
+            const current = (step && step.value && typeof step.value === 'object' && !Array.isArray(step.value))
+                ? step.value
+                : {};
+            const tone = String(current.tone || '').trim().toLowerCase();
+            return {
+                title: String(current.title || '提示'),
+                text: String(current.text || ''),
+                tone: ['info', 'success', 'warning', 'danger'].includes(tone) ? tone : 'info'
+            };
+        },
+
+        isDefaultHintStepValue(step) {
+            const normalized = this.normalizeHintStepValue(step);
+            return (
+                normalized.title === '提示'
+                && normalized.text === '这是一条只读提示，不会在执行时触发页面操作。'
+                && normalized.tone === 'info'
+            );
+        },
+
+        syncHintEditorState() {
+            const next = { ...this.expandedHintEditors };
+            (this.workflow || []).forEach((step, index) => {
+                if (step.action !== 'READONLY_HINT') {
+                    delete next[index];
+                    return;
+                }
+                if (!Object.prototype.hasOwnProperty.call(next, index)) {
+                    next[index] = this.isDefaultHintStepValue(step);
+                }
+            });
+            Object.keys(next).forEach(key => {
+                const idx = Number(key);
+                if (!Number.isInteger(idx) || !(this.workflow || [])[idx] || (this.workflow || [])[idx].action !== 'READONLY_HINT') {
+                    delete next[key];
+                }
+            });
+            const prevKeys = Object.keys(this.expandedHintEditors);
+            const nextKeys = Object.keys(next);
+            if (
+                prevKeys.length === nextKeys.length
+                && nextKeys.every(key => this.expandedHintEditors[key] === next[key])
+            ) {
+                return;
+            }
+            this.expandedHintEditors = next;
+        },
+
+        isHintExpanded(index) {
+            return !!this.expandedHintEditors[index];
+        },
+
+        toggleHintExpand(index) {
+            this.expandedHintEditors = {
+                ...this.expandedHintEditors,
+                [index]: !this.isHintExpanded(index)
+            };
+        },
+
+        getHintToneClasses(step) {
+            const tone = this.normalizeHintStepValue(step).tone;
+            const toneMap = {
+                info: 'border-sky-200 bg-sky-50/90 text-sky-800 dark:border-sky-800 dark:bg-sky-900/20 dark:text-sky-200',
+                success: 'border-emerald-200 bg-emerald-50/90 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-200',
+                warning: 'border-amber-200 bg-amber-50/90 text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-200',
+                danger: 'border-rose-200 bg-rose-50/90 text-rose-800 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-200'
+            };
+            return toneMap[tone] || toneMap.info;
+        },
+
+        getHintStepClasses(step) {
+            return 'shadow-none ' + this.getHintToneClasses(step);
         }
     },
     template: `
@@ -218,7 +313,12 @@ window.WorkflowPanel = {
 
             <div v-show="!collapsed" class="p-4 space-y-3 max-h-96 overflow-auto">
                 <div v-for="(step, index) in workflow" :key="index"
-                     class="border dark:border-gray-700 rounded-lg p-3 hover:border-blue-300 dark:hover:border-blue-600 transition-colors bg-gray-50/50 dark:bg-gray-900/30">
+                     :class="[
+                         'border rounded-lg p-3 transition-colors',
+                         step.action === 'READONLY_HINT'
+                             ? getHintStepClasses(step)
+                             : 'dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-600 bg-gray-50/50 dark:bg-gray-900/30'
+                     ]">
                     <div class="flex gap-3 items-start">
                         <div class="flex flex-col items-center gap-0.5 pt-1">
                             <span class="text-xs font-bold text-gray-600 dark:text-gray-300 w-6 h-6 flex items-center justify-center bg-gray-200 dark:bg-gray-700 rounded-full">{{ index + 1 }}</span>
@@ -234,7 +334,7 @@ window.WorkflowPanel = {
                             </div>
                         </div>
 
-                        <div class="w-36">
+                        <div v-if="step.action !== 'READONLY_HINT'" class="w-36">
                             <label class="text-xs font-medium text-gray-500 dark:text-gray-400">动作</label>
                             <select v-model="step.action" @change="$emit('action-change', step)"
                                     class="border dark:border-gray-600 px-2 py-1.5 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent w-full text-sm mt-1 bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
@@ -246,12 +346,13 @@ window.WorkflowPanel = {
                                 <option value="WAIT">等待</option>
                                 <option value="KEY_PRESS">按键</option>
                                 <option value="JS_EXEC">执行 JavaScript</option>
+                                <option value="READONLY_HINT">只读提示</option>
                             </select>
                         </div>
 
                         <div class="flex-1 min-w-0">
-                            <label class="text-xs font-medium text-gray-500 dark:text-gray-400">
-                                {{ ['FILL_INPUT', 'CLICK', 'STREAM_WAIT'].includes(step.action) ? '目标选择器' : ['COORD_CLICK', 'COORD_SCROLL'].includes(step.action) ? '坐标参数' : step.action === 'JS_EXEC' ? 'JavaScript' : '参数' }}
+                            <label v-if="step.action !== 'READONLY_HINT'" class="text-xs font-medium text-gray-500 dark:text-gray-400">
+                                {{ ['FILL_INPUT', 'CLICK', 'STREAM_WAIT'].includes(step.action) ? '目标选择器' : ['COORD_CLICK', 'COORD_SCROLL'].includes(step.action) ? '坐标参数' : step.action === 'JS_EXEC' ? 'JavaScript' : step.action === 'READONLY_HINT' ? '提示内容' : '参数' }}
                             </label>
 
                             <select v-if="['FILL_INPUT', 'CLICK', 'STREAM_WAIT'].includes(step.action)" v-model="step.target"
@@ -352,6 +453,71 @@ window.WorkflowPanel = {
                                           placeholder="return document.title;"></textarea>
                             </div>
 
+                            <div v-else-if="step.action === 'READONLY_HINT'" class="space-y-3">
+                                <div class="relative min-h-[4.5rem]">
+                                    <button @click="toggleHintExpand(index)"
+                                            type="button"
+                                            class="absolute right-0 top-0 z-10 inline-flex h-8 w-8 items-center justify-center rounded-md border border-current/20 bg-white/45 text-[11px] font-semibold shadow-sm transition hover:bg-white/70 dark:bg-slate-950/20 dark:hover:bg-slate-950/35">
+                                        {{ isHintExpanded(index) ? '−' : '✎' }}
+                                    </button>
+                                    <div class="w-full pr-12 text-sm leading-7">
+                                        <div class="text-base font-semibold">
+                                            {{ normalizeHintStepValue(step).title || '提示' }}
+                                        </div>
+                                        <div class="mt-1 whitespace-pre-wrap">
+                                            {{ normalizeHintStepValue(step).text || '这里会展示提示预览，执行时不会触发页面操作。' }}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div v-if="isHintExpanded(index)" class="space-y-3 border-t border-current/15 pt-3">
+                                    <div class="grid grid-cols-1 md:grid-cols-[160px_minmax(0,1fr)_180px] gap-3">
+                                        <div>
+                                            <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">动作</label>
+                                            <select v-model="step.action" @change="$emit('action-change', step)"
+                                                    class="w-full border dark:border-gray-600 px-2 py-1.5 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent">
+                                                <option value="FILL_INPUT">填入内容</option>
+                                                <option value="CLICK">点击元素</option>
+                                                <option value="COORD_CLICK">坐标点击</option>
+                                                <option value="COORD_SCROLL">模拟滑动</option>
+                                                <option value="STREAM_WAIT">流式等待</option>
+                                                <option value="WAIT">等待</option>
+                                                <option value="KEY_PRESS">按键</option>
+                                                <option value="JS_EXEC">执行 JavaScript</option>
+                                                <option value="READONLY_HINT">只读提示</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">标题</label>
+                                            <input :value="normalizeHintStepValue(step).title"
+                                                   @input="step.value = { ...normalizeHintStepValue(step), title: $event.target.value }"
+                                                   type="text"
+                                                   class="w-full border dark:border-gray-600 px-2 py-1.5 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
+                                                   placeholder="例如：实验功能说明">
+                                        </div>
+                                        <div>
+                                            <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">语气</label>
+                                            <select :value="normalizeHintStepValue(step).tone"
+                                                    @change="step.value = { ...normalizeHintStepValue(step), tone: $event.target.value }"
+                                                    class="w-full border dark:border-gray-600 px-2 py-1.5 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent">
+                                                <option v-for="tone in hintToneOptions" :key="tone.value" :value="tone.value">{{ tone.label }}</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">正文</label>
+                                        <textarea :value="normalizeHintStepValue(step).text"
+                                                  @input="step.value = { ...normalizeHintStepValue(step), text: $event.target.value }"
+                                                  rows="4"
+                                                  class="w-full rounded-md border dark:border-gray-600 px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white resize-y focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
+                                                  placeholder="这里填写给用户看的只读提示内容。"></textarea>
+                                    </div>
+                                    <div class="text-xs text-gray-500 dark:text-gray-400">
+                                        这一步只用于给用户展示说明，不会在执行时点击、输入或等待页面。
+                                    </div>
+                                </div>
+                            </div>
+
                             <div v-else-if="step.action === 'WAIT'" class="flex items-center gap-2 mt-1">
                                 <input v-model.number="step.value" type="number" step="0.1" min="0"
                                        class="border dark:border-gray-600 px-2 py-1.5 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent w-24 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
@@ -359,7 +525,7 @@ window.WorkflowPanel = {
                             </div>
                         </div>
 
-                        <div class="pt-5">
+                        <div v-if="step.action !== 'READONLY_HINT'" class="pt-5">
                             <label class="flex items-center text-xs cursor-pointer whitespace-nowrap text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white transition-colors"
                                    title="勾选后找不到元素会报错；不勾选则跳过该步骤">
                                 <input type="checkbox"

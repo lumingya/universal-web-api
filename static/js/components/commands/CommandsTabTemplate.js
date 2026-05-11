@@ -1226,10 +1226,19 @@ window.CommandsTabTemplate = `
                              class="mt-4 rounded-lg border border-cyan-200 bg-cyan-50 p-4 dark:border-cyan-800 dark:bg-cyan-900/20">
                             <h5 class="mb-3 text-sm font-semibold text-cyan-800 dark:text-cyan-300">🌐 页面内 GET / POST</h5>
 
-                            <div class="grid grid-cols-1 gap-3 md:grid-cols-4">
+                            <div class="grid grid-cols-1 gap-3 md:grid-cols-5">
+                                <div>
+                                    <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">请求配置</label>
+                                    <select v-model="action.request_profile"
+                                            class="w-full rounded border px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white">
+                                        <option value="">通用请求</option>
+                                        <option value="deepseek_completion">DeepSeek 直发</option>
+                                    </select>
+                                </div>
                                 <div>
                                     <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">方法</label>
                                     <select v-model="action.method"
+                                            :disabled="action.request_profile === 'deepseek_completion'"
                                             class="w-full rounded border px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white">
                                         <option value="GET">GET</option>
                                         <option value="POST">POST</option>
@@ -1242,6 +1251,7 @@ window.CommandsTabTemplate = `
                                 <div>
                                     <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">Body 类型</label>
                                     <select v-model="action.body_mode"
+                                            :disabled="action.request_profile === 'deepseek_completion'"
                                             class="w-full rounded border px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white">
                                         <option value="json">JSON</option>
                                         <option value="form">Form</option>
@@ -1256,11 +1266,13 @@ window.CommandsTabTemplate = `
                                         <option value="json">JSON 文本</option>
                                         <option value="status">仅状态</option>
                                         <option value="response">完整响应</option>
+                                        <option value="raw" v-if="action.request_profile === 'deepseek_completion'">原始 SSE</option>
                                     </select>
                                 </div>
                                 <div>
                                     <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">凭据模式</label>
                                     <select v-model="action.credentials"
+                                            :disabled="action.request_profile === 'deepseek_completion'"
                                             class="w-full rounded border px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white">
                                         <option value="include">include</option>
                                         <option value="same-origin">same-origin</option>
@@ -1269,14 +1281,14 @@ window.CommandsTabTemplate = `
                                 </div>
                             </div>
 
-                            <div class="mt-3">
+                            <div v-if="action.request_profile !== 'deepseek_completion'" class="mt-3">
                                 <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">请求 URL</label>
                                 <input v-model.trim="action.url" type="text"
                                        placeholder="例如：/api/register 或 https://example.com/api"
                                        class="w-full rounded border px-2 py-1.5 text-sm font-mono dark:border-gray-600 dark:bg-gray-700 dark:text-white">
                             </div>
 
-                            <div class="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+                            <div v-if="action.request_profile !== 'deepseek_completion'" class="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
                                 <div>
                                     <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">Headers（JSON）</label>
                                     <textarea v-model="action.headers" rows="4"
@@ -1288,6 +1300,62 @@ window.CommandsTabTemplate = `
                                     <textarea v-model="action.body" rows="4"
                                               :placeholder="action.body_mode === 'json' ? '例如：{ email: temp_email }' : (action.body_mode === 'form' ? '例如：email=temp_email' : 'plain text')"
                                               class="w-full rounded border px-2 py-1.5 text-sm font-mono dark:border-gray-600 dark:bg-gray-700 dark:text-white"></textarea>
+                                </div>
+                            </div>
+
+                            <div v-else class="mt-3 space-y-3">
+                                <div>
+                                    <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">提示词</label>
+                                    <textarea v-model="action.prompt" rows="4"
+                                              placeholder="支持模板变量，例如：{{command_result_summary}}"
+                                              class="w-full rounded border px-2 py-1.5 text-sm font-mono dark:border-gray-600 dark:bg-gray-700 dark:text-white"></textarea>
+                                </div>
+                                <div class="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-4">
+                                    <div>
+                                        <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">模型类型</label>
+                                        <select v-model="action.model_type"
+                                                class="w-full rounded border px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white">
+                                            <option value="auto">跟随页面</option>
+                                            <option value="default">快速模式</option>
+                                            <option value="expert">专家模式</option>
+                                            <option value="vision">识图模式</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">联网搜索</label>
+                                        <select v-model="action.search_enabled"
+                                                class="w-full rounded border px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white">
+                                            <option value="auto">跟随页面</option>
+                                            <option value="true">开启</option>
+                                            <option value="false">关闭</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">深度思考</label>
+                                        <select v-model="action.thinking_enabled"
+                                                class="w-full rounded border px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white">
+                                            <option value="auto">跟随页面</option>
+                                            <option value="true">开启</option>
+                                            <option value="false">关闭</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">客户端版本</label>
+                                        <input v-model.trim="action.client_version" type="text"
+                                               placeholder="2.0.0"
+                                               class="w-full rounded border px-2 py-1.5 text-sm font-mono dark:border-gray-600 dark:bg-gray-700 dark:text-white">
+                                    </div>
+                                </div>
+                                <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+                                    <div>
+                                        <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">应用版本</label>
+                                        <input v-model.trim="action.app_version" type="text"
+                                               placeholder="默认跟客户端版本一致"
+                                               class="w-full rounded border px-2 py-1.5 text-sm font-mono dark:border-gray-600 dark:bg-gray-700 dark:text-white">
+                                    </div>
+                                    <div class="rounded border border-cyan-200/80 bg-white/70 px-3 py-2 text-xs leading-5 text-cyan-700 dark:border-cyan-700/60 dark:bg-cyan-950/20 dark:text-cyan-200">
+                                        会在当前 DeepSeek 页面里自动执行 create session -> PoW -> chat completion，不走输入框和发送按钮。
+                                    </div>
                                 </div>
                             </div>
 
@@ -1311,7 +1379,10 @@ window.CommandsTabTemplate = `
                                 </div>
                             </div>
 
-                            <p class="mt-2 text-xs text-cyan-700 dark:text-cyan-300">请求在当前页面上下文里执行，会尽量沿用当前标签页的 Cookie / 会话。URL、Headers、Body 都支持模板变量。</p>
+                            <p class="mt-2 text-xs text-cyan-700 dark:text-cyan-300">
+                                <span v-if="action.request_profile !== 'deepseek_completion'">请求在当前页面上下文里执行，会尽量沿用当前标签页的 Cookie / 会话。URL、Headers、Body 都支持模板变量。</span>
+                                <span v-else>直发模式会自动复用当前 DeepSeek 登录态与页面内 PoW 求解逻辑。提示词支持模板变量。</span>
+                            </p>
                         </div>
 
                         <div v-for="(action, i) in editingCommand.actions.filter(a => a.type === 'append_file')"

@@ -98,15 +98,15 @@ def smooth_move_mouse(
         _dispatch_mouse_move(tab, x1, y1)
         return (x1, y1)
     
-    # 自动计算移动时长（Fitts's Law 启发）
+    # 自动计算移动时长：保持连贯，不额外拖慢
     if duration is None:
-        duration = 0.15 + 0.12 * math.log2(1 + dist / 50)
-        duration *= random.uniform(0.85, 1.15)
-        duration = max(0.12, min(duration, 0.8))
-    
-    # 步数：模拟 55-75Hz 采样率
-    sample_rate = random.uniform(18, 28)
-    steps = max(6, min(24, int(duration * sample_rate)))
+        duration = 0.09 + 0.09 * math.log2(1 + dist / 60)
+        duration *= random.uniform(0.9, 1.08)
+        duration = max(0.08, min(duration, 0.5))
+
+    # 步数：短时高采样，让移动更快但仍平滑
+    sample_rate = random.uniform(24, 36)
+    steps = max(6, min(28, int(duration * sample_rate)))
     step_interval = duration / steps
     
     # 噪声幅度：与距离成正比，上限 12px
@@ -160,7 +160,7 @@ def smooth_move_mouse(
         ox = int(x1 + math.cos(angle) * overshoot_dist)
         oy = int(y1 + math.sin(angle) * overshoot_dist)
         _dispatch_mouse_move(tab, ox, oy)
-        time.sleep(random.uniform(0.04, 0.10))
+        time.sleep(random.uniform(0.02, 0.06))
         _dispatch_mouse_move(tab, x1, y1)
     
     return (x1, y1)
@@ -362,7 +362,7 @@ def human_scroll_path(
 
     _dispatch_mouse_move(tab, x0, y0)
     start_time = time.perf_counter()
-    duration = max(0.18, min(0.9, 0.20 + travel / 900.0 + random.uniform(0.02, 0.12)))
+    duration = max(0.12, min(0.6, 0.14 + travel / 1200.0 + random.uniform(0.01, 0.06)))
     step_interval = duration / steps
 
     for i in range(1, steps + 1):
@@ -403,7 +403,7 @@ def human_scroll_path(
         target_time = start_time + step_interval * i
         remaining = target_time - time.perf_counter()
         if remaining > 0:
-            time.sleep(remaining * random.uniform(0.75, 1.0))
+            time.sleep(remaining * random.uniform(0.82, 1.0))
 
     # 收尾，确保滚动量累计完整
     rest_dx = total_dx - prev_scroll_x
@@ -467,12 +467,12 @@ def cdp_precise_click(
     x, y = int(x), int(y)
     
     if hold_duration is None:
-        hold_duration = random.uniform(0.06, 0.14)
+        hold_duration = random.uniform(0.04, 0.09)
     
     try:
         # 1. 点击前确认鼠标位置（真实硬件在按下前一帧必有 mouseMoved）
         _dispatch_mouse_move(tab, x, y, buttons=0)
-        time.sleep(random.uniform(0.008, 0.025))  # 1 帧间隔
+        time.sleep(random.uniform(0.005, 0.015))  # 1 帧间隔
         
         if check_cancelled and check_cancelled():
             return False

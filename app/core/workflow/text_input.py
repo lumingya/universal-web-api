@@ -978,17 +978,17 @@ class TextInputHandler:
     
     def _human_key_combo(self, *keys):
         """
-        人类化组合键：每个 key_down/key_up 之间加随机微延迟
+        人类化组合键：保留轻微随机感，但不刻意拖慢节奏
         
         用法：
             self._human_key_combo('Control', 'A')   → Ctrl+A
             self._human_key_combo('Control', 'V')   → Ctrl+V
             self._human_key_combo('Delete')          → Delete
         """
-        down_up_min = getattr(BrowserConstants, 'STEALTH_KEY_DOWN_UP_MIN', 0.03)
-        down_up_max = getattr(BrowserConstants, 'STEALTH_KEY_DOWN_UP_MAX', 0.09)
-        between_min = getattr(BrowserConstants, 'STEALTH_KEY_BETWEEN_MIN', 0.04)
-        between_max = getattr(BrowserConstants, 'STEALTH_KEY_BETWEEN_MAX', 0.12)
+        down_up_min = float(BrowserConstants.get('STEALTH_KEY_DOWN_UP_MIN') or 0.015)
+        down_up_max = float(BrowserConstants.get('STEALTH_KEY_DOWN_UP_MAX') or 0.04)
+        between_min = float(BrowserConstants.get('STEALTH_KEY_BETWEEN_MIN') or 0.02)
+        between_max = float(BrowserConstants.get('STEALTH_KEY_BETWEEN_MAX') or 0.06)
         
         if len(keys) == 1:
             self.tab.actions.key_down(keys[0])
@@ -1398,7 +1398,7 @@ class TextInputHandler:
 
         try:
             button.click()
-            self._smart_delay(0.15, 0.35)
+            self._smart_delay(0.06, 0.12)
             logger.info("[FILE_PASTE] 已点击上传按钮")
             return True
         except Exception as e:
@@ -1730,7 +1730,7 @@ class TextInputHandler:
 
             if self.stealth_mode:
                 self._human_key_combo('Control', 'A')
-                self._smart_delay(0.08, 0.18)
+                self._smart_delay(0.03, 0.08)
             else:
                 self.tab.actions.key_down('Control').key_down('A').key_up('A').key_up('Control')
                 time.sleep(0.1)
@@ -1843,9 +1843,9 @@ class TextInputHandler:
         
         clipboard_lock = get_clipboard_lock()
         
-        settle_min = getattr(BrowserConstants, 'STEALTH_PASTE_SETTLE_MIN', 0.4)
-        settle_max = getattr(BrowserConstants, 'STEALTH_PASTE_SETTLE_MAX', 0.8)
-        skip_verify = getattr(BrowserConstants, 'STEALTH_SKIP_PASTE_VERIFY', True)
+        settle_min = float(BrowserConstants.get('STEALTH_PASTE_SETTLE_MIN') or 0.12)
+        settle_max = float(BrowserConstants.get('STEALTH_PASTE_SETTLE_MAX') or 0.25)
+        skip_verify = bool(BrowserConstants.get('STEALTH_SKIP_PASTE_VERIFY'))
         
         try:
             if self._check_cancelled():
@@ -1875,7 +1875,7 @@ class TextInputHandler:
                     pass
                 
                 pyperclip.copy(text)
-                time.sleep(random.uniform(0.06, 0.15))
+                time.sleep(random.uniform(0.02, 0.06))
                 
                 # Ctrl+V 粘贴
                 self._human_key_combo('Control', 'V')
@@ -1890,7 +1890,7 @@ class TextInputHandler:
                     pass
             
             # 额外等待框架响应
-            self._smart_delay(0.2, 0.5)
+            self._smart_delay(0.06, 0.14)
             
             if self._check_cancelled():
                 return
@@ -1935,14 +1935,14 @@ class TextInputHandler:
     
         clipboard_lock = get_clipboard_lock()
         
-        settle_min = getattr(BrowserConstants, 'STEALTH_PASTE_SETTLE_MIN', 0.4)
-        settle_max = getattr(BrowserConstants, 'STEALTH_PASTE_SETTLE_MAX', 0.8)
-        skip_verify = getattr(BrowserConstants, 'STEALTH_SKIP_PASTE_VERIFY', True)
+        settle_min = float(BrowserConstants.get('STEALTH_PASTE_SETTLE_MIN') or 0.12)
+        settle_max = float(BrowserConstants.get('STEALTH_PASTE_SETTLE_MAX') or 0.25)
+        skip_verify = bool(BrowserConstants.get('STEALTH_SKIP_PASTE_VERIFY'))
     
         try:
             # 1. 聚焦输入框（原生点击）
             ele.click()
-            self._smart_delay(0.15, 0.35)
+            self._smart_delay(0.06, 0.12)
 
             if not self.ensure_input_focus(ele, log_failure=False):
                 self.physical_activate(ele)
@@ -1957,7 +1957,7 @@ class TextInputHandler:
         
             # 2. 全选（人类化时序）—— 粘贴会自动覆盖选中内容，无需 Delete
             self._human_key_combo('Control', 'A')
-            self._smart_delay(0.08, 0.18)
+            self._smart_delay(0.03, 0.08)
         
             if self._check_cancelled():
                 return
@@ -1971,7 +1971,7 @@ class TextInputHandler:
                     pass
             
                 pyperclip.copy(text)
-                time.sleep(random.uniform(0.06, 0.15))
+                time.sleep(random.uniform(0.02, 0.06))
             
                 # Ctrl+V 粘贴（人类化时序）
                 self._human_key_combo('Control', 'V')
@@ -1986,7 +1986,7 @@ class TextInputHandler:
                     pass
         
             # 4. 额外等待框架响应
-            self._smart_delay(0.2, 0.5)
+            self._smart_delay(0.06, 0.14)
         
             if self._check_cancelled():
                 return

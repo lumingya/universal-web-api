@@ -29,6 +29,10 @@ from app.models.schemas import (
 from app.services.extractor_manager import extractor_manager
 from app.services.parser_manager import parser_manager
 from app.utils.site_rules import derive_site_card_id, get_site_rule
+from app.core.request_transport import (
+    get_default_request_transport_config,
+    normalize_request_transport_config,
+)
 from .managers import GlobalConfigManager, ImagePresetsManager
 from .processors import HTMLCleaner, SelectorValidator, AIAnalyzer
 
@@ -80,6 +84,7 @@ def get_default_stream_config() -> Dict[str, Any]:
     """获取默认流式配置"""
     return {
         "mode": "dom",              # dom / network
+        "request_transport": get_default_request_transport_config(),
         "hard_timeout": 300,        # 全局硬超时（秒）
         "send_confirmation": get_default_send_confirmation_config(),
         "attachment_monitor": get_default_attachment_monitor_config(),
@@ -1713,6 +1718,11 @@ class ConfigEngine:
             if key in stream_config:
                 result[key] = stream_config[key]
 
+        if isinstance(stream_config.get("request_transport"), dict):
+            result["request_transport"] = normalize_request_transport_config(
+                stream_config.get("request_transport")
+            )
+
         # 处理 send_confirmation 配置
         if isinstance(stream_config.get("send_confirmation"), dict):
             result["send_confirmation"].update(stream_config["send_confirmation"])
@@ -1792,7 +1802,7 @@ class ConfigEngine:
             if mode in ("dom", "network"):
                 result["mode"] = mode
                 mode_explicitly_set = True
-        
+
         # 验证数值字段
         for key in ["hard_timeout"]:
             if key in config:
@@ -1807,6 +1817,11 @@ class ConfigEngine:
         if isinstance(config.get("send_confirmation"), dict):
             result["send_confirmation"] = self._validate_send_confirmation_config(
                 config["send_confirmation"]
+            )
+
+        if isinstance(config.get("request_transport"), dict):
+            result["request_transport"] = normalize_request_transport_config(
+                config["request_transport"]
             )
 
         # 验证 attachment_monitor 配置

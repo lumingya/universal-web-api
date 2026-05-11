@@ -12,9 +12,19 @@ window.StreamConfigPanel = {
         return {
             availableParsers: [],
             loadingParsers: false,
+            loadingTransportProfiles: false,
             guideExpanded: false,
             networkStepsExpanded: false,
             attachmentRulesExpanded: false,
+            requestTransportMeta: {
+                defaults: {
+                    mode: 'workflow',
+                    profile: '',
+                    options: {}
+                },
+                mode_options: ['workflow', 'page_fetch'],
+                profiles: []
+            },
             attachmentSensitivityOptions: [
                 {
                     value: 'low',
@@ -71,6 +81,49 @@ window.StreamConfigPanel = {
     computed: {
         isNetworkMode() {
             return this.streamConfig.mode === 'network';
+        },
+
+        requestTransportConfig() {
+            const defaults = (this.requestTransportMeta && this.requestTransportMeta.defaults) || {
+                mode: 'workflow',
+                profile: '',
+                options: {}
+            };
+            const current = (this.streamConfig && this.streamConfig.request_transport) || {};
+            return {
+                ...defaults,
+                ...current,
+                options: {
+                    ...((defaults && defaults.options) || {}),
+                    ...((current && current.options) || {})
+                }
+            };
+        },
+
+        requestTransportModeOptions() {
+            const options = (this.requestTransportMeta && this.requestTransportMeta.mode_options) || ['workflow', 'page_fetch'];
+            return options.map(value => ({
+                value,
+                label: value === 'page_fetch' ? '页面直发' : '工作流模拟'
+            }));
+        },
+
+        availableRequestTransportProfiles() {
+            const profiles = (this.requestTransportMeta && this.requestTransportMeta.profiles) || [];
+            const parserId = String(this.networkConfig.parser || '').trim().toLowerCase();
+            const domain = String(this.currentDomain || '').trim().toLowerCase();
+            return profiles.filter(profile => {
+                const supportedParsers = Array.isArray(profile.supported_parsers) ? profile.supported_parsers : [];
+                const supportedDomains = Array.isArray(profile.supported_domains) ? profile.supported_domains : [];
+                const parserOkay = supportedParsers.length === 0 || supportedParsers.includes(parserId);
+                const domainOkay = supportedDomains.length === 0 || supportedDomains.includes(domain);
+                return parserOkay && domainOkay;
+            });
+        },
+
+        selectedRequestTransportProfileMeta() {
+            const currentProfile = String(this.requestTransportConfig.profile || '').trim();
+            return this.availableRequestTransportProfiles.find(profile => profile.id === currentProfile) || null;
         },
 
         networkConfig() {
@@ -136,6 +189,7 @@ window.StreamConfigPanel = {
         }
     },
     mounted() {
+        this.loadTransportProfiles();
         if (this.isNetworkMode) {
             this.loadParsers();
         }
@@ -156,6 +210,39 @@ window.StreamConfigPanel = {
 
         updateField(field, value) {
             const newConfig = { ...this.streamConfig, [field]: value };
+            this.$emit('save-stream-config', newConfig);
+        },
+
+        updateRequestTransportField(field, value) {
+            const request_transport = {
+                ...this.requestTransportConfig,
+                [field]: value
+            };
+            if (field === 'mode' && value !== 'page_fetch') {
+                request_transport.profile = '';
+                request_transport.options = {};
+            }
+            if (field === 'profile') {
+                const profile = this.availableRequestTransportProfiles.find(item => item.id === value);
+                const nextOptions = {};
+                (profile && Array.isArray(profile.options) ? profile.options : []).forEach(option => {
+                    nextOptions[option.key] = option.default;
+                });
+                request_transport.options = nextOptions;
+            }
+            const newConfig = { ...this.streamConfig, request_transport };
+            this.$emit('save-stream-config', newConfig);
+        },
+
+        updateRequestTransportOption(key, value) {
+            const request_transport = {
+                ...this.requestTransportConfig,
+                options: {
+                    ...(this.requestTransportConfig.options || {}),
+                    [key]: value
+                }
+            };
+            const newConfig = { ...this.streamConfig, request_transport };
             this.$emit('save-stream-config', newConfig);
         },
 
@@ -297,6 +384,35 @@ window.StreamConfigPanel = {
             } finally {
                 this.loadingParsers = false;
             }
+        },
+
+        async loadTransportProfiles() {
+            if (this.loadingTransportProfiles) return;
+            this.loadingTransportProfiles = true;
+            try {
+                const response = await fetch('/api/settings/stream-config-defaults', {
+                    headers: this.buildAuthHeaders()
+                });
+                if (!response.ok) {
+                    const err = await response.json().catch(() => ({}));
+                    throw new Error(err.detail || ('HTTP ' + response.status));
+                }
+                const data = await response.json();
+                const requestTransport = data.request_transport || {};
+                this.requestTransportMeta = {
+                    defaults: requestTransport.defaults || {
+                        mode: 'workflow',
+                        profile: '',
+                        options: {}
+                    },
+                    mode_options: requestTransport.mode_options || ['workflow', 'page_fetch'],
+                    profiles: requestTransport.profiles || []
+                };
+            } catch (e) {
+                console.error('加载发送方式配置失败:', e);
+            } finally {
+                this.loadingTransportProfiles = false;
+            }
         }
     },
     template: `
@@ -367,6 +483,61 @@ window.StreamConfigPanel = {
 
                 <!-- 网络模式配置 -->
                 <div v-if="isNetworkMode" class="space-y-4 border-t dark:border-gray-700 pt-4">
+                    <div class="rounded-lg border border-slate-200/70 bg-slate-50/80 p-4 dark:border-slate-700 dark:bg-slate-900/40 space-y-4">
+                        <div class="text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center gap-2">
+                            <span>🚀</span>
+                            <span>发送方式</span>
+                        </div>
+
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">发送模式</label>
+                                <select :value="requestTransportConfig.mode"
+                                        @change="updateRequestTransportField('mode', $event.target.value)"
+                                        class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-purple-400 focus:border-transparent">
+                                    <option v-for="option in requestTransportModeOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+                                </select>
+                            </div>
+                            <div v-if="requestTransportConfig.mode === 'page_fetch'">
+                                <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">发送 Profile</label>
+                                <select :value="requestTransportConfig.profile"
+                                        @change="updateRequestTransportField('profile', $event.target.value)"
+                                        class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-purple-400 focus:border-transparent">
+                                    <option value="" disabled>{{ loadingTransportProfiles ? '加载中...' : '选择发送 profile...' }}</option>
+                                    <option v-for="profile in availableRequestTransportProfiles" :key="profile.id" :value="profile.id">{{ profile.name }}</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div v-if="selectedRequestTransportProfileMeta" class="space-y-4">
+                            <p class="text-xs leading-5 text-slate-500 dark:text-slate-400">
+                                {{ selectedRequestTransportProfileMeta.description }}
+                            </p>
+
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <template v-for="option in selectedRequestTransportProfileMeta.options" :key="option.key">
+                                    <div v-if="option.type === 'enum'">
+                                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{{ option.label }}</label>
+                                        <select :value="requestTransportConfig.options[option.key]"
+                                                @change="updateRequestTransportOption(option.key, $event.target.value)"
+                                                class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-purple-400 focus:border-transparent">
+                                            <option v-for="choice in option.choices" :key="choice.value" :value="choice.value">{{ choice.label }}</option>
+                                        </select>
+                                        <p v-if="option.description" class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ option.description }}</p>
+                                    </div>
+                                    <div v-else-if="option.type === 'string'">
+                                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{{ option.label }}</label>
+                                        <input type="text"
+                                               :value="requestTransportConfig.options[option.key]"
+                                               @input="updateRequestTransportOption(option.key, $event.target.value)"
+                                               class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm font-mono bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-purple-400 focus:border-transparent">
+                                        <p v-if="option.description" class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ option.description }}</p>
+                                    </div>
+                                </template>
+                            </div>
+                        </div>
+                    </div>
+
                     <div>
                         <button v-if="!networkStepsExpanded"
                                 @click="networkStepsExpanded = true"

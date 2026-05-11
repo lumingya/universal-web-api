@@ -137,6 +137,12 @@
       "name": "ds刷新",
       "enabled": true,
       "group_name": "ds"
+    },
+    {
+      "id": "cmd_ds_deepseek_direct_test",
+      "name": "DeepSeek页面直发测试",
+      "enabled": false,
+      "group_name": "ds"
     }
   ]
 }

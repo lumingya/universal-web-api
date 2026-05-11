@@ -920,13 +920,20 @@ window.CommandsTabMethods = {
 
         initHttpRequestAction(action) {
             if (action.type !== 'http_request') return;
+            action.request_profile = action.request_profile || this.httpRequestDefaults.request_profile;
             action.method = action.method || this.httpRequestDefaults.method;
             action.url = action.url || this.httpRequestDefaults.url;
             if (action.headers === undefined) action.headers = this.httpRequestDefaults.headers;
+            if (action.prompt === undefined) action.prompt = this.httpRequestDefaults.prompt;
             if (action.body === undefined) action.body = this.httpRequestDefaults.body;
             action.body_mode = action.body_mode || this.httpRequestDefaults.body_mode;
             action.response_mode = action.response_mode || this.httpRequestDefaults.response_mode;
             action.credentials = action.credentials || this.httpRequestDefaults.credentials;
+            action.model_type = action.model_type || this.httpRequestDefaults.model_type;
+            if (action.search_enabled === undefined) action.search_enabled = this.httpRequestDefaults.search_enabled;
+            if (action.thinking_enabled === undefined) action.thinking_enabled = this.httpRequestDefaults.thinking_enabled;
+            action.client_version = action.client_version || this.httpRequestDefaults.client_version;
+            action.app_version = action.app_version || this.httpRequestDefaults.app_version;
             if (action.timeout_sec === undefined) action.timeout_sec = this.httpRequestDefaults.timeout_sec;
             if (action.fail_on_http_error === undefined) action.fail_on_http_error = this.httpRequestDefaults.fail_on_http_error;
             if (action.save_as === undefined) action.save_as = this.httpRequestDefaults.save_as;
@@ -978,6 +985,9 @@ window.CommandsTabMethods = {
 
         getHttpRequestSummary(action) {
             if (!action) return '';
+            if (action.request_profile === 'deepseek_completion') {
+                return 'DeepSeek 直发 ' + ((action.prompt || '').slice(0, 24) || '未配置提示词');
+            }
             return (action.method || 'GET') + ' ' + ((action.url || '').slice(0, 40) || '未配置 URL');
         },
 

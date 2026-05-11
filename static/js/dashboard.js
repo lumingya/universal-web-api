@@ -185,7 +185,7 @@ const BROWSER_CONSTANTS_SCHEMA = {
                 type: 'number',
                 step: 0.05,
                 min: 0,
-                default: 0.1
+                default: 0.03
             },
             STEALTH_DELAY_MAX: {
                 label: '隐身延迟上限',
@@ -193,7 +193,7 @@ const BROWSER_CONSTANTS_SCHEMA = {
                 type: 'number',
                 step: 0.05,
                 min: 0,
-                default: 0.3
+                default: 0.1
             },
             ACTION_DELAY_MIN: {
                 label: '动作延迟下限',
@@ -201,7 +201,7 @@ const BROWSER_CONSTANTS_SCHEMA = {
                 type: 'number',
                 step: 0.05,
                 min: 0,
-                default: 0.15
+                default: 0.06
             },
             ACTION_DELAY_MAX: {
                 label: '动作延迟上限',
@@ -209,7 +209,7 @@ const BROWSER_CONSTANTS_SCHEMA = {
                 type: 'number',
                 step: 0.05,
                 min: 0,
-                default: 0.3
+                default: 0.14
             }
         }
     },
@@ -3563,6 +3563,18 @@ const app = createApp({
             if (['FILL_INPUT', 'CLICK', 'STREAM_WAIT'].includes(step.action)) {
                 step.value = null
                 if (!step.target) step.target = ''
+            } else if (step.action === 'READONLY_HINT') {
+                step.target = ''
+                const current = (step.value && typeof step.value === 'object' && !Array.isArray(step.value))
+                    ? step.value
+                    : {}
+                step.value = {
+                    title: String(current.title || '提示'),
+                    text: String(current.text || '这是一条只读提示，不会在执行时触发页面操作。'),
+                    tone: ['info', 'success', 'warning', 'danger'].includes(String(current.tone || '').trim().toLowerCase())
+                        ? String(current.tone || '').trim().toLowerCase()
+                        : 'info'
+                }
             } else if (step.action === 'COORD_CLICK') {
                 step.target = ''
                 step.value = {
@@ -3605,6 +3617,12 @@ const app = createApp({
                     { action: 'STREAM_WAIT', target: 'result_container', optional: false, value: null }
                 ],
                 'simple': [
+                    { action: 'FILL_INPUT', target: 'input_box', optional: false, value: null },
+                    { action: 'KEY_PRESS', target: 'Enter', optional: false, value: null },
+                    { action: 'STREAM_WAIT', target: 'result_container', optional: false, value: null }
+                ],
+                'experimental_hint': [
+                    { action: 'READONLY_HINT', target: '', optional: false, value: { title: '提示', text: '这是一条只读提示，不会影响执行，只用于说明当前工作流中的特殊行为。', tone: 'info' } },
                     { action: 'FILL_INPUT', target: 'input_box', optional: false, value: null },
                     { action: 'KEY_PRESS', target: 'Enter', optional: false, value: null },
                     { action: 'STREAM_WAIT', target: 'result_container', optional: false, value: null }

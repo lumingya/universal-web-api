@@ -1256,6 +1256,64 @@
       "id": "cmd_72ae0f7d",
       "last_triggered": 1777533881.7545376,
       "trigger_count": 1
+    },
+    {
+      "id": "cmd_ds_deepseek_direct_test",
+      "name": "DeepSeek页面直发测试",
+      "enabled": false,
+      "log_enabled": true,
+      "log_level": "INFO",
+      "mode": "simple",
+      "stop_on_error": false,
+      "group_name": "ds",
+      "trigger": {
+        "type": "page_check",
+        "value": "deepseek_manual_direct_send_only",
+        "command_id": "",
+        "command_ids": [],
+        "listen_all_commands": false,
+        "informative_only": true,
+        "action_ref": "",
+        "match_rule": "equals",
+        "expected_value": "",
+        "match_mode": "keyword",
+        "status_codes": "403,429,500,502,503,504",
+        "abort_on_match": true,
+        "scope": "domain",
+        "domain": "chat.deepseek.com",
+        "tab_index": null,
+        "priority": 2,
+        "fire_mode": "edge",
+        "cooldown_sec": 0,
+        "stable_for_sec": 0,
+        "check_while_busy_workflow": true,
+        "allow_during_workflow": true,
+        "interrupt_policy": "auto",
+        "interrupt_message": "",
+        "probe_js": "",
+        "periodic_enabled": true,
+        "periodic_interval_sec": 8,
+        "periodic_jitter_sec": 2
+      },
+      "actions": [
+        {
+          "type": "http_request",
+          "action_id": "step_1_deepseek_direct_send",
+          "request_profile": "deepseek_completion",
+          "prompt": "请只回复：DeepSeek页面直发命令已配置完成。",
+          "response_mode": "text",
+          "model_type": "auto",
+          "search_enabled": "auto",
+          "thinking_enabled": "auto",
+          "client_version": "2.0.0",
+          "app_version": "2.0.0",
+          "timeout_sec": 20,
+          "fail_on_http_error": true,
+          "save_as": "deepseek_direct_reply"
+        }
+      ],
+      "script": "",
+      "script_lang": "javascript"
     }
   ]
 }

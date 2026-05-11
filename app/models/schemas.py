@@ -7,6 +7,7 @@ schemas.py - 数据模型和 API Schema 定义
 - 提供类型检查支持
 """
 
+import copy
 from typing import TypedDict, List, Optional, Literal, Dict, Any
 from pydantic import BaseModel
 
@@ -21,7 +22,8 @@ ActionType = Literal[
     "STREAM_OUTPUT",
     "KEY_PRESS",
     "WAIT",
-    "JS_EXEC"
+    "JS_EXEC",
+    "READONLY_HINT",
 ]
 
 # ================= 选择器字段名称 =================
@@ -261,6 +263,7 @@ class NetworkConfig(TypedDict, total=False):
 class StreamConfig(TypedDict, total=False):
     """流式监控配置（可选字段）"""
     mode: Literal["dom", "network"]
+    request_transport: Dict[str, Any]
     hard_timeout: float
     network: NetworkConfig
     send_confirmation: SendConfirmationConfig
@@ -606,6 +609,17 @@ def validate_site_config(config: Dict[str, Any]) -> bool:
         if "hard_timeout" in stream_config and not isinstance(stream_config["hard_timeout"], (int, float)):
             return False
 
+        if "request_transport" in stream_config:
+            request_transport = stream_config["request_transport"]
+            if not isinstance(request_transport, dict):
+                return False
+            if "mode" in request_transport and not isinstance(request_transport["mode"], str):
+                return False
+            if "profile" in request_transport and not isinstance(request_transport["profile"], str):
+                return False
+            if "options" in request_transport and not isinstance(request_transport["options"], dict):
+                return False
+
         if "network" in stream_config:
             if not isinstance(stream_config["network"], dict):
                 return False
@@ -742,6 +756,11 @@ def get_default_attachment_monitor_config() -> AttachmentMonitorConfig:
 def get_default_stream_config() -> StreamConfig:
     """获取默认的流式监控配置"""
     return {
+        "request_transport": {
+            "mode": "workflow",
+            "profile": "",
+            "options": {},
+        },
         "send_confirmation": get_default_send_confirmation_config(),
         "attachment_monitor": get_default_attachment_monitor_config(),
     }
@@ -760,6 +779,19 @@ def merge_stream_config(
     
     result = defaults.copy()
     result.update(site_config)
+
+    default_request_transport = defaults.get("request_transport")
+    site_request_transport = site_config.get("request_transport")
+    if isinstance(default_request_transport, dict):
+        result["request_transport"] = copy.deepcopy(default_request_transport)
+        if isinstance(site_request_transport, dict):
+            result["request_transport"].update(site_request_transport)
+            if isinstance(default_request_transport.get("options"), dict):
+                result["request_transport"]["options"] = copy.deepcopy(default_request_transport.get("options") or {})
+                if isinstance(site_request_transport.get("options"), dict):
+                    result["request_transport"]["options"].update(site_request_transport["options"])
+    elif isinstance(site_request_transport, dict):
+        result["request_transport"] = copy.deepcopy(site_request_transport)
 
     default_send_confirmation = defaults.get("send_confirmation")
     site_send_confirmation = site_config.get("send_confirmation")

@@ -1999,15 +1999,17 @@ async def install_parser(
 async def get_stream_config_defaults(authenticated: bool = Depends(verify_auth)):
     """获取流式配置的默认值和限制"""
     from app.services.config.engine import get_default_stream_config, get_default_network_config
+    from app.core.request_transport import get_request_transport_defaults_payload
     
     return {
         "defaults": get_default_stream_config(),
         "network_defaults": get_default_network_config(),
+        "request_transport": get_request_transport_defaults_payload(),
         "limits": {
             "hard_timeout": {"min": 10, "max": 600},
             "silence_threshold": {"min": 0.5, "max": 30},
             "response_interval": {"min": 0.1, "max": 5}
         },
         "mode_options": ["dom", "network"],
-        "stream_match_mode_options": ["keyword", "regex"]
+        "stream_match_mode_options": ["keyword", "regex"],
     }
