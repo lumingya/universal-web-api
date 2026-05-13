@@ -887,6 +887,15 @@ const app = createApp({
             systemStatsTimer: null,
             isFetchingSystemStats: false,
 
+            // 请求监控
+            requestHistory: [],
+            requestHistoryLoading: false,
+            requestHistoryError: '',
+            requestHistoryTimer: null,
+            requestHistoryRevision: '',
+            requestHistoryFetchedAt: 0,
+            requestHistoryDetailLoading: {},
+
             // ========== 导入功能 ==========
             showImportDialog: false,
             importMode: 'merge',  // 'merge' | 'replace'
@@ -1091,6 +1100,7 @@ const app = createApp({
     beforeUnmount() {
         this.stopLogPolling()
         this.stopMarketplaceUpdatePolling()
+        this.stopRequestHistoryPolling()
         if (this.systemStatsTimer) {
             clearInterval(this.systemStatsTimer)
             this.systemStatsTimer = null
@@ -1104,6 +1114,7 @@ const app = createApp({
             this.startLogPolling()
             await this.loadHealthStatus({ silent: true, timeoutMs: 2500 }).catch(() => false)
             this.startMarketplaceUpdatePolling()
+            this.startRequestHistoryPolling()
             this.ensureTabDataLoaded(this.activeTab)
 
             // 每 2 秒刷新系统状态
@@ -1134,6 +1145,25 @@ const app = createApp({
 
             clearInterval(this.logPollingTimer)
             this.logPollingTimer = null
+        },
+
+        startRequestHistoryPolling() {
+            if (this.requestHistoryTimer) {
+                clearInterval(this.requestHistoryTimer)
+            }
+            this.requestHistoryTimer = setInterval(() => {
+                if (this.activeTab === 'monitor' && document.visibilityState !== 'hidden') {
+                    this.fetchRequestHistory({ silent: true, ifChanged: true }).catch(() => {})
+                }
+            }, 3000)
+        },
+
+        stopRequestHistoryPolling() {
+            if (!this.requestHistoryTimer) {
+                return
+            }
+            clearInterval(this.requestHistoryTimer)
+            this.requestHistoryTimer = null
         },
 
         startMarketplaceUpdatePolling() {
@@ -2591,6 +2621,15 @@ const app = createApp({
         },
 
         async ensureTabDataLoaded(tab) {
+            if (tab === 'monitor') {
+                const now = Date.now()
+                const stale = now - Number(this.requestHistoryFetchedAt || 0) > 2000
+                await Promise.all([
+                    this.fetchRequestHistory({ silent: true, ifChanged: !stale }),
+                    this.fetchSystemStats({ timeoutMs: 5000 })
+                ]);
+                return;
+            }
             if (tab === 'marketplace') {
                 if (!this.hasLoadedMarketplace) {
                     this.hasLoadedMarketplace = true;
@@ -2609,6 +2648,90 @@ const app = createApp({
                     this.loadSelectorDefinitions()
                 ]);
                 return;
+            }
+        },
+
+        async fetchRequestHistory({ silent = false, ifChanged = false, force = false } = {}) {
+            if (this.requestHistoryLoading) {
+                return this.requestHistory;
+            }
+            const now = Date.now();
+            if (!force && ifChanged && now - Number(this.requestHistoryFetchedAt || 0) < 1200) {
+                return this.requestHistory;
+            }
+            this.requestHistoryLoading = true;
+            if (!silent) {
+                this.requestHistoryError = '';
+            }
+            try {
+                const data = await this.apiRequest('/api/system/request-history?limit=200', {
+                    timeoutMs: 5000
+                });
+                const revision = String(data.revision || '');
+                if (!ifChanged || force || !this.requestHistoryRevision || revision !== this.requestHistoryRevision) {
+                    const detailCache = new Map(
+                        this.requestHistory
+                            .filter(item => item && item.detail_loaded && item.id)
+                            .map(item => [String(item.id), item])
+                    );
+                    const records = Array.isArray(data.records) ? data.records : [];
+                    this.requestHistory = records.map(item => {
+                        const cached = detailCache.get(String(item && item.id || ''));
+                        return cached ? { ...item, ...cached } : item;
+                    });
+                    this.requestHistoryRevision = revision;
+                }
+                this.requestHistoryFetchedAt = Date.now();
+                this.requestHistoryError = '';
+                return this.requestHistory;
+            } catch (error) {
+                this.requestHistoryError = error.message || '请求历史加载失败';
+                return this.requestHistory;
+            } finally {
+                this.requestHistoryLoading = false;
+            }
+        },
+
+        async fetchRequestHistoryDetail(requestId) {
+            const id = String(requestId || '').trim();
+            if (!id || this.requestHistoryDetailLoading[id]) {
+                return null;
+            }
+
+            const existingIndex = this.requestHistory.findIndex(item => String(item && item.id || '') === id);
+            if (existingIndex >= 0 && this.requestHistory[existingIndex].detail_loaded) {
+                return this.requestHistory[existingIndex];
+            }
+
+            this.requestHistoryDetailLoading = {
+                ...this.requestHistoryDetailLoading,
+                [id]: true
+            };
+            try {
+                const detail = await this.apiRequest('/api/system/request-history/' + encodeURIComponent(id), {
+                    timeoutMs: 5000
+                });
+                const index = this.requestHistory.findIndex(item => String(item && item.id || '') === id);
+                if (index >= 0) {
+                    const updated = {
+                        ...this.requestHistory[index],
+                        ...(detail || {}),
+                        detail_loaded: true,
+                        has_detail: true
+                    };
+                    const nextHistory = this.requestHistory.slice();
+                    nextHistory[index] = updated;
+                    this.requestHistory = nextHistory;
+                    return updated;
+                }
+                return detail || null;
+            } catch (error) {
+                this.notify('加载请求详情失败: ' + error.message, 'error');
+                return null;
+            } finally {
+                const nextLoading = { ...this.requestHistoryDetailLoading };
+                delete nextLoading[id];
+                this.requestHistoryDetailLoading = nextLoading;
             }
         },
 
@@ -3563,6 +3686,10 @@ const app = createApp({
             if (['FILL_INPUT', 'CLICK', 'STREAM_WAIT'].includes(step.action)) {
                 step.value = null
                 if (!step.target) step.target = ''
+            } else if (step.action === 'PAGE_FETCH') {
+                step.target = ''
+                step.optional = true
+                step.value = null
             } else if (step.action === 'READONLY_HINT') {
                 step.target = ''
                 const current = (step.value && typeof step.value === 'object' && !Array.isArray(step.value))
@@ -3623,6 +3750,7 @@ const app = createApp({
                 ],
                 'experimental_hint': [
                     { action: 'READONLY_HINT', target: '', optional: false, value: { title: '提示', text: '这是一条只读提示，不会影响执行，只用于说明当前工作流中的特殊行为。', tone: 'info' } },
+                    { action: 'PAGE_FETCH', target: '', optional: true, value: null },
                     { action: 'FILL_INPUT', target: 'input_box', optional: false, value: null },
                     { action: 'KEY_PRESS', target: 'Enter', optional: false, value: null },
                     { action: 'STREAM_WAIT', target: 'result_container', optional: false, value: null }
@@ -3851,6 +3979,7 @@ const app = createApp({
 app.component('sidebar-component', window.SidebarComponent);
 app.component('config-tab', window.ConfigTab);
 app.component('marketplace-tab', window.MarketplaceTab);
+app.component('request-monitor-tab', window.RequestMonitorTab);
 app.component('tabpool-tab', window.TabPoolTabComponent);
 app.component('commands-tab', window.CommandsTabComponent);  // 🆕 命令系统
 app.component('logs-tab', window.LogsTab);

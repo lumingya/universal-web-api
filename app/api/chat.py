@@ -304,6 +304,13 @@ async def chat_completions(
         )
 
     ctx = request_manager.create_request()
+    request_manager.record_request_input(
+        ctx,
+        body.model_dump(),
+        endpoint="/v1/chat/completions",
+        route_domain=route_domain,
+        preset_name=body.preset_name,
+    )
     with logger.context(ctx.request_id):
         logger.info("开始")
 
@@ -430,6 +437,7 @@ async def _stream_with_lifecycle(
 
             if isinstance(chunk, tuple) and chunk[0] == "ERROR":
                 logger.error(f"错误: {chunk[1]}")
+                request_manager.capture_error(ctx, chunk[1], code="worker_error")
                 ctx.mark_failed(chunk[1])
                 yield _pack_error(f"执行错误: {chunk[1]}", "internal_error")
                 break
@@ -439,11 +447,13 @@ async def _stream_with_lifecycle(
             if has_images:
                 logger.info(f"[SEND] 发送包含图片的 chunk 给客户端")
             
+            request_manager.capture_response_chunk(ctx, chunk)
             yield chunk
             last_sse_emit_at = time.monotonic()
             error_message = _extract_stream_error_message(chunk)
             if error_message:
                 logger.warning(f"流式响应返回错误事件: {error_message}")
+                request_manager.capture_error(ctx, error_message, code="stream_error")
                 ctx.mark_failed(error_message)
                 break
             await asyncio.sleep(0)
@@ -458,6 +468,7 @@ async def _stream_with_lifecycle(
 
     except Exception as e:
         logger.error(f"异常: {e}")
+        request_manager.capture_error(ctx, e, code="internal_error")
         ctx.mark_failed(str(e))
         yield _pack_error(f"执行错误: {str(e)}", "internal_error")
 
@@ -535,6 +546,7 @@ async def _non_stream_with_lifecycle(
         model=body.model,
         media=_dedupe_media_items(collected_media),
     )
+    request_manager.capture_response_payload(ctx, response)
 
     return JSONResponse(content=response)
 
@@ -632,6 +644,7 @@ async def _complete_tool_calling_with_lifecycle(
             ctx.request_id,
             ctx.should_stop,
         )
+        request_manager.capture_response_payload(ctx, response)
 
         if not ctx.should_stop() and ctx.status == RequestStatus.RUNNING:
             ctx.mark_completed()
@@ -643,6 +656,7 @@ async def _complete_tool_calling_with_lifecycle(
         raise
     except Exception as e:
         logger.error(f"tool_calling_failed: {e}")
+        request_manager.capture_error(ctx, e, code="tool_calling_failed")
         ctx.mark_failed(str(e))
         raise
     finally:
@@ -664,6 +678,7 @@ async def _non_stream_tool_calling_with_lifecycle(
         response = await _complete_tool_calling_with_lifecycle(request, body, ctx)
         return JSONResponse(content=response)
     except Exception as e:
+        request_manager.capture_error(ctx, e, code="tool_calling_failed")
         return JSONResponse(
             content={
                 "error": {

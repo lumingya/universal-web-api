@@ -71,31 +71,6 @@ window.SidebarComponent = {
                 </div>
             </div>
 
-            <!--状态面板-->
-            <div class="p-3 border-b dark:border-gray-700 bg-white dark:bg-gray-800 transition-all duration-300">
-                <div class="flex items-center justify-between mb-2 cursor-pointer group" @click="isStatsExpanded = !isStatsExpanded">
-                    <span class="text-sm font-semibold dark:text-white group-hover:text-blue-500 transition-colors">系统占用面板</span>
-                    <span class="text-gray-400 transform transition-transform duration-300" :class="{'rotate-180': isStatsExpanded}">
-                        ▼
-                    </span>
-                </div>
-                <div class="text-xs space-y-2 overflow-hidden transition-all duration-300" 
-                     :style="{maxHeight: isStatsExpanded ? '150px' : '0', opacity: isStatsExpanded ? '1' : '0', margin: isStatsExpanded ? '' : '0'}">
-                    <div class="flex justify-between items-center text-gray-600 dark:text-gray-400 border-l-2 border-blue-400 pl-2">
-                        <span>💻 内存占用</span>
-                        <span class="font-medium">{{ systemStats.memory_mb }} MB</span>
-                    </div>
-                    <div class="flex flex-col text-gray-600 dark:text-gray-400 border-l-2 border-green-400 pl-2">
-                        <span>💾 硬盘状态</span>
-                        <span class="font-medium truncate" :title="systemStats.disk_status">{{ systemStats.disk_status }}</span>
-                    </div>
-                    <div class="flex justify-between items-center text-gray-600 dark:text-gray-400 border-l-2 border-purple-400 pl-2">
-                        <span>📊 总请求数</span>
-                        <span class="font-medium">{{ systemStats.total_requests }}</span>
-                    </div>
-                </div>
-            </div>
-
             <!-- ✨ 新增：Tab 切换 -->
             <div class="border-b dark:border-gray-700">
                 <div class="flex">
@@ -115,10 +90,17 @@ window.SidebarComponent = {
                     </button>
                     <button @click="$emit('change-tab', 'logs')"
                             :class="['flex-1 py-2 text-xs font-medium transition-colors border-b-2',
-                                     activeTab === 'logs' 
+                                     activeTab === 'logs'
                                      ? 'border-blue-500 text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20' 
                                      : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50']">
                         📋 日志
+                    </button>
+                    <button @click="$emit('change-tab', 'monitor')"
+                            :class="['flex-1 py-2 text-xs font-medium transition-colors border-b-2',
+                                     activeTab === 'monitor'
+                                     ? 'border-blue-500 text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20'
+                                     : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50']">
+                        📊 监控
                     </button>
                     <button @click="$emit('change-tab', 'settings')"
                             :class="['flex-1 py-2 text-xs font-medium transition-colors border-b-2',

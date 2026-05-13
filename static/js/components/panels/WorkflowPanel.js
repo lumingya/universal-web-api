@@ -339,6 +339,7 @@ window.WorkflowPanel = {
                             <select v-model="step.action" @change="$emit('action-change', step)"
                                     class="border dark:border-gray-600 px-2 py-1.5 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent w-full text-sm mt-1 bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
                                 <option value="FILL_INPUT">填入内容</option>
+                                <option value="PAGE_FETCH">页面直发</option>
                                 <option value="CLICK">点击元素</option>
                                 <option value="COORD_CLICK">坐标点击</option>
                                 <option value="COORD_SCROLL">模拟滑动</option>
@@ -352,7 +353,7 @@ window.WorkflowPanel = {
 
                         <div class="flex-1 min-w-0">
                             <label v-if="step.action !== 'READONLY_HINT'" class="text-xs font-medium text-gray-500 dark:text-gray-400">
-                                {{ ['FILL_INPUT', 'CLICK', 'STREAM_WAIT'].includes(step.action) ? '目标选择器' : ['COORD_CLICK', 'COORD_SCROLL'].includes(step.action) ? '坐标参数' : step.action === 'JS_EXEC' ? 'JavaScript' : step.action === 'READONLY_HINT' ? '提示内容' : '参数' }}
+                                {{ ['FILL_INPUT', 'CLICK', 'STREAM_WAIT'].includes(step.action) ? '目标选择器' : step.action === 'PAGE_FETCH' ? '发送方式' : ['COORD_CLICK', 'COORD_SCROLL'].includes(step.action) ? '坐标参数' : step.action === 'JS_EXEC' ? 'JavaScript' : step.action === 'READONLY_HINT' ? '提示内容' : '参数' }}
                             </label>
 
                             <select v-if="['FILL_INPUT', 'CLICK', 'STREAM_WAIT'].includes(step.action)" v-model="step.target"
@@ -477,6 +478,7 @@ window.WorkflowPanel = {
                                             <select v-model="step.action" @change="$emit('action-change', step)"
                                                     class="w-full border dark:border-gray-600 px-2 py-1.5 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent">
                                                 <option value="FILL_INPUT">填入内容</option>
+                                                <option value="PAGE_FETCH">页面直发</option>
                                                 <option value="CLICK">点击元素</option>
                                                 <option value="COORD_CLICK">坐标点击</option>
                                                 <option value="COORD_SCROLL">模拟滑动</option>
@@ -523,9 +525,15 @@ window.WorkflowPanel = {
                                        class="border dark:border-gray-600 px-2 py-1.5 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent w-24 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
                                 <span class="text-sm text-gray-500 dark:text-gray-400">秒</span>
                             </div>
+
+                            <div v-else-if="step.action === 'PAGE_FETCH'" class="mt-1 space-y-2">
+                                <div class="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm leading-6 text-sky-800 dark:border-sky-800 dark:bg-sky-900/20 dark:text-sky-200">
+                                    使用当前预设的页面直发配置发送已构造的 prompt。失败且回退模式为工作流时，会继续执行后续填入 / 按键 / 等待步骤。
+                                </div>
+                            </div>
                         </div>
 
-                        <div v-if="step.action !== 'READONLY_HINT'" class="pt-5">
+                        <div v-if="!['READONLY_HINT', 'PAGE_FETCH'].includes(step.action)" class="pt-5">
                             <label class="flex items-center text-xs cursor-pointer whitespace-nowrap text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white transition-colors"
                                    title="勾选后找不到元素会报错；不勾选则跳过该步骤">
                                 <input type="checkbox"

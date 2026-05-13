@@ -19,6 +19,8 @@ import socket
 import threading
 import time
 import contextlib
+import shutil
+import subprocess
 from typing import Optional, List, Dict, Any, Generator, Callable
 from DrissionPage import Chromium, ChromiumPage, ChromiumOptions
 
@@ -49,7 +51,6 @@ def _looks_like_transient_local_debug_error(error: Any) -> bool:
     if "failed to establish a new connection" in text and "127.0.0.1" in text:
         return True
     return False
-
 
 # ================= 配置加载 =================
 
@@ -91,6 +92,104 @@ class BrowserCore:
     
     _instance: Optional['BrowserCore'] = None
     _lock = threading.Lock()
+
+    @staticmethod
+    def _append_audio_tail_silence(filepath, duration_seconds: float = 0.3):
+        """为音频尾部追加一小段静音，避免播放时戛然而止。"""
+        from pathlib import Path
+
+        try:
+            target = Path(filepath)
+        except Exception:
+            return filepath
+
+        if duration_seconds <= 0 or not target.exists() or not target.is_file():
+            return filepath
+
+        ffmpeg_path = shutil.which("ffmpeg")
+        if not ffmpeg_path:
+            return filepath
+
+        duration_text = f"{float(duration_seconds):.3f}".rstrip("0").rstrip(".")
+        temp_path = target.with_name(f"{target.stem}_tail{target.suffix}")
+        command_variants = [
+            [
+                ffmpeg_path,
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                str(target),
+                "-f",
+                "lavfi",
+                "-t",
+                duration_text,
+                "-i",
+                "anullsrc=r=24000:cl=mono",
+                "-filter_complex",
+                "[0:a][1:a]concat=n=2:v=0:a=1[aout]",
+                "-map",
+                "[aout]",
+                "-c:a",
+                "copy",
+                str(temp_path),
+            ],
+            [
+                ffmpeg_path,
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                str(target),
+                "-f",
+                "lavfi",
+                "-t",
+                duration_text,
+                "-i",
+                "anullsrc=r=24000:cl=mono",
+                "-filter_complex",
+                "[0:a][1:a]concat=n=2:v=0:a=1[aout]",
+                "-map",
+                "[aout]",
+                str(temp_path),
+            ],
+        ]
+
+        for cmd in command_variants:
+            try:
+                completed = subprocess.run(
+                    cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                )
+            except Exception as exc:
+                logger.debug(f"音频尾静音追加失败（ffmpeg 调用异常）: {exc}")
+                continue
+
+            if completed.returncode == 0 and temp_path.exists() and temp_path.stat().st_size > 0:
+                try:
+                    temp_path.replace(target)
+                    return str(target)
+                except Exception as exc:
+                    logger.debug(f"音频尾静音替换失败: {exc}")
+                    try:
+                        if temp_path.exists():
+                            temp_path.unlink()
+                    except Exception:
+                        pass
+                    return filepath
+
+        try:
+            if temp_path.exists():
+                temp_path.unlink()
+        except Exception:
+            pass
+        return filepath
     
     def __new__(cls, port: int = None):
         if cls._instance is None:
@@ -1191,6 +1290,14 @@ class BrowserCore:
             setattr(session, "_bound_request_id", request_id)
             from app.services.request_manager import request_manager
             bind_ok = bool(request_manager.bind_tab(request_id, session.id))
+            tab_index = int(getattr(session, "persistent_index", 0) or 0)
+            request_manager.update_request_metadata(
+                request_id,
+                tab_id=session.id,
+                tab_index=tab_index if tab_index > 0 else None,
+                target_domain=str(getattr(session, "current_domain", "") or "").strip(),
+                preset_name=str(getattr(session, "preset_name", "") or "").strip(),
+            )
             logger.debug(
                 f"[{session.id}] 绑定请求标签页: request={request_id}, "
                 f"bind_ok={bind_ok}, current_task={str(getattr(session, 'current_task_id', '') or '').strip() or '-'}, "
@@ -1391,22 +1498,39 @@ class BrowserCore:
             logger.debug(f"[{session.id}] stream terminal alert event skipped: {e}")
 
     @staticmethod
+    def _extract_stream_delta_content(chunk: str) -> str:
+        if not isinstance(chunk, str):
+            return ""
+
+        parts = []
+        for frame in chunk.split("\n\n"):
+            frame = frame.strip()
+            if not frame.startswith("data: "):
+                continue
+
+            data_str = frame[6:].strip()
+            if not data_str or data_str == "[DONE]":
+                continue
+
+            try:
+                payload = json.loads(data_str)
+            except json.JSONDecodeError:
+                continue
+
+            choices = payload.get("choices")
+            if not isinstance(choices, list) or not choices:
+                continue
+
+            delta = choices[0].get("delta", {}) if isinstance(choices[0], dict) else {}
+            content = delta.get("content", "") if isinstance(delta, dict) else ""
+            if content:
+                parts.append(str(content))
+
+        return "".join(parts)
+
+    @staticmethod
     def _chunk_has_stream_content(chunk: str) -> bool:
-        if not isinstance(chunk, str) or not chunk.startswith("data: "):
-            return False
-        data_str = chunk[6:].strip()
-        if not data_str or data_str == "[DONE]":
-            return False
-        try:
-            payload = json.loads(data_str)
-        except json.JSONDecodeError:
-            return False
-        choices = payload.get("choices")
-        if not isinstance(choices, list) or not choices:
-            return False
-        delta = choices[0].get("delta", {}) if isinstance(choices[0], dict) else {}
-        content = delta.get("content", "") if isinstance(delta, dict) else ""
-        return bool(content)
+        return bool(BrowserCore._extract_stream_delta_content(chunk))
 
     def _execute_workflow_stream_once(
         self,
@@ -1530,6 +1654,85 @@ class BrowserCore:
         stream_config = site_config.get("stream_config", {}) or {}
         file_paste_config = site_config.get("file_paste", {}) or {}
 
+        audio_capture_preload_enabled = (
+            bool(modalities.get("audio"))
+            and bool(image_config.get("audio_capture_enabled", True))
+            and bool(image_config.get("audio_capture_preload_enabled", True))
+        )
+        if audio_capture_preload_enabled and not effective_stop_checker():
+            try:
+                from app.core.extractors.media_extractor import media_extractor
+
+                init_script = media_extractor.build_page_audio_capture_init_script(image_config)
+                capture_status = media_extractor.get_page_audio_capture_status(tab)
+                current_capture_version = int(capture_status.get("version") or 0) if isinstance(capture_status, dict) else 0
+                has_current_capture = current_capture_version == int(getattr(media_extractor, "PAGE_AUDIO_CAPTURE_SCRIPT_VERSION", 0) or 0)
+                tracked_audio_nodes = 0
+                if isinstance(capture_status, dict):
+                    tracked_audio_nodes = int(capture_status.get("tracked_media_elements") or 0) + int(capture_status.get("tracked_web_audio") or 0)
+                try:
+                    if getattr(session, "_audio_capture_init_script_source", None) != init_script:
+                        tab.run_cdp(
+                            "Page.addScriptToEvaluateOnNewDocument",
+                            source=init_script,
+                        )
+                        setattr(session, "_audio_capture_init_script_source", init_script)
+                        logger.debug("页面音频捕获预注入脚本已注册")
+                    else:
+                        logger.debug("页面音频捕获预注入脚本已存在")
+                except Exception as cdp_exc:
+                    logger.debug(f"页面音频捕获预注入脚本注册失败（已忽略）: {cdp_exc}")
+
+                media_extractor.prepare_page_audio_capture(tab, image_config)
+                should_reload_capture = (
+                    bool(image_config.get("audio_capture_reload_before_workflow", False))
+                    and (
+                        not has_current_capture
+                        or tracked_audio_nodes <= 0
+                    )
+                )
+                if should_reload_capture:
+                    current_tab_url = ""
+                    try:
+                        current_tab_url = str(tab.url or "")
+                    except Exception:
+                        current_tab_url = ""
+                    should_reload_for_capture = (
+                        "/settings" not in current_tab_url
+                        and "chrome://" not in current_tab_url
+                        and "about:" not in current_tab_url
+                    )
+                    if not should_reload_for_capture:
+                        logger.debug(f"页面音频捕获跳过刷新预热: url={current_tab_url!r}")
+                    else:
+                        try:
+                            tab.refresh(ignore_cache=True)
+                            try:
+                                tab.wait.doc_loaded(timeout=15)
+                            except Exception:
+                                pass
+                            input_selector = selectors.get("input_box", "")
+                            if input_selector:
+                                deadline = time.time() + 20.0
+                                while time.time() < deadline and not effective_stop_checker():
+                                    try:
+                                        if tab.ele(f"css:{input_selector}", timeout=0.5):
+                                            break
+                                    except Exception:
+                                        pass
+                                    time.sleep(0.5)
+                            media_extractor.prepare_page_audio_capture(tab, image_config)
+                            logger.debug("页面音频捕获已刷新页面并重新初始化")
+                        except Exception as refresh_exc:
+                            logger.debug(f"页面音频捕获刷新预热失败（已忽略）: {refresh_exc}")
+                elif bool(image_config.get("audio_capture_reload_before_workflow", False)):
+                    logger.debug(
+                        "页面音频捕获跳过刷新预热：当前脚本版本已就绪且已接管音频节点 "
+                        f"(tracked_nodes={tracked_audio_nodes})"
+                    )
+            except Exception as preload_exc:
+                logger.debug(f"页面音频捕获预热失败（已忽略）: {preload_exc}")
+
         # 🆕 提取用户发送的图片：可配置是否包含历史对话图片
         upload_history = self._get_upload_history_images_flag(default=True)
         logger.debug(f"图片历史上传: {upload_history}")
@@ -1581,6 +1784,19 @@ class BrowserCore:
         extractor = config_engine.get_site_extractor(domain, preset_name=effective_preset_name)
         logger.debug(f"[{session.id}] 使用提取器: {extractor.get_id()} [预设: {resolved_preset_name}]")
 
+        try:
+            from app.services.request_manager import request_manager
+            request_manager.update_request_metadata(
+                str(getattr(session, "_bound_request_id", "") or ""),
+                target_domain=domain,
+                route_domain=domain,
+                preset_name=resolved_preset_name,
+                tab_index=int(getattr(session, "persistent_index", 0) or 0) or None,
+                tab_id=session.id,
+            )
+        except Exception as e:
+            logger.debug(f"[{session.id}] 更新请求监控元数据失败（忽略）: {e}")
+
         if command_engine is not None:
             try:
                 workflow_runtime = command_engine.begin_workflow_runtime(
@@ -1617,6 +1833,7 @@ class BrowserCore:
         setattr(session, "_workflow_stop_reason", None)
         if not effective_stop_checker():
             setattr(session, "_workflow_user_stop_logged", False)
+        streamed_text_parts: List[str] = []
         
         try:
             step_index = 0
@@ -1669,7 +1886,7 @@ class BrowserCore:
                 
                 selector = selectors.get(target_key, '')
                 
-                if not selector and action not in ("WAIT", "KEY_PRESS", "COORD_CLICK", "COORD_SCROLL", "JS_EXEC", "READONLY_HINT"):
+                if not selector and action not in ("WAIT", "KEY_PRESS", "COORD_CLICK", "COORD_SCROLL", "JS_EXEC", "READONLY_HINT", "PAGE_FETCH"):
                     if optional:
                         step_index += 1
                         continue
@@ -1681,14 +1898,18 @@ class BrowserCore:
                         break
                 
                 try:
-                    yield from executor.execute_step(
+                    for chunk in executor.execute_step(
                         action=action,
                         selector=selector,
                         target_key=target_key,
                         value=param_value,
                         optional=optional,
                         context=context
-                    )
+                    ):
+                        delta_content = self._extract_stream_delta_content(chunk)
+                        if delta_content:
+                            streamed_text_parts.append(delta_content)
+                        yield chunk
                     
                     logger.debug(f"[PROBE] execute_step 完成: action={action}, target={target_key}")
 
@@ -1698,6 +1919,15 @@ class BrowserCore:
                     
                     if action in ("STREAM_WAIT", "STREAM_OUTPUT"):
                         result_container_selector = selector
+                    if (
+                        action == "PAGE_FETCH"
+                        and hasattr(executor, "consume_last_request_transport_sent")
+                        and executor.consume_last_request_transport_sent()
+                    ):
+                        step_index = executor._consume_request_transport_followup_steps(
+                            workflow,
+                            step_index,
+                        )
                     step_index += 1
                         
                 except (ElementNotFoundError, WorkflowError):
@@ -1745,6 +1975,7 @@ class BrowserCore:
                         message_wrapper_selector=selectors.get("message_wrapper", ""),
                         completion_id=executor._completion_id,
                         stop_checker=_combined_stop_checker,
+                        response_text_hint="".join(streamed_text_parts),
                         media_generation_state=getattr(executor, "_last_stream_media_state", None),
                     )
                     
@@ -1917,7 +2148,13 @@ class BrowserCore:
         from app.core.elements import ElementFinder
         from app.core.extractors.media_extractor import media_extractor
         
-        debounce = image_config.get("debounce_seconds", 2.0)
+        modalities = image_config.get("modalities") or {}
+        only_audio_mode = (
+            bool(modalities.get("audio"))
+            and not bool(modalities.get("image"))
+            and not bool(modalities.get("video"))
+        )
+        debounce = 0.0 if only_audio_mode else image_config.get("debounce_seconds", 2.0)
         effective_stop_checker = stop_checker or self._should_stop_checker
         if debounce > 0:
             elapsed = 0
@@ -1963,6 +2200,19 @@ class BrowserCore:
         try:
             elements, container_mode = _find_candidate_elements(timeout=1)
             if not elements:
+                should_try_page_audio_capture = (
+                    bool((image_config.get("modalities") or {}).get("audio"))
+                    and bool(image_config.get("audio_capture_enabled", True))
+                    and not effective_stop_checker()
+                )
+                if should_try_page_audio_capture:
+                    logger.debug("结果容器为空，尝试页面级音频播放捕获回退")
+                    return self._capture_audio_via_page_playback(
+                        tab=tab,
+                        target_element=None,
+                        image_config=image_config,
+                        stop_checker=effective_stop_checker,
+                    )
                 return []
             
             last_element = elements[-1]
@@ -1986,7 +2236,7 @@ class BrowserCore:
                     container_selector_fallback=result_selector
                 )
 
-            media_items = _extract_media_once(last_element)
+            media_items = [] if only_audio_mode else _extract_media_once(last_element)
             ready_media_items = self._filter_ready_media_items(media_items, image_config)
             pending_media_items = [
                 item for item in media_items
@@ -1998,15 +2248,16 @@ class BrowserCore:
             video_items = [item for item in ready_media_items if item.get("media_type") == "video"]
 
             placeholder_text = ""
-            try:
-                if hasattr(extractor, 'extract_text'):
-                    placeholder_text = str(extractor.extract_text(last_element) or "")
-                else:
-                    placeholder_text = str(
-                        last_element.run_js("return this.innerText || this.textContent || ''") or ""
-                    )
-            except Exception:
-                placeholder_text = ""
+            if not only_audio_mode:
+                try:
+                    if hasattr(extractor, 'extract_text'):
+                        placeholder_text = str(extractor.extract_text(last_element) or "")
+                    else:
+                        placeholder_text = str(
+                            last_element.run_js("return this.innerText || this.textContent || ''") or ""
+                        )
+                except Exception:
+                    placeholder_text = ""
 
             placeholder_text_lower = placeholder_text.lower()
             response_text_hint_lower = str(response_text_hint or "").strip().lower()
@@ -2125,6 +2376,24 @@ class BrowserCore:
                         "等待待渲染媒体超时，仍未拿到最终结果: "
                         f"kinds={','.join(sorted(pending_kinds))}, late_wait={late_wait_timeout:.1f}s"
                     )
+
+            should_try_audio_capture = (
+                bool((image_config.get("modalities") or {}).get("audio"))
+                and bool(image_config.get("audio_capture_enabled", True))
+                and not audio_items
+                and not effective_stop_checker()
+            )
+            if should_try_audio_capture:
+                captured_audio_items = self._capture_audio_via_page_playback(
+                    tab=tab,
+                    target_element=last_element,
+                    image_config=image_config,
+                    stop_checker=effective_stop_checker,
+                    response_text_hint=response_text_hint,
+                )
+                if captured_audio_items:
+                    ready_media_items = list(ready_media_items) + captured_audio_items
+                    audio_items = [item for item in ready_media_items if item.get("media_type") == "audio"]
             
             # 🆕 如果图片是不可直连的外链（如 googleusercontent），尝试截图落盘并替换为本地 URL
             media_items = ready_media_items
@@ -2147,6 +2416,179 @@ class BrowserCore:
         except Exception as e:
             logger.warning(f"多模态提取异常: {e}")
             return []
+
+    def _capture_audio_via_page_playback(
+        self,
+        tab,
+        target_element,
+        image_config: Dict,
+        stop_checker: Optional[Callable[[], bool]] = None,
+        response_text_hint: str = "",
+    ) -> List[Dict]:
+        """回退方案：触发页面播放按钮并从隐藏音频/ WebAudio 输出中捕获音频。"""
+        from app.core.extractors.media_extractor import media_extractor
+
+        if not tab:
+            return []
+
+        effective_stop_checker = stop_checker or self._should_stop_checker
+        if effective_stop_checker():
+            return []
+
+        prepared = media_extractor.prepare_page_audio_capture(tab, image_config)
+        if not prepared:
+            return []
+
+        network_capture = dict(image_config.get("audio_network_capture") or {})
+        network_capture_enabled = bool(network_capture.get("enabled", False))
+        if network_capture_enabled and not media_extractor.install_audio_network_probe(tab, image_config):
+            network_capture_enabled = False
+
+        trigger_target = target_element or tab
+        trigger_result = media_extractor.trigger_audio_playback(trigger_target, image_config)
+        if not bool(trigger_result.get("clicked")) and target_element is not None and target_element is not tab:
+            trigger_result = media_extractor.trigger_audio_playback(tab, image_config)
+        if not bool(trigger_result.get("clicked")):
+            logger.debug(f"页面音频捕获未触发播放按钮: {trigger_result}")
+            return []
+
+        logger.debug(
+            "页面音频捕获已触发播放按钮: "
+            f"text={trigger_result.get('text')!r}, candidates={trigger_result.get('candidate_count')}"
+        )
+
+        if network_capture_enabled:
+            network_audio_items = media_extractor.capture_network_audio(
+                tab=tab,
+                config=image_config,
+                stop_checker=effective_stop_checker,
+                response_text_hint=response_text_hint,
+            )
+            if network_audio_items:
+                logger.debug(f"网络音频捕获成功: {len(network_audio_items)} 项")
+                return network_audio_items
+
+        max_wait = float(
+            image_config.get("audio_capture_max_wait_seconds")
+            or max(8.0, float(image_config.get("load_timeout_seconds", 5.0) or 5.0) * 1.8)
+        )
+        hint_text = str(response_text_hint or "").strip()
+        if hint_text:
+            try:
+                chars_per_second = max(
+                    1.0,
+                    float(image_config.get("audio_capture_estimated_chars_per_second") or 4.8),
+                )
+                min_wait = max(
+                    1.0,
+                    float(image_config.get("audio_capture_min_wait_seconds") or 2.0),
+                )
+                padding_seconds = max(
+                    0.0,
+                    float(image_config.get("audio_capture_wait_padding_seconds") or 1.2),
+                )
+                hard_cap = max(
+                    min_wait,
+                    float(image_config.get("audio_capture_hard_max_wait_seconds") or max_wait),
+                )
+                fallback_wait = max_wait
+                estimated_wait = min_wait + (len(hint_text) / chars_per_second) + padding_seconds
+                max_wait = min(max(min_wait, estimated_wait), hard_cap)
+                logger.debug(
+                    "页面音频捕获动态等待窗口: "
+                    f"text_len={len(hint_text)}, max_wait={max_wait:.1f}s, "
+                    f"fallback_wait={fallback_wait:.1f}s, "
+                    f"chars_per_second={chars_per_second:.1f}"
+                )
+            except (TypeError, ValueError):
+                pass
+        poll_interval = max(0.1, float(image_config.get("audio_capture_poll_seconds") or 0.25))
+        silence_seconds = max(0.4, float(image_config.get("audio_capture_silence_seconds") or 1.2))
+        activity_silence_seconds = max(
+            0.2,
+            float(image_config.get("audio_capture_activity_silence_seconds") or 0.65),
+        )
+        terminal_settle_seconds = max(
+            0.0,
+            float(image_config.get("audio_capture_terminal_settle_seconds") or 0.35),
+        )
+        deadline = time.time() + max_wait
+        has_seen_data = False
+        has_seen_activity = False
+        terminal_deadline = 0.0
+
+        while time.time() < deadline and not effective_stop_checker():
+            time.sleep(poll_interval)
+            status = media_extractor.get_page_audio_capture_status(tab)
+            if not isinstance(status, dict):
+                continue
+
+            if bool(status.get("has_data")):
+                has_seen_data = True
+
+            active_recordings = int(status.get("active_recordings") or 0)
+            last_data_at_ms = int(status.get("last_data_at") or 0)
+            last_active_at_ms = int(status.get("last_active_at") or 0)
+            playing_media_elements = int(status.get("playing_media_elements") or 0)
+            terminal_playback_elements = int(status.get("terminal_playback_elements") or 0)
+            if last_active_at_ms:
+                has_seen_activity = True
+            if has_seen_data and active_recordings <= 0:
+                break
+            if has_seen_data and playing_media_elements <= 0 and terminal_playback_elements > 0:
+                if terminal_deadline <= 0:
+                    terminal_deadline = time.time() + terminal_settle_seconds
+                elif time.time() >= terminal_deadline:
+                    break
+            else:
+                terminal_deadline = 0.0
+
+            if has_seen_activity and last_active_at_ms:
+                activity_silence_elapsed = (time.time() * 1000.0 - last_active_at_ms) / 1000.0
+                if activity_silence_elapsed >= activity_silence_seconds:
+                    break
+
+            if has_seen_data and last_data_at_ms:
+                silence_elapsed = (time.time() * 1000.0 - last_data_at_ms) / 1000.0
+                if silence_elapsed >= silence_seconds:
+                    break
+
+        if effective_stop_checker():
+            return []
+
+        captured_items = media_extractor.export_page_audio_capture(tab, image_config)
+        if captured_items:
+            status = media_extractor.get_page_audio_capture_status(tab)
+            if isinstance(status, dict):
+                logger.debug(
+                    "页面播放音频捕获成功: "
+                    f"{len(captured_items)} 项, "
+                    f"version={status.get('version')}, "
+                    f"tracked_media={status.get('tracked_media_elements')}, "
+                    f"tracked_web_audio={status.get('tracked_web_audio')}, "
+                    f"active={status.get('active_recordings')}, "
+                    f"chunks={status.get('total_chunks')}, "
+                    f"last_data_at={status.get('last_data_at')}, "
+                    f"last_active_at={status.get('last_active_at')}, "
+                    f"peak_rms={status.get('peak_rms')}"
+                )
+        if not captured_items:
+            status = media_extractor.get_page_audio_capture_status(tab)
+            if isinstance(status, dict):
+                logger.debug(
+                    "页面音频捕获未导出到任何音频数据: "
+                    f"version={status.get('version')}, "
+                    f"tracked_media={status.get('tracked_media_elements')}, "
+                    f"tracked_web_audio={status.get('tracked_web_audio')}, "
+                    f"active={status.get('active_recordings')}, "
+                    f"chunks={status.get('total_chunks')}, "
+                    f"has_data={status.get('has_data')}, "
+                    f"errors={status.get('recent_errors')}, "
+                    f"events={status.get('recent_events')}"
+                )
+            else:
+                logger.debug("页面音频捕获未导出到任何音频数据")
+        return captured_items
 
     def _resolve_media_ref(self, media_item: Dict) -> str:
         ref = str(media_item.get("url") or media_item.get("data_uri") or "").strip()
@@ -2203,6 +2645,10 @@ class BrowserCore:
             ref = self._resolve_media_ref(item)
             if entry.get("kind") == "url":
                 entry["url"] = ref or entry.get("url")
+            if ref and entry.get("kind") != "url":
+                entry["kind"] = "url"
+                entry["url"] = ref
+            entry.pop("data_uri", None)
             entry.pop("local_path", None)
             result.append(entry)
         return result
@@ -2234,6 +2680,7 @@ class BrowserCore:
             "audio/x-wav": ".wav",
             "audio/ogg": ".ogg",
             "audio/webm": ".webm",
+            "audio/webm;codecs=opus": ".webm",
             "audio/mp4": ".m4a",
             "video/mp4": ".mp4",
             "video/webm": ".webm",
@@ -2323,7 +2770,7 @@ class BrowserCore:
                         handle.write(chunk)
 
                 new_item = dict(item)
-                new_item["url"] = f"/download_images/{filename}"
+                new_item["url"] = f"/media/{filename}"
                 new_item["mime"] = content_type or item.get("mime")
                 new_item["byte_size"] = written
                 new_item["source"] = "local_file"
@@ -2565,6 +3012,8 @@ class BrowserCore:
             "audio/wav": ".wav",
             "audio/x-wav": ".wav",
             "audio/ogg": ".ogg",
+            "audio/webm": ".webm",
+            "audio/webm;codecs=opus": ".webm",
             "audio/mp4": ".m4a",
             "video/mp4": ".mp4",
             "video/webm": ".webm",
@@ -2599,6 +3048,8 @@ class BrowserCore:
 
             try:
                 filepath.write_bytes(media_bytes)
+                if str(item.get("media_type") or "").strip().lower() == "audio":
+                    self._append_audio_tail_silence(filepath, duration_seconds=0.3)
             except Exception as e:
                 logger.warning(f"data uri 保存失败，保留原媒体数据: {e}")
                 result.append(item)
@@ -2606,7 +3057,11 @@ class BrowserCore:
 
             new_item = dict(item)
             new_item["kind"] = "url"
-            new_item["url"] = f"/download_images/{filename}"
+            media_type = str(item.get("media_type") or "").strip().lower()
+            if media_type in {"audio", "video"}:
+                new_item["url"] = f"/media/{filename}"
+            else:
+                new_item["url"] = f"/download_images/{filename}"
             new_item["data_uri"] = None
             new_item["mime"] = mime
             new_item["byte_size"] = len(media_bytes)

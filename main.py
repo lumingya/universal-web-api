@@ -7,17 +7,20 @@ logging.getLogger("urllib3").setLevel(logging.WARNING)
 import os
 import logging
 import socket
+import mimetypes
+import shutil
+import subprocess
 import sys
 import threading
 import time
 import webbrowser
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from urllib.request import urlopen
 from pathlib import Path
 from contextlib import asynccontextmanager
 from app import __version__ as APP_VERSION
 from app.core import get_browser
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, FileResponse
@@ -549,6 +552,122 @@ async def controlled_browser_guide_data():
             status_code=500,
             content={"error": {"message": "无法加载受控浏览器引导页数据"}}
         )
+
+
+_MEDIA_MIME_OVERRIDES = {
+    ".mp3": "audio/mpeg",
+    ".m4a": "audio/mp4",
+    ".aac": "audio/aac",
+    ".wav": "audio/wav",
+    ".ogg": "audio/ogg",
+    ".oga": "audio/ogg",
+    ".webm": "audio/webm",
+    ".mp4": "video/mp4",
+    ".mov": "video/quicktime",
+    ".ogv": "video/ogg",
+}
+
+_MEDIA_TRANSCODE_FORMATS = {
+    "mp3": {
+        "ext": ".mp3",
+        "mime": "audio/mpeg",
+        "args": ["-vn", "-codec:a", "libmp3lame", "-b:a", "128k"],
+    },
+    "m4a": {
+        "ext": ".m4a",
+        "mime": "audio/mp4",
+        "args": ["-vn", "-codec:a", "aac", "-b:a", "128k"],
+    },
+}
+
+
+def _resolve_download_media_path(filename: str) -> Path:
+    safe_name = Path(str(filename or "")).name
+    if not safe_name or safe_name != str(filename or ""):
+        raise HTTPException(status_code=400, detail="invalid_media_filename")
+
+    base_dir = Path("download_images").resolve()
+    path = (base_dir / safe_name).resolve()
+    if base_dir not in path.parents or not path.is_file():
+        raise HTTPException(status_code=404, detail="media_not_found")
+    return path
+
+
+def _guess_media_mime(path: Path) -> str:
+    suffix = path.suffix.lower()
+    return _MEDIA_MIME_OVERRIDES.get(suffix) or mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+
+
+def _transcode_media(path: Path, fmt: str) -> Path:
+    spec = _MEDIA_TRANSCODE_FORMATS.get(fmt)
+    if not spec:
+        raise HTTPException(status_code=400, detail="unsupported_media_format")
+
+    ffmpeg_path = shutil.which("ffmpeg")
+    if not ffmpeg_path:
+        raise HTTPException(status_code=503, detail="ffmpeg_not_available")
+
+    cache_dir = path.parent / "_transcoded"
+    cache_dir.mkdir(exist_ok=True)
+    out_path = cache_dir / f"{path.stem}{spec['ext']}"
+    if out_path.exists() and out_path.stat().st_mtime >= path.stat().st_mtime and out_path.stat().st_size > 0:
+        return out_path
+
+    cmd = [
+        ffmpeg_path,
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(path),
+        *spec["args"],
+        str(out_path),
+    ]
+    try:
+        completed = subprocess.run(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="media_transcode_timeout")
+    except Exception as e:
+        logger.warning(f"媒体转码启动失败: {e}")
+        raise HTTPException(status_code=500, detail="media_transcode_failed")
+
+    if completed.returncode != 0 or not out_path.exists() or out_path.stat().st_size <= 0:
+        stderr = str(completed.stderr or "").strip()[:240]
+        logger.warning(f"媒体转码失败: format={fmt}, file={path.name}, error={stderr}")
+        raise HTTPException(status_code=500, detail="media_transcode_failed")
+
+    return out_path
+
+
+@app.get("/media/{filename}", include_in_schema=False)
+async def media_file(
+    filename: str,
+    format: Optional[str] = Query(default=None, pattern="^(mp3|m4a)$"),
+):
+    source_path = _resolve_download_media_path(filename)
+    requested_format = str(format or "").strip().lower() if isinstance(format, str) else ""
+
+    if requested_format:
+        media_path = _transcode_media(source_path, requested_format)
+        media_type = _MEDIA_TRANSCODE_FORMATS[requested_format]["mime"]
+    else:
+        media_path = source_path
+        media_type = _guess_media_mime(media_path)
+
+    return FileResponse(
+        media_path,
+        media_type=media_type,
+        filename=media_path.name,
+        content_disposition_type="inline",
+    )
 # ================= 注册 API 路由（在 Dashboard 之后）=================
 
 from app.api import router as api_router

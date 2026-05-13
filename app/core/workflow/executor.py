@@ -275,6 +275,7 @@ class WorkflowExecutor:
         )
         self._pending_request_transport_state: Optional[Dict[str, Any]] = None
         self._request_transport_bypass = False
+        self._last_request_transport_sent = False
         
         # 检查是否启用网络监听模式
         self._stream_mode = stream_config.get("mode", "dom") if stream_config else "dom"
@@ -528,6 +529,11 @@ class WorkflowExecutor:
     def _clear_request_transport_state(self) -> None:
         self._pending_request_transport_state = None
 
+    def consume_last_request_transport_sent(self) -> bool:
+        sent = bool(self._last_request_transport_sent)
+        self._last_request_transport_sent = False
+        return sent
+
     def _reset_request_transport_monitor_if_needed(self) -> None:
         if self._network_monitor is None:
             return
@@ -551,6 +557,77 @@ class WorkflowExecutor:
         finally:
             self._request_transport_bypass = False
             self._clear_request_transport_state()
+
+    def _stage_request_transport_from_context(
+        self,
+        *,
+        selector: str = "",
+        target_key: str = "",
+        optional: bool = False,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        prompt = str((context or {}).get("prompt") or "").strip()
+        if not self._can_stage_request_transport(prompt):
+            return False
+        self._queue_request_transport_prompt(
+            selector=selector,
+            target_key=target_key,
+            optional=optional,
+            prompt=prompt,
+        )
+        logger.debug(
+            f"[REQUEST_TRANSPORT] 已缓存页面直发 prompt "
+            f"(profile={self._get_request_transport_profile()}, chars={len(prompt)})"
+        )
+        return True
+
+    def _consume_request_transport_followup_steps(self, workflow: list, current_index: int) -> int:
+        if current_index < 0 or current_index >= len(workflow):
+            return current_index
+        if str(workflow[current_index].get("action") or "").strip() != "PAGE_FETCH":
+            return current_index
+
+        next_index = current_index + 1
+        consumed = 0
+        while next_index < len(workflow):
+            next_step = workflow[next_index] if isinstance(workflow[next_index], dict) else {}
+            next_action = str(next_step.get("action") or "").strip()
+            next_target = str(next_step.get("target") or "").strip()
+            if next_action in {"FILL_INPUT", "KEY_PRESS"}:
+                consumed += 1
+                next_index += 1
+                continue
+            if next_action == "CLICK" and next_target == "send_btn":
+                consumed += 1
+                next_index += 1
+                continue
+            if next_action == "WAIT":
+                lookahead = next_index + 1
+                while lookahead < len(workflow):
+                    lookahead_step = workflow[lookahead] if isinstance(workflow[lookahead], dict) else {}
+                    lookahead_action = str(lookahead_step.get("action") or "").strip()
+                    lookahead_target = str(lookahead_step.get("target") or "").strip()
+                    if lookahead_action == "WAIT":
+                        lookahead += 1
+                        continue
+                    break
+                if (
+                    lookahead < len(workflow)
+                    and (
+                        lookahead_action in {"FILL_INPUT", "KEY_PRESS"}
+                        or (lookahead_action == "CLICK" and lookahead_target == "send_btn")
+                    )
+                ):
+                    consumed += 1
+                    next_index += 1
+                    continue
+            break
+
+        if consumed > 0:
+            logger.debug(
+                f"[REQUEST_TRANSPORT] 页面直发成功后跳过 {consumed} 个回退步骤"
+            )
+        return next_index - 1
 
     def _attempt_request_transport_send(self) -> bool:
         if not self._has_pending_request_transport_prompt():
@@ -576,6 +653,7 @@ class WorkflowExecutor:
                 f"session_id={result.get('session_id') or '-'})"
             )
             self._clear_request_transport_state()
+            self._last_request_transport_sent = True
             return True
 
         fallback_mode = self._get_request_transport_fallback_mode()
@@ -1265,6 +1343,29 @@ class WorkflowExecutor:
             elif action == "READONLY_HINT":
                 logger.debug(f"[WORKFLOW_HINT] {str(value or '')[:160]}")
                 return
+
+            elif action == "PAGE_FETCH":
+                self._last_request_transport_sent = False
+                if self._network_monitor is not None:
+                    self._prepare_kimi_page_capture()
+                    self._network_monitor.pre_start()
+                if not self._has_pending_request_transport_prompt():
+                    self._stage_request_transport_from_context(
+                        selector=selector,
+                        target_key=target_key,
+                        optional=optional,
+                        context=context,
+                    )
+                if self._attempt_request_transport_send():
+                    return
+                if self._has_pending_request_transport_prompt():
+                    pending = self._pending_request_transport_state or {}
+                    if pending.get("selector") or pending.get("target_key"):
+                        self._ensure_cached_prompt_filled()
+                    else:
+                        self._request_transport_bypass = True
+                        self._clear_request_transport_state()
+                return
             
             elif action == "CLICK":
                 # ===== 隐身模式：首次交互前执行人类行为预热 =====
@@ -1309,19 +1410,13 @@ class WorkflowExecutor:
                 self._execute_coord_scroll(value, optional)
             
             elif action == "FILL_INPUT":
-                
                 prompt = context.get("prompt", "") if context else ""
-                if self._can_stage_request_transport(prompt):
-                    self._queue_request_transport_prompt(
-                        selector=selector,
-                        target_key=target_key,
-                        optional=optional,
-                        prompt=prompt,
-                    )
-                    logger.debug(
-                        f"[REQUEST_TRANSPORT] 已缓存页面直发 prompt "
-                        f"(profile={self._get_request_transport_profile()}, chars={len(prompt)})"
-                    )
+                if self._stage_request_transport_from_context(
+                    selector=selector,
+                    target_key=target_key,
+                    optional=optional,
+                    context=context,
+                ):
                     return
                 self._execute_fill(selector, prompt, target_key, optional)
             

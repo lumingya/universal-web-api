@@ -478,7 +478,56 @@ class DoubaoParser(ResponseParser):
         if not text:
             return text
 
-        if not DoubaoParser._should_try_repair_text(text):
+        repaired_whole = DoubaoParser._repair_text_candidate(text)
+        if repaired_whole != text:
+            return repaired_whole
+
+        repaired_segments: List[str] = []
+        changed = False
+        buffer = ""
+        buffer_is_suspicious: bool | None = None
+
+        def flush() -> None:
+            nonlocal buffer, buffer_is_suspicious, changed
+            if not buffer:
+                return
+            if buffer_is_suspicious:
+                repaired = DoubaoParser._repair_text_candidate(buffer)
+                if repaired != buffer:
+                    changed = True
+                repaired_segments.append(repaired)
+            else:
+                repaired_segments.append(buffer)
+            buffer = ""
+            buffer_is_suspicious = None
+
+        for ch in text:
+            is_suspicious = DoubaoParser._is_suspicious_char(ch)
+            if buffer_is_suspicious is None:
+                buffer = ch
+                buffer_is_suspicious = is_suspicious
+                continue
+            if is_suspicious == buffer_is_suspicious:
+                buffer += ch
+                continue
+            flush()
+            buffer = ch
+            buffer_is_suspicious = is_suspicious
+
+        flush()
+        if changed:
+            repaired_text = "".join(repaired_segments)
+            if repaired_text != text:
+                logger.debug(
+                    "[DoubaoParser][Repair] repaired mixed mojibake "
+                    f"(before_len={len(text)}, after_len={len(repaired_text)})"
+                )
+                return repaired_text
+        return text
+
+    @staticmethod
+    def _repair_text_candidate(text: str) -> str:
+        if not text or not DoubaoParser._should_try_repair_text(text):
             return text
 
         for source_encoding in ("latin1", "cp1252"):
@@ -510,11 +559,24 @@ class DoubaoParser(ResponseParser):
         }
         suspicious_count = 0
         for ch in text:
-            code = ord(ch)
-            if 0x80 <= code <= 0x00FF or code in cp1252_extra:
+            if DoubaoParser._is_suspicious_char(ch, cp1252_extra):
                 suspicious_count += 1
 
         return suspicious_count >= max(2, len(text) // 4)
+
+    @staticmethod
+    def _is_suspicious_char(ch: str, cp1252_extra: set[int] | None = None) -> bool:
+        if not ch:
+            return False
+        if cp1252_extra is None:
+            cp1252_extra = {
+                0x0152, 0x0153, 0x0160, 0x0161, 0x0178, 0x017D, 0x017E,
+                0x02C6, 0x02DC, 0x2013, 0x2014, 0x2018, 0x2019, 0x201A,
+                0x201C, 0x201D, 0x201E, 0x2020, 0x2021, 0x2022, 0x2026,
+                0x2030, 0x2039, 0x203A, 0x20AC, 0x2122,
+            }
+        code = ord(ch)
+        return 0x80 <= code <= 0x00FF or code in cp1252_extra
 
     @staticmethod
     def _try_redecode_text(text: str, source_encoding: str) -> str:

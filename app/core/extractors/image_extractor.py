@@ -39,7 +39,32 @@ def get_default_image_extraction_config() -> Dict:
         "download_blobs": True,
         "max_size_mb": 10,
         "src_allow_patterns": [],
-        "mode": "all"
+        "mode": "all",
+        "audio_capture_enabled": True,
+        "audio_capture_mute_playback": True,
+        "audio_capture_preload_enabled": True,
+        "audio_capture_reload_before_workflow": False,
+        "audio_capture_preserve_graph": True,
+        "audio_capture_terminal_settle_seconds": 0.35,
+        "audio_trigger_selector": "",
+        "audio_trigger_labels": ["朗读", "语音朗读", "收听", "read aloud", "listen", "tts", "voice"],
+        "audio_capture_max_wait_seconds": 12.0,
+        "audio_capture_min_wait_seconds": 2.0,
+        "audio_capture_hard_max_wait_seconds": 45.0,
+        "audio_capture_estimated_chars_per_second": 4.8,
+        "audio_capture_wait_padding_seconds": 1.2,
+        "audio_network_capture": {
+            "enabled": False,
+            "timeout_seconds": 2.5,
+            "transport": "page_websocket_probe",
+            "url_patterns": ["voicegenie", "speech", "audio", "tts"],
+            "extractor": "voicegenie_ogg_pages",
+            "settle_seconds": 0.35,
+        },
+        "audio_capture_poll_seconds": 0.25,
+        "audio_capture_silence_seconds": 1.2,
+        "audio_capture_activity_threshold": 0.006,
+        "audio_capture_activity_silence_seconds": 0.65,
     }
 
 

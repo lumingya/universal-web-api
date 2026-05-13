@@ -1823,7 +1823,7 @@ class SSEFormatter:
         """
         chunk_id = completion_id or cls._generate_id()
         delta = {"content": content}
-        if media:
+        if media is not None:
             delta["media"] = media
         data = {
             "id": chunk_id,
@@ -1836,7 +1836,7 @@ class SSEFormatter:
                 "finish_reason": None
             }]
         }
-        if media:
+        if media is not None:
             data["media"] = media
         return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
     
@@ -1899,7 +1899,7 @@ class SSEFormatter:
             "role": "assistant",
             "content": content
         }
-        if media:
+        if media is not None:
             message["media"] = media
 
         data = {
@@ -1918,7 +1918,7 @@ class SSEFormatter:
                 "total_tokens": 0
             }
         }
-        if media:
+        if media is not None:
             data["media"] = media
         return data
 

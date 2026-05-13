@@ -1430,3 +1430,28 @@ def _get_system_stats_payload_cached(ttl_seconds: float = 10.0) -> Dict[str, Any
 @router.get("/api/system/stats")
 async def get_system_stats(authenticated: bool = Depends(verify_auth)):
     return await asyncio.to_thread(_get_system_stats_payload_cached)
+
+
+@router.get("/api/system/request-history")
+async def get_request_history(
+    limit: int = 200,
+    detail: bool = False,
+    authenticated: bool = Depends(verify_auth),
+):
+    safe_limit = max(1, min(200, int(limit or 200)))
+    return await asyncio.to_thread(
+        request_manager.get_request_history_payload,
+        safe_limit,
+        bool(detail),
+    )
+
+
+@router.get("/api/system/request-history/{request_id}")
+async def get_request_history_detail(
+    request_id: str,
+    authenticated: bool = Depends(verify_auth),
+):
+    record = await asyncio.to_thread(request_manager.get_request_history_record, request_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="请求历史不存在")
+    return record

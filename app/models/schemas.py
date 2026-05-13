@@ -24,6 +24,7 @@ ActionType = Literal[
     "WAIT",
     "JS_EXEC",
     "READONLY_HINT",
+    "PAGE_FETCH",
 ]
 
 # ================= 选择器字段名称 =================
@@ -204,6 +205,16 @@ class ExtractionModalitiesConfig(TypedDict, total=False):
     video: bool
 
 
+class AudioNetworkCaptureConfig(TypedDict, total=False):
+    """页面内网络音频捕获配置"""
+    enabled: bool
+    timeout_seconds: float
+    transport: Literal["page_websocket_probe"]
+    url_patterns: List[str]
+    extractor: Literal["voicegenie_ogg_pages"]
+    settle_seconds: float
+
+
 class ImageExtractionConfig(TypedDict, total=False):
     """
     多模态提取配置
@@ -223,6 +234,24 @@ class ImageExtractionConfig(TypedDict, total=False):
     max_size_mb: int                 # blob 最大允许大小(MB)
     src_allow_patterns: List[str]    # 可选：按 src 正则白名单过滤
     mode: Literal["all", "first", "last"]  # 每种模态的提取模式
+    audio_capture_enabled: bool      # 是否启用通用页面播放音频捕获回退
+    audio_capture_mute_playback: bool # 捕获时是否静音页面播放
+    audio_capture_preload_enabled: bool # 是否在页面加载前预注入捕获脚本
+    audio_capture_reload_before_workflow: bool # 捕获前是否刷新页面以接管早期音频图
+    audio_capture_preserve_graph: bool # 重置捕获时是否保留已接管的音频图
+    audio_capture_terminal_settle_seconds: float # 播放结束后额外等待一小段时间，避免截断尾音
+    audio_trigger_selector: str      # 可选：朗读/播放按钮选择器
+    audio_trigger_labels: List[str]  # 可选：朗读/播放按钮文本候选
+    audio_capture_max_wait_seconds: float  # 最长等待音频播放完成
+    audio_capture_min_wait_seconds: float  # 按文本估算等待时的最短窗口
+    audio_capture_hard_max_wait_seconds: float # 按文本估算等待时的硬上限
+    audio_capture_estimated_chars_per_second: float # 按文本估算朗读时长的字符/秒
+    audio_capture_wait_padding_seconds: float # 按文本估算等待时额外冗余
+    audio_network_capture: AudioNetworkCaptureConfig # 页面内网络音频捕获配置
+    audio_capture_poll_seconds: float      # 捕获状态轮询间隔
+    audio_capture_silence_seconds: float   # 检测到静默后结束捕获
+    audio_capture_activity_threshold: float # 音量活动检测阈值
+    audio_capture_activity_silence_seconds: float # 音量静默多久后结束捕获
 # ================= 流式监控配置 =================
 
 class SendConfirmationConfig(TypedDict, total=False):
@@ -578,7 +607,32 @@ def get_default_image_extraction_config() -> ImageExtractionConfig:
         "download_blobs": True,
         "max_size_mb": 10,
         "src_allow_patterns": [],
-        "mode": "all"
+        "mode": "all",
+        "audio_capture_enabled": True,
+        "audio_capture_mute_playback": True,
+        "audio_capture_preload_enabled": True,
+        "audio_capture_reload_before_workflow": False,
+        "audio_capture_preserve_graph": True,
+        "audio_capture_terminal_settle_seconds": 0.35,
+        "audio_trigger_selector": "",
+        "audio_trigger_labels": ["朗读", "语音朗读", "收听", "read aloud", "listen", "tts", "voice"],
+        "audio_capture_max_wait_seconds": 12.0,
+        "audio_capture_min_wait_seconds": 2.0,
+        "audio_capture_hard_max_wait_seconds": 45.0,
+        "audio_capture_estimated_chars_per_second": 4.8,
+        "audio_capture_wait_padding_seconds": 1.2,
+        "audio_network_capture": {
+            "enabled": False,
+            "timeout_seconds": 2.5,
+            "transport": "page_websocket_probe",
+            "url_patterns": ["voicegenie", "speech", "audio", "tts"],
+            "extractor": "voicegenie_ogg_pages",
+            "settle_seconds": 0.35,
+        },
+        "audio_capture_poll_seconds": 0.25,
+        "audio_capture_silence_seconds": 1.2,
+        "audio_capture_activity_threshold": 0.006,
+        "audio_capture_activity_silence_seconds": 0.65,
     }
 def validate_site_config(config: Dict[str, Any]) -> bool:
     """验证站点配置是否有效"""

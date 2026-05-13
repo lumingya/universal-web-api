@@ -2934,6 +2934,57 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
             <div class="note">
                 <p><strong>💡 使用建议：</strong>大多数站点先确定要开哪几种模态，再分别验证对应选择器能命中真实媒体节点。只有在页面里媒体很多、容易误抓时，才需要再补 <code>container_selector</code> 来缩小范围。</p>
             </div>
+
+            <h3>🔊 页面朗读音频捕获（新增）</h3>
+            <p>除了直接提取网页里的 <code>audio</code> / <code>video</code> 节点，系统现在还支持<strong>点击页面里的“朗读 / 收听 / TTS”按钮</strong>，把 AI 播放出来的语音音频也一起抓回来。</p>
+
+            <pre><code>"image_extraction": {
+  "modalities": {
+    "audio": true
+  },
+  "audio_capture_enabled": true,
+  "audio_trigger_selector": "button[aria-label=\"朗读\"]",
+  "audio_trigger_labels": ["朗读", "语音朗读", "收听"],
+  "audio_network_capture": {
+    "enabled": true,
+    "transport": "page_websocket_probe",
+    "url_patterns": ["voicegenie"],
+    "extractor": "voicegenie_ogg_pages",
+    "timeout_seconds": 2.5,
+    "settle_seconds": 0.35
+  }
+}</code></pre>
+
+            <div class="info-box">
+                <p><strong>工作顺序：</strong>系统会先等待文本回复完成，然后尝试点击页面里的朗读按钮。点击成功后，优先从页面内网络流（如 WebSocket TTS 帧）直接提取音频；如果网络直抓不够完整，就自动回退到页面播放录音。</p>
+            </div>
+
+            <p><strong>关键配置说明：</strong></p>
+            <ul>
+                <li><strong><code>audio_capture_enabled</code></strong>：是否启用“点击朗读并抓音频”这条链路。</li>
+                <li><strong><code>audio_trigger_selector</code></strong>：优先使用的朗读按钮选择器。站点按钮稳定时，建议直接填精确 selector。</li>
+                <li><strong><code>audio_trigger_labels</code></strong>：当 selector 不稳定时，用这些按钮文本做兜底匹配。</li>
+                <li><strong><code>audio_network_capture.enabled</code></strong>：是否优先尝试网络直抓。</li>
+                <li><strong><code>audio_network_capture.url_patterns</code></strong>：只捕获 URL 命中这些关键字的音频网络流。</li>
+                <li><strong><code>audio_network_capture.extractor</code></strong>：网络流聚合器。当前豆包朗读使用 <code>voicegenie_ogg_pages</code>。</li>
+            </ul>
+
+            <div class="success-box">
+                <p><strong>豆包朗读预设：</strong>项目里已经给 <code>www.doubao.com</code> 的<strong>朗读</strong>预设接好了这套能力，默认策略是：<strong>网络直抓优先，页面录音兜底</strong>。</p>
+            </div>
+
+            <div class="note">
+                <p><strong>试听说明：</strong>如果你希望页面能正常外放试听，需要保证<strong>受控浏览器本身不是用 <code>--mute-audio</code> 启动的</strong>。单纯刷新网页无法解除浏览器进程级静音，必须重启 9222 那个受控 Chrome 实例。</p>
+            </div>
+
+            <div class="note">
+                <p><strong>常见现象排查：</strong></p>
+                <ul>
+                    <li><code>页面音频捕获未触发播放按钮</code>：通常是朗读按钮选择器过时，或者页面当前根本没出现朗读入口。</li>
+                    <li><code>tracked_media=0, tracked_web_audio=0, chunks=0</code>：说明按钮点到了，但这轮播放链没有被页面捕获脚本接管。</li>
+                    <li><strong>偶发截断</strong>：当前会优先尝试网络直抓；如果网络音频看起来过短或不完整，系统会丢弃它并回退到页面录音，避免把半截音频返回给前端。</li>
+                </ul>
+            </div>
         </section>
 
         <!-- ==================== 响应检测配置 ==================== -->

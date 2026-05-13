@@ -21,7 +21,8 @@
         READ: { color: 'rgba(139, 92, 246, 0.15)', border: '#8B5CF6', name: '读取' },
         WAIT: { color: 'rgba(245, 158, 11, 0.18)', border: '#F59E0B', name: '等待' },
         KEY: { color: 'rgba(236, 72, 153, 0.18)', border: '#EC4899', name: '按键' },
-        SCRIPT: { color: 'rgba(99, 102, 241, 0.18)', border: '#6366F1', name: '脚本' }
+        SCRIPT: { color: 'rgba(99, 102, 241, 0.18)', border: '#6366F1', name: '脚本' },
+        PAGE_FETCH: { color: 'rgba(6, 182, 212, 0.18)', border: '#06B6D4', name: '页面直发' }
     };
     const VISUAL_ACTION_DEFS = [
         { ballType: 'COORD_CLICK', workflowAction: 'COORD_CLICK', toolbarAction: 'add-coord-click', toolbarLabel: '+ 坐标点击', menuLabel: '坐标点击' },
@@ -31,7 +32,8 @@
         { ballType: 'READ', workflowAction: 'STREAM_WAIT', toolbarAction: 'add-read', toolbarLabel: '+ 读取', menuLabel: '读取' },
         { ballType: 'WAIT', workflowAction: 'WAIT', toolbarAction: 'add-wait', toolbarLabel: '+ 等待', menuLabel: '等待' },
         { ballType: 'KEY', workflowAction: 'KEY_PRESS', toolbarAction: 'add-key', toolbarLabel: '+ 按键', menuLabel: '按键' },
-        { ballType: 'SCRIPT', workflowAction: 'JS_EXEC', toolbarAction: 'add-script', toolbarLabel: '+ 脚本', menuLabel: '脚本' }
+        { ballType: 'SCRIPT', workflowAction: 'JS_EXEC', toolbarAction: 'add-script', toolbarLabel: '+ 脚本', menuLabel: '脚本' },
+        { ballType: 'PAGE_FETCH', workflowAction: 'PAGE_FETCH', toolbarAction: 'add-page-fetch', toolbarLabel: '+ 直发', menuLabel: '页面直发' }
     ];
     const VISUAL_ACTION_BY_TOOLBAR_ACTION = Object.fromEntries(
         VISUAL_ACTION_DEFS.map(def => [def.toolbarAction, def])
@@ -757,6 +759,13 @@
           optional: !!ball.config.optional,
           value: String(ball.config.script || '').trim() || 'return document.title;'
         });
+      } else if (ball.type === 'PAGE_FETCH') {
+        newWorkflow.push({
+          action: 'PAGE_FETCH',
+          target: '',
+          optional: true,
+          value: null
+        });
       } else if (ball.type === 'READ') {
         newWorkflow.push({
           action: 'STREAM_WAIT',
@@ -1065,6 +1074,7 @@
                 script: 'return document.title;',
                 selector: '',
                 targetKey: '',
+                description: '使用当前预设的 request_transport 页面直发配置发送 prompt',
                 optional: false,
                 ...opts.config
             };
@@ -1253,6 +1263,8 @@
               this.element.textContent = `K${n}`;
           } else if (this.type === 'SCRIPT') {
               this.element.textContent = `J${n}`;
+          } else if (this.type === 'PAGE_FETCH') {
+              this.element.textContent = `P${n}`;
           } else {
               this.element.textContent = String(n);
           }
@@ -1383,6 +1395,7 @@
         ball.type === 'CLICK' ? '在此坐标模拟鼠标点击' :
         ball.type === 'COORD_SCROLL' ? '从起点滚轮滑动到终点坐标' :
         ball.type === 'INPUT' ? '在此位置输入文本内容' :
+        ball.type === 'PAGE_FETCH' ? '使用预设页面直发配置发送 prompt，失败时可回退后续工作流' :
         '提取特定元素的文本'
       ])
     ]));
@@ -1592,6 +1605,13 @@
         el('span', { className: 'wfe-menu-label' }, ['代码'])
       ]));
       body.appendChild(scriptInput);
+    } else if (ball.type === 'PAGE_FETCH') {
+      body.appendChild(el('div', { className: 'wfe-menu-item disabled' }, [
+        el('span', { className: 'wfe-menu-label' }, ['页面直发使用当前预设的 request_transport 配置。'])
+      ]));
+      body.appendChild(el('div', { className: 'wfe-menu-item disabled' }, [
+        el('span', { className: 'wfe-menu-label' }, ['若直发失败且 fallback_mode=workflow，会继续执行后续步骤。'])
+      ]));
     } else if (ball.type === 'READ') {
       body.appendChild(el('div', { className: 'wfe-menu-item disabled' }, [
         el('span', { className: 'wfe-menu-label' }, [`🔍 ${ball.config.selector || '(未设置)'}`])
@@ -1868,6 +1888,12 @@
                     delay_ms: 0,
                     script: String(step.value || '').trim() || 'return document.title;',
                     optional: !!step.optional
+                };
+            } else if (action === 'PAGE_FETCH') {
+                type = 'PAGE_FETCH';
+                stepConfig = {
+                    delay_ms: 0,
+                    optional: true
                 };
             } else if (action === 'STREAM_WAIT') {
                 type = 'READ';
@@ -2249,6 +2275,7 @@
     addWait: () => addBall('WAIT'),
     addKey: () => addBall('KEY'),
     addScript: () => addBall('SCRIPT'),
+    addPageFetch: () => addBall('PAGE_FETCH'),
     clear: clearAll,
     export: exportConfig,
     show: showEditor,

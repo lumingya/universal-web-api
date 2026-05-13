@@ -151,7 +151,45 @@
           "download_blobs": true,
           "max_size_mb": 100,
           "src_allow_patterns": [],
-          "mode": "all"
+          "mode": "all",
+          "audio_capture_enabled": true,
+          "audio_capture_mute_playback": false,
+          "audio_capture_preload_enabled": true,
+          "audio_capture_reload_before_workflow": false,
+          "audio_capture_preserve_graph": true,
+          "audio_capture_terminal_settle_seconds": 0.35,
+          "audio_trigger_selector": "button[aria-label=\"朗读\"], button[aria-label*=\"朗读\"], button[data-dbx-name=\"button\"][aria-label*=\"朗读\"], button.voiceButton-GAZh3G",
+          "audio_trigger_labels": [
+            "朗读",
+            "语音朗读",
+            "收听",
+            "read aloud",
+            "listen",
+            "tts",
+            "voice"
+          ],
+          "audio_capture_max_wait_seconds": 12,
+          "audio_capture_min_wait_seconds": 2,
+          "audio_capture_hard_max_wait_seconds": 45,
+          "audio_capture_estimated_chars_per_second": 4.8,
+          "audio_capture_wait_padding_seconds": 1.2,
+          "audio_network_capture": {
+            "enabled": false,
+            "timeout_seconds": 2.5,
+            "transport": "page_websocket_probe",
+            "url_patterns": [
+              "voicegenie",
+              "speech",
+              "audio",
+              "tts"
+            ],
+            "extractor": "voicegenie_ogg_pages",
+            "settle_seconds": 0.35
+          },
+          "audio_capture_poll_seconds": 0.25,
+          "audio_capture_silence_seconds": 1.2,
+          "audio_capture_activity_threshold": 0.006,
+          "audio_capture_activity_silence_seconds": 0.65
         },
         "file_paste": {
           "enabled": true,
@@ -241,7 +279,45 @@
           "download_blobs": true,
           "max_size_mb": 100,
           "src_allow_patterns": [],
-          "mode": "all"
+          "mode": "all",
+          "audio_capture_enabled": true,
+          "audio_capture_mute_playback": true,
+          "audio_capture_preload_enabled": true,
+          "audio_capture_reload_before_workflow": false,
+          "audio_capture_preserve_graph": true,
+          "audio_capture_terminal_settle_seconds": 0.35,
+          "audio_trigger_selector": "",
+          "audio_trigger_labels": [
+            "朗读",
+            "语音朗读",
+            "收听",
+            "read aloud",
+            "listen",
+            "tts",
+            "voice"
+          ],
+          "audio_capture_max_wait_seconds": 12,
+          "audio_capture_min_wait_seconds": 2,
+          "audio_capture_hard_max_wait_seconds": 45,
+          "audio_capture_estimated_chars_per_second": 4.8,
+          "audio_capture_wait_padding_seconds": 1.2,
+          "audio_network_capture": {
+            "enabled": false,
+            "timeout_seconds": 2.5,
+            "transport": "page_websocket_probe",
+            "url_patterns": [
+              "voicegenie",
+              "speech",
+              "audio",
+              "tts"
+            ],
+            "extractor": "voicegenie_ogg_pages",
+            "settle_seconds": 0.35
+          },
+          "audio_capture_poll_seconds": 0.25,
+          "audio_capture_silence_seconds": 1.2,
+          "audio_capture_activity_threshold": 0.006,
+          "audio_capture_activity_silence_seconds": 0.65
         },
         "file_paste": {
           "enabled": false,
@@ -323,7 +399,45 @@
           "download_blobs": true,
           "max_size_mb": 100,
           "src_allow_patterns": [],
-          "mode": "all"
+          "mode": "all",
+          "audio_capture_enabled": true,
+          "audio_capture_mute_playback": true,
+          "audio_capture_preload_enabled": true,
+          "audio_capture_reload_before_workflow": false,
+          "audio_capture_preserve_graph": true,
+          "audio_capture_terminal_settle_seconds": 0.35,
+          "audio_trigger_selector": "",
+          "audio_trigger_labels": [
+            "朗读",
+            "语音朗读",
+            "收听",
+            "read aloud",
+            "listen",
+            "tts",
+            "voice"
+          ],
+          "audio_capture_max_wait_seconds": 12,
+          "audio_capture_min_wait_seconds": 2,
+          "audio_capture_hard_max_wait_seconds": 45,
+          "audio_capture_estimated_chars_per_second": 4.8,
+          "audio_capture_wait_padding_seconds": 1.2,
+          "audio_network_capture": {
+            "enabled": false,
+            "timeout_seconds": 2.5,
+            "transport": "page_websocket_probe",
+            "url_patterns": [
+              "voicegenie",
+              "speech",
+              "audio",
+              "tts"
+            ],
+            "extractor": "voicegenie_ogg_pages",
+            "settle_seconds": 0.35
+          },
+          "audio_capture_poll_seconds": 0.25,
+          "audio_capture_silence_seconds": 1.2,
+          "audio_capture_activity_threshold": 0.006,
+          "audio_capture_activity_silence_seconds": 0.65
         },
         "file_paste": {
           "enabled": false,
@@ -343,23 +457,61 @@
           "threshold": 180000
         },
         "image_extraction": {
-          "audio_selector": "audio, audio source",
-          "container_selector": "div[id^=\"image-\"]",
-          "debounce_seconds": 2,
-          "download_blobs": true,
           "enabled": true,
-          "load_timeout_seconds": 8,
-          "max_size_mb": 20,
           "modalities": {
-            "audio": false,
             "image": true,
+            "audio": false,
             "video": false
           },
-          "mode": "all",
           "selector": "img:not([aria-hidden=\"true\"])",
-          "src_allow_patterns": [],
+          "audio_selector": "audio, audio source",
           "video_selector": "video, video source",
-          "wait_for_load": true
+          "container_selector": "div[id^=\"image-\"]",
+          "debounce_seconds": 2.0,
+          "wait_for_load": true,
+          "load_timeout_seconds": 8.0,
+          "download_blobs": true,
+          "max_size_mb": 20,
+          "src_allow_patterns": [],
+          "mode": "all",
+          "audio_capture_enabled": true,
+          "audio_capture_mute_playback": true,
+          "audio_capture_preload_enabled": true,
+          "audio_capture_reload_before_workflow": false,
+          "audio_capture_preserve_graph": true,
+          "audio_capture_terminal_settle_seconds": 0.35,
+          "audio_trigger_selector": "",
+          "audio_trigger_labels": [
+            "朗读",
+            "语音朗读",
+            "收听",
+            "read aloud",
+            "listen",
+            "tts",
+            "voice"
+          ],
+          "audio_capture_max_wait_seconds": 12.0,
+          "audio_capture_min_wait_seconds": 2.0,
+          "audio_capture_hard_max_wait_seconds": 45.0,
+          "audio_capture_estimated_chars_per_second": 4.8,
+          "audio_capture_wait_padding_seconds": 1.2,
+          "audio_network_capture": {
+            "enabled": false,
+            "timeout_seconds": 2.5,
+            "transport": "page_websocket_probe",
+            "url_patterns": [
+              "voicegenie",
+              "speech",
+              "audio",
+              "tts"
+            ],
+            "extractor": "voicegenie_ogg_pages",
+            "settle_seconds": 0.35
+          },
+          "audio_capture_poll_seconds": 0.25,
+          "audio_capture_silence_seconds": 1.2,
+          "audio_capture_activity_threshold": 0.006,
+          "audio_capture_activity_silence_seconds": 0.65
         },
         "selectors": {
           "generating_indicator": null,
@@ -587,7 +739,45 @@
           "download_blobs": true,
           "max_size_mb": 100,
           "src_allow_patterns": [],
-          "mode": "first"
+          "mode": "first",
+          "audio_capture_enabled": true,
+          "audio_capture_mute_playback": true,
+          "audio_capture_preload_enabled": true,
+          "audio_capture_reload_before_workflow": false,
+          "audio_capture_preserve_graph": true,
+          "audio_capture_terminal_settle_seconds": 0.35,
+          "audio_trigger_selector": "",
+          "audio_trigger_labels": [
+            "朗读",
+            "语音朗读",
+            "收听",
+            "read aloud",
+            "listen",
+            "tts",
+            "voice"
+          ],
+          "audio_capture_max_wait_seconds": 12,
+          "audio_capture_min_wait_seconds": 2,
+          "audio_capture_hard_max_wait_seconds": 45,
+          "audio_capture_estimated_chars_per_second": 4.8,
+          "audio_capture_wait_padding_seconds": 1.2,
+          "audio_network_capture": {
+            "enabled": false,
+            "timeout_seconds": 2.5,
+            "transport": "page_websocket_probe",
+            "url_patterns": [
+              "voicegenie",
+              "speech",
+              "audio",
+              "tts"
+            ],
+            "extractor": "voicegenie_ogg_pages",
+            "settle_seconds": 0.35
+          },
+          "audio_capture_poll_seconds": 0.25,
+          "audio_capture_silence_seconds": 1.2,
+          "audio_capture_activity_threshold": 0.006,
+          "audio_capture_activity_silence_seconds": 0.65
         },
         "file_paste": {
           "enabled": false,
@@ -736,7 +926,45 @@
           "download_blobs": true,
           "max_size_mb": 50,
           "src_allow_patterns": [],
-          "mode": "first"
+          "mode": "first",
+          "audio_capture_enabled": true,
+          "audio_capture_mute_playback": true,
+          "audio_capture_preload_enabled": true,
+          "audio_capture_reload_before_workflow": false,
+          "audio_capture_preserve_graph": true,
+          "audio_capture_terminal_settle_seconds": 0.35,
+          "audio_trigger_selector": "",
+          "audio_trigger_labels": [
+            "朗读",
+            "语音朗读",
+            "收听",
+            "read aloud",
+            "listen",
+            "tts",
+            "voice"
+          ],
+          "audio_capture_max_wait_seconds": 12,
+          "audio_capture_min_wait_seconds": 2,
+          "audio_capture_hard_max_wait_seconds": 45,
+          "audio_capture_estimated_chars_per_second": 4.8,
+          "audio_capture_wait_padding_seconds": 1.2,
+          "audio_network_capture": {
+            "enabled": false,
+            "timeout_seconds": 2.5,
+            "transport": "page_websocket_probe",
+            "url_patterns": [
+              "voicegenie",
+              "speech",
+              "audio",
+              "tts"
+            ],
+            "extractor": "voicegenie_ogg_pages",
+            "settle_seconds": 0.35
+          },
+          "audio_capture_poll_seconds": 0.25,
+          "audio_capture_silence_seconds": 1.2,
+          "audio_capture_activity_threshold": 0.006,
+          "audio_capture_activity_silence_seconds": 0.65
         },
         "file_paste": {
           "enabled": false,
@@ -880,7 +1108,45 @@
           "download_blobs": true,
           "max_size_mb": 100,
           "src_allow_patterns": [],
-          "mode": "first"
+          "mode": "first",
+          "audio_capture_enabled": true,
+          "audio_capture_mute_playback": true,
+          "audio_capture_preload_enabled": true,
+          "audio_capture_reload_before_workflow": false,
+          "audio_capture_preserve_graph": true,
+          "audio_capture_terminal_settle_seconds": 0.35,
+          "audio_trigger_selector": "",
+          "audio_trigger_labels": [
+            "朗读",
+            "语音朗读",
+            "收听",
+            "read aloud",
+            "listen",
+            "tts",
+            "voice"
+          ],
+          "audio_capture_max_wait_seconds": 12,
+          "audio_capture_min_wait_seconds": 2,
+          "audio_capture_hard_max_wait_seconds": 45,
+          "audio_capture_estimated_chars_per_second": 4.8,
+          "audio_capture_wait_padding_seconds": 1.2,
+          "audio_network_capture": {
+            "enabled": false,
+            "timeout_seconds": 2.5,
+            "transport": "page_websocket_probe",
+            "url_patterns": [
+              "voicegenie",
+              "speech",
+              "audio",
+              "tts"
+            ],
+            "extractor": "voicegenie_ogg_pages",
+            "settle_seconds": 0.35
+          },
+          "audio_capture_poll_seconds": 0.25,
+          "audio_capture_silence_seconds": 1.2,
+          "audio_capture_activity_threshold": 0.006,
+          "audio_capture_activity_silence_seconds": 0.65
         },
         "file_paste": {
           "enabled": false,
@@ -989,7 +1255,45 @@
           "download_blobs": true,
           "max_size_mb": 10,
           "src_allow_patterns": [],
-          "mode": "all"
+          "mode": "all",
+          "audio_capture_enabled": true,
+          "audio_capture_mute_playback": true,
+          "audio_capture_preload_enabled": true,
+          "audio_capture_reload_before_workflow": false,
+          "audio_capture_preserve_graph": true,
+          "audio_capture_terminal_settle_seconds": 0.35,
+          "audio_trigger_selector": "",
+          "audio_trigger_labels": [
+            "朗读",
+            "语音朗读",
+            "收听",
+            "read aloud",
+            "listen",
+            "tts",
+            "voice"
+          ],
+          "audio_capture_max_wait_seconds": 12,
+          "audio_capture_min_wait_seconds": 2,
+          "audio_capture_hard_max_wait_seconds": 45,
+          "audio_capture_estimated_chars_per_second": 4.8,
+          "audio_capture_wait_padding_seconds": 1.2,
+          "audio_network_capture": {
+            "enabled": false,
+            "timeout_seconds": 2.5,
+            "transport": "page_websocket_probe",
+            "url_patterns": [
+              "voicegenie",
+              "speech",
+              "audio",
+              "tts"
+            ],
+            "extractor": "voicegenie_ogg_pages",
+            "settle_seconds": 0.35
+          },
+          "audio_capture_poll_seconds": 0.25,
+          "audio_capture_silence_seconds": 1.2,
+          "audio_capture_activity_threshold": 0.006,
+          "audio_capture_activity_silence_seconds": 0.65
         },
         "file_paste": {
           "enabled": true,
@@ -1082,7 +1386,45 @@
           "download_blobs": true,
           "max_size_mb": 10,
           "src_allow_patterns": [],
-          "mode": "all"
+          "mode": "all",
+          "audio_capture_enabled": true,
+          "audio_capture_mute_playback": true,
+          "audio_capture_preload_enabled": true,
+          "audio_capture_reload_before_workflow": false,
+          "audio_capture_preserve_graph": true,
+          "audio_capture_terminal_settle_seconds": 0.35,
+          "audio_trigger_selector": "",
+          "audio_trigger_labels": [
+            "朗读",
+            "语音朗读",
+            "收听",
+            "read aloud",
+            "listen",
+            "tts",
+            "voice"
+          ],
+          "audio_capture_max_wait_seconds": 12,
+          "audio_capture_min_wait_seconds": 2,
+          "audio_capture_hard_max_wait_seconds": 45,
+          "audio_capture_estimated_chars_per_second": 4.8,
+          "audio_capture_wait_padding_seconds": 1.2,
+          "audio_network_capture": {
+            "enabled": false,
+            "timeout_seconds": 2.5,
+            "transport": "page_websocket_probe",
+            "url_patterns": [
+              "voicegenie",
+              "speech",
+              "audio",
+              "tts"
+            ],
+            "extractor": "voicegenie_ogg_pages",
+            "settle_seconds": 0.35
+          },
+          "audio_capture_poll_seconds": 0.25,
+          "audio_capture_silence_seconds": 1.2,
+          "audio_capture_activity_threshold": 0.006,
+          "audio_capture_activity_silence_seconds": 0.65
         },
         "file_paste": {
           "enabled": true,
@@ -1090,7 +1432,7 @@
           "hint_text": "完全专注于文件内容"
         }
       },
-      "实验性预设-此预设测试新功能": {
+      "实验性预设-此预设可能有封号风险": {
         "selectors": {
           "input_box": "textarea",
           "send_btn": "div.bf38813a > div > div[role='button']",
@@ -1168,9 +1510,15 @@
             "optional": false,
             "value": {
               "title": "实验性预设说明",
-              "text": "当前预设会保留“新对话 / 切到专家模式”等前置步骤，但真正发送时会优先走页面直发。若检测到图片、文件或直发失败，则会自动回退到原工作流发送方式。",
+              "text": "当前预设会保留“新对话 / 切到专家模式”等前置步骤，并把页面直发显示为独立步骤。若检测到图片、文件或直发失败，则会自动回退到后续原工作流发送方式。",
               "tone": "info"
             }
+          },
+          {
+            "action": "PAGE_FETCH",
+            "target": "",
+            "optional": true,
+            "value": null
           },
           {
             "action": "FILL_INPUT",
@@ -1209,7 +1557,45 @@
           "download_blobs": true,
           "max_size_mb": 10,
           "src_allow_patterns": [],
-          "mode": "all"
+          "mode": "all",
+          "audio_capture_enabled": true,
+          "audio_capture_mute_playback": true,
+          "audio_capture_preload_enabled": true,
+          "audio_capture_reload_before_workflow": false,
+          "audio_capture_preserve_graph": true,
+          "audio_capture_terminal_settle_seconds": 0.35,
+          "audio_trigger_selector": "",
+          "audio_trigger_labels": [
+            "朗读",
+            "语音朗读",
+            "收听",
+            "read aloud",
+            "listen",
+            "tts",
+            "voice"
+          ],
+          "audio_capture_max_wait_seconds": 12,
+          "audio_capture_min_wait_seconds": 2,
+          "audio_capture_hard_max_wait_seconds": 45,
+          "audio_capture_estimated_chars_per_second": 4.8,
+          "audio_capture_wait_padding_seconds": 1.2,
+          "audio_network_capture": {
+            "enabled": false,
+            "timeout_seconds": 2.5,
+            "transport": "page_websocket_probe",
+            "url_patterns": [
+              "voicegenie",
+              "speech",
+              "audio",
+              "tts"
+            ],
+            "extractor": "voicegenie_ogg_pages",
+            "settle_seconds": 0.35
+          },
+          "audio_capture_poll_seconds": 0.25,
+          "audio_capture_silence_seconds": 1.2,
+          "audio_capture_activity_threshold": 0.006,
+          "audio_capture_activity_silence_seconds": 0.65
         },
         "file_paste": {
           "enabled": true,
@@ -1226,17 +1612,17 @@
   },
   "www.doubao.com": {
     "presets": {
-      "主预设": {
+      "文本-图像预设": {
         "selectors": {
           "input_box": "textarea[data-testid=\"chat_input_input\"], textarea[placeholder], textarea",
           "send_btn": "button[data-testid=\"chat_input_send_button\"], button[aria-label*=\"发送\"], button[type=\"submit\"]",
-          "result_container": "[data-testid=\"message_content\"], [data-testid=\"message-content\"]",
+          "result_container": "main [aria-label=\"doc_editor\"], [data-testid=\"message_content\"], [data-testid=\"message-content\"]",
           "new_chat_btn": "[data-testid=\"create_conversation_button\"], [data-testid=\"create-new-chat-button\"], button[aria-label*=\"新对话\"]"
         },
         "workflow": [
           {
-            "action": "CLICK",
-            "target": "new_chat_btn",
+            "action": "KEY_PRESS",
+            "target": "ctrl+k",
             "optional": true,
             "value": null
           },
@@ -1250,12 +1636,6 @@
             "action": "FILL_INPUT",
             "target": "input_box",
             "optional": false,
-            "value": null
-          },
-          {
-            "action": "CLICK",
-            "target": "send_btn",
-            "optional": true,
             "value": null
           },
           {
@@ -1289,7 +1669,147 @@
           "download_blobs": true,
           "max_size_mb": 10,
           "src_allow_patterns": [],
-          "mode": "all"
+          "mode": "all",
+          "audio_capture_enabled": false,
+          "audio_capture_mute_playback": true,
+          "audio_capture_preload_enabled": true,
+          "audio_capture_reload_before_workflow": false,
+          "audio_capture_preserve_graph": true,
+          "audio_capture_terminal_settle_seconds": 0.35,
+          "audio_trigger_selector": "",
+          "audio_trigger_labels": [
+            "朗读",
+            "语音朗读",
+            "收听"
+          ],
+          "audio_capture_max_wait_seconds": 15,
+          "audio_capture_min_wait_seconds": 2,
+          "audio_capture_hard_max_wait_seconds": 45,
+          "audio_capture_estimated_chars_per_second": 4.8,
+          "audio_capture_wait_padding_seconds": 1.2,
+          "audio_network_capture": {
+            "enabled": false,
+            "timeout_seconds": 2.5,
+            "transport": "page_websocket_probe",
+            "url_patterns": [
+              "voicegenie",
+              "speech",
+              "audio",
+              "tts"
+            ],
+            "extractor": "voicegenie_ogg_pages",
+            "settle_seconds": 0.35
+          },
+          "audio_capture_poll_seconds": 0.25,
+          "audio_capture_silence_seconds": 1.2,
+          "audio_capture_activity_threshold": 0.006,
+          "audio_capture_activity_silence_seconds": 0.65
+        },
+        "file_paste": {
+          "enabled": true,
+          "threshold": 50000,
+          "hint_text": "完全专注于文件内容"
+        },
+        "stream_config": {
+          "mode": "network",
+          "hard_timeout": 300,
+          "network": {
+            "listen_pattern": "chat/completion",
+            "parser": "doubao",
+            "silence_threshold": 3,
+            "response_interval": 0.5
+          }
+        }
+      },
+      "朗读": {
+        "selectors": {
+          "input_box": "textarea[data-testid=\"chat_input_input\"], textarea[placeholder], textarea",
+          "send_btn": "button[data-testid=\"chat_input_send_button\"], button[aria-label*=\"发送\"], button[type=\"submit\"]",
+          "result_container": "main [aria-label=\"doc_editor\"], [data-testid=\"message_content\"], [data-testid=\"message-content\"]",
+          "new_chat_btn": "[data-testid=\"create_conversation_button\"], [data-testid=\"create-new-chat-button\"], button[aria-label*=\"新对话\"]"
+        },
+        "workflow": [
+          {
+            "action": "KEY_PRESS",
+            "target": "ctrl+k",
+            "optional": false,
+            "value": null
+          },
+          {
+            "action": "WAIT",
+            "target": "",
+            "optional": false,
+            "value": "0.5"
+          },
+          {
+            "action": "FILL_INPUT",
+            "target": "input_box",
+            "optional": false,
+            "value": null
+          },
+          {
+            "action": "KEY_PRESS",
+            "target": "Enter",
+            "optional": true,
+            "value": null
+          },
+          {
+            "action": "STREAM_WAIT",
+            "target": "result_container",
+            "optional": false,
+            "value": null
+          }
+        ],
+        "stealth": true,
+        "image_extraction": {
+          "enabled": true,
+          "modalities": {
+            "image": false,
+            "audio": true,
+            "video": false
+          },
+          "selector": "img",
+          "audio_selector": "audio, audio source",
+          "video_selector": "video, video source",
+          "container_selector": null,
+          "debounce_seconds": 0,
+          "wait_for_load": true,
+          "load_timeout_seconds": 10,
+          "download_blobs": true,
+          "max_size_mb": 10,
+          "src_allow_patterns": [],
+          "mode": "all",
+          "audio_capture_enabled": true,
+          "audio_capture_mute_playback": true,
+          "audio_capture_preload_enabled": true,
+          "audio_capture_reload_before_workflow": true,
+          "audio_capture_preserve_graph": true,
+          "audio_trigger_selector": "",
+          "audio_trigger_labels": [
+            "朗读",
+            "语音朗读",
+            "收听"
+          ],
+          "audio_capture_max_wait_seconds": 10,
+          "audio_capture_min_wait_seconds": 2,
+          "audio_capture_hard_max_wait_seconds": 45,
+          "audio_capture_estimated_chars_per_second": 4.8,
+          "audio_capture_wait_padding_seconds": 1.2,
+          "audio_network_capture": {
+            "enabled": true,
+            "timeout_seconds": 2.5,
+            "transport": "page_websocket_probe",
+            "url_patterns": [
+              "voicegenie"
+            ],
+            "extractor": "voicegenie_ogg_pages",
+            "settle_seconds": 0.35
+          },
+          "audio_capture_poll_seconds": 0.25,
+          "audio_capture_silence_seconds": 0.8,
+          "audio_capture_activity_threshold": 0.006,
+          "audio_capture_activity_silence_seconds": 0.65,
+          "audio_capture_terminal_settle_seconds": 0.45
         },
         "file_paste": {
           "enabled": true,
@@ -1308,7 +1828,7 @@
         }
       }
     },
-    "default_preset": "主预设"
+    "default_preset": "朗读"
   },
   "claude.ai": {
     "presets": {
@@ -1381,7 +1901,45 @@
           "download_blobs": true,
           "max_size_mb": 10,
           "src_allow_patterns": [],
-          "mode": "all"
+          "mode": "all",
+          "audio_capture_enabled": true,
+          "audio_capture_mute_playback": true,
+          "audio_capture_preload_enabled": true,
+          "audio_capture_reload_before_workflow": false,
+          "audio_capture_preserve_graph": true,
+          "audio_capture_terminal_settle_seconds": 0.35,
+          "audio_trigger_selector": "",
+          "audio_trigger_labels": [
+            "朗读",
+            "语音朗读",
+            "收听",
+            "read aloud",
+            "listen",
+            "tts",
+            "voice"
+          ],
+          "audio_capture_max_wait_seconds": 12,
+          "audio_capture_min_wait_seconds": 2,
+          "audio_capture_hard_max_wait_seconds": 45,
+          "audio_capture_estimated_chars_per_second": 4.8,
+          "audio_capture_wait_padding_seconds": 1.2,
+          "audio_network_capture": {
+            "enabled": false,
+            "timeout_seconds": 2.5,
+            "transport": "page_websocket_probe",
+            "url_patterns": [
+              "voicegenie",
+              "speech",
+              "audio",
+              "tts"
+            ],
+            "extractor": "voicegenie_ogg_pages",
+            "settle_seconds": 0.35
+          },
+          "audio_capture_poll_seconds": 0.25,
+          "audio_capture_silence_seconds": 1.2,
+          "audio_capture_activity_threshold": 0.006,
+          "audio_capture_activity_silence_seconds": 0.65
         },
         "file_paste": {
           "enabled": false,
@@ -1477,7 +2035,45 @@
           "download_blobs": true,
           "max_size_mb": 10,
           "src_allow_patterns": [],
-          "mode": "all"
+          "mode": "all",
+          "audio_capture_enabled": true,
+          "audio_capture_mute_playback": true,
+          "audio_capture_preload_enabled": true,
+          "audio_capture_reload_before_workflow": false,
+          "audio_capture_preserve_graph": true,
+          "audio_capture_terminal_settle_seconds": 0.35,
+          "audio_trigger_selector": "",
+          "audio_trigger_labels": [
+            "朗读",
+            "语音朗读",
+            "收听",
+            "read aloud",
+            "listen",
+            "tts",
+            "voice"
+          ],
+          "audio_capture_max_wait_seconds": 12,
+          "audio_capture_min_wait_seconds": 2,
+          "audio_capture_hard_max_wait_seconds": 45,
+          "audio_capture_estimated_chars_per_second": 4.8,
+          "audio_capture_wait_padding_seconds": 1.2,
+          "audio_network_capture": {
+            "enabled": false,
+            "timeout_seconds": 2.5,
+            "transport": "page_websocket_probe",
+            "url_patterns": [
+              "voicegenie",
+              "speech",
+              "audio",
+              "tts"
+            ],
+            "extractor": "voicegenie_ogg_pages",
+            "settle_seconds": 0.35
+          },
+          "audio_capture_poll_seconds": 0.25,
+          "audio_capture_silence_seconds": 1.2,
+          "audio_capture_activity_threshold": 0.006,
+          "audio_capture_activity_silence_seconds": 0.65
         },
         "file_paste": {
           "enabled": false,
@@ -1545,7 +2141,45 @@
           "download_blobs": true,
           "max_size_mb": 10,
           "src_allow_patterns": [],
-          "mode": "all"
+          "mode": "all",
+          "audio_capture_enabled": true,
+          "audio_capture_mute_playback": true,
+          "audio_capture_preload_enabled": true,
+          "audio_capture_reload_before_workflow": false,
+          "audio_capture_preserve_graph": true,
+          "audio_capture_terminal_settle_seconds": 0.35,
+          "audio_trigger_selector": "",
+          "audio_trigger_labels": [
+            "朗读",
+            "语音朗读",
+            "收听",
+            "read aloud",
+            "listen",
+            "tts",
+            "voice"
+          ],
+          "audio_capture_max_wait_seconds": 12,
+          "audio_capture_min_wait_seconds": 2,
+          "audio_capture_hard_max_wait_seconds": 45,
+          "audio_capture_estimated_chars_per_second": 4.8,
+          "audio_capture_wait_padding_seconds": 1.2,
+          "audio_network_capture": {
+            "enabled": false,
+            "timeout_seconds": 2.5,
+            "transport": "page_websocket_probe",
+            "url_patterns": [
+              "voicegenie",
+              "speech",
+              "audio",
+              "tts"
+            ],
+            "extractor": "voicegenie_ogg_pages",
+            "settle_seconds": 0.35
+          },
+          "audio_capture_poll_seconds": 0.25,
+          "audio_capture_silence_seconds": 1.2,
+          "audio_capture_activity_threshold": 0.006,
+          "audio_capture_activity_silence_seconds": 0.65
         },
         "file_paste": {
           "enabled": false,
@@ -1604,7 +2238,45 @@
           "download_blobs": true,
           "max_size_mb": 10,
           "src_allow_patterns": [],
-          "mode": "all"
+          "mode": "all",
+          "audio_capture_enabled": true,
+          "audio_capture_mute_playback": true,
+          "audio_capture_preload_enabled": true,
+          "audio_capture_reload_before_workflow": false,
+          "audio_capture_preserve_graph": true,
+          "audio_capture_terminal_settle_seconds": 0.35,
+          "audio_trigger_selector": "",
+          "audio_trigger_labels": [
+            "朗读",
+            "语音朗读",
+            "收听",
+            "read aloud",
+            "listen",
+            "tts",
+            "voice"
+          ],
+          "audio_capture_max_wait_seconds": 12,
+          "audio_capture_min_wait_seconds": 2,
+          "audio_capture_hard_max_wait_seconds": 45,
+          "audio_capture_estimated_chars_per_second": 4.8,
+          "audio_capture_wait_padding_seconds": 1.2,
+          "audio_network_capture": {
+            "enabled": false,
+            "timeout_seconds": 2.5,
+            "transport": "page_websocket_probe",
+            "url_patterns": [
+              "voicegenie",
+              "speech",
+              "audio",
+              "tts"
+            ],
+            "extractor": "voicegenie_ogg_pages",
+            "settle_seconds": 0.35
+          },
+          "audio_capture_poll_seconds": 0.25,
+          "audio_capture_silence_seconds": 1.2,
+          "audio_capture_activity_threshold": 0.006,
+          "audio_capture_activity_silence_seconds": 0.65
         },
         "file_paste": {
           "enabled": false,
@@ -1695,7 +2367,45 @@
           "download_blobs": true,
           "max_size_mb": 10,
           "src_allow_patterns": [],
-          "mode": "all"
+          "mode": "all",
+          "audio_capture_enabled": true,
+          "audio_capture_mute_playback": true,
+          "audio_capture_preload_enabled": true,
+          "audio_capture_reload_before_workflow": false,
+          "audio_capture_preserve_graph": true,
+          "audio_capture_terminal_settle_seconds": 0.35,
+          "audio_trigger_selector": "",
+          "audio_trigger_labels": [
+            "朗读",
+            "语音朗读",
+            "收听",
+            "read aloud",
+            "listen",
+            "tts",
+            "voice"
+          ],
+          "audio_capture_max_wait_seconds": 12,
+          "audio_capture_min_wait_seconds": 2,
+          "audio_capture_hard_max_wait_seconds": 45,
+          "audio_capture_estimated_chars_per_second": 4.8,
+          "audio_capture_wait_padding_seconds": 1.2,
+          "audio_network_capture": {
+            "enabled": false,
+            "timeout_seconds": 2.5,
+            "transport": "page_websocket_probe",
+            "url_patterns": [
+              "voicegenie",
+              "speech",
+              "audio",
+              "tts"
+            ],
+            "extractor": "voicegenie_ogg_pages",
+            "settle_seconds": 0.35
+          },
+          "audio_capture_poll_seconds": 0.25,
+          "audio_capture_silence_seconds": 1.2,
+          "audio_capture_activity_threshold": 0.006,
+          "audio_capture_activity_silence_seconds": 0.65
         },
         "file_paste": {
           "enabled": false,
@@ -1828,7 +2538,45 @@
           "download_blobs": true,
           "max_size_mb": 10,
           "src_allow_patterns": [],
-          "mode": "all"
+          "mode": "all",
+          "audio_capture_enabled": true,
+          "audio_capture_mute_playback": true,
+          "audio_capture_preload_enabled": true,
+          "audio_capture_reload_before_workflow": false,
+          "audio_capture_preserve_graph": true,
+          "audio_capture_terminal_settle_seconds": 0.35,
+          "audio_trigger_selector": "",
+          "audio_trigger_labels": [
+            "朗读",
+            "语音朗读",
+            "收听",
+            "read aloud",
+            "listen",
+            "tts",
+            "voice"
+          ],
+          "audio_capture_max_wait_seconds": 12,
+          "audio_capture_min_wait_seconds": 2,
+          "audio_capture_hard_max_wait_seconds": 45,
+          "audio_capture_estimated_chars_per_second": 4.8,
+          "audio_capture_wait_padding_seconds": 1.2,
+          "audio_network_capture": {
+            "enabled": false,
+            "timeout_seconds": 2.5,
+            "transport": "page_websocket_probe",
+            "url_patterns": [
+              "voicegenie",
+              "speech",
+              "audio",
+              "tts"
+            ],
+            "extractor": "voicegenie_ogg_pages",
+            "settle_seconds": 0.35
+          },
+          "audio_capture_poll_seconds": 0.25,
+          "audio_capture_silence_seconds": 1.2,
+          "audio_capture_activity_threshold": 0.006,
+          "audio_capture_activity_silence_seconds": 0.65
         },
         "file_paste": {
           "enabled": true,
@@ -1968,7 +2716,45 @@
           "download_blobs": true,
           "max_size_mb": 10,
           "src_allow_patterns": [],
-          "mode": "all"
+          "mode": "all",
+          "audio_capture_enabled": true,
+          "audio_capture_mute_playback": true,
+          "audio_capture_preload_enabled": true,
+          "audio_capture_reload_before_workflow": false,
+          "audio_capture_preserve_graph": true,
+          "audio_capture_terminal_settle_seconds": 0.35,
+          "audio_trigger_selector": "",
+          "audio_trigger_labels": [
+            "朗读",
+            "语音朗读",
+            "收听",
+            "read aloud",
+            "listen",
+            "tts",
+            "voice"
+          ],
+          "audio_capture_max_wait_seconds": 12,
+          "audio_capture_min_wait_seconds": 2,
+          "audio_capture_hard_max_wait_seconds": 45,
+          "audio_capture_estimated_chars_per_second": 4.8,
+          "audio_capture_wait_padding_seconds": 1.2,
+          "audio_network_capture": {
+            "enabled": false,
+            "timeout_seconds": 2.5,
+            "transport": "page_websocket_probe",
+            "url_patterns": [
+              "voicegenie",
+              "speech",
+              "audio",
+              "tts"
+            ],
+            "extractor": "voicegenie_ogg_pages",
+            "settle_seconds": 0.35
+          },
+          "audio_capture_poll_seconds": 0.25,
+          "audio_capture_silence_seconds": 1.2,
+          "audio_capture_activity_threshold": 0.006,
+          "audio_capture_activity_silence_seconds": 0.65
         },
         "file_paste": {
           "enabled": true,
@@ -2056,7 +2842,45 @@
           "download_blobs": true,
           "max_size_mb": 10,
           "src_allow_patterns": [],
-          "mode": "all"
+          "mode": "all",
+          "audio_capture_enabled": true,
+          "audio_capture_mute_playback": true,
+          "audio_capture_preload_enabled": true,
+          "audio_capture_reload_before_workflow": false,
+          "audio_capture_preserve_graph": true,
+          "audio_capture_terminal_settle_seconds": 0.35,
+          "audio_trigger_selector": "",
+          "audio_trigger_labels": [
+            "朗读",
+            "语音朗读",
+            "收听",
+            "read aloud",
+            "listen",
+            "tts",
+            "voice"
+          ],
+          "audio_capture_max_wait_seconds": 12,
+          "audio_capture_min_wait_seconds": 2,
+          "audio_capture_hard_max_wait_seconds": 45,
+          "audio_capture_estimated_chars_per_second": 4.8,
+          "audio_capture_wait_padding_seconds": 1.2,
+          "audio_network_capture": {
+            "enabled": false,
+            "timeout_seconds": 2.5,
+            "transport": "page_websocket_probe",
+            "url_patterns": [
+              "voicegenie",
+              "speech",
+              "audio",
+              "tts"
+            ],
+            "extractor": "voicegenie_ogg_pages",
+            "settle_seconds": 0.35
+          },
+          "audio_capture_poll_seconds": 0.25,
+          "audio_capture_silence_seconds": 1.2,
+          "audio_capture_activity_threshold": 0.006,
+          "audio_capture_activity_silence_seconds": 0.65
         },
         "file_paste": {
           "enabled": false,

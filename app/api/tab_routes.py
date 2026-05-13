@@ -121,6 +121,57 @@ def _extract_chunk_media_items(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     return media_items
 
 
+def _iter_sse_payloads(chunk: Any) -> List[Dict[str, Any]]:
+    if not isinstance(chunk, str):
+        return []
+
+    payloads: List[Dict[str, Any]] = []
+    for frame in chunk.split("\n\n"):
+        frame = frame.strip()
+        if not frame.startswith("data: "):
+            continue
+        data_str = frame[6:].strip()
+        if not data_str or data_str == "[DONE]":
+            continue
+        try:
+            data = json.loads(data_str)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict):
+            payloads.append(data)
+    return payloads
+
+
+def _extract_sse_chunk_media_items(chunk: Any) -> List[Dict[str, Any]]:
+    media_items: List[Dict[str, Any]] = []
+    for payload in _iter_sse_payloads(chunk):
+        media_items.extend(_extract_chunk_media_items(payload))
+    return media_items
+
+
+def _has_audio_media(media_items: List[Dict[str, Any]]) -> bool:
+    return any(
+        str(item.get("media_type") or "").strip().lower() == "audio"
+        for item in media_items or []
+        if isinstance(item, dict)
+    )
+
+
+def _should_fast_return_on_audio_media(body: "ChatRequest") -> bool:
+    text = " ".join(
+        str(value or "").strip().lower()
+        for value in (
+            getattr(body, "preset_name", None),
+            getattr(body, "model", None),
+        )
+        if value
+    )
+    if not text:
+        return False
+    markers = ("朗读", "语音朗读", "read aloud", "text-to-speech", "tts", "voice")
+    return any(marker in text for marker in markers)
+
+
 def _dedupe_media_items(media_items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     deduped: List[Dict[str, Any]] = []
     seen = set()
@@ -624,12 +675,20 @@ async def chat_with_tab(
     resolved_preset_name = str(preset_name or body.preset_name or "").strip() or None
     if resolved_preset_name != body.preset_name:
         body = body.model_copy(update={"preset_name": resolved_preset_name})
-    
+
+    browser = get_browser(auto_connect=False)
+    tab_info = _get_tab_info_by_index(browser, tab_index)
     ctx = request_manager.create_request()
+    request_manager.record_request_input(
+        ctx,
+        body.model_dump(),
+        endpoint=f"/tab/{tab_index}/v1/chat/completions",
+        route_domain=str((tab_info or {}).get("current_domain") or (tab_info or {}).get("route_domain") or ""),
+        tab_index=tab_index,
+        preset_name=resolved_preset_name,
+    )
     with logger.context(ctx.request_id):
         logger.info(f"开始 (标签页 #{tab_index}, preset={resolved_preset_name or '<follow-tab/default>'})")
-        browser = get_browser(auto_connect=False)
-        tab_info = _get_tab_info_by_index(browser, tab_index)
         resolved_headers = _build_tab_resolution_headers(
             tab_info,
             selector="fixed",
@@ -687,6 +746,14 @@ async def chat_with_route_domain(
         raise HTTPException(status_code=500, detail="resolved_tab_index_invalid")
 
     ctx = request_manager.create_request()
+    request_manager.record_request_input(
+        ctx,
+        body.model_dump(),
+        endpoint=f"/url/{route_key}/v1/chat/completions",
+        route_domain=str(tab_info.get("current_domain") or tab_info.get("route_domain") or route_key),
+        tab_index=resolved_tab_index,
+        preset_name=resolved_preset_name,
+    )
     with logger.context(ctx.request_id):
         logger.info(
             f"开始 (域名路由 {route_key} -> 标签页 #{resolved_tab_index}, "
@@ -738,6 +805,8 @@ async def _stream_with_tab_index(
     disconnect_task = None
     worker_thread = None
     chunk_queue = None
+    fast_return_on_audio_media = _should_fast_return_on_audio_media(body)
+    fast_returned_on_audio = False
 
     try:
         disconnect_task = asyncio.create_task(
@@ -809,16 +878,25 @@ async def _stream_with_tab_index(
                 break
 
             if isinstance(chunk, tuple) and chunk[0] == "ERROR":
+                request_manager.capture_error(ctx, chunk[1], code="worker_error")
                 ctx.mark_failed(chunk[1])
                 yield _pack_error(f"执行错误: {chunk[1]}", "internal_error")
                 break
 
+            request_manager.capture_response_chunk(ctx, chunk)
             yield chunk
             last_sse_emit_at = time.monotonic()
             error_message = _extract_stream_error_message(chunk)
             if error_message:
                 logger.warning(f"流式响应返回错误事件(tab={tab_index}): {error_message}")
+                request_manager.capture_error(ctx, error_message, code="stream_error")
                 ctx.mark_failed(error_message)
+                break
+            if fast_return_on_audio_media and _has_audio_media(_extract_sse_chunk_media_items(chunk)):
+                fast_returned_on_audio = True
+                ctx.mark_completed()
+                logger.info(f"流式朗读响应已取得音频，提前结束(tab={tab_index})")
+                yield SSEFormatter.pack_finish(model=body.model)
                 break
             await asyncio.sleep(0)
 
@@ -831,13 +909,18 @@ async def _stream_with_tab_index(
 
     except Exception as e:
         logger.error(f"异常: {e}")
+        request_manager.capture_error(ctx, e, code="internal_error")
         ctx.mark_failed(str(e))
         yield _pack_error(f"执行错误: {str(e)}", "internal_error")
 
     finally:
         if worker_thread and worker_thread.is_alive():
-            ctx.request_cancel("cleanup")
-            worker_thread.join(timeout=2.0)
+            if fast_returned_on_audio:
+                ctx.request_cancel("audio_media_fast_return")
+                worker_thread.join(timeout=0.2)
+            elif not ctx.is_terminal():
+                ctx.request_cancel("cleanup")
+                worker_thread.join(timeout=2.0)
 
         if chunk_queue is not None:
             try:
@@ -866,24 +949,22 @@ async def _non_stream_with_tab_index(
     collected_content = []
     collected_media = []
     error_data = None
+    fast_return_on_audio_media = _should_fast_return_on_audio_media(body)
 
     async for chunk in _stream_with_tab_index(request, body, ctx, tab_index):
         if isinstance(chunk, str):
             if chunk.startswith("data: [DONE]"):
                 continue
 
-            if chunk.startswith("data: "):
+            for data in _iter_sse_payloads(chunk):
                 try:
-                    data_str = chunk[6:].strip()
-                    if not data_str:
-                        continue
-                    data = json.loads(data_str)
 
                     if "error" in data:
                         error_data = data
                         break
 
-                    collected_media.extend(_extract_chunk_media_items(data))
+                    media_items = _extract_chunk_media_items(data)
+                    collected_media.extend(media_items)
 
                     if "choices" in data and data["choices"]:
                         delta = data["choices"][0].get("delta", {})
@@ -891,8 +972,13 @@ async def _non_stream_with_tab_index(
                         if content:
                             collected_content.append(content)
 
+                    if fast_return_on_audio_media and _has_audio_media(collected_media):
+                        ctx.mark_completed()
+                        break
                 except json.JSONDecodeError:
                     continue
+            if error_data or (fast_return_on_audio_media and _has_audio_media(collected_media)):
+                break
 
     if error_data:
         return JSONResponse(content=error_data, status_code=500)
@@ -903,6 +989,7 @@ async def _non_stream_with_tab_index(
         model=body.model,
         media=_dedupe_media_items(collected_media),
     )
+    request_manager.capture_response_payload(ctx, response)
 
     return JSONResponse(content=response)
 
@@ -917,6 +1004,8 @@ async def _stream_with_route_domain(
     disconnect_task = None
     worker_thread = None
     chunk_queue = None
+    fast_return_on_audio_media = _should_fast_return_on_audio_media(body)
+    fast_returned_on_audio = False
 
     try:
         disconnect_task = asyncio.create_task(
@@ -987,16 +1076,25 @@ async def _stream_with_route_domain(
                 break
 
             if isinstance(chunk, tuple) and chunk[0] == "ERROR":
+                request_manager.capture_error(ctx, chunk[1], code="worker_error")
                 ctx.mark_failed(chunk[1])
                 yield _pack_error(f"执行错误: {chunk[1]}", "internal_error")
                 break
 
+            request_manager.capture_response_chunk(ctx, chunk)
             yield chunk
             last_sse_emit_at = time.monotonic()
             error_message = _extract_stream_error_message(chunk)
             if error_message:
                 logger.warning(f"流式响应返回错误事件(route_domain={route_domain}): {error_message}")
+                request_manager.capture_error(ctx, error_message, code="stream_error")
                 ctx.mark_failed(error_message)
+                break
+            if fast_return_on_audio_media and _has_audio_media(_extract_sse_chunk_media_items(chunk)):
+                fast_returned_on_audio = True
+                ctx.mark_completed()
+                logger.info(f"流式朗读响应已取得音频，提前结束(route_domain={route_domain})")
+                yield SSEFormatter.pack_finish(model=body.model)
                 break
             await asyncio.sleep(0)
 
@@ -1009,13 +1107,18 @@ async def _stream_with_route_domain(
 
     except Exception as e:
         logger.error(f"异常: {e}")
+        request_manager.capture_error(ctx, e, code="internal_error")
         ctx.mark_failed(str(e))
         yield _pack_error(f"执行错误: {str(e)}", "internal_error")
 
     finally:
         if worker_thread and worker_thread.is_alive():
-            ctx.request_cancel("cleanup")
-            worker_thread.join(timeout=2.0)
+            if fast_returned_on_audio:
+                ctx.request_cancel("audio_media_fast_return")
+                worker_thread.join(timeout=0.2)
+            elif not ctx.is_terminal():
+                ctx.request_cancel("cleanup")
+                worker_thread.join(timeout=2.0)
 
         if chunk_queue is not None:
             try:
@@ -1044,24 +1147,22 @@ async def _non_stream_with_route_domain(
     collected_content = []
     collected_media = []
     error_data = None
+    fast_return_on_audio_media = _should_fast_return_on_audio_media(body)
 
     async for chunk in _stream_with_route_domain(request, body, ctx, route_domain):
         if isinstance(chunk, str):
             if chunk.startswith("data: [DONE]"):
                 continue
 
-            if chunk.startswith("data: "):
+            for data in _iter_sse_payloads(chunk):
                 try:
-                    data_str = chunk[6:].strip()
-                    if not data_str:
-                        continue
-                    data = json.loads(data_str)
 
                     if "error" in data:
                         error_data = data
                         break
 
-                    collected_media.extend(_extract_chunk_media_items(data))
+                    media_items = _extract_chunk_media_items(data)
+                    collected_media.extend(media_items)
 
                     if "choices" in data and data["choices"]:
                         delta = data["choices"][0].get("delta", {})
@@ -1069,8 +1170,13 @@ async def _non_stream_with_route_domain(
                         if content:
                             collected_content.append(content)
 
+                    if fast_return_on_audio_media and _has_audio_media(collected_media):
+                        ctx.mark_completed()
+                        break
                 except json.JSONDecodeError:
                     continue
+            if error_data or (fast_return_on_audio_media and _has_audio_media(collected_media)):
+                break
 
     if error_data:
         return JSONResponse(content=error_data, status_code=500)
@@ -1081,6 +1187,7 @@ async def _non_stream_with_route_domain(
         model=body.model,
         media=_dedupe_media_items(collected_media),
     )
+    request_manager.capture_response_payload(ctx, response)
 
     return JSONResponse(content=response)
 
@@ -1271,6 +1378,7 @@ async def _complete_tool_calling_with_tab_index(
             ctx.request_id,
             ctx.should_stop,
         )
+        request_manager.capture_response_payload(ctx, response)
 
         if not ctx.should_stop() and ctx.status == RequestStatus.RUNNING:
             ctx.mark_completed()
@@ -1282,6 +1390,7 @@ async def _complete_tool_calling_with_tab_index(
         raise
     except Exception as e:
         logger.error(f"tool_calling_failed(tab={tab_index}): {e}")
+        request_manager.capture_error(ctx, e, code="tool_calling_failed")
         ctx.mark_failed(str(e))
         raise
     finally:
@@ -1316,6 +1425,7 @@ async def _complete_tool_calling_with_route_domain(
             ctx.request_id,
             ctx.should_stop,
         )
+        request_manager.capture_response_payload(ctx, response)
 
         if not ctx.should_stop() and ctx.status == RequestStatus.RUNNING:
             ctx.mark_completed()
@@ -1327,6 +1437,7 @@ async def _complete_tool_calling_with_route_domain(
         raise
     except Exception as e:
         logger.error(f"tool_calling_failed(route_domain={route_domain}): {e}")
+        request_manager.capture_error(ctx, e, code="tool_calling_failed")
         ctx.mark_failed(str(e))
         raise
     finally:
@@ -1349,6 +1460,7 @@ async def _non_stream_tool_calling_with_tab_index(
         response = await _complete_tool_calling_with_tab_index(request, body, ctx, tab_index)
         return JSONResponse(content=response)
     except Exception as e:
+        request_manager.capture_error(ctx, e, code="tool_calling_failed")
         return JSONResponse(
             content={
                 "error": {
@@ -1371,6 +1483,7 @@ async def _non_stream_tool_calling_with_route_domain(
         response = await _complete_tool_calling_with_route_domain(request, body, ctx, route_domain)
         return JSONResponse(content=response)
     except Exception as e:
+        request_manager.capture_error(ctx, e, code="tool_calling_failed")
         return JSONResponse(
             content={
                 "error": {

@@ -90,6 +90,7 @@ class NetworkMonitor:
     DEFAULT_RESPONSE_INTERVAL = 0.5        # 响应轮询间隔
     DEFAULT_SILENCE_THRESHOLD = 3.0        # 静默超时（无新数据）
     MAX_LISTEN_RESTARTS = 3                # 监听状态异常后的最大重建次数
+    CANCEL_CHECK_SLICE = 1.0              # 长等待期间的取消检查切片（秒）
     
     def __init__(self, tab, formatter: SSEFormatter,
                  parser: ResponseParser,
@@ -322,6 +323,26 @@ class NetworkMonitor:
             logger.error(f"[NetworkMonitor] 启动监听失败 ({reason}): {e}")
             raise NetworkMonitorError(f"启动监听失败: {e}")
 
+    def _wait_for_response(self, timeout: float) -> Any:
+        wait_budget = max(0.01, float(timeout or 0.01))
+        remaining = wait_budget
+
+        while remaining > 0:
+            if self._should_stop():
+                return False
+
+            step_timeout = min(remaining, self.CANCEL_CHECK_SLICE)
+            if not self._listen_is_active():
+                self._ensure_listening("wait_inactive")
+
+            response = self.tab.listen.wait(timeout=step_timeout)
+            if response not in (None, False):
+                return response
+
+            remaining -= step_timeout
+
+        return False
+
     def _extract_event(self, response: Any) -> Dict[str, Any]:
         req = getattr(response, "request", None)
         resp = getattr(response, "response", None)
@@ -467,6 +488,8 @@ class NetworkMonitor:
 
     @staticmethod
     def _normalize_raw_body(raw_body: Any) -> str:
+        if raw_body is None:
+            return ""
         if isinstance(raw_body, str):
             return raw_body
         if isinstance(raw_body, (bytes, bytearray)):
@@ -537,10 +560,12 @@ class NetworkMonitor:
 
     def _extract_content_type(self, response: Any) -> str:
         resp = getattr(response, "response", None)
+        resp_payload = getattr(resp, "_response", None)
+        resp_headers = resp_payload.get("headers") if isinstance(resp_payload, dict) else None
         candidates = (
-            self._nested_get(resp, "headers", "content-type"),
-            self._nested_get(resp, "headers", "Content-Type"),
-            self._nested_get(resp, "headers", "contentType"),
+            self._nested_get(resp_headers, "content-type"),
+            self._nested_get(resp_headers, "Content-Type"),
+            self._nested_get(resp_headers, "contentType"),
             getattr(resp, "content_type", None),
             getattr(resp, "contentType", None),
             self._nested_get(response, "headers", "content-type"),
@@ -853,9 +878,7 @@ class NetworkMonitor:
                 if self._prefetched_responses:
                     response = self._prefetched_responses.pop(0)
                 else:
-                    if not self._listen_is_active():
-                        self._ensure_listening("wait_inactive")
-                    response = self.tab.listen.wait(timeout=timeout)
+                    response = self._wait_for_response(timeout)
             except Exception as e:
                 err_text = str(e)
                 if self._is_restartable_listen_error(err_text):
@@ -936,13 +959,20 @@ class NetworkMonitor:
             last_activity_time = time.time()
 
             # 检查响应对象结构
-            if not hasattr(response, 'response'):
+            response_obj = getattr(response, "response", None)
+            if response_obj is None:
                 logger.debug(f"[NetworkMonitor] 响应对象结构异常: {type(response).__name__}")
                 continue
 
             # 读取响应体，流式协议优先使用 _stream.fullText
             raw_body, raw_body_source = self._extract_raw_body(response)
             raw_body = self._normalize_raw_body(raw_body)
+            if getattr(response_obj, "_response", None) is None and not raw_body:
+                logger.warning(
+                    "[NetworkMonitor] 目标流响应缺少响应元数据和响应体，回退到 DOM 监听 "
+                    f"(status={event.get('status')}, url={event.get('url', '')[:120]})"
+                )
+                raise NetworkMonitorError("incomplete_target_response")
             if self.parser.get_id() == "doubao" and raw_body_source == "body":
                 if self._looks_like_sse_payload(raw_body):
                     logger.debug(

@@ -40,6 +40,23 @@ window.ImageConfigPanel = {
                 ? this.imageConfig.src_allow_patterns
                 : [];
             return patterns.join('\n');
+        },
+        audioNetworkCapture() {
+            return {
+                enabled: false,
+                timeout_seconds: 2.5,
+                transport: 'page_websocket_probe',
+                url_patterns: ['voicegenie', 'speech', 'audio', 'tts'],
+                extractor: 'voicegenie_ogg_pages',
+                settle_seconds: 0.35,
+                ...((this.imageConfig && this.imageConfig.audio_network_capture) || {})
+            };
+        },
+        audioNetworkUrlPatternsText() {
+            const patterns = Array.isArray(this.audioNetworkCapture.url_patterns)
+                ? this.audioNetworkCapture.url_patterns
+                : [];
+            return patterns.join('\n');
         }
     },
     watch: {
@@ -89,6 +106,22 @@ window.ImageConfigPanel = {
                 .map(line => line.trim())
                 .filter(Boolean);
             this.updateField('src_allow_patterns', patterns);
+        },
+
+        updateAudioNetworkCapture(patch = {}) {
+            const nextConfig = {
+                ...this.audioNetworkCapture,
+                ...(patch || {})
+            };
+            this.updateField('audio_network_capture', nextConfig);
+        },
+
+        updateAudioNetworkUrlPatterns(text) {
+            const patterns = String(text || '')
+                .split(/\r?\n/)
+                .map(line => line.trim())
+                .filter(Boolean);
+            this.updateAudioNetworkCapture({ url_patterns: patterns });
         },
 
         toggleModality(type) {
@@ -378,6 +411,76 @@ window.ImageConfigPanel = {
                                 <input type="checkbox" :checked="imageConfig.download_blobs" @change="updateField('download_blobs', $event.target.checked)" class="sr-only peer">
                                 <div class="toggle-bg"></div>
                             </label>
+                        </div>
+                    </div>
+                </div>
+
+                <div v-if="modalities.audio" class="border-t dark:border-gray-700 pt-4">
+                    <div class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">网络音频捕获</div>
+
+                    <div class="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg">
+                        <div>
+                            <div class="text-sm font-medium text-gray-700 dark:text-gray-300">启用网络音频捕获</div>
+                            <div class="text-xs text-gray-500 dark:text-gray-400">优先尝试从页面内 WebSocket / 网络流直接提取音频，失败后再回退到页面录音。</div>
+                        </div>
+                        <label class="toggle-label scale-90">
+                            <input type="checkbox" :checked="audioNetworkCapture.enabled" @change="updateAudioNetworkCapture({ enabled: $event.target.checked })" class="sr-only peer">
+                            <div class="toggle-bg"></div>
+                        </label>
+                    </div>
+
+                    <div :class="['mt-4 space-y-4', audioNetworkCapture.enabled ? '' : 'opacity-50']">
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">捕获超时 (秒)</label>
+                                <input type="number"
+                                       :value="audioNetworkCapture.timeout_seconds"
+                                       @input="updateAudioNetworkCapture({ timeout_seconds: parseFloat($event.target.value) || 2.5 })"
+                                       min="0.1" max="15" step="0.1"
+                                       :disabled="!audioNetworkCapture.enabled"
+                                       class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent disabled:cursor-not-allowed">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">传输类型</label>
+                                <select :value="audioNetworkCapture.transport"
+                                        @change="updateAudioNetworkCapture({ transport: $event.target.value })"
+                                        :disabled="!audioNetworkCapture.enabled"
+                                        class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent disabled:cursor-not-allowed">
+                                    <option value="page_websocket_probe">页面 WebSocket Probe</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">提取器</label>
+                                <select :value="audioNetworkCapture.extractor"
+                                        @change="updateAudioNetworkCapture({ extractor: $event.target.value })"
+                                        :disabled="!audioNetworkCapture.enabled"
+                                        class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent disabled:cursor-not-allowed">
+                                    <option value="voicegenie_ogg_pages">voicegenie_ogg_pages</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">稳定等待窗口 (秒)</label>
+                                <input type="number"
+                                       :value="audioNetworkCapture.settle_seconds"
+                                       @input="updateAudioNetworkCapture({ settle_seconds: parseFloat($event.target.value) || 0.35 })"
+                                       min="0.05" max="5" step="0.05"
+                                       :disabled="!audioNetworkCapture.enabled"
+                                       class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent disabled:cursor-not-allowed">
+                            </div>
+                        </div>
+
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">URL 匹配关键字</label>
+                            <textarea :value="audioNetworkUrlPatternsText"
+                                      @input="updateAudioNetworkUrlPatterns($event.target.value)"
+                                      rows="4"
+                                      :disabled="!audioNetworkCapture.enabled"
+                                      placeholder="voicegenie&#10;speech&#10;audio&#10;tts"
+                                      class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm font-mono bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent disabled:cursor-not-allowed"></textarea>
+                            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">每行一个关键字，命中对应 WebSocket / 网络请求 URL 时才会参与音频聚合。</p>
                         </div>
                     </div>
                 </div>

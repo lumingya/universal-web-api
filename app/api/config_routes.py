@@ -127,6 +127,7 @@ def _execute_workflow_editor_test_payload(
         "WAIT": "等待",
         "KEY_PRESS": "按键",
         "JS_EXEC": "执行脚本",
+        "PAGE_FETCH": "页面直发",
     }
 
     domain = str(data.get("domain") or "").strip()
@@ -239,13 +240,15 @@ def _execute_workflow_editor_test_payload(
             "images": [],
         }
 
-        for step in workflow:
+        step_index = 0
+        while step_index < len(workflow):
+            step = workflow[step_index]
             action = str(step.get("action") or "").strip()
             target_key = str(step.get("target") or "")
             optional = bool(step.get("optional", False))
             value = step.get("value")
             selector = selectors.get(target_key, "")
-            current_index = executed + 1
+            current_index = step_index + 1
 
             logger.debug(
                 "[WFE_TEST] step "
@@ -276,6 +279,16 @@ def _execute_workflow_editor_test_payload(
                 pass
 
             executed += 1
+            if (
+                action == "PAGE_FETCH"
+                and hasattr(executor, "consume_last_request_transport_sent")
+                and executor.consume_last_request_transport_sent()
+            ):
+                step_index = executor._consume_request_transport_followup_steps(
+                    workflow,
+                    step_index,
+                )
+            step_index += 1
 
         logger.debug(
             "[WFE_TEST] done "

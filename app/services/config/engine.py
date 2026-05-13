@@ -1527,6 +1527,165 @@ class ConfigEngine:
             if val in ("all", "first", "last"):
                 result["mode"] = val
 
+        if "audio_capture_enabled" in config:
+            result["audio_capture_enabled"] = bool(config["audio_capture_enabled"])
+
+        if "audio_capture_mute_playback" in config:
+            result["audio_capture_mute_playback"] = bool(config["audio_capture_mute_playback"])
+
+        if "audio_capture_preload_enabled" in config:
+            result["audio_capture_preload_enabled"] = bool(config["audio_capture_preload_enabled"])
+
+        if "audio_capture_reload_before_workflow" in config:
+            result["audio_capture_reload_before_workflow"] = bool(config["audio_capture_reload_before_workflow"])
+
+        if "audio_capture_preserve_graph" in config:
+            result["audio_capture_preserve_graph"] = bool(config["audio_capture_preserve_graph"])
+
+        if "audio_capture_terminal_settle_seconds" in config:
+            try:
+                val = float(config["audio_capture_terminal_settle_seconds"])
+                result["audio_capture_terminal_settle_seconds"] = max(0.0, min(val, 5.0))
+            except (ValueError, TypeError):
+                pass
+
+        if "audio_trigger_selector" in config:
+            result["audio_trigger_selector"] = str(config["audio_trigger_selector"] or "").strip()
+
+        if "audio_trigger_labels" in config:
+            raw_labels = config.get("audio_trigger_labels")
+            if isinstance(raw_labels, (list, tuple)):
+                labels = [
+                    str(item).strip()
+                    for item in raw_labels
+                    if str(item).strip()
+                ]
+                if labels:
+                    result["audio_trigger_labels"] = labels
+
+        if "audio_capture_max_wait_seconds" in config:
+            try:
+                val = float(config["audio_capture_max_wait_seconds"])
+                result["audio_capture_max_wait_seconds"] = max(1.0, min(val, 120.0))
+            except (ValueError, TypeError):
+                pass
+
+        if "audio_capture_min_wait_seconds" in config:
+            try:
+                val = float(config["audio_capture_min_wait_seconds"])
+                result["audio_capture_min_wait_seconds"] = max(0.2, min(val, 30.0))
+            except (ValueError, TypeError):
+                pass
+
+        if "audio_capture_hard_max_wait_seconds" in config:
+            try:
+                val = float(config["audio_capture_hard_max_wait_seconds"])
+                result["audio_capture_hard_max_wait_seconds"] = max(1.0, min(val, 180.0))
+            except (ValueError, TypeError):
+                pass
+
+        if "audio_capture_estimated_chars_per_second" in config:
+            try:
+                val = float(config["audio_capture_estimated_chars_per_second"])
+                result["audio_capture_estimated_chars_per_second"] = max(1.0, min(val, 20.0))
+            except (ValueError, TypeError):
+                pass
+
+        if "audio_capture_wait_padding_seconds" in config:
+            try:
+                val = float(config["audio_capture_wait_padding_seconds"])
+                result["audio_capture_wait_padding_seconds"] = max(0.0, min(val, 10.0))
+            except (ValueError, TypeError):
+                pass
+
+        network_capture = dict(result.get("audio_network_capture") or {})
+        raw_network_capture = config.get("audio_network_capture")
+        if isinstance(raw_network_capture, dict):
+            if "enabled" in raw_network_capture:
+                network_capture["enabled"] = bool(raw_network_capture["enabled"])
+            if "timeout_seconds" in raw_network_capture:
+                try:
+                    val = float(raw_network_capture["timeout_seconds"])
+                    network_capture["timeout_seconds"] = max(0.1, min(val, 15.0))
+                except (ValueError, TypeError):
+                    pass
+            if "transport" in raw_network_capture:
+                val = str(raw_network_capture["transport"] or "").strip()
+                if val in {"page_websocket_probe"}:
+                    network_capture["transport"] = val
+            if "extractor" in raw_network_capture:
+                val = str(raw_network_capture["extractor"] or "").strip()
+                if val in {"voicegenie_ogg_pages"}:
+                    network_capture["extractor"] = val
+            if "settle_seconds" in raw_network_capture:
+                try:
+                    val = float(raw_network_capture["settle_seconds"])
+                    network_capture["settle_seconds"] = max(0.05, min(val, 5.0))
+                except (ValueError, TypeError):
+                    pass
+            if "url_patterns" in raw_network_capture:
+                raw_patterns = raw_network_capture.get("url_patterns")
+                if isinstance(raw_patterns, (list, tuple)):
+                    patterns = [
+                        str(item).strip()
+                        for item in raw_patterns
+                        if str(item).strip()
+                    ]
+                    if patterns:
+                        network_capture["url_patterns"] = patterns
+
+        # 兼容旧平铺字段，最终统一收口到新对象
+        if "audio_network_capture_enabled" in config:
+            network_capture["enabled"] = bool(config["audio_network_capture_enabled"])
+
+        if "audio_network_capture_timeout_seconds" in config:
+            try:
+                val = float(config["audio_network_capture_timeout_seconds"])
+                network_capture["timeout_seconds"] = max(0.1, min(val, 15.0))
+            except (ValueError, TypeError):
+                pass
+
+        if "audio_network_url_patterns" in config:
+            raw_patterns = config.get("audio_network_url_patterns")
+            if isinstance(raw_patterns, (list, tuple)):
+                patterns = [
+                    str(item).strip()
+                    for item in raw_patterns
+                    if str(item).strip()
+                ]
+                if patterns:
+                    network_capture["url_patterns"] = patterns
+
+        result["audio_network_capture"] = network_capture
+
+        if "audio_capture_poll_seconds" in config:
+            try:
+                val = float(config["audio_capture_poll_seconds"])
+                result["audio_capture_poll_seconds"] = max(0.05, min(val, 5.0))
+            except (ValueError, TypeError):
+                pass
+
+        if "audio_capture_silence_seconds" in config:
+            try:
+                val = float(config["audio_capture_silence_seconds"])
+                result["audio_capture_silence_seconds"] = max(0.2, min(val, 30.0))
+            except (ValueError, TypeError):
+                pass
+
+        if "audio_capture_activity_threshold" in config:
+            try:
+                val = float(config["audio_capture_activity_threshold"])
+                result["audio_capture_activity_threshold"] = max(0.0001, min(val, 0.2))
+            except (ValueError, TypeError):
+                pass
+
+        if "audio_capture_activity_silence_seconds" in config:
+            try:
+                val = float(config["audio_capture_activity_silence_seconds"])
+                result["audio_capture_activity_silence_seconds"] = max(0.2, min(val, 10.0))
+            except (ValueError, TypeError):
+                pass
+
         result["enabled"] = any(
             bool((result.get("modalities") or {}).get(key))
             for key in ("image", "audio", "video")
