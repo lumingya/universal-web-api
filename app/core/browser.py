@@ -108,54 +108,75 @@ class BrowserCore:
 
         ffmpeg_path = shutil.which("ffmpeg")
         if not ffmpeg_path:
+            logger.debug(f"音频尾静音跳过：未找到 ffmpeg，file={target}")
             return filepath
+
+        ffprobe_path = shutil.which("ffprobe")
+
+        def _probe_duration(path_obj: Path) -> float:
+            if not ffprobe_path:
+                return -1.0
+            cmd = [
+                ffprobe_path,
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(path_obj),
+            ]
+            try:
+                completed = subprocess.run(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=15,
+                    check=False,
+                )
+                if completed.returncode != 0:
+                    return -1.0
+                return float(str(completed.stdout or "").strip() or -1.0)
+            except Exception:
+                return -1.0
 
         duration_text = f"{float(duration_seconds):.3f}".rstrip("0").rstrip(".")
         temp_path = target.with_name(f"{target.stem}_tail{target.suffix}")
-        command_variants = [
-            [
-                ffmpeg_path,
-                "-y",
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-i",
-                str(target),
-                "-f",
-                "lavfi",
-                "-t",
-                duration_text,
-                "-i",
-                "anullsrc=r=24000:cl=mono",
-                "-filter_complex",
-                "[0:a][1:a]concat=n=2:v=0:a=1[aout]",
-                "-map",
-                "[aout]",
-                "-c:a",
-                "copy",
-                str(temp_path),
-            ],
-            [
-                ffmpeg_path,
-                "-y",
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-i",
-                str(target),
-                "-f",
-                "lavfi",
-                "-t",
-                duration_text,
-                "-i",
-                "anullsrc=r=24000:cl=mono",
-                "-filter_complex",
-                "[0:a][1:a]concat=n=2:v=0:a=1[aout]",
-                "-map",
-                "[aout]",
-                str(temp_path),
-            ],
-        ]
+        suffix = target.suffix.lower()
+        codec_args: list[str] = []
+        if suffix in {".ogg", ".oga"}:
+            codec_args = ["-c:a", "libvorbis", "-q:a", "5"]
+        elif suffix == ".mp3":
+            codec_args = ["-c:a", "libmp3lame", "-b:a", "128k"]
+        elif suffix in {".m4a", ".mp4"}:
+            codec_args = ["-c:a", "aac", "-b:a", "128k"]
+        elif suffix == ".wav":
+            codec_args = ["-c:a", "pcm_s16le"]
+        elif suffix == ".webm":
+            codec_args = ["-c:a", "libopus", "-b:a", "96k"]
+
+        original_duration = _probe_duration(target)
+        logger.debug(
+            f"音频尾静音开始: file={target.name}, ext={suffix or '<none>'}, "
+            f"append={duration_text}s, duration_before={original_duration:.3f}"
+        )
+
+        command_variants = [[
+            ffmpeg_path,
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(target),
+            "-af",
+            f"apad=pad_dur={duration_text}",
+            "-t",
+            f"{max(0.0, original_duration) + float(duration_seconds):.3f}" if original_duration > 0 else duration_text,
+            *codec_args,
+            str(temp_path),
+        ]]
 
         for cmd in command_variants:
             try:
@@ -173,6 +194,11 @@ class BrowserCore:
 
             if completed.returncode == 0 and temp_path.exists() and temp_path.stat().st_size > 0:
                 try:
+                    new_duration = _probe_duration(temp_path)
+                    logger.debug(
+                        f"音频尾静音生成成功: file={target.name}, "
+                        f"duration_after={new_duration:.3f}, size={temp_path.stat().st_size}"
+                    )
                     temp_path.replace(target)
                     return str(target)
                 except Exception as exc:
@@ -189,6 +215,7 @@ class BrowserCore:
                 temp_path.unlink()
         except Exception:
             pass
+        logger.debug(f"音频尾静音未生效，保留原文件: {target.name}")
         return filepath
     
     def __new__(cls, port: int = None):
@@ -3049,6 +3076,7 @@ class BrowserCore:
             try:
                 filepath.write_bytes(media_bytes)
                 if str(item.get("media_type") or "").strip().lower() == "audio":
+                    logger.debug(f"data-uri 音频已落盘，准备追加尾静音: {filepath.name}")
                     self._append_audio_tail_silence(filepath, duration_seconds=0.3)
             except Exception as e:
                 logger.warning(f"data uri 保存失败，保留原媒体数据: {e}")

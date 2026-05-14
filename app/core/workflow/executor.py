@@ -2294,13 +2294,50 @@ class WorkflowExecutor:
             max_wait = getattr(BrowserConstants, "ATTACHMENT_READY_MAX_WAIT", 20.0)
             check_interval = getattr(BrowserConstants, "ATTACHMENT_READY_CHECK_INTERVAL", 0.35)
             stable_window = getattr(BrowserConstants, "ATTACHMENT_READY_STABLE_WINDOW", 0.8)
+            recent_attachment_age = self._recent_attachment_age_seconds()
+            recent_file_upload = False
+            recent_image_upload = False
+            confirmed_file_upload = False
+            try:
+                recent_file_upload = bool(self._text_handler.has_recent_attachment_upload())
+            except Exception:
+                recent_file_upload = False
+            try:
+                recent_image_upload = bool(self._image_handler.has_recent_attachment_upload())
+            except Exception:
+                recent_image_upload = False
+            if not recent_image_upload:
+                context = getattr(self, "_context", None) or {}
+                recent_image_upload = bool(context.get("images"))
+            if recent_file_upload:
+                try:
+                    confirmed_file_upload = bool(self._text_handler.has_confirmed_upload_signal())
+                except Exception:
+                    confirmed_file_upload = False
+
+            reuse_existing_tracking = recent_attachment_age is not None
+            require_attachment_confirmation = recent_image_upload or (
+                recent_file_upload and not confirmed_file_upload
+            )
+            if reuse_existing_tracking:
+                logger.debug(
+                    "[SEND] Recent attachment upload detected before submit; "
+                    f"reusing existing attachment tracking (age={recent_attachment_age:.1f}s)"
+                )
+            if recent_file_upload and confirmed_file_upload and not recent_image_upload:
+                logger.debug(
+                    "[SEND] Recent file-paste upload was strongly confirmed; "
+                    "send gate will only wait for pending/busy signals"
+                )
             result = self._attachment_monitor.wait_until_ready(
-                require_observed=False,
+                require_observed=require_attachment_confirmation,
                 require_send_enabled=True,
-                accept_existing=True,
+                accept_existing=not require_attachment_confirmation,
+                start_new_tracking=not reuse_existing_tracking,
                 max_wait=max_wait,
                 poll_interval=check_interval,
                 stable_window=stable_window,
+                require_attachment_present=require_attachment_confirmation,
                 label="send-gate",
             )
             if result.get("success"):
@@ -3053,6 +3090,7 @@ class WorkflowExecutor:
 
             self._last_input_element = ele
             self._last_input_target_key = target_key or ""
+            self._text_handler.set_active_input_context(selector=selector, target_key=target_key)
 
             self._wait_for_element_interactable(ele, target_key)
 

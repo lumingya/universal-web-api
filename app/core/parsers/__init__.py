@@ -16,6 +16,7 @@ from .aistudio_parser import AIStudioParser
 from .doubao_parser import DoubaoParser
 from .claude_parser import ClaudeParser
 from .kimi_parser import KimiParser
+from .glm_parser import GLMParser
 from .qwen_parser import QwenParser
 from .mimo_parser import MimoParser
 from .lmarena_parser import LmarenaParser
@@ -29,6 +30,7 @@ ParserRegistry.register_class(AIStudioParser)
 ParserRegistry.register_class(DoubaoParser)
 ParserRegistry.register_class(ClaudeParser)
 ParserRegistry.register_class(KimiParser)
+ParserRegistry.register_class(GLMParser)
 ParserRegistry.register_class(QwenParser)
 ParserRegistry.register_class(MimoParser)
 ParserRegistry.register_class(LmarenaParser)
@@ -44,6 +46,7 @@ __all__ = [
     'DoubaoParser',
     'ClaudeParser',
     'KimiParser',
+    'GLMParser',
     'QwenParser',
     'MimoParser',
     'LmarenaParser',

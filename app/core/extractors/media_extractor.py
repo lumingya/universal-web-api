@@ -30,6 +30,11 @@ PAGE_TTS_WS_PROBE_INSTALL_JS = r"""
 return (function(opts) {
     const stateKey = "__uwaTtsWsProbe";
     const maxLogs = Math.max(16, Number(opts && opts.maxLogs || 128) || 128);
+    const urlPatterns = Array.isArray(opts && opts.urlPatterns)
+        ? opts.urlPatterns
+            .map(item => String(item || "").trim().toLowerCase())
+            .filter(Boolean)
+        : [];
     let state = window[stateKey];
 
     const ensureState = () => {
@@ -56,6 +61,46 @@ return (function(opts) {
     };
 
     state = ensureState();
+
+    const normalizeUrl = (value) => {
+        try {
+            if (!value) return "";
+            if (typeof value === "string") return value;
+            if (typeof Request !== "undefined" && value instanceof Request) {
+                return String(value.url || "");
+            }
+            if (typeof URL !== "undefined" && value instanceof URL) {
+                return String(value.href || "");
+            }
+            return String(value.url || value.href || value.src || value || "");
+        } catch {
+            return "";
+        }
+    };
+    const matchesUrlPattern = (url) => {
+        const lowered = String(url || "").trim().toLowerCase();
+        if (!lowered) return false;
+        if (!urlPatterns.length) return true;
+        return urlPatterns.some(pattern => lowered.includes(pattern));
+    };
+    const looksLikeAudioContentType = (value) => {
+        const lowered = String(value || "").trim().toLowerCase();
+        if (!lowered) return false;
+        return (
+            lowered.includes("audio/")
+            || lowered.includes("application/ogg")
+            || lowered.includes("ogg")
+            || lowered.includes("opus")
+            || lowered.includes("mpeg")
+            || lowered.includes("mp3")
+            || lowered.includes("wav")
+            || lowered.includes("webm")
+            || lowered.includes("octet-stream")
+        );
+    };
+    const shouldCaptureBinary = (url, contentType) => (
+        matchesUrlPattern(url) || looksLikeAudioContentType(contentType)
+    );
 
     const toBase64 = async (data) => {
         if (typeof data === "string") {
@@ -85,6 +130,18 @@ return (function(opts) {
             base64: btoa(binary),
         };
     };
+    const pushBinary = async ({ url, data, transport, contentType, status, method }) => {
+        const info = await toBase64(data);
+        state.push({
+            dir: "recv",
+            url: String(url || ""),
+            transport: String(transport || ""),
+            content_type: String(contentType || ""),
+            status: Number(status || 0) || 0,
+            method: String(method || "").toUpperCase(),
+            ...(info || {}),
+        });
+    };
 
     const patchSocket = (ws) => {
         if (!ws || ws.__uwaTtsWsProbeWrapped) return ws;
@@ -107,6 +164,208 @@ return (function(opts) {
 
         return ws;
     };
+
+    if (!state._fetchPatched && typeof window.fetch === "function") {
+        const rawFetch = window.fetch;
+        window.fetch = function(...args) {
+            const req = args[0];
+            const url = normalizeUrl(req);
+            const method = String(
+                (args[1] && args[1].method)
+                || (req && req.method)
+                || "GET"
+            ).toUpperCase();
+            if (matchesUrlPattern(url)) {
+                state.push({ dir: "http-request", transport: "fetch", url, method });
+            }
+            return rawFetch.apply(this, args).then((response) => {
+                try {
+                    const responseUrl = normalizeUrl(response && response.url) || url;
+                    const contentType = String(
+                        response
+                        && response.headers
+                        && typeof response.headers.get === "function"
+                        && response.headers.get("content-type")
+                        || ""
+                    );
+                    const status = Number(response && response.status || 0) || 0;
+                    const capture = shouldCaptureBinary(responseUrl, contentType);
+                    if (capture || matchesUrlPattern(responseUrl)) {
+                        state.push({
+                            dir: "http-response",
+                            transport: "fetch",
+                            url: responseUrl,
+                            method,
+                            status,
+                            content_type: contentType,
+                            capture,
+                        });
+                    }
+                    if (capture && response && typeof response.clone === "function") {
+                        const cloned = response.clone();
+                        Promise.resolve().then(async () => {
+                            try {
+                                const body = await cloned.arrayBuffer();
+                                await pushBinary({
+                                    url: responseUrl,
+                                    data: body,
+                                    transport: "fetch",
+                                    contentType,
+                                    status,
+                                    method,
+                                });
+                            } catch (error) {
+                                state.push({
+                                    dir: "http-error",
+                                    transport: "fetch",
+                                    phase: "read-body",
+                                    url: responseUrl,
+                                    message: String(error && (error.message || error.name) || error || "fetch_body_error").slice(0, 200),
+                                });
+                            }
+                        });
+                    }
+                } catch (error) {
+                    state.push({
+                        dir: "http-error",
+                        transport: "fetch",
+                        phase: "response",
+                        url,
+                        message: String(error && (error.message || error.name) || error || "fetch_response_error").slice(0, 200),
+                    });
+                }
+                return response;
+            }).catch((error) => {
+                state.push({
+                    dir: "http-error",
+                    transport: "fetch",
+                    phase: "request",
+                    url,
+                    method,
+                    message: String(error && (error.message || error.name) || error || "fetch_request_error").slice(0, 200),
+                });
+                throw error;
+            });
+        };
+        state._fetchPatched = true;
+    }
+
+    if (!state._xhrPatched && typeof window.XMLHttpRequest !== "undefined") {
+        const origOpen = XMLHttpRequest.prototype.open;
+        const origSend = XMLHttpRequest.prototype.send;
+        XMLHttpRequest.prototype.open = function(method, url, ...rest) {
+            try {
+                this.__uwaProbeMethod = String(method || "GET").toUpperCase();
+                this.__uwaProbeUrl = normalizeUrl(url);
+            } catch {}
+            return origOpen.call(this, method, url, ...rest);
+        };
+        XMLHttpRequest.prototype.send = function(...args) {
+            try {
+                if (!this.__uwaProbeLoadendInstalled) {
+                    this.__uwaProbeLoadendInstalled = true;
+                    this.addEventListener("loadend", () => {
+                        const responseUrl = normalizeUrl(this.responseURL || this.__uwaProbeUrl || "");
+                        const method = String(this.__uwaProbeMethod || "GET").toUpperCase();
+                        let contentType = "";
+                        try {
+                            contentType = String(
+                                typeof this.getResponseHeader === "function"
+                                && this.getResponseHeader("content-type")
+                                || ""
+                            );
+                        } catch {}
+                        const status = Number(this.status || 0) || 0;
+                        const capture = shouldCaptureBinary(responseUrl, contentType);
+                        if (capture || matchesUrlPattern(responseUrl)) {
+                            state.push({
+                                dir: "http-response",
+                                transport: "xhr",
+                                url: responseUrl,
+                                method,
+                                status,
+                                content_type: contentType,
+                                capture,
+                            });
+                        }
+                        if (!capture) {
+                            return;
+                        }
+                        Promise.resolve().then(async () => {
+                            try {
+                                const responseType = String(this.responseType || "").trim().toLowerCase();
+                                const payload = this.response;
+                                if (payload instanceof Blob) {
+                                    await pushBinary({
+                                        url: responseUrl,
+                                        data: payload,
+                                        transport: "xhr",
+                                        contentType,
+                                        status,
+                                        method,
+                                    });
+                                    return;
+                                }
+                                if (payload instanceof ArrayBuffer) {
+                                    await pushBinary({
+                                        url: responseUrl,
+                                        data: payload,
+                                        transport: "xhr",
+                                        contentType,
+                                        status,
+                                        method,
+                                    });
+                                    return;
+                                }
+                                if (ArrayBuffer.isView(payload)) {
+                                    await pushBinary({
+                                        url: responseUrl,
+                                        data: payload.buffer.slice(0),
+                                        transport: "xhr",
+                                        contentType,
+                                        status,
+                                        method,
+                                    });
+                                    return;
+                                }
+                                if ((!responseType || responseType === "text") && typeof this.responseText === "string" && this.responseText) {
+                                    const info = await toBase64(this.responseText);
+                                    state.push({
+                                        dir: "recv",
+                                        url: responseUrl,
+                                        transport: "xhr",
+                                        content_type: contentType,
+                                        status,
+                                        method,
+                                        ...(info || {}),
+                                    });
+                                }
+                            } catch (error) {
+                                state.push({
+                                    dir: "http-error",
+                                    transport: "xhr",
+                                    phase: "read-body",
+                                    url: responseUrl,
+                                    method,
+                                    message: String(error && (error.message || error.name) || error || "xhr_body_error").slice(0, 200),
+                                });
+                            }
+                        });
+                    });
+                }
+            } catch (error) {
+                state.push({
+                    dir: "http-error",
+                    transport: "xhr",
+                    phase: "install",
+                    url: normalizeUrl(this && this.__uwaProbeUrl),
+                    message: String(error && (error.message || error.name) || error || "xhr_install_error").slice(0, 200),
+                });
+            }
+            return origSend.apply(this, args);
+        };
+        state._xhrPatched = true;
+    }
 
     if (!state._patched) {
         const RawWS = window.WebSocket;
@@ -1302,12 +1561,49 @@ class MediaExtractor:
 
         const candidates = Array.from(candidateMap.values()).sort((a, b) => b.score - a.score);
         if (!candidates.length) {
+            const nearbyCandidates = [];
+            const visibleButtonSamples = [];
+            try {
+                const probeSelectors = ["button", "[role=\"button\"]", "[aria-label]", "[title]", "[data-testid]", "svg"];
+                for (const selector of probeSelectors) {
+                    let nodes = [];
+                    try {
+                        nodes = Array.from(document.querySelectorAll(selector));
+                    } catch {}
+                    for (const node of nodes) {
+                        if (!(node instanceof Element)) continue;
+                        const info = describeNode(node, { selector });
+                        const haystack = String(info.text || info.aria_label || info.data_testid || info.class_name || "").toLowerCase();
+                        if (visibleButtonSamples.length < 16) {
+                            const rect = typeof node.getBoundingClientRect === "function" ? node.getBoundingClientRect() : null;
+                            if (rect && rect.width >= 1 && rect.height >= 1) {
+                                visibleButtonSamples.push(info);
+                            }
+                        }
+                        if (!haystack) continue;
+                        if (
+                            haystack.includes("朗") ||
+                            haystack.includes("读") ||
+                            haystack.includes("收听") ||
+                            haystack.includes("voice") ||
+                            haystack.includes("audio") ||
+                            haystack.includes("tts")
+                        ) {
+                            nearbyCandidates.push(info);
+                            if (nearbyCandidates.length >= 12) break;
+                        }
+                    }
+                    if (nearbyCandidates.length >= 12) break;
+                }
+            } catch {}
             return {
                 clicked: false,
                 candidate_count: 0,
                 selector_used: triggerSelector || selectors.join(", "),
                 labels_used: normalizedLabels,
                 debug_matches: debugMatches.slice(0, 8),
+                nearby_candidates: nearbyCandidates,
+                visible_button_samples: visibleButtonSamples,
             };
         }
 
@@ -1497,6 +1793,7 @@ class MediaExtractor:
                 {
                     "clear": True,
                     "maxLogs": int(network_config.get("max_logs") or 1024),
+                    "urlPatterns": network_config.get("url_patterns") or [],
                 },
             )
             return True
@@ -1508,7 +1805,14 @@ class MediaExtractor:
         if not tab:
             return False
         try:
-            tab.run_js(PAGE_TTS_WS_PROBE_INSTALL_JS, {"clear": True, "maxLogs": 256})
+            tab.run_js(
+                PAGE_TTS_WS_PROBE_INSTALL_JS,
+                {
+                    "clear": True,
+                    "maxLogs": 256,
+                    "urlPatterns": [],
+                },
+            )
             return True
         except Exception as exc:
             logger.debug(f"清空页面 TTS 网络探针失败（已忽略）: {exc}")
@@ -1621,6 +1925,37 @@ class MediaExtractor:
             logger.debug(f"网络音频捕获失败（已忽略）: {exc}")
 
         if not best_event:
+            try:
+                logs = tab.run_js(PAGE_TTS_WS_PROBE_DUMP_JS) or []
+                summaries: List[str] = []
+                for item in logs[-32:]:
+                    if not isinstance(item, dict):
+                        continue
+                    url = str(item.get("url") or "").strip()
+                    lowered_url = url.lower()
+                    content_type = str(item.get("content_type") or "").strip()
+                    if not (
+                        any(pattern.lower() in lowered_url for pattern in url_patterns)
+                        or ("audio" in content_type.lower() if content_type else False)
+                    ):
+                        continue
+                    summaries.append(
+                        (
+                            f"{str(item.get('transport') or '')}:{str(item.get('dir') or '')}:"
+                            f"status={item.get('status')}:"
+                            f"content_type={content_type[:48]!r}:"
+                            f"url={url[:120]!r}"
+                        )
+                    )
+                    if len(summaries) >= 8:
+                        break
+                if summaries:
+                    logger.debug(
+                        "网络音频捕获未命中，最近相关网络摘要: "
+                        + " | ".join(summaries)
+                    )
+            except Exception as exc:
+                logger.debug(f"读取网络音频探针摘要失败（已忽略）: {exc}")
             return []
 
         if not self._is_network_audio_event_usable(
@@ -1905,6 +2240,7 @@ class MediaExtractor:
 
         try:
             from app.core import get_browser
+            logger.debug(f"网络音频已落盘，准备追加尾静音: {filepath.name}")
             get_browser(auto_connect=False)._append_audio_tail_silence(filepath, duration_seconds=0.3)
         except Exception as exc:
             logger.debug(f"网络音频追加尾静音失败（已忽略）: {exc}")

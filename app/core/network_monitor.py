@@ -461,10 +461,12 @@ class NetworkMonitor:
                     f"{self._describe_json_container(direct_body)}"
                 )
             else:
-                logger.debug(
-                    "[NetworkMonitor][DirectBody] body is not a JSON container: "
-                    f"{self._describe_json_container(direct_body)}"
-                )
+                direct_body_text = self._normalize_raw_body(direct_body)
+                if not self._looks_like_sse_payload(direct_body_text):
+                    logger.debug(
+                        "[NetworkMonitor][DirectBody] body is not a JSON container: "
+                        f"{self._describe_json_container(direct_body)}"
+                    )
             return direct_body, "body"
 
         return None, "empty"

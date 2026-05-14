@@ -286,7 +286,7 @@
           "audio_capture_reload_before_workflow": false,
           "audio_capture_preserve_graph": true,
           "audio_capture_terminal_settle_seconds": 0.35,
-          "audio_trigger_selector": "",
+          "audio_trigger_selector": "button[aria-label=\"朗读\"], button[aria-label*=\"朗读\"], button[data-dbx-name=\"button\"][aria-label*=\"朗读\"], button.voiceButton-GAZh3G, [data-testid*=\"voice\"] button, [class*=\"voice\"] button, button svg, span[data-dbx-name=\"text\"], [role=\"button\"]",
           "audio_trigger_labels": [
             "朗读",
             "语音朗读",
@@ -406,7 +406,7 @@
           "audio_capture_reload_before_workflow": false,
           "audio_capture_preserve_graph": true,
           "audio_capture_terminal_settle_seconds": 0.35,
-          "audio_trigger_selector": "",
+          "audio_trigger_selector": "button[aria-label=\"朗读\"], button[aria-label*=\"朗读\"], button[data-dbx-name=\"button\"][aria-label*=\"朗读\"], button.voiceButton-GAZh3G, [data-testid*=\"voice\"] button, [class*=\"voice\"] button, [role=\"button\"][aria-label*=\"朗读\"]",
           "audio_trigger_labels": [
             "朗读",
             "语音朗读",
@@ -467,9 +467,9 @@
           "audio_selector": "audio, audio source",
           "video_selector": "video, video source",
           "container_selector": "div[id^=\"image-\"]",
-          "debounce_seconds": 2.0,
+          "debounce_seconds": 2,
           "wait_for_load": true,
-          "load_timeout_seconds": 8.0,
+          "load_timeout_seconds": 8,
           "download_blobs": true,
           "max_size_mb": 20,
           "src_allow_patterns": [],
@@ -490,9 +490,9 @@
             "tts",
             "voice"
           ],
-          "audio_capture_max_wait_seconds": 12.0,
-          "audio_capture_min_wait_seconds": 2.0,
-          "audio_capture_hard_max_wait_seconds": 45.0,
+          "audio_capture_max_wait_seconds": 12,
+          "audio_capture_min_wait_seconds": 2,
+          "audio_capture_hard_max_wait_seconds": 45,
           "audio_capture_estimated_chars_per_second": 4.8,
           "audio_capture_wait_padding_seconds": 1.2,
           "audio_network_capture": {
@@ -642,6 +642,8 @@
             "pending_selectors": [
               ".image-preview.loading",
               "[data-test-id=\"image-loading-preview\"]",
+              "[aria-label=\"正在加载图片\"]",
+              "[aria-label*=\"正在加载图片\"]",
               ".progress-spinner",
               ".loading-content-spinner-container",
               "mat-spinner[role=\"progressbar\"]",
@@ -649,7 +651,11 @@
               ".mdc-circular-progress--indeterminate",
               ".mdc-circular-progress"
             ],
-            "busy_text_markers": [],
+            "busy_text_markers": [
+              "正在加载图片",
+              "正在加载",
+              "加载中"
+            ],
             "send_button_disabled_markers": [],
             "require_attachment_present": true,
             "continue_once_on_unconfirmed_send": false,
@@ -829,6 +835,8 @@
             "pending_selectors": [
               ".image-preview.loading",
               "[data-test-id=\"image-loading-preview\"]",
+              "[aria-label=\"正在加载图片\"]",
+              "[aria-label*=\"正在加载图片\"]",
               ".progress-spinner",
               ".loading-content-spinner-container",
               "mat-spinner[role=\"progressbar\"]",
@@ -836,7 +844,11 @@
               ".mdc-circular-progress--indeterminate",
               ".mdc-circular-progress"
             ],
-            "busy_text_markers": [],
+            "busy_text_markers": [
+              "正在加载图片",
+              "正在加载",
+              "加载中"
+            ],
             "send_button_disabled_markers": [],
             "require_attachment_present": true,
             "continue_once_on_unconfirmed_send": false,
@@ -1021,12 +1033,19 @@
             "pending_selectors": [
               ".image-preview.loading",
               "[data-test-id=\"image-loading-preview\"]",
+              "[aria-label=\"正在加载图片\"]",
+              "[aria-label*=\"正在加载图片\"]",
               ".progress-spinner",
               ".loading-content-spinner-container",
               "mat-spinner[role=\"progressbar\"]",
               "mat-progress-spinner[role=\"progressbar\"]",
               ".mdc-circular-progress--indeterminate",
               ".mdc-circular-progress"
+            ],
+            "busy_text_markers": [
+              "正在加载图片",
+              "正在加载",
+              "加载中"
             ],
             "require_attachment_present": true,
             "continue_once_on_unconfirmed_send": false,
@@ -1784,7 +1803,7 @@
           "audio_capture_preload_enabled": true,
           "audio_capture_reload_before_workflow": true,
           "audio_capture_preserve_graph": true,
-          "audio_trigger_selector": "",
+          "audio_trigger_selector": "button[aria-label=\"朗读\"], button[aria-label*=\"朗读\"], button[data-dbx-name=\"button\"][aria-label*=\"朗读\"], button.voiceButton-GAZh3G, [data-testid*=\"voice\"] button, [class*=\"voice\"] button, [role=\"button\"][aria-label*=\"朗读\"]",
           "audio_trigger_labels": [
             "朗读",
             "语音朗读",
@@ -2886,6 +2905,178 @@
           "enabled": false,
           "threshold": 50000,
           "hint_text": "完全专注于文件内容"
+        }
+      }
+    },
+    "default_preset": "主预设"
+  },
+  "chatglm.cn": {
+    "presets": {
+      "主预设": {
+        "selectors": {
+          "input_box": ".input-box-inner textarea",
+          "send_btn": ".enter .enter-icon-container",
+          "result_container": ".answer-content-wrap:not(.text-advance-thinking-content) .markdown-body",
+          "new_chat_btn": "//div[contains(@class, 'new-session') and .//div[text()='新对话']]",
+          "click_target": "img.enter_icon",
+          "input_box_1": "//div[contains(@class, 'input-box-inner')]//textarea",
+          "result_container_1": "//div[contains(@class, 'code-box')]//div[contains(@class, 'markdown-body') and not(ancestor::div[contains(@class, 'advance-thinking')])]"
+        },
+        "workflow": [
+          {
+            "action": "CLICK",
+            "target": "new_chat_btn",
+            "optional": false,
+            "value": null
+          },
+          {
+            "action": "FILL_INPUT",
+            "target": "input_box",
+            "optional": false,
+            "value": null
+          },
+          {
+            "action": "WAIT",
+            "target": "",
+            "optional": false,
+            "value": 0.5
+          },
+          {
+            "action": "KEY_PRESS",
+            "target": "Enter",
+            "optional": false,
+            "value": null
+          },
+          {
+            "action": "STREAM_WAIT",
+            "target": "result_container",
+            "optional": false,
+            "value": null
+          }
+        ],
+        "stealth": false,
+        "stream_config": {
+          "mode": "network",
+          "request_transport": {
+            "mode": "workflow",
+            "profile": "",
+            "options": {}
+          },
+          "hard_timeout": 300,
+          "send_confirmation": {
+            "attachment_sensitivity": "medium",
+            "post_click_observe_window": 1.8,
+            "pre_retry_probe_window": 0.12,
+            "retry_observe_window": 0.9,
+            "attachment_observe_window": 6,
+            "trust_network_activity": true,
+            "trust_generating_indicator": true,
+            "trust_send_disabled_with_input_shrink": true
+          },
+          "attachment_monitor": {
+            "root_selectors": [
+              ".input-box",
+              ".input-box-inner",
+              "[class*='input-box']"
+            ],
+            "attachment_selectors": [
+              ".file-list-box-content-item"
+            ],
+            "pending_selectors": [
+              ".file-list-box-content-item .file-preview-box.disabled",
+              ".file-list-box-content-item .upload-progress",
+              ".file-list-box-content-item .status .loading",
+              ".file-list-box-content-item [class*='loading']",
+              ".file-list-box-content-item [class*='progress']"
+            ],
+            "busy_text_markers": [
+              "上传中",
+              "处理中",
+              "解析中",
+              "uploading",
+              "loading"
+            ],
+            "send_button_disabled_markers": [],
+            "require_attachment_present": false,
+            "continue_once_on_unconfirmed_send": true,
+            "idle_timeout": 8,
+            "hard_max_wait": 90
+          },
+          "network": {
+            "listen_pattern": "/chatglm/backend-api/assistant/stream",
+            "stream_match_mode": "keyword",
+            "stream_match_pattern": "/chatglm/backend-api/assistant/stream",
+            "parser": "glm",
+            "silence_threshold": 3,
+            "response_interval": 0.5
+          }
+        },
+        "image_extraction": {
+          "enabled": false,
+          "modalities": {
+            "image": false,
+            "audio": false,
+            "video": false
+          },
+          "selector": "img",
+          "audio_selector": "audio, audio source",
+          "video_selector": "video, video source",
+          "container_selector": null,
+          "debounce_seconds": 2,
+          "wait_for_load": true,
+          "load_timeout_seconds": 5,
+          "download_blobs": true,
+          "max_size_mb": 10,
+          "src_allow_patterns": [],
+          "mode": "all",
+          "audio_capture_enabled": true,
+          "audio_capture_mute_playback": true,
+          "audio_capture_preload_enabled": true,
+          "audio_capture_reload_before_workflow": false,
+          "audio_capture_preserve_graph": true,
+          "audio_capture_terminal_settle_seconds": 0.35,
+          "audio_trigger_selector": "",
+          "audio_trigger_labels": [
+            "朗读",
+            "语音朗读",
+            "收听",
+            "read aloud",
+            "listen",
+            "tts",
+            "voice"
+          ],
+          "audio_capture_max_wait_seconds": 12,
+          "audio_capture_min_wait_seconds": 2,
+          "audio_capture_hard_max_wait_seconds": 45,
+          "audio_capture_estimated_chars_per_second": 4.8,
+          "audio_capture_wait_padding_seconds": 1.2,
+          "audio_network_capture": {
+            "enabled": false,
+            "timeout_seconds": 2.5,
+            "transport": "page_websocket_probe",
+            "url_patterns": [
+              "voicegenie",
+              "speech",
+              "audio",
+              "tts"
+            ],
+            "extractor": "voicegenie_ogg_pages",
+            "settle_seconds": 0.35
+          },
+          "audio_capture_poll_seconds": 0.25,
+          "audio_capture_silence_seconds": 1.2,
+          "audio_capture_activity_threshold": 0.006,
+          "audio_capture_activity_silence_seconds": 0.65
+        },
+        "file_paste": {
+          "enabled": true,
+          "threshold": 20000,
+          "hint_text": "继续",
+          "reacquire_input_after_upload": true,
+          "post_upload_input_selector": ".input-box-inner textarea",
+          "post_upload_settle": 0.4,
+          "upload_signal_timeout": 6,
+          "upload_signal_grace": 4
         }
       }
     },

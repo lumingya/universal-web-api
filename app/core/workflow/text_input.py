@@ -60,6 +60,8 @@ class TextInputHandler:
             "weak_signal_seen": False,
             "last_state": {},
         }
+        self._active_input_selector = ""
+        self._active_input_target_key = ""
 
     def has_recent_attachment_upload(self, window: float = 45.0) -> bool:
         """Whether this request recently attached a file via file-paste/upload."""
@@ -90,6 +92,11 @@ class TextInputHandler:
             value = float(default or 0.0)
         return max(0.0, value)
 
+    def set_active_input_context(self, selector: str = "", target_key: str = ""):
+        """Remember the current workflow input locator for post-upload reacquire."""
+        self._active_input_selector = str(selector or "").strip()
+        self._active_input_target_key = str(target_key or "").strip()
+
     def _sanitize_text_chunk_size(self, raw_value, default: int = TEXT_INPUT_CHUNK_SIZE_DEFAULT) -> int:
         """Normalize long-text chunk size from config/user input."""
         try:
@@ -117,6 +124,10 @@ class TextInputHandler:
         signal_state = state or self.probe_recent_upload_signal()
         return self._has_upload_signal(signal_state)
 
+    def has_confirmed_upload_signal(self, state: dict = None) -> bool:
+        """Whether the latest file upload was already confirmed by page/file-input probes."""
+        return self._has_confirmed_upload_signal(state)
+
     def _attachment_monitor_list(self, key: str) -> list:
         raw_value = self._attachment_monitor_config.get(key) if isinstance(self._attachment_monitor_config, dict) else None
         if not isinstance(raw_value, list):
@@ -127,6 +138,16 @@ class TextInputHandler:
             if value and value not in cleaned:
                 cleaned.append(value)
         return cleaned
+
+    def _should_reacquire_input_after_upload(self) -> bool:
+        return bool(self._file_paste_config.get("reacquire_input_after_upload", False))
+
+    def _has_confirmed_upload_signal(self, state: dict = None) -> bool:
+        """Whether upload has already been strongly confirmed by file-input/page probes."""
+        signal_state = state if isinstance(state, dict) else self._last_upload_signal_wait
+        if bool((signal_state or {}).get("confirmed")):
+            return True
+        return self.has_strong_upload_signal((signal_state or {}).get("last_state"))
     
     # ================= 工具方法 =================
     
@@ -1082,6 +1103,45 @@ class TextInputHandler:
         elements = self._find_elements(selector, timeout=timeout)
         return elements[0] if elements else None
 
+    def _reacquire_input_after_upload(self, fallback_ele=None):
+        """
+        Re-locate the active input after upload finishes.
+
+        Some sites rebuild the composer after attaching a file, so the old
+        element reference stops receiving subsequent hint text.
+        """
+        if not self._should_reacquire_input_after_upload():
+            return fallback_ele
+
+        candidates = []
+        configured = str(self._file_paste_config.get("post_upload_input_selector") or "").strip()
+        if configured:
+            candidates.append(("post_upload_input_selector", configured))
+        if self._active_input_selector:
+            candidates.append(("active_input_selector", self._active_input_selector))
+        if self._active_input_target_key:
+            selector = self._get_selector_value(self._active_input_target_key)
+            if selector:
+                candidates.append((f"target_key:{self._active_input_target_key}", selector))
+
+        seen = set()
+        for source, selector in candidates:
+            normalized = self._normalize_selector(selector)
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            try:
+                ele = self.tab.ele(normalized, timeout=1.5)
+            except Exception as e:
+                logger.debug(f"[FILE_PASTE] 上传后重定位输入框失败 ({source}={selector!r}): {e}")
+                continue
+            if ele and getattr(ele, "tag", None):
+                logger.debug(f"[FILE_PASTE] 上传后重定位输入框成功 ({source}={selector!r})")
+                return ele
+
+        logger.warning("[FILE_PASTE] 上传后未能重新定位输入框，回退到原元素")
+        return fallback_ele
+
     def _guess_mime_type(self, filepath: str) -> str:
         """推断文件 MIME。"""
         mime_type, _ = mimetypes.guess_type(filepath)
@@ -1781,31 +1841,36 @@ class TextInputHandler:
                 return True
 
             if self._attachment_monitor is not None:
-                upload_timeout = self.get_upload_signal_timeout(
-                    getattr(BrowserConstants, "ATTACHMENT_READY_MAX_WAIT", 20.0)
-                )
-                upload_grace = self.get_upload_signal_grace(4.0)
-                check_interval = getattr(BrowserConstants, "ATTACHMENT_READY_CHECK_INTERVAL", 0.25)
-                stable_window = getattr(BrowserConstants, "ATTACHMENT_READY_STABLE_WINDOW", 0.8)
-                attachment_state = self._attachment_monitor.wait_until_ready(
-                    expected_names=expected_names,
-                    require_observed=True,
-                    require_send_enabled=False,
-                    accept_existing=False,
-                    start_new_tracking=False,
-                    max_wait=max(upload_timeout, 0.5) + max(upload_grace, 0.0),
-                    poll_interval=check_interval,
-                    stable_window=stable_window,
-                    label="file-paste",
-                )
-                if not attachment_state.get("success"):
-                    if attachment_state.get("activitySeen") or attachment_state.get("attachmentObserved"):
-                        logger.error(
-                            "[FILE_PASTE] Attachment activity was observed but never confirmed; aborting text fallback to avoid duplicate send"
-                        )
-                        raise WorkflowError("file_paste_upload_unconfirmed")
-                    logger.warning("[FILE_PASTE] file upload did not take effect; giving up file-paste mode")
-                    return False
+                if self._has_confirmed_upload_signal():
+                    logger.debug(
+                        "[FILE_PASTE] 已拿到强上传信号，跳过 attachment_monitor 的长等待，直接进入补文本阶段"
+                    )
+                else:
+                    upload_timeout = self.get_upload_signal_timeout(
+                        getattr(BrowserConstants, "ATTACHMENT_READY_MAX_WAIT", 20.0)
+                    )
+                    upload_grace = self.get_upload_signal_grace(4.0)
+                    check_interval = getattr(BrowserConstants, "ATTACHMENT_READY_CHECK_INTERVAL", 0.25)
+                    stable_window = getattr(BrowserConstants, "ATTACHMENT_READY_STABLE_WINDOW", 0.8)
+                    attachment_state = self._attachment_monitor.wait_until_ready(
+                        expected_names=expected_names,
+                        require_observed=True,
+                        require_send_enabled=False,
+                        accept_existing=False,
+                        start_new_tracking=False,
+                        max_wait=max(upload_timeout, 0.5) + max(upload_grace, 0.0),
+                        poll_interval=check_interval,
+                        stable_window=stable_window,
+                        label="file-paste",
+                    )
+                    if not attachment_state.get("success"):
+                        if attachment_state.get("activitySeen") or attachment_state.get("attachmentObserved"):
+                            logger.error(
+                                "[FILE_PASTE] Attachment activity was observed but never confirmed; aborting text fallback to avoid duplicate send"
+                            )
+                            raise WorkflowError("file_paste_upload_unconfirmed")
+                        logger.warning("[FILE_PASTE] file upload did not take effect; giving up file-paste mode")
+                        return False
             else:
                 time.sleep(random.uniform(0.5, 1.0))
                 self._smart_delay(0.3, 0.6)
@@ -1815,10 +1880,20 @@ class TextInputHandler:
                     return False
             self._recent_file_upload_at = time.time()
 
+            settle_seconds = self.get_post_upload_settle_seconds(0.0)
+            if settle_seconds > 0:
+                time.sleep(settle_seconds)
+
+            hint_ele = self._reacquire_input_after_upload(fallback_ele=ele)
+
             hint_text = self._file_paste_config.get("hint_text", "完全专注于文件内容")
             if hint_text:
+                logger.debug(
+                    f"[FILE_PASTE] 进入补文本阶段: reacquire={self._should_reacquire_input_after_upload()}, "
+                    f"hint_target_tag={getattr(hint_ele, 'tag', '') or 'unknown'}"
+                )
                 logger.debug(f"[FILE_PASTE] appending hint text: {hint_text}")
-                self._append_file_paste_hint(ele, hint_text)
+                self._append_file_paste_hint(hint_ele, hint_text)
 
             logger.info(f"[FILE_PASTE] file paste completed ({len(text)} chars)")
             return True

@@ -1773,6 +1773,34 @@ class ConfigEngine:
             val = str(config["hint_text"]).strip()
             # 限制长度，避免过长的引导文本
             result["hint_text"] = val[:500] if val else ""
+
+        if "reacquire_input_after_upload" in config:
+            result["reacquire_input_after_upload"] = bool(config["reacquire_input_after_upload"])
+
+        if "post_upload_input_selector" in config:
+            val = str(config["post_upload_input_selector"] or "").strip()
+            result["post_upload_input_selector"] = val[:500] if val else ""
+
+        if "post_upload_settle" in config:
+            try:
+                val = float(config["post_upload_settle"])
+                result["post_upload_settle"] = max(0.0, min(val, 30.0))
+            except (ValueError, TypeError):
+                pass
+
+        if "upload_signal_timeout" in config:
+            try:
+                val = float(config["upload_signal_timeout"])
+                result["upload_signal_timeout"] = max(0.5, min(val, 120.0))
+            except (ValueError, TypeError):
+                pass
+
+        if "upload_signal_grace" in config:
+            try:
+                val = float(config["upload_signal_grace"])
+                result["upload_signal_grace"] = max(0.0, min(val, 120.0))
+            except (ValueError, TypeError):
+                pass
         
         return result
     # ================= 图片预设管理 =================

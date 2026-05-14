@@ -143,6 +143,18 @@
       "name": "DeepSeek页面直发测试",
       "enabled": false,
       "group_name": "ds"
+    },
+    {
+      "id": "cmd_7dbc42e0",
+      "name": "glm",
+      "enabled": false,
+      "group_name": ""
+    },
+    {
+      "id": "cmd_arena_ip_rotate_q4",
+      "name": "ARENA_EVERY4_ROTATE_IP",
+      "enabled": true,
+      "group_name": "arena"
     }
   ]
 }
