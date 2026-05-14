@@ -182,6 +182,7 @@ class FilePasteConfig(TypedDict, total=False):
     当文本长度超过阈值时，将文本写入临时 txt 文件，
     然后以文件形式粘贴到输入框（通过 CF_HDROP 剪贴板格式）。
     粘贴文件后，自动在输入框中追加一句引导文本，确保能正常发送。
+    附件发送确认规则也优先挂在这里，避免和网络监听配置混在一起。
     
     用于 sites.json 中的 file_paste 字段
     """
@@ -193,6 +194,9 @@ class FilePasteConfig(TypedDict, total=False):
     post_upload_settle: float           # 上传完成后额外稳定等待
     upload_signal_timeout: float        # 上传信号确认超时
     upload_signal_grace: float          # 弱信号额外宽限
+    send_confirmation: Dict[str, Any]   # 附件发送后的成功判定策略
+    attachment_monitor: Dict[str, Any]  # 附件预览 / pending / busy 规则
+    state_probe: Dict[str, Any]         # 自定义 JS 状态探针
 
 
 def get_default_file_paste_config() -> 'FilePasteConfig':
@@ -206,6 +210,10 @@ def get_default_file_paste_config() -> 'FilePasteConfig':
         "post_upload_settle": 0.0,
         "upload_signal_timeout": 2.5,
         "upload_signal_grace": 3.0,
+        "state_probe": {
+            "enabled": False,
+            "code": "",
+        },
     }
 
 class ExtractionModalitiesConfig(TypedDict, total=False):
@@ -271,6 +279,14 @@ class SendConfirmationConfig(TypedDict, total=False):
     pre_retry_probe_window: float
     retry_observe_window: float
     attachment_observe_window: float
+    max_retry_count: int
+    retry_interval: float
+    retry_on_unconfirmed_send: bool
+    accept_attachment_change: bool
+    accept_attachment_disappear: bool
+    accept_probe_confirmation: bool
+    retry_block_on_stop_button: bool
+    retry_block_if_generating: bool
     trust_network_activity: bool
     trust_generating_indicator: bool
     trust_send_disabled_with_input_shrink: bool
@@ -284,6 +300,7 @@ class AttachmentMonitorConfig(TypedDict, total=False):
     busy_text_markers: List[str]
     send_button_disabled_markers: List[str]
     require_attachment_present: bool
+    require_upload_signal_before_ready: bool
     continue_once_on_unconfirmed_send: bool
     idle_timeout: float
     hard_max_wait: float
@@ -722,8 +739,18 @@ def validate_site_config(config: Dict[str, Any]) -> bool:
                 "pre_retry_probe_window",
                 "retry_observe_window",
                 "attachment_observe_window",
+                "retry_interval",
+            ]
+            int_fields = [
+                "max_retry_count",
             ]
             bool_fields = [
+                "retry_on_unconfirmed_send",
+                "accept_attachment_change",
+                "accept_attachment_disappear",
+                "accept_probe_confirmation",
+                "retry_block_on_stop_button",
+                "retry_block_if_generating",
                 "trust_network_activity",
                 "trust_generating_indicator",
                 "trust_send_disabled_with_input_shrink",
@@ -734,6 +761,10 @@ def validate_site_config(config: Dict[str, Any]) -> bool:
 
             for key in numeric_fields:
                 if key in send_confirmation and not isinstance(send_confirmation[key], (int, float)):
+                    return False
+
+            for key in int_fields:
+                if key in send_confirmation and not isinstance(send_confirmation[key], int):
                     return False
 
             for key in bool_fields:
@@ -758,6 +789,125 @@ def validate_site_config(config: Dict[str, Any]) -> bool:
             ]
             bool_fields = [
                 "require_attachment_present",
+                "require_upload_signal_before_ready",
+                "continue_once_on_unconfirmed_send",
+            ]
+            list_fields = [
+                "root_selectors",
+                "attachment_selectors",
+                "pending_selectors",
+                "busy_text_markers",
+                "send_button_disabled_markers",
+            ]
+
+            for key in numeric_fields:
+                if key in attachment_monitor and not isinstance(attachment_monitor[key], (int, float)):
+                    return False
+
+            for key in bool_fields:
+                if key in attachment_monitor and not isinstance(attachment_monitor[key], bool):
+                    return False
+
+            for key in list_fields:
+                if key not in attachment_monitor:
+                    continue
+                value = attachment_monitor[key]
+                if not isinstance(value, list):
+                    return False
+                if any(not isinstance(item, str) for item in value):
+                    return False
+
+    if "file_paste" in config:
+        if not isinstance(config["file_paste"], dict):
+            return False
+
+        file_paste = config["file_paste"]
+        if "enabled" in file_paste and not isinstance(file_paste["enabled"], bool):
+            return False
+        if "threshold" in file_paste and not isinstance(file_paste["threshold"], int):
+            return False
+        if "hint_text" in file_paste and not isinstance(file_paste["hint_text"], str):
+            return False
+        if "reacquire_input_after_upload" in file_paste and not isinstance(file_paste["reacquire_input_after_upload"], bool):
+            return False
+        if "post_upload_input_selector" in file_paste and not isinstance(file_paste["post_upload_input_selector"], str):
+            return False
+        if "post_upload_settle" in file_paste and not isinstance(file_paste["post_upload_settle"], (int, float)):
+            return False
+        if "upload_signal_timeout" in file_paste and not isinstance(file_paste["upload_signal_timeout"], (int, float)):
+            return False
+        if "upload_signal_grace" in file_paste and not isinstance(file_paste["upload_signal_grace"], (int, float)):
+            return False
+        if "state_probe" in file_paste:
+            state_probe = file_paste["state_probe"]
+            if not isinstance(state_probe, dict):
+                return False
+            if "enabled" in state_probe and not isinstance(state_probe["enabled"], bool):
+                return False
+            if "code" in state_probe and not isinstance(state_probe["code"], str):
+                return False
+
+        if "send_confirmation" in file_paste:
+            send_confirmation = file_paste["send_confirmation"]
+            if not isinstance(send_confirmation, dict):
+                return False
+
+            numeric_fields = [
+                "post_click_observe_window",
+                "pre_retry_probe_window",
+                "retry_observe_window",
+                "attachment_observe_window",
+                "retry_interval",
+            ]
+            int_fields = [
+                "max_retry_count",
+            ]
+            bool_fields = [
+                "retry_on_unconfirmed_send",
+                "accept_attachment_change",
+                "accept_attachment_disappear",
+                "accept_probe_confirmation",
+                "retry_block_on_stop_button",
+                "retry_block_if_generating",
+                "trust_network_activity",
+                "trust_generating_indicator",
+                "trust_send_disabled_with_input_shrink",
+            ]
+            enum_fields = {
+                "attachment_sensitivity": {"low", "medium", "high"},
+            }
+
+            for key in numeric_fields:
+                if key in send_confirmation and not isinstance(send_confirmation[key], (int, float)):
+                    return False
+
+            for key in int_fields:
+                if key in send_confirmation and not isinstance(send_confirmation[key], int):
+                    return False
+
+            for key in bool_fields:
+                if key in send_confirmation and not isinstance(send_confirmation[key], bool):
+                    return False
+
+            for key, allowed_values in enum_fields.items():
+                if key not in send_confirmation:
+                    continue
+                value = str(send_confirmation[key]).strip().lower()
+                if value not in allowed_values:
+                    return False
+
+        if "attachment_monitor" in file_paste:
+            attachment_monitor = file_paste["attachment_monitor"]
+            if not isinstance(attachment_monitor, dict):
+                return False
+
+            numeric_fields = [
+                "idle_timeout",
+                "hard_max_wait",
+            ]
+            bool_fields = [
+                "require_attachment_present",
+                "require_upload_signal_before_ready",
                 "continue_once_on_unconfirmed_send",
             ]
             list_fields = [
@@ -796,6 +946,14 @@ def get_default_send_confirmation_config() -> SendConfirmationConfig:
         "pre_retry_probe_window": 0.12,
         "retry_observe_window": 0.9,
         "attachment_observe_window": 6.0,
+        "max_retry_count": 2,
+        "retry_interval": 0.6,
+        "retry_on_unconfirmed_send": True,
+        "accept_attachment_change": False,
+        "accept_attachment_disappear": False,
+        "accept_probe_confirmation": True,
+        "retry_block_on_stop_button": True,
+        "retry_block_if_generating": True,
         "trust_network_activity": True,
         "trust_generating_indicator": True,
         "trust_send_disabled_with_input_shrink": True,
@@ -811,6 +969,7 @@ def get_default_attachment_monitor_config() -> AttachmentMonitorConfig:
         "busy_text_markers": [],
         "send_button_disabled_markers": [],
         "require_attachment_present": False,
+        "require_upload_signal_before_ready": False,
         "continue_once_on_unconfirmed_send": True,
         "idle_timeout": 8.0,
         "hard_max_wait": 90.0,

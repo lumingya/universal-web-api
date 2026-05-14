@@ -41,6 +41,21 @@ def _get_max_tool_result_chars() -> int:
     return max(1, value)
 
 
+def _read_tool_calling_flag(name: str, default: bool) -> bool:
+    raw_value = str(os.getenv(name, "1" if default else "0") or "").strip().lower()
+    if not raw_value:
+        return default
+    return raw_value not in {"0", "false", "no", "off"}
+
+
+def get_tool_calling_allow_media_postprocess() -> bool:
+    return _read_tool_calling_flag("TOOL_CALLING_ALLOW_MEDIA_POSTPROCESS", False)
+
+
+def get_tool_calling_sanitize_assistant_content_enabled() -> bool:
+    return _read_tool_calling_flag("TOOL_CALLING_SANITIZE_ASSISTANT_CONTENT", True)
+
+
 def _trim_middle_text(text: str, limit: int) -> str:
     value = str(text or "")
     if limit <= 0 or len(value) <= limit:
@@ -853,6 +868,104 @@ def _serialize_content(content: Any) -> str:
         except Exception:
             return str(content)
     return str(content)
+
+
+_TOOL_CALLING_PLACEHOLDER_URL_RE = re.compile(
+    r"^\s*https?://(?:[\w.-]+\.)?googleusercontent\.com/"
+    r"(?:image_generation_content|generated_music_content)/\d+\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _cleanup_tool_calling_content_text(content: Any) -> str:
+    text = _serialize_content(content)
+    cleaned = _TOOL_CALLING_PLACEHOLDER_URL_RE.sub("", text or "")
+    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+
+def _resolve_response_media_ref(item: Any) -> str:
+    if not isinstance(item, dict):
+        return ""
+    ref = str(item.get("url") or item.get("data_uri") or "").strip()
+    return ref
+
+
+def _build_response_media_markdown_block(media_items: Any) -> str:
+    if not isinstance(media_items, list):
+        return ""
+
+    image_blocks: List[str] = []
+    audio_lines: List[str] = []
+    video_lines: List[str] = []
+
+    for item in media_items:
+        ref = _resolve_response_media_ref(item)
+        if not ref:
+            continue
+
+        media_type = str((item or {}).get("media_type") or "image").strip().lower()
+        if media_type == "image":
+            image_blocks.append(f"\n\n![image_{len(image_blocks)}]({ref})")
+            continue
+
+        label = str((item or {}).get("label") or (item or {}).get("mime") or "").strip()
+        label_suffix = f" - {label}" if label else ""
+        if media_type == "audio":
+            audio_lines.append(f"[audio_{len(audio_lines)}]({ref}){label_suffix}")
+        elif media_type == "video":
+            video_lines.append(f"[video_{len(video_lines)}]({ref}){label_suffix}")
+
+    blocks: List[str] = []
+    if image_blocks:
+        blocks.append("".join(image_blocks))
+    if audio_lines:
+        blocks.append("\n\n" + "\n".join(audio_lines))
+    if video_lines:
+        blocks.append("\n\n" + "\n".join(video_lines))
+
+    if not blocks:
+        return ""
+
+    return "".join(blocks) + "\n\n"
+
+
+def _strip_trailing_response_media_markdown(content: str, media_items: Any) -> str:
+    text = str(content or "")
+    media_markdown = _build_response_media_markdown_block(media_items)
+    if media_markdown:
+        candidates = []
+        for variant in (media_markdown, media_markdown.rstrip(), media_markdown.strip()):
+            if variant and variant not in candidates:
+                candidates.append(variant)
+        for candidate in candidates:
+            if text.endswith(candidate):
+                return text[: -len(candidate)].rstrip()
+    return text
+
+
+def extract_tool_calling_assistant_content(response: Dict[str, Any]) -> str:
+    try:
+        message = (
+            response.get("choices", [])[0]
+            .get("message", {})
+        )
+    except Exception:
+        message = {}
+
+    if not isinstance(message, dict):
+        return ""
+
+    sanitize = get_tool_calling_sanitize_assistant_content_enabled()
+    content = _serialize_content(message.get("content"))
+    if not sanitize:
+        return content.strip()
+
+    content = _cleanup_tool_calling_content_text(content)
+    media_items = message.get("media")
+    if not isinstance(media_items, list):
+        media_items = response.get("media")
+
+    return _strip_trailing_response_media_markdown(content, media_items)
 
 
 def decode_browser_non_stream_payload(payload: Any) -> Dict[str, Any]:
@@ -2410,6 +2523,9 @@ def _pack_sse_chunk(data: Dict[str, Any]) -> str:
 __all__ = [
     "build_browser_messages_for_tools",
     "build_tool_completion_response",
+    "extract_tool_calling_assistant_content",
+    "get_tool_calling_allow_media_postprocess",
+    "get_tool_calling_sanitize_assistant_content_enabled",
     "decode_browser_non_stream_payload",
     "complete_tool_calling_roundtrip",
     "complete_tool_calling_roundtrip_async",

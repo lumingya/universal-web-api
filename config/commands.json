@@ -1371,7 +1371,7 @@
       "name": "ARENA_EVERY4_ROTATE_IP",
       "enabled": true,
       "log_enabled": true,
-      "log_level": "GLOBAL",
+      "log_level": "ERROR",
       "mode": "advanced",
       "stop_on_error": false,
       "trigger": {

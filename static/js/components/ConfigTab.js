@@ -82,20 +82,6 @@ window.ConfigTab = {
                     options: {}
                 },
                 hard_timeout: 300,
-                send_confirmation: {
-                    attachment_sensitivity: 'medium'
-                },
-                attachment_monitor: {
-                    root_selectors: [],
-                    attachment_selectors: [],
-                    pending_selectors: [],
-                    busy_text_markers: [],
-                    send_button_disabled_markers: [],
-                    require_attachment_present: false,
-                    continue_once_on_unconfirmed_send: true,
-                    idle_timeout: 8.0,
-                    hard_max_wait: 90.0
-                },
                 network: null
             }
         };
@@ -139,16 +125,15 @@ window.ConfigTab = {
                     }
                 },
                 hard_timeout: streamConfig.hard_timeout || this.defaultStreamConfig.hard_timeout,
-                network: streamConfig.network || this.defaultStreamConfig.network,
-                send_confirmation: {
-                    ...(this.defaultStreamConfig.send_confirmation || {}),
-                    ...(streamConfig.send_confirmation || {})
-                },
-                attachment_monitor: {
-                    ...(this.defaultStreamConfig.attachment_monitor || {}),
-                    ...(streamConfig.attachment_monitor || {})
-                }
+                network: streamConfig.network || this.defaultStreamConfig.network
             };
+        },
+        filePasteConfigRef() {
+            if (!this.presetConfig) return {};
+            if (!this.presetConfig.file_paste || typeof this.presetConfig.file_paste !== 'object') {
+                this.presetConfig.file_paste = {};
+            }
+            return this.presetConfig.file_paste;
         },
         siteAdvancedConfig() {
             if (!this.currentConfig) {
@@ -1144,7 +1129,7 @@ window.ConfigTab = {
                 />
                 <!-- 文件粘贴配置面板 -->
                 <file-paste-panel v-if="presetConfig"
-                    :sites="$parent.sites"
+                    :file-paste-config="filePasteConfigRef"
                     :current-domain="currentDomain"
                     :selected-preset="selectedPreset"
                     :collapsed="filePasteCollapsed"

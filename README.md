@@ -45,7 +45,7 @@ Create isolated cookie sessions for the same site to support concurrent calls wi
 | AI Studio | aistudio.google.com | — |
 | Arena AI | arena.ai | Sensitive to IP quality; see notes |
 
-> Sites not listed here can still be adapted through AI-based page analysis. See [Add a New Site](./static/tutorial.html#add-site-guide).
+> Sites not listed here can still be adapted through AI-based page analysis. See [Add a New Site](./static/tutorial/index.html#add-site-guide).
 
 ## Quick Start
 
@@ -58,22 +58,22 @@ Create isolated cookie sessions for the same site to support concurrent calls wi
    - **Base URL**: `http://127.0.0.1:8199/v1`
    - **API Key**: any value, such as `sk-any`
 
-For detailed instructions, see the [full tutorial](./static/tutorial.html#quick-start).
+For detailed instructions, see the [full tutorial](./static/tutorial/index.html#quick-start).
 
 ## Documentation
 
 | Document | Description |
 |------|------|
-| [Full Tutorial](./static/tutorial.html#quick-start) | Installation, startup, login, and dashboard overview |
-| [Connect API](./static/tutorial.html#connect-api) | Common parameters, routing modes, and request examples |
-| [Add a New Site](./static/tutorial.html#add-site-guide) | AI auto-recognition and manual site configuration |
-| [Function Calling](./static/tutorial.html#function-calling) | Tool-calling compatibility and usage guidance |
-| [Tab Pool and Presets](./static/tutorial.html#tab-pool) | Multi-tab concurrency and preset usage |
-| [Core Configuration](./static/tutorial.html#selectors) | Selectors, workflow, streaming, multimodal extraction, and file paste |
-| [Advanced Configuration](./static/tutorial.html#stealth-mode) | Stealth mode, AI element recognition, and environment settings |
-| [Notes and Known Limits](./static/tutorial.html#faq) | Runtime limits, known issues, and special-site notes |
-| [FAQ](./static/tutorial.html#faq) | Troubleshooting startup failures, timeouts, and repeated failures |
-| [Parameter Reference](./static/tutorial.html#env-config) | Detailed explanation of configuration options |
+| [Full Tutorial](./static/tutorial/index.html#quick-start) | Installation, startup, login, and dashboard overview |
+| [Connect API](./static/tutorial/index.html#connect-api) | Common parameters, routing modes, and request examples |
+| [Add a New Site](./static/tutorial/index.html#add-site-guide) | AI auto-recognition and manual site configuration |
+| [Function Calling](./static/tutorial/index.html#function-calling) | Tool-calling compatibility and usage guidance |
+| [Tab Pool and Presets](./static/tutorial/index.html#tab-pool) | Multi-tab concurrency and preset usage |
+| [Core Configuration](./static/tutorial/index.html#selectors) | Selectors, workflow, streaming, multimodal extraction, and file paste |
+| [Advanced Configuration](./static/tutorial/index.html#stealth-mode) | Stealth mode, AI element recognition, and environment settings |
+| [Notes and Known Limits](./static/tutorial/index.html#faq) | Runtime limits, known issues, and special-site notes |
+| [FAQ](./static/tutorial/index.html#faq) | Troubleshooting startup failures, timeouts, and repeated failures |
+| [Parameter Reference](./static/tutorial/index.html#env-config) | Detailed explanation of configuration options |
 
 ## Feedback
 
@@ -81,7 +81,7 @@ If you run into problems, you can join the QQ group **1073037753** or open an is
 
 ## Disclaimer
 
-This project is for learning, research, and technical discussion only. Make sure you comply with the target site's Terms of Service, and do not use it for commercial purposes or high-frequency automated requests. See the [usage notes in the tutorial](./static/tutorial.html#author-note).
+This project is for learning, research, and technical discussion only. Make sure you comply with the target site's Terms of Service, and do not use it for commercial purposes or high-frequency automated requests. See the [usage notes in the tutorial](./static/tutorial/index.html#author-note).
 
 ## License
 

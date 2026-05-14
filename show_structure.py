@@ -134,6 +134,7 @@ COMMENTS = {
     # css
     "static/css": "💅 样式表目录",
     "static/css/dashboard.css": "🎨 控制面板样式：布局、主题、响应式适配",
+    "static/css/tutorial.css": "📚 教程页样式：从原单文件中拆分出的教程专用样式",
 
     # js
     "static/js": "⚡ 前端 JavaScript 代码",
@@ -166,11 +167,14 @@ COMMENTS = {
     # js 其他
     "static/js/dashboard.js": "🚀 前端入口文件：初始化 App、路由、WebSocket",
     "static/js/icons.js": "🖼️ SVG 图标数据：内联图标资源",
+    "static/js/tutorial-page.js": "📚 教程页脚本：从原单文件中拆分出的教程交互逻辑",
     "static/js/workflow-editor-inject.js": "✏️ 工作流编辑器注入脚本：在目标页面注入可视化编辑器",
 
     # static 其他
     "static/index.html": "🏠 Web UI 主页入口 (SPA)",
-    "static/tutorial.html": "📚 使用教程页面：功能说明和操作指南",
+    "static/tutorial": "📚 使用教程目录：拆分后的教程入口与页面资源",
+    "static/tutorial/index.html": "📚 使用教程页面：拆分后的主入口模板",
+    "static/tutorial.html": "↪️ 教程兼容入口：跳转到拆分后的教程目录",
     "static/backup": "📦 备份的前端文件 (旧版本)",
 
     # ==================== tests 目录 ====================

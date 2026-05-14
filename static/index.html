@@ -235,7 +235,8 @@
                             @reload-config="reloadConfig">
                 </config-tab>
 
-                <marketplace-tab v-show="activeTab === 'marketplace'"
+                <marketplace-tab v-if="shouldRenderTab('marketplace')"
+                                 v-show="activeTab === 'marketplace'"
                                  :catalog="marketplaceCatalog"
                                  :loading="marketplaceLoading"
                                  :error="marketplaceError"
@@ -254,12 +255,13 @@
                 </tabpool-tab>
 
                 <!-- 命令 Tab -->
-                <commands-tab v-show="activeTab === 'commands'"
+                <commands-tab v-if="shouldRenderTab('commands')"
+                              v-show="activeTab === 'commands'"
                               :dark-mode="darkMode"
                               @notify="notify($event.message, $event.type)">
                 </commands-tab>
                 <!-- 日志 Tab -->
-                <logs-tab v-show="activeTab === 'logs'"
+                <logs-tab v-if="activeTab === 'logs'"
                           :logs="logs"
                           :filter="logLevelFilter"
                           :paused="pauseLogs"
@@ -268,7 +270,7 @@
                           @toggle-pause="pauseLogs = !pauseLogs">
                 </logs-tab>
 
-                <request-monitor-tab v-show="activeTab === 'monitor'"
+                <request-monitor-tab v-if="activeTab === 'monitor'"
                                      :records="requestHistory"
                                      :system-stats="systemStats"
                                      :loading="requestHistoryLoading"
@@ -278,7 +280,7 @@
                 </request-monitor-tab>
 
                 <!-- 设置 Tab -->
-                <settings-tab v-show="activeTab === 'settings'"
+                <settings-tab v-if="activeTab === 'settings'"
                               :env-config="envConfig"
                               :env-schema="envSchema"
                               :env-collapsed="envCollapsed"
@@ -773,6 +775,6 @@
     <script src="/static/js/components/CommandsTab.js?v=2.6.7"></script>
 
     <!-- 主应用逻辑 -->
-    <script src="/static/js/dashboard.js?v=2.6.21"></script>
+<script src="/static/js/dashboard.js?v=2.6.23"></script>
 </body>
 </html>

@@ -396,7 +396,7 @@ async def lifespan(app: FastAPI):
             if _should_open_startup_pages(browser):
                 try:
                     base_url = _get_local_startup_base_url()
-                    tutorial_url = f"{base_url}/static/tutorial.html"
+                    tutorial_url = f"{base_url}/static/tutorial/index.html"
                     guide_url = f"{base_url}/static/controlled-browser-guide.html"
                     logger.info(f"[startup] 首次启动，使用系统浏览器打开教程页: {tutorial_url}")
                     _open_startup_page_non_blocking(

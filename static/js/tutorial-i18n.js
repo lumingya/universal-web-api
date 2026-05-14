@@ -678,7 +678,7 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
                 <h4>Use the visual workbench first</h4>
                 <p>The local page is no longer just a toy demo. It now acts as a real selector workbench where you can switch target fields, change page state, inspect suggested candidates, and test whether dynamic classes break your selector.</p>
                 <div class="tutorial-callout-actions">
-                    <a class="btn" href="./selector-practice.html" target="_blank" rel="noopener">Open the selector workbench</a>
+                    <a class="btn" href="../selector-practice.html" target="_blank" rel="noopener">Open the selector workbench</a>
                 </div>
             </div>
         </div>
@@ -951,14 +951,14 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
             <p><strong>Manual helper script:</strong> the project already includes <code>static/拦截请求发生器.txt</code>. You can copy it from this tutorial section or open the original text file directly.</p>
             <div class="script-link-row">
                 <button type="button" class="btn" id="copyRequestGeneratorBtn">Copy Script</button>
-                <a class="btn" href="./%E6%8B%A6%E6%88%AA%E8%AF%B7%E6%B1%82%E5%8F%91%E7%94%9F%E5%99%A8.txt" target="_blank" rel="noopener">Open Script</a>
+                <a class="btn" href="../%E6%8B%A6%E6%88%AA%E8%AF%B7%E6%B1%82%E5%8F%91%E7%94%9F%E5%99%A8.txt" target="_blank" rel="noopener">Open Script</a>
             </div>
             <details class="inline-script-viewer">
                 <summary>View the script inside the tutorial</summary>
                 <iframe
                     id="requestGeneratorFrame"
                     class="inline-script-frame"
-                    src="./%E6%8B%A6%E6%88%AA%E8%AF%B7%E6%B1%82%E5%8F%91%E7%94%9F%E5%99%A8.txt"
+                    src="../%E6%8B%A6%E6%88%AA%E8%AF%B7%E6%B1%82%E5%8F%91%E7%94%9F%E5%99%A8.txt"
                     title="Request generator script"
                 ></iframe>
             </details>

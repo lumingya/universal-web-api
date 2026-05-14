@@ -262,6 +262,7 @@ class WorkflowExecutor:
         self._extractor = extractor
         self._image_config = image_config or {}  
         self._stream_config = stream_config or {}
+        self._file_paste_config = file_paste_config or {}
         self._selectors = selectors or {}
         
         # 🆕 初始化双 Monitor（优先网络，回退 DOM）
@@ -276,6 +277,7 @@ class WorkflowExecutor:
         self._pending_request_transport_state: Optional[Dict[str, Any]] = None
         self._request_transport_bypass = False
         self._last_request_transport_sent = False
+        self._last_send_attempt_state: Dict[str, Any] = {}
         
         # 检查是否启用网络监听模式
         self._stream_mode = stream_config.get("mode", "dom") if stream_config else "dom"
@@ -770,7 +772,7 @@ class WorkflowExecutor:
                         || Number(style.opacity || '1') < 0.05;
                     const pointerEventsNone = style.pointerEvents === 'none';
                     const busy = el.getAttribute('aria-busy') === 'true'
-                        || /loading|pending|sending|uploading|disabled/.test(text);
+                        || /loading|pending|sending|uploading|disable(?:d)?/.test(text);
                     const sizeOk = rect.width >= 1 && rect.height >= 1;
                     const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
                     const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
@@ -865,6 +867,10 @@ class WorkflowExecutor:
             raw_config = stream_config.get("attachment_monitor", {}) or {}
             if isinstance(raw_config, dict):
                 config.update(raw_config)
+        if isinstance(file_paste_config, dict):
+            raw_config = file_paste_config.get("attachment_monitor", {}) or {}
+            if isinstance(raw_config, dict):
+                config.update(raw_config)
 
         attachment_selectors = self._normalize_attachment_rule_list(
             config.get("attachment_selectors", [])
@@ -879,6 +885,18 @@ class WorkflowExecutor:
             config["attachment_selectors"] = attachment_selectors
 
         return config
+
+    def _get_file_paste_send_confirmation_config(self) -> Dict[str, Any]:
+        if not isinstance(self._file_paste_config, dict):
+            return {}
+        raw_config = self._file_paste_config.get("send_confirmation", {}) or {}
+        return raw_config if isinstance(raw_config, dict) else {}
+
+    def _get_file_paste_state_probe_config(self) -> Dict[str, Any]:
+        if not isinstance(self._file_paste_config, dict):
+            return {}
+        raw_config = self._file_paste_config.get("state_probe", {}) or {}
+        return raw_config if isinstance(raw_config, dict) else {}
 
     def _get_attachment_monitor_flag(self, key: str, default: bool = False) -> bool:
         raw_value = {}
@@ -2148,10 +2166,20 @@ class WorkflowExecutor:
                 if not isinstance(state, dict):
                     state = {}
                 state = dict(state)
-                state["ready"] = AttachmentMonitor._is_ready_state(
+                phase_flags = AttachmentMonitor.derive_phase_flags(
                     state,
                     require_send_enabled=True,
+                    require_attachment_present=self._get_attachment_monitor_flag(
+                        "require_attachment_present",
+                        False,
+                    ),
+                    require_upload_signal_before_ready=self._get_attachment_monitor_flag(
+                        "require_upload_signal_before_ready",
+                        False,
+                    ),
                 )
+                state.update(phase_flags)
+                state["ready"] = bool(phase_flags.get("upload_ready"))
                 return state
             except Exception as e:
                 logger.debug(f"[SEND] 附件状态探测失败: {e}")
@@ -2163,6 +2191,9 @@ class WorkflowExecutor:
                     "sendFound": False,
                     "sendDisabled": False,
                     "sendBusy": False,
+                    "upload_started": False,
+                    "uploading": False,
+                    "attachment_present": False,
                     "ready": True,
                 }
         selector_json = json.dumps((send_selector or "").strip(), ensure_ascii=False)
@@ -2225,7 +2256,7 @@ class WorkflowExecutor:
                 const sendDisabled = !!sendBtn && (
                     !!sendBtn.disabled
                     || sendBtn.getAttribute('aria-disabled') === 'true'
-                    || /disabled|loading|uploading|sending/.test(String(sendBtn.className || '').toLowerCase())
+                    || /disable(?:d)?|loading|uploading|sending/.test(String(sendBtn.className || '').toLowerCase())
                 );
 
                 return {{
@@ -2263,6 +2294,9 @@ class WorkflowExecutor:
                 "pendingText": False,
                 "sendFound": False,
                 "sendDisabled": False,
+                "upload_started": False,
+                "uploading": False,
+                "attachment_present": False,
                 "ready": True,
             }
 
@@ -2473,6 +2507,12 @@ class WorkflowExecutor:
         raw_config = {}
         if isinstance(self._stream_config, dict):
             raw_config = self._stream_config.get("send_confirmation", {}) or {}
+        file_paste_config = self._get_file_paste_send_confirmation_config()
+        if isinstance(file_paste_config, dict):
+            raw_config = {
+                **(raw_config if isinstance(raw_config, dict) else {}),
+                **file_paste_config,
+            }
 
         if isinstance(raw_config, dict):
             config.update(raw_config)
@@ -2481,10 +2521,15 @@ class WorkflowExecutor:
 
     def _get_raw_send_confirmation_config(self) -> Dict[str, Any]:
         """Return only the site-provided send confirmation overrides."""
-        if not isinstance(self._stream_config, dict):
-            return {}
-        raw_config = self._stream_config.get("send_confirmation", {}) or {}
-        return raw_config if isinstance(raw_config, dict) else {}
+        raw_config: Dict[str, Any] = {}
+        if isinstance(self._stream_config, dict):
+            legacy_config = self._stream_config.get("send_confirmation", {}) or {}
+            if isinstance(legacy_config, dict):
+                raw_config.update(legacy_config)
+        file_paste_config = self._get_file_paste_send_confirmation_config()
+        if isinstance(file_paste_config, dict):
+            raw_config.update(file_paste_config)
+        return raw_config
 
     def _get_send_confirmation_window(
         self,
@@ -2527,6 +2572,25 @@ class WorkflowExecutor:
             if lowered in ("0", "false", "no", "off"):
                 return False
         return bool(raw_value)
+
+    def _get_send_confirmation_int(
+        self,
+        key: str,
+        fallback: int,
+        *,
+        min_value: int = 0,
+        max_value: Optional[int] = None,
+        raw_only: bool = False,
+    ) -> int:
+        config = self._get_raw_send_confirmation_config() if raw_only else self._get_send_confirmation_config()
+        try:
+            value = int(config.get(key, fallback))
+        except (TypeError, ValueError):
+            value = int(fallback)
+        value = max(min_value, value)
+        if max_value is not None:
+            value = min(value, max_value)
+        return value
 
     def _get_attachment_send_confirmation_profile(self) -> Dict[str, Any]:
         """Resolve the 3-level attachment send sensitivity profile."""
@@ -2648,7 +2712,7 @@ class WorkflowExecutor:
                 const sendDisabled = !!sendBtn && (
                     !!sendBtn.disabled
                     || sendBtn.getAttribute('aria-disabled') === 'true'
-                    || /disabled|loading|uploading|sending/.test(sendMeta)
+                    || /disable(?:d)?|loading|uploading|sending/.test(sendMeta)
                 );
 
                 return {{
@@ -2764,6 +2828,162 @@ class WorkflowExecutor:
 
         return False
 
+    def _probe_attachment_state_probe(self, state: Optional[Dict[str, Any]], stage: str) -> Dict[str, Any]:
+        if self._attachment_monitor is None:
+            return {
+                "enabled": False,
+                "ok": False,
+                "hit": False,
+                "result": {},
+                "summary": "",
+            }
+        try:
+            return self._attachment_monitor.run_state_probe(state=state, stage=stage)
+        except Exception as e:
+            logger.debug(f"[SEND] 附件 state probe 执行失败 ({stage}): {e}")
+            return {
+                "enabled": True,
+                "ok": False,
+                "hit": False,
+                "result": {},
+                "summary": str(e)[:240],
+            }
+
+    def _build_send_attempt_state(
+        self,
+        *,
+        send_selector: str,
+        before_len: int,
+        after_len: int,
+        baseline_attachment_state: Optional[Dict[str, Any]] = None,
+        attachment_state: Optional[Dict[str, Any]] = None,
+        network_state: Optional[Dict[str, Any]] = None,
+        post_click_state: Optional[Dict[str, Any]] = None,
+        probe_info: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        base_attachment_state = dict(baseline_attachment_state or {})
+        current_attachment_state = dict(attachment_state or {})
+        attachment_delta = {
+            "attachmentCount": int(current_attachment_state.get("attachmentCount", 0) or 0)
+            - int(base_attachment_state.get("attachmentCount", 0) or 0),
+            "previewCount": int(current_attachment_state.get("previewCount", 0) or 0)
+            - int(base_attachment_state.get("previewCount", 0) or 0),
+            "fileInputCount": int(current_attachment_state.get("fileInputCount", 0) or 0)
+            - int(base_attachment_state.get("fileInputCount", 0) or 0),
+        }
+        attachment_changed = bool(
+            current_attachment_state.get("attachmentFingerprint")
+            and current_attachment_state.get("attachmentFingerprint") != base_attachment_state.get("attachmentFingerprint")
+        ) or any(delta != 0 for delta in attachment_delta.values())
+        attachment_disappeared = bool(
+            AttachmentMonitor._attachment_present(base_attachment_state)
+            and not AttachmentMonitor._attachment_present(current_attachment_state)
+        )
+
+        state = {
+            "before_input_length": int(before_len or 0),
+            "after_input_length": int(after_len or 0),
+            "input_shrunk": int(after_len or 0) < int(before_len or 0),
+            "attachment_before": base_attachment_state,
+            "attachment_after": current_attachment_state,
+            "attachment_delta": attachment_delta,
+            "attachment_changed_after_send": attachment_changed,
+            "attachment_disappeared_after_send": attachment_disappeared,
+            "network": dict(network_state or {}),
+            "post_click": dict(post_click_state or {}),
+            "probe": dict(probe_info or {}),
+        }
+
+        accepted_signals = []
+        if state["input_shrunk"]:
+            accepted_signals.append("input_shrunk")
+        if bool((state["network"] or {}).get("matched")):
+            accepted_signals.append("network_activity")
+        if bool((state["post_click"] or {}).get("generating")):
+            accepted_signals.append("generating")
+        if bool((state["post_click"] or {}).get("sendLooksLikeStop")):
+            accepted_signals.append("send_became_stop")
+        if bool((state["post_click"] or {}).get("sendDisabled")) and state["input_shrunk"]:
+            accepted_signals.append("send_disabled_with_input_shrink")
+        if attachment_changed:
+            accepted_signals.append("attachment_changed")
+        if attachment_disappeared:
+            accepted_signals.append("attachment_disappeared")
+        probe_result = (probe_info or {}).get("result") if isinstance(probe_info, dict) else {}
+        if isinstance(probe_result, dict) and bool(probe_result.get("accepted")):
+            accepted_signals.append("probe_accepted")
+        if isinstance(probe_result, dict) and bool(probe_result.get("confirmed")):
+            accepted_signals.append("probe_confirmed")
+        if isinstance(probe_result, dict) and bool(probe_result.get("retry")):
+            state["probe_retry"] = True
+        if isinstance(probe_result, dict) and bool(probe_result.get("uploading")):
+            state["probe_uploading"] = True
+        if isinstance(probe_result, dict) and bool(probe_result.get("ready")):
+            state["probe_ready"] = True
+
+        state["accepted_signals"] = accepted_signals
+        state["accepted"] = bool(accepted_signals)
+        return state
+
+    def _should_retry_attachment_send(
+        self,
+        attempt_state: Dict[str, Any],
+        *,
+        retry_index: int,
+        max_retry_count: int,
+    ) -> bool:
+        if retry_index >= max_retry_count:
+            return False
+
+        retry_on_unconfirmed = self._get_send_confirmation_flag(
+            "retry_on_unconfirmed_send",
+            True,
+            raw_only=True,
+        )
+        if not retry_on_unconfirmed:
+            return False
+
+        if self._get_send_confirmation_flag("retry_block_if_generating", True, raw_only=True):
+            if bool((attempt_state.get("post_click") or {}).get("generating")):
+                return False
+
+        if self._get_send_confirmation_flag("retry_block_on_stop_button", True, raw_only=True):
+            if bool((attempt_state.get("post_click") or {}).get("sendLooksLikeStop")):
+                return False
+
+        probe_result = (attempt_state.get("probe") or {}).get("result") if isinstance(attempt_state.get("probe"), dict) else {}
+        if isinstance(probe_result, dict):
+            if probe_result.get("shouldRetry") is False:
+                return False
+            if probe_result.get("retry") is True:
+                return True
+            if probe_result.get("accepted") is True or probe_result.get("confirmed") is True:
+                return False
+
+        if bool((attempt_state.get("network") or {}).get("matched")):
+            return False
+
+        if bool(attempt_state.get("accepted")):
+            if self._get_send_confirmation_flag("accept_attachment_change", False, raw_only=True):
+                if "attachment_changed" in (attempt_state.get("accepted_signals") or []):
+                    return False
+            if self._get_send_confirmation_flag("accept_attachment_disappear", False, raw_only=True):
+                if "attachment_disappeared" in (attempt_state.get("accepted_signals") or []):
+                    return False
+            if self._get_send_confirmation_flag("accept_probe_confirmation", True, raw_only=True):
+                if any(
+                    signal in (attempt_state.get("accepted_signals") or [])
+                    for signal in ("probe_accepted", "probe_confirmed")
+                ):
+                    return False
+            if any(
+                signal in (attempt_state.get("accepted_signals") or [])
+                for signal in ("input_shrunk", "generating", "send_became_stop", "network_activity")
+            ):
+                return False
+
+        return True
+
     def _execute_click_send_reliably(self, selector: str, target_key: str, optional: bool):
         """
         可靠发送（v5.6 隐身模式增强版）
@@ -2781,9 +3001,22 @@ class WorkflowExecutor:
 
         # ===== 普通模式：原有逻辑 =====
         max_wait = getattr(BrowserConstants, "IMAGE_SEND_MAX_WAIT", 12.0)
-        retry_interval = getattr(BrowserConstants, "IMAGE_SEND_RETRY_INTERVAL", 0.6)
         avoid_repeat_click = self._has_recent_attachment_upload()
         attachment_profile = self._get_attachment_send_confirmation_profile()
+        max_retry_count = self._get_send_confirmation_int(
+            "max_retry_count",
+            2,
+            min_value=0,
+            max_value=10,
+            raw_only=True,
+        )
+        retry_interval = self._get_send_confirmation_window(
+            "retry_interval",
+            getattr(BrowserConstants, "IMAGE_SEND_RETRY_INTERVAL", 0.6),
+            min_value=0.0,
+            max_value=max_wait,
+            raw_only=True,
+        )
         send_observe_window = self._get_send_confirmation_window(
             "post_click_observe_window",
             getattr(BrowserConstants, "SEND_POST_CLICK_OBSERVE_WINDOW", 1.8),
@@ -2826,6 +3059,7 @@ class WorkflowExecutor:
         )
 
         before_len = self._safe_get_input_len_by_key("input_box")
+        baseline_attachment_state = self._probe_attachment_readiness(selector) if avoid_repeat_click else {}
         self._execute_click(selector, target_key, optional)
 
         time.sleep(0.25)
@@ -2836,6 +3070,42 @@ class WorkflowExecutor:
             return
 
         if avoid_repeat_click:
+            network_probe = {"matched": False}
+            if attachment_trust_network_activity and self._network_monitor is not None:
+                try:
+                    network_probe = self._network_monitor.poll_send_activity(timeout=min(0.3, attachment_observe_window)) or {"matched": False}
+                except Exception as e:
+                    logger.debug_throttled(
+                        "send.attachment_network_probe_failed",
+                        f"[SEND] 附件发送网络探测失败: {e}",
+                        interval_sec=5.0,
+                    )
+            post_click_state = self._probe_send_post_click_state(selector)
+            attachment_state_after_send = self._probe_attachment_readiness(selector)
+            probe_info = self._probe_attachment_state_probe(attachment_state_after_send, "after_send")
+            attempt_state = self._build_send_attempt_state(
+                send_selector=selector,
+                before_len=before_len,
+                after_len=after_len,
+                baseline_attachment_state=baseline_attachment_state,
+                attachment_state=attachment_state_after_send,
+                network_state=network_probe,
+                post_click_state=post_click_state,
+                probe_info=probe_info,
+            )
+            self._last_send_attempt_state = attempt_state
+
+            accept_unconfirmed = False
+            if self._get_send_confirmation_flag("accept_attachment_change", False, raw_only=True):
+                accept_unconfirmed = accept_unconfirmed or bool(attempt_state.get("attachment_changed_after_send"))
+            if self._get_send_confirmation_flag("accept_attachment_disappear", False, raw_only=True):
+                accept_unconfirmed = accept_unconfirmed or bool(attempt_state.get("attachment_disappeared_after_send"))
+            if self._get_send_confirmation_flag("accept_probe_confirmation", True, raw_only=True):
+                accept_unconfirmed = accept_unconfirmed or any(
+                    signal in (attempt_state.get("accepted_signals") or [])
+                    for signal in ("probe_accepted", "probe_confirmed")
+                )
+
             if self._observe_send_without_retry(
                 selector,
                 before_len,
@@ -2847,11 +3117,109 @@ class WorkflowExecutor:
                 logger.info(
                     f"发送成功（附件场景，已避免重复点击发送按钮，sensitivity={attachment_profile['level']}）"
                 )
-            else:
-                logger.warning(
-                    "[SEND] 附件发送场景未观察到明确成功信号，跳过自动补点以避免误点停止按钮 "
-                    f"(sensitivity={attachment_profile['level']})"
+            elif accept_unconfirmed:
+                logger.info(
+                    f"发送成功（附件场景，通过补充信号确认，signals={attempt_state.get('accepted_signals') or []}）"
                 )
+            else:
+                if max_retry_count > 0 and self._should_retry_attachment_send(
+                    attempt_state,
+                    retry_index=0,
+                    max_retry_count=max_retry_count,
+                ):
+                    logger.warning(
+                        "[SEND] 附件发送场景未确认成功，进入附件重试 "
+                        f"(signals={attempt_state.get('accepted_signals') or []}, "
+                        f"sensitivity={attachment_profile['level']})"
+                    )
+
+                    for retry_index in range(1, max_retry_count + 1):
+                        if self._check_cancelled():
+                            return
+
+                        wait_for = max(0.0, min(retry_interval, max_wait))
+                        if wait_for > 0:
+                            time.sleep(wait_for)
+
+                        pre_retry_probe_window = min(
+                            max(0.0, retry_probe_window),
+                            max(0.0, max_wait),
+                        )
+                        if pre_retry_probe_window > 0 and self._observe_send_without_retry(
+                            selector,
+                            before_len,
+                            max_wait=pre_retry_probe_window,
+                            trust_network_activity=attachment_trust_network_activity,
+                            trust_generating_indicator=attachment_trust_generating_indicator,
+                            trust_send_disabled_with_input_shrink=attachment_trust_send_disabled_with_input_shrink,
+                        ):
+                            logger.info(f"发送成功（附件重试前观察确认，第 {retry_index} 轮）")
+                            return
+
+                        self._execute_click(selector, target_key, optional)
+                        time.sleep(0.25)
+                        retry_after_len = self._safe_get_input_len_by_key("input_box")
+                        retry_network_probe = {"matched": False}
+                        if attachment_trust_network_activity and self._network_monitor is not None:
+                            try:
+                                retry_network_probe = self._network_monitor.poll_send_activity(
+                                    timeout=min(0.3, attachment_observe_window)
+                                ) or {"matched": False}
+                            except Exception as e:
+                                logger.debug_throttled(
+                                    "send.attachment_network_retry_probe_failed",
+                                    f"[SEND] 附件重试网络探测失败: {e}",
+                                    interval_sec=5.0,
+                                )
+                        retry_post_click_state = self._probe_send_post_click_state(selector)
+                        retry_attachment_state = self._probe_attachment_readiness(selector)
+                        retry_probe_info = self._probe_attachment_state_probe(
+                            retry_attachment_state,
+                            f"retry_{retry_index}",
+                        )
+                        retry_attempt_state = self._build_send_attempt_state(
+                            send_selector=selector,
+                            before_len=before_len,
+                            after_len=retry_after_len,
+                            baseline_attachment_state=baseline_attachment_state,
+                            attachment_state=retry_attachment_state,
+                            network_state=retry_network_probe,
+                            post_click_state=retry_post_click_state,
+                            probe_info=retry_probe_info,
+                        )
+                        self._last_send_attempt_state = retry_attempt_state
+
+                        if self._observe_send_without_retry(
+                            selector,
+                            before_len,
+                            max_wait=min(retry_observe_window, max_wait),
+                            trust_network_activity=attachment_trust_network_activity,
+                            trust_generating_indicator=attachment_trust_generating_indicator,
+                            trust_send_disabled_with_input_shrink=attachment_trust_send_disabled_with_input_shrink,
+                        ):
+                            logger.info(f"发送成功（附件重试后观察确认，第 {retry_index} 轮）")
+                            return
+
+                        if not self._should_retry_attachment_send(
+                            retry_attempt_state,
+                            retry_index=retry_index,
+                            max_retry_count=max_retry_count,
+                        ):
+                            logger.warning(
+                                "[SEND] 附件重试停止：不再满足重试条件 "
+                                f"(signals={retry_attempt_state.get('accepted_signals') or []})"
+                            )
+                            return
+
+                    logger.warning(
+                        "[SEND] 附件发送重试已达到上限，停止自动补点 "
+                        f"(max_retry_count={max_retry_count})"
+                    )
+                else:
+                    logger.warning(
+                        "[SEND] 附件发送场景未观察到明确成功信号，跳过自动补点以避免误点停止按钮 "
+                        f"(sensitivity={attachment_profile['level']})"
+                    )
             return
 
         if self._observe_send_without_retry(selector, before_len, max_wait=send_observe_window):

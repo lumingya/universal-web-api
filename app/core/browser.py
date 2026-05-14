@@ -1052,6 +1052,7 @@ class BrowserCore:
         task_id: str = None,
         stop_checker: Optional[Callable[[], bool]] = None,
         workflow_priority: Optional[int] = None,
+        allow_media_postprocess: bool = True,
     ) -> Generator[str, None, None]:
         """
         工作流执行入口（v2.0 改进版）
@@ -1104,6 +1105,7 @@ class BrowserCore:
                     sanitized_messages,
                     stop_checker=effective_stop_checker,
                     workflow_priority=workflow_priority,
+                    allow_media_postprocess=allow_media_postprocess,
                 )
             else:
                 yield from self._execute_workflow_non_stream(
@@ -1111,6 +1113,7 @@ class BrowserCore:
                     sanitized_messages,
                     stop_checker=effective_stop_checker,
                     workflow_priority=workflow_priority,
+                    allow_media_postprocess=allow_media_postprocess,
                 )
         
         finally:
@@ -1136,6 +1139,7 @@ class BrowserCore:
         preset_name: Optional[str] = None,
         stop_checker: Optional[Callable[[], bool]] = None,
         workflow_priority: Optional[int] = None,
+        allow_media_postprocess: bool = True,
     ) -> Generator[str, None, None]:
         """
         使用指定编号的标签页执行工作流
@@ -1191,6 +1195,7 @@ class BrowserCore:
                     preset_name=preset_name,
                     stop_checker=effective_stop_checker,
                     workflow_priority=workflow_priority,
+                    allow_media_postprocess=allow_media_postprocess,
                 )
             else:
                 yield from self._execute_workflow_non_stream(
@@ -1199,6 +1204,7 @@ class BrowserCore:
                     preset_name=preset_name,
                     stop_checker=effective_stop_checker,
                     workflow_priority=workflow_priority,
+                    allow_media_postprocess=allow_media_postprocess,
                 )
         
         finally:
@@ -1223,6 +1229,7 @@ class BrowserCore:
         preset_name: Optional[str] = None,
         stop_checker: Optional[Callable[[], bool]] = None,
         workflow_priority: Optional[int] = None,
+        allow_media_postprocess: bool = True,
     ) -> Generator[str, None, None]:
         """
         使用指定域名路由匹配的标签页执行工作流。
@@ -1284,6 +1291,7 @@ class BrowserCore:
                     preset_name=preset_name,
                     stop_checker=effective_stop_checker,
                     workflow_priority=workflow_priority,
+                    allow_media_postprocess=allow_media_postprocess,
                 )
             else:
                 yield from self._execute_workflow_non_stream(
@@ -1292,6 +1300,7 @@ class BrowserCore:
                     preset_name=preset_name,
                     stop_checker=effective_stop_checker,
                     workflow_priority=workflow_priority,
+                    allow_media_postprocess=allow_media_postprocess,
                 )
 
         finally:
@@ -1341,6 +1350,7 @@ class BrowserCore:
         preset_name: Optional[str] = None,
         stop_checker: Optional[Callable[[], bool]] = None,
         workflow_priority: Optional[int] = None,
+        allow_media_postprocess: bool = True,
     ) -> Generator[str, None, None]:
         max_terminal_retries = 1
         attempt = 0
@@ -1352,6 +1362,7 @@ class BrowserCore:
                 preset_name=preset_name,
                 stop_checker=stop_checker,
                 workflow_priority=workflow_priority,
+                allow_media_postprocess=allow_media_postprocess,
             )
             saw_content = False
             retry_requested = False
@@ -1566,6 +1577,7 @@ class BrowserCore:
         preset_name: Optional[str] = None,
         stop_checker: Optional[Callable[[], bool]] = None,
         workflow_priority: Optional[int] = None,
+        allow_media_postprocess: bool = True,
     ) -> Generator[str, None, None]:
         """流式工作流执行（v2.0）"""
     
@@ -1991,7 +2003,12 @@ class BrowserCore:
 
             # 多模态提取
             logger.debug(f"[PROBE] Workflow 循环结束，image_enabled={image_extraction_enabled}, should_stop={effective_stop_checker()}")
-            if image_extraction_enabled and not effective_stop_checker() and not workflow_aborted:
+            if (
+                allow_media_postprocess
+                and image_extraction_enabled
+                and not effective_stop_checker()
+                and not workflow_aborted
+            ):
                 logger.debug("[PROBE] 进入多模态提取分支")
                 try:
                     media_items = self._extract_media_after_stream(
@@ -3106,6 +3123,7 @@ class BrowserCore:
         preset_name: Optional[str] = None,
         stop_checker: Optional[Callable[[], bool]] = None,
         workflow_priority: Optional[int] = None,
+        allow_media_postprocess: bool = True,
     ) -> Generator[str, None, None]:
         """非流式工作流执行"""
         collected_content = []
@@ -3118,6 +3136,7 @@ class BrowserCore:
             preset_name=preset_name,
             stop_checker=stop_checker,
             workflow_priority=workflow_priority,
+            allow_media_postprocess=allow_media_postprocess,
         )
 
         try:
@@ -3159,7 +3178,7 @@ class BrowserCore:
             yield json.dumps(error_data, ensure_ascii=False)
         else:
             full_content = "".join(collected_content)
-            if not collected_media and full_content.strip():
+            if allow_media_postprocess and not collected_media and full_content.strip():
                 extra_media_items = self._retry_pending_media_from_response_text(
                     session,
                     full_content,

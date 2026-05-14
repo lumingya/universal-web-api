@@ -5,6 +5,7 @@ This module avoids fixed sleeps by observing composer DOM changes,
 attachment previews, pending indicators, and send button busy state.
 """
 
+import copy
 import json
 import time
 from typing import Any, Callable, Dict, Iterable, Optional
@@ -312,7 +313,10 @@ _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
 
   function collectState(opts) {
     const rootSelectors = prioritizeUnique(opts && opts.rootSelectors, defaultRootSelectors);
-    const attachmentSelectors = mergeUnique(defaultAttachmentSelectors, opts && opts.attachmentSelectors);
+    const useDefaultAttachmentSelectors = !(opts && opts.useDefaultAttachmentSelectors === false);
+    const attachmentSelectors = useDefaultAttachmentSelectors
+      ? mergeUnique(defaultAttachmentSelectors, opts && opts.attachmentSelectors)
+      : prioritizeUnique(opts && opts.attachmentSelectors, []);
     const pendingSelectors = mergeUnique(defaultPendingSelectors, opts && opts.pendingSelectors);
     const busyWords = mergeUnique(defaultBusyWords, opts && opts.busyTextMarkers);
     const disabledMarkers = mergeUnique(
@@ -328,8 +332,8 @@ _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
 
     const attachmentSelector = joinSelectors(attachmentSelectors);
     const pendingSelector = joinSelectors(pendingSelectors);
-    const uploadNodes = root ? Array.from(root.querySelectorAll(attachmentSelector)) : [];
-    const pendingNodes = root ? Array.from(root.querySelectorAll(pendingSelector)) : [];
+    const uploadNodes = (root && attachmentSelector) ? Array.from(root.querySelectorAll(attachmentSelector)) : [];
+    const pendingNodes = (root && pendingSelector) ? Array.from(root.querySelectorAll(pendingSelector)) : [];
     const fileInputs = Array.from(document.querySelectorAll("input[type='file']"));
     const fileInputCount = fileInputs.reduce((sum, inputNode) => {
       try {
@@ -641,6 +645,10 @@ class AttachmentMonitor:
         except Exception:
             return float(default)
 
+    def _config_dict(self, key: str) -> Dict[str, Any]:
+        raw_value = self._config.get(key) if isinstance(self._config, dict) else None
+        return copy.deepcopy(raw_value) if isinstance(raw_value, dict) else {}
+
     def _run_js(self, script: str):
         try:
             return self.tab.run_js(script)
@@ -663,6 +671,7 @@ class AttachmentMonitor:
             "sendSelector": self._selector_value("send_btn"),
             "expectedNames": names,
             "rootSelectors": self._config_list("root_selectors"),
+            "useDefaultAttachmentSelectors": self._config_flag("use_default_attachment_selectors", True),
             "attachmentSelectors": self._config_list("attachment_selectors"),
             "pendingSelectors": self._config_list("pending_selectors"),
             "busyTextMarkers": self._config_list("busy_text_markers"),
@@ -686,6 +695,103 @@ class AttachmentMonitor:
             f"return (window.__ATTACHMENT_MONITOR__ && window.__ATTACHMENT_MONITOR__.snapshot({options})) || null;"
         )
         return result if isinstance(result, dict) else {}
+
+    def run_state_probe(self, state: Optional[Dict[str, Any]] = None, stage: str = "") -> Dict[str, Any]:
+        probe_config = self._config_dict("state_probe")
+        if not probe_config or not bool(probe_config.get("enabled")):
+            return {
+                "enabled": False,
+                "ok": False,
+                "hit": False,
+                "result": {},
+                "summary": "",
+            }
+
+        code = str(probe_config.get("code") or "").strip()
+        if not code:
+            return {
+                "enabled": True,
+                "ok": False,
+                "hit": False,
+                "result": {},
+                "summary": "empty_probe_code",
+            }
+
+        payload = {
+            "stage": str(stage or "").strip(),
+            "monitorState": state if isinstance(state, dict) else {},
+        }
+        try:
+            result = self.tab.run_js(code, payload)
+        except Exception as exc:
+            message = str(exc)
+            logger.debug(f"[ATTACHMENT] state probe failed ({stage or 'unknown'}): {message}")
+            return {
+                "enabled": True,
+                "ok": False,
+                "hit": False,
+                "result": {},
+                "summary": message[:240],
+            }
+
+        parsed = result if isinstance(result, dict) else {"value": result}
+        summary = str(
+            parsed.get("summary", parsed.get("reason", parsed.get("value", ""))) or ""
+        ).strip()
+        hit = False
+        if isinstance(parsed, dict):
+            if "hit" in parsed:
+                hit = bool(parsed.get("hit"))
+            elif any(key in parsed for key in ("accepted", "ready", "uploading", "retry")):
+                hit = any(bool(parsed.get(key)) for key in ("accepted", "ready", "uploading", "retry"))
+            else:
+                hit = bool(parsed)
+
+        return {
+            "enabled": True,
+            "ok": True,
+            "hit": hit,
+            "result": parsed,
+            "summary": summary[:240],
+        }
+
+    @classmethod
+    def derive_phase_flags(
+        cls,
+        state: Dict[str, Any],
+        *,
+        require_send_enabled: bool = False,
+        require_attachment_present: bool = False,
+        require_upload_signal_before_ready: bool = False,
+    ) -> Dict[str, Any]:
+        safe_state = dict(state or {})
+        attachment_present = cls._attachment_present(safe_state)
+        upload_started = bool(
+            safe_state.get("attachmentObserved")
+            or safe_state.get("attachmentChanged")
+            or safe_state.get("pendingChanged")
+            or safe_state.get("sendTransition")
+            or int(safe_state.get("mutationCount", 0) or 0) > 0
+            or attachment_present
+        )
+        uploading = bool(
+            int(safe_state.get("pendingCount", 0) or 0) > 0
+            or bool(safe_state.get("pendingText"))
+            or bool(safe_state.get("sendBusy"))
+        )
+        ready = cls._is_ready_state(safe_state, require_send_enabled=require_send_enabled)
+
+        if require_attachment_present and not attachment_present:
+            ready = False
+        if require_upload_signal_before_ready and not upload_started:
+            ready = False
+
+        return {
+            "attachment_present": attachment_present,
+            "upload_started": upload_started,
+            "uploading": uploading,
+            "upload_ready": bool(ready),
+        }
 
     @staticmethod
     def _is_ready_state(state: Dict[str, Any], require_send_enabled: bool) -> bool:
@@ -746,6 +852,7 @@ class AttachmentMonitor:
     def summarize(state: Dict[str, Any]) -> str:
         if not state:
             return "no_state"
+        phase_flags = AttachmentMonitor.derive_phase_flags(state)
         parts = [
             f"attachments={int(state.get('attachmentCount', 0) or 0)}, "
             f"previews={int(state.get('previewCount', 0) or 0)}, "
@@ -755,6 +862,8 @@ class AttachmentMonitor:
             f"send_disabled={bool(state.get('sendDisabled'))}, "
             f"send_busy={bool(state.get('sendBusy'))}, "
             f"observed={bool(state.get('attachmentObserved'))}, "
+            f"upload_started={bool(phase_flags.get('upload_started'))}, "
+            f"upload_ready={bool(phase_flags.get('upload_ready'))}, "
             f"mutations={int(state.get('mutationCount', 0) or 0)}, "
             f"idle_ms={int(state.get('idleMs', 0) or 0)}"
         ]
@@ -805,6 +914,7 @@ class AttachmentMonitor:
         require_observed: bool,
         require_send_enabled: bool,
         require_attachment_present: bool,
+        require_upload_signal_before_ready: bool,
         observed_once: bool,
         accept_existing: bool,
     ) -> str:
@@ -812,10 +922,19 @@ class AttachmentMonitor:
             return "no_state"
 
         reasons = []
-        attachment_present = cls._attachment_present(state)
+        phase_flags = cls.derive_phase_flags(
+            state,
+            require_send_enabled=require_send_enabled,
+            require_attachment_present=require_attachment_present,
+            require_upload_signal_before_ready=require_upload_signal_before_ready,
+        )
+        attachment_present = bool(phase_flags.get("attachment_present"))
 
         if require_attachment_present and not attachment_present:
             reasons.append("attachment_missing")
+
+        if require_upload_signal_before_ready and not bool(phase_flags.get("upload_started")):
+            reasons.append("upload_not_started")
 
         if require_observed and not (observed_once or (accept_existing and attachment_present)):
             reasons.append("attachment_not_observed")
@@ -873,6 +992,7 @@ class AttachmentMonitor:
         poll_interval: Optional[float] = None,
         stable_window: Optional[float] = None,
         require_attachment_present: Optional[bool] = None,
+        require_upload_signal_before_ready: Optional[bool] = None,
         idle_timeout: Optional[float] = None,
         hard_max_wait: Optional[float] = None,
         label: str = "attachment",
@@ -911,6 +1031,11 @@ class AttachmentMonitor:
             self._config_flag("require_attachment_present", False)
             if require_attachment_present is None
             else bool(require_attachment_present)
+        )
+        require_upload_signal_before_ready = (
+            self._config_flag("require_upload_signal_before_ready", False)
+            if require_upload_signal_before_ready is None
+            else bool(require_upload_signal_before_ready)
         )
 
         state = self.begin_tracking(expected_names) if start_new_tracking else self.snapshot(expected_names)
@@ -972,12 +1097,21 @@ class AttachmentMonitor:
                 if active_pending:
                     activity_deadline = min(hard_deadline, now + max(0.5, check_interval * 2.0))
 
-            ready = self._is_ready_state(last_state, require_send_enabled=require_send_enabled)
-            attachment_present = self._attachment_present(last_state)
+            phase_flags = self.derive_phase_flags(
+                last_state,
+                require_send_enabled=require_send_enabled,
+                require_attachment_present=require_attachment_present,
+                require_upload_signal_before_ready=require_upload_signal_before_ready,
+            )
+            ready = bool(phase_flags.get("upload_ready"))
+            attachment_present = bool(phase_flags.get("attachment_present"))
+            upload_started = bool(phase_flags.get("upload_started"))
             presence_ok = attachment_present or not require_attachment_present
             gate_ok = presence_ok and (
                 observed_once or (accept_existing and attachment_present) or not require_observed
             )
+            if require_upload_signal_before_ready and not upload_started:
+                gate_ok = False
 
             if gate_ok and ready:
                 if stable_since is None:
@@ -1026,6 +1160,7 @@ class AttachmentMonitor:
             require_observed=require_observed,
             require_send_enabled=require_send_enabled,
             require_attachment_present=require_attachment_present,
+            require_upload_signal_before_ready=require_upload_signal_before_ready,
             observed_once=observed_once,
             accept_existing=accept_existing,
         )

@@ -32,6 +32,8 @@ from app.services.tool_calling import (
     build_tool_completion_response,
     complete_tool_calling_roundtrip_async,
     decode_browser_non_stream_payload,
+    extract_tool_calling_assistant_content,
+    get_tool_calling_allow_media_postprocess,
     has_tool_calling_request,
     iter_tool_stream_chunks,
     normalize_tool_request,
@@ -563,6 +565,7 @@ def _execute_browser_non_stream_messages(
         stream=False,
         task_id=request_id,
         stop_checker=stop_checker,
+        allow_media_postprocess=get_tool_calling_allow_media_postprocess(),
     ):
         payload = chunk
 
@@ -578,12 +581,7 @@ def _execute_browser_non_stream_messages(
 
 def _extract_assistant_content(response: Dict[str, Any]) -> str:
     try:
-        return str(
-            response.get("choices", [])[0]
-            .get("message", {})
-            .get("content", "")
-            or ""
-        )
+        return extract_tool_calling_assistant_content(response)
     except Exception:
         return ""
 

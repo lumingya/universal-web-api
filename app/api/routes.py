@@ -10,6 +10,7 @@ from fastapi import APIRouter
 
 # 导入子路由
 from app.api.chat import router as chat_router
+from app.api.anthropic_routes import router as anthropic_router
 from app.api.config_routes import router as config_router
 from app.api.marketplace_routes import router as marketplace_router
 from app.api.system import router as system_router
@@ -21,6 +22,7 @@ router = APIRouter()
 
 # 聚合所有子路由
 router.include_router(chat_router)
+router.include_router(anthropic_router)
 router.include_router(config_router)
 router.include_router(marketplace_router)
 router.include_router(system_router)

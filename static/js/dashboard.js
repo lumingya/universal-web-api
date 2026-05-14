@@ -761,7 +761,7 @@ const ENV_CONFIG_SCHEMA = {
         apply: 'service',
         label: '函数调用',
         icon: '🧰',
-        desc: '控制函数调用的内部修复、重试策略与工具结果上限。',
+        desc: '控制函数调用的内部修复、结果清洗与媒体后处理策略。',
         items: {
             TOOL_CALLING_RETRY_STRATEGY: {
                 label: '重试策略',
@@ -789,6 +789,18 @@ const ENV_CONFIG_SCHEMA = {
                 min: 1,
                 step: 10000,
                 default: 300000
+            },
+            TOOL_CALLING_ALLOW_MEDIA_POSTPROCESS: {
+                label: '允许媒体后处理',
+                desc: '开启后，函数调用隐藏回合也会执行媒体二次提取、占位补偿和 Markdown 媒体注入。兼容旧行为，但更容易污染 tool payload；默认关闭。',
+                type: 'switch',
+                default: false
+            },
+            TOOL_CALLING_SANITIZE_ASSISTANT_CONTENT: {
+                label: '解析前清洗回复',
+                desc: '开启后，函数调用在解析 assistant 内容前会移除占位链接和尾部媒体 Markdown。推荐保持开启；只有需要完全回退旧行为时再关闭。',
+                type: 'switch',
+                default: true
             }
         }
     },
@@ -846,6 +858,9 @@ const app = createApp({
 
             // Tab 切换（新增 settings）
             activeTab: 'config',  // 'config' | 'logs' | 'settings'
+            mountedTabs: {
+                config: true
+            },
 
             // 折叠面板状态
             selectorCollapsed: true,
@@ -1059,7 +1074,11 @@ const app = createApp({
 
     watch: {
         activeTab(tab) {
+            this.markTabAsVisited(tab)
             this.ensureTabDataLoaded(tab)
+            if (tab === 'logs') {
+                this.pollLogs()
+            }
         },
         darkMode() {
             this.applyDarkMode()
@@ -1083,6 +1102,7 @@ const app = createApp({
 
         // 初始化折叠状态
         this.initCollapsedStates()
+        this.markTabAsVisited(this.activeTab)
         this.restoreSitesCache()
         this.refreshMarketplaceUpdateFlagFromStorage()
 
@@ -1145,6 +1165,21 @@ const app = createApp({
 
             clearInterval(this.logPollingTimer)
             this.logPollingTimer = null
+        },
+
+        markTabAsVisited(tab) {
+            const key = String(tab || '').trim()
+            if (!key || this.mountedTabs[key]) {
+                return
+            }
+            this.mountedTabs = {
+                ...this.mountedTabs,
+                [key]: true
+            }
+        },
+
+        shouldRenderTab(tab) {
+            return this.activeTab === tab || !!this.mountedTabs[tab]
         },
 
         startRequestHistoryPolling() {
@@ -1670,16 +1705,16 @@ const app = createApp({
         // ========== 日志相关 ==========
 
         async pollLogs() {
-            if (this.pauseLogs) return;
+            if (this.pauseLogs || document.visibilityState === 'hidden') return;
 
             try {
                 const result = await this.apiRequest('/api/logs?after_seq=' + this.lastLogSeq);
 
                 if (result.logs && result.logs.length > 0) {
-                    result.logs.forEach(log => {
+                    const nextLogs = result.logs.map(log => {
                         const messageText = log.message_text || log.display_message || log.message || '';
                         const kind = log.kind || log.level;
-                        this.logs.push({
+                        return {
                             id: log.seq || (Date.now() + Math.random()),
                             seq: log.seq || 0,
                             timestamp: new Date(log.timestamp * 1000).toLocaleTimeString() + '.' +
@@ -1693,18 +1728,9 @@ const app = createApp({
                             messageText,
                             originalMessageText: log.original_message_text || messageText,
                             messageAlias: log.message_alias || ''
-                        });
-                    });
-
-                    if (this.logs.length > 500) {
-                        this.logs = this.logs.slice(-500);
-                    }
-
-                    this.$nextTick(() => {
-                        if (this.$refs.logContainer) {
-                            this.$refs.logContainer.scrollTop = this.$refs.logContainer.scrollHeight;
                         }
                     });
+                    this.logs = this.logs.concat(nextLogs).slice(-500);
                 }
                 this.lastLogSeq = Number(result.next_seq || this.lastLogSeq || 0);
                 this.lastLogTimestamp = Number(result.timestamp || this.lastLogTimestamp || 0);
@@ -2617,6 +2643,7 @@ const app = createApp({
         },
 
         changeTab(tab) {
+            this.markTabAsVisited(tab)
             this.activeTab = tab;
         },
 

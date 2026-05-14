@@ -46,7 +46,7 @@
 | Arena AI | arena.ai | IP 质量敏感，详见注意事项 |
 | 小米mimo | aistudio.xiaomimimo.com | - |
 
-> 未收录的网站支持通过 AI 自动分析网页结构进行适配，详见 [新增站点指南](./static/tutorial.html#add-site-guide)。
+> 未收录的网站支持通过 AI 自动分析网页结构进行适配，详见 [新增站点指南](./static/tutorial/index.html#add-site-guide)。
 
 ## 快速开始
 
@@ -59,22 +59,22 @@
    - **接口地址**：`http://127.0.0.1:8199/v1`
    - **API 密钥**：任意填写（如 `sk-any`）
 
-详细说明请查看 [完整使用文档](./static/tutorial.html#quick-start)。
+详细说明请查看 [完整使用文档](./static/tutorial/index.html#quick-start)。
 
 ## 文档
 
 | 文档 | 说明 |
 |------|------|
-| [完整使用文档](./static/tutorial.html#quick-start) | 安装、启动、登录、控制面板导览 |
-| [连接 API](./static/tutorial.html#connect-api) | 通用配置参数、路由方式、调用示例 |
-| [新增站点](./static/tutorial.html#add-site-guide) | AI 自动识别与手动配置站点 |
-| [函数调用说明](./static/tutorial.html#function-calling) | Tool Calling 兼容与使用建议 |
-| [标签页池与预设系统](./static/tutorial.html#tab-pool) | 多标签并发与预设使用方式 |
-| [核心功能配置](./static/tutorial.html#selectors) | 选择器、工作流、流式模式、多模态提取、文件粘贴 |
-| [高级配置](./static/tutorial.html#stealth-mode) | 隐身模式、AI 元素识别、环境配置 |
-| [注意事项与已知限制](./static/tutorial.html#faq) | 运行限制、已知问题、特殊站点说明 |
-| [常见问题 FAQ](./static/tutorial.html#faq) | 启动失败、超时、频繁失败等排查 |
-| [参数解释](./static/tutorial.html#env-config) | 所有配置项的详细说明 |
+| [完整使用文档](./static/tutorial/index.html#quick-start) | 安装、启动、登录、控制面板导览 |
+| [连接 API](./static/tutorial/index.html#connect-api) | 通用配置参数、路由方式、调用示例 |
+| [新增站点](./static/tutorial/index.html#add-site-guide) | AI 自动识别与手动配置站点 |
+| [函数调用说明](./static/tutorial/index.html#function-calling) | Tool Calling 兼容与使用建议 |
+| [标签页池与预设系统](./static/tutorial/index.html#tab-pool) | 多标签并发与预设使用方式 |
+| [核心功能配置](./static/tutorial/index.html#selectors) | 选择器、工作流、流式模式、多模态提取、文件粘贴 |
+| [高级配置](./static/tutorial/index.html#stealth-mode) | 隐身模式、AI 元素识别、环境配置 |
+| [注意事项与已知限制](./static/tutorial/index.html#faq) | 运行限制、已知问题、特殊站点说明 |
+| [常见问题 FAQ](./static/tutorial/index.html#faq) | 启动失败、超时、频繁失败等排查 |
+| [参数解释](./static/tutorial/index.html#env-config) | 所有配置项的详细说明 |
 
 ## 交流反馈
 
@@ -82,7 +82,7 @@
 
 ## 免责声明
 
-本项目仅供学习、研究和技术交流使用。使用前请确保遵守目标网站的服务条款，切勿用于商业用途或高频自动化请求。详见 [教程中的使用预期与维护须知](./static/tutorial.html#author-note)。
+本项目仅供学习、研究和技术交流使用。使用前请确保遵守目标网站的服务条款，切勿用于商业用途或高频自动化请求。详见 [教程中的使用预期与维护须知](./static/tutorial/index.html#author-note)。
 
 ## 许可证
 

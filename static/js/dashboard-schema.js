@@ -485,7 +485,7 @@ const ENV_CONFIG_SCHEMA = {
         apply: 'service',
         label: '函数调用',
         icon: '🧰',
-        desc: '控制函数调用的内部修复、重试策略与工具结果上限。',
+        desc: '控制函数调用的内部修复、结果清洗与媒体后处理策略。',
         items: {
             TOOL_CALLING_RETRY_STRATEGY: {
                 label: '重试策略',
@@ -513,6 +513,18 @@ const ENV_CONFIG_SCHEMA = {
                 min: 1,
                 step: 10000,
                 default: 300000
+            },
+            TOOL_CALLING_ALLOW_MEDIA_POSTPROCESS: {
+                label: '允许媒体后处理',
+                desc: '开启后，函数调用隐藏回合也会执行媒体二次提取、占位补偿和 Markdown 媒体注入。兼容旧行为，但更容易污染 tool payload；默认关闭。',
+                type: 'switch',
+                default: false
+            },
+            TOOL_CALLING_SANITIZE_ASSISTANT_CONTENT: {
+                label: '解析前清洗回复',
+                desc: '开启后，函数调用在解析 assistant 内容前会移除占位链接和尾部媒体 Markdown。推荐保持开启；只有需要完全回退旧行为时再关闭。',
+                type: 'switch',
+                default: true
             }
         }
     },

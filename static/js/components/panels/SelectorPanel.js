@@ -76,7 +76,7 @@ window.SelectorPanel = {
         },
 
         openTutorial(anchor = 'selector-basics') {
-            this.openInNewTab('/static/tutorial.html#' + encodeURIComponent(anchor));
+            this.openInNewTab('/static/tutorial/index.html#' + encodeURIComponent(anchor));
         },
 
         openPracticeLab() {

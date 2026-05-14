@@ -1267,6 +1267,14 @@ class ConfigEngine:
             if "file_paste" not in config:
                 config["file_paste"] = get_default_file_paste_config()
                 changed = True
+            else:
+                normalized_file_paste = self._validate_file_paste_config(
+                    config.get("file_paste", {}),
+                    legacy_stream_config=config.get("stream_config"),
+                )
+                if normalized_file_paste != config.get("file_paste"):
+                    config["file_paste"] = normalized_file_paste
+                    changed = True
             
             if changed:
                 self._save_config()
@@ -1379,11 +1387,30 @@ class ConfigEngine:
                         logger.debug(f"迁移: {domain}/{preset_name} (规范化 image_extraction)")
                 
                 if "file_paste" not in preset_data:
-                    preset_data["file_paste"] = default_file_paste.copy()
+                    preset_data["file_paste"] = copy.deepcopy(default_file_paste)
                     migrated_count += 1
                     logger.debug(f"迁移: {domain}/{preset_name} (添加 file_paste)")
 
                 stream_config = preset_data.get("stream_config")
+                moved_attachment_rules = False
+                if not isinstance(stream_config, dict):
+                    stream_config = {}
+                    preset_data["stream_config"] = stream_config
+
+                normalized_file_paste = self._validate_file_paste_config(
+                    preset_data.get("file_paste", {}),
+                    legacy_stream_config=stream_config,
+                )
+                if normalized_file_paste != preset_data.get("file_paste"):
+                    preset_data["file_paste"] = normalized_file_paste
+                    migrated_count += 1
+                    logger.debug(f"迁移: {domain}/{preset_name} (规范化 file_paste)")
+
+                for legacy_key in ("send_confirmation", "attachment_monitor"):
+                    if legacy_key in stream_config:
+                        del stream_config[legacy_key]
+                        moved_attachment_rules = True
+
                 if isinstance(stream_config, dict):
                     removed_stream = False
                     for key in list(obsolete_stream_keys):
@@ -1399,7 +1426,7 @@ class ConfigEngine:
                                 del network_config[key]
                                 removed_network = True
 
-                    if removed_stream or removed_network:
+                    if removed_stream or removed_network or moved_attachment_rules:
                         migrated_count += 1
                         logger.debug(f"迁移: {domain}/{preset_name} (清理废弃的流式配置字段)")
         
@@ -1702,14 +1729,16 @@ class ConfigEngine:
         
         data = self._get_site_data(domain, preset_name)
         if data is None:
-            return default_config
-        
-        file_paste_config = data.get("file_paste", {})
-        
-        result = default_config.copy()
-        result.update(file_paste_config)
-        
-        return result
+            result = copy.deepcopy(default_config)
+            result["send_confirmation"] = get_default_send_confirmation_config()
+            result["attachment_monitor"] = get_default_attachment_monitor_config()
+            return result
+
+        return self._validate_file_paste_config(
+            data.get("file_paste", {}),
+            legacy_stream_config=data.get("stream_config"),
+            include_attachment_defaults=True,
+        )
     
     def set_site_file_paste_config(self, domain: str, config: dict, 
                                     preset_name: str = None) -> bool:
@@ -1721,7 +1750,10 @@ class ConfigEngine:
             logger.warning(f"站点或预设不存在: {domain}/{preset_name}")
             return False
         
-        validated = self._validate_file_paste_config(config)
+        validated = self._validate_file_paste_config(
+            config,
+            legacy_stream_config=data.get("stream_config"),
+        )
         
         data["file_paste"] = validated
         self._save_config()
@@ -1732,8 +1764,6 @@ class ConfigEngine:
     def get_all_file_paste_configs(self) -> dict:
         """获取所有站点的文件粘贴配置（使用各站点当前默认预设）"""
         self.refresh_if_changed()
-        
-        default_config = get_default_file_paste_config()
         result = {}
         
         for domain in self.sites:
@@ -1744,20 +1774,27 @@ class ConfigEngine:
             if data is None:
                 continue
             
-            file_paste = data.get("file_paste", {})
-            merged = default_config.copy()
-            merged.update(file_paste)
-            result[domain] = merged
+            result[domain] = self._validate_file_paste_config(
+                data.get("file_paste", {}),
+                legacy_stream_config=data.get("stream_config"),
+                include_attachment_defaults=True,
+            )
         
         return result
     
-    def _validate_file_paste_config(self, config: dict) -> dict:
+    def _validate_file_paste_config(
+        self,
+        config: dict,
+        *,
+        legacy_stream_config: Optional[Dict[str, Any]] = None,
+        include_attachment_defaults: bool = False,
+    ) -> dict:
         """验证并规范化文件粘贴配置"""
         default = get_default_file_paste_config()
-        result = default.copy()
+        result = copy.deepcopy(default)
         
-        if not config:
-            return result
+        if not isinstance(config, dict):
+            config = {}
         
         if "enabled" in config:
             result["enabled"] = bool(config["enabled"])
@@ -1801,6 +1838,36 @@ class ConfigEngine:
                 result["upload_signal_grace"] = max(0.0, min(val, 120.0))
             except (ValueError, TypeError):
                 pass
+
+        default_state_probe = copy.deepcopy(default.get("state_probe") or {})
+        raw_state_probe = config.get("state_probe")
+        state_probe = copy.deepcopy(default_state_probe)
+        if isinstance(raw_state_probe, dict):
+            if "enabled" in raw_state_probe:
+                state_probe["enabled"] = bool(raw_state_probe["enabled"])
+            if "code" in raw_state_probe:
+                code = str(raw_state_probe["code"] or "").strip()
+                state_probe["code"] = code[:20000] if code else ""
+        if state_probe:
+            result["state_probe"] = state_probe
+
+        legacy_send_confirmation = {}
+        if isinstance(legacy_stream_config, dict) and isinstance(legacy_stream_config.get("send_confirmation"), dict):
+            legacy_send_confirmation.update(legacy_stream_config.get("send_confirmation") or {})
+        raw_send_confirmation = config.get("send_confirmation")
+        if isinstance(raw_send_confirmation, dict):
+            legacy_send_confirmation.update(raw_send_confirmation)
+        if legacy_send_confirmation or include_attachment_defaults:
+            result["send_confirmation"] = self._validate_send_confirmation_config(legacy_send_confirmation)
+
+        legacy_attachment_monitor = {}
+        if isinstance(legacy_stream_config, dict) and isinstance(legacy_stream_config.get("attachment_monitor"), dict):
+            legacy_attachment_monitor.update(legacy_stream_config.get("attachment_monitor") or {})
+        raw_attachment_monitor = config.get("attachment_monitor")
+        if isinstance(raw_attachment_monitor, dict):
+            legacy_attachment_monitor.update(raw_attachment_monitor)
+        if legacy_attachment_monitor or include_attachment_defaults:
+            result["attachment_monitor"] = self._validate_attachment_monitor_config(legacy_attachment_monitor)
         
         return result
     # ================= 图片预设管理 =================
@@ -1917,6 +1984,13 @@ class ConfigEngine:
         # 处理 attachment_monitor 配置
         if isinstance(stream_config.get("attachment_monitor"), dict):
             result["attachment_monitor"].update(stream_config["attachment_monitor"])
+
+        file_paste_config = data.get("file_paste", {})
+        if isinstance(file_paste_config, dict):
+            if isinstance(file_paste_config.get("send_confirmation"), dict):
+                result["send_confirmation"].update(file_paste_config["send_confirmation"])
+            if isinstance(file_paste_config.get("attachment_monitor"), dict):
+                result["attachment_monitor"].update(file_paste_config["attachment_monitor"])
         
         # 处理 network 配置
         if stream_config.get("network"):
@@ -1957,8 +2031,27 @@ class ConfigEngine:
             logger.warning(f"站点或预设不存在: {domain}/{preset_name}")
             return False
         
+        legacy_file_paste_updates: Dict[str, Any] = {}
+        if isinstance(config.get("send_confirmation"), dict):
+            legacy_file_paste_updates["send_confirmation"] = config.get("send_confirmation") or {}
+        if isinstance(config.get("attachment_monitor"), dict):
+            legacy_file_paste_updates["attachment_monitor"] = config.get("attachment_monitor") or {}
+
         # 验证并规范化配置
         validated = self._validate_stream_config(config)
+        validated.pop("send_confirmation", None)
+        validated.pop("attachment_monitor", None)
+
+        if legacy_file_paste_updates:
+            existing_file_paste = data.get("file_paste", {})
+            merged_file_paste = {}
+            if isinstance(existing_file_paste, dict):
+                merged_file_paste.update(copy.deepcopy(existing_file_paste))
+            merged_file_paste.update(legacy_file_paste_updates)
+            data["file_paste"] = self._validate_file_paste_config(
+                merged_file_paste,
+                legacy_stream_config=data.get("stream_config"),
+            )
         
         data["stream_config"] = validated
         self._save_config()
@@ -2045,6 +2138,7 @@ class ConfigEngine:
             "pre_retry_probe_window": (0.0, 5.0),
             "retry_observe_window": (0.0, 15.0),
             "attachment_observe_window": (0.0, 30.0),
+            "retry_interval": (0.0, 30.0),
         }
         for key, (minimum, maximum) in numeric_ranges.items():
             if key not in config:
@@ -2055,7 +2149,21 @@ class ConfigEngine:
                 continue
             result[key] = max(minimum, min(value, maximum))
 
+        if "max_retry_count" in config:
+            try:
+                value = int(config["max_retry_count"])
+            except (TypeError, ValueError):
+                value = None
+            if value is not None:
+                result["max_retry_count"] = max(0, min(value, 10))
+
         bool_fields = [
+            "retry_on_unconfirmed_send",
+            "accept_attachment_change",
+            "accept_attachment_disappear",
+            "accept_probe_confirmation",
+            "retry_block_on_stop_button",
+            "retry_block_if_generating",
             "trust_network_activity",
             "trust_generating_indicator",
             "trust_send_disabled_with_input_shrink",
@@ -2123,6 +2231,7 @@ class ConfigEngine:
 
         bool_fields = [
             "require_attachment_present",
+            "require_upload_signal_before_ready",
             "continue_once_on_unconfirmed_send",
         ]
         for key in bool_fields:

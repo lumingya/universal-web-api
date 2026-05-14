@@ -55,7 +55,8 @@ UPDATE_PRESERVE_OPTIONS: List[Dict[str, Any]] = [
     _option("static_js", "static/js", "static/js/", "前端脚本目录", "前端资源"),
     _option("static_css", "static/css", "static/css/", "前端样式目录", "前端资源"),
     _option("static_vendor", "static/vendor", "static/vendor/", "前端第三方依赖目录", "前端资源"),
-    _option("static_tutorial", "static/tutorial.html", "static/tutorial.html", "前端教程页", "前端资源"),
+    _option("static_tutorial", "static/tutorial", "static/tutorial/", "前端教程页目录（拆分后）", "前端资源"),
+    _option("static_tutorial_entry", "static/tutorial.html", "static/tutorial.html", "教程兼容跳转入口", "前端资源"),
     _option(
         "static_tutorial_overview",
         "static/tutorial-dashboard-overview.png",
@@ -102,6 +103,7 @@ INTERNAL_ALWAYS_PRESERVE: List[str] = [
 LEGACY_PATTERN_ALIASES = {
     "sites.local.json": "config/sites.local.json",
     "commands.local.json": "config/commands.local.json",
+    "static/tutorial.html": "static/tutorial",
 }
 
 
