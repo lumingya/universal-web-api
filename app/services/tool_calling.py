@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import os
 import re
 import time
@@ -48,12 +49,33 @@ def _read_tool_calling_flag(name: str, default: bool) -> bool:
     return raw_value not in {"0", "false", "no", "off"}
 
 
+def _read_tool_calling_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    raw_value = str(os.getenv(name, str(default)) or str(default)).strip()
+    try:
+        value = int(raw_value)
+    except Exception:
+        value = default
+    return max(minimum, min(maximum, value))
+
+
 def get_tool_calling_allow_media_postprocess() -> bool:
     return _read_tool_calling_flag("TOOL_CALLING_ALLOW_MEDIA_POSTPROCESS", False)
 
 
 def get_tool_calling_sanitize_assistant_content_enabled() -> bool:
     return _read_tool_calling_flag("TOOL_CALLING_SANITIZE_ASSISTANT_CONTENT", True)
+
+
+def _get_max_tool_argument_chars() -> int:
+    return _read_tool_calling_int("TOOL_CALLING_MAX_ARGUMENT_CHARS", 50000, 256, 500000)
+
+
+def _get_max_tool_argument_depth() -> int:
+    return _read_tool_calling_int("TOOL_CALLING_MAX_ARGUMENT_DEPTH", 20, 2, 100)
+
+
+def _get_max_tool_argument_nodes() -> int:
+    return _read_tool_calling_int("TOOL_CALLING_MAX_ARGUMENT_NODES", 4000, 16, 50000)
 
 
 def _trim_middle_text(text: str, limit: int) -> str:
@@ -134,6 +156,7 @@ def normalize_tool_request(
     function_call: Any = None,
 ) -> Tuple[List[Dict[str, Any]], Any]:
     normalized_tools: List[Dict[str, Any]] = []
+    seen_names = set()
 
     if isinstance(tools, list):
         for item in tools:
@@ -147,6 +170,9 @@ def normalize_tool_request(
             name = str(fn.get("name", "") or "").strip()
             if not name:
                 continue
+            if name in seen_names:
+                continue
+            seen_names.add(name)
             normalized_tools.append(
                 {
                     "type": "function",
@@ -165,6 +191,9 @@ def normalize_tool_request(
             name = str(fn.get("name", "") or "").strip()
             if not name:
                 continue
+            if name in seen_names:
+                continue
+            seen_names.add(name)
             normalized_tools.append(
                 {
                     "type": "function",
@@ -1261,6 +1290,8 @@ def _inspect_tool_response(
     errors: List[Dict[str, Any]] = []
     accepted_tool_calls: List[Dict[str, Any]] = []
     rejected_tool_calls: List[Dict[str, Any]] = []
+    seen_tool_call_ids = set()
+    seen_tool_call_signatures = set()
     allowed_tools = {
         str(item.get("function", {}).get("name", "") or "").strip(): item
         for item in tools or []
@@ -1369,6 +1400,18 @@ def _inspect_tool_response(
             rejected_tool_calls.append(copy.deepcopy(tool_call))
             continue
 
+        shape_errors = _validate_tool_argument_shape_limits(args)
+        for message in shape_errors:
+            tool_call_errors.append(
+                {
+                    "code": "argument_shape_limit_exceeded",
+                    "message": f'Tool "{tool_name}" {message}',
+                    "tool_call_id": tool_call_id,
+                    "tool_name": tool_name,
+                    "tool_call_index": index,
+                }
+            )
+
         schema = tool_def.get("function", {}).get("parameters")
         schema_errors = _validate_tool_arguments_against_schema(
             args=args,
@@ -1385,6 +1428,35 @@ def _inspect_tool_response(
                     "tool_call_index": index,
                 }
             )
+
+        if tool_call_id:
+            if tool_call_id in seen_tool_call_ids:
+                tool_call_errors.append(
+                    {
+                        "code": "duplicate_tool_call_id",
+                        "message": f'Tool "{tool_name}" reuses the duplicate tool_call id "{tool_call_id}".',
+                        "tool_call_id": tool_call_id,
+                        "tool_name": tool_name,
+                        "tool_call_index": index,
+                    }
+                )
+            else:
+                seen_tool_call_ids.add(tool_call_id)
+
+        signature = f"{tool_name}\u0000{_canonicalize_tool_args(args)}"
+        if signature in seen_tool_call_signatures:
+            tool_call_errors.append(
+                {
+                    "code": "duplicate_tool_call",
+                    "message": f'Tool "{tool_name}" duplicates an earlier tool call with identical arguments.',
+                    "tool_call_id": tool_call_id,
+                    "tool_name": tool_name,
+                    "tool_call_index": index,
+                }
+            )
+        else:
+            seen_tool_call_signatures.add(signature)
+
         if tool_call_errors:
             errors.extend(tool_call_errors)
             rejected_tool_calls.append(copy.deepcopy(tool_call))
@@ -1546,6 +1618,52 @@ def _validate_tool_arguments_against_schema(
     return _validate_json_schema_value(args, schema, path=path)
 
 
+def _walk_json_shape(
+    value: Any,
+    path: str,
+    depth: int,
+    counters: Dict[str, int],
+    errors: List[str],
+) -> None:
+    counters["nodes"] += 1
+    counters["max_depth"] = max(counters.get("max_depth", 0), depth)
+    max_depth = _get_max_tool_argument_depth()
+    max_nodes = _get_max_tool_argument_nodes()
+
+    if counters["nodes"] > max_nodes:
+        errors.append(f"{path} exceeds the maximum structural node count of {max_nodes}.")
+        return
+
+    if depth > max_depth:
+        errors.append(f"{path} exceeds the maximum nesting depth of {max_depth}.")
+        return
+
+    if isinstance(value, dict):
+        for key, item in value.items():
+            _walk_json_shape(item, f"{path}.{key}", depth + 1, counters, errors)
+        return
+
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            _walk_json_shape(item, f"{path}[{index}]", depth + 1, counters, errors)
+
+
+def _validate_tool_argument_shape_limits(args: Dict[str, Any]) -> List[str]:
+    errors: List[str] = []
+    try:
+        serialized = json.dumps(args, ensure_ascii=False, separators=(",", ":"))
+    except Exception:
+        return ["arguments could not be serialized into a stable JSON object."]
+
+    max_chars = _get_max_tool_argument_chars()
+    if len(serialized) > max_chars:
+        errors.append(f"arguments exceed the maximum serialized size of {max_chars} characters.")
+
+    counters = {"nodes": 0, "max_depth": 0}
+    _walk_json_shape(args, "arguments", 1, counters, errors)
+    return errors
+
+
 def _validate_json_schema_value(value: Any, schema: Dict[str, Any], path: str) -> List[str]:
     errors: List[str] = []
 
@@ -1602,6 +1720,9 @@ def _validate_json_schema_value(value: Any, schema: Dict[str, Any], path: str) -
                 pass
 
     if _is_number_like(value):
+        if not math.isfinite(float(value)):
+            errors.append(f"{path} must be a finite number.")
+            return errors
         minimum = schema.get("minimum")
         if isinstance(minimum, (int, float)) and value < minimum:
             errors.append(f"{path} must be >= {minimum}.")
@@ -1614,6 +1735,14 @@ def _validate_json_schema_value(value: Any, schema: Dict[str, Any], path: str) -
         exclusive_maximum = schema.get("exclusiveMaximum")
         if isinstance(exclusive_maximum, (int, float)) and value >= exclusive_maximum:
             errors.append(f"{path} must be < {exclusive_maximum}.")
+        multiple_of = schema.get("multipleOf")
+        if isinstance(multiple_of, (int, float)) and multiple_of not in (0, 0.0):
+            try:
+                quotient = float(value) / float(multiple_of)
+                if not math.isclose(quotient, round(quotient), rel_tol=0.0, abs_tol=1e-9):
+                    errors.append(f"{path} must be a multiple of {multiple_of}.")
+            except Exception:
+                pass
 
     if isinstance(value, list):
         min_items = schema.get("minItems")
@@ -1622,6 +1751,17 @@ def _validate_json_schema_value(value: Any, schema: Dict[str, Any], path: str) -
         max_items = schema.get("maxItems")
         if isinstance(max_items, int) and len(value) > max_items:
             errors.append(f"{path} must contain at most {max_items} items.")
+        if schema.get("uniqueItems") is True:
+            seen = set()
+            for index, item in enumerate(value):
+                try:
+                    marker = json.dumps(item, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+                except Exception:
+                    marker = repr(item)
+                if marker in seen:
+                    errors.append(f"{path}[{index}] duplicates an earlier array item.")
+                    break
+                seen.add(marker)
         item_schema = schema.get("items")
         if isinstance(item_schema, dict):
             for index, item in enumerate(value):
@@ -1630,6 +1770,12 @@ def _validate_json_schema_value(value: Any, schema: Dict[str, Any], path: str) -
                 )
 
     if isinstance(value, dict):
+        min_properties = schema.get("minProperties")
+        if isinstance(min_properties, int) and len(value) < min_properties:
+            errors.append(f"{path} must contain at least {min_properties} properties.")
+        max_properties = schema.get("maxProperties")
+        if isinstance(max_properties, int) and len(value) > max_properties:
+            errors.append(f"{path} must contain at most {max_properties} properties.")
         required_fields = schema.get("required")
         if isinstance(required_fields, list):
             for field_name in required_fields:
@@ -1652,10 +1798,10 @@ def _validate_json_schema_value(value: Any, schema: Dict[str, Any], path: str) -
         if additional_properties is False:
             for field_name in extra_keys:
                 logger.warning(
-                    "[tool_calling] stripped hallucinated argument "
+                    "[tool_calling] rejected hallucinated argument "
                     f"path={path}.{field_name}"
                 )
-                value.pop(field_name, None)
+                errors.append(f"{path}.{field_name} is not allowed.")
         elif isinstance(additional_properties, dict):
             for field_name in extra_keys:
                 errors.extend(
@@ -1730,6 +1876,13 @@ def _describe_runtime_type(value: Any) -> str:
 
 def _is_number_like(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _canonicalize_tool_args(args: Dict[str, Any]) -> str:
+    try:
+        return json.dumps(args, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    except Exception:
+        return repr(args)
 
 
 def _build_tool_retry_messages(

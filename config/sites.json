@@ -3364,7 +3364,6 @@
               "disable",
               "disabled"
             ],
-            "use_default_attachment_selectors": false,
             "require_attachment_present": false,
             "require_upload_signal_before_ready": false,
             "continue_once_on_unconfirmed_send": true,
