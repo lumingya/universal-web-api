@@ -485,7 +485,7 @@ if AppConfig.is_cors_enabled():
 async def disable_dashboard_cache(request, call_next):
     response = await call_next(request)
     path = request.url.path or ""
-    if path in ("/", "/dashboard", "/marketplace") or path.startswith("/static/"):
+    if path in ("/", "/dashboard") or path.startswith("/static/"):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
@@ -527,18 +527,6 @@ async def dashboard():
     return JSONResponse(
         status_code=404,
         content={"error": {"message": "Dashboard 未找到，请确保 DASHBOARD_FILE 指向的文件存在"}}
-    )
-
-
-@app.get("/marketplace", include_in_schema=False)
-async def marketplace_page():
-    """插件市场独立页面"""
-    page_path = Path("static/marketplace.html")
-    if page_path.exists() and page_path.is_file():
-        return FileResponse(page_path)
-    return JSONResponse(
-        status_code=404,
-        content={"error": {"message": "插件市场页面未找到"}}
     )
 
 

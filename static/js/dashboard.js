@@ -346,15 +346,7 @@ const BROWSER_CONSTANTS_SCHEMA = {
                 type: 'number',
                 min: 1,
                 default: 8
-            }
-        }
-    },
-    streamAdvanced: {
-        label: '流式监控（高级）',
-        icon: '⚙️',
-        collapsed: true,
-        desc: '这里只保留当前版本仍在生效的兼容参数，大多数站点不用改。',
-        items: {
+            },
             STREAM_CONTENT_SHRINK_TOLERANCE: {
                 label: '内容收缩容忍次数',
                 desc: '允许回复在小范围内回退多少字符仍不当成异常。用于容忍编辑器重排、占位符回收这类轻微波动。',

@@ -1,13 +1,17 @@
+<p align="center">
+  <img src="./static/images/logo.svg" alt="Universal Web API logo" width="160">
+</p>
+
 # Universal Web API
 
 📖 Documentation • [English](./README.md) • [简体中文](./README.zh-CN.md)
 
-Turn any AI website you already use, such as ChatGPT, DeepSeek, Claude, or Gemini, into a standard OpenAI-compatible API for free, with full local deployment.
+Connect AI websites you already use in your browser, such as ChatGPT, DeepSeek, Claude, or Gemini, to a standard local OpenAI-compatible interface for personal testing, workflow orchestration, and client integration.
 
 ## Features
 
 **Workflow-driven**
-Browser automation is abstracted into visual workflows. It is highly configurable and lets you add support for new sites freely.
+Browser automation is abstracted into visual workflows. It is highly configurable and lets you extend support to additional sites as needed.
 
 **Flexible request routing**
 Built-in tab pooling supports routing by tab, by site, and by round-robin, so concurrent requests work naturally.
@@ -16,17 +20,21 @@ Built-in tab pooling supports routing by tab, by site, and by round-robin, so co
 Extract text, images, audio, and video from AI web apps based on configuration, and automatically download them locally.
 
 **Network-layer monitoring**
-Intercept and inspect low-level network requests based on configuration, making it possible to capture the raw AI output stream completely.
+Observe and parse target network responses based on configuration so you can debug the output flow of adapted sites.
 
 **File paste**
-Oversized text can be saved as a temporary file before sending, helping bypass input-length limits on some websites.
+Oversized text can be staged as a temporary file before sending, which is useful on sites that handle long context better through file-style inputs. Windows keeps the native clipboard fallback, while other platforms rely on site-native upload entry points.
 
 **Isolated cookie mode**
-Create isolated cookie sessions for the same site to support concurrent calls with multiple accounts.
+Create isolated cookie sessions for the same site so different browser contexts can be kept separate.
 
 ## Limitations
 
-> ⚠️ **Windows only**. macOS / Linux are not supported yet.
+> ⚠️ **Windows remains the most complete path**. `start.bat` and the native file / image clipboard upload flow are preserved for Windows users.
+>
+> ⚠️ **macOS / Linux can now start through `python3 start.py`**. On those platforms, attachments rely on page-native `file input`, `drop zone`, or upload-button flows instead of OS-level file / image clipboard paste.
+>
+> ⚠️ If a target site only accepts clipboard-style attachment paste and exposes no usable upload entry point, **Windows is still recommended** for full parity.
 >
 > ⚠️ Requires **Python 3.10+**.
 
@@ -51,12 +59,17 @@ Create isolated cookie sessions for the same site to support concurrent calls wi
 
 1. Download and extract the package from [Releases](../../releases) into a directory **without Chinese characters in the path**
 2. Make sure Chrome / Edge / Brave or another Chromium-based browser is installed
-3. Double-click **`start.bat`** and wait for dependency installation to finish
-4. Open the dashboard at `http://127.0.0.1:8199`
-5. Log in to your AI account in the browser that opens automatically
-6. In any client that supports the OpenAI API, use:
+3. Start the project:
+   - **Windows**: double-click **`start.bat`**
+   - **macOS / Linux**: run **`python3 start.py`**
+4. Wait for dependency installation and browser startup to finish
+5. Open the dashboard at `http://127.0.0.1:8199`
+6. Log in to your AI account in the browser that opens automatically
+7. In any client that supports the OpenAI API, use:
    - **Base URL**: `http://127.0.0.1:8199/v1`
-   - **API Key**: any value, such as `sk-any`
+   - **API Key**: if built-in auth is disabled, use a placeholder value such as `sk-local`; if auth is enabled, it must match your configured auth token
+
+For non-Windows deployments, prefer site configurations that expose `file_input`, `drop_zone`, or an upload button when you need image or file attachments.
 
 For detailed instructions, see the [full tutorial](./static/tutorial/index.html#quick-start).
 
@@ -70,7 +83,7 @@ For detailed instructions, see the [full tutorial](./static/tutorial/index.html#
 | [Function Calling](./static/tutorial/index.html#function-calling) | Tool-calling compatibility and usage guidance |
 | [Tab Pool and Presets](./static/tutorial/index.html#tab-pool) | Multi-tab concurrency and preset usage |
 | [Core Configuration](./static/tutorial/index.html#selectors) | Selectors, workflow, streaming, multimodal extraction, and file paste |
-| [Advanced Configuration](./static/tutorial/index.html#stealth-mode) | Stealth mode, AI element recognition, and environment settings |
+| [Advanced Configuration](./static/tutorial/index.html#stealth-mode) | Low-interference mode, AI element recognition, and environment settings |
 | [Notes and Known Limits](./static/tutorial/index.html#faq) | Runtime limits, known issues, and special-site notes |
 | [FAQ](./static/tutorial/index.html#faq) | Troubleshooting startup failures, timeouts, and repeated failures |
 | [Parameter Reference](./static/tutorial/index.html#env-config) | Detailed explanation of configuration options |

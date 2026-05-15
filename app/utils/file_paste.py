@@ -8,12 +8,16 @@ app/utils/file_paste.py - 文件粘贴工具
 """
 
 import os
-import struct
 import tempfile
 import shutil
 from app.core.config import get_logger
 from pathlib import Path
 from typing import Optional
+from app.utils.system_clipboard import (
+    ClipboardDependencyError,
+    ClipboardUnsupportedError,
+    copy_file_to_native_clipboard,
+)
 
 logger = get_logger("FPASTE")
 
@@ -111,59 +115,20 @@ def copy_file_to_clipboard(filepath: str) -> bool:
         是否成功
     """
     try:
-        import win32clipboard
-        
-        # 确保文件存在
         abs_path = os.path.abspath(filepath)
         if not os.path.exists(abs_path):
             logger.error(f"文件不存在: {abs_path}")
             return False
-        
-        # 构建 DROPFILES 结构体
-        # 参考: https://learn.microsoft.com/en-us/windows/win32/api/shlobj_core/ns-shlobj_core-dropfiles
-        #
-        # typedef struct _DROPFILES {
-        #     DWORD pFiles;    // 文件名列表相对于结构体起始的偏移量
-        #     POINT pt;        // 放置点 (x, y)
-        #     BOOL  fNC;       // 是否在非客户区
-        #     BOOL  fWide;     // 是否使用宽字符 (Unicode)
-        # } DROPFILES;
-        #
-        # 结构体大小: 4 + 4 + 4 + 4 + 4 = 20 字节
-        
-        # 使用 Unicode 路径（fWide=1）
-        # 文件列表: 路径以 \0 分隔，整体以 \0\0 结尾
-        file_list = abs_path + '\0'  # 单个文件 + 终结符
-        file_list += '\0'            # 列表结束的额外 \0
-        
-        # 编码为 UTF-16LE（Windows 宽字符）
-        file_list_bytes = file_list.encode('utf-16-le')
-        
-        # DROPFILES 结构体头部
-        # pFiles = 20 (结构体本身大小，文件列表紧跟其后)
-        # pt.x = 0, pt.y = 0
-        # fNC = 0
-        # fWide = 1 (使用 Unicode)
-        header = struct.pack('IIIii', 20, 0, 0, 0, 1)
-        
-        # 完整数据 = 头部 + 文件列表
-        data = header + file_list_bytes
-        
-        # CF_HDROP = 15
-        CF_HDROP = 15
-        
-        win32clipboard.OpenClipboard()
-        try:
-            win32clipboard.EmptyClipboard()
-            win32clipboard.SetClipboardData(CF_HDROP, data)
-        finally:
-            win32clipboard.CloseClipboard()
-        
+
+        copy_file_to_native_clipboard(abs_path)
         logger.debug(f"文件已复制到剪贴板: {abs_path}")
         return True
-    
-    except ImportError:
-        logger.error("pywin32 未安装，无法使用文件粘贴功能")
+
+    except ClipboardUnsupportedError:
+        logger.info("当前平台不支持原生文件剪贴板，将依赖 file input / drop_zone 上传")
+        return False
+    except ClipboardDependencyError:
+        logger.error("缺少 Windows 原生文件剪贴板依赖，请执行: pip install pywin32")
         return False
     except Exception as e:
         logger.error(f"复制文件到剪贴板失败: {e}")

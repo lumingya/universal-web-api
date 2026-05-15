@@ -99,6 +99,9 @@ class TabSession:
     is_isolated_context: bool = False
     transient_disconnect_until: float = 0.0
     transient_disconnect_reason: Optional[str] = None
+    last_conversation_activity_at: float = 0.0
+    last_conversation_domain: Optional[str] = None
+    last_conversation_preset_name: Optional[str] = None
     
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     
@@ -210,6 +213,9 @@ class TabSession:
                 try:
                     self.tab.get("about:blank")
                     self.current_domain = None
+                    self.last_conversation_activity_at = 0.0
+                    self.last_conversation_domain = None
+                    self.last_conversation_preset_name = None
                 except Exception as e:
                     logger.debug(f"clear page failed: {e}")
 
@@ -266,6 +272,7 @@ class TabSession:
         if clear_page:
             try:
                 self.tab.refresh()
+                self.reset_conversation_state()
             except Exception as e:
                 logger.warning(f"[{self.id}] force_release refresh failed: {e}")
                 reset_success = False
@@ -309,6 +316,98 @@ class TabSession:
             self.status = TabStatus.ERROR
             self.error_count += 1
             logger.warning(f"[{self.id}] 标记为错误: {reason}")
+
+    def reset_conversation_state(self):
+        with self._lock:
+            self.last_conversation_activity_at = 0.0
+            self.last_conversation_domain = None
+            self.last_conversation_preset_name = None
+
+    def mark_conversation_activity(self, domain: str = "", preset_name: str = ""):
+        normalized_domain = str(domain or "").strip().lower() or None
+        normalized_preset = str(preset_name or "").strip() or None
+        now = time.time()
+        with self._lock:
+            self.last_conversation_activity_at = now
+            self.last_conversation_domain = normalized_domain
+            self.last_conversation_preset_name = normalized_preset
+        logger.debug(
+            f"[{self.id}] 记录会话活动: idx=#{self.persistent_index or '-'}, "
+            f"domain={normalized_domain or '-'}, preset={normalized_preset or '-'}, "
+            f"at={round(now, 3)}"
+        )
+
+    def get_conversation_status(
+        self,
+        current_domain: str = "",
+        preset_name: str = "",
+        threshold_seconds: float = 0.0,
+        force_new: bool = False,
+    ) -> Dict[str, Any]:
+        normalized_domain = str(current_domain or self.current_domain or "").strip().lower()
+        normalized_preset = str(preset_name or "").strip() or None
+        threshold_value = max(0.0, float(threshold_seconds or 0.0))
+
+        with self._lock:
+            last_activity_at = float(self.last_conversation_activity_at or 0.0)
+            last_domain = str(self.last_conversation_domain or "").strip().lower()
+            last_preset = str(self.last_conversation_preset_name or "").strip() or None
+
+        elapsed_seconds = None
+        if last_activity_at > 0:
+            elapsed_seconds = max(0.0, time.time() - last_activity_at)
+
+        reason = "no_previous_conversation"
+        will_start_new = True
+
+        if force_new:
+            reason = "force_new_enabled"
+        elif threshold_value <= 0:
+            reason = "threshold_disabled_reuse"
+        elif not normalized_domain:
+            reason = "missing_current_domain"
+        elif not last_activity_at:
+            reason = "no_previous_conversation"
+        elif last_domain and normalized_domain != last_domain:
+            reason = "domain_changed"
+        elif normalized_preset and last_preset and normalized_preset != last_preset:
+            reason = "preset_changed"
+        elif elapsed_seconds is not None and elapsed_seconds < threshold_value:
+            will_start_new = False
+            reason = "reuse_existing"
+        else:
+            reason = "timeout_expired"
+
+        return {
+            "id": self.id,
+            "persistent_index": self.persistent_index,
+            "current_domain": normalized_domain,
+            "current_preset_name": normalized_preset,
+            "last_conversation_domain": last_domain or None,
+            "last_conversation_preset_name": last_preset,
+            "last_conversation_at": last_activity_at or None,
+            "elapsed_seconds": round(elapsed_seconds, 1) if elapsed_seconds is not None else None,
+            "threshold_seconds": threshold_value,
+            "force_new_conversation": bool(force_new),
+            "will_start_new_conversation": will_start_new,
+            "reason": reason,
+        }
+
+    def should_start_new_conversation(
+        self,
+        current_domain: str = "",
+        preset_name: str = "",
+        threshold_seconds: float = 0.0,
+        force_new: bool = False,
+    ) -> bool:
+        return bool(
+            self.get_conversation_status(
+                current_domain=current_domain,
+                preset_name=preset_name,
+                threshold_seconds=threshold_seconds,
+                force_new=force_new,
+            ).get("will_start_new_conversation", True)
+        )
     
     def get_info(self) -> Dict:
         busy_duration = None
@@ -332,6 +431,9 @@ class TabSession:
             "preset_name": self.preset_name,  # 🆕
             "is_isolated_context": self.is_isolated_context,
             "browser_context_id": self.browser_context_id,
+            "last_conversation_at": self.last_conversation_activity_at or None,
+            "last_conversation_domain": self.last_conversation_domain,
+            "last_conversation_preset_name": self.last_conversation_preset_name,
         }
     
     def _refresh_current_domain(self, url: str = "") -> str:
@@ -3012,6 +3114,8 @@ class TabPoolManager:
             
             old_preset = session.preset_name
             session.preset_name = preset_name if preset_name else None
+            if old_preset != session.preset_name:
+                session.reset_conversation_state()
             
             logger.debug(
                 f"[{session.id}] 预设切换: "

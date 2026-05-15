@@ -134,7 +134,7 @@ if "!IS_STORE_PYTHON!"=="1" (
 
 REM 尝试获取版本号（方法1: sys.version_info）
 set "PYTHON_VERSION="
-for /f "tokens=*" %%i in ('!PYTHON_CMD! -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2^>nul') do set "PYTHON_VERSION=%%i"
+for /f "tokens=*" %%i in ('!PYTHON_CMD! -c "import sys; print(sys.version_info.major,sys.version_info.minor,sep=chr(46))" 2^>nul') do set "PYTHON_VERSION=%%i"
 
 REM 方法2: 如果方法1失败，尝试解析 --version 输出
 if not defined PYTHON_VERSION (

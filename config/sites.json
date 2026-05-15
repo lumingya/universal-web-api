@@ -353,25 +353,25 @@
     "presets": {
       "主预设": {
         "selectors": {
-          "input_box": "div.tiptap[contenteditable=\"true\"]",
-          "send_btn": "button[aria-label=\"提交\"]",
-          "result_container": "div[id^=\"response-\"].items-start .response-content-markdown",
-          "new_chat_btn": "a[aria-label=\"主页\"]",
+          "input_box": "div[data-testid=\"chat-input\"] [contenteditable=\"true\"]",
+          "send_btn": "form button[type=\"submit\"][aria-label=\"提交\"], form button[type=\"submit\"][aria-label=\"Send\"], form button[type=\"submit\"]",
+          "result_container": "div[id^=\"response-\"] [data-testid=\"assistant-message\"] > .relative > .relative",
+          "new_chat_btn": "a.peer\\/menu-button[href=\"/\"]",
           "message_wrapper": "div[id^=\"response-\"]",
-          "generating_indicator": null
+          "generating_indicator": "button[aria-label=\"停止\"], button[aria-label=\"Stop\"], button[aria-label*=\"停止\"], button[aria-label*=\"Stop\"]"
         },
         "workflow": [
           {
-            "action": "JS_EXEC",
-            "target": "",
-            "optional": false,
-            "value": "window.location.assign('/');"
+            "action": "CLICK",
+            "target": "new_chat_btn",
+            "optional": true,
+            "value": null
           },
           {
             "action": "WAIT",
             "target": "",
             "optional": false,
-            "value": "0.5"
+            "value": "0.8"
           },
           {
             "action": "FILL_INPUT",
@@ -398,15 +398,15 @@
             "value": null
           }
         ],
-        "stealth": false,
+        "stealth": true,
         "image_extraction": {
-          "enabled": false,
+          "enabled": true,
           "modalities": {
-            "image": false,
+            "image": true,
             "audio": false,
             "video": false
           },
-          "selector": "img",
+          "selector": "div.group\\/image img.object-cover.relative",
           "audio_selector": "audio, audio source",
           "video_selector": "video, video source",
           "container_selector": null,
@@ -470,7 +470,18 @@
             "code": ""
           }
         },
-        "stream_config": {}
+        "stream_config": {
+          "mode": "network",
+          "hard_timeout": 300,
+          "network": {
+            "listen_pattern": "/rest/app-chat/conversations/",
+            "parser": "grok",
+            "response_interval": 0.5,
+            "silence_threshold": 2,
+            "stream_match_mode": "regex",
+            "stream_match_pattern": "/rest/app-chat/conversations/(?:new|[^/]+/responses)(?:$|[?#])"
+          }
+        }
       }
     },
     "default_preset": "主预设"
@@ -3331,8 +3342,8 @@
           "reacquire_input_after_upload": true,
           "post_upload_input_selector": ".input-box-inner textarea",
           "post_upload_settle": 0.4,
-          "upload_signal_timeout": 6.0,
-          "upload_signal_grace": 4.0,
+          "upload_signal_timeout": 6,
+          "upload_signal_grace": 4,
           "state_probe": {
             "enabled": false,
             "code": ""
@@ -3342,7 +3353,7 @@
             "post_click_observe_window": 1.8,
             "pre_retry_probe_window": 0.12,
             "retry_observe_window": 0.9,
-            "attachment_observe_window": 6.0,
+            "attachment_observe_window": 6,
             "max_retry_count": 2,
             "retry_interval": 0.6,
             "retry_action": "key_press",
@@ -3387,8 +3398,8 @@
             "require_attachment_present": false,
             "require_upload_signal_before_ready": false,
             "continue_once_on_unconfirmed_send": true,
-            "idle_timeout": 8.0,
-            "hard_max_wait": 90.0
+            "idle_timeout": 8,
+            "hard_max_wait": 90
           }
         }
       }

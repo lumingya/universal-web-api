@@ -36,7 +36,7 @@
             <a href="#response-detection" class="nav-link">🌊 响应检测配置</a>
             <a href="#workflow" class="nav-link">🎬 工作流配置</a>
             <a href="#file-paste" class="nav-link">📄 文件粘贴</a>
-            <a href="#stealth-mode" class="nav-link">🛡️ 隐身模式</a>
+            <a href="#stealth-mode" class="nav-link">🛡️ 低干扰操作</a>
             <a href="#commands" class="nav-link">⚡ 自动化命令</a>
             <a href="#ai-recognition" class="nav-link">🎯 AI 元素识别</a>
             <a href="#env-config" class="nav-link">⚙️ 环境配置</a>
@@ -139,10 +139,10 @@
         <!-- ==================== 快速开始 ==================== -->
         <section id="quick-start">
             <h2>🚀 快速开始</h2>
-            <p><strong>Web-to-API</strong> 把你在浏览器里使用的 AI 对话网页（ChatGPT、Gemini、DeepSeek 等）转换成一个<strong>兼容 OpenAI 格式的本地 API</strong>。换句话说，你在网页上能聊的 AI，接入本项目后就能像调用 OpenAI API 一样被客户端或脚本直接调用。</p>
+            <p><strong>Web-to-API</strong> 把你在浏览器里已经打开并可正常使用的 AI 对话网页（ChatGPT、Gemini、DeepSeek 等）接入为一个<strong>兼容 OpenAI 格式的本地接口</strong>，用于个人测试、工作流衔接与客户端集成。</p>
 
             <div class="highlight-box">
-                <p><strong>典型用途：</strong>把网页端的免费额度变成标准 API；同时维护多标签页、多预设并行使用；通过「文件粘贴」绕过部分站点的输入框长度限制；直接观察浏览器侧真实上下文和请求流程。</p>
+                <p><strong>典型用途：</strong>统一本地接入方式；按站点或标签页组织不同工作流；在长文本场景下通过文件粘贴或附件承载上下文；在调试时观察页面侧与请求侧的执行流程。</p>
             </div>
 
             <div class="info-box">
@@ -160,8 +160,8 @@
             </div>
 
             <div class="note">
-                <p><strong>💡 想跳过重新登录？</strong>如果你想直接复用自己 Chrome 里已经登录好的状态，先<strong>完全关闭 Chrome</strong>，再把对应的用户目录复制一份到项目内的 <code>chrome_profile/</code>，或者在 <code>.env</code> 中把 <code>BROWSER_PROFILE_DIR</code> 指向这份副本。至少保留 <code>Local State</code> 和你要使用的 <code>Default</code> / <code>Profile 1</code> 等子目录，并确保 <code>BROWSER_PROFILE_NAME</code> 与目录名一致。</p>
-                <p style="margin-top: 10px; margin-bottom: 0;"><strong>⚠️ 不要直接指向系统默认的 User Data：</strong>在 Chrome 136+ 上，这样做很可能导致远程调试端口起不来。一定要复制出一份副本再用。</p>
+                <p><strong>💡 想跳过重新登录？</strong>这属于<strong>高级选项</strong>。普通使用更推荐继续使用项目自带的 <code>chrome_profile/</code>，把登录态留在这个独立目录里，隔离性最好。</p>
+                <p style="margin-top: 10px; margin-bottom: 0;"><strong>⚠️ 只有在明确理解浏览器用户目录结构和会话数据风险时，才建议复用现有登录态副本。</strong>如果你确实需要这样做，请只复制你自己的本地浏览器目录副本，不要共享、分发或混用他人的登录态数据。详细步骤放在后面的「浏览器常量」章节中。</p>
             </div>
 
             <div class="note">
@@ -182,7 +182,7 @@
             </div>
 
             <div class="highlight-box">
-                <p><strong>⚠️ 关于 arena.ai：</strong>该站点非常看重 IP 质量。<strong>IP 好的可以一直对话，IP 不好的一次就会被拦截</strong>。IP 好坏不仅取决于纯净度，更重要的是<strong>历史行为和共享人数</strong>——有时候机房 IP 会比原生双 ISP 更具优势。经测试，即便关闭网络监听模式，IP 质量不佳时仍会频繁触发 Cloudflare 人机验证。这是站点本身的安全策略，与脚本无关。<br><small style="opacity: 0.8;">（感谢测试者 @喵团子爱摸鱼 的反馈）</small></p>
+                <p><strong>⚠️ 关于 arena.ai：</strong>该站点对访问环境和交互频率较敏感，即使在普通使用场景下也可能频繁触发 Cloudflare 人机验证。这属于站点自身策略，不应把它视为稳定的长时间连续测试目标。更稳妥的做法是降低频率，并把异常优先当作站点侧限制排查。<br><small style="opacity: 0.8;">（感谢测试者 @喵团子爱摸鱼 的反馈）</small></p>
             </div>
 
             <h3>🆕 网站不在列表里？</h3>
@@ -322,8 +322,8 @@
                             <li>部分客户端需要完整路径：在末尾补上 <code>/chat/completions</code></li>
                         </ul>
                     </li>
-                    <li><strong>API 密钥 (API Key)</strong>：任意填写即可（例如：<code>sk-any</code>）。<br><small style="color: var(--desc-color);">本项目并不验证密钥有效性，这里只是满足客户端格式要求。唯一例外：如果你开启了「认证」功能（<code>AUTH_ENABLED=true</code>），则此处必须和 <code>.env</code> 中的 <code>AUTH_TOKEN</code> 保持一致。</small></li>
-                    <li><strong>模型名称 (Model)</strong>：可随意填写（例如填 <code>gpt-4o</code> 或 <code>any</code> 都行）。实际使用的模型由你在受控浏览器里打开的是哪个 AI 网站决定，和这里填的名字无关。</li>
+                    <li><strong>API 密钥 (API Key)</strong>：默认未启用认证时，填一个占位值即可（例如：<code>sk-local</code>）。<br><small style="color: var(--desc-color);">本项目默认不会校验这个值是否来自上游站点；唯一例外是你开启了「认证」功能（<code>AUTH_ENABLED=true</code>），这时它必须和 <code>.env</code> 中的 <code>AUTH_TOKEN</code> 保持一致。</small></li>
+                    <li><strong>模型名称 (Model)</strong>：建议填写一个便于客户端保存配置的占位名称（例如 <code>web-api</code> 或 <code>gemini-web</code>）。实际响应来源仍由你当前打开的站点和预设决定。</li>
                 </ul>
             </div>
 
@@ -490,7 +490,7 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
 
             <h3>💡 关于登录状态</h3>
             <ul>
-                <li><strong>推荐登录</strong>：建议在网页上登录你的账号，这样 API 也就拥有了你的账号权限（如 Plus 会员、历史记录等）。</li>
+                <li><strong>推荐登录</strong>：建议在网页上登录你自己的账号，这样本地接口才能继承当前会话本来就能使用的站点能力与历史上下文。</li>
                 <li><strong>免登录也可以</strong>：如果该网站在未登录状态下允许对话，则无需登录也能直接通过 API 调用。</li>
             </ul>
 
@@ -499,7 +499,7 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
             </div>
 
             <div class="highlight-box">
-                <p><strong>⚠️ 上下文长度限制：</strong>受限于网站输入框一次性所能容纳的字符上限，上下文不能太长，否则请求会直接失败。对于长文本场景，可以开启「文件粘贴」功能来绕过部分限制。</p>
+                <p><strong>⚠️ 上下文长度限制：</strong>受限于网站输入框一次性所能容纳的字符上限，上下文不能太长，否则请求会直接失败。对于长文本场景，可以开启「文件粘贴」功能，让站点改按附件流程处理内容。</p>
             </div>
 
             <h3>已测试站点单次最大发送长度：</h3>
@@ -515,14 +515,16 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
             <h2>🧰 函数调用（Tool Calling）</h2>
 
             <p>项目兼容 <strong>OpenAI 标准 <code>tools</code> 格式</strong>，也兼容 <code>functions</code> / <code>function_call</code></p>
+            <p>在网页模型输出这一侧，后端现在优先引导项目自己的 XML 调用块：<code>&lt;adapter_calls&gt;</code> / <code>&lt;call&gt;</code> / <code>&lt;arg&gt;</code>。旧的 <code>&lt;tool_calls&gt;</code> / <code>&lt;invoke&gt;</code> / <code>&lt;parameter&gt;</code> 仍然兼容。</p>
             <p>后端内置了 <strong>函数调用校验失败后的内部修复重试</strong>，可以直接在 <strong>控制面板 → 设置 → 环境配置 → 函数调用</strong> 里切换策略、控制重试次数和结果长度上限。</p>
 
             <div class="info-box">
                 <p><strong>这是什么：</strong>兼容 OpenAI 标准的 <code>tools</code> 调用格式，让你继续用熟悉的方式定义工具。</p>
+                <p><strong>默认输出外壳：</strong><code>&lt;adapter_calls&gt;</code> → <code>&lt;call name="..."&gt;</code> → <code>&lt;arg name="..."&gt;</code></p>
             </div>
 
             <div class="highlight-box">
-                <p><strong>注意：</strong>这<strong>不是原生 API 的函数调用</strong>。实际工作方式是：后端把工具定义、工具历史和调用约束整理成提示词 -> 网页端模型按格式输出 -> 后端再尝试把结果解析回 <code>tool_calls</code>。所以它的稳定性核心取决于<strong>模型自己的理解能力</strong>，而不是官方 API 层的强制执行。</p>
+                <p><strong>注意：</strong>这<strong>不是原生 API 的函数调用</strong>。实际工作方式是：后端把工具定义、工具历史和调用约束整理成提示词 -> 网页端模型按格式输出 -> 后端再尝试把结果解析回 OpenAI 风格的 <code>tool_calls</code>。所以它的稳定性核心取决于<strong>模型自己的理解能力</strong>，而不是官方 API 层的强制执行。</p>
             </div>
 
             <h3>控制台参数解释</h3>
@@ -553,13 +555,13 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
             <h3>典型失败表现</h3>
             <ul>
                 <li>模型直接输出自然语言，而不是工具调用</li>
-                <li>JSON 格式不完整，后端无法解析</li>
+                <li>XML 或 JSON 结构不完整，后端无法解析</li>
                 <li>参数名对不上，或字段层级错位</li>
                 <li>混合输出：解释文字 + 半个工具调用</li>
             </ul>
 
             <div class="note">
-            <p><strong>最重要的预期管理：</strong>如果你遇到“明明该调工具却直接说了一段话”“参数对不上”“后端提示无法解析 <code>tool_calls</code>”这类现象，先优先怀疑网页端模型这次没能稳定完成工具调用输出，客户端本身往往没有接错。</p>
+            <p><strong>最重要的预期管理：</strong>如果你遇到“明明该调工具却直接说了一段话”“参数对不上”“后端提示无法解析结构化调用块”这类现象，先优先怀疑网页端模型这次没能稳定产出 <code>&lt;adapter_calls&gt;</code> 或有效 JSON 回退，客户端本身往往没有接错。</p>
             </div>
 
             <h3>实战建议</h3>
@@ -1013,13 +1015,13 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
                 <tr><td>长文 / 代码生成</td><td>8-15 秒</td><td>6-10 次</td><td>240-600 秒</td></tr>
             </table>
 
-            <h3>网络拦截模式（进阶推荐 📡）</h3>
+            <h3>网络响应解析（进阶推荐 📡）</h3>
 
             <div class="highlight-box">
-                <p><strong>⚠️ 前提条件：</strong>网络拦截模式必须配合站点解析器使用。没有适配的站点不要随意开启，否则轻则报错，重则增加被风控或 Cloudflare 拦截的概率。</p>
+                <p><strong>⚠️ 前提条件：</strong>这个模式必须配合站点解析器使用。没有适配的站点不要随意开启，否则通常既抓不到有效数据，也会明显增加排障复杂度。</p>
             </div>
 
-            <p>网络拦截模式像“直接读浏览器底层响应”一样工作：它会拦截 XHR / Fetch 请求，拿到最原始的 JSON 或文本，再把它转换成最终输出或增量流。对于已适配站点，它通常更快、更稳，对复杂代码块和公式的还原也更好。</p>
+            <p>网络拦截模式会观察与当前会话相关的 XHR / Fetch 响应，再把命中的 JSON 或文本转换成最终输出或增量流。对于已适配站点，它通常更快、更稳，对复杂代码块和公式的还原也更好。</p>
             <ul>
                 <li><strong>适用场景</strong>：追求更完整的代码块 / 公式，或者网页本身不适合从 DOM 提取内容。</li>
                 <li><strong>优势</strong>：对已适配站点通常更稳，流式输出更接近原始响应。</li>
@@ -1085,7 +1087,7 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
             <p>如果目标网站走的是一次性完整返回的 JSON 或文本接口，你通常需要新增一个自定义解析器。别担心，这部分工作完全可以直接交给 AI 来做。</p>
 
             <div class="success-box">
-                <p><strong>项目已内置脚本：</strong>项目里已经附带同内容文件 <code>static/拦截请求发生器.txt</code>。可以将该文件内容放在控制台里来拦截网络请求。</p>
+                <p><strong>项目已内置调试脚本：</strong>项目里已经附带同内容文件 <code>static/拦截请求发生器.txt</code>。这部分主要面向<strong>维护者 / 高级调试</strong>：当内置日志和解析器调试捕获仍然不够时，再用它采集站点响应样本。</p>
                 <div class="script-link-row">
                     <button type="button" class="btn" id="copyRequestGeneratorBtn">复制脚本</button>
                     <a class="btn" href="../%E6%8B%A6%E6%88%AA%E8%AF%B7%E6%B1%82%E5%8F%91%E7%94%9F%E5%99%A8.txt" target="_blank" rel="noopener">单独打开脚本</a>
@@ -1101,7 +1103,11 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
                 </details>
             </div>
 
-            <h4>保姆级操作步骤</h4>
+            <div class="highlight-box">
+                <p><strong>⚠️ 普通用户可以直接跳过下面这段。</strong>脚本导出的请求 JSON 可能包含当前会话的请求结构、上下文片段和站点响应内容。采集、保存和发给 AI 之前，先确认这些数据只来自你自己的本机会话，并且不会被继续扩散。</p>
+            </div>
+
+            <h4>维护者 / 高级调试步骤</h4>
             <ol>
                 <li>用受控浏览器打开目标站点，停在真正聊天的页面。</li>
                 <li>打开开发者工具的 <code>Console</code>。</li>
@@ -1231,11 +1237,11 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
 
         <!-- ==================== 隐身模式 ==================== -->
         <section id="stealth-mode">
-            <h2>🛡️ 隐身模式（反检测）</h2>
-            <p>隐身模式通过模拟<strong>真实人类操作</strong>来降低自动化检测风险，主要用于 Cloudflare 或类似防护场景。</p>
+            <h2>🛡️ 隐身模式（低干扰操作）</h2>
+            <p>隐身模式会把点击、移动、滚动和输入节奏做得更接近人工操作，用于改善某些站点上的界面兼容性和执行稳定性。</p>
 
             <h3>核心原理</h3>
-            <p>开启后，脚本的点击、鼠标移动、滚动和操作间隔都会尽量接近真人，而不是“瞬移 + 立即点击”的标准自动化轨迹。</p>
+            <p>开启后，脚本的点击、鼠标移动、滚动和操作间隔都会更平缓，不再是“瞬移 + 立即点击”的激进轨迹。</p>
             <table>
                 <tr><th>操作</th><th>普通模式</th><th>隐身模式</th></tr>
                 <tr><td>点击</td><td>直接 CDP 命令</td><td>模拟按压 -> 微移 -> 释放</td></tr>
@@ -1247,17 +1253,17 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
 
             <h3>何时开启</h3>
             <ul>
-                <li><strong>建议开启</strong>：有 Cloudflare 防护的站点（如 <code>arena.ai</code>、<code>chatgpt.com</code>）。</li>
-                <li><strong>建议开启</strong>：频繁触发人机验证，或页面已经提示检测到自动化。</li>
-                <li><strong>可以不开</strong>：AI Studio、DeepSeek 这类低防护或基本无防护站点。</li>
+                <li><strong>建议开启</strong>：页面对瞬时点击、直接粘贴或坐标跳变比较敏感的站点。</li>
+                <li><strong>建议开启</strong>：普通模式下更容易丢焦点、误判未发送，或元素定位不稳定时。</li>
+                <li><strong>可以不开</strong>：普通模式已经长期稳定的站点。</li>
             </ul>
 
             <div class="info-box">
-                <p><strong>📍 配置方式：</strong>控制面板 -> 选择站点 -> 页面顶部勾选「隐身模式」。这个设置是<strong>按预设独立</strong>保存的。</p>
+                <p><strong>📍 配置方式：</strong>控制面板 -> 选择站点 -> 页面顶部勾选「隐身模式」。这里保留的是现有 UI 名称；这个设置会<strong>按预设独立</strong>保存。</p>
             </div>
 
             <h3>DrissionPage 补丁（必看）</h3>
-            <p>为了进一步降低被检测风险，本项目会给 DrissionPage 打一个小补丁，让网络监听尽量复用浏览器的主连接，而不是额外再建立新连接。</p>
+            <p>为了减少额外连接带来的兼容性问题，本项目会给 DrissionPage 打一个小补丁，让网络监听尽量复用浏览器的主连接，而不是额外再建立新连接。</p>
             <ul>
                 <li><strong>自动执行</strong>：运行 <code>start.bat</code> 后会自动安装依赖并执行补丁。</li>
                 <li><strong>手动执行</strong>：<code>python patch_drissionpage.py</code></li>
@@ -1269,7 +1275,7 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
             </div>
 
             <div class="highlight-box">
-                <p><strong>⚠️ Arena.ai 特别说明：</strong>即便开启了隐身模式并关闭了网络监听，在半小时内连续对话约 10 条也依然很容易触发 Cloudflare 验证。这是站点本身的安全策略，真人操作也会遇到，并不是脚本问题。更现实的做法是降低频率，或配合代理切换一起用。</p>
+                <p><strong>⚠️ Arena.ai 特别说明：</strong>即便开启了隐身模式并关闭了网络监听，在半小时内连续对话约 10 条也依然很容易触发 Cloudflare 验证。这说明该站点本身就不适合长时间连续测试；开启该模式也不能保证稳定通过，更稳妥的做法仍然是降低频率。</p>
             </div>
         </section>
         <!-- ==================== 自动化命令 ==================== -->
@@ -1503,7 +1509,7 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
             </div>
 
             <h3 id="proxy-switching">🔀 代理切换功能</h3>
-            <p>通过 Clash API 自动切换代理节点，适用于需要频繁更换 IP 的场景（如绕过频率限制）。</p>
+            <p>通过 Clash API 自动切换代理节点，适用于需要在不同网络环境下做兼容性测试或稳定性排查的场景。</p>
 
             <div class="note">
                 <p><strong>⚠️ 前提条件：</strong>需要运行 Clash 并开启 External Controller。在 Clash 配置文件中确保有以下设置：</p>
@@ -1790,10 +1796,14 @@ if session.error_count > 2:
 
             <div class="config-group">
                 <h4><span class="icon">🧳</span> 想沿用自己的浏览器登录态，应该怎么配？</h4>
-                <p>如果你希望脚本启动后直接继承自己平时浏览器里的登录状态、Cookie 和扩展，请使用 <strong>独立复制出来的用户数据目录</strong>，不要直接把脚本指向你日常正在使用的系统默认目录。</p>
+                <p>这是一个<strong>高级选项</strong>。如果你希望脚本启动后直接继承自己平时浏览器里的登录状态、Cookie 和扩展，请使用 <strong>独立复制出来的用户数据目录</strong>，不要直接把脚本指向你日常正在使用的系统默认目录。</p>
 
                 <div class="highlight-box">
                     <p><strong>⚠️ 重要：</strong>从 <strong>Chrome 136</strong> 开始，Chrome 对远程调试做了安全调整，<strong>默认 Chrome 数据目录</strong>不再接受 <code>--remote-debugging-port</code>。如果你把 <code>BROWSER_PROFILE_DIR</code> 直接写成系统默认的 <code>User Data</code>，浏览器可能会被打开，但调试端口不会真正起来，脚本也就无法接管它。Chrome 官方说明见：<a href="https://developer.chrome.com/blog/remote-debugging-port" target="_blank" rel="noopener noreferrer">Changes to remote debugging switches to improve security</a>。</p>
+                </div>
+
+                <div class="highlight-box">
+                    <p><strong>⚠️ 会话数据提醒：</strong>复制浏览器用户目录时，里面可能包含登录态、Cookie、本地缓存和扩展数据。只建议复制<strong>你自己的本机目录副本</strong>，并且只用于本机调试；不要把这类目录打包分享、提交仓库或发给别人。</p>
                 </div>
 
                 <h5>推荐做法：复制一份专用用户目录</h5>
@@ -1825,7 +1835,7 @@ BROWSER_PROFILE_NAME=Default</code></pre>
                 </div>
 
                 <div class="info-box">
-                    <p><strong>如果你不在乎沿用自己的登录态：</strong>最省心的方式是留空 <code>BROWSER_PROFILE_DIR</code>，让项目继续使用根目录下的 <code>chrome_profile/</code>。这样隔离最彻底，也最不容易和日常 Chrome 互相影响。</p>
+                    <p><strong>如果你不在乎沿用自己的登录态：</strong>最省心的方式是留空 <code>BROWSER_PROFILE_DIR</code>，让项目继续使用根目录下的 <code>chrome_profile/</code>。这样隔离最彻底，也最不容易和日常 Chrome 互相影响；对大多数用户来说，这也是默认推荐方案。</p>
                 </div>
             </div>
 
@@ -1998,7 +2008,7 @@ BROWSER_PROFILE_NAME=Default</code></pre>
                 <ul>
                     <li><code>config/sites.local.json</code>：站点默认预设覆盖</li>
                     <li><code>config/commands.local.json</code>：命令启用状态与分组覆盖</li>
-                    <li><code>chrome_profile/</code>：浏览器登录态、Cookie 与用户目录</li>
+                    <li><code>chrome_profile/</code>：浏览器登录态、Cookie 与用户目录，仅建议本机自用，不建议共享或提交到仓库</li>
                     <li><code>venv/</code>：Python 虚拟环境</li>
                     <li><code>logs/</code>：日志目录</li>
                     <li><code>image/</code>：图片输出目录</li>

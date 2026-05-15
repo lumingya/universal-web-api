@@ -1,7 +1,7 @@
 """
 app/services/parser_manager.py - Runtime parser installation manager.
 
-Marketplace parser packages are written into app/core/parsers and then
+Parser packages can be written into app/core/parsers and then
 registered through ParserRegistry via config/parsers.json.
 """
 

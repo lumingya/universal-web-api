@@ -89,6 +89,7 @@ class NetworkMonitor:
     DEFAULT_HARD_TIMEOUT = 300             # 全局硬超时
     DEFAULT_RESPONSE_INTERVAL = 0.5        # 响应轮询间隔
     DEFAULT_SILENCE_THRESHOLD = 3.0        # 静默超时（无新数据）
+    DEFAULT_INITIAL_TARGET_BODY_WAIT = 4.0  # 首个目标响应空 body 时的补等宽限
     MAX_LISTEN_RESTARTS = 3                # 监听状态异常后的最大重建次数
     CANCEL_CHECK_SLICE = 1.0              # 长等待期间的取消检查切片（秒）
     
@@ -144,6 +145,26 @@ class NetworkMonitor:
         self._silence_threshold = network_config.get(
             "silence_threshold",
             self.DEFAULT_SILENCE_THRESHOLD
+        )
+        initial_target_body_wait = network_config.get(
+            "initial_target_body_wait",
+            max(
+                self.DEFAULT_INITIAL_TARGET_BODY_WAIT,
+                float(self._silence_threshold or self.DEFAULT_SILENCE_THRESHOLD)
+                + float(self._response_interval or self.DEFAULT_RESPONSE_INTERVAL),
+            ),
+        )
+        try:
+            initial_target_body_wait = float(initial_target_body_wait)
+        except Exception:
+            initial_target_body_wait = max(
+                self.DEFAULT_INITIAL_TARGET_BODY_WAIT,
+                float(self._silence_threshold or self.DEFAULT_SILENCE_THRESHOLD)
+                + float(self._response_interval or self.DEFAULT_RESPONSE_INTERVAL),
+            )
+        self._initial_target_body_wait = min(
+            max(initial_target_body_wait, max(float(self._response_interval or 0.5), 0.2)),
+            max(float(self._hard_timeout or self.DEFAULT_HARD_TIMEOUT), 1.0),
         )
                 
         # 监听预启动标记（用于提前启动监听）
@@ -719,13 +740,25 @@ class NetworkMonitor:
                 return bool(value)
         return False
 
-    def _wait_for_stream_body(self, response: Any, initial_body: str, initial_source: str) -> tuple[str, str]:
+    def _wait_for_stream_body(
+        self,
+        response: Any,
+        initial_body: str,
+        initial_source: str,
+        wait_budget: Optional[float] = None,
+    ) -> tuple[str, str]:
         body = initial_body
         source = initial_source
         if body:
             return body, source
 
-        wait_budget = min(max(float(self._response_interval or 0.5), 0.2), 1.5)
+        if wait_budget is None:
+            wait_budget = min(max(float(self._response_interval or 0.5), 0.2), 1.5)
+        else:
+            try:
+                wait_budget = max(float(wait_budget), 0.2)
+            except Exception:
+                wait_budget = min(max(float(self._response_interval or 0.5), 0.2), 1.5)
         deadline = time.time() + wait_budget
 
         while time.time() < deadline:
@@ -1091,16 +1124,40 @@ class NetworkMonitor:
                     )
                     raise NetworkMonitorError("doubao_body_only_response")
             is_event_stream = self._is_event_stream_response(response)
+            should_probe_initial_target_body = (
+                stream_target_hits == 1 and self._total_chunks == 0
+            )
 
-            if not raw_body and is_event_stream:
+            if not raw_body and (is_event_stream or should_probe_initial_target_body):
+                wait_budget = (
+                    self._initial_target_body_wait
+                    if should_probe_initial_target_body
+                    else None
+                )
                 raw_body, raw_body_source = self._wait_for_stream_body(
                     response,
                     raw_body,
                     raw_body_source,
+                    wait_budget=wait_budget,
                 )
+                if raw_body and not is_event_stream and self._looks_like_sse_payload(raw_body):
+                    is_event_stream = True
 
             if not raw_body:
                 empty_body_skips += 1
+                if should_probe_initial_target_body:
+                    body_wait_elapsed = max(
+                        0.0,
+                        time.time() - float(event.get("timestamp", 0.0) or 0.0),
+                    )
+                    logger.warning(
+                        "[NetworkMonitor] 首个流目标响应正文未在宽限期内就绪，回退到 DOM 监听 "
+                        f"(wait={body_wait_elapsed:.1f}s, status={event.get('status')}, "
+                        f"url={event.get('url', '')[:120]}, source={raw_body_source})"
+                    )
+                    raise NetworkMonitorTimeout(
+                        f"目标流响应正文未就绪（{body_wait_elapsed:.1f}s）"
+                    )
                 logger.debug_throttled(
                     "network.empty_body",
                     "[NetworkMonitor] 响应体为空，跳过 "

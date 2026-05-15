@@ -21,6 +21,7 @@ from .qwen_parser import QwenParser
 from .mimo_parser import MimoParser
 from .lmarena_parser import LmarenaParser
 from .lmarena_side_left_parser import LmarenaSideLeftParser
+from .grok_parser import GrokParser
 
 # 自动注册内置解析器
 ParserRegistry.register_class(GeminiParser)
@@ -35,6 +36,7 @@ ParserRegistry.register_class(QwenParser)
 ParserRegistry.register_class(MimoParser)
 ParserRegistry.register_class(LmarenaParser)
 ParserRegistry.register_class(LmarenaSideLeftParser)
+ParserRegistry.register_class(GrokParser)
 
 __all__ = [
     'ResponseParser',
@@ -51,4 +53,5 @@ __all__ = [
     'MimoParser',
     'LmarenaParser',
     'LmarenaSideLeftParser',
+    'GrokParser',
 ]
