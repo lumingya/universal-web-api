@@ -158,6 +158,9 @@ class NetworkMonitor:
         self._last_stream_raw_body: str = ""
         self._last_stream_parse_result: Dict[str, Any] = {}
         self._last_media_generation_state: Dict[str, Any] = {}
+        self._send_attempt_baseline_targets = 0
+        self._send_attempt_baseline_requests = 0
+        self._send_attempt_marked_at = 0.0
         
         logger.debug(
             f"[NetworkMonitor] 初始化完成 "
@@ -267,6 +270,62 @@ class NetworkMonitor:
         self._pre_started = True
         self._is_listening = True
 
+    def _read_listen_counters(self) -> Dict[str, int]:
+        listen = getattr(self.tab, "listen", None)
+        if listen is None:
+            return {
+                "running_targets": 0,
+                "running_requests": 0,
+                "queued_packets": 0,
+            }
+
+        try:
+            running_targets = int(getattr(listen, "_running_targets", 0) or 0)
+        except Exception:
+            running_targets = 0
+
+        try:
+            running_requests = int(getattr(listen, "_running_requests", 0) or 0)
+        except Exception:
+            running_requests = 0
+
+        queued_packets = 0
+        try:
+            caught = getattr(listen, "_caught", None)
+            if caught is not None and hasattr(caught, "qsize"):
+                queued_packets = int(caught.qsize() or 0)
+        except Exception:
+            queued_packets = 0
+
+        return {
+            "running_targets": max(0, running_targets),
+            "running_requests": max(0, running_requests),
+            "queued_packets": max(0, queued_packets),
+        }
+
+    def mark_send_attempt(self):
+        """Record the listener baseline immediately before a submit action."""
+        if not self._listen_pattern:
+            return
+
+        try:
+            if not self._listen_is_active():
+                self._ensure_listening("mark_send_attempt")
+        except Exception as e:
+            logger.debug(f"[NetworkMonitor] 记录发送基线失败: {e}")
+            return
+
+        snapshot = self._read_listen_counters()
+        self._send_attempt_baseline_targets = snapshot["running_targets"]
+        self._send_attempt_baseline_requests = snapshot["running_requests"]
+        self._send_attempt_marked_at = time.time()
+        logger.debug(
+            "[NetworkMonitor] 已记录发送基线 "
+            f"(targets={snapshot['running_targets']}, "
+            f"requests={snapshot['running_requests']}, "
+            f"queued={snapshot['queued_packets']})"
+        )
+
     def poll_send_activity(self, timeout: float = 0.25) -> Dict[str, Any]:
         """
         发送后短窗口里轻量探测一次网络活动。
@@ -279,8 +338,6 @@ class NetworkMonitor:
         try:
             if not self._listen_is_active():
                 self._ensure_listening("poll_send_activity")
-
-            response = self.tab.listen.wait(timeout=max(0.01, float(timeout or 0.01)))
         except Exception as e:
             err_text = str(e)
             if self._is_restartable_listen_error(err_text):
@@ -291,22 +348,65 @@ class NetworkMonitor:
                 return {"seen": False, "matched": False, "error": err_text}
             return {"seen": False, "matched": False, "error": err_text}
 
-        if response in (None, False):
-            return {"seen": False, "matched": False}
+        baseline_targets = int(getattr(self, "_send_attempt_baseline_targets", 0) or 0)
+        deadline = time.time() + max(0.01, float(timeout or 0.01))
+        saw_any_response = False
+        last_event: Dict[str, Any] = {}
 
-        self._prefetched_responses.append(response)
-        event = self._extract_event(response)
-        matched = False
-        try:
-            matched = self.parser.get_id() != "event_only" and self._matches_stream_target(event)
-        except Exception:
+        while True:
+            counters = self._read_listen_counters()
+            if counters["running_targets"] > baseline_targets:
+                return {
+                    "seen": True,
+                    "matched": True,
+                    "source": "request_started",
+                    **counters,
+                }
+
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                return {
+                    "seen": saw_any_response,
+                    "matched": False,
+                    "source": "timeout",
+                    "event": last_event,
+                    **counters,
+                }
+
+            wait_timeout = min(0.05, max(0.01, remaining))
+            try:
+                response = self.tab.listen.wait(timeout=wait_timeout)
+            except Exception as e:
+                err_text = str(e)
+                if self._is_restartable_listen_error(err_text):
+                    try:
+                        self._ensure_listening("poll_send_activity_wait_restart")
+                    except Exception:
+                        return {"seen": saw_any_response, "matched": False, "error": err_text, **counters}
+                    continue
+                return {"seen": saw_any_response, "matched": False, "error": err_text, **counters}
+            if response in (None, False):
+                continue
+
+            saw_any_response = True
+            self._prefetched_responses.append(response)
+            event = self._extract_event(response)
+            last_event = event
             matched = False
+            try:
+                matched = self.parser.get_id() != "event_only" and self._matches_stream_target(event)
+            except Exception:
+                matched = False
 
-        return {
-            "seen": True,
-            "matched": matched,
-            "event": event,
-        }
+            counters = self._read_listen_counters()
+            if matched:
+                return {
+                    "seen": True,
+                    "matched": True,
+                    "source": "response_packet",
+                    "event": event,
+                    **counters,
+                }
 
     def _ensure_listening(self, reason: str):
         if self._is_listening and self._listen_is_active():

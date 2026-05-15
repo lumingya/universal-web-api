@@ -281,6 +281,8 @@ class SendConfirmationConfig(TypedDict, total=False):
     attachment_observe_window: float
     max_retry_count: int
     retry_interval: float
+    retry_action: Literal["click_send_btn", "key_press"]
+    retry_key_combo: str
     retry_on_unconfirmed_send: bool
     accept_attachment_change: bool
     accept_attachment_disappear: bool
@@ -744,6 +746,9 @@ def validate_site_config(config: Dict[str, Any]) -> bool:
             int_fields = [
                 "max_retry_count",
             ]
+            string_fields = [
+                "retry_key_combo",
+            ]
             bool_fields = [
                 "retry_on_unconfirmed_send",
                 "accept_attachment_change",
@@ -757,6 +762,7 @@ def validate_site_config(config: Dict[str, Any]) -> bool:
             ]
             enum_fields = {
                 "attachment_sensitivity": {"low", "medium", "high"},
+                "retry_action": {"click_send_btn", "key_press"},
             }
 
             for key in numeric_fields:
@@ -765,6 +771,10 @@ def validate_site_config(config: Dict[str, Any]) -> bool:
 
             for key in int_fields:
                 if key in send_confirmation and not isinstance(send_confirmation[key], int):
+                    return False
+
+            for key in string_fields:
+                if key in send_confirmation and not isinstance(send_confirmation[key], str):
                     return False
 
             for key in bool_fields:
@@ -862,6 +872,9 @@ def validate_site_config(config: Dict[str, Any]) -> bool:
             int_fields = [
                 "max_retry_count",
             ]
+            string_fields = [
+                "retry_key_combo",
+            ]
             bool_fields = [
                 "retry_on_unconfirmed_send",
                 "accept_attachment_change",
@@ -875,6 +888,7 @@ def validate_site_config(config: Dict[str, Any]) -> bool:
             ]
             enum_fields = {
                 "attachment_sensitivity": {"low", "medium", "high"},
+                "retry_action": {"click_send_btn", "key_press"},
             }
 
             for key in numeric_fields:
@@ -883,6 +897,10 @@ def validate_site_config(config: Dict[str, Any]) -> bool:
 
             for key in int_fields:
                 if key in send_confirmation and not isinstance(send_confirmation[key], int):
+                    return False
+
+            for key in string_fields:
+                if key in send_confirmation and not isinstance(send_confirmation[key], str):
                     return False
 
             for key in bool_fields:
@@ -948,6 +966,8 @@ def get_default_send_confirmation_config() -> SendConfirmationConfig:
         "attachment_observe_window": 6.0,
         "max_retry_count": 2,
         "retry_interval": 0.6,
+        "retry_action": "click_send_btn",
+        "retry_key_combo": "Enter",
         "retry_on_unconfirmed_send": True,
         "accept_attachment_change": False,
         "accept_attachment_disappear": False,

@@ -1353,6 +1353,7 @@ class WorkflowExecutor:
                     if self._network_monitor is not None:
                         self._prepare_kimi_page_capture()
                         self._network_monitor.pre_start()
+                        self._network_monitor.mark_send_attempt()
                 self._execute_keypress_combo(key)
 
             elif action == "JS_EXEC":
@@ -2499,6 +2500,8 @@ class WorkflowExecutor:
             "attachment_observe_window": float(
                 getattr(BrowserConstants, "ATTACHMENT_SEND_OBSERVE_WINDOW", 6.0)
             ),
+            "retry_action": "click_send_btn",
+            "retry_key_combo": "Enter",
             "trust_network_activity": True,
             "trust_generating_indicator": True,
             "trust_send_disabled_with_input_shrink": True,
@@ -2591,6 +2594,46 @@ class WorkflowExecutor:
         if max_value is not None:
             value = min(value, max_value)
         return value
+
+    def _get_send_retry_action_config(self) -> Dict[str, str]:
+        """Resolve the action used when automatic send retry is triggered."""
+        config = self._get_send_confirmation_config()
+        retry_action = str(config.get("retry_action") or "click_send_btn").strip().lower()
+        if retry_action not in {"click_send_btn", "key_press"}:
+            retry_action = "click_send_btn"
+
+        retry_key_combo = str(config.get("retry_key_combo") or "Enter").strip() or "Enter"
+        return {
+            "retry_action": retry_action,
+            "retry_key_combo": retry_key_combo,
+        }
+
+    def _format_send_retry_action(self, retry_action_config: Optional[Dict[str, str]] = None) -> str:
+        config = retry_action_config or self._get_send_retry_action_config()
+        retry_action = str(config.get("retry_action") or "click_send_btn").strip().lower()
+        if retry_action == "key_press":
+            return f"KEY_PRESS({config.get('retry_key_combo') or 'Enter'})"
+        return "CLICK(send_btn)"
+
+    def _execute_send_retry_action(
+        self,
+        selector: str,
+        target_key: str,
+        optional: bool,
+        *,
+        retry_action_config: Optional[Dict[str, str]] = None,
+    ) -> None:
+        config = retry_action_config or self._get_send_retry_action_config()
+        retry_action = str(config.get("retry_action") or "click_send_btn").strip().lower()
+        if self._network_monitor is not None:
+            self._network_monitor.mark_send_attempt()
+
+        if retry_action == "key_press":
+            key_combo = str(config.get("retry_key_combo") or "Enter").strip() or "Enter"
+            self._execute_keypress_combo(key_combo)
+            return
+
+        self._execute_click(selector, target_key, optional)
 
     def _get_attachment_send_confirmation_profile(self) -> Dict[str, Any]:
         """Resolve the 3-level attachment send sensitivity profile."""
@@ -2806,7 +2849,12 @@ class WorkflowExecutor:
             elapsed += step
 
             if trust_network_activity and network_state.get("matched"):
-                logger.debug("[SEND] 已通过网络监听捕获到发送后的目标流事件")
+                logger.debug(
+                    "[SEND] 已通过网络监听捕获到发送后的目标流事件 "
+                    f"(source={network_state.get('source') or '-'}, "
+                    f"targets={network_state.get('running_targets', 0)}, "
+                    f"requests={network_state.get('running_requests', 0)})"
+                )
                 return True
 
             current_len = self._safe_get_input_len_by_key("input_box")
@@ -2925,15 +2973,73 @@ class WorkflowExecutor:
         state["accepted"] = bool(accepted_signals)
         return state
 
-    def _should_retry_attachment_send(
+    @staticmethod
+    def _format_send_attempt_state(attempt_state: Optional[Dict[str, Any]]) -> str:
+        if not isinstance(attempt_state, dict) or not attempt_state:
+            return "state=-"
+
+        accepted_signals = [
+            str(item).strip()
+            for item in (attempt_state.get("accepted_signals") or [])
+            if str(item).strip()
+        ]
+        signals_text = "|".join(accepted_signals) if accepted_signals else "-"
+        post_click = attempt_state.get("post_click") or {}
+        network = attempt_state.get("network") or {}
+        attachment_delta = attempt_state.get("attachment_delta") or {}
+        probe = attempt_state.get("probe") or {}
+        probe_result = probe.get("result") if isinstance(probe, dict) else {}
+
+        probe_flags = []
+        if isinstance(probe_result, dict):
+            for key, label in (
+                ("retry", "retry"),
+                ("accepted", "accepted"),
+                ("confirmed", "confirmed"),
+                ("uploading", "uploading"),
+                ("ready", "ready"),
+            ):
+                if probe_result.get(key):
+                    probe_flags.append(label)
+
+        parts = [
+            f"signals={signals_text}",
+            f"input={int(attempt_state.get('before_input_length') or 0)}->{int(attempt_state.get('after_input_length') or 0)}",
+            f"network={bool(network.get('matched'))}",
+            f"network_source={str(network.get('source') or '-')}",
+            f"generating={bool(post_click.get('generating'))}",
+            f"stop={bool(post_click.get('sendLooksLikeStop'))}",
+            f"disabled={bool(post_click.get('sendDisabled'))}",
+            "attachment_delta="
+            f"a{int(attachment_delta.get('attachmentCount', 0) or 0)}/"
+            f"p{int(attachment_delta.get('previewCount', 0) or 0)}/"
+            f"f{int(attachment_delta.get('fileInputCount', 0) or 0)}",
+        ]
+
+        if probe_flags:
+            parts.append(f"probe={'+'.join(probe_flags)}")
+
+        probe_summary = str(probe.get("summary") or "").strip() if isinstance(probe, dict) else ""
+        if probe_summary:
+            parts.append(f"probe_summary={probe_summary[:80]}")
+
+        return ", ".join(parts)
+
+    def _evaluate_attachment_retry_decision(
         self,
         attempt_state: Dict[str, Any],
         *,
         retry_index: int,
         max_retry_count: int,
-    ) -> bool:
+    ) -> Dict[str, Any]:
+        decision = {
+            "should_retry": False,
+            "reason": "unknown",
+        }
+
         if retry_index >= max_retry_count:
-            return False
+            decision["reason"] = f"max_retry_count_reached({retry_index}/{max_retry_count})"
+            return decision
 
         retry_on_unconfirmed = self._get_send_confirmation_flag(
             "retry_on_unconfirmed_send",
@@ -2941,48 +3047,74 @@ class WorkflowExecutor:
             raw_only=True,
         )
         if not retry_on_unconfirmed:
-            return False
+            decision["reason"] = "retry_disabled"
+            return decision
 
         if self._get_send_confirmation_flag("retry_block_if_generating", True, raw_only=True):
             if bool((attempt_state.get("post_click") or {}).get("generating")):
-                return False
+                decision["reason"] = "page_generating"
+                return decision
 
         if self._get_send_confirmation_flag("retry_block_on_stop_button", True, raw_only=True):
             if bool((attempt_state.get("post_click") or {}).get("sendLooksLikeStop")):
-                return False
+                decision["reason"] = "send_button_became_stop"
+                return decision
 
         probe_result = (attempt_state.get("probe") or {}).get("result") if isinstance(attempt_state.get("probe"), dict) else {}
         if isinstance(probe_result, dict):
             if probe_result.get("shouldRetry") is False:
-                return False
+                decision["reason"] = "probe_blocked_retry"
+                return decision
             if probe_result.get("retry") is True:
-                return True
+                decision["should_retry"] = True
+                decision["reason"] = "probe_requested_retry"
+                return decision
             if probe_result.get("accepted") is True or probe_result.get("confirmed") is True:
-                return False
+                decision["reason"] = "probe_confirmed_send"
+                return decision
 
         if bool((attempt_state.get("network") or {}).get("matched")):
-            return False
+            decision["reason"] = "network_activity_seen"
+            return decision
 
         if bool(attempt_state.get("accepted")):
+            accepted_signals = attempt_state.get("accepted_signals") or []
             if self._get_send_confirmation_flag("accept_attachment_change", False, raw_only=True):
-                if "attachment_changed" in (attempt_state.get("accepted_signals") or []):
-                    return False
+                if "attachment_changed" in accepted_signals:
+                    decision["reason"] = "attachment_changed_accepted"
+                    return decision
             if self._get_send_confirmation_flag("accept_attachment_disappear", False, raw_only=True):
-                if "attachment_disappeared" in (attempt_state.get("accepted_signals") or []):
-                    return False
+                if "attachment_disappeared" in accepted_signals:
+                    decision["reason"] = "attachment_disappeared_accepted"
+                    return decision
             if self._get_send_confirmation_flag("accept_probe_confirmation", True, raw_only=True):
                 if any(
-                    signal in (attempt_state.get("accepted_signals") or [])
+                    signal in accepted_signals
                     for signal in ("probe_accepted", "probe_confirmed")
                 ):
-                    return False
-            if any(
-                signal in (attempt_state.get("accepted_signals") or [])
-                for signal in ("input_shrunk", "generating", "send_became_stop", "network_activity")
-            ):
-                return False
+                    decision["reason"] = "probe_confirmed_send"
+                    return decision
+            if "input_shrunk" in accepted_signals:
+                decision["reason"] = "input_shrunk"
+                return decision
+            if "generating" in accepted_signals:
+                decision["reason"] = "page_generating"
+                return decision
+            if "send_became_stop" in accepted_signals:
+                decision["reason"] = "send_button_became_stop"
+                return decision
+            if "network_activity" in accepted_signals:
+                decision["reason"] = "network_activity_seen"
+                return decision
+            if "send_disabled_with_input_shrink" in accepted_signals:
+                decision["reason"] = "send_disabled_with_input_shrink"
+                return decision
+            decision["reason"] = f"accepted_signal:{'|'.join(str(item) for item in accepted_signals)}"
+            return decision
 
-        return True
+        decision["should_retry"] = True
+        decision["reason"] = "unconfirmed_no_success_signal"
+        return decision
 
     def _execute_click_send_reliably(self, selector: str, target_key: str, optional: bool):
         """
@@ -3057,9 +3189,13 @@ class WorkflowExecutor:
             attachment_profile["trust_send_disabled_with_input_shrink"],
             raw_only=True,
         )
+        retry_action_config = self._get_send_retry_action_config()
+        retry_action_desc = self._format_send_retry_action(retry_action_config)
 
         before_len = self._safe_get_input_len_by_key("input_box")
         baseline_attachment_state = self._probe_attachment_readiness(selector) if avoid_repeat_click else {}
+        if self._network_monitor is not None:
+            self._network_monitor.mark_send_attempt()
         self._execute_click(selector, target_key, optional)
 
         time.sleep(0.25)
@@ -3119,18 +3255,22 @@ class WorkflowExecutor:
                 )
             elif accept_unconfirmed:
                 logger.info(
-                    f"发送成功（附件场景，通过补充信号确认，signals={attempt_state.get('accepted_signals') or []}）"
+                    "发送成功（附件场景，通过补充信号确认，"
+                    f"{self._format_send_attempt_state(attempt_state)}）"
                 )
             else:
-                if max_retry_count > 0 and self._should_retry_attachment_send(
+                retry_decision = self._evaluate_attachment_retry_decision(
                     attempt_state,
                     retry_index=0,
                     max_retry_count=max_retry_count,
-                ):
+                )
+                if max_retry_count > 0 and retry_decision["should_retry"]:
                     logger.warning(
-                        "[SEND] 附件发送场景未确认成功，进入附件重试 "
-                        f"(signals={attempt_state.get('accepted_signals') or []}, "
-                        f"sensitivity={attachment_profile['level']})"
+                        "[SEND] 附件发送首轮未确认，准备自动重试 "
+                        f"(next_retry=1/{max_retry_count}, action={retry_action_desc}, "
+                        f"reason={retry_decision['reason']}, "
+                        f"sensitivity={attachment_profile['level']}, "
+                        f"{self._format_send_attempt_state(attempt_state)})"
                     )
 
                     for retry_index in range(1, max_retry_count + 1):
@@ -3153,10 +3293,21 @@ class WorkflowExecutor:
                             trust_generating_indicator=attachment_trust_generating_indicator,
                             trust_send_disabled_with_input_shrink=attachment_trust_send_disabled_with_input_shrink,
                         ):
-                            logger.info(f"发送成功（附件重试前观察确认，第 {retry_index} 轮）")
+                            logger.info(
+                                f"发送成功（附件重试前观察确认，第 {retry_index} 轮，无需执行重试动作，action={retry_action_desc}）"
+                            )
                             return
 
-                        self._execute_click(selector, target_key, optional)
+                        logger.warning(
+                            "[SEND] 执行附件重试动作 "
+                            f"(retry={retry_index}/{max_retry_count}, action={retry_action_desc})"
+                        )
+                        self._execute_send_retry_action(
+                            selector,
+                            target_key,
+                            optional,
+                            retry_action_config=retry_action_config,
+                        )
                         time.sleep(0.25)
                         retry_after_len = self._safe_get_input_len_by_key("input_box")
                         retry_network_probe = {"matched": False}
@@ -3197,28 +3348,35 @@ class WorkflowExecutor:
                             trust_generating_indicator=attachment_trust_generating_indicator,
                             trust_send_disabled_with_input_shrink=attachment_trust_send_disabled_with_input_shrink,
                         ):
-                            logger.info(f"发送成功（附件重试后观察确认，第 {retry_index} 轮）")
+                            logger.info(
+                                f"发送成功（附件重试后观察确认，第 {retry_index} 轮，action={retry_action_desc}）"
+                            )
                             return
 
-                        if not self._should_retry_attachment_send(
+                        retry_decision = self._evaluate_attachment_retry_decision(
                             retry_attempt_state,
                             retry_index=retry_index,
                             max_retry_count=max_retry_count,
-                        ):
+                        )
+                        if not retry_decision["should_retry"]:
                             logger.warning(
-                                "[SEND] 附件重试停止：不再满足重试条件 "
-                                f"(signals={retry_attempt_state.get('accepted_signals') or []})"
+                                "[SEND] 附件重试停止 "
+                                f"(retry={retry_index}/{max_retry_count}, action={retry_action_desc}, "
+                                f"reason={retry_decision['reason']}, "
+                                f"{self._format_send_attempt_state(retry_attempt_state)})"
                             )
                             return
 
                     logger.warning(
-                        "[SEND] 附件发送重试已达到上限，停止自动补点 "
-                        f"(max_retry_count={max_retry_count})"
+                        "[SEND] 附件发送重试已达到上限，停止自动补发 "
+                        f"(max_retry_count={max_retry_count}, action={retry_action_desc})"
                     )
                 else:
                     logger.warning(
-                        "[SEND] 附件发送场景未观察到明确成功信号，跳过自动补点以避免误点停止按钮 "
-                        f"(sensitivity={attachment_profile['level']})"
+                        "[SEND] 附件发送未确认，但当前不执行自动重试 "
+                        f"(action={retry_action_desc}, reason={retry_decision['reason']}, "
+                        f"sensitivity={attachment_profile['level']}, "
+                        f"{self._format_send_attempt_state(attempt_state)})"
                     )
             return
 
@@ -3226,7 +3384,11 @@ class WorkflowExecutor:
             logger.info("发送成功（首次点击后观察确认）")
             return
 
-        logger.warning(f"[SEND] 发送未成功，进入重试窗口 max_wait={max_wait}s")
+        retry_action_config = self._get_send_retry_action_config()
+        retry_action_desc = self._format_send_retry_action(retry_action_config)
+        logger.warning(
+            f"[SEND] 发送未成功，进入重试窗口 (max_wait={max_wait}s, action={retry_action_desc})"
+        )
 
         deadline = time.time() + max_wait
         while time.time() < deadline:
@@ -3246,10 +3408,20 @@ class WorkflowExecutor:
                 max_wait=min(retry_probe_window, remaining),
             ):
                 elapsed = max_wait - max(0.0, deadline - time.time())
-                logger.info(f"发送成功（重试前观察确认，elapsed={elapsed:.1f}s）")
+                logger.info(
+                    f"发送成功（重试前观察确认，elapsed={elapsed:.1f}s, action={retry_action_desc} 未执行）"
+                )
                 return
 
-            self._execute_click(selector, target_key, optional)
+            logger.warning(
+                f"[SEND] 执行发送重试动作 (elapsed={max_wait - remaining:.1f}s, action={retry_action_desc})"
+            )
+            self._execute_send_retry_action(
+                selector,
+                target_key,
+                optional,
+                retry_action_config=retry_action_config,
+            )
 
             if time.time() < deadline:
                 time.sleep(min(0.25, max(0.0, deadline - time.time())))
@@ -3257,7 +3429,7 @@ class WorkflowExecutor:
 
             if self._is_send_success(after_len, new_len) or self._is_send_success(before_len, new_len):
                 elapsed = max_wait - max(0.0, deadline - time.time())
-                logger.info(f"发送成功 (重试{elapsed:.1f}s)")
+                logger.info(f"发送成功（重试动作后确认，elapsed={elapsed:.1f}s, action={retry_action_desc}）")
                 return
 
             remaining = max(0.0, deadline - time.time())
@@ -3267,12 +3439,14 @@ class WorkflowExecutor:
                 max_wait=min(retry_observe_window, remaining),
             ):
                 elapsed = max_wait - max(0.0, deadline - time.time())
-                logger.info(f"发送成功（重试后观察确认，elapsed={elapsed:.1f}s）")
+                logger.info(
+                    f"发送成功（重试后观察确认，elapsed={elapsed:.1f}s, action={retry_action_desc}）"
+                )
                 return
 
             after_len = new_len
 
-        logger.error("[SEND] 发送重试超时")
+        logger.error(f"[SEND] 发送重试超时 (action={retry_action_desc})")
         if not optional:
             raise WorkflowError("send_btn_click_failed_due_to_uploading")
 

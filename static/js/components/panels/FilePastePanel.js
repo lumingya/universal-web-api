@@ -29,6 +29,8 @@ window.FilePastePanel = {
                 attachment_sensitivity: 'medium',
                 max_retry_count: 2,
                 retry_interval: 0.6,
+                retry_action: 'click_send_btn',
+                retry_key_combo: 'Enter',
                 retry_on_unconfirmed_send: true,
                 accept_attachment_change: false,
                 accept_attachment_disappear: false,
@@ -373,6 +375,32 @@ window.FilePastePanel = {
                                        class="flex-1 border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent">
                                 <span class="text-sm text-gray-500 dark:text-gray-400">秒</span>
                             </div>
+                        </div>
+                    </div>
+
+                    <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">自动重试动作</label>
+                            <select :value="resolvedFilePaste.send_confirmation.retry_action"
+                                    @change="updateSendConfirmationField('retry_action', $event.target.value)"
+                                    class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent">
+                                <option value="click_send_btn">点击发送按钮</option>
+                                <option value="key_press">按键发送</option>
+                            </select>
+                            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                某些站点二次点击会把“发送”变成“停止”，这时更适合改成按键发送。
+                            </p>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">重试按键组合</label>
+                            <input type="text"
+                                   :value="resolvedFilePaste.send_confirmation.retry_key_combo"
+                                   @input="updateSendConfirmationField('retry_key_combo', $event.target.value)"
+                                   placeholder="Enter / Ctrl+Enter"
+                                   class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm font-mono bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent">
+                            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                仅在“按键发送”时生效，支持 Enter、Ctrl+Enter、Shift+Enter 等组合。
+                            </p>
                         </div>
                     </div>
 

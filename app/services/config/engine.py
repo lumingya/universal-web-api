@@ -2157,6 +2157,15 @@ class ConfigEngine:
             if value is not None:
                 result["max_retry_count"] = max(0, min(value, 10))
 
+        retry_action = str(config.get("retry_action") or "").strip().lower()
+        if retry_action in {"click_send_btn", "key_press"}:
+            result["retry_action"] = retry_action
+
+        if "retry_key_combo" in config:
+            retry_key_combo = str(config.get("retry_key_combo") or "").strip()
+            if retry_key_combo:
+                result["retry_key_combo"] = retry_key_combo[:64]
+
         bool_fields = [
             "retry_on_unconfirmed_send",
             "accept_attachment_change",
