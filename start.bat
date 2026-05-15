@@ -134,7 +134,7 @@ if "!IS_STORE_PYTHON!"=="1" (
 
 REM 尝试获取版本号（方法1: sys.version_info）
 set "PYTHON_VERSION="
-for /f "tokens=*" %%i in ('!PYTHON_CMD! -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2^>nul') do set "PYTHON_VERSION=%%i"
+for /f "tokens=*" %%i in ('!PYTHON_CMD! -c "import sys; print(sys.version_info.major,sys.version_info.minor,sep=chr(46))" 2^>nul') do set "PYTHON_VERSION=%%i"
 
 REM 方法2: 如果方法1失败，尝试解析 --version 输出
 if not defined PYTHON_VERSION (
@@ -196,35 +196,16 @@ echo.
 
 REM ---------- 3) 自动更新检查 ----------
 if /I "%AUTO_UPDATE_ENABLED%"=="true" (
-    echo [STEP] 自动更新检查
+    echo [STEP] 自动更新
     echo ----------------------------------------
     echo.
-    echo   +----------------------------------------------+
-    echo   ^|  [WARN] 自动更新已启用                       ^|
-    echo   ^|                                              ^|
-    echo   ^|  更新会覆盖以下内容:                         ^|
-    echo   ^|    - config/*.json                           ^|
-    echo   ^|    - app/                                    ^|
-    echo   ^|    - static/                                 ^|
-    echo   ^|                                              ^|
-    echo   ^|  原配置会自动备份到 backup_* 目录            ^|
-    echo   +----------------------------------------------+
-    echo.
-    
     if exist "updater.py" (
         echo [INFO] 检查 GitHub 最新版本...
-        venv\Scripts\python.exe updater.py
-        
+        !PYTHON_CMD! updater.py
         if !errorlevel! equ 0 (
-            echo [INFO] 更新已应用，建议重新启动脚本
-            echo.
-            set /p RESTART_CHOICE="是否立即重启? [Y/n]: "
-            if /I "!RESTART_CHOICE!"=="" set "RESTART_CHOICE=Y"
-            if /I "!RESTART_CHOICE!"=="Y" (
-                echo [INFO] 重新启动...
-                start "" "%~f0"
-                exit /b 0
-            )
+            echo [INFO] 自动更新已应用，继续启动服务...
+        ) else (
+            echo [WARN] 本次未应用更新，继续启动服务
         )
     ) else (
         echo [WARN] 未找到 updater.py，跳过自动更新

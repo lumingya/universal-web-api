@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="./static/images/logo.svg" alt="Universal Web API logo" width="160">
+</p>
+
 # Universal Web API
 
 📖 文档 • [English](./README.md) • [简体中文](./README.zh-CN.md)
@@ -19,14 +23,16 @@
 根据配置观察并解析目标网络响应，便于调试已适配站点的输出流程。
 
 **文件粘贴**
-将超长文本自动保存为临时文件再发送给 AI，适合那些更适合通过附件承载长上下文的网站。
+将超长文本自动保存为临时文件再发送给 AI，适合那些更适合通过附件承载长上下文的网站。Windows 继续保留原生剪贴板回退，其它平台则依赖网页原生上传入口。
 
 **独立 Cookie 模式**
 可为同一站点创建相互隔离的独立 Cookie 会话，便于区分不同浏览器上下文。
 
-## 限制
+## 启动
 
-> ⚠️ **仅支持 Windows 系统**，暂不支持 macOS / Linux。
+>  **Windows 系统可点击`start.bat` 以及运行。
+>
+> **macOS / Linux 可以通过 `python3 start.py` 启动**。部分功能弱于windows。
 >
 > ⚠️ 需要 **Python 3.10+**。
 
@@ -34,16 +40,16 @@
 
 | 站点 | 地址 | 备注 |
 |------|------|------|
-| ChatGPT | chatgpt.com | 约 200k 单次最大发送长度 |
-| DeepSeek | chat.deepseek.com | 思考模式下存在读取问题 |
-| Gemini | gemini.google.com | 无会员约 30k，Pro 会员尚未发现上限 |
-| Claude | claude.ai | 已支持站点级解析与适配 |
-| Kimi | www.kimi.com | — |
-| 通义千问 | chat.qwen.ai | 已支持 Qwen 页面适配 |
-| Grok | grok.com | — |
-| 豆包 | www.doubao.com | 已适配新版域名 |
+| ChatGPT | chatgpt.com | - |
+| DeepSeek | chat.deepseek.com | - |
+| Gemini | gemini.google.com | - |
+| Claude | claude.ai | - |
+| Kimi | www.kimi.com | - |
+| 通义千问 | chat.qwen.ai | - |
+| Grok | grok.com | - |
+| 豆包 | www.doubao.com | - |
 | AI Studio | aistudio.google.com | — |
-| Arena AI | arena.ai | IP 质量敏感，详见注意事项 |
+| Arena AI | arena.ai | - |
 | 小米mimo | aistudio.xiaomimimo.com | - |
 
 > 未收录的网站支持通过 AI 自动分析网页结构进行适配，详见 [新增站点指南](./static/tutorial/index.html#add-site-guide)。
@@ -52,12 +58,17 @@
 
 1. 从 [Releases](../../releases) 下载并解压到**无中文路径**的目录
 2. 确保已安装 Chrome / Edge / Brave 等 Chromium 内核浏览器
-3. 双击运行 **`start.bat`**，等待依赖自动安装完成
-4. 打开控制面板 `http://127.0.0.1:8199`
-5. 在自动弹出的浏览器中登录你的 AI 账号
-6. 在任意支持 OpenAI API 的客户端中填入：
+3. 启动项目：
+   - **Windows**：双击运行 **`start.bat`**
+   - **macOS / Linux**：执行 **`python3 start.py`**
+4. 等待依赖安装和浏览器启动完成
+5. 打开控制面板 `http://127.0.0.1:8199`
+6. 在自动弹出的浏览器中登录你的 AI 账号
+7. 在任意支持 OpenAI API 的客户端中填入：
    - **接口地址**：`http://127.0.0.1:8199/v1`
    - **API 密钥**：默认未启用认证时可填写占位值（如 `sk-local`）；若启用了认证功能，则必须与对应认证配置保持一致
+
+对于非 Windows 部署，若需要图片或文件附件，建议优先配置站点的 `file_input`、`drop_zone` 或上传按钮入口。
 
 详细说明请查看 [完整使用文档](./static/tutorial/index.html#quick-start)。
 

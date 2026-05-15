@@ -71,7 +71,8 @@
         </div>
 
         <div class="note">
-            <p><strong>💡 Want to reuse an existing login state?</strong> Close Chrome first, then copy the browser user directory you want to reuse into the project's <code>chrome_profile/</code>, or point <code>BROWSER_PROFILE_DIR</code> in <code>.env</code> to a copied profile directory. At minimum, bring over <code>Local State</code> and the profile folder you want, such as <code>Default</code> or <code>Profile 1</code>, and keep the folder name aligned with <code>BROWSER_PROFILE_NAME</code>. After that, the next launch will use your existing login state directly. The full explanation is in the <strong>Browser Configuration</strong> section later in this page.</p>
+            <p><strong>💡 Want to reuse an existing login state?</strong> Treat that as an <strong>advanced option</strong>. For normal use, it is safer to keep using the project's own <code>chrome_profile/</code> directory and keep your session isolated there.</p>
+            <p><strong>⚠️ Only do profile-copy reuse if you understand browser user-data structure and session-data risk.</strong> If you really need it, only copy your own local browser profile into a separate directory. Do not share, publish, or mix someone else's login-state data. The detailed steps stay in the <strong>Browser Configuration</strong> section later in this page.</p>
         </div>
 
         <div class="note">
@@ -409,14 +410,16 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
         <h2>🧰 Function Calling (Tool Calling)</h2>
 
         <p>The project supports the <strong>OpenAI-style <code>tools</code> format</strong> and also the older <code>functions</code> / <code>function_call</code> fields, so most clients that already support Tool Calling can connect directly.</p>
+        <p>On the model-output side, the backend now prefers a project-local XML block format: <code>&lt;adapter_calls&gt;</code> / <code>&lt;call&gt;</code> / <code>&lt;arg&gt;</code>. The older XML tags <code>&lt;tool_calls&gt;</code> / <code>&lt;invoke&gt;</code> / <code>&lt;parameter&gt;</code> are still accepted for compatibility.</p>
         <p>Unlike the earliest versions, this no longer has to fail in a single shot. The backend now includes <strong>internal repair retries</strong> after invalid tool-call output, and you can tune the strategy directly in <strong>Dashboard → Settings → Environment Settings → Function Calling</strong>.</p>
 
         <div class="info-box">
             <p><strong>What this is:</strong> a compatibility layer that lets you keep using familiar OpenAI-style tool definitions.</p>
+            <p><strong>Preferred output shell:</strong> <code>&lt;adapter_calls&gt;</code> → <code>&lt;call name="..."&gt;</code> → <code>&lt;arg name="..."&gt;</code>.</p>
         </div>
 
         <div class="highlight-box">
-            <p><strong>⚠️ Important boundary:</strong> this is <strong>not native API tool calling</strong>. The backend rewrites your tool definitions into prompt instructions, the website model tries to follow them, and the backend then parses the result back into <code>tool_calls</code>. Reliability depends heavily on the model's own reasoning and formatting discipline.</p>
+            <p><strong>⚠️ Important boundary:</strong> this is <strong>not native API tool calling</strong>. The backend rewrites your tool definitions into prompt instructions, the website model tries to follow them, and the backend then parses the result back into OpenAI-style <code>tool_calls</code>. Reliability depends heavily on the model's own reasoning and formatting discipline.</p>
         </div>
 
         <h3>What you can tune in the dashboard</h3>
@@ -447,13 +450,13 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
         <h3>Typical failure patterns</h3>
         <ul>
             <li>The model answers in plain language instead of calling a tool.</li>
-            <li>The JSON shape is malformed and cannot be parsed.</li>
+            <li>The XML or JSON structure is malformed and cannot be parsed.</li>
             <li>Argument names do not match the schema.</li>
             <li>The output mixes explanation text with a partial tool call.</li>
         </ul>
 
         <div class="note">
-            <p><strong>Expectation management:</strong> if you see wrong function names, missing arguments, plain chat replies instead of tool calls, or backend parse failures, look at the website model first. In many cases it simply did not produce a stable structured result.</p>
+            <p><strong>Expectation management:</strong> if you see wrong function names, missing arguments, plain chat replies instead of tool calls, or backend parse failures, look at the website model first. In many cases it simply did not produce a stable <code>&lt;adapter_calls&gt;</code> block or valid JSON fallback.</p>
         </div>
 
         <h3>Practical advice</h3>
@@ -973,6 +976,10 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
             <li>Ask AI to build the parser and tell you what <code>listen_pattern</code> and parser ID to use.</li>
         </ol>
 
+        <div class="highlight-box">
+            <p><strong>⚠️ Maintainer-only workflow:</strong> the exported JSON can contain live session structure, request metadata, prompt fragments, and response content. Skip this unless built-in debug capture was not enough, and only use it on your own local session data.</p>
+        </div>
+
         <div class="info-box">
             <p><strong>💡 Tell AI these requirements:</strong></p>
             <ul>
@@ -1347,11 +1354,15 @@ if session.error_count > 2:
 
         <div class="config-group">
             <h4><span class="icon">🧳</span> Reuse your own browser profile</h4>
-            <p>If you want the script to inherit your existing login state, cookies, and extensions, point it to a <strong>copied user-data directory</strong> rather than your live system Chrome profile.</p>
+            <p>This is an <strong>advanced option</strong>. If you want the script to inherit your existing login state, cookies, and extensions, point it to a <strong>copied user-data directory</strong> rather than your live system Chrome profile.</p>
 
-            <div class="highlight-box">
-                <p><strong>⚠️ Important:</strong> starting from <strong>Chrome 136</strong>, Chrome tightened remote-debugging behavior. If you point <code>BROWSER_PROFILE_DIR</code> to the live system <code>User Data</code> folder, Chrome may open while the debugging port never becomes usable.</p>
-            </div>
+        <div class="highlight-box">
+            <p><strong>⚠️ Important:</strong> starting from <strong>Chrome 136</strong>, Chrome tightened remote-debugging behavior. If you point <code>BROWSER_PROFILE_DIR</code> to the live system <code>User Data</code> folder, Chrome may open while the debugging port never becomes usable.</p>
+        </div>
+
+        <div class="highlight-box">
+            <p><strong>⚠️ Session-data reminder:</strong> copied browser profiles can contain login state, cookies, local cache, and extension data. Only copy your own local profile into a dedicated directory for local debugging. Do not upload it, commit it, or pass it to someone else.</p>
+        </div>
 
             <h5>Recommended approach</h5>
             <ol>
@@ -1512,7 +1523,7 @@ BROWSER_PROFILE_NAME=Default</code></pre>
             <ul>
                 <li><code>config/sites.local.json</code></li>
                 <li><code>config/commands.local.json</code></li>
-                <li><code>chrome_profile/</code></li>
+                <li><code>chrome_profile/</code> (local session data; keep it private and out of version control)</li>
                 <li><code>venv/</code></li>
                 <li><code>logs/</code></li>
                 <li><code>image/</code></li>

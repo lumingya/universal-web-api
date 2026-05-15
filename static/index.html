@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Universal Web-to-API Dashboard</title>
+    <link rel="icon" type="image/svg+xml" href="/static/images/logo.svg">
+    <link rel="shortcut icon" href="/static/images/logo.svg">
 
     <!-- 外部依赖 -->
 
@@ -17,6 +19,7 @@
 <body class="bg-gray-50 dark:bg-gray-900 transition-colors duration-300 h-screen overflow-hidden">
     <div id="app-shell" class="app-shell" style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:24px;background:radial-gradient(circle at top, rgba(59,130,246,.16), transparent 38%), linear-gradient(180deg, #111827 0%, #0f172a 100%);z-index:9999;">
         <div class="app-shell-card" style="width:min(480px,100%);padding:28px;border:1px solid rgba(148,163,184,.24);border-radius:18px;background:rgba(15,23,42,.88);box-shadow:0 20px 50px rgba(0,0,0,.35);color:#e5eefc;text-align:center;">
+            <img src="/static/images/logo.svg" alt="Universal Web API logo" style="display:block;width:72px;height:72px;margin:0 auto 16px;object-fit:contain;">
             <div class="app-shell-title">控制面板加载中</div>
             <p class="app-shell-text">正在加载前端资源和配置。如果停留太久，通常是本地服务初始化或接口响应较慢。</p>
             <button type="button" class="app-shell-button" onclick="window.location.reload()">重新加载</button>
@@ -66,31 +69,7 @@
         <!-- 主内容区 -->
         <main class="flex-1 flex flex-col overflow-x-hidden overflow-y-auto bg-gray-50 dark:bg-gray-900">
 
-            <!-- 头部（配置/日志 Tab） -->
-            <header v-if="activeTab === 'marketplace'"
-                    class="bg-white dark:bg-gray-800 border-b dark:border-gray-700 p-4">
-                <div class="flex justify-between items-center gap-4">
-                    <div class="flex items-center gap-3">
-                        <span v-html="$icons.shoppingBag" class="text-gray-600 dark:text-gray-400"></span>
-                        <div>
-                            <h2 class="text-xl font-bold dark:text-white">插件市场</h2>
-                            <p class="text-sm text-gray-500 dark:text-gray-400">站点配置和命令系统都支持预览与导入</p>
-                        </div>
-                    </div>
-                    <div class="flex gap-2">
-                        <button @click="loadMarketplaceCatalog({ force: true })"
-                                class="border dark:border-gray-700 rounded hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-white transition-colors px-2 py-0.5 text-sm">
-                            <span v-html="$icons.arrowPath"></span> 刷新市场
-                        </button>
-                        <button @click="openMarketplaceSubmitDialog"
-                                class="border dark:border-gray-700 rounded hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-white transition-colors px-2 py-0.5 text-sm">
-                            <span v-html="$icons.arrowUpTray"></span> 投稿上传
-                        </button>
-                    </div>
-                </div>
-            </header>
-
-            <header v-if="activeTab !== 'settings' && activeTab !== 'marketplace' && activeTab !== 'monitor' && currentDomain && currentConfig"
+            <header v-if="activeTab !== 'settings' && activeTab !== 'monitor' && currentDomain && currentConfig"
                     class="bg-white dark:bg-gray-800 border-b dark:border-gray-700 p-4">
                 <div class="flex justify-between items-center">
                     <div class="flex items-center gap-4">
@@ -208,12 +187,6 @@
                     <span v-if="envConfigChanged || browserConstantsChanged || updatePreserveChanged || selectorDefinitionsChanged"
                           class="ml-1 w-2 h-2 bg-orange-500 rounded-full inline-block"></span>
                 </button>
-                <button @click="openMarketplace"
-                        :class="['marketplace-entry-button', 'ml-auto', { 'has-update': marketplaceHasUpdates }]">
-                    <span v-html="$icons.shoppingBag"></span>
-                    插件市场
-                    <span v-if="marketplaceHasUpdates" class="marketplace-entry-button__badge" aria-label="插件市场有新内容"></span>
-                </button>
             </div>
             <div class="flex-1 overflow-y-auto">
                 <!-- Tab 内容区 -->
@@ -234,19 +207,6 @@
                             @test-image-extraction="testImageExtraction"
                             @reload-config="reloadConfig">
                 </config-tab>
-
-                <marketplace-tab v-if="shouldRenderTab('marketplace')"
-                                 v-show="activeTab === 'marketplace'"
-                                 :catalog="marketplaceCatalog"
-                                 :loading="marketplaceLoading"
-                                 :error="marketplaceError"
-                                 :importing-id="marketplaceImportingId"
-                                 @refresh="loadMarketplaceCatalog({ force: true })"
-                                 @preview-item="previewMarketplaceItem"
-                                 @import-item="startMarketplaceImport"
-                                 @open-submit="openMarketplaceSubmitDialog"
-                                 @open-link="openExternalLink">
-                </marketplace-tab>
 
                 <!-- 标签页池 Tab -->
                 <tabpool-tab v-if="activeTab === 'tabpool'"
@@ -366,14 +326,6 @@
                            @save="saveDefinition">
         </definition-dialog>
 
-        <json-preview-dialog :show="showMarketplacePreview"
-                             :json-data="marketplacePreviewData || {}"
-                             :title="marketplacePreviewTitle || '市场预览'"
-                             @close="showMarketplacePreview = false"
-                             @copy="copyMarketplacePreview"
-                             @save="saveMarketplacePreview">
-        </json-preview-dialog>
-
         <div v-if="showMainCompareSummaryDialog"
              class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm"
              @click.self="closeMainCompareSummaryDialog">
@@ -479,270 +431,6 @@
             </div>
         </div>
 
-        <div v-if="showMarketplaceImportDialog"
-             class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
-            <div class="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900">
-                <div class="flex items-center justify-between border-b border-slate-200 px-6 py-4 dark:border-slate-700">
-                    <div>
-                        <h3 class="text-lg font-bold text-slate-900 dark:text-white">导入站点配置</h3>
-                        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">可以直接覆盖站点，也可以另存为新的预设。</p>
-                    </div>
-                    <button @click="showMarketplaceImportDialog = false"
-                            class="rounded-lg px-2 py-1 text-slate-500 transition hover:bg-slate-100 dark:hover:bg-slate-800">
-                        关闭
-                    </button>
-                </div>
-                <div class="space-y-4 px-6 py-5">
-                    <label class="flex items-start gap-3 rounded-xl border border-slate-200 p-4 dark:border-slate-700">
-                        <input type="radio" value="overwrite" v-model="marketplaceImportStrategy" class="mt-1">
-                        <div>
-                            <div class="font-semibold text-slate-900 dark:text-white">覆盖站点配置</div>
-                            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">直接用市场中的配置替换该站点当前配置。</p>
-                        </div>
-                    </label>
-                    <label class="flex items-start gap-3 rounded-xl border border-slate-200 p-4 dark:border-slate-700">
-                        <input type="radio" value="save_as_preset" v-model="marketplaceImportStrategy" class="mt-1">
-                        <div class="flex-1">
-                            <div class="font-semibold text-slate-900 dark:text-white">另存为预设</div>
-                            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">保留当前站点配置，只把导入内容保存为新的预设。</p>
-                            <input v-if="marketplaceImportStrategy === 'save_as_preset'"
-                                   v-model.trim="marketplaceImportPresetName"
-                                   type="text"
-                                   placeholder="输入新的预设名称"
-                                   class="mt-3 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200">
-                        </div>
-                    </label>
-                </div>
-                <div class="flex justify-end gap-3 border-t border-slate-200 px-6 py-4 dark:border-slate-700">
-                    <button @click="showMarketplaceImportDialog = false"
-                            class="rounded-xl border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
-                        取消
-                    </button>
-                    <button @click="confirmMarketplaceImport"
-                            class="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700">
-                        确认导入
-                    </button>
-                </div>
-            </div>
-        </div>
-
-        <div v-if="showMarketplaceSubmitDialog"
-             class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4 backdrop-blur-sm">
-            <div class="w-full max-w-6xl rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900">
-                <div class="flex items-center justify-between border-b border-slate-200 px-6 py-4 dark:border-slate-700">
-                    <div>
-                        <h3 class="text-lg font-bold text-slate-900 dark:text-white">投稿到插件市场</h3>
-                        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">上传时需要标题、简介，并且会实时生成预览供他人查看。</p>
-                    </div>
-                    <button @click="showMarketplaceSubmitDialog = false"
-                            class="rounded-lg px-2 py-1 text-slate-500 transition hover:bg-slate-100 dark:hover:bg-slate-800">
-                        关闭
-                    </button>
-                </div>
-                <div class="grid gap-6 px-6 py-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-                    <div class="space-y-4">
-                        <div class="grid gap-3 sm:grid-cols-3">
-                            <button @click="setMarketplaceSubmitType('site_config')"
-                                    :class="['rounded-xl border px-4 py-3 text-left transition',
-                                             marketplaceSubmitForm.item_type === 'site_config'
-                                             ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-300'
-                                             : 'border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800']">
-                                <div class="font-semibold">站点配置</div>
-                                <div class="mt-1 text-sm opacity-80">上传当前站点预设，并按站点域名归类。</div>
-                            </button>
-                            <button @click="setMarketplaceSubmitType('command_bundle')"
-                                    :class="['rounded-xl border px-4 py-3 text-left transition',
-                                             marketplaceSubmitForm.item_type === 'command_bundle'
-                                             ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-300'
-                                             : 'border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800']">
-                                <div class="font-semibold">命令系统</div>
-                                <div class="mt-1 text-sm opacity-80">选择一个或多个命令，打包成命令系统投稿。</div>
-                            </button>
-                            <button @click="setMarketplaceSubmitType('response_parser')"
-                                    :class="['rounded-xl border px-4 py-3 text-left transition',
-                                             marketplaceSubmitForm.item_type === 'response_parser'
-                                             ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-300'
-                                             : 'border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800']">
-                                <div class="font-semibold">响应解析器</div>
-                                <div class="mt-1 text-sm opacity-80">上传解析器源码，导入时写入 <code>app/core/parsers</code> 并自动注册。</div>
-                            </button>
-                        </div>
-
-                        <div class="grid gap-4 sm:grid-cols-2">
-                            <label class="block">
-                                <div class="mb-1 text-sm font-medium text-slate-700 dark:text-slate-200">标题</div>
-                                <input v-model.trim="marketplaceSubmitForm.title"
-                                       type="text"
-                                       class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200">
-                            </label>
-                            <label class="block">
-                                <div class="mb-1 text-sm font-medium text-slate-700 dark:text-slate-200">作者</div>
-                                <input v-model.trim="marketplaceSubmitForm.author"
-                                       type="text"
-                                       class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200">
-                            </label>
-                        </div>
-
-                        <label class="block">
-                            <div class="mb-1 text-sm font-medium text-slate-700 dark:text-slate-200">简介</div>
-                            <textarea v-model.trim="marketplaceSubmitForm.summary"
-                                      rows="3"
-                                      class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200"></textarea>
-                        </label>
-
-                        <div class="grid gap-4 sm:grid-cols-2">
-                            <label v-if="marketplaceSubmitForm.item_type === 'site_config'" class="block">
-                                <div class="mb-1 text-sm font-medium text-slate-700 dark:text-slate-200">站点域名</div>
-                                <input v-model.trim="marketplaceSubmitForm.site_domain"
-                                       type="text"
-                                       placeholder="例如 chatgpt.com"
-                                       class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200">
-                            </label>
-                            <label class="block">
-                                <div class="mb-1 text-sm font-medium text-slate-700 dark:text-slate-200">分类</div>
-                                <input v-model.trim="marketplaceSubmitForm.category"
-                                       type="text"
-                                       :placeholder="marketplaceSubmitForm.item_type === 'site_config' ? '默认使用站点域名分类' : (marketplaceSubmitForm.item_type === 'command_bundle' ? '默认命令系统' : '默认响应解析器')"
-                                       class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200">
-                            </label>
-                        </div>
-
-                        <div class="grid gap-4 sm:grid-cols-3">
-                            <label v-if="marketplaceSubmitForm.item_type === 'site_config'" class="block">
-                                <div class="mb-1 text-sm font-medium text-slate-700 dark:text-slate-200">预设名</div>
-                                <input v-model.trim="marketplaceSubmitForm.preset_name"
-                                       type="text"
-                                       class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200">
-                            </label>
-                            <label class="block">
-                                <div class="mb-1 text-sm font-medium text-slate-700 dark:text-slate-200">版本</div>
-                                <input v-model.trim="marketplaceSubmitForm.version"
-                                       type="text"
-                                       class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200">
-                            </label>
-                            <label class="block">
-                                <div class="mb-1 text-sm font-medium text-slate-700 dark:text-slate-200">兼容说明</div>
-                                <input v-model.trim="marketplaceSubmitForm.compatibility"
-                                       type="text"
-                                       placeholder="例如 2.6.x"
-                                       class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200">
-                            </label>
-                        </div>
-
-                        <label class="block">
-                            <div class="mb-1 text-sm font-medium text-slate-700 dark:text-slate-200">标签</div>
-                            <input v-model.trim="marketplaceSubmitForm.tagsText"
-                                   type="text"
-                                   placeholder="用逗号分隔，例如 稳定, 中文, 长输出"
-                                   class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200">
-                        </label>
-
-                        <div v-if="marketplaceSubmitForm.item_type === 'response_parser'" class="grid gap-4 sm:grid-cols-2">
-                            <label class="block">
-                                <div class="mb-1 text-sm font-medium text-slate-700 dark:text-slate-200">解析器 ID</div>
-                                <input v-model.trim="marketplaceSubmitForm.parser_id"
-                                       type="text"
-                                       placeholder="例如 my_parser"
-                                       class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200">
-                            </label>
-                            <label class="block">
-                                <div class="mb-1 text-sm font-medium text-slate-700 dark:text-slate-200">类名</div>
-                                <input v-model.trim="marketplaceSubmitForm.parser_class_name"
-                                       type="text"
-                                       placeholder="例如 MyParser"
-                                       class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200">
-                            </label>
-                            <label class="block">
-                                <div class="mb-1 text-sm font-medium text-slate-700 dark:text-slate-200">模块名</div>
-                                <input v-model.trim="marketplaceSubmitForm.parser_module_name"
-                                       type="text"
-                                       placeholder="例如 my_parser"
-                                       class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200">
-                            </label>
-                            <label class="block">
-                                <div class="mb-1 text-sm font-medium text-slate-700 dark:text-slate-200">支持规则</div>
-                                <input v-model.trim="marketplaceSubmitForm.parser_patterns_text"
-                                       type="text"
-                                       placeholder="用逗号分隔 URL pattern"
-                                       class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200">
-                            </label>
-                            <label class="block sm:col-span-2">
-                                <div class="mb-1 text-sm font-medium text-slate-700 dark:text-slate-200">解析器文件</div>
-                                <input type="file"
-                                       accept=".py,text/x-python"
-                                       @change="handleMarketplaceParserFileChange"
-                                       class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 file:mr-4 file:rounded-lg file:border-0 file:bg-slate-100 file:px-3 file:py-2 file:text-sm file:font-medium file:text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:file:bg-slate-800 dark:file:text-slate-200">
-                                <div v-if="marketplaceSubmitForm.parser_filename"
-                                     class="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                                    {{ marketplaceSubmitForm.parser_filename }}
-                                </div>
-                            </label>
-                            <label class="block sm:col-span-2">
-                                <div class="mb-1 text-sm font-medium text-slate-700 dark:text-slate-200">源码</div>
-                                <textarea v-model="marketplaceSubmitForm.parser_source"
-                                          rows="12"
-                                          placeholder="粘贴或上传解析器源码"
-                                          class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 font-mono text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200"></textarea>
-                            </label>
-                        </div>
-
-                        <div v-if="marketplaceSubmitForm.item_type === 'command_bundle'" class="rounded-2xl border border-slate-200 p-4 dark:border-slate-700">
-                            <div class="mb-3 flex items-center justify-between">
-                                <div class="text-sm font-semibold text-slate-800 dark:text-slate-100">选择命令</div>
-                                <button @click="loadMarketplaceCommandOptions"
-                                        type="button"
-                                        class="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
-                                    刷新命令
-                                </button>
-                            </div>
-                            <div v-if="marketplaceCommandLoading" class="text-sm text-slate-500 dark:text-slate-400">命令列表加载中...</div>
-                            <div v-else class="max-h-64 space-y-2 overflow-y-auto pr-1">
-                                <label v-for="command in marketplaceCommandOptions" :key="command.id"
-                                       class="flex items-start gap-3 rounded-xl border border-slate-200 px-3 py-2 text-sm dark:border-slate-700">
-                                    <input v-model="marketplaceSubmitForm.selected_command_ids" :value="command.id" type="checkbox" class="mt-1">
-                                    <div class="min-w-0">
-                                        <div class="font-medium text-slate-800 dark:text-slate-100">{{ command.name }}</div>
-                                        <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ command.group_name || '未分组' }}</div>
-                                    </div>
-                                </label>
-                            </div>
-                        </div>
-
-                        <div v-if="marketplaceSubmitForm.item_type === 'response_parser'"
-                             class="rounded-2xl border border-amber-200 bg-amber-50/80 p-4 text-sm text-amber-900 dark:border-amber-500/30 dark:bg-amber-900/10 dark:text-amber-200">
-                            导入解析器会把源码写入 <code>app/core/parsers</code>，并在当前应用里动态注册，请确认来源可信。
-                        </div>
-                    </div>
-
-                    <div class="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 dark:border-slate-700 dark:bg-slate-950/60">
-                        <div class="mb-3 flex items-center justify-between">
-                            <div>
-                                <h4 class="text-base font-semibold text-slate-900 dark:text-white">投稿预览</h4>
-                                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">别人看到的标题、简介与导入内容会从这里生成。</p>
-                            </div>
-                            <button @click="showMarketplacePreview = true; marketplacePreviewTitle = '投稿预览'; marketplacePreviewData = JSON.parse(getMarketplaceSubmissionPreviewText().startsWith('//') ? '{}' : getMarketplaceSubmissionPreviewText())"
-                                    type="button"
-                                    class="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
-                                独立预览
-                            </button>
-                        </div>
-                        <pre class="max-h-[28rem] overflow-auto rounded-xl bg-slate-950 p-4 text-xs leading-6 text-slate-100">{{ getMarketplaceSubmissionPreviewText() }}</pre>
-                    </div>
-                </div>
-                <div class="flex justify-end gap-3 border-t border-slate-200 px-6 py-4 dark:border-slate-700">
-                    <button @click="showMarketplaceSubmitDialog = false"
-                            class="rounded-xl border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 transition hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800">
-                        取消
-                    </button>
-                    <button @click="submitMarketplaceItem"
-                            :disabled="marketplaceSubmitSaving"
-                            class="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50">
-                        {{ marketplaceSubmitSaving ? '提交中...' : '提交到本地市场' }}
-                    </button>
-                </div>
-            </div>
-        </div>
-
     </div>
 
     <!-- 加载组件 JS -->
@@ -763,10 +451,9 @@
 
     <!-- 主组件 -->
     <script src="static/js/components/ConfigTab.js?v=2.6.22"></script>
-    <script src="/static/js/components/MarketplaceTab.js?v=2.6.9"></script>
     <script src="/static/js/components/LogsTab.js?v=2.6.7"></script>
     <script src="/static/js/components/RequestMonitorTab.js?v=2.6.22"></script>
-    <script src="/static/js/components/SettingsTab.js?v=2.6.7"></script>
+    <script src="/static/js/components/SettingsTab.js?v=2.6.8"></script>
     <script src="/static/js/components/Dialogs.js?v=2.6.9"></script>
     <script src="/static/js/components/TabPoolTab.js?v=2.6.7"></script>
     <script src="/static/js/components/commands/CommandsTabComputed.js?v=2.6.7"></script>
@@ -775,6 +462,6 @@
     <script src="/static/js/components/CommandsTab.js?v=2.6.7"></script>
 
     <!-- 主应用逻辑 -->
-<script src="/static/js/dashboard.js?v=2.6.23"></script>
+<script src="/static/js/dashboard.js?v=2.6.24"></script>
 </body>
 </html>

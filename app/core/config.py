@@ -27,7 +27,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from functools import lru_cache
 from collections import deque
-from urllib.parse import quote
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_LOG_DIR = PROJECT_ROOT / "logs"
@@ -166,136 +165,6 @@ class AppConfig:
     @staticmethod
     def get_sites_config_file() -> str:
         return os.getenv("SITES_CONFIG_FILE", "config/sites.json")
-
-    @staticmethod
-    def get_marketplace_file() -> str:
-        return os.getenv("MARKETPLACE_FILE", "config/marketplace.json")
-
-    @staticmethod
-    def get_marketplace_cache_file() -> str:
-        return os.getenv("MARKETPLACE_CACHE_FILE", "config/marketplace_cache.json")
-
-    @staticmethod
-    def get_marketplace_index_url() -> str:
-        explicit_url = os.getenv("MARKETPLACE_INDEX_URL", "").strip()
-        if explicit_url:
-            return explicit_url
-
-        repo = AppConfig.get_marketplace_repo()
-        if not repo:
-            return ""
-
-        branch = AppConfig.get_marketplace_branch()
-        index_path = AppConfig.get_marketplace_index_path()
-        return f"https://raw.githubusercontent.com/{repo}/{branch}/{index_path}"
-
-    @staticmethod
-    def get_marketplace_upload_url() -> str:
-        explicit_url = os.getenv("MARKETPLACE_UPLOAD_URL", "").strip()
-        if explicit_url:
-            return explicit_url
-
-        repo = AppConfig.get_marketplace_repo()
-        if not repo:
-            return ""
-
-        template_name = AppConfig.get_marketplace_issue_template()
-        base_url = f"https://github.com/{repo}/issues/new"
-        if not template_name:
-            return base_url
-        return f"{base_url}?template={quote(template_name, safe='')}"
-
-    @staticmethod
-    def get_marketplace_timeout() -> float:
-        try:
-            return float(os.getenv("MARKETPLACE_TIMEOUT", "6"))
-        except Exception:
-            return 6.0
-
-    @staticmethod
-    def get_marketplace_repo() -> str:
-        repo = os.getenv("MARKETPLACE_GITHUB_REPO", "").strip()
-        if repo:
-            return repo.strip("/")
-        return os.getenv("GITHUB_REPO", "").strip().strip("/")
-
-    @staticmethod
-    def get_marketplace_repo_url() -> str:
-        repo = AppConfig.get_marketplace_repo()
-        return f"https://github.com/{repo}" if repo else ""
-
-    @staticmethod
-    def get_marketplace_github_token() -> str:
-        token = os.getenv("MARKETPLACE_GITHUB_TOKEN", "").strip()
-        if token:
-            return token
-
-        token = os.getenv("GITHUB_TOKEN", "").strip()
-        if token:
-            return token
-
-        return os.getenv("GH_TOKEN", "").strip()
-
-    @staticmethod
-    def get_marketplace_branch() -> str:
-        return os.getenv("MARKETPLACE_GITHUB_BRANCH", "main").strip() or "main"
-
-    @staticmethod
-    def get_marketplace_index_path() -> str:
-        return os.getenv("MARKETPLACE_INDEX_PATH", "config/marketplace.json").strip().lstrip("/") or "config/marketplace.json"
-
-    @staticmethod
-    def get_marketplace_issue_template() -> str:
-        return os.getenv("MARKETPLACE_ISSUE_TEMPLATE", "marketplace_submission.md").strip()
-
-    @staticmethod
-    def get_marketplace_issues_api_url() -> str:
-        explicit_url = os.getenv("MARKETPLACE_ISSUES_API_URL", "").strip()
-        if explicit_url:
-            return explicit_url
-
-        repo = AppConfig.get_marketplace_repo()
-        if not repo:
-            return ""
-        return f"https://api.github.com/repos/{repo}/issues?state=open&per_page=100"
-
-    @staticmethod
-    def get_marketplace_issues_web_url() -> str:
-        explicit_url = os.getenv("MARKETPLACE_ISSUES_WEB_URL", "").strip()
-        if explicit_url:
-            return explicit_url
-
-        repo_url = AppConfig.get_marketplace_repo_url()
-        if not repo_url:
-            return ""
-        return f"{repo_url}/issues?q=is%3Aissue+is%3Aopen"
-
-    @staticmethod
-    def get_marketplace_submit_mode() -> str:
-        mode = os.getenv("MARKETPLACE_SUBMIT_MODE", "auto").strip().lower()
-        if mode == "local":
-            return "local"
-        if mode in ("external", "redirect", "github", "public"):
-            return "external"
-        return "external" if AppConfig.get_marketplace_upload_url() else "local"
-
-    @staticmethod
-    def is_marketplace_pending_enabled() -> bool:
-        raw_value = os.getenv("MARKETPLACE_PENDING_ENABLED", "").strip().lower()
-        if raw_value in ("true", "1", "yes", "on"):
-            return True
-        if raw_value in ("false", "0", "no", "off"):
-            return False
-        return bool(AppConfig.get_marketplace_issues_api_url())
-
-    @staticmethod
-    def is_marketplace_local_overlay_enabled() -> bool:
-        raw_value = os.getenv("MARKETPLACE_LOCAL_OVERLAY_ENABLED", "").strip().lower()
-        if raw_value in ("true", "1", "yes", "on"):
-            return True
-        if raw_value in ("false", "0", "no", "off"):
-            return False
-        return not bool(AppConfig.get_marketplace_index_url())
     
     # ===== 便捷属性（支持类/实例两种访问方式）=====
     @classproperty
@@ -385,6 +254,8 @@ class BrowserConstants:
         'NETWORK_DEBUG_CAPTURE_ENABLED': False,
         'NETWORK_DEBUG_CAPTURE_MAX_BODY_CHARS': 200000,
         'NETWORK_DEBUG_CAPTURE_PARSER_FILTER': '',
+        'CONVERSATION_TIMEOUT_THRESHOLD': 0.0,
+        'FORCE_NEW_CONVERSATION': False,
         'ATTACHMENT_READY_IDLE_TIMEOUT': 8.0,
         'ATTACHMENT_READY_HARD_MAX_WAIT': 90.0,
     }
@@ -469,6 +340,10 @@ class BrowserConstants:
     NETWORK_DEBUG_CAPTURE_ENABLED = False
     NETWORK_DEBUG_CAPTURE_MAX_BODY_CHARS = 200000
     NETWORK_DEBUG_CAPTURE_PARSER_FILTER = ""
+
+    # 对话会话控制
+    CONVERSATION_TIMEOUT_THRESHOLD = 0.0
+    FORCE_NEW_CONVERSATION = False
 
     @classmethod
     def _load_config(cls):

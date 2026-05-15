@@ -1570,6 +1570,24 @@ class BrowserCore:
     def _chunk_has_stream_content(chunk: str) -> bool:
         return bool(BrowserCore._extract_stream_delta_content(chunk))
 
+    def _get_conversation_timeout_threshold(self) -> float:
+        try:
+            return max(0.0, float(BrowserConstants.get("CONVERSATION_TIMEOUT_THRESHOLD") or 0.0))
+        except Exception:
+            return 0.0
+
+    @staticmethod
+    def _step_submits_conversation_request(action: str, target_key: str, value: Any = None) -> bool:
+        action_upper = str(action or "").strip().upper()
+        target = str(target_key or "").strip().lower()
+        if action_upper == "CLICK" and target in {"send_btn", "send_button", "submit_btn"}:
+            return True
+        if action_upper == "KEY_PRESS":
+            key_name = str(target_key or value or "").strip().lower()
+            if key_name in {"enter", "ctrl+enter", "control+enter", "meta+enter", "command+enter"}:
+                return True
+        return False
+
     def _execute_workflow_stream_once(
         self,
         session: TabSession,
@@ -1684,6 +1702,27 @@ class BrowserCore:
         selectors = site_config.get("selectors", {})
         workflow = site_config.get("workflow", [])
         stealth_mode = site_config.get("stealth", False)
+        force_new_conversation = bool(BrowserConstants.get("FORCE_NEW_CONVERSATION"))
+        conversation_threshold = self._get_conversation_timeout_threshold()
+        skip_new_chat = not session.should_start_new_conversation(
+            current_domain=domain,
+            preset_name=resolved_preset_name,
+            threshold_seconds=conversation_threshold,
+            force_new=force_new_conversation,
+        )
+
+        if force_new_conversation:
+            logger.debug(f"[{session.id}] 已启用强制新建对话")
+        elif skip_new_chat:
+            logger.debug(
+                f"[{session.id}] 复用当前对话: domain={domain}, "
+                f"preset={resolved_preset_name}, threshold={conversation_threshold}s"
+            )
+        else:
+            logger.debug(
+                f"[{session.id}] 本轮将新建对话: domain={domain}, "
+                f"preset={resolved_preset_name}, threshold={conversation_threshold}s"
+            )
         
         image_config = site_config.get("image_extraction", {})
         modalities = image_config.get("modalities") or {}
@@ -1873,6 +1912,7 @@ class BrowserCore:
         if not effective_stop_checker():
             setattr(session, "_workflow_user_stop_logged", False)
         streamed_text_parts: List[str] = []
+        conversation_activity_marked = False
         
         try:
             step_index = 0
@@ -1922,6 +1962,19 @@ class BrowserCore:
                 target_key = step.get('target', '')
                 optional = step.get('optional', False)
                 param_value = step.get('value')
+                action_upper = str(action or "").strip().upper()
+                target_key_normalized = str(target_key or "").strip().lower()
+
+                if skip_new_chat and (
+                    target_key_normalized in {"new_chat_btn", "new_chat", "new_conversation"}
+                    or action_upper in {"NEW_CHAT", "NEW_CONVERSATION"}
+                ):
+                    logger.debug(
+                        f"[{session.id}] 会话仍有效，跳过新建对话步骤 "
+                        f"(action={action_upper or '-'}, target={target_key_normalized or '-'})"
+                    )
+                    step_index += 1
+                    continue
                 
                 selector = selectors.get(target_key, '')
                 
@@ -1956,17 +2009,29 @@ class BrowserCore:
                         logger.info(f"[{session.id}] 步骤完成后检测到取消，提前结束工作流")
                         break
                     
+                    page_fetch_sent = False
                     if action in ("STREAM_WAIT", "STREAM_OUTPUT"):
                         result_container_selector = selector
                     if (
                         action == "PAGE_FETCH"
                         and hasattr(executor, "consume_last_request_transport_sent")
-                        and executor.consume_last_request_transport_sent()
                     ):
-                        step_index = executor._consume_request_transport_followup_steps(
-                            workflow,
-                            step_index,
+                        page_fetch_sent = bool(executor.consume_last_request_transport_sent())
+                        if page_fetch_sent:
+                            step_index = executor._consume_request_transport_followup_steps(
+                                workflow,
+                                step_index,
+                            )
+                    if (
+                        not conversation_activity_marked
+                        and (
+                            self._step_submits_conversation_request(action, target_key, param_value)
+                            or page_fetch_sent
+                            or action_upper in {"STREAM_WAIT", "STREAM_OUTPUT"}
                         )
+                    ):
+                        session.mark_conversation_activity(domain, resolved_preset_name)
+                        conversation_activity_marked = True
                     step_index += 1
                         
                 except (ElementNotFoundError, WorkflowError):

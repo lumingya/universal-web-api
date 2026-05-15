@@ -39,6 +39,17 @@ window.SidebarComponent = {
     },
     template: `
         <aside class="w-64 bg-white dark:bg-gray-800 border-r dark:border-gray-700 flex flex-col">
+            <div class="p-4 border-b dark:border-gray-700 bg-gradient-to-r from-slate-50 via-white to-blue-50 dark:from-gray-900 dark:via-gray-900 dark:to-slate-800">
+                <div class="flex items-center gap-3">
+                    <img src="/static/images/logo.svg"
+                         alt="Universal Web API logo"
+                         class="h-12 w-12 rounded-xl bg-white/80 p-1 shadow-sm ring-1 ring-slate-200/70 dark:bg-slate-800/90 dark:ring-slate-700/80">
+                    <div class="min-w-0">
+                        <div class="truncate text-sm font-semibold text-slate-900 dark:text-white">Universal Web API</div>
+                        <div class="text-xs text-slate-500 dark:text-slate-400">控制面板</div>
+                    </div>
+                </div>
+            </div>
             <div class="p-3 border-b dark:border-gray-700 bg-gray-50 dark:bg-gray-900">
                 <div class="flex items-center justify-between mb-2">
                     <span class="text-sm font-semibold dark:text-white">服务状态</span>
