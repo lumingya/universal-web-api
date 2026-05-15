@@ -495,9 +495,9 @@
           "hint_text": "完全专注于文件内容",
           "reacquire_input_after_upload": false,
           "post_upload_input_selector": "",
-          "post_upload_settle": 0.0,
+          "post_upload_settle": 0,
           "upload_signal_timeout": 2.5,
-          "upload_signal_grace": 3.0,
+          "upload_signal_grace": 3,
           "state_probe": {
             "enabled": false,
             "code": ""
@@ -507,7 +507,7 @@
             "post_click_observe_window": 1.8,
             "pre_retry_probe_window": 0.12,
             "retry_observe_window": 0.9,
-            "attachment_observe_window": 6.0,
+            "attachment_observe_window": 6,
             "max_retry_count": 2,
             "retry_interval": 0.6,
             "retry_action": "click_send_btn",
@@ -538,8 +538,8 @@
             "require_attachment_present": true,
             "require_upload_signal_before_ready": false,
             "continue_once_on_unconfirmed_send": false,
-            "idle_timeout": 8.0,
-            "hard_max_wait": 90.0
+            "idle_timeout": 8,
+            "hard_max_wait": 90
           }
         },
         "image_extraction": {
@@ -803,9 +803,9 @@
           "hint_text": "完全专注于文件内容",
           "reacquire_input_after_upload": false,
           "post_upload_input_selector": "",
-          "post_upload_settle": 0.0,
+          "post_upload_settle": 0,
           "upload_signal_timeout": 2.5,
-          "upload_signal_grace": 3.0,
+          "upload_signal_grace": 3,
           "state_probe": {
             "enabled": false,
             "code": ""
@@ -815,7 +815,7 @@
             "post_click_observe_window": 1.8,
             "pre_retry_probe_window": 0.12,
             "retry_observe_window": 0.9,
-            "attachment_observe_window": 8.0,
+            "attachment_observe_window": 8,
             "max_retry_count": 2,
             "retry_interval": 0.6,
             "retry_action": "click_send_btn",
@@ -867,8 +867,8 @@
             "require_attachment_present": true,
             "require_upload_signal_before_ready": false,
             "continue_once_on_unconfirmed_send": false,
-            "idle_timeout": 12.0,
-            "hard_max_wait": 120.0
+            "idle_timeout": 12,
+            "hard_max_wait": 120
           }
         }
       },
@@ -1026,9 +1026,9 @@
           "hint_text": "完全专注于文件内容",
           "reacquire_input_after_upload": false,
           "post_upload_input_selector": "",
-          "post_upload_settle": 0.0,
+          "post_upload_settle": 0,
           "upload_signal_timeout": 2.5,
-          "upload_signal_grace": 3.0,
+          "upload_signal_grace": 3,
           "state_probe": {
             "enabled": false,
             "code": ""
@@ -1038,7 +1038,7 @@
             "post_click_observe_window": 1.8,
             "pre_retry_probe_window": 0.12,
             "retry_observe_window": 0.9,
-            "attachment_observe_window": 8.0,
+            "attachment_observe_window": 8,
             "max_retry_count": 2,
             "retry_interval": 0.6,
             "retry_action": "click_send_btn",
@@ -1090,8 +1090,8 @@
             "require_attachment_present": true,
             "require_upload_signal_before_ready": false,
             "continue_once_on_unconfirmed_send": false,
-            "idle_timeout": 12.0,
-            "hard_max_wait": 120.0
+            "idle_timeout": 12,
+            "hard_max_wait": 120
           }
         }
       },
@@ -1239,9 +1239,9 @@
           "hint_text": "完全专注于文件内容",
           "reacquire_input_after_upload": false,
           "post_upload_input_selector": "",
-          "post_upload_settle": 0.0,
+          "post_upload_settle": 0,
           "upload_signal_timeout": 2.5,
-          "upload_signal_grace": 3.0,
+          "upload_signal_grace": 3,
           "state_probe": {
             "enabled": false,
             "code": ""
@@ -1251,7 +1251,7 @@
             "post_click_observe_window": 1.8,
             "pre_retry_probe_window": 0.12,
             "retry_observe_window": 0.9,
-            "attachment_observe_window": 8.0,
+            "attachment_observe_window": 8,
             "max_retry_count": 2,
             "retry_interval": 0.6,
             "retry_action": "click_send_btn",
@@ -1303,8 +1303,8 @@
             "require_attachment_present": true,
             "require_upload_signal_before_ready": false,
             "continue_once_on_unconfirmed_send": false,
-            "idle_timeout": 12.0,
-            "hard_max_wait": 120.0
+            "idle_timeout": 12,
+            "hard_max_wait": 120
           }
         }
       }
@@ -1434,9 +1434,9 @@
           "hint_text": "完全专注于文件内容",
           "reacquire_input_after_upload": false,
           "post_upload_input_selector": "",
-          "post_upload_settle": 0.0,
+          "post_upload_settle": 0,
           "upload_signal_timeout": 2.5,
-          "upload_signal_grace": 3.0,
+          "upload_signal_grace": 3,
           "state_probe": {
             "enabled": false,
             "code": ""
@@ -1446,7 +1446,7 @@
             "post_click_observe_window": 2.4,
             "pre_retry_probe_window": 0.18,
             "retry_observe_window": 1.2,
-            "attachment_observe_window": 8.0,
+            "attachment_observe_window": 8,
             "max_retry_count": 2,
             "retry_interval": 0.6,
             "retry_action": "click_send_btn",
@@ -1470,8 +1470,8 @@
             "require_attachment_present": false,
             "require_upload_signal_before_ready": false,
             "continue_once_on_unconfirmed_send": true,
-            "idle_timeout": 8.0,
-            "hard_max_wait": 90.0
+            "idle_timeout": 8,
+            "hard_max_wait": 90
           }
         }
       },
@@ -1596,9 +1596,9 @@
           "hint_text": "完全专注于文件内容",
           "reacquire_input_after_upload": false,
           "post_upload_input_selector": "",
-          "post_upload_settle": 0.0,
+          "post_upload_settle": 0,
           "upload_signal_timeout": 2.5,
-          "upload_signal_grace": 3.0,
+          "upload_signal_grace": 3,
           "state_probe": {
             "enabled": false,
             "code": ""
@@ -1608,7 +1608,7 @@
             "post_click_observe_window": 2.4,
             "pre_retry_probe_window": 0.18,
             "retry_observe_window": 1.2,
-            "attachment_observe_window": 8.0,
+            "attachment_observe_window": 8,
             "max_retry_count": 2,
             "retry_interval": 0.6,
             "retry_action": "click_send_btn",
@@ -1775,9 +1775,9 @@
           "hint_text": "完全专注于文件内容",
           "reacquire_input_after_upload": false,
           "post_upload_input_selector": "",
-          "post_upload_settle": 0.0,
+          "post_upload_settle": 0,
           "upload_signal_timeout": 2.5,
-          "upload_signal_grace": 3.0,
+          "upload_signal_grace": 3,
           "state_probe": {
             "enabled": false,
             "code": ""
@@ -1787,7 +1787,7 @@
             "post_click_observe_window": 2.4,
             "pre_retry_probe_window": 0.18,
             "retry_observe_window": 1.2,
-            "attachment_observe_window": 8.0,
+            "attachment_observe_window": 8,
             "max_retry_count": 2,
             "retry_interval": 0.6,
             "retry_action": "click_send_btn",
@@ -1811,8 +1811,8 @@
             "require_attachment_present": false,
             "require_upload_signal_before_ready": false,
             "continue_once_on_unconfirmed_send": true,
-            "idle_timeout": 8.0,
-            "hard_max_wait": 90.0
+            "idle_timeout": 8,
+            "hard_max_wait": 90
           }
         }
       }
@@ -2819,9 +2819,9 @@
           "hint_text": "继续",
           "reacquire_input_after_upload": false,
           "post_upload_input_selector": "",
-          "post_upload_settle": 0.0,
+          "post_upload_settle": 0,
           "upload_signal_timeout": 2.5,
-          "upload_signal_grace": 3.0,
+          "upload_signal_grace": 3,
           "state_probe": {
             "enabled": false,
             "code": ""
@@ -2831,7 +2831,7 @@
             "post_click_observe_window": 1.8,
             "pre_retry_probe_window": 0.12,
             "retry_observe_window": 0.9,
-            "attachment_observe_window": 6.0,
+            "attachment_observe_window": 6,
             "max_retry_count": 2,
             "retry_interval": 0.6,
             "retry_action": "click_send_btn",
@@ -2875,8 +2875,8 @@
             "require_attachment_present": true,
             "require_upload_signal_before_ready": false,
             "continue_once_on_unconfirmed_send": false,
-            "idle_timeout": 8.0,
-            "hard_max_wait": 90.0
+            "idle_timeout": 8,
+            "hard_max_wait": 90
           }
         }
       },
@@ -3013,9 +3013,9 @@
           "hint_text": "继续",
           "reacquire_input_after_upload": false,
           "post_upload_input_selector": "",
-          "post_upload_settle": 0.0,
+          "post_upload_settle": 0,
           "upload_signal_timeout": 2.5,
-          "upload_signal_grace": 3.0,
+          "upload_signal_grace": 3,
           "state_probe": {
             "enabled": false,
             "code": ""
@@ -3025,7 +3025,7 @@
             "post_click_observe_window": 1.8,
             "pre_retry_probe_window": 0.12,
             "retry_observe_window": 0.9,
-            "attachment_observe_window": 6.0,
+            "attachment_observe_window": 6,
             "max_retry_count": 2,
             "retry_interval": 0.6,
             "retry_action": "click_send_btn",
@@ -3073,8 +3073,8 @@
             "require_attachment_present": true,
             "require_upload_signal_before_ready": false,
             "continue_once_on_unconfirmed_send": false,
-            "idle_timeout": 8.0,
-            "hard_max_wait": 90.0
+            "idle_timeout": 8,
+            "hard_max_wait": 90
           }
         }
       }
