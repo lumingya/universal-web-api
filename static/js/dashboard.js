@@ -185,7 +185,7 @@ const BROWSER_CONSTANTS_SCHEMA = {
                 type: 'number',
                 step: 0.05,
                 min: 0,
-                default: 0.03
+                default: 0.1
             },
             STEALTH_DELAY_MAX: {
                 label: '隐身延迟上限',
@@ -193,7 +193,7 @@ const BROWSER_CONSTANTS_SCHEMA = {
                 type: 'number',
                 step: 0.05,
                 min: 0,
-                default: 0.1
+                default: 0.3
             },
             ACTION_DELAY_MIN: {
                 label: '动作延迟下限',
@@ -201,7 +201,7 @@ const BROWSER_CONSTANTS_SCHEMA = {
                 type: 'number',
                 step: 0.05,
                 min: 0,
-                default: 0.06
+                default: 0.15
             },
             ACTION_DELAY_MAX: {
                 label: '动作延迟上限',
@@ -209,7 +209,7 @@ const BROWSER_CONSTANTS_SCHEMA = {
                 type: 'number',
                 step: 0.05,
                 min: 0,
-                default: 0.14
+                default: 0.3
             }
         }
     },
@@ -533,6 +533,28 @@ const BROWSER_CONSTANTS_SCHEMA = {
                 default: 180
             }
         }
+    },
+    session: {
+        label: '会话管理',
+        icon: '💬',
+        desc: '控制是否在连续请求之间复用当前 AI 对话，超时后自动创建新对话',
+        items: {
+            CONVERSATION_TIMEOUT_THRESHOLD: {
+                label: '会话超时阈值',
+                unit: '秒',
+                desc: '距上一条请求超过此时间后，会自动创建新对话。设为 0 表示每次都新建',
+                type: 'number',
+                min: 0,
+                step: 10,
+                default: 300
+            },
+            FORCE_NEW_CONVERSATION: {
+                label: '强制新建对话',
+                desc: '开启后每次请求都会创建新对话，不保持当前上下文',
+                type: 'switch',
+                default: false
+            }
+        }
     }
 };
 
@@ -761,7 +783,7 @@ const ENV_CONFIG_SCHEMA = {
         apply: 'service',
         label: '函数调用',
         icon: '🧰',
-        desc: '控制函数调用的内部修复、结果清洗与媒体后处理策略。',
+        desc: '控制函数调用的内部修复、重试策略与工具结果上限。',
         items: {
             TOOL_CALLING_RETRY_STRATEGY: {
                 label: '重试策略',
@@ -789,18 +811,6 @@ const ENV_CONFIG_SCHEMA = {
                 min: 1,
                 step: 10000,
                 default: 300000
-            },
-            TOOL_CALLING_ALLOW_MEDIA_POSTPROCESS: {
-                label: '允许媒体后处理',
-                desc: '开启后，函数调用隐藏回合也会执行媒体二次提取、占位补偿和 Markdown 媒体注入。兼容旧行为，但更容易污染 tool payload；默认关闭。',
-                type: 'switch',
-                default: false
-            },
-            TOOL_CALLING_SANITIZE_ASSISTANT_CONTENT: {
-                label: '解析前清洗回复',
-                desc: '开启后，函数调用在解析 assistant 内容前会移除占位链接和尾部媒体 Markdown。推荐保持开启；只有需要完全回退旧行为时再关闭。',
-                type: 'switch',
-                default: true
             }
         }
     },
@@ -858,9 +868,6 @@ const app = createApp({
 
             // Tab 切换（新增 settings）
             activeTab: 'config',  // 'config' | 'logs' | 'settings'
-            mountedTabs: {
-                config: true
-            },
 
             // 折叠面板状态
             selectorCollapsed: true,
@@ -902,15 +909,6 @@ const app = createApp({
             systemStatsTimer: null,
             isFetchingSystemStats: false,
 
-            // 请求监控
-            requestHistory: [],
-            requestHistoryLoading: false,
-            requestHistoryError: '',
-            requestHistoryTimer: null,
-            requestHistoryRevision: '',
-            requestHistoryFetchedAt: 0,
-            requestHistoryDetailLoading: {},
-
             // ========== 导入功能 ==========
             showImportDialog: false,
             importMode: 'merge',  // 'merge' | 'replace'
@@ -934,6 +932,10 @@ const app = createApp({
             browserConstantsCollapsed: {},
             isSavingConstants: false,
             isLoadingConstants: false,
+
+            // 会话状态
+            sessionStatus: { sessions: {}, force_new_conversation: false },
+            isLoadingSessionStatus: false,
 
             // 更新白名单
             updatePreserveOptions: [],
@@ -1074,11 +1076,7 @@ const app = createApp({
 
     watch: {
         activeTab(tab) {
-            this.markTabAsVisited(tab)
             this.ensureTabDataLoaded(tab)
-            if (tab === 'logs') {
-                this.pollLogs()
-            }
         },
         darkMode() {
             this.applyDarkMode()
@@ -1102,7 +1100,6 @@ const app = createApp({
 
         // 初始化折叠状态
         this.initCollapsedStates()
-        this.markTabAsVisited(this.activeTab)
         this.restoreSitesCache()
         this.refreshMarketplaceUpdateFlagFromStorage()
 
@@ -1120,7 +1117,6 @@ const app = createApp({
     beforeUnmount() {
         this.stopLogPolling()
         this.stopMarketplaceUpdatePolling()
-        this.stopRequestHistoryPolling()
         if (this.systemStatsTimer) {
             clearInterval(this.systemStatsTimer)
             this.systemStatsTimer = null
@@ -1134,7 +1130,6 @@ const app = createApp({
             this.startLogPolling()
             await this.loadHealthStatus({ silent: true, timeoutMs: 2500 }).catch(() => false)
             this.startMarketplaceUpdatePolling()
-            this.startRequestHistoryPolling()
             this.ensureTabDataLoaded(this.activeTab)
 
             // 每 2 秒刷新系统状态
@@ -1165,40 +1160,6 @@ const app = createApp({
 
             clearInterval(this.logPollingTimer)
             this.logPollingTimer = null
-        },
-
-        markTabAsVisited(tab) {
-            const key = String(tab || '').trim()
-            if (!key || this.mountedTabs[key]) {
-                return
-            }
-            this.mountedTabs = {
-                ...this.mountedTabs,
-                [key]: true
-            }
-        },
-
-        shouldRenderTab(tab) {
-            return this.activeTab === tab || !!this.mountedTabs[tab]
-        },
-
-        startRequestHistoryPolling() {
-            if (this.requestHistoryTimer) {
-                clearInterval(this.requestHistoryTimer)
-            }
-            this.requestHistoryTimer = setInterval(() => {
-                if (this.activeTab === 'monitor' && document.visibilityState !== 'hidden') {
-                    this.fetchRequestHistory({ silent: true, ifChanged: true }).catch(() => {})
-                }
-            }, 3000)
-        },
-
-        stopRequestHistoryPolling() {
-            if (!this.requestHistoryTimer) {
-                return
-            }
-            clearInterval(this.requestHistoryTimer)
-            this.requestHistoryTimer = null
         },
 
         startMarketplaceUpdatePolling() {
@@ -1705,16 +1666,16 @@ const app = createApp({
         // ========== 日志相关 ==========
 
         async pollLogs() {
-            if (this.pauseLogs || document.visibilityState === 'hidden') return;
+            if (this.pauseLogs) return;
 
             try {
                 const result = await this.apiRequest('/api/logs?after_seq=' + this.lastLogSeq);
 
                 if (result.logs && result.logs.length > 0) {
-                    const nextLogs = result.logs.map(log => {
+                    result.logs.forEach(log => {
                         const messageText = log.message_text || log.display_message || log.message || '';
                         const kind = log.kind || log.level;
-                        return {
+                        this.logs.push({
                             id: log.seq || (Date.now() + Math.random()),
                             seq: log.seq || 0,
                             timestamp: new Date(log.timestamp * 1000).toLocaleTimeString() + '.' +
@@ -1728,9 +1689,18 @@ const app = createApp({
                             messageText,
                             originalMessageText: log.original_message_text || messageText,
                             messageAlias: log.message_alias || ''
+                        });
+                    });
+
+                    if (this.logs.length > 500) {
+                        this.logs = this.logs.slice(-500);
+                    }
+
+                    this.$nextTick(() => {
+                        if (this.$refs.logContainer) {
+                            this.$refs.logContainer.scrollTop = this.$refs.logContainer.scrollHeight;
                         }
                     });
-                    this.logs = this.logs.concat(nextLogs).slice(-500);
                 }
                 this.lastLogSeq = Number(result.next_seq || this.lastLogSeq || 0);
                 this.lastLogTimestamp = Number(result.timestamp || this.lastLogTimestamp || 0);
@@ -2406,6 +2376,22 @@ const app = createApp({
             }
         },
 
+        async loadSessionStatus() {
+            this.isLoadingSessionStatus = true;
+            try {
+                const data = await this.apiRequest('/api/session/status');
+                this.sessionStatus = {
+                    sessions: data.sessions || {},
+                    force_new_conversation: !!data.force_new_conversation,
+                };
+            } catch (error) {
+                console.error('加载会话状态失败:', error);
+                this.sessionStatus = { sessions: {}, force_new_conversation: false };
+            } finally {
+                this.isLoadingSessionStatus = false;
+            }
+        },
+
         getBrowserConstantsDefaults() {
             return this.normalizeBrowserConstantsForEditor({});
         },
@@ -2423,6 +2409,7 @@ const app = createApp({
                 this.browserConstants = this.normalizeBrowserConstantsForEditor(payload);
                 this.browserConstantsOriginal = JSON.parse(JSON.stringify(this.browserConstants));
                 this.notify('浏览器常量已保存', 'success');
+                this.loadSessionStatus();
             } catch (error) {
                 this.notify('保存失败: ' + error.message, 'error');
             } finally {
@@ -2643,20 +2630,10 @@ const app = createApp({
         },
 
         changeTab(tab) {
-            this.markTabAsVisited(tab)
             this.activeTab = tab;
         },
 
         async ensureTabDataLoaded(tab) {
-            if (tab === 'monitor') {
-                const now = Date.now()
-                const stale = now - Number(this.requestHistoryFetchedAt || 0) > 2000
-                await Promise.all([
-                    this.fetchRequestHistory({ silent: true, ifChanged: !stale }),
-                    this.fetchSystemStats({ timeoutMs: 5000 })
-                ]);
-                return;
-            }
             if (tab === 'marketplace') {
                 if (!this.hasLoadedMarketplace) {
                     this.hasLoadedMarketplace = true;
@@ -2671,94 +2648,11 @@ const app = createApp({
                 await Promise.all([
                     this.loadEnvConfig(),
                     this.loadBrowserConstants(),
+                    this.loadSessionStatus(),
                     this.loadUpdatePreserveSettings(),
                     this.loadSelectorDefinitions()
                 ]);
                 return;
-            }
-        },
-
-        async fetchRequestHistory({ silent = false, ifChanged = false, force = false } = {}) {
-            if (this.requestHistoryLoading) {
-                return this.requestHistory;
-            }
-            const now = Date.now();
-            if (!force && ifChanged && now - Number(this.requestHistoryFetchedAt || 0) < 1200) {
-                return this.requestHistory;
-            }
-            this.requestHistoryLoading = true;
-            if (!silent) {
-                this.requestHistoryError = '';
-            }
-            try {
-                const data = await this.apiRequest('/api/system/request-history?limit=200', {
-                    timeoutMs: 5000
-                });
-                const revision = String(data.revision || '');
-                if (!ifChanged || force || !this.requestHistoryRevision || revision !== this.requestHistoryRevision) {
-                    const detailCache = new Map(
-                        this.requestHistory
-                            .filter(item => item && item.detail_loaded && item.id)
-                            .map(item => [String(item.id), item])
-                    );
-                    const records = Array.isArray(data.records) ? data.records : [];
-                    this.requestHistory = records.map(item => {
-                        const cached = detailCache.get(String(item && item.id || ''));
-                        return cached ? { ...item, ...cached } : item;
-                    });
-                    this.requestHistoryRevision = revision;
-                }
-                this.requestHistoryFetchedAt = Date.now();
-                this.requestHistoryError = '';
-                return this.requestHistory;
-            } catch (error) {
-                this.requestHistoryError = error.message || '请求历史加载失败';
-                return this.requestHistory;
-            } finally {
-                this.requestHistoryLoading = false;
-            }
-        },
-
-        async fetchRequestHistoryDetail(requestId) {
-            const id = String(requestId || '').trim();
-            if (!id || this.requestHistoryDetailLoading[id]) {
-                return null;
-            }
-
-            const existingIndex = this.requestHistory.findIndex(item => String(item && item.id || '') === id);
-            if (existingIndex >= 0 && this.requestHistory[existingIndex].detail_loaded) {
-                return this.requestHistory[existingIndex];
-            }
-
-            this.requestHistoryDetailLoading = {
-                ...this.requestHistoryDetailLoading,
-                [id]: true
-            };
-            try {
-                const detail = await this.apiRequest('/api/system/request-history/' + encodeURIComponent(id), {
-                    timeoutMs: 5000
-                });
-                const index = this.requestHistory.findIndex(item => String(item && item.id || '') === id);
-                if (index >= 0) {
-                    const updated = {
-                        ...this.requestHistory[index],
-                        ...(detail || {}),
-                        detail_loaded: true,
-                        has_detail: true
-                    };
-                    const nextHistory = this.requestHistory.slice();
-                    nextHistory[index] = updated;
-                    this.requestHistory = nextHistory;
-                    return updated;
-                }
-                return detail || null;
-            } catch (error) {
-                this.notify('加载请求详情失败: ' + error.message, 'error');
-                return null;
-            } finally {
-                const nextLoading = { ...this.requestHistoryDetailLoading };
-                delete nextLoading[id];
-                this.requestHistoryDetailLoading = nextLoading;
             }
         },
 
@@ -3713,22 +3607,6 @@ const app = createApp({
             if (['FILL_INPUT', 'CLICK', 'STREAM_WAIT'].includes(step.action)) {
                 step.value = null
                 if (!step.target) step.target = ''
-            } else if (step.action === 'PAGE_FETCH') {
-                step.target = ''
-                step.optional = true
-                step.value = null
-            } else if (step.action === 'READONLY_HINT') {
-                step.target = ''
-                const current = (step.value && typeof step.value === 'object' && !Array.isArray(step.value))
-                    ? step.value
-                    : {}
-                step.value = {
-                    title: String(current.title || '提示'),
-                    text: String(current.text || '这是一条只读提示，不会在执行时触发页面操作。'),
-                    tone: ['info', 'success', 'warning', 'danger'].includes(String(current.tone || '').trim().toLowerCase())
-                        ? String(current.tone || '').trim().toLowerCase()
-                        : 'info'
-                }
             } else if (step.action === 'COORD_CLICK') {
                 step.target = ''
                 step.value = {
@@ -3771,13 +3649,6 @@ const app = createApp({
                     { action: 'STREAM_WAIT', target: 'result_container', optional: false, value: null }
                 ],
                 'simple': [
-                    { action: 'FILL_INPUT', target: 'input_box', optional: false, value: null },
-                    { action: 'KEY_PRESS', target: 'Enter', optional: false, value: null },
-                    { action: 'STREAM_WAIT', target: 'result_container', optional: false, value: null }
-                ],
-                'experimental_hint': [
-                    { action: 'READONLY_HINT', target: '', optional: false, value: { title: '提示', text: '这是一条只读提示，不会影响执行，只用于说明当前工作流中的特殊行为。', tone: 'info' } },
-                    { action: 'PAGE_FETCH', target: '', optional: true, value: null },
                     { action: 'FILL_INPUT', target: 'input_box', optional: false, value: null },
                     { action: 'KEY_PRESS', target: 'Enter', optional: false, value: null },
                     { action: 'STREAM_WAIT', target: 'result_container', optional: false, value: null }
@@ -4006,7 +3877,6 @@ const app = createApp({
 app.component('sidebar-component', window.SidebarComponent);
 app.component('config-tab', window.ConfigTab);
 app.component('marketplace-tab', window.MarketplaceTab);
-app.component('request-monitor-tab', window.RequestMonitorTab);
 app.component('tabpool-tab', window.TabPoolTabComponent);
 app.component('commands-tab', window.CommandsTabComponent);  // 🆕 命令系统
 app.component('logs-tab', window.LogsTab);
