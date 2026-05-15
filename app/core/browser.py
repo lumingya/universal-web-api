@@ -35,7 +35,7 @@ from app.core.config import (
 from app.utils.image_handler import extract_images_from_messages
 from app.utils.site_url import extract_remote_site_domain
 from app.core.workflow import WorkflowExecutor
-from app.core.tab_pool import TabPoolManager, TabSession, get_clipboard_lock
+from app.core.tab_pool import TabPoolManager, TabSession
 from app.core.session_manager import session_manager as _session_manager
 
 
