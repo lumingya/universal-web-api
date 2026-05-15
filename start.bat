@@ -195,46 +195,48 @@ echo     路径: !PYTHON_PATH!
 echo.
 
 REM ---------- 3) 自动更新检查 ----------
+echo [STEP] 检查更新
+echo ----------------------------------------
+echo.
+
 if /I "%AUTO_UPDATE_ENABLED%"=="true" (
-    echo [STEP] 自动更新检查
-    echo ----------------------------------------
-    echo.
-    echo   +----------------------------------------------+
-    echo   ^|  [WARN] 自动更新已启用                       ^|
-    echo   ^|                                              ^|
-    echo   ^|  更新会覆盖以下内容:                         ^|
-    echo   ^|    - config/*.json                           ^|
-    echo   ^|    - app/                                    ^|
-    echo   ^|    - static/                                 ^|
-    echo   ^|                                              ^|
-    echo   ^|  原配置会自动备份到 backup_* 目录            ^|
-    echo   +----------------------------------------------+
-    echo.
-    
     if exist "updater.py" (
-        echo [INFO] 检查 GitHub 最新版本...
-        venv\Scripts\python.exe updater.py
-        
-        if !errorlevel! equ 0 (
-            echo [INFO] 更新已应用，建议重新启动脚本
+        echo   检测到新版本可用时，更新会覆盖以下内容:
+        echo     - config/*.json
+        echo     - app/
+        echo     - static/
+        echo.
+        echo   原配置会自动备份到 backup_* 目录
+        echo.
+        set /p UPDATE_CHOICE="是否检查 GitHub 最新版本? [Y/n]: "
+        if /I "!UPDATE_CHOICE!"=="" set "UPDATE_CHOICE=Y"
+        if /I "!UPDATE_CHOICE!"=="Y" (
             echo.
-            set /p RESTART_CHOICE="是否立即重启? [Y/n]: "
-            if /I "!RESTART_CHOICE!"=="" set "RESTART_CHOICE=Y"
-            if /I "!RESTART_CHOICE!"=="Y" (
-                echo [INFO] 重新启动...
-                start "" "%~f0"
-                exit /b 0
+            echo [INFO] 正在检查 GitHub 最新版本...
+            venv\Scripts\python.exe updater.py
+            
+            if !errorlevel! equ 0 (
+                echo [INFO] 更新已应用，建议重新启动脚本
+                echo.
+                set /p RESTART_CHOICE="是否立即重启? [Y/n]: "
+                if /I "!RESTART_CHOICE!"=="" set "RESTART_CHOICE=Y"
+                if /I "!RESTART_CHOICE!"=="Y" (
+                    echo [INFO] 重新启动...
+                    start "" "%~f0"
+                    exit /b 0
+                )
             )
+        ) else (
+            echo [INFO] 已跳过更新检查
         )
     ) else (
         echo [WARN] 未找到 updater.py，跳过自动更新
     )
-    echo.
 ) else (
     echo [INFO] 自动更新已禁用
     echo       如需启用，请修改 .env 中的 AUTO_UPDATE_ENABLED=true
-    echo.
 )
+echo.
 
 REM ---------- 4) 检查目录结构 ----------
 echo [STEP] 检查项目结构
