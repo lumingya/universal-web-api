@@ -18,13 +18,14 @@ from pathlib import Path
 from typing import Optional, Any, Dict
 
 from app import __version__ as APP_VERSION
-from fastapi import APIRouter, Request, HTTPException, Header, Depends
+from fastapi import APIRouter, Request, HTTPException, Header, Depends, Query
 from fastapi.responses import JSONResponse
 
 from app.core.config import AppConfig, get_logger, log_collector, BrowserConstants
 from app.core import get_browser, BrowserConnectionError
 from app.core.session_manager import session_manager
 from app.services.config_engine import config_engine, ConfigConstants
+from app.services.stats_recorder import stats_recorder
 from app.services.command_engine import command_engine
 from app.services.request_manager import request_manager
 from update_preserve import load_update_preserve_settings, save_update_preserve_settings
@@ -893,6 +894,53 @@ async def get_session_status(authenticated: bool = Depends(verify_auth)):
     except Exception as e:
         logger.error(f"获取会话状态失败: {e}")
         return {"sessions": {}, "force_new_conversation": False}
+
+
+# ================= 请求统计 API =================
+
+@router.get("/api/stats/summary")
+async def get_stats_summary(authenticated: bool = Depends(verify_auth)):
+    """获取请求统计摘要"""
+    try:
+        summary = stats_recorder.get_summary()
+        daily = stats_recorder.get_daily_stats(7)
+        return {"summary": summary, "daily": daily}
+    except Exception as e:
+        logger.error(f"获取统计摘要失败: {e}")
+        return {"summary": {}, "daily": []}
+
+
+@router.get("/api/stats/history")
+async def get_stats_history(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    domain: str = Query(""),
+    status: str = Query(""),
+    authenticated: bool = Depends(verify_auth),
+):
+    """获取请求历史记录"""
+    try:
+        return stats_recorder.get_history(
+            page=page, page_size=page_size,
+            domain=domain.strip(), status=status.strip(),
+        )
+    except Exception as e:
+        logger.error(f"获取历史记录失败: {e}")
+        return {"items": [], "total": 0, "page": page, "page_size": page_size, "total_pages": 0}
+
+
+@router.post("/api/stats/clear")
+async def clear_stats_history(
+    before_days: int = Query(7, ge=1),
+    authenticated: bool = Depends(verify_auth),
+):
+    """清理历史记录"""
+    try:
+        stats_recorder.clear_history(before_days)
+        return {"status": "success", "message": f"已清理 {before_days} 天前的记录"}
+    except Exception as e:
+        logger.error(f"清理历史记录失败: {e}")
+        raise HTTPException(status_code=500, detail=f"清理失败: {str(e)}")
 
 
 # ================= 调试 API =================

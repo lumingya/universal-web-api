@@ -30,6 +30,7 @@ from app.services.request_manager import (
     RequestStatus,
     watch_client_disconnect
 )
+from app.services.stats_recorder import stats_recorder
 from app.services.tool_calling import (
     build_tool_completion_response,
     complete_tool_calling_roundtrip_async,
@@ -940,6 +941,32 @@ async def _stream_with_tab_index(
 
         request_manager.finish_request(ctx, success=(ctx.status == RequestStatus.COMPLETED))
 
+        try:
+            started = getattr(ctx, "started_at", None) or getattr(ctx, "created_at", time.time())
+            duration = int((time.time() - started) * 1000)
+            resp_parts = ctx.monitor.get("response_parts", [])
+            resp_len = sum(len(str(p)) for p in resp_parts) if isinstance(resp_parts, list) else 0
+            msg_len = sum(
+                len(str(m.get("content", "")))
+                for m in (getattr(body, "messages", None) or [])
+            )
+            status_str = "success" if ctx.status == RequestStatus.COMPLETED else (
+                "failed" if ctx.status == RequestStatus.FAILED else "cancelled"
+            )
+            stats_recorder.record_request(
+                request_id=ctx.request_id,
+                domain=ctx.monitor.get("target_domain", ""),
+                model=getattr(body, "model", ""),
+                message_length=msg_len,
+                response_length=resp_len,
+                duration_ms=duration,
+                status=status_str,
+                error_message=str(ctx.monitor.get("last_error", "") or ""),
+                preset_name=getattr(body, "preset_name", ""),
+            )
+        except Exception:
+            pass
+
 
 async def _non_stream_with_tab_index(
     request: Request,
@@ -1401,6 +1428,32 @@ async def _complete_tool_calling_with_tab_index(
                 pass
         request_manager.finish_request(ctx, success=(ctx.status == RequestStatus.COMPLETED))
 
+        try:
+            started = getattr(ctx, "started_at", None) or getattr(ctx, "created_at", time.time())
+            duration = int((time.time() - started) * 1000)
+            resp = ctx.monitor.get("response_payload", {})
+            resp_len = len(str(resp.get("content", ""))) if isinstance(resp, dict) else 0
+            msg_len = sum(
+                len(str(m.get("content", "")))
+                for m in (getattr(body, "messages", None) or [])
+            )
+            status_str = "success" if ctx.status == RequestStatus.COMPLETED else (
+                "failed" if ctx.status == RequestStatus.FAILED else "cancelled"
+            )
+            stats_recorder.record_request(
+                request_id=ctx.request_id,
+                domain=ctx.monitor.get("target_domain", ""),
+                model=getattr(body, "model", ""),
+                message_length=msg_len,
+                response_length=resp_len,
+                duration_ms=duration,
+                status=status_str,
+                error_message=str(ctx.monitor.get("last_error", "") or ""),
+                preset_name=getattr(body, "preset_name", ""),
+            )
+        except Exception:
+            pass
+
 
 async def _complete_tool_calling_with_route_domain(
     request: Request,
@@ -1447,6 +1500,32 @@ async def _complete_tool_calling_with_route_domain(
             except asyncio.CancelledError:
                 pass
         request_manager.finish_request(ctx, success=(ctx.status == RequestStatus.COMPLETED))
+
+        try:
+            started = getattr(ctx, "started_at", None) or getattr(ctx, "created_at", time.time())
+            duration = int((time.time() - started) * 1000)
+            resp = ctx.monitor.get("response_payload", {})
+            resp_len = len(str(resp.get("content", ""))) if isinstance(resp, dict) else 0
+            msg_len = sum(
+                len(str(m.get("content", "")))
+                for m in (getattr(body, "messages", None) or [])
+            )
+            status_str = "success" if ctx.status == RequestStatus.COMPLETED else (
+                "failed" if ctx.status == RequestStatus.FAILED else "cancelled"
+            )
+            stats_recorder.record_request(
+                request_id=ctx.request_id,
+                domain=ctx.monitor.get("target_domain", ""),
+                model=getattr(body, "model", ""),
+                message_length=msg_len,
+                response_length=resp_len,
+                duration_ms=duration,
+                status=status_str,
+                error_message=str(ctx.monitor.get("last_error", "") or ""),
+                preset_name=getattr(body, "preset_name", ""),
+            )
+        except Exception:
+            pass
 
 
 async def _non_stream_tool_calling_with_tab_index(

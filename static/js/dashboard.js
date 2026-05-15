@@ -944,6 +944,13 @@ const app = createApp({
             isSavingUpdatePreserve: false,
             isLoadingUpdatePreserve: false,
 
+            // 请求统计
+            statsSummary: {},
+            statsDaily: [],
+            statsHistory: { items: [], total: 0, page: 1, page_size: 50, total_pages: 1 },
+            isLoadingStats: false,
+            statsFilter: { domain: '', status: '', page: 1 },
+
             // Schema 引用
             envSchema: ENV_CONFIG_SCHEMA,
             browserConstantsSchema: BROWSER_CONSTANTS_SCHEMA,
@@ -2392,6 +2399,48 @@ const app = createApp({
             }
         },
 
+        async loadStatsSummary() {
+            this.isLoadingStats = true;
+            try {
+                const data = await this.apiRequest('/api/stats/summary');
+                this.statsSummary = data.summary || {};
+                this.statsDaily = data.daily || [];
+            } catch (error) {
+                console.error('加载统计摘要失败:', error);
+                this.statsSummary = {};
+                this.statsDaily = [];
+            } finally {
+                this.isLoadingStats = false;
+            }
+        },
+
+        async loadStatsHistory() {
+            try {
+                const params = new URLSearchParams({
+                    page: this.statsFilter.page,
+                    page_size: 50,
+                    domain: this.statsFilter.domain,
+                    status: this.statsFilter.status,
+                });
+                const data = await this.apiRequest('/api/stats/history?' + params.toString());
+                this.statsHistory = data || { items: [], total: 0, page: 1, page_size: 50, total_pages: 1 };
+            } catch (error) {
+                console.error('加载统计历史失败:', error);
+                this.statsHistory = { items: [], total: 0, page: 1, page_size: 50, total_pages: 1 };
+            }
+        },
+
+        async clearStatsHistory() {
+            try {
+                await this.apiRequest('/api/stats/clear', { method: 'POST' });
+                this.notify('统计历史已清理', 'success');
+                this.loadStatsSummary();
+                this.loadStatsHistory();
+            } catch (error) {
+                this.notify('清理失败: ' + error.message, 'error');
+            }
+        },
+
         getBrowserConstantsDefaults() {
             return this.normalizeBrowserConstantsForEditor({});
         },
@@ -2651,6 +2700,13 @@ const app = createApp({
                     this.loadSessionStatus(),
                     this.loadUpdatePreserveSettings(),
                     this.loadSelectorDefinitions()
+                ]);
+                return;
+            }
+            if (tab === 'stats') {
+                await Promise.all([
+                    this.loadStatsSummary(),
+                    this.loadStatsHistory(),
                 ]);
                 return;
             }
@@ -3881,6 +3937,7 @@ app.component('tabpool-tab', window.TabPoolTabComponent);
 app.component('commands-tab', window.CommandsTabComponent);  // 🆕 命令系统
 app.component('logs-tab', window.LogsTab);
 app.component('settings-tab', window.SettingsTab);
+app.component('stats-tab', window.StatsTab);
 app.component('json-preview-dialog', window.JsonPreviewDialog);
 app.component('token-dialog', window.TokenDialog);
 app.component('step-templates-dialog', window.StepTemplatesDialog);

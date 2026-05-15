@@ -596,7 +596,16 @@ if "!DEBUG_PORT_OK!"=="1" (
 :BROWSER_READY
 echo.
 
-REM ---------- 8) 显示版本信息 ----------
+REM ---------- 8) 检查并清理 APP_PORT 占用 ----------
+echo [STEP] 检查并清理端口占用
+echo ----------------------------------------
+call :cleanup_app_port
+if "!CLEANUP_DONE!"=="1" (
+    timeout /t 1 /nobreak >nul
+)
+echo.
+
+REM ---------- 9) 显示版本信息 ----------
 if exist "VERSION" (
     echo   版本信息:
     echo   ----------------------------------------
@@ -605,7 +614,7 @@ if exist "VERSION" (
     echo   ----------------------------------------
 )
 
-REM ---------- 9) 启动服务 ----------
+REM ---------- 10) 启动服务 ----------
 echo ========================================
 echo   服务启动中...
 echo ========================================
@@ -631,6 +640,12 @@ echo.
 
 REM ========== 循环重启机制 ==========
 :SERVICE_LOOP
+
+REM 每次启动前都检查并清理旧进程
+call :cleanup_app_port
+if "!CLEANUP_DONE!"=="1" (
+    timeout /t 1 /nobreak >nul
+)
 
 venv\Scripts\python.exe main.py
 set "EXIT_CODE=!errorlevel!"
@@ -663,6 +678,27 @@ goto :SERVICE_LOOP
 REM ===============================
 REM 子程序区域
 REM ===============================
+
+:cleanup_app_port
+set "CLEANUP_DONE=0"
+
+REM 直接使用 netstat 获取并杀掉占用端口的进程
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":%APP_PORT%.*LISTENING" 2^>nul') do (
+    if not "%%a"=="" if not "%%a"=="0" (
+        echo [INFO] 检测到旧进程占用端口 %APP_PORT%，PID: %%a
+        taskkill /F /PID %%a >nul 2>&1
+        if !errorlevel! equ 0 (
+            echo [OK] 已终止进程 %%a
+            set "CLEANUP_DONE=1"
+        )
+    )
+)
+
+if "!CLEANUP_DONE!"=="0" (
+    echo [OK] 端口 %APP_PORT% 未被占用
+)
+
+goto :eof
 
 :check_debug_port
 set "DEBUG_PORT_OK=0"
