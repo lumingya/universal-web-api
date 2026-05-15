@@ -5,8 +5,30 @@
 退出码: 0=完整, 1=缺失
 """
 
+import re
 import sys
 from pathlib import Path
+
+
+def _marker_matches(marker: str) -> bool:
+    """仅处理当前项目用到的简单环境标记。"""
+    normalized = str(marker or "").strip()
+    if not normalized:
+        return True
+
+    match = re.fullmatch(r"sys_platform\s*([=!]=)\s*['\"]([^'\"]+)['\"]", normalized)
+    if not match:
+        return True
+
+    operator, expected = match.groups()
+    actual = sys.platform
+    if operator == "==":
+        return actual == expected
+    return actual != expected
+
+
+def _parse_requirement_name(line: str) -> str:
+    return line.split(">=")[0].split("<=")[0].split("<")[0].split(">")[0].split("==")[0].split("[")[0].strip()
 
 
 def check_dependencies():
@@ -24,8 +46,11 @@ def check_dependencies():
         # 跳过空行和注释
         if not line or line.startswith("#"):
             continue
+        requirement, _, marker = line.partition(";")
+        if marker and not _marker_matches(marker):
+            continue
         # 提取包名（去掉版本约束）
-        pkg_name = line.split(">=")[0].split("<=")[0].split("<")[0].split(">")[0].split("==")[0].split("[")[0].strip()
+        pkg_name = _parse_requirement_name(requirement.strip())
         if pkg_name:
             packages.append(pkg_name)
     

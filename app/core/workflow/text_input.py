@@ -19,6 +19,7 @@ from app.core.config import logger, BrowserConstants, WorkflowError
 from app.core.tab_pool import get_clipboard_lock
 from app.utils.file_paste import create_temp_txt, copy_file_to_clipboard
 from app.utils.human_mouse import smooth_move_mouse
+from app.utils.platform import get_primary_modifier_key
 
 # ================= 常量配置 =================
 
@@ -60,6 +61,7 @@ class TextInputHandler:
             "weak_signal_seen": False,
             "last_state": {},
         }
+        self._primary_modifier = get_primary_modifier_key()
         self._active_input_selector = ""
         self._active_input_target_key = ""
 
@@ -529,9 +531,9 @@ class TextInputHandler:
                     time.sleep(random.uniform(0.06, 0.12))
 
                     if self.stealth_mode:
-                        self._human_key_combo('Control', 'V')
+                        self._press_primary_combo('V', humanized=True)
                     else:
-                        self.tab.actions.key_down('Control').key_down('V').key_up('V').key_up('Control')
+                        self._press_primary_combo('V')
 
                     time.sleep(random.uniform(0.2, 0.4))
                 finally:
@@ -1003,7 +1005,7 @@ class TextInputHandler:
         
         用法：
             self._human_key_combo('Control', 'A')   → Ctrl+A
-            self._human_key_combo('Control', 'V')   → Ctrl+V
+            self._human_key_combo('Meta', 'V')      → Cmd+V
             self._human_key_combo('Delete')          → Delete
         """
         down_up_min = float(BrowserConstants.get('STEALTH_KEY_DOWN_UP_MIN') or 0.015)
@@ -1032,6 +1034,14 @@ class TextInputHandler:
         
         time.sleep(random.uniform(down_up_min, down_up_max))
         self.tab.actions.key_up(modifier)
+
+    def _press_primary_combo(self, key: str, *, humanized: bool = False):
+        """发送平台主修饰键组合，例如 Ctrl/Cmd + A/V。"""
+        if humanized:
+            self._human_key_combo(self._primary_modifier, key)
+            return
+
+        self.tab.actions.key_down(self._primary_modifier).key_down(key).key_up(key).key_up(self._primary_modifier)
 
     def _stealth_verify_paste_light(self, ele, expected_text: str):
         """
@@ -1789,10 +1799,10 @@ class TextInputHandler:
                 return False
 
             if self.stealth_mode:
-                self._human_key_combo('Control', 'A')
+                self._press_primary_combo('A', humanized=True)
                 self._smart_delay(0.03, 0.08)
             else:
-                self.tab.actions.key_down('Control').key_down('A').key_up('A').key_up('Control')
+                self._press_primary_combo('A')
                 time.sleep(0.1)
 
             if self._check_cancelled():
@@ -1833,9 +1843,9 @@ class TextInputHandler:
                         time.sleep(random.uniform(0.08, 0.15))
 
                         if self.stealth_mode:
-                            self._human_key_combo('Control', 'V')
+                            self._press_primary_combo('V', humanized=True)
                         else:
-                            self.tab.actions.key_down('Control').key_down('V').key_up('V').key_up('Control')
+                            self._press_primary_combo('V')
 
             if self._check_cancelled():
                 return True
@@ -1935,7 +1945,7 @@ class TextInputHandler:
                     raise WorkflowError("clipboard_focus_failed")
             
             # 全选（人类化时序）
-            self._human_key_combo('Control', 'A')
+            self._press_primary_combo('A', humanized=True)
             self._smart_delay(0.08, 0.18)
             
             if self._check_cancelled():
@@ -1952,8 +1962,8 @@ class TextInputHandler:
                 pyperclip.copy(text)
                 time.sleep(random.uniform(0.02, 0.06))
                 
-                # Ctrl+V 粘贴
-                self._human_key_combo('Control', 'V')
+                # 主修饰键 + V 粘贴
+                self._press_primary_combo('V', humanized=True)
                 
                 # 等待粘贴完成
                 time.sleep(random.uniform(settle_min, settle_max))
@@ -1991,11 +2001,11 @@ class TextInputHandler:
     
     def fill_via_clipboard(self, ele, text: str):
         """
-        隐身模式专用：剪贴板 + Ctrl+V 输入（v5.6 反检测增强版）
+        隐身模式专用：剪贴板 + 主修饰键粘贴输入（v5.6 反检测增强版）
         
         改进：
         - 人类化按键时序（_human_key_combo）
-        - Ctrl+A → Ctrl+V（跳过 Delete，人类习惯：选中直接粘贴覆盖）
+        - 主修饰键+A → 主修饰键+V（跳过 Delete，人类习惯：选中直接粘贴覆盖）
         - 默认跳过 JS 注入验证（STEALTH_SKIP_PASTE_VERIFY）
         - 验证降级为原生属性读取
         - 🆕 文件粘贴模式：超长文本自动切换为文件粘贴
@@ -2031,7 +2041,7 @@ class TextInputHandler:
                 return
         
             # 2. 全选（人类化时序）—— 粘贴会自动覆盖选中内容，无需 Delete
-            self._human_key_combo('Control', 'A')
+            self._press_primary_combo('A', humanized=True)
             self._smart_delay(0.03, 0.08)
         
             if self._check_cancelled():
@@ -2048,8 +2058,8 @@ class TextInputHandler:
                 pyperclip.copy(text)
                 time.sleep(random.uniform(0.02, 0.06))
             
-                # Ctrl+V 粘贴（人类化时序）
-                self._human_key_combo('Control', 'V')
+                # 主修饰键+V 粘贴（人类化时序）
+                self._press_primary_combo('V', humanized=True)
             
                 # 等待粘贴完成 + DOM 更新
                 time.sleep(random.uniform(settle_min, settle_max))
@@ -2121,7 +2131,7 @@ class TextInputHandler:
             # 清空
             ele.click()
             time.sleep(0.05)
-            self.tab.actions.key_down('Control').key_down('A').key_up('A').key_up('Control')
+            self._press_primary_combo('A')
             time.sleep(0.05)
             self.tab.actions.key_down('Delete').key_up('Delete')
             time.sleep(0.1)
@@ -2138,7 +2148,7 @@ class TextInputHandler:
                 # 粘贴操作
                 pyperclip.copy(expected_text)
                 time.sleep(0.05)
-                self.tab.actions.key_down('Control').key_down('V').key_up('V').key_up('Control')
+                self._press_primary_combo('V')
                 time.sleep(0.5)
             
                 # 恢复剪贴板

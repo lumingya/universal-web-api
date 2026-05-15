@@ -34,7 +34,7 @@
             'response-detection': '🌊 Response Detection',
             'workflow': '🎬 Workflow',
             'file-paste': '📄 File Attach',
-            'stealth-mode': '🛡️ Stealth Mode',
+            'stealth-mode': '🛡️ Low-Interference Mode',
             'commands': '⚡ Automation Commands',
             'ai-recognition': '🎯 AI Recognition',
             'env-config': '⚙️ Environment Settings',
@@ -48,7 +48,7 @@
 
     translations.sections['quick-start'] = `
         <h2>🚀 Quick Start</h2>
-        <p>Welcome to Web-to-API. This project turns AI chat websites into an OpenAI-compatible API that you can run locally.</p>
+        <p>Welcome to Web-to-API. This project connects browser-based AI chat sites to a local OpenAI-compatible interface for personal testing, workflow integration, and client-side orchestration.</p>
 
         <div class="highlight-box">
             <p><strong>Recommended reading order:</strong> read the main workflow of this page first, then come back to the author note at the end. That section explains the maintenance scope, support expectations, and the most effective feedback channels.</p>
@@ -216,8 +216,8 @@
                         <li>Some clients need the full path: <code>http://127.0.0.1:8199/v1/chat/completions</code></li>
                     </ul>
                 </li>
-                <li><strong>API Key</strong>: any value is fine, for example <code>sk-any</code>.</li>
-                <li><strong>Model</strong>: the real model depends on the website you opened, so this field can usually be any placeholder value.</li>
+                <li><strong>API Key</strong>: if built-in auth is disabled, use a placeholder such as <code>sk-local</code>. If auth is enabled, it must match your configured auth token.</li>
+                <li><strong>Model</strong>: use a placeholder name that is convenient for your client, such as <code>web-api</code> or <code>gemini-web</code>. The actual response source still depends on the site and preset you opened.</li>
             </ul>
         </div>
 
@@ -385,7 +385,7 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
 
         <h3>💡 About login state</h3>
         <ul>
-            <li><strong>Recommended</strong>: log into the website so the API can inherit your account permissions, such as Plus benefits or history.</li>
+            <li><strong>Recommended</strong>: sign into your own account so the local interface can inherit the site capabilities and chat history already available to your current session.</li>
             <li><strong>Optional</strong>: if the site allows chatting without login, you can use it directly.</li>
         </ul>
 
@@ -394,7 +394,7 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
         </div>
 
         <div class="highlight-box">
-            <p><strong>⚠️ Context-length limit:</strong> websites still limit how much text can fit into one input box. For very long input, enable the <strong>File Attach</strong> feature to bypass part of that limit.</p>
+            <p><strong>⚠️ Context-length note:</strong> many websites still limit how much text fits in a single input box. For very long input, enable <strong>File Attach</strong> so the site can process that content through its own attachment flow.</p>
         </div>
 
         <h3>Observed single-send limits</h3>
@@ -1083,11 +1083,11 @@ Attached:
     `;
 
     translations.sections['stealth-mode'] = `
-        <h2>🛡️ Stealth Mode (Anti-Detection)</h2>
-        <p>Stealth mode reduces automation-detection risk by making clicks, cursor movement, scrolling, and timing look more like real human behavior.</p>
+        <h2>🛡️ Stealth Mode (Low-Interference Operation)</h2>
+        <p>Stealth mode makes clicks, cursor movement, scrolling, and timing behave more like gradual manual interaction so some sites are easier to drive reliably.</p>
 
         <h3>Core idea</h3>
-        <p>Instead of “teleport and click immediately”, stealth mode uses more human-like motion and pauses so anti-bot systems have fewer obvious signals to latch onto.</p>
+        <p>Instead of “teleport and click immediately”, stealth mode uses smoother motion and pauses so page interaction is less abrupt.</p>
         <table>
             <tr><th>Action</th><th>Normal mode</th><th>Stealth mode</th></tr>
             <tr><td>Click</td><td>Immediate CDP command</td><td>Press -> tiny movement -> release</td></tr>
@@ -1099,17 +1099,17 @@ Attached:
 
         <h3>When to enable it</h3>
         <ul>
-            <li><strong>Recommended</strong>: sites with strong anti-bot protection such as <code>arena.ai</code> and <code>chatgpt.com</code>.</li>
-            <li><strong>Recommended</strong>: when captcha or automation warnings appear often.</li>
-            <li><strong>Usually unnecessary</strong>: lower-protection sites such as AI Studio or DeepSeek.</li>
+            <li><strong>Recommended</strong>: sites that react poorly to instant clicks, direct paste, or abrupt coordinate jumps.</li>
+            <li><strong>Recommended</strong>: when normal mode loses focus easily, misjudges send state, or interacts unreliably with elements.</li>
+            <li><strong>Usually unnecessary</strong>: sites that already behave reliably in normal mode.</li>
         </ul>
 
         <div class="info-box">
-            <p><strong>📍 Where to enable it:</strong> select a site in the dashboard and check <strong>Stealth Mode</strong> at the top. This setting is stored per preset.</p>
+            <p><strong>📍 Where to enable it:</strong> select a site in the dashboard and check <strong>Stealth Mode</strong> at the top. That is the current UI label, and the setting is stored per preset.</p>
         </div>
 
         <h3>DrissionPage patch (important)</h3>
-        <p>This project applies a small DrissionPage patch so network monitoring can reuse the browser's main connection instead of opening extra ones, which lowers detection risk.</p>
+        <p>This project applies a small DrissionPage patch so network monitoring can reuse the browser's main connection instead of opening extra ones, which improves compatibility.</p>
         <ul>
             <li><strong>Automatic</strong>: <code>start.bat</code> applies the patch after dependency installation.</li>
             <li><strong>Manual</strong>: <code>python patch_drissionpage.py</code></li>
@@ -1121,7 +1121,7 @@ Attached:
         </div>
 
         <div class="highlight-box">
-            <p><strong>⚠️ arena.ai note:</strong> even with stealth mode enabled and network monitoring disabled, repeated chatting can still trigger Cloudflare after roughly ten messages in half an hour. That is the site's own policy rather than a script bug. In practice, lowering frequency or combining this with proxy rotation works better.</p>
+            <p><strong>⚠️ arena.ai note:</strong> even with stealth mode enabled and network monitoring disabled, repeated chatting can still trigger Cloudflare after roughly ten messages in half an hour. That indicates the site is simply a poor fit for long continuous test sessions, and lowering frequency is still the safer approach.</p>
         </div>
     `;
 
@@ -1594,10 +1594,10 @@ BROWSER_PROFILE_NAME=Default</code></pre>
 
         <h3>Q9: What is this project useful for?</h3>
         <ul>
-            <li>Turning free web AI access into an OpenAI-style API</li>
-            <li>Inspecting how websites build context</li>
+            <li>Connecting browser-based AI sessions to a local OpenAI-style interface</li>
+            <li>Inspecting how websites build and render context</li>
             <li>Running multiple tabs and presets in parallel</li>
-            <li>Bypassing some long-input limits through file attach</li>
+            <li>Handing long input to the site's attachment flow through file attach</li>
         </ul>
 
         <div class="info-box">

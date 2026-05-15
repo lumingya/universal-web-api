@@ -20,6 +20,11 @@ import io
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 from PIL import Image
+from app.utils.system_clipboard import (
+    ClipboardDependencyError,
+    ClipboardUnsupportedError,
+    copy_image_to_native_clipboard,
+)
 
 
 logger = get_logger("IMG_HDL")
@@ -287,34 +292,15 @@ def copy_image_to_clipboard(image_path: str) -> bool:
         是否成功
     """
     try:
-        import win32clipboard
-        from PIL import Image
-        
-        # 打开图片
-        image = Image.open(image_path)
-        
-        # 转换为 RGB（剪贴板不支持透明通道）
-        if image.mode != 'RGB':
-            image = image.convert('RGB')
-        
-        # 转换为 DIB 格式（Windows 剪贴板标准）
-        output = io.BytesIO()
-        image.save(output, 'BMP')
-        data = output.getvalue()[14:]  # 跳过 BMP 文件头（14 字节）
-        
-        # 写入剪贴板
-        win32clipboard.OpenClipboard()
-        try:
-            win32clipboard.EmptyClipboard()
-            win32clipboard.SetClipboardData(win32clipboard.CF_DIB, data)
-        finally:
-            win32clipboard.CloseClipboard()
-        
+        copy_image_to_native_clipboard(image_path)
         logger.debug(f"[CLIPBOARD] 图片已复制: {image_path}")
         return True
-    
-    except ImportError:
-        logger.error("[CLIPBOARD] 缺少 pywin32 依赖，请执行: pip install pywin32")
+
+    except ClipboardUnsupportedError:
+        logger.info("[CLIPBOARD] 当前平台不支持原生图片剪贴板，将依赖网页原生上传入口")
+        return False
+    except ClipboardDependencyError:
+        logger.error("[CLIPBOARD] 缺少 Windows 原生图片剪贴板依赖，请执行: pip install pywin32")
         return False
     except Exception as e:
         logger.error(f"[CLIPBOARD] 复制失败: {e}")

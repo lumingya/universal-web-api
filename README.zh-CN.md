@@ -2,12 +2,12 @@
 
 📖 文档 • [English](./README.md) • [简体中文](./README.zh-CN.md)
 
-将任何你常用的 AI 网站（ChatGPT, DeepSeek, Claude, Gemini 等）转换为标准的 OpenAI 兼容 API 接口，完全免费，支持本地部署。
+将你在浏览器中已登录并可正常使用的 AI 网站（ChatGPT, DeepSeek, Claude, Gemini 等）接入为标准的 OpenAI 兼容本地接口，便于个人测试、工作流编排与客户端集成。
 
 ## 特点
 
 **工作流驱动**
-将浏览器自动化操作抽象为可视化工作流，高度可配置，支持自由新增任意站点。
+将浏览器自动化操作抽象为可视化工作流，高度可配置，支持按需扩展新站点。
 
 **灵活的请求路由**
 内置标签页池，支持按标签页、按站点、按轮询三种 URL 路由方式发起请求，天然支持多请求并发。
@@ -16,13 +16,13 @@
 根据配置提取 AI 网页中的文字、图片、音频、视频内容，并自动下载到本地。
 
 **网络层监听**
-根据配置拦截并监听底层网络请求，可完整捕获 AI 生成的原始内容流。
+根据配置观察并解析目标网络响应，便于调试已适配站点的输出流程。
 
 **文件粘贴**
-将超长文本自动保存为临时文件再发送给 AI，可绕过部分网站输入框的字符长度限制。
+将超长文本自动保存为临时文件再发送给 AI，适合那些更适合通过附件承载长上下文的网站。
 
 **独立 Cookie 模式**
-可为同一站点创建相互隔离的独立 Cookie 会话，实现多账号并发调用。
+可为同一站点创建相互隔离的独立 Cookie 会话，便于区分不同浏览器上下文。
 
 ## 限制
 
@@ -57,7 +57,7 @@
 5. 在自动弹出的浏览器中登录你的 AI 账号
 6. 在任意支持 OpenAI API 的客户端中填入：
    - **接口地址**：`http://127.0.0.1:8199/v1`
-   - **API 密钥**：任意填写（如 `sk-any`）
+   - **API 密钥**：默认未启用认证时可填写占位值（如 `sk-local`）；若启用了认证功能，则必须与对应认证配置保持一致
 
 详细说明请查看 [完整使用文档](./static/tutorial/index.html#quick-start)。
 
@@ -71,7 +71,7 @@
 | [函数调用说明](./static/tutorial/index.html#function-calling) | Tool Calling 兼容与使用建议 |
 | [标签页池与预设系统](./static/tutorial/index.html#tab-pool) | 多标签并发与预设使用方式 |
 | [核心功能配置](./static/tutorial/index.html#selectors) | 选择器、工作流、流式模式、多模态提取、文件粘贴 |
-| [高级配置](./static/tutorial/index.html#stealth-mode) | 隐身模式、AI 元素识别、环境配置 |
+| [高级配置](./static/tutorial/index.html#stealth-mode) | 低干扰操作、AI 元素识别、环境配置 |
 | [注意事项与已知限制](./static/tutorial/index.html#faq) | 运行限制、已知问题、特殊站点说明 |
 | [常见问题 FAQ](./static/tutorial/index.html#faq) | 启动失败、超时、频繁失败等排查 |
 | [参数解释](./static/tutorial/index.html#env-config) | 所有配置项的详细说明 |

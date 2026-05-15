@@ -416,6 +416,7 @@ class WorkflowExecutor:
             check_cancelled_fn=self._check_cancelled,
             attachment_monitor=self._attachment_monitor,
             focus_input_fn=self._focus_last_input_for_attachment_paste,
+            selectors=self._selectors,
         )
         
         if extractor:
