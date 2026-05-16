@@ -134,7 +134,6 @@ DEFAULT_SELECTOR_DEFINITIONS: List[SelectorDefinition] = [
 
 def get_default_selector_definitions() -> List[SelectorDefinition]:
     """获取默认的元素定义列表（深拷贝）"""
-    import copy
     return copy.deepcopy(DEFAULT_SELECTOR_DEFINITIONS)
 
 # ================= 图片提取相关模型（Phase A 新增）=================

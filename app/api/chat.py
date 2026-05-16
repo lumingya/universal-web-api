@@ -20,8 +20,12 @@ from fastapi import APIRouter, Request, HTTPException, Header, Depends
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
 
+import copy
+
 from app.core.config import AppConfig, get_logger, SSEFormatter
+from app.api import tab_routes as tab_routes_api
 from app.core import get_browser
+from app.services.config_engine import config_engine
 from app.services.request_manager import (
     request_manager, 
     RequestContext, 
@@ -39,6 +43,7 @@ from app.services.tool_calling import (
     normalize_tool_request,
     summarize_messages_for_debug,
 )
+from app.services.stats_recorder import stats_recorder
 from app.utils.model_routing import collect_route_domain_models, resolve_model_route_domain
 
 logger = get_logger("API.CHAT")
@@ -178,7 +183,6 @@ DEFAULT_RESPONSE_FORMAT_HINTS = {
 def _get_response_format_hint(format_type: str) -> str:
     """获取指定格式类型的提示词模板"""
     try:
-        from app.services.config_engine import config_engine
         hints = config_engine.global_config.get("response_format_hints")
         if hints and isinstance(hints, dict) and format_type in hints:
             return hints[format_type]
@@ -209,7 +213,6 @@ def _apply_response_format(messages: list, response_format: dict) -> list:
         except Exception:
             hint = hint_template.replace("{schema}", str(schema_content))
     
-    import copy
     new_messages = copy.deepcopy(messages)
     
     for i in range(len(new_messages) - 1, -1, -1):
@@ -292,7 +295,6 @@ async def chat_completions(
 
     if route_domain:
         logger.info(f"模型路由命中: model={body.model!r} -> {route_domain}")
-        from app.api import tab_routes as tab_routes_api
 
         route_body = tab_routes_api.ChatRequest(**body.model_dump())
         return await tab_routes_api.chat_with_route_domain(
@@ -367,6 +369,7 @@ async def _stream_with_lifecycle(
 
     try:
         request_manager.start_request(ctx)
+        ctx._started_at = time.time()
         disconnect_task = asyncio.create_task(
             watch_client_disconnect(request, ctx, check_interval=0.3)
         )
@@ -494,6 +497,32 @@ async def _stream_with_lifecycle(
                 pass
 
         request_manager.finish_request(ctx, success=(ctx.status == RequestStatus.COMPLETED))
+
+        try:
+            started = getattr(ctx, "started_at", None) or getattr(ctx, "created_at", time.time())
+            duration = int((time.time() - started) * 1000)
+            resp_parts = ctx.monitor.get("response_parts", [])
+            resp_len = sum(len(str(p)) for p in resp_parts) if isinstance(resp_parts, list) else 0
+            msg_len = sum(
+                len(str(m.get("content", "")))
+                for m in (getattr(body, "messages", None) or [])
+            )
+            status_str = "success" if ctx.status == RequestStatus.COMPLETED else (
+                "failed" if ctx.status == RequestStatus.FAILED else "cancelled"
+            )
+            stats_recorder.record_request(
+                request_id=ctx.request_id,
+                domain=ctx.monitor.get("target_domain", ""),
+                model=getattr(body, "model", ""),
+                message_length=msg_len,
+                response_length=resp_len,
+                duration_ms=duration,
+                status=status_str,
+                error_message=str(ctx.monitor.get("last_error", "") or ""),
+                preset_name=getattr(body, "preset_name", ""),
+            )
+        except Exception:
+            pass
 
 
 async def _non_stream_with_lifecycle(
@@ -665,6 +694,32 @@ async def _complete_tool_calling_with_lifecycle(
             except asyncio.CancelledError:
                 pass
         request_manager.finish_request(ctx, success=(ctx.status == RequestStatus.COMPLETED))
+
+        try:
+            started = getattr(ctx, "started_at", None) or getattr(ctx, "created_at", time.time())
+            duration = int((time.time() - started) * 1000)
+            resp = ctx.monitor.get("response_payload", {})
+            resp_len = len(str(resp.get("content", ""))) if isinstance(resp, dict) else 0
+            msg_len = sum(
+                len(str(m.get("content", "")))
+                for m in (getattr(body, "messages", None) or [])
+            )
+            status_str = "success" if ctx.status == RequestStatus.COMPLETED else (
+                "failed" if ctx.status == RequestStatus.FAILED else "cancelled"
+            )
+            stats_recorder.record_request(
+                request_id=ctx.request_id,
+                domain=ctx.monitor.get("target_domain", ""),
+                model=getattr(body, "model", ""),
+                message_length=msg_len,
+                response_length=resp_len,
+                duration_ms=duration,
+                status=status_str,
+                error_message=str(ctx.monitor.get("last_error", "") or ""),
+                preset_name=getattr(body, "preset_name", ""),
+            )
+        except Exception:
+            pass
 
 
 async def _non_stream_tool_calling_with_lifecycle(

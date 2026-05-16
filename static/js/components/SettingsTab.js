@@ -14,6 +14,9 @@ window.SettingsTab = {
         browserChanged: { type: Boolean, default: false },
         savingBrowser: { type: Boolean, default: false },
 
+        sessionStatus: { type: Object, default: () => ({ sessions: {}, force_new_conversation: false }) },
+        loadingSessionStatus: { type: Boolean, default: false },
+
         updatePreserveOptions: { type: Array, required: true },
         updatePreserveSelected: { type: Array, required: true },
         updatePreserveChanged: { type: Boolean, default: false },
@@ -38,6 +41,10 @@ window.SettingsTab = {
         };
     },
     computed: {
+        sessionDomains() {
+            const sessions = this.sessionStatus?.sessions || {};
+            return Object.keys(sessions).sort();
+        },
         updatePreserveGroups() {
             const groups = {}
             for (const item of this.updatePreserveOptions || []) {
@@ -370,10 +377,57 @@ window.SettingsTab = {
                                 </div>
                             </div>
                         </div>
+                </div>
+            </div>
+
+            <!-- ========== 会话状态 ========== -->
+            <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700">
+                <div class="p-4 border-b border-gray-100 dark:border-gray-700">
+                    <div>
+                        <h3 class="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2">
+                            <span class="text-xl">📊</span> 会话状态
+                        </h3>
+                        <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">当前各域名的对话保持状态</p>
                     </div>
                 </div>
+                <div class="p-4">
+                    <div v-if="loadingSessionStatus" class="text-sm text-gray-400 text-center py-4">
+                        加载中...
+                    </div>
+                    <div v-else-if="sessionDomains.length === 0" class="text-sm text-gray-400 text-center py-4">
+                        暂无活跃会话 — 发送请求后会自动记录
+                    </div>
+                    <div v-else class="space-y-2">
+                        <div v-for="domain in sessionDomains" :key="domain"
+                             class="flex items-center justify-between rounded-lg border border-gray-100 dark:border-gray-700/50 px-4 py-3">
+                            <div class="min-w-0 flex-1">
+                                <div class="text-sm font-medium text-gray-800 dark:text-gray-200 truncate">{{ domain }}</div>
+                                <div class="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
+                                    已过 {{ sessionStatus.sessions[domain].elapsed_seconds }}s
+                                    / 阈值 {{ sessionStatus.sessions[domain].threshold_seconds }}s
+                                </div>
+                            </div>
+                            <div class="ml-3 flex-shrink-0">
+                                <span v-if="sessionStatus.sessions[domain].will_new_conversation"
+                                      class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400">
+                                    即将新建
+                                </span>
+                                <span v-else
+                                      class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">
+                                    保持对话
+                                </span>
+                            </div>
+                        </div>
+                        <div v-if="sessionStatus.force_new_conversation"
+                             class="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
+                            ⚠️ 「强制新建对话」已开启，每次请求都会创建新对话
+                        </div>
+                    </div>
+                </div>
+            </div>
 
-                <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700">
+            <!-- ========== 更新白名单 ========== -->
+            <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700">
                     <div class="p-4 border-b border-gray-100 dark:border-gray-700 flex justify-between items-center cursor-pointer"
                          @click="updatePreserveCollapsed = !updatePreserveCollapsed">
                         <div>

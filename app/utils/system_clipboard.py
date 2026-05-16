@@ -14,6 +14,13 @@ import struct
 
 from app.utils.platform import is_windows
 
+try:
+    import win32clipboard
+except ImportError:
+    win32clipboard = None
+
+from PIL import Image
+
 
 class ClipboardUnsupportedError(RuntimeError):
     """当前平台不支持该原生剪贴板能力。"""
@@ -40,10 +47,8 @@ def copy_file_to_native_clipboard(filepath: str) -> None:
     if not supports_native_file_clipboard():
         raise ClipboardUnsupportedError("native file clipboard is only supported on Windows")
 
-    try:
-        import win32clipboard
-    except ImportError as exc:
-        raise ClipboardDependencyError("pywin32 is required for the Windows file clipboard backend") from exc
+    if win32clipboard is None:
+        raise ClipboardDependencyError("pywin32 is required for the Windows file clipboard backend")
 
     abs_path = os.path.abspath(filepath)
     if not os.path.exists(abs_path):
@@ -73,12 +78,8 @@ def copy_image_to_native_clipboard(image_path: str) -> None:
     if not supports_native_image_clipboard():
         raise ClipboardUnsupportedError("native image clipboard is only supported on Windows")
 
-    try:
-        import win32clipboard
-    except ImportError as exc:
-        raise ClipboardDependencyError("pywin32 is required for the Windows image clipboard backend") from exc
-
-    from PIL import Image
+    if win32clipboard is None:
+        raise ClipboardDependencyError("pywin32 is required for the Windows image clipboard backend")
 
     image = Image.open(image_path)
     if image.mode != "RGB":

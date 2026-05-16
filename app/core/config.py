@@ -11,8 +11,10 @@ app/core/config.py - 配置和基础设施
 
 此模块是基础层，不依赖其他 app.core 模块
 """
+import ast
 import contextvars
 import contextlib
+import datetime
 import os
 import time
 import json
@@ -26,7 +28,7 @@ import ctypes
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from functools import lru_cache
-from collections import deque
+from collections import defaultdict, deque
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_LOG_DIR = PROJECT_ROOT / "logs"
@@ -1423,7 +1425,7 @@ _command_log_context: contextvars.ContextVar[Optional[Dict[str, Any]]] = context
 
 class SecureLogger:
     """安全日志器，带图标和格式化（支持上下文自动注入 request_id）"""
-    _debug_throttle_lock = threading.Lock()
+    _debug_throttle_locks: Dict[str, threading.Lock] = defaultdict(threading.Lock)
     _debug_throttle_state: Dict[str, Dict[str, Any]] = {}
     
     ICONS = {
@@ -1490,7 +1492,6 @@ class SecureLogger:
 
     def _format(self, level_key: str, msg: str) -> str:
         """核心格式化逻辑（简洁版）"""
-        import datetime
         now = datetime.datetime.now().strftime('%H:%M:%S')
         
         request_id = _request_context.get()
@@ -1578,7 +1579,8 @@ class SecureLogger:
         suppressed = 0
         should_log = False
 
-        with self._debug_throttle_lock:
+        lock = self._debug_throttle_locks[throttle_key]
+        with lock:
             state = self._debug_throttle_state.get(throttle_key)
             last_at = float(state.get("last_at", 0.0) or 0.0) if state else 0.0
             if state is None or (now - last_at) >= interval:
@@ -1869,7 +1871,6 @@ class MessageValidator:
 
         if parsed is None:
             try:
-                import ast
                 parsed = ast.literal_eval(stripped)
             except Exception:
                 parsed = None

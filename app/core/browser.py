@@ -13,15 +13,24 @@ v2.0 改动：
 - execute_workflow 改为接收 tab_session 参数
 """
 
+import ast
+import base64
+import binascii
+import contextlib
 import json
+import logging
 import os
 import socket
 import threading
-import time
-import contextlib
-import shutil
-import subprocess
+import time as time_module
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
+from pathlib import Path
 from typing import Optional, List, Dict, Any, Generator, Callable
+from urllib.parse import urlparse
+
+import requests
 from DrissionPage import Chromium, ChromiumPage, ChromiumOptions
 
 from app.core.config import (
@@ -34,10 +43,15 @@ from app.core.config import (
     SSEFormatter,
     MessageValidator,
 )
+from app.core.elements import ElementFinder
+from app.core.extractors.media_extractor import media_extractor
+from app.core.session_manager import session_manager as _session_manager
+from app.core.tab_pool import TabPoolManager, TabSession
+from app.core.workflow import WorkflowExecutor
+from app.services.command_engine import command_engine
+from app.services.config_engine import config_engine
 from app.utils.image_handler import extract_images_from_messages
 from app.utils.site_url import extract_remote_site_domain
-from app.core.workflow import WorkflowExecutor
-from app.core.tab_pool import TabPoolManager, TabSession, get_clipboard_lock
 
 
 def _looks_like_transient_local_debug_error(error: Any) -> bool:
@@ -51,6 +65,7 @@ def _looks_like_transient_local_debug_error(error: Any) -> bool:
     if "failed to establish a new connection" in text and "127.0.0.1" in text:
         return True
     return False
+
 
 # ================= 配置加载 =================
 
@@ -92,131 +107,6 @@ class BrowserCore:
     
     _instance: Optional['BrowserCore'] = None
     _lock = threading.Lock()
-
-    @staticmethod
-    def _append_audio_tail_silence(filepath, duration_seconds: float = 0.3):
-        """为音频尾部追加一小段静音，避免播放时戛然而止。"""
-        from pathlib import Path
-
-        try:
-            target = Path(filepath)
-        except Exception:
-            return filepath
-
-        if duration_seconds <= 0 or not target.exists() or not target.is_file():
-            return filepath
-
-        ffmpeg_path = shutil.which("ffmpeg")
-        if not ffmpeg_path:
-            logger.debug(f"音频尾静音跳过：未找到 ffmpeg，file={target}")
-            return filepath
-
-        ffprobe_path = shutil.which("ffprobe")
-
-        def _probe_duration(path_obj: Path) -> float:
-            if not ffprobe_path:
-                return -1.0
-            cmd = [
-                ffprobe_path,
-                "-v",
-                "error",
-                "-show_entries",
-                "format=duration",
-                "-of",
-                "default=noprint_wrappers=1:nokey=1",
-                str(path_obj),
-            ]
-            try:
-                completed = subprocess.run(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    timeout=15,
-                    check=False,
-                )
-                if completed.returncode != 0:
-                    return -1.0
-                return float(str(completed.stdout or "").strip() or -1.0)
-            except Exception:
-                return -1.0
-
-        duration_text = f"{float(duration_seconds):.3f}".rstrip("0").rstrip(".")
-        temp_path = target.with_name(f"{target.stem}_tail{target.suffix}")
-        suffix = target.suffix.lower()
-        codec_args: list[str] = []
-        if suffix in {".ogg", ".oga"}:
-            codec_args = ["-c:a", "libvorbis", "-q:a", "5"]
-        elif suffix == ".mp3":
-            codec_args = ["-c:a", "libmp3lame", "-b:a", "128k"]
-        elif suffix in {".m4a", ".mp4"}:
-            codec_args = ["-c:a", "aac", "-b:a", "128k"]
-        elif suffix == ".wav":
-            codec_args = ["-c:a", "pcm_s16le"]
-        elif suffix == ".webm":
-            codec_args = ["-c:a", "libopus", "-b:a", "96k"]
-
-        original_duration = _probe_duration(target)
-        logger.debug(
-            f"音频尾静音开始: file={target.name}, ext={suffix or '<none>'}, "
-            f"append={duration_text}s, duration_before={original_duration:.3f}"
-        )
-
-        command_variants = [[
-            ffmpeg_path,
-            "-y",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-i",
-            str(target),
-            "-af",
-            f"apad=pad_dur={duration_text}",
-            "-t",
-            f"{max(0.0, original_duration) + float(duration_seconds):.3f}" if original_duration > 0 else duration_text,
-            *codec_args,
-            str(temp_path),
-        ]]
-
-        for cmd in command_variants:
-            try:
-                completed = subprocess.run(
-                    cmd,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    timeout=30,
-                    check=False,
-                )
-            except Exception as exc:
-                logger.debug(f"音频尾静音追加失败（ffmpeg 调用异常）: {exc}")
-                continue
-
-            if completed.returncode == 0 and temp_path.exists() and temp_path.stat().st_size > 0:
-                try:
-                    new_duration = _probe_duration(temp_path)
-                    logger.debug(
-                        f"音频尾静音生成成功: file={target.name}, "
-                        f"duration_after={new_duration:.3f}, size={temp_path.stat().st_size}"
-                    )
-                    temp_path.replace(target)
-                    return str(target)
-                except Exception as exc:
-                    logger.debug(f"音频尾静音替换失败: {exc}")
-                    try:
-                        if temp_path.exists():
-                            temp_path.unlink()
-                    except Exception:
-                        pass
-                    return filepath
-
-        try:
-            if temp_path.exists():
-                temp_path.unlink()
-        except Exception:
-            pass
-        logger.debug(f"音频尾静音未生效，保留原文件: {target.name}")
-        return filepath
     
     def __new__(cls, port: int = None):
         if cls._instance is None:
@@ -267,23 +157,24 @@ class BrowserCore:
         - 类列表对象: tuple/其他可迭代 → 转换为 list 处理
         """
         content_type = type(content).__name__
-        content_preview = ""
-        try:
-            content_str_temp = str(content)
-            content_len = len(content_str_temp)
-            content_preview = (
-                repr(content_str_temp[:120])
-                if content_len > 120
-                else repr(content_str_temp)
+        if logger._level <= logging.DEBUG:
+            content_preview = ""
+            try:
+                content_str_temp = str(content)
+                content_len = len(content_str_temp)
+                content_preview = (
+                    repr(content_str_temp[:120])
+                    if content_len > 120
+                    else repr(content_str_temp)
+                )
+            except Exception:
+                content_len = -1
+                content_preview = "[无法预览]"
+
+            logger.debug(
+                f"[CONTENT_PARSE] 开始解析: type={content_type}, "
+                f"raw_len={content_len}, preview={content_preview}"
             )
-        except Exception:
-            content_len = -1
-            content_preview = "[无法预览]"
-        
-        logger.debug(
-            f"[CONTENT_PARSE] 开始解析: type={content_type}, "
-            f"raw_len={content_len}, preview={content_preview}"
-        )
         
         if content is None:
             logger.debug("[CONTENT_PARSE] 内容为 None，返回空字符串")
@@ -303,7 +194,6 @@ class BrowserCore:
                 
                 if parsed is None:
                     try:
-                        import ast
                         parsed = ast.literal_eval(stripped)
                         parse_method = "literal_eval"
                     except (ValueError, SyntaxError):
@@ -346,29 +236,32 @@ class BrowserCore:
             image_count = 0
             skipped_count = 0
             unknown_types = []
-            samples = []
-            
+            if logger._level <= logging.DEBUG:
+                samples = []
+            else:
+                samples = None
+
             for idx, item in enumerate(content):
                 if not isinstance(item, dict):
                     skipped_count += 1
-                    if len(samples) < 3:
+                    if logger._level <= logging.DEBUG and samples is not None and len(samples) < 3:
                         samples.append(f"skip[{idx}]={type(item).__name__}")
                     continue
-                
+
                 item_type = str(item.get("type", "") or "").strip()
-                
+
                 if item_type == "text":
                     text_content = str(item.get("text", "") or "")
                     text_parts.append(text_content)
                     text_item_count += 1
-                    if len(samples) < 3:
+                    if logger._level <= logging.DEBUG and samples is not None and len(samples) < 3:
                         preview = (
                             repr(text_content[:40])
                             if len(text_content) > 40
                             else repr(text_content)
                         )
                         samples.append(f"text[{idx}]={preview}")
-                
+
                 elif item_type == "image_url":
                     image_count += 1
                     text_parts.append(f"[图片{image_count}]")
@@ -379,28 +272,29 @@ class BrowserCore:
                         else str(image_url_obj)
                     )
                     url_preview = "[data_uri]" if "base64" in url_text[:50] else url_text[:50]
-                    if len(samples) < 3:
+                    if logger._level <= logging.DEBUG and samples is not None and len(samples) < 3:
                         samples.append(f"image[{idx}]={url_preview}")
-                
+
                 else:
                     unknown_types.append(item_type or "<empty>")
-                    if len(samples) < 3:
+                    if logger._level <= logging.DEBUG and samples is not None and len(samples) < 3:
                         samples.append(f"unknown[{idx}]={item_type or '<empty>'}")
-            
+
             result = " ".join(text_parts)
-            extras = []
-            if skipped_count:
-                extras.append(f"skipped={skipped_count}")
-            if unknown_types:
-                unknown_preview = ", ".join(sorted(set(unknown_types))[:3])
-                extras.append(f"unknown={len(unknown_types)}[{unknown_preview}]")
-            sample_summary = "; ".join(samples) if samples else "none"
-            extra_text = f", {', '.join(extras)}" if extras else ""
-            logger.debug(
-                "[CONTENT_PARSE] 多模态解析完成: "
-                f"text_items={text_item_count}, images={image_count}, "
-                f"result_len={len(result)}, samples={sample_summary}{extra_text}"
-            )
+            if logger._level <= logging.DEBUG:
+                extras = []
+                if skipped_count:
+                    extras.append(f"skipped={skipped_count}")
+                if unknown_types:
+                    unknown_preview = ", ".join(sorted(set(unknown_types))[:3])
+                    extras.append(f"unknown={len(unknown_types)}[{unknown_preview}]")
+                sample_summary = "; ".join(samples) if samples else "none"
+                extra_text = f", {', '.join(extras)}" if extras else ""
+                logger.debug(
+                    "[CONTENT_PARSE] 多模态解析完成: "
+                    f"text_items={text_item_count}, images={image_count}, "
+                    f"result_len={len(result)}, samples={sample_summary}{extra_text}"
+                )
             return result
         
         logger.warning(f"[CONTENT_PARSE] ⚠️ 未知内容类型: {content_type}，返回占位符")
@@ -475,7 +369,6 @@ class BrowserCore:
 
         try:
             from app.services.request_manager import request_manager
-
             ctx = request_manager.get_request(task)
         except Exception:
             return snapshot
@@ -598,7 +491,6 @@ class BrowserCore:
                 pass
 
         try:
-            from app.services.request_manager import request_manager
             cancelled = bool(request_manager.cancel_request(request_id, "task_ownership_lost"))
             if cancelled:
                 logger.warning(
@@ -725,7 +617,6 @@ class BrowserCore:
     
     def _get_config_engine(self):
         if self.config_engine is None:
-            from app.services.config_engine import config_engine
             self.config_engine = config_engine
         return self.config_engine
     
@@ -1052,7 +943,6 @@ class BrowserCore:
         task_id: str = None,
         stop_checker: Optional[Callable[[], bool]] = None,
         workflow_priority: Optional[int] = None,
-        allow_media_postprocess: bool = True,
     ) -> Generator[str, None, None]:
         """
         工作流执行入口（v2.0 改进版）
@@ -1105,7 +995,6 @@ class BrowserCore:
                     sanitized_messages,
                     stop_checker=effective_stop_checker,
                     workflow_priority=workflow_priority,
-                    allow_media_postprocess=allow_media_postprocess,
                 )
             else:
                 yield from self._execute_workflow_non_stream(
@@ -1113,7 +1002,6 @@ class BrowserCore:
                     sanitized_messages,
                     stop_checker=effective_stop_checker,
                     workflow_priority=workflow_priority,
-                    allow_media_postprocess=allow_media_postprocess,
                 )
         
         finally:
@@ -1125,7 +1013,6 @@ class BrowserCore:
                     task_id=task_id,
                 )
                 try:
-                    from app.services.command_engine import command_engine
                     command_engine.schedule_deferred_workflow_commands(session, delay_sec=0.25)
                 except Exception:
                     pass
@@ -1139,7 +1026,6 @@ class BrowserCore:
         preset_name: Optional[str] = None,
         stop_checker: Optional[Callable[[], bool]] = None,
         workflow_priority: Optional[int] = None,
-        allow_media_postprocess: bool = True,
     ) -> Generator[str, None, None]:
         """
         使用指定编号的标签页执行工作流
@@ -1195,7 +1081,6 @@ class BrowserCore:
                     preset_name=preset_name,
                     stop_checker=effective_stop_checker,
                     workflow_priority=workflow_priority,
-                    allow_media_postprocess=allow_media_postprocess,
                 )
             else:
                 yield from self._execute_workflow_non_stream(
@@ -1204,7 +1089,6 @@ class BrowserCore:
                     preset_name=preset_name,
                     stop_checker=effective_stop_checker,
                     workflow_priority=workflow_priority,
-                    allow_media_postprocess=allow_media_postprocess,
                 )
         
         finally:
@@ -1215,7 +1099,6 @@ class BrowserCore:
                     task_id=task_id,
                 )
                 try:
-                    from app.services.command_engine import command_engine
                     command_engine.schedule_deferred_workflow_commands(session, delay_sec=0.25)
                 except Exception:
                     pass
@@ -1229,7 +1112,6 @@ class BrowserCore:
         preset_name: Optional[str] = None,
         stop_checker: Optional[Callable[[], bool]] = None,
         workflow_priority: Optional[int] = None,
-        allow_media_postprocess: bool = True,
     ) -> Generator[str, None, None]:
         """
         使用指定域名路由匹配的标签页执行工作流。
@@ -1291,7 +1173,6 @@ class BrowserCore:
                     preset_name=preset_name,
                     stop_checker=effective_stop_checker,
                     workflow_priority=workflow_priority,
-                    allow_media_postprocess=allow_media_postprocess,
                 )
             else:
                 yield from self._execute_workflow_non_stream(
@@ -1300,7 +1181,6 @@ class BrowserCore:
                     preset_name=preset_name,
                     stop_checker=effective_stop_checker,
                     workflow_priority=workflow_priority,
-                    allow_media_postprocess=allow_media_postprocess,
                 )
 
         finally:
@@ -1311,7 +1191,6 @@ class BrowserCore:
                     task_id=task_id,
                 )
                 try:
-                    from app.services.command_engine import command_engine
                     command_engine.schedule_deferred_workflow_commands(session, delay_sec=0.25)
                 except Exception:
                     pass
@@ -1323,17 +1202,9 @@ class BrowserCore:
         if not request_id:
             return
         try:
-            setattr(session, "_bound_request_id", request_id)
             from app.services.request_manager import request_manager
+            setattr(session, "_bound_request_id", request_id)
             bind_ok = bool(request_manager.bind_tab(request_id, session.id))
-            tab_index = int(getattr(session, "persistent_index", 0) or 0)
-            request_manager.update_request_metadata(
-                request_id,
-                tab_id=session.id,
-                tab_index=tab_index if tab_index > 0 else None,
-                target_domain=str(getattr(session, "current_domain", "") or "").strip(),
-                preset_name=str(getattr(session, "preset_name", "") or "").strip(),
-            )
             logger.debug(
                 f"[{session.id}] 绑定请求标签页: request={request_id}, "
                 f"bind_ok={bind_ok}, current_task={str(getattr(session, 'current_task_id', '') or '').strip() or '-'}, "
@@ -1350,7 +1221,6 @@ class BrowserCore:
         preset_name: Optional[str] = None,
         stop_checker: Optional[Callable[[], bool]] = None,
         workflow_priority: Optional[int] = None,
-        allow_media_postprocess: bool = True,
     ) -> Generator[str, None, None]:
         max_terminal_retries = 1
         attempt = 0
@@ -1362,7 +1232,6 @@ class BrowserCore:
                 preset_name=preset_name,
                 stop_checker=stop_checker,
                 workflow_priority=workflow_priority,
-                allow_media_postprocess=allow_media_postprocess,
             )
             saw_content = False
             retry_requested = False
@@ -1520,8 +1389,6 @@ class BrowserCore:
             return
 
         try:
-            from app.services.command_engine import command_engine
-
             command_engine.emit_external_command_result_event(
                 session,
                 source_command_id="evt_stream_terminal_error",
@@ -1536,57 +1403,22 @@ class BrowserCore:
             logger.debug(f"[{session.id}] stream terminal alert event skipped: {e}")
 
     @staticmethod
-    def _extract_stream_delta_content(chunk: str) -> str:
-        if not isinstance(chunk, str):
-            return ""
-
-        parts = []
-        for frame in chunk.split("\n\n"):
-            frame = frame.strip()
-            if not frame.startswith("data: "):
-                continue
-
-            data_str = frame[6:].strip()
-            if not data_str or data_str == "[DONE]":
-                continue
-
-            try:
-                payload = json.loads(data_str)
-            except json.JSONDecodeError:
-                continue
-
-            choices = payload.get("choices")
-            if not isinstance(choices, list) or not choices:
-                continue
-
-            delta = choices[0].get("delta", {}) if isinstance(choices[0], dict) else {}
-            content = delta.get("content", "") if isinstance(delta, dict) else ""
-            if content:
-                parts.append(str(content))
-
-        return "".join(parts)
-
-    @staticmethod
     def _chunk_has_stream_content(chunk: str) -> bool:
-        return bool(BrowserCore._extract_stream_delta_content(chunk))
-
-    def _get_conversation_timeout_threshold(self) -> float:
+        if not isinstance(chunk, str) or not chunk.startswith("data: "):
+            return False
+        data_str = chunk[6:].strip()
+        if not data_str or data_str == "[DONE]":
+            return False
         try:
-            return max(0.0, float(BrowserConstants.get("CONVERSATION_TIMEOUT_THRESHOLD") or 0.0))
-        except Exception:
-            return 0.0
-
-    @staticmethod
-    def _step_submits_conversation_request(action: str, target_key: str, value: Any = None) -> bool:
-        action_upper = str(action or "").strip().upper()
-        target = str(target_key or "").strip().lower()
-        if action_upper == "CLICK" and target in {"send_btn", "send_button", "submit_btn"}:
-            return True
-        if action_upper == "KEY_PRESS":
-            key_name = str(target_key or value or "").strip().lower()
-            if key_name in {"enter", "ctrl+enter", "control+enter", "meta+enter", "command+enter"}:
-                return True
-        return False
+            payload = json.loads(data_str)
+        except json.JSONDecodeError:
+            return False
+        choices = payload.get("choices")
+        if not isinstance(choices, list) or not choices:
+            return False
+        delta = choices[0].get("delta", {}) if isinstance(choices[0], dict) else {}
+        content = delta.get("content", "") if isinstance(delta, dict) else ""
+        return bool(content)
 
     def _execute_workflow_stream_once(
         self,
@@ -1595,7 +1427,6 @@ class BrowserCore:
         preset_name: Optional[str] = None,
         stop_checker: Optional[Callable[[], bool]] = None,
         workflow_priority: Optional[int] = None,
-        allow_media_postprocess: bool = True,
     ) -> Generator[str, None, None]:
         """流式工作流执行（v2.0）"""
     
@@ -1607,8 +1438,8 @@ class BrowserCore:
         workflow_abort_message = ""
         command_engine = None
         try:
-            from app.services.command_engine import command_engine as _command_engine
-            command_engine = _command_engine
+            import app.services.command_engine as _ce_mod
+            command_engine = _ce_mod.command_engine
             workflow_priority_value = command_engine._normalize_priority(
                 workflow_priority, command_engine._get_request_priority_baseline()
             )
@@ -1677,6 +1508,16 @@ class BrowserCore:
         # ===== 增强的 URL 检查结束 =====
     
         logger.debug(f"[{session.id}] 域名: {domain}")
+
+        _force_new = bool(BrowserConstants.get('FORCE_NEW_CONVERSATION'))
+        _skip_new_chat = not _force_new and not _session_manager.should_start_new_conversation(domain)
+        if _force_new:
+            logger.debug(f"[{session.id}] 强制新建对话已启用，跳过会话保持逻辑")
+        _session_manager.record_request(domain)
+        if _skip_new_chat:
+            logger.debug(f"[{session.id}] 保持当前对话上下文，跳过新建对话步骤")
+        else:
+            logger.debug(f"[{session.id}] 需要新建对话或首次请求，正常执行工作流")
         
         page_status = self._check_page_status(tab)
         if not page_status["ready"]:
@@ -1702,27 +1543,6 @@ class BrowserCore:
         selectors = site_config.get("selectors", {})
         workflow = site_config.get("workflow", [])
         stealth_mode = site_config.get("stealth", False)
-        force_new_conversation = bool(BrowserConstants.get("FORCE_NEW_CONVERSATION"))
-        conversation_threshold = self._get_conversation_timeout_threshold()
-        skip_new_chat = not session.should_start_new_conversation(
-            current_domain=domain,
-            preset_name=resolved_preset_name,
-            threshold_seconds=conversation_threshold,
-            force_new=force_new_conversation,
-        )
-
-        if force_new_conversation:
-            logger.debug(f"[{session.id}] 已启用强制新建对话")
-        elif skip_new_chat:
-            logger.debug(
-                f"[{session.id}] 复用当前对话: domain={domain}, "
-                f"preset={resolved_preset_name}, threshold={conversation_threshold}s"
-            )
-        else:
-            logger.debug(
-                f"[{session.id}] 本轮将新建对话: domain={domain}, "
-                f"preset={resolved_preset_name}, threshold={conversation_threshold}s"
-            )
         
         image_config = site_config.get("image_extraction", {})
         modalities = image_config.get("modalities") or {}
@@ -1731,85 +1551,6 @@ class BrowserCore:
         )
         stream_config = site_config.get("stream_config", {}) or {}
         file_paste_config = site_config.get("file_paste", {}) or {}
-
-        audio_capture_preload_enabled = (
-            bool(modalities.get("audio"))
-            and bool(image_config.get("audio_capture_enabled", True))
-            and bool(image_config.get("audio_capture_preload_enabled", True))
-        )
-        if audio_capture_preload_enabled and not effective_stop_checker():
-            try:
-                from app.core.extractors.media_extractor import media_extractor
-
-                init_script = media_extractor.build_page_audio_capture_init_script(image_config)
-                capture_status = media_extractor.get_page_audio_capture_status(tab)
-                current_capture_version = int(capture_status.get("version") or 0) if isinstance(capture_status, dict) else 0
-                has_current_capture = current_capture_version == int(getattr(media_extractor, "PAGE_AUDIO_CAPTURE_SCRIPT_VERSION", 0) or 0)
-                tracked_audio_nodes = 0
-                if isinstance(capture_status, dict):
-                    tracked_audio_nodes = int(capture_status.get("tracked_media_elements") or 0) + int(capture_status.get("tracked_web_audio") or 0)
-                try:
-                    if getattr(session, "_audio_capture_init_script_source", None) != init_script:
-                        tab.run_cdp(
-                            "Page.addScriptToEvaluateOnNewDocument",
-                            source=init_script,
-                        )
-                        setattr(session, "_audio_capture_init_script_source", init_script)
-                        logger.debug("页面音频捕获预注入脚本已注册")
-                    else:
-                        logger.debug("页面音频捕获预注入脚本已存在")
-                except Exception as cdp_exc:
-                    logger.debug(f"页面音频捕获预注入脚本注册失败（已忽略）: {cdp_exc}")
-
-                media_extractor.prepare_page_audio_capture(tab, image_config)
-                should_reload_capture = (
-                    bool(image_config.get("audio_capture_reload_before_workflow", False))
-                    and (
-                        not has_current_capture
-                        or tracked_audio_nodes <= 0
-                    )
-                )
-                if should_reload_capture:
-                    current_tab_url = ""
-                    try:
-                        current_tab_url = str(tab.url or "")
-                    except Exception:
-                        current_tab_url = ""
-                    should_reload_for_capture = (
-                        "/settings" not in current_tab_url
-                        and "chrome://" not in current_tab_url
-                        and "about:" not in current_tab_url
-                    )
-                    if not should_reload_for_capture:
-                        logger.debug(f"页面音频捕获跳过刷新预热: url={current_tab_url!r}")
-                    else:
-                        try:
-                            tab.refresh(ignore_cache=True)
-                            try:
-                                tab.wait.doc_loaded(timeout=15)
-                            except Exception:
-                                pass
-                            input_selector = selectors.get("input_box", "")
-                            if input_selector:
-                                deadline = time.time() + 20.0
-                                while time.time() < deadline and not effective_stop_checker():
-                                    try:
-                                        if tab.ele(f"css:{input_selector}", timeout=0.5):
-                                            break
-                                    except Exception:
-                                        pass
-                                    time.sleep(0.5)
-                            media_extractor.prepare_page_audio_capture(tab, image_config)
-                            logger.debug("页面音频捕获已刷新页面并重新初始化")
-                        except Exception as refresh_exc:
-                            logger.debug(f"页面音频捕获刷新预热失败（已忽略）: {refresh_exc}")
-                elif bool(image_config.get("audio_capture_reload_before_workflow", False)):
-                    logger.debug(
-                        "页面音频捕获跳过刷新预热：当前脚本版本已就绪且已接管音频节点 "
-                        f"(tracked_nodes={tracked_audio_nodes})"
-                    )
-            except Exception as preload_exc:
-                logger.debug(f"页面音频捕获预热失败（已忽略）: {preload_exc}")
 
         # 🆕 提取用户发送的图片：可配置是否包含历史对话图片
         upload_history = self._get_upload_history_images_flag(default=True)
@@ -1862,19 +1603,6 @@ class BrowserCore:
         extractor = config_engine.get_site_extractor(domain, preset_name=effective_preset_name)
         logger.debug(f"[{session.id}] 使用提取器: {extractor.get_id()} [预设: {resolved_preset_name}]")
 
-        try:
-            from app.services.request_manager import request_manager
-            request_manager.update_request_metadata(
-                str(getattr(session, "_bound_request_id", "") or ""),
-                target_domain=domain,
-                route_domain=domain,
-                preset_name=resolved_preset_name,
-                tab_index=int(getattr(session, "persistent_index", 0) or 0) or None,
-                tab_id=session.id,
-            )
-        except Exception as e:
-            logger.debug(f"[{session.id}] 更新请求监控元数据失败（忽略）: {e}")
-
         if command_engine is not None:
             try:
                 workflow_runtime = command_engine.begin_workflow_runtime(
@@ -1911,8 +1639,6 @@ class BrowserCore:
         setattr(session, "_workflow_stop_reason", None)
         if not effective_stop_checker():
             setattr(session, "_workflow_user_stop_logged", False)
-        streamed_text_parts: List[str] = []
-        conversation_activity_marked = False
         
         try:
             step_index = 0
@@ -1962,23 +1688,15 @@ class BrowserCore:
                 target_key = step.get('target', '')
                 optional = step.get('optional', False)
                 param_value = step.get('value')
-                action_upper = str(action or "").strip().upper()
-                target_key_normalized = str(target_key or "").strip().lower()
 
-                if skip_new_chat and (
-                    target_key_normalized in {"new_chat_btn", "new_chat", "new_conversation"}
-                    or action_upper in {"NEW_CHAT", "NEW_CONVERSATION"}
-                ):
-                    logger.debug(
-                        f"[{session.id}] 会话仍有效，跳过新建对话步骤 "
-                        f"(action={action_upper or '-'}, target={target_key_normalized or '-'})"
-                    )
+                if _skip_new_chat and target_key in ("new_chat_btn", "new_chat", "new_conversation"):
+                    logger.debug(f"[{session.id}] 会话未超时，跳过新建对话步骤 (target={target_key})")
                     step_index += 1
                     continue
                 
                 selector = selectors.get(target_key, '')
                 
-                if not selector and action not in ("WAIT", "KEY_PRESS", "COORD_CLICK", "COORD_SCROLL", "JS_EXEC", "READONLY_HINT", "PAGE_FETCH"):
+                if not selector and action not in ("WAIT", "KEY_PRESS", "COORD_CLICK", "COORD_SCROLL", "JS_EXEC"):
                     if optional:
                         step_index += 1
                         continue
@@ -1990,18 +1708,14 @@ class BrowserCore:
                         break
                 
                 try:
-                    for chunk in executor.execute_step(
+                    yield from executor.execute_step(
                         action=action,
                         selector=selector,
                         target_key=target_key,
                         value=param_value,
                         optional=optional,
                         context=context
-                    ):
-                        delta_content = self._extract_stream_delta_content(chunk)
-                        if delta_content:
-                            streamed_text_parts.append(delta_content)
-                        yield chunk
+                    )
                     
                     logger.debug(f"[PROBE] execute_step 完成: action={action}, target={target_key}")
 
@@ -2009,29 +1723,8 @@ class BrowserCore:
                         logger.info(f"[{session.id}] 步骤完成后检测到取消，提前结束工作流")
                         break
                     
-                    page_fetch_sent = False
                     if action in ("STREAM_WAIT", "STREAM_OUTPUT"):
                         result_container_selector = selector
-                    if (
-                        action == "PAGE_FETCH"
-                        and hasattr(executor, "consume_last_request_transport_sent")
-                    ):
-                        page_fetch_sent = bool(executor.consume_last_request_transport_sent())
-                        if page_fetch_sent:
-                            step_index = executor._consume_request_transport_followup_steps(
-                                workflow,
-                                step_index,
-                            )
-                    if (
-                        not conversation_activity_marked
-                        and (
-                            self._step_submits_conversation_request(action, target_key, param_value)
-                            or page_fetch_sent
-                            or action_upper in {"STREAM_WAIT", "STREAM_OUTPUT"}
-                        )
-                    ):
-                        session.mark_conversation_activity(domain, resolved_preset_name)
-                        conversation_activity_marked = True
                     step_index += 1
                         
                 except (ElementNotFoundError, WorkflowError):
@@ -2068,12 +1761,7 @@ class BrowserCore:
 
             # 多模态提取
             logger.debug(f"[PROBE] Workflow 循环结束，image_enabled={image_extraction_enabled}, should_stop={effective_stop_checker()}")
-            if (
-                allow_media_postprocess
-                and image_extraction_enabled
-                and not effective_stop_checker()
-                and not workflow_aborted
-            ):
+            if image_extraction_enabled and not effective_stop_checker() and not workflow_aborted:
                 logger.debug("[PROBE] 进入多模态提取分支")
                 try:
                     media_items = self._extract_media_after_stream(
@@ -2084,7 +1772,6 @@ class BrowserCore:
                         message_wrapper_selector=selectors.get("message_wrapper", ""),
                         completion_id=executor._completion_id,
                         stop_checker=_combined_stop_checker,
-                        response_text_hint="".join(streamed_text_parts),
                         media_generation_state=getattr(executor, "_last_stream_media_state", None),
                     )
                     
@@ -2254,25 +1941,13 @@ class BrowserCore:
         media_generation_state: Optional[Dict[str, Any]] = None,
     ) -> List[Dict]:
         """流式输出结束后提取多模态资源。"""
-        from app.core.elements import ElementFinder
-        from app.core.extractors.media_extractor import media_extractor
         
-        modalities = image_config.get("modalities") or {}
-        only_audio_mode = (
-            bool(modalities.get("audio"))
-            and not bool(modalities.get("image"))
-            and not bool(modalities.get("video"))
-        )
-        debounce = 0.0 if only_audio_mode else image_config.get("debounce_seconds", 2.0)
+        debounce = image_config.get("debounce_seconds", 2.0)
         effective_stop_checker = stop_checker or self._should_stop_checker
         if debounce > 0:
-            elapsed = 0
-            step = 0.1
-            while elapsed < debounce:
-                if effective_stop_checker():
-                    return []
-                time.sleep(step)
-                elapsed += step
+            threading.Event().wait(timeout=debounce)
+            if effective_stop_checker():
+                return []
         
         finder = ElementFinder(tab)
 
@@ -2309,19 +1984,6 @@ class BrowserCore:
         try:
             elements, container_mode = _find_candidate_elements(timeout=1)
             if not elements:
-                should_try_page_audio_capture = (
-                    bool((image_config.get("modalities") or {}).get("audio"))
-                    and bool(image_config.get("audio_capture_enabled", True))
-                    and not effective_stop_checker()
-                )
-                if should_try_page_audio_capture:
-                    logger.debug("结果容器为空，尝试页面级音频播放捕获回退")
-                    return self._capture_audio_via_page_playback(
-                        tab=tab,
-                        target_element=None,
-                        image_config=image_config,
-                        stop_checker=effective_stop_checker,
-                    )
                 return []
             
             last_element = elements[-1]
@@ -2345,7 +2007,7 @@ class BrowserCore:
                     container_selector_fallback=result_selector
                 )
 
-            media_items = [] if only_audio_mode else _extract_media_once(last_element)
+            media_items = _extract_media_once(last_element)
             ready_media_items = self._filter_ready_media_items(media_items, image_config)
             pending_media_items = [
                 item for item in media_items
@@ -2357,16 +2019,15 @@ class BrowserCore:
             video_items = [item for item in ready_media_items if item.get("media_type") == "video"]
 
             placeholder_text = ""
-            if not only_audio_mode:
-                try:
-                    if hasattr(extractor, 'extract_text'):
-                        placeholder_text = str(extractor.extract_text(last_element) or "")
-                    else:
-                        placeholder_text = str(
-                            last_element.run_js("return this.innerText || this.textContent || ''") or ""
-                        )
-                except Exception:
-                    placeholder_text = ""
+            try:
+                if hasattr(extractor, 'extract_text'):
+                    placeholder_text = str(extractor.extract_text(last_element) or "")
+                else:
+                    placeholder_text = str(
+                        last_element.run_js("return this.innerText || this.textContent || ''") or ""
+                    )
+            except Exception:
+                placeholder_text = ""
 
             placeholder_text_lower = placeholder_text.lower()
             response_text_hint_lower = str(response_text_hint or "").strip().lower()
@@ -2452,7 +2113,7 @@ class BrowserCore:
                 wait_satisfied = False
 
                 while time.time() < deadline and not effective_stop_checker():
-                    time.sleep(max(0.2, poll_interval))
+                    threading.Event().wait(timeout=max(0.2, poll_interval))
                     elements, container_mode = _find_candidate_elements(timeout=0.5)
                     if not elements:
                         continue
@@ -2485,24 +2146,6 @@ class BrowserCore:
                         "等待待渲染媒体超时，仍未拿到最终结果: "
                         f"kinds={','.join(sorted(pending_kinds))}, late_wait={late_wait_timeout:.1f}s"
                     )
-
-            should_try_audio_capture = (
-                bool((image_config.get("modalities") or {}).get("audio"))
-                and bool(image_config.get("audio_capture_enabled", True))
-                and not audio_items
-                and not effective_stop_checker()
-            )
-            if should_try_audio_capture:
-                captured_audio_items = self._capture_audio_via_page_playback(
-                    tab=tab,
-                    target_element=last_element,
-                    image_config=image_config,
-                    stop_checker=effective_stop_checker,
-                    response_text_hint=response_text_hint,
-                )
-                if captured_audio_items:
-                    ready_media_items = list(ready_media_items) + captured_audio_items
-                    audio_items = [item for item in ready_media_items if item.get("media_type") == "audio"]
             
             # 🆕 如果图片是不可直连的外链（如 googleusercontent），尝试截图落盘并替换为本地 URL
             media_items = ready_media_items
@@ -2525,179 +2168,6 @@ class BrowserCore:
         except Exception as e:
             logger.warning(f"多模态提取异常: {e}")
             return []
-
-    def _capture_audio_via_page_playback(
-        self,
-        tab,
-        target_element,
-        image_config: Dict,
-        stop_checker: Optional[Callable[[], bool]] = None,
-        response_text_hint: str = "",
-    ) -> List[Dict]:
-        """回退方案：触发页面播放按钮并从隐藏音频/ WebAudio 输出中捕获音频。"""
-        from app.core.extractors.media_extractor import media_extractor
-
-        if not tab:
-            return []
-
-        effective_stop_checker = stop_checker or self._should_stop_checker
-        if effective_stop_checker():
-            return []
-
-        prepared = media_extractor.prepare_page_audio_capture(tab, image_config)
-        if not prepared:
-            return []
-
-        network_capture = dict(image_config.get("audio_network_capture") or {})
-        network_capture_enabled = bool(network_capture.get("enabled", False))
-        if network_capture_enabled and not media_extractor.install_audio_network_probe(tab, image_config):
-            network_capture_enabled = False
-
-        trigger_target = target_element or tab
-        trigger_result = media_extractor.trigger_audio_playback(trigger_target, image_config)
-        if not bool(trigger_result.get("clicked")) and target_element is not None and target_element is not tab:
-            trigger_result = media_extractor.trigger_audio_playback(tab, image_config)
-        if not bool(trigger_result.get("clicked")):
-            logger.debug(f"页面音频捕获未触发播放按钮: {trigger_result}")
-            return []
-
-        logger.debug(
-            "页面音频捕获已触发播放按钮: "
-            f"text={trigger_result.get('text')!r}, candidates={trigger_result.get('candidate_count')}"
-        )
-
-        if network_capture_enabled:
-            network_audio_items = media_extractor.capture_network_audio(
-                tab=tab,
-                config=image_config,
-                stop_checker=effective_stop_checker,
-                response_text_hint=response_text_hint,
-            )
-            if network_audio_items:
-                logger.debug(f"网络音频捕获成功: {len(network_audio_items)} 项")
-                return network_audio_items
-
-        max_wait = float(
-            image_config.get("audio_capture_max_wait_seconds")
-            or max(8.0, float(image_config.get("load_timeout_seconds", 5.0) or 5.0) * 1.8)
-        )
-        hint_text = str(response_text_hint or "").strip()
-        if hint_text:
-            try:
-                chars_per_second = max(
-                    1.0,
-                    float(image_config.get("audio_capture_estimated_chars_per_second") or 4.8),
-                )
-                min_wait = max(
-                    1.0,
-                    float(image_config.get("audio_capture_min_wait_seconds") or 2.0),
-                )
-                padding_seconds = max(
-                    0.0,
-                    float(image_config.get("audio_capture_wait_padding_seconds") or 1.2),
-                )
-                hard_cap = max(
-                    min_wait,
-                    float(image_config.get("audio_capture_hard_max_wait_seconds") or max_wait),
-                )
-                fallback_wait = max_wait
-                estimated_wait = min_wait + (len(hint_text) / chars_per_second) + padding_seconds
-                max_wait = min(max(min_wait, estimated_wait), hard_cap)
-                logger.debug(
-                    "页面音频捕获动态等待窗口: "
-                    f"text_len={len(hint_text)}, max_wait={max_wait:.1f}s, "
-                    f"fallback_wait={fallback_wait:.1f}s, "
-                    f"chars_per_second={chars_per_second:.1f}"
-                )
-            except (TypeError, ValueError):
-                pass
-        poll_interval = max(0.1, float(image_config.get("audio_capture_poll_seconds") or 0.25))
-        silence_seconds = max(0.4, float(image_config.get("audio_capture_silence_seconds") or 1.2))
-        activity_silence_seconds = max(
-            0.2,
-            float(image_config.get("audio_capture_activity_silence_seconds") or 0.65),
-        )
-        terminal_settle_seconds = max(
-            0.0,
-            float(image_config.get("audio_capture_terminal_settle_seconds") or 0.35),
-        )
-        deadline = time.time() + max_wait
-        has_seen_data = False
-        has_seen_activity = False
-        terminal_deadline = 0.0
-
-        while time.time() < deadline and not effective_stop_checker():
-            time.sleep(poll_interval)
-            status = media_extractor.get_page_audio_capture_status(tab)
-            if not isinstance(status, dict):
-                continue
-
-            if bool(status.get("has_data")):
-                has_seen_data = True
-
-            active_recordings = int(status.get("active_recordings") or 0)
-            last_data_at_ms = int(status.get("last_data_at") or 0)
-            last_active_at_ms = int(status.get("last_active_at") or 0)
-            playing_media_elements = int(status.get("playing_media_elements") or 0)
-            terminal_playback_elements = int(status.get("terminal_playback_elements") or 0)
-            if last_active_at_ms:
-                has_seen_activity = True
-            if has_seen_data and active_recordings <= 0:
-                break
-            if has_seen_data and playing_media_elements <= 0 and terminal_playback_elements > 0:
-                if terminal_deadline <= 0:
-                    terminal_deadline = time.time() + terminal_settle_seconds
-                elif time.time() >= terminal_deadline:
-                    break
-            else:
-                terminal_deadline = 0.0
-
-            if has_seen_activity and last_active_at_ms:
-                activity_silence_elapsed = (time.time() * 1000.0 - last_active_at_ms) / 1000.0
-                if activity_silence_elapsed >= activity_silence_seconds:
-                    break
-
-            if has_seen_data and last_data_at_ms:
-                silence_elapsed = (time.time() * 1000.0 - last_data_at_ms) / 1000.0
-                if silence_elapsed >= silence_seconds:
-                    break
-
-        if effective_stop_checker():
-            return []
-
-        captured_items = media_extractor.export_page_audio_capture(tab, image_config)
-        if captured_items:
-            status = media_extractor.get_page_audio_capture_status(tab)
-            if isinstance(status, dict):
-                logger.debug(
-                    "页面播放音频捕获成功: "
-                    f"{len(captured_items)} 项, "
-                    f"version={status.get('version')}, "
-                    f"tracked_media={status.get('tracked_media_elements')}, "
-                    f"tracked_web_audio={status.get('tracked_web_audio')}, "
-                    f"active={status.get('active_recordings')}, "
-                    f"chunks={status.get('total_chunks')}, "
-                    f"last_data_at={status.get('last_data_at')}, "
-                    f"last_active_at={status.get('last_active_at')}, "
-                    f"peak_rms={status.get('peak_rms')}"
-                )
-        if not captured_items:
-            status = media_extractor.get_page_audio_capture_status(tab)
-            if isinstance(status, dict):
-                logger.debug(
-                    "页面音频捕获未导出到任何音频数据: "
-                    f"version={status.get('version')}, "
-                    f"tracked_media={status.get('tracked_media_elements')}, "
-                    f"tracked_web_audio={status.get('tracked_web_audio')}, "
-                    f"active={status.get('active_recordings')}, "
-                    f"chunks={status.get('total_chunks')}, "
-                    f"has_data={status.get('has_data')}, "
-                    f"errors={status.get('recent_errors')}, "
-                    f"events={status.get('recent_events')}"
-                )
-            else:
-                logger.debug("页面音频捕获未导出到任何音频数据")
-        return captured_items
 
     def _resolve_media_ref(self, media_item: Dict) -> str:
         ref = str(media_item.get("url") or media_item.get("data_uri") or "").strip()
@@ -2754,10 +2224,6 @@ class BrowserCore:
             ref = self._resolve_media_ref(item)
             if entry.get("kind") == "url":
                 entry["url"] = ref or entry.get("url")
-            if ref and entry.get("kind") != "url":
-                entry["kind"] = "url"
-                entry["url"] = ref
-            entry.pop("data_uri", None)
             entry.pop("local_path", None)
             result.append(entry)
         return result
@@ -2769,11 +2235,6 @@ class BrowserCore:
         max_size_mb: int = 10,
     ) -> List[Dict]:
         """Download remote audio/video URLs to local files so downstream clients get stable local URLs."""
-        import time as time_module
-        import uuid
-        from pathlib import Path
-        from urllib.parse import urlparse
-        import requests
 
         if not media_items or tab is None:
             return media_items
@@ -2789,7 +2250,6 @@ class BrowserCore:
             "audio/x-wav": ".wav",
             "audio/ogg": ".ogg",
             "audio/webm": ".webm",
-            "audio/webm;codecs=opus": ".webm",
             "audio/mp4": ".m4a",
             "video/mp4": ".mp4",
             "video/webm": ".webm",
@@ -2813,23 +2273,19 @@ class BrowserCore:
             "Accept": "*/*",
         }
 
-        result = []
-        for item in media_items:
-            filepath = None
+        def _process_one(idx, item):
             if item.get("kind") != "url":
-                result.append(item)
-                continue
+                return idx, item
 
             media_type = str(item.get("media_type") or "").lower()
             if media_type not in {"audio", "video"}:
-                result.append(item)
-                continue
+                return idx, item
 
             url = str(item.get("url") or "").strip()
             if not (url.startswith("http://") or url.startswith("https://")):
-                result.append(item)
-                continue
+                return idx, item
 
+            filepath = None
             try:
                 response = requests.get(
                     url,
@@ -2841,24 +2297,20 @@ class BrowserCore:
                 )
             except Exception as exc:
                 logger.warning(f"{media_type} 下载失败，保留远程链接: {exc}")
-                result.append(item)
-                continue
+                return idx, item
 
             try:
                 if response.status_code != 200:
                     logger.warning(f"{media_type} 下载失败，HTTP {response.status_code}")
-                    result.append(item)
-                    continue
+                    return idx, item
 
                 content_type = str(response.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
                 if media_type == "audio" and "audio" not in content_type:
                     logger.warning(f"音频下载返回非音频类型，保留远程链接: {content_type or 'unknown'}")
-                    result.append(item)
-                    continue
+                    return idx, item
                 if media_type == "video" and "video" not in content_type:
                     logger.warning(f"视频下载返回非视频类型，保留远程链接: {content_type or 'unknown'}")
-                    result.append(item)
-                    continue
+                    return idx, item
 
                 ext = ext_map.get(content_type)
                 if not ext:
@@ -2879,13 +2331,13 @@ class BrowserCore:
                         handle.write(chunk)
 
                 new_item = dict(item)
-                new_item["url"] = f"/media/{filename}"
+                new_item["url"] = f"/download_images/{filename}"
                 new_item["mime"] = content_type or item.get("mime")
                 new_item["byte_size"] = written
                 new_item["source"] = "local_file"
                 new_item["local_path"] = str(filepath)
-                result.append(new_item)
                 logger.debug(f"✅ {media_type} 已保存到本地: {filename} ({written} bytes)")
+                return idx, new_item
             except Exception as exc:
                 logger.warning(f"{media_type} 落盘失败，保留远程链接: {exc}")
                 try:
@@ -2893,22 +2345,23 @@ class BrowserCore:
                         filepath.unlink()
                 except Exception:
                     pass
-                result.append(item)
+                return idx, item
             finally:
                 response.close()
+
+        result = [None] * len(media_items)
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            futures = {executor.submit(_process_one, idx, item): idx for idx, item in enumerate(media_items)}
+            for future in as_completed(futures):
+                idx, processed_item = future.result()
+                result[idx] = processed_item
 
         return result
 
     def _try_screenshot_images_to_local(self, tab, last_element, images: List[Dict], image_config: Dict = None) -> List[Dict]:
-        """
-        优先下载图片（更精准），下载失败才截图。
+        """优先下载图片（更精准），下载失败才截图。
         基于实测 API：img_ele.attr('src'), page.cookies(), get_screenshot(path)
         """
-        from pathlib import Path
-        import time as time_module
-        import uuid
-        from urllib.parse import urlparse
-        import requests
 
         if not images:
             return images
@@ -3019,11 +2472,13 @@ class BrowserCore:
 
         new_images = list(images)
         localized_count = 0
+        claim_lock = threading.Lock()
 
-        for target_index in reversed(remote_indexes):
+        def _process_one(target_index):
             target_image = images[target_index]
             target_url = str(target_image.get("url") or "").strip()
-            img_ele = _claim_image_element(target_url)
+            with claim_lock:
+                img_ele = _claim_image_element(target_url)
             saved = False
 
             base_name = f"{int(time_module.time())}_{uuid.uuid4().hex[:8]}"
@@ -3078,7 +2533,7 @@ class BrowserCore:
 
             if not saved:
                 logger.warning(f"图片[{target_index}] 保存失败：下载和截图均失败")
-                continue
+                return None
 
             local_url = f"/download_images/{filename}"
             new_item = dict(target_image)
@@ -3087,8 +2542,17 @@ class BrowserCore:
             new_item["source"] = "local_file"
             new_item["local_path"] = str(out_path)
             new_item["byte_size"] = out_path.stat().st_size
-            new_images[target_index] = new_item
-            localized_count += 1
+            return target_index, new_item
+
+        save_results = [None] * len(remote_indexes)
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = {executor.submit(_process_one, idx): i for i, idx in enumerate(remote_indexes)}
+            for future in as_completed(futures):
+                result = future.result()
+                if result is not None:
+                    target_idx, new_item = result
+                    new_images[target_idx] = new_item
+                    localized_count += 1
 
         if localized_count > 0:
             logger.debug(f"✅ 图片本地化完成: {localized_count}/{len(remote_indexes)} 张")
@@ -3097,11 +2561,6 @@ class BrowserCore:
 
     def _persist_data_uri_media_to_local(self, media_items: List[Dict]) -> List[Dict]:
         """Persist extracted data-uri media so downstream Markdown can reuse the existing URL flow."""
-        import base64
-        import binascii
-        import uuid
-        from pathlib import Path
-        from datetime import datetime
 
         if not media_items:
             return media_items
@@ -3121,8 +2580,6 @@ class BrowserCore:
             "audio/wav": ".wav",
             "audio/x-wav": ".wav",
             "audio/ogg": ".ogg",
-            "audio/webm": ".webm",
-            "audio/webm;codecs=opus": ".webm",
             "audio/mp4": ".m4a",
             "video/mp4": ".mp4",
             "video/webm": ".webm",
@@ -3157,9 +2614,6 @@ class BrowserCore:
 
             try:
                 filepath.write_bytes(media_bytes)
-                if str(item.get("media_type") or "").strip().lower() == "audio":
-                    logger.debug(f"data-uri 音频已落盘，准备追加尾静音: {filepath.name}")
-                    self._append_audio_tail_silence(filepath, duration_seconds=0.3)
             except Exception as e:
                 logger.warning(f"data uri 保存失败，保留原媒体数据: {e}")
                 result.append(item)
@@ -3167,11 +2621,7 @@ class BrowserCore:
 
             new_item = dict(item)
             new_item["kind"] = "url"
-            media_type = str(item.get("media_type") or "").strip().lower()
-            if media_type in {"audio", "video"}:
-                new_item["url"] = f"/media/{filename}"
-            else:
-                new_item["url"] = f"/download_images/{filename}"
+            new_item["url"] = f"/download_images/{filename}"
             new_item["data_uri"] = None
             new_item["mime"] = mime
             new_item["byte_size"] = len(media_bytes)
@@ -3188,7 +2638,6 @@ class BrowserCore:
         preset_name: Optional[str] = None,
         stop_checker: Optional[Callable[[], bool]] = None,
         workflow_priority: Optional[int] = None,
-        allow_media_postprocess: bool = True,
     ) -> Generator[str, None, None]:
         """非流式工作流执行"""
         collected_content = []
@@ -3201,7 +2650,6 @@ class BrowserCore:
             preset_name=preset_name,
             stop_checker=stop_checker,
             workflow_priority=workflow_priority,
-            allow_media_postprocess=allow_media_postprocess,
         )
 
         try:
@@ -3243,7 +2691,7 @@ class BrowserCore:
             yield json.dumps(error_data, ensure_ascii=False)
         else:
             full_content = "".join(collected_content)
-            if allow_media_postprocess and not collected_media and full_content.strip():
+            if not collected_media and full_content.strip():
                 extra_media_items = self._retry_pending_media_from_response_text(
                     session,
                     full_content,
@@ -3342,39 +2790,31 @@ class BrowserCore:
             return []
 
     def _download_url_images(self, images: List[Dict], tab=None) -> List[Dict]:
-        """
-        在浏览器内通过 Canvas 压缩图片，保存到本地并返回可访问 URL
+        """在浏览器内通过 Canvas 压缩图片，保存到本地并返回可访问 URL
         
         流程：
         1. 浏览器 Canvas 压缩 → base64
         2. 后端解码 → 保存到 download_images/
         3. 返回 /download_images/xxx.jpg URL
         """
-        import base64
-        import uuid
-        from pathlib import Path
-        from datetime import datetime
-        
-        result = []
-        
-        # 确保目录存在
+
+        if not images:
+            return images
+
         save_dir = Path("download_images")
         save_dir.mkdir(exist_ok=True)
         canvas_image_max_size = AppConfig.get_canvas_image_max_size()
 
-        for img in images:
+        def _process_one(idx, img):
             if img.get('kind') != 'url':
-                result.append(img)
-                continue
-            
+                return idx, img
+
             url = img.get('url')
             if not url:
-                result.append(img)
-                continue
-            
+                return idx, img
+
             if not tab:
-                result.append(img)
-                continue
+                return idx, img
             
             try:
                 # 🔑 在浏览器中用 Canvas 加载并压缩图片
@@ -3540,19 +2980,24 @@ class BrowserCore:
                         new_img['source'] = 'local_file'
                         new_img['local_path'] = str(filepath)
                         
-                        result.append(new_img)
                         logger.info(f"✅ 图片已保存: {filename} ({len(image_bytes)} bytes)")
-                        continue
-                
+                        return idx, new_img
+
                 error_msg = download_result.get('error', 'Unknown') if download_result else 'No result'
                 logger.warning(f"⚠️ 图片处理失败: {error_msg}")
-            
+
             except Exception as e:
                 logger.warning(f"⚠️ 图片保存异常: {str(e)[:100]}")
-            
-            # 失败时保留原 URL
-            result.append(img)
-        
+
+            return idx, img
+
+        result = [None] * len(images)
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = {executor.submit(_process_one, idx, img): idx for idx, img in enumerate(images)}
+            for future in as_completed(futures):
+                idx, processed_img = future.result()
+                result[idx] = processed_img
+
         return result
 
     def _check_page_status(self, tab) -> Dict[str, Any]:

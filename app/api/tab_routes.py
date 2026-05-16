@@ -22,14 +22,16 @@ from fastapi.params import Param
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from app.core.config import AppConfig, get_logger, SSEFormatter
+from app.core.config import AppConfig, BrowserConstants, get_logger, SSEFormatter
 from app.core import get_browser
+from app.services.config_engine import config_engine
 from app.services.request_manager import (
     request_manager,
     RequestContext,
     RequestStatus,
     watch_client_disconnect
 )
+from app.services.stats_recorder import stats_recorder
 from app.services.tool_calling import (
     build_tool_completion_response,
     complete_tool_calling_roundtrip_async,
@@ -431,7 +433,6 @@ async def get_tab_pool_tabs(authenticated: bool = Depends(verify_auth)):
         
         # 🆕 为每个标签页附加可用预设列表
         try:
-            from app.services.config_engine import config_engine
             for tab_info in tabs:
                 domain = tab_info.get("current_domain", "")
                 if domain:
@@ -490,7 +491,6 @@ async def update_tab_pool_config(
         _write_browser_config(config)
 
         try:
-            from app.core.config import BrowserConstants
             if hasattr(BrowserConstants, "reload"):
                 BrowserConstants.reload()
         except Exception as reload_error:
@@ -939,6 +939,32 @@ async def _stream_with_tab_index(
                 pass
 
         request_manager.finish_request(ctx, success=(ctx.status == RequestStatus.COMPLETED))
+
+        try:
+            started = getattr(ctx, "started_at", None) or getattr(ctx, "created_at", time.time())
+            duration = int((time.time() - started) * 1000)
+            resp_parts = ctx.monitor.get("response_parts", [])
+            resp_len = sum(len(str(p)) for p in resp_parts) if isinstance(resp_parts, list) else 0
+            msg_len = sum(
+                len(str(m.get("content", "")))
+                for m in (getattr(body, "messages", None) or [])
+            )
+            status_str = "success" if ctx.status == RequestStatus.COMPLETED else (
+                "failed" if ctx.status == RequestStatus.FAILED else "cancelled"
+            )
+            stats_recorder.record_request(
+                request_id=ctx.request_id,
+                domain=ctx.monitor.get("target_domain", ""),
+                model=getattr(body, "model", ""),
+                message_length=msg_len,
+                response_length=resp_len,
+                duration_ms=duration,
+                status=status_str,
+                error_message=str(ctx.monitor.get("last_error", "") or ""),
+                preset_name=getattr(body, "preset_name", ""),
+            )
+        except Exception:
+            pass
 
 
 async def _non_stream_with_tab_index(
@@ -1401,6 +1427,32 @@ async def _complete_tool_calling_with_tab_index(
                 pass
         request_manager.finish_request(ctx, success=(ctx.status == RequestStatus.COMPLETED))
 
+        try:
+            started = getattr(ctx, "started_at", None) or getattr(ctx, "created_at", time.time())
+            duration = int((time.time() - started) * 1000)
+            resp = ctx.monitor.get("response_payload", {})
+            resp_len = len(str(resp.get("content", ""))) if isinstance(resp, dict) else 0
+            msg_len = sum(
+                len(str(m.get("content", "")))
+                for m in (getattr(body, "messages", None) or [])
+            )
+            status_str = "success" if ctx.status == RequestStatus.COMPLETED else (
+                "failed" if ctx.status == RequestStatus.FAILED else "cancelled"
+            )
+            stats_recorder.record_request(
+                request_id=ctx.request_id,
+                domain=ctx.monitor.get("target_domain", ""),
+                model=getattr(body, "model", ""),
+                message_length=msg_len,
+                response_length=resp_len,
+                duration_ms=duration,
+                status=status_str,
+                error_message=str(ctx.monitor.get("last_error", "") or ""),
+                preset_name=getattr(body, "preset_name", ""),
+            )
+        except Exception:
+            pass
+
 
 async def _complete_tool_calling_with_route_domain(
     request: Request,
@@ -1447,6 +1499,32 @@ async def _complete_tool_calling_with_route_domain(
             except asyncio.CancelledError:
                 pass
         request_manager.finish_request(ctx, success=(ctx.status == RequestStatus.COMPLETED))
+
+        try:
+            started = getattr(ctx, "started_at", None) or getattr(ctx, "created_at", time.time())
+            duration = int((time.time() - started) * 1000)
+            resp = ctx.monitor.get("response_payload", {})
+            resp_len = len(str(resp.get("content", ""))) if isinstance(resp, dict) else 0
+            msg_len = sum(
+                len(str(m.get("content", "")))
+                for m in (getattr(body, "messages", None) or [])
+            )
+            status_str = "success" if ctx.status == RequestStatus.COMPLETED else (
+                "failed" if ctx.status == RequestStatus.FAILED else "cancelled"
+            )
+            stats_recorder.record_request(
+                request_id=ctx.request_id,
+                domain=ctx.monitor.get("target_domain", ""),
+                model=getattr(body, "model", ""),
+                message_length=msg_len,
+                response_length=resp_len,
+                duration_ms=duration,
+                status=status_str,
+                error_message=str(ctx.monitor.get("last_error", "") or ""),
+                preset_name=getattr(body, "preset_name", ""),
+            )
+        except Exception:
+            pass
 
 
 async def _non_stream_tool_calling_with_tab_index(
@@ -1633,7 +1711,6 @@ async def get_site_presets(
 ):
     """获取指定站点的所有预设"""
     try:
-        from app.services.config_engine import config_engine
         presets = config_engine.list_presets(domain)
         default_preset = config_engine.get_default_preset(domain)
         return {"domain": domain, "presets": presets, "default_preset": default_preset}
@@ -1650,7 +1727,6 @@ async def create_site_preset(
 ):
     """为站点创建新预设（克隆自现有预设）"""
     try:
-        from app.services.config_engine import config_engine
         success = config_engine.create_preset(domain, body.new_name, body.source_name)
         
         if success:
@@ -1672,7 +1748,6 @@ async def rename_site_preset(
 ):
     """重命名指定预设"""
     try:
-        from app.services.config_engine import config_engine
         success = config_engine.rename_preset(domain, body.old_name, body.new_name)
 
         if success:
@@ -1696,7 +1771,6 @@ async def set_site_default_preset(
 ):
     """设置站点默认预设（本地覆盖）"""
     try:
-        from app.services.config_engine import config_engine
         success = config_engine.set_default_preset(domain, body.preset_name)
 
         if success:
@@ -1723,7 +1797,6 @@ async def delete_site_preset(
 ):
     """删除指定预设（不能删除最后一个）"""
     try:
-        from app.services.config_engine import config_engine
         success = config_engine.delete_preset(domain, preset_name)
         
         if success:

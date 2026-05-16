@@ -69,7 +69,31 @@
         <!-- 主内容区 -->
         <main class="flex-1 flex flex-col overflow-x-hidden overflow-y-auto bg-gray-50 dark:bg-gray-900">
 
-            <header v-if="activeTab !== 'settings' && activeTab !== 'monitor' && currentDomain && currentConfig"
+            <!-- 头部（配置/日志 Tab） -->
+            <header v-if="activeTab === 'marketplace'"
+                    class="bg-white dark:bg-gray-800 border-b dark:border-gray-700 p-4">
+                <div class="flex justify-between items-center gap-4">
+                    <div class="flex items-center gap-3">
+                        <span v-html="$icons.shoppingBag" class="text-gray-600 dark:text-gray-400"></span>
+                        <div>
+                            <h2 class="text-xl font-bold dark:text-white">插件市场</h2>
+                            <p class="text-sm text-gray-500 dark:text-gray-400">站点配置和命令系统都支持预览与导入</p>
+                        </div>
+                    </div>
+                    <div class="flex gap-2">
+                        <button @click="loadMarketplaceCatalog({ force: true })"
+                                class="border dark:border-gray-700 rounded hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-white transition-colors px-2 py-0.5 text-sm">
+                            <span v-html="$icons.arrowPath"></span> 刷新市场
+                        </button>
+                        <button @click="openMarketplaceSubmitDialog"
+                                class="border dark:border-gray-700 rounded hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-white transition-colors px-2 py-0.5 text-sm">
+                            <span v-html="$icons.arrowUpTray"></span> 投稿上传
+                        </button>
+                    </div>
+                </div>
+            </header>
+
+            <header v-if="activeTab !== 'settings' && activeTab !== 'marketplace' && currentDomain && currentConfig"
                     class="bg-white dark:bg-gray-800 border-b dark:border-gray-700 p-4">
                 <div class="flex justify-between items-center">
                     <div class="flex items-center gap-4">
@@ -164,19 +188,19 @@
                     <span v-html="$icons.chartBar"></span> 日志
                     <span v-if="logs.length > 0" class="ml-1 px-1.5 py-0.5 text-xs bg-blue-100 dark:bg-blue-900 text-blue-600 dark:text-blue-300 rounded-full">{{ logs.length }}</span>
                 </button>
-                <button @click="activeTab = 'monitor'"
-                        :class="['px-4 py-2 text-sm font-medium border-b-2 transition-colors',
-                                 activeTab === 'monitor'
-                                 ? 'border-blue-500 text-blue-600 dark:text-blue-400'
-                                 : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300']">
-                    📊 请求监控
-                </button>
                 <button @click="activeTab = 'commands'"
                         :class="['px-4 py-2 text-sm font-medium border-b-2 transition-colors',
                                  activeTab === 'commands'
                                  ? 'border-blue-500 text-blue-600 dark:text-blue-400'
                                  : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300']">
                     ⚡ 命令
+                </button>
+                <button @click="activeTab = 'stats'"
+                        :class="['px-4 py-2 text-sm font-medium border-b-2 transition-colors',
+                                 activeTab === 'stats'
+                                 ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+                                 : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300']">
+                    📊 统计
                 </button>
                 <button @click="activeTab = 'settings'"
                         :class="['px-4 py-2 text-sm font-medium border-b-2 transition-colors',
@@ -208,6 +232,18 @@
                             @reload-config="reloadConfig">
                 </config-tab>
 
+                <marketplace-tab v-show="activeTab === 'marketplace'"
+                                 :catalog="marketplaceCatalog"
+                                 :loading="marketplaceLoading"
+                                 :error="marketplaceError"
+                                 :importing-id="marketplaceImportingId"
+                                 @refresh="loadMarketplaceCatalog({ force: true })"
+                                 @preview-item="previewMarketplaceItem"
+                                 @import-item="startMarketplaceImport"
+                                 @open-submit="openMarketplaceSubmitDialog"
+                                 @open-link="openExternalLink">
+                </marketplace-tab>
+
                 <!-- 标签页池 Tab -->
                 <tabpool-tab v-if="activeTab === 'tabpool'"
                              :dark-mode="darkMode"
@@ -215,13 +251,12 @@
                 </tabpool-tab>
 
                 <!-- 命令 Tab -->
-                <commands-tab v-if="shouldRenderTab('commands')"
-                              v-show="activeTab === 'commands'"
+                <commands-tab v-show="activeTab === 'commands'"
                               :dark-mode="darkMode"
                               @notify="notify($event.message, $event.type)">
                 </commands-tab>
                 <!-- 日志 Tab -->
-                <logs-tab v-if="activeTab === 'logs'"
+                <logs-tab v-show="activeTab === 'logs'"
                           :logs="logs"
                           :filter="logLevelFilter"
                           :paused="pauseLogs"
@@ -230,17 +265,8 @@
                           @toggle-pause="pauseLogs = !pauseLogs">
                 </logs-tab>
 
-                <request-monitor-tab v-if="activeTab === 'monitor'"
-                                     :records="requestHistory"
-                                     :system-stats="systemStats"
-                                     :loading="requestHistoryLoading"
-                                     :error="requestHistoryError"
-                                     @refresh="fetchRequestHistory({ silent: false, force: true }); fetchSystemStats({ timeoutMs: 5000 })"
-                                     @load-detail="fetchRequestHistoryDetail">
-                </request-monitor-tab>
-
                 <!-- 设置 Tab -->
-                <settings-tab v-if="activeTab === 'settings'"
+                <settings-tab v-show="activeTab === 'settings'"
                               :env-config="envConfig"
                               :env-schema="envSchema"
                               :env-collapsed="envCollapsed"
@@ -251,6 +277,8 @@
                               :browser-collapsed="browserConstantsCollapsed"
                               :browser-changed="browserConstantsChanged"
                               :saving-browser="isSavingConstants"
+                              :session-status="sessionStatus"
+                              :loading-session-status="isLoadingSessionStatus"
                               :update-preserve-options="updatePreserveOptions"
                               :update-preserve-selected="updatePreserveSelected"
                               :update-preserve-changed="updatePreserveChanged"
@@ -275,6 +303,18 @@
                               @toggle-definition="toggleDefinitionEnabled"
                               @move-definition="moveDefinition">
                 </settings-tab>
+                <!-- 统计 Tab -->
+                <stats-tab v-show="activeTab === 'stats'"
+                           :stats-summary="statsSummary"
+                           :stats-daily="statsDaily"
+                           :stats-history="statsHistory"
+                           :is-loading-stats="isLoadingStats"
+                           :stats-filter="statsFilter"
+                           @load-stats="loadStatsSummary(); loadStatsHistory()"
+                           @load-history="loadStatsHistory"
+                           @clear-stats="clearStatsHistory"
+                           @change-filter="statsFilter = $event; loadStatsHistory()">
+                </stats-tab>
             </div>
         </main>
 
@@ -446,14 +486,15 @@
     <script src="static/js/components/panels/SelectorPanel.js?v=2.6.12"></script>
     <script src="static/js/components/panels/ImageConfigPanel.js?v=2.6.11"></script>
     <script src="static/js/components/panels/StreamConfigPanel.js?v=2.6.10"></script>
-    <script src="static/js/components/panels/WorkflowPanel.js?v=2.6.8"></script>
+    <script src="static/js/components/panels/WorkflowPanel.js?v=2.6.7"></script>
     <script src="static/js/components/panels/FilePastePanel.js?v=2.6.8"></script>
 
     <!-- 主组件 -->
     <script src="static/js/components/ConfigTab.js?v=2.6.22"></script>
+    <script src="/static/js/components/MarketplaceTab.js?v=2.6.9"></script>
     <script src="/static/js/components/LogsTab.js?v=2.6.7"></script>
-    <script src="/static/js/components/RequestMonitorTab.js?v=2.6.22"></script>
-    <script src="/static/js/components/SettingsTab.js?v=2.6.8"></script>
+    <script src="/static/js/components/SettingsTab.js?v=2.6.7"></script>
+    <script src="/static/js/components/StatsTab.js?v=2.6.7"></script>
     <script src="/static/js/components/Dialogs.js?v=2.6.9"></script>
     <script src="/static/js/components/TabPoolTab.js?v=2.6.7"></script>
     <script src="/static/js/components/commands/CommandsTabComputed.js?v=2.6.7"></script>
@@ -462,6 +503,6 @@
     <script src="/static/js/components/CommandsTab.js?v=2.6.7"></script>
 
     <!-- 主应用逻辑 -->
-<script src="/static/js/dashboard.js?v=2.6.24"></script>
+    <script src="/static/js/dashboard.js?v=2.6.19"></script>
 </body>
 </html>

@@ -10,6 +10,7 @@ from typing import Any, Optional, Dict, List
 
 from app.core.extractors.base import BaseExtractor
 from app.core.extractors.image_extractor import image_extractor
+from app.core.extractors.media_extractor import media_extractor
 
 
 class DeepBrowserExtractor(BaseExtractor):
@@ -518,8 +519,6 @@ class DeepBrowserExtractor(BaseExtractor):
         """从元素中提取多模态资源。"""
         if not element:
             return []
-
-        from app.core.extractors.media_extractor import media_extractor
 
         target_ele = self.find_content_node(element)
         return media_extractor.extract(

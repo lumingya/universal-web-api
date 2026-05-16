@@ -8,6 +8,7 @@ app/utils/image_handler.py - 图片处理工具
 - 复制图片到剪贴板（Windows）
 """
 
+import ast
 import os
 import re
 import hashlib
@@ -80,7 +81,6 @@ def extract_images_from_messages(messages: List[Dict]) -> List[str]:
                 # 尝试 Python literal_eval
                 if parsed is None:
                     try:
-                        import ast
                         parsed = ast.literal_eval(stripped)
                         logger.debug("[IMAGE] Python literal_eval 解析成功")
                     except (ValueError, SyntaxError):

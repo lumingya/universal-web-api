@@ -22,6 +22,11 @@ from pydantic import BaseModel, Field
 
 from app.core.config import AppConfig, get_logger
 from app.core import get_browser, BrowserConnectionError
+from app.core.request_transport import get_request_transport_defaults_payload
+from app.core.workflow import WorkflowExecutor
+from app.core.workflow_editor import workflow_editor_injector
+from app.models.schemas import get_default_image_extraction_config, get_default_selector_definitions
+from app.services.config.engine import get_default_stream_config, get_default_network_config
 from app.services.config_engine import config_engine, ConfigConstants
 from app.services.extractor_manager import extractor_manager
 from app.utils.site_url import extract_remote_site_domain
@@ -115,7 +120,6 @@ def _execute_workflow_editor_test_payload(
     progress_callback: Optional[Callable[[str, str], None]] = None
 ) -> Dict[str, Any]:
     """复用真实执行器执行可视化编辑器测试。"""
-    from app.core.workflow.executor import WorkflowExecutor
 
     action_labels = {
         "CLICK": "点击元素",
@@ -1104,7 +1108,6 @@ async def toggle_site_image_extraction(
 @router.get("/api/settings/image-extraction-defaults")
 async def get_image_extraction_defaults(authenticated: bool = Depends(verify_auth)):
     """获取多模态提取的默认配置"""
-    from app.models.schemas import get_default_image_extraction_config
     
     return {
         "defaults": get_default_image_extraction_config(),
@@ -1206,8 +1209,6 @@ async def reload_image_presets(authenticated: bool = Depends(verify_auth)):
 @router.post("/api/workflow-editor/inject")
 async def inject_workflow_editor(request: Request):
     """向当前活动标签页注入可视化工作流编辑器"""
-    from app.core.workflow_editor import workflow_editor_injector
-    from app.core.browser import get_browser
     
     try:
         target_domain = None
@@ -1299,7 +1300,6 @@ async def test_workflow_editor_steps(
     authenticated: bool = Depends(verify_auth)
 ):
     """在当前活动标签页上按真实执行器测试工作流步骤。"""
-    from app.core.browser import get_browser
 
     try:
         data = await request.json()
@@ -1321,7 +1321,6 @@ async def consume_workflow_editor_actions(
     authenticated: bool = Depends(verify_auth)
 ):
     """由本地控制台轮询，消费远端页面注入编辑器排队的动作请求。"""
-    from app.core.browser import get_browser
 
     browser_instance = get_browser(auto_connect=True)
     if not browser_instance.get_browser_handle():
@@ -1494,7 +1493,6 @@ async def update_site_workflow(
 @router.post("/api/workflow-editor/clear-cache")
 async def clear_editor_cache():
     """清除编辑器脚本缓存（开发调试用）"""
-    from app.core.workflow_editor import workflow_editor_injector
     workflow_editor_injector.clear_cache()
     return {"success": True, "message": "缓存已清除"}
 
@@ -1790,8 +1788,6 @@ async def save_selector_definitions(
 async def reset_selector_definitions(authenticated: bool = Depends(verify_auth)):
     """重置元素定义为默认值"""
     try:
-        from app.models.schemas import get_default_selector_definitions
-
         defaults = get_default_selector_definitions()
         config_engine.set_selector_definitions(defaults)
 
@@ -1977,8 +1973,6 @@ async def list_parsers(authenticated: bool = Depends(verify_auth)):
 @router.get("/api/settings/stream-config-defaults")
 async def get_stream_config_defaults(authenticated: bool = Depends(verify_auth)):
     """获取流式配置的默认值和限制"""
-    from app.services.config.engine import get_default_stream_config, get_default_network_config
-    from app.core.request_transport import get_request_transport_defaults_payload
     
     return {
         "defaults": get_default_stream_config(),

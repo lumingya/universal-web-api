@@ -1,5 +1,84 @@
 const { createApp } = Vue
+const MARKETPLACE_CLIENT_VERSION_STORAGE_KEY = 'marketplace_client_version'
+const MARKETPLACE_SEEN_SNAPSHOT_STORAGE_KEY = 'marketplace_seen_snapshot_v1'
+const MARKETPLACE_LATEST_SNAPSHOT_STORAGE_KEY = 'marketplace_latest_snapshot_v1'
 const DASHBOARD_SITES_CACHE_STORAGE_KEY = 'dashboard_sites_cache_v1'
+
+function loadStoredMarketplaceClientVersion() {
+    try {
+        return String(localStorage.getItem(MARKETPLACE_CLIENT_VERSION_STORAGE_KEY) || '').trim()
+    } catch (error) {
+        return ''
+    }
+}
+
+function saveStoredMarketplaceClientVersion(version) {
+    try {
+        const value = String(version || '').trim()
+        if (value) {
+            localStorage.setItem(MARKETPLACE_CLIENT_VERSION_STORAGE_KEY, value)
+        } else {
+            localStorage.removeItem(MARKETPLACE_CLIENT_VERSION_STORAGE_KEY)
+        }
+    } catch (error) {
+        // ignore storage failures and keep runtime data available
+    }
+}
+
+function loadStoredMarketplaceSnapshot(storageKey) {
+    try {
+        const raw = localStorage.getItem(storageKey)
+        if (!raw) {
+            return null
+        }
+        const parsed = JSON.parse(raw)
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            return null
+        }
+        const ids = Array.isArray(parsed.ids) ? parsed.ids.map(item => String(item || '').trim()).filter(Boolean) : []
+        return {
+            ids,
+            count: Number(parsed.count || ids.length || 0),
+            savedAt: Number(parsed.savedAt || 0)
+        }
+    } catch (error) {
+        return null
+    }
+}
+
+function saveStoredMarketplaceSnapshot(storageKey, snapshot) {
+    try {
+        if (!snapshot) {
+            localStorage.removeItem(storageKey)
+            return
+        }
+        localStorage.setItem(storageKey, JSON.stringify(snapshot))
+    } catch (error) {
+        // ignore storage failures and keep runtime data available
+    }
+}
+
+function buildMarketplaceSnapshot(catalog) {
+    const items = Array.isArray(catalog && catalog.items) ? catalog.items : []
+    const ids = items
+        .map(item => String(item && item.id || '').trim())
+        .filter(Boolean)
+        .sort((left, right) => left.localeCompare(right, 'zh-CN'))
+
+    return {
+        ids,
+        count: ids.length,
+        savedAt: Date.now()
+    }
+}
+
+function hasMarketplaceNewItems(latestSnapshot, seenSnapshot) {
+    if (!latestSnapshot || !Array.isArray(latestSnapshot.ids) || !seenSnapshot || !Array.isArray(seenSnapshot.ids)) {
+        return false
+    }
+    const seenIds = new Set(seenSnapshot.ids)
+    return latestSnapshot.ids.some(id => !seenIds.has(id))
+}
 
 function loadStoredSitesCache() {
     try {
@@ -106,7 +185,7 @@ const BROWSER_CONSTANTS_SCHEMA = {
                 type: 'number',
                 step: 0.05,
                 min: 0,
-                default: 0.03
+                default: 0.1
             },
             STEALTH_DELAY_MAX: {
                 label: '隐身延迟上限',
@@ -114,7 +193,7 @@ const BROWSER_CONSTANTS_SCHEMA = {
                 type: 'number',
                 step: 0.05,
                 min: 0,
-                default: 0.1
+                default: 0.3
             },
             ACTION_DELAY_MIN: {
                 label: '动作延迟下限',
@@ -122,7 +201,7 @@ const BROWSER_CONSTANTS_SCHEMA = {
                 type: 'number',
                 step: 0.05,
                 min: 0,
-                default: 0.06
+                default: 0.15
             },
             ACTION_DELAY_MAX: {
                 label: '动作延迟上限',
@@ -130,7 +209,7 @@ const BROWSER_CONSTANTS_SCHEMA = {
                 type: 'number',
                 step: 0.05,
                 min: 0,
-                default: 0.14
+                default: 0.3
             }
         }
     },
@@ -165,7 +244,7 @@ const BROWSER_CONSTANTS_SCHEMA = {
         }
     },
     text_input: {
-        label: '长文本分块大小',
+        label: '文本输入',
         icon: '⌨️',
         items: {
             TEXT_INPUT_CHUNK_SIZE: {
@@ -447,23 +526,23 @@ const BROWSER_CONSTANTS_SCHEMA = {
             }
         }
     },
-    conversation: {
-        label: '对话复用',
+    session: {
+        label: '会话管理',
         icon: '💬',
-        collapsed: true,
+        desc: '控制是否在连续请求之间复用当前 AI 对话，超时后自动创建新对话',
         items: {
             CONVERSATION_TIMEOUT_THRESHOLD: {
-                label: '对话复用窗口',
+                label: '会话超时阈值',
                 unit: '秒',
-                desc: '大于 0 时，同一标签页在这个时间窗口内会复用当前对话；设为 0 表示关闭复用（默认）。',
+                desc: '距上一条请求超过此时间后，会自动创建新对话。设为 0 表示每次都新建',
                 type: 'number',
                 min: 0,
                 step: 10,
-                default: 0
+                default: 300
             },
             FORCE_NEW_CONVERSATION: {
                 label: '强制新建对话',
-                desc: '开启后，即使设置了复用窗口，也始终强制新建对话。',
+                desc: '开启后每次请求都会创建新对话，不保持当前上下文',
                 type: 'switch',
                 default: false
             }
@@ -696,7 +775,7 @@ const ENV_CONFIG_SCHEMA = {
         apply: 'service',
         label: '函数调用',
         icon: '🧰',
-        desc: '控制函数调用的内部修复、结果清洗与媒体后处理策略。',
+        desc: '控制函数调用的内部修复、重试策略与工具结果上限。',
         items: {
             TOOL_CALLING_RETRY_STRATEGY: {
                 label: '重试策略',
@@ -724,18 +803,6 @@ const ENV_CONFIG_SCHEMA = {
                 min: 1,
                 step: 10000,
                 default: 300000
-            },
-            TOOL_CALLING_ALLOW_MEDIA_POSTPROCESS: {
-                label: '允许媒体后处理',
-                desc: '开启后，函数调用隐藏回合也会执行媒体二次提取、占位补偿和 Markdown 媒体注入。兼容旧行为，但更容易污染 tool payload；默认关闭。',
-                type: 'switch',
-                default: false
-            },
-            TOOL_CALLING_SANITIZE_ASSISTANT_CONTENT: {
-                label: '解析前清洗回复',
-                desc: '开启后，函数调用在解析 assistant 内容前会移除占位链接和尾部媒体 Markdown。推荐保持开启；只有需要完全回退旧行为时再关闭。',
-                type: 'switch',
-                default: true
             }
         }
     },
@@ -767,6 +834,7 @@ const app = createApp({
             toasts: [],
             toastCounter: 0,
             hasLoadedSettings: false,
+            hasLoadedMarketplace: false,
             isSaving: false,
             isLoading: false,
             showJsonPreview: false,
@@ -792,9 +860,6 @@ const app = createApp({
 
             // Tab 切换（新增 settings）
             activeTab: 'config',  // 'config' | 'logs' | 'settings'
-            mountedTabs: {
-                config: true
-            },
 
             // 折叠面板状态
             selectorCollapsed: true,
@@ -836,15 +901,6 @@ const app = createApp({
             systemStatsTimer: null,
             isFetchingSystemStats: false,
 
-            // 请求监控
-            requestHistory: [],
-            requestHistoryLoading: false,
-            requestHistoryError: '',
-            requestHistoryTimer: null,
-            requestHistoryRevision: '',
-            requestHistoryFetchedAt: 0,
-            requestHistoryDetailLoading: {},
-
             // ========== 导入功能 ==========
             showImportDialog: false,
             importMode: 'merge',  // 'merge' | 'replace'
@@ -869,12 +925,23 @@ const app = createApp({
             isSavingConstants: false,
             isLoadingConstants: false,
 
+            // 会话状态
+            sessionStatus: { sessions: {}, force_new_conversation: false },
+            isLoadingSessionStatus: false,
+
             // 更新白名单
             updatePreserveOptions: [],
             updatePreserveSelected: [],
             updatePreserveSelectedOriginal: [],
             isSavingUpdatePreserve: false,
             isLoadingUpdatePreserve: false,
+
+            // 请求统计
+            statsSummary: {},
+            statsDaily: [],
+            statsHistory: { items: [], total: 0, page: 1, page_size: 50, total_pages: 1 },
+            isLoadingStats: false,
+            statsFilter: { domain: '', status: '', page: 1 },
 
             // Schema 引用
             envSchema: ENV_CONFIG_SCHEMA,
@@ -893,6 +960,55 @@ const app = createApp({
                 required: false
             },
             editingDefinitionIndex: null,
+
+            // ========== 插件市场 ==========
+            marketplaceCatalog: {
+                items: [],
+                count: 0,
+                total_downloads: 0,
+                default_sort: 'downloads',
+                source_mode: 'local',
+                source_name: '配置市场',
+                source_url: '',
+                upload_url: '',
+                warning: ''
+            },
+            marketplaceLoading: false,
+            marketplaceError: '',
+            marketplaceHasUpdates: false,
+            marketplaceCheckTimer: null,
+            marketplaceImportingId: null,
+            showMarketplacePreview: false,
+            marketplacePreviewData: null,
+            marketplacePreviewTitle: '',
+            showMarketplaceImportDialog: false,
+            marketplacePendingImport: null,
+            marketplaceImportStrategy: 'overwrite',
+            marketplaceImportPresetName: '',
+            showMarketplaceSubmitDialog: false,
+            marketplaceSubmitSaving: false,
+            marketplaceCommandOptions: [],
+            marketplaceCommandLoading: false,
+            appVersion: loadStoredMarketplaceClientVersion(),
+            marketplaceSubmitForm: {
+                item_type: 'site_config',
+                title: '',
+                summary: '',
+                author: '本地投稿',
+                site_domain: '',
+                category: '',
+                preset_name: '',
+                compatibility: '',
+                version: '1.0.0',
+                tagsText: '',
+                selected_command_ids: [],
+                parser_id: '',
+                parser_class_name: '',
+                parser_module_name: '',
+                parser_source: '',
+                parser_patterns_text: '',
+                parser_filename: ''
+            },
 
         }
     },
@@ -959,11 +1075,7 @@ const app = createApp({
 
     watch: {
         activeTab(tab) {
-            this.markTabAsVisited(tab)
             this.ensureTabDataLoaded(tab)
-            if (tab === 'logs') {
-                this.pollLogs()
-            }
         },
         darkMode() {
             this.applyDarkMode()
@@ -987,8 +1099,8 @@ const app = createApp({
 
         // 初始化折叠状态
         this.initCollapsedStates()
-        this.markTabAsVisited(this.activeTab)
         this.restoreSitesCache()
+        this.refreshMarketplaceUpdateFlagFromStorage()
 
         this.initializeDashboard()
 
@@ -1003,7 +1115,7 @@ const app = createApp({
 
     beforeUnmount() {
         this.stopLogPolling()
-        this.stopRequestHistoryPolling()
+        this.stopMarketplaceUpdatePolling()
         if (this.systemStatsTimer) {
             clearInterval(this.systemStatsTimer)
             this.systemStatsTimer = null
@@ -1016,7 +1128,7 @@ const app = createApp({
 
             this.startLogPolling()
             await this.loadHealthStatus({ silent: true, timeoutMs: 2500 }).catch(() => false)
-            this.startRequestHistoryPolling()
+            this.startMarketplaceUpdatePolling()
             this.ensureTabDataLoaded(this.activeTab)
 
             // 每 2 秒刷新系统状态
@@ -1049,38 +1161,22 @@ const app = createApp({
             this.logPollingTimer = null
         },
 
-        markTabAsVisited(tab) {
-            const key = String(tab || '').trim()
-            if (!key || this.mountedTabs[key]) {
+        startMarketplaceUpdatePolling() {
+            this.loadMarketplaceCatalog({ silent: true, background: true }).catch(() => {})
+            if (this.marketplaceCheckTimer) {
+                clearInterval(this.marketplaceCheckTimer)
+            }
+            this.marketplaceCheckTimer = setInterval(() => {
+                this.loadMarketplaceCatalog({ silent: true, background: true, force: true }).catch(() => {})
+            }, 300000)
+        },
+
+        stopMarketplaceUpdatePolling() {
+            if (!this.marketplaceCheckTimer) {
                 return
             }
-            this.mountedTabs = {
-                ...this.mountedTabs,
-                [key]: true
-            }
-        },
-
-        shouldRenderTab(tab) {
-            return this.activeTab === tab || !!this.mountedTabs[tab]
-        },
-
-        startRequestHistoryPolling() {
-            if (this.requestHistoryTimer) {
-                clearInterval(this.requestHistoryTimer)
-            }
-            this.requestHistoryTimer = setInterval(() => {
-                if (this.activeTab === 'monitor' && document.visibilityState !== 'hidden') {
-                    this.fetchRequestHistory({ silent: true, ifChanged: true }).catch(() => {})
-                }
-            }, 3000)
-        },
-
-        stopRequestHistoryPolling() {
-            if (!this.requestHistoryTimer) {
-                return
-            }
-            clearInterval(this.requestHistoryTimer)
-            this.requestHistoryTimer = null
+            clearInterval(this.marketplaceCheckTimer)
+            this.marketplaceCheckTimer = null
         },
         // ========== 初始化 ==========
 
@@ -1241,6 +1337,57 @@ const app = createApp({
             } finally {
                 this.isSaving = false
             }
+        },
+
+        getMarketplaceClientVersion() {
+            return String(this.appVersion || '').trim() || loadStoredMarketplaceClientVersion()
+        },
+
+        appendMarketplaceClientVersion(url) {
+            const target = String(url || '')
+            const version = this.getMarketplaceClientVersion()
+            if (!target || !version) {
+                return target
+            }
+            const separator = target.includes('?') ? '&' : '?'
+            return target + separator + 'app_version=' + encodeURIComponent(version)
+        },
+
+        refreshMarketplaceUpdateFlagFromStorage() {
+            const latestSnapshot = loadStoredMarketplaceSnapshot(MARKETPLACE_LATEST_SNAPSHOT_STORAGE_KEY)
+            const seenSnapshot = loadStoredMarketplaceSnapshot(MARKETPLACE_SEEN_SNAPSHOT_STORAGE_KEY)
+            this.marketplaceHasUpdates = hasMarketplaceNewItems(latestSnapshot, seenSnapshot)
+            return this.marketplaceHasUpdates
+        },
+
+        syncMarketplaceUpdateState(catalog, { markSeen = false } = {}) {
+            const latestSnapshot = buildMarketplaceSnapshot(catalog)
+            const seenSnapshot = loadStoredMarketplaceSnapshot(MARKETPLACE_SEEN_SNAPSHOT_STORAGE_KEY)
+
+            if (!seenSnapshot) {
+                saveStoredMarketplaceSnapshot(MARKETPLACE_SEEN_SNAPSHOT_STORAGE_KEY, latestSnapshot)
+                saveStoredMarketplaceSnapshot(MARKETPLACE_LATEST_SNAPSHOT_STORAGE_KEY, latestSnapshot)
+                this.marketplaceHasUpdates = false
+                return false
+            }
+
+            saveStoredMarketplaceSnapshot(MARKETPLACE_LATEST_SNAPSHOT_STORAGE_KEY, latestSnapshot)
+
+            if (markSeen) {
+                saveStoredMarketplaceSnapshot(MARKETPLACE_SEEN_SNAPSHOT_STORAGE_KEY, latestSnapshot)
+                this.marketplaceHasUpdates = false
+                return false
+            }
+
+            this.marketplaceHasUpdates = hasMarketplaceNewItems(latestSnapshot, seenSnapshot)
+            return this.marketplaceHasUpdates
+        },
+
+        markMarketplaceCatalogAsSeen() {
+            if (!Array.isArray(this.marketplaceCatalog && this.marketplaceCatalog.items)) {
+                return false
+            }
+            return this.syncMarketplaceUpdateState(this.marketplaceCatalog, { markSeen: true })
         },
 
         async checkAuth() {
@@ -1518,16 +1665,16 @@ const app = createApp({
         // ========== 日志相关 ==========
 
         async pollLogs() {
-            if (this.pauseLogs || document.visibilityState === 'hidden') return;
+            if (this.pauseLogs) return;
 
             try {
                 const result = await this.apiRequest('/api/logs?after_seq=' + this.lastLogSeq);
 
                 if (result.logs && result.logs.length > 0) {
-                    const nextLogs = result.logs.map(log => {
+                    result.logs.forEach(log => {
                         const messageText = log.message_text || log.display_message || log.message || '';
                         const kind = log.kind || log.level;
-                        return {
+                        this.logs.push({
                             id: log.seq || (Date.now() + Math.random()),
                             seq: log.seq || 0,
                             timestamp: new Date(log.timestamp * 1000).toLocaleTimeString() + '.' +
@@ -1541,9 +1688,18 @@ const app = createApp({
                             messageText,
                             originalMessageText: log.original_message_text || messageText,
                             messageAlias: log.message_alias || ''
+                        });
+                    });
+
+                    if (this.logs.length > 500) {
+                        this.logs = this.logs.slice(-500);
+                    }
+
+                    this.$nextTick(() => {
+                        if (this.$refs.logContainer) {
+                            this.$refs.logContainer.scrollTop = this.$refs.logContainer.scrollHeight;
                         }
                     });
-                    this.logs = this.logs.concat(nextLogs).slice(-500);
                 }
                 this.lastLogSeq = Number(result.next_seq || this.lastLogSeq || 0);
                 this.lastLogTimestamp = Number(result.timestamp || this.lastLogTimestamp || 0);
@@ -2219,6 +2375,64 @@ const app = createApp({
             }
         },
 
+        async loadSessionStatus() {
+            this.isLoadingSessionStatus = true;
+            try {
+                const data = await this.apiRequest('/api/session/status');
+                this.sessionStatus = {
+                    sessions: data.sessions || {},
+                    force_new_conversation: !!data.force_new_conversation,
+                };
+            } catch (error) {
+                console.error('加载会话状态失败:', error);
+                this.sessionStatus = { sessions: {}, force_new_conversation: false };
+            } finally {
+                this.isLoadingSessionStatus = false;
+            }
+        },
+
+        async loadStatsSummary() {
+            this.isLoadingStats = true;
+            try {
+                const data = await this.apiRequest('/api/stats/summary');
+                this.statsSummary = data.summary || {};
+                this.statsDaily = data.daily || [];
+            } catch (error) {
+                console.error('加载统计摘要失败:', error);
+                this.statsSummary = {};
+                this.statsDaily = [];
+            } finally {
+                this.isLoadingStats = false;
+            }
+        },
+
+        async loadStatsHistory() {
+            try {
+                const params = new URLSearchParams({
+                    page: this.statsFilter.page,
+                    page_size: 50,
+                    domain: this.statsFilter.domain,
+                    status: this.statsFilter.status,
+                });
+                const data = await this.apiRequest('/api/stats/history?' + params.toString());
+                this.statsHistory = data || { items: [], total: 0, page: 1, page_size: 50, total_pages: 1 };
+            } catch (error) {
+                console.error('加载统计历史失败:', error);
+                this.statsHistory = { items: [], total: 0, page: 1, page_size: 50, total_pages: 1 };
+            }
+        },
+
+        async clearStatsHistory() {
+            try {
+                await this.apiRequest('/api/stats/clear', { method: 'POST' });
+                this.notify('统计历史已清理', 'success');
+                this.loadStatsSummary();
+                this.loadStatsHistory();
+            } catch (error) {
+                this.notify('清理失败: ' + error.message, 'error');
+            }
+        },
+
         getBrowserConstantsDefaults() {
             return this.normalizeBrowserConstantsForEditor({});
         },
@@ -2236,6 +2450,7 @@ const app = createApp({
                 this.browserConstants = this.normalizeBrowserConstantsForEditor(payload);
                 this.browserConstantsOriginal = JSON.parse(JSON.stringify(this.browserConstants));
                 this.notify('浏览器常量已保存', 'success');
+                this.loadSessionStatus();
             } catch (error) {
                 this.notify('保存失败: ' + error.message, 'error');
             } finally {
@@ -2456,18 +2671,17 @@ const app = createApp({
         },
 
         changeTab(tab) {
-            this.markTabAsVisited(tab)
             this.activeTab = tab;
         },
 
         async ensureTabDataLoaded(tab) {
-            if (tab === 'monitor') {
-                const now = Date.now()
-                const stale = now - Number(this.requestHistoryFetchedAt || 0) > 2000
-                await Promise.all([
-                    this.fetchRequestHistory({ silent: true, ifChanged: !stale }),
-                    this.fetchSystemStats({ timeoutMs: 5000 })
-                ]);
+            if (tab === 'marketplace') {
+                if (!this.hasLoadedMarketplace) {
+                    this.hasLoadedMarketplace = true;
+                    await this.loadMarketplaceCatalog({ silent: true, markSeen: true });
+                    return;
+                }
+                this.markMarketplaceCatalogAsSeen();
                 return;
             }
             if (tab === 'settings' && !this.hasLoadedSettings) {
@@ -2475,94 +2689,613 @@ const app = createApp({
                 await Promise.all([
                     this.loadEnvConfig(),
                     this.loadBrowserConstants(),
+                    this.loadSessionStatus(),
                     this.loadUpdatePreserveSettings(),
                     this.loadSelectorDefinitions()
                 ]);
                 return;
             }
+            if (tab === 'stats') {
+                await Promise.all([
+                    this.loadStatsSummary(),
+                    this.loadStatsHistory(),
+                ]);
+                return;
+            }
         },
 
-        async fetchRequestHistory({ silent = false, ifChanged = false, force = false } = {}) {
-            if (this.requestHistoryLoading) {
-                return this.requestHistory;
+        async loadMarketplaceCatalog({ silent = false, force = false, background = false, markSeen = false } = {}) {
+            if (!background) {
+                this.marketplaceLoading = true;
             }
-            const now = Date.now();
-            if (!force && ifChanged && now - Number(this.requestHistoryFetchedAt || 0) < 1200) {
-                return this.requestHistory;
+            this.marketplaceError = '';
+            try {
+                const suffix = force ? '?refresh=true' : '';
+                const url = this.appendMarketplaceClientVersion('/api/marketplace' + suffix);
+                const data = await this.apiRequest(url);
+                this.marketplaceCatalog = {
+                    items: [],
+                    count: 0,
+                    total_downloads: 0,
+                    default_sort: 'downloads',
+                    source_mode: 'local',
+                    source_name: '配置市场',
+                    source_url: '',
+                    upload_url: '',
+                    warning: '',
+                    ...(data || {})
+                };
+                this.syncMarketplaceUpdateState(this.marketplaceCatalog, {
+                    markSeen: markSeen || this.activeTab === 'marketplace'
+                });
+                this.hasLoadedMarketplace = true;
+                if (!silent) {
+                    this.notify('插件市场已刷新', 'success');
+                }
+                return true;
+            } catch (error) {
+                this.marketplaceError = error.message;
+                if (!silent) {
+                    this.notify('加载插件市场失败: ' + error.message, 'error');
+                }
+                return false;
+            } finally {
+                if (!background) {
+                    this.marketplaceLoading = false;
+                }
             }
-            this.requestHistoryLoading = true;
-            if (!silent) {
-                this.requestHistoryError = '';
+        },
+
+        openMarketplace() {
+            window.location.href = '/static/marketplace.html';
+        },
+
+        openExternalLink(url) {
+            const target = String(url || '').trim();
+            if (!target) {
+                this.notify('当前项目没有可打开的外部链接', 'warning');
+                return;
+            }
+            window.open(target, '_blank', 'noopener,noreferrer');
+        },
+
+        async previewMarketplaceItem(item) {
+            if (!item || !item.id) {
+                return;
             }
             try {
-                const data = await this.apiRequest('/api/system/request-history?limit=200', {
-                    timeoutMs: 5000
-                });
-                const revision = String(data.revision || '');
-                if (!ifChanged || force || !this.requestHistoryRevision || revision !== this.requestHistoryRevision) {
-                    const detailCache = new Map(
-                        this.requestHistory
-                            .filter(item => item && item.detail_loaded && item.id)
-                            .map(item => [String(item.id), item])
-                    );
-                    const records = Array.isArray(data.records) ? data.records : [];
-                    this.requestHistory = records.map(item => {
-                        const cached = detailCache.get(String(item && item.id || ''));
-                        return cached ? { ...item, ...cached } : item;
-                    });
-                    this.requestHistoryRevision = revision;
-                }
-                this.requestHistoryFetchedAt = Date.now();
-                this.requestHistoryError = '';
-                return this.requestHistory;
+                const url = this.appendMarketplaceClientVersion('/api/marketplace/items/' + encodeURIComponent(item.id));
+                const detail = await this.apiRequest(url);
+                this.marketplacePreviewTitle = '市场预览 · ' + (detail.name || item.name || item.id);
+                this.marketplacePreviewData = detail;
+                this.showMarketplacePreview = true;
             } catch (error) {
-                this.requestHistoryError = error.message || '请求历史加载失败';
-                return this.requestHistory;
-            } finally {
-                this.requestHistoryLoading = false;
+                this.notify('加载预览失败: ' + error.message, 'error');
             }
         },
 
-        async fetchRequestHistoryDetail(requestId) {
-            const id = String(requestId || '').trim();
-            if (!id || this.requestHistoryDetailLoading[id]) {
-                return null;
-            }
+        copyMarketplacePreview() {
+            const payload = JSON.stringify(this.marketplacePreviewData || {}, null, 2);
+            navigator.clipboard.writeText(payload)
+                .then(() => this.notify('预览内容已复制', 'success'))
+                .catch(() => this.notify('复制失败', 'error'));
+        },
 
-            const existingIndex = this.requestHistory.findIndex(item => String(item && item.id || '') === id);
-            if (existingIndex >= 0 && this.requestHistory[existingIndex].detail_loaded) {
-                return this.requestHistory[existingIndex];
-            }
+        saveMarketplacePreview() {
+            const payload = JSON.stringify(this.marketplacePreviewData || {}, null, 2);
+            this.downloadDataAsJson('marketplace-preview-' + Date.now() + '.json', payload);
+            this.notify('预览文件已导出', 'success');
+        },
 
-            this.requestHistoryDetailLoading = {
-                ...this.requestHistoryDetailLoading,
-                [id]: true
+        openMarketplaceSubmitDialog() {
+            this.resetMarketplaceSubmitForm();
+            this.showMarketplaceSubmitDialog = true;
+        },
+
+        resetMarketplaceSubmitForm() {
+            this.marketplaceSubmitForm = {
+                item_type: 'site_config',
+                title: this.currentDomain ? (this.currentDomain + ' 配置投稿') : '',
+                summary: '',
+                author: '本地投稿',
+                site_domain: this.currentDomain || '',
+                category: this.currentDomain || '',
+                preset_name: this.getActivePresetName(),
+                compatibility: '',
+                version: '1.0.0',
+                tagsText: '',
+                selected_command_ids: [],
+                parser_id: '',
+                parser_class_name: '',
+                parser_module_name: '',
+                parser_source: '',
+                parser_patterns_text: '',
+                parser_filename: ''
             };
-            try {
-                const detail = await this.apiRequest('/api/system/request-history/' + encodeURIComponent(id), {
-                    timeoutMs: 5000
-                });
-                const index = this.requestHistory.findIndex(item => String(item && item.id || '') === id);
-                if (index >= 0) {
-                    const updated = {
-                        ...this.requestHistory[index],
-                        ...(detail || {}),
-                        detail_loaded: true,
-                        has_detail: true
-                    };
-                    const nextHistory = this.requestHistory.slice();
-                    nextHistory[index] = updated;
-                    this.requestHistory = nextHistory;
-                    return updated;
+        },
+
+        async setMarketplaceSubmitType(itemType) {
+            this.marketplaceSubmitForm.item_type = itemType;
+            if (itemType === 'command_bundle') {
+                if (!this.marketplaceCommandOptions.length) {
+                    await this.loadMarketplaceCommandOptions();
                 }
-                return detail || null;
+                this.marketplaceSubmitForm.title = this.marketplaceSubmitForm.title || '命令包投稿';
+                this.marketplaceSubmitForm.category = '命令系统';
+            } else if (itemType === 'response_parser') {
+                if (!this.marketplaceSubmitForm.category
+                    || this.marketplaceSubmitForm.category === '命令系统'
+                    || this.marketplaceSubmitForm.category === this.marketplaceSubmitForm.site_domain
+                    || this.marketplaceSubmitForm.category === this.currentDomain) {
+                    this.marketplaceSubmitForm.category = '响应解析器';
+                }
+            } else {
+                this.marketplaceSubmitForm.site_domain = this.marketplaceSubmitForm.site_domain || this.currentDomain || '';
+                this.marketplaceSubmitForm.category = this.marketplaceSubmitForm.category || this.marketplaceSubmitForm.site_domain;
+                this.marketplaceSubmitForm.preset_name = this.marketplaceSubmitForm.preset_name || this.getActivePresetName();
+            }
+        },
+
+        async loadMarketplaceCommandOptions() {
+            this.marketplaceCommandLoading = true;
+            try {
+                const data = await this.apiRequest('/api/commands');
+                const commands = Array.isArray(data.commands) ? data.commands : [];
+                commands.sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'zh-CN'));
+                this.marketplaceCommandOptions = commands;
+                return commands;
             } catch (error) {
-                this.notify('加载请求详情失败: ' + error.message, 'error');
-                return null;
+                this.notify('加载命令列表失败: ' + error.message, 'error');
+                return [];
             } finally {
-                const nextLoading = { ...this.requestHistoryDetailLoading };
-                delete nextLoading[id];
-                this.requestHistoryDetailLoading = nextLoading;
+                this.marketplaceCommandLoading = false;
+            }
+        },
+
+        parseMarketplaceTags(text) {
+            return String(text || '')
+                .split(/[,\n，]/)
+                .map(item => item.trim())
+                .filter(Boolean);
+        },
+
+        normalizeMarketplaceParserModuleName(value) {
+            const normalized = String(value || '')
+                .replace(/\.py$/i, '')
+                .trim()
+                .replace(/[^A-Za-z0-9_]+/g, '_')
+                .replace(/^_+|_+$/g, '');
+            return normalized || '';
+        },
+
+        normalizeMarketplaceParserId(value) {
+            const normalized = String(value || '')
+                .trim()
+                .replace(/[^A-Za-z0-9._-]+/g, '_')
+                .replace(/^_+|_+$/g, '');
+            return normalized || '';
+        },
+
+        extractMarketplaceParserClassName(sourceText) {
+            const text = String(sourceText || '');
+            const parserMatch = text.match(/class\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*ResponseParser\b/);
+            if (parserMatch) {
+                return parserMatch[1];
+            }
+            const anyClassMatch = text.match(/class\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/);
+            return anyClassMatch ? anyClassMatch[1] : '';
+        },
+
+        async handleMarketplaceParserFileChange(event) {
+            const file = event && event.target && event.target.files && event.target.files[0];
+            if (!file) {
+                return;
+            }
+
+            try {
+                const source = await file.text();
+                const moduleName = this.normalizeMarketplaceParserModuleName(file.name);
+                const parserId = this.normalizeMarketplaceParserId(moduleName.replace(/_parser$/i, ''));
+                const className = this.extractMarketplaceParserClassName(source);
+                const defaultTitle = this.currentDomain ? (this.currentDomain + ' 配置投稿') : '';
+
+                this.marketplaceSubmitForm.parser_filename = file.name;
+                this.marketplaceSubmitForm.parser_source = source;
+                if (!this.marketplaceSubmitForm.parser_module_name) {
+                    this.marketplaceSubmitForm.parser_module_name = moduleName;
+                }
+                if (!this.marketplaceSubmitForm.parser_id) {
+                    this.marketplaceSubmitForm.parser_id = parserId;
+                }
+                if (!this.marketplaceSubmitForm.parser_class_name) {
+                    this.marketplaceSubmitForm.parser_class_name = className;
+                }
+                if (!this.marketplaceSubmitForm.title || this.marketplaceSubmitForm.title === defaultTitle) {
+                    this.marketplaceSubmitForm.title = className || parserId || moduleName || file.name.replace(/\.py$/i, '');
+                }
+            } catch (error) {
+                this.notify('读取解析器文件失败: ' + error.message, 'error');
+            } finally {
+                if (event && event.target) {
+                    event.target.value = '';
+                }
+            }
+        },
+
+        sanitizeCommandForBundle(command) {
+            const cloned = JSON.parse(JSON.stringify(command || {}));
+            delete cloned.last_triggered;
+            delete cloned.trigger_count;
+            return cloned;
+        },
+
+        getMarketplaceSelectedCommands() {
+            const selectedIds = new Set(this.marketplaceSubmitForm.selected_command_ids || []);
+            return (this.marketplaceCommandOptions || [])
+                .filter(command => selectedIds.has(command.id))
+                .map(command => this.sanitizeCommandForBundle(command));
+        },
+
+        buildMarketplaceSubmissionPayload() {
+            const form = this.marketplaceSubmitForm || {};
+            const title = String(form.title || '').trim();
+            const summary = String(form.summary || '').trim();
+            const author = String(form.author || '本地投稿').trim() || '本地投稿';
+            const category = String(form.category || '').trim();
+            const presetName = String(form.preset_name || this.getActivePresetName() || '主预设').trim() || '主预设';
+            const compatibility = String(form.compatibility || '').trim();
+            const version = String(form.version || '1.0.0').trim() || '1.0.0';
+            const tags = this.parseMarketplaceTags(form.tagsText);
+
+            if (!title) {
+                throw new Error('请填写标题');
+            }
+            if (!summary) {
+                throw new Error('请填写简介');
+            }
+
+            if (form.item_type === 'command_bundle') {
+                const commands = this.getMarketplaceSelectedCommands();
+                if (!commands.length) {
+                    throw new Error('请至少选择一个命令');
+                }
+                return {
+                    item_type: 'command_bundle',
+                    title,
+                    summary,
+                    author,
+                    category: category || '命令系统',
+                    compatibility,
+                    version,
+                    tags,
+                    command_bundle: {
+                        group_name: '',
+                        commands
+                    }
+                };
+            }
+
+            if (form.item_type === 'response_parser') {
+                const parserId = this.normalizeMarketplaceParserId(form.parser_id);
+                const className = String(form.parser_class_name || '').trim();
+                const moduleName = this.normalizeMarketplaceParserModuleName(form.parser_module_name);
+                const sourceCode = String(form.parser_source || '');
+                const supportedPatterns = this.parseMarketplaceTags(form.parser_patterns_text);
+
+                if (!parserId) {
+                    throw new Error('请填写解析器 ID');
+                }
+                if (!className) {
+                    throw new Error('请填写解析器类名');
+                }
+                if (!moduleName) {
+                    throw new Error('请填写解析器模块名');
+                }
+                if (!sourceCode.trim()) {
+                    throw new Error('请上传或粘贴解析器源码');
+                }
+
+                return {
+                    item_type: 'response_parser',
+                    title,
+                    summary,
+                    author,
+                    category: category || '响应解析器',
+                    compatibility,
+                    version,
+                    tags,
+                    parser_package: {
+                        parser_id: parserId,
+                        class_name: className,
+                        module_name: moduleName,
+                        filename: moduleName + '.py',
+                        name: title,
+                        description: summary,
+                        source_code: sourceCode,
+                        supported_patterns: supportedPatterns
+                    }
+                };
+            }
+
+            const siteDomain = String(form.site_domain || this.currentDomain || '').trim();
+            if (!siteDomain) {
+                throw new Error('请填写站点域名');
+            }
+            const presetConfig = this.getActivePresetConfig();
+            if (!presetConfig) {
+                throw new Error('当前没有可上传的站点配置');
+            }
+
+            return {
+                item_type: 'site_config',
+                title,
+                summary,
+                author,
+                category: category || siteDomain,
+                site_domain: siteDomain,
+                preset_name: presetName,
+                compatibility,
+                version,
+                tags,
+                site_config: {
+                    [siteDomain]: {
+                        default_preset: presetName,
+                        presets: {
+                            [presetName]: JSON.parse(JSON.stringify(presetConfig))
+                        }
+                    }
+                }
+            };
+        },
+
+        getMarketplaceSubmissionPreviewText() {
+            try {
+                return JSON.stringify(this.buildMarketplaceSubmissionPayload(), null, 2);
+            } catch (error) {
+                return '// 预览暂不可用: ' + error.message;
+            }
+        },
+
+        async submitMarketplaceItem() {
+            let payload = null;
+            try {
+                payload = this.buildMarketplaceSubmissionPayload();
+            } catch (error) {
+                this.notify(error.message, 'warning');
+                return;
+            }
+
+            this.marketplaceSubmitSaving = true;
+            try {
+                await this.apiRequest('/api/marketplace/items', {
+                    method: 'POST',
+                    body: JSON.stringify(payload)
+                });
+                this.showMarketplaceSubmitDialog = false;
+                this.activeTab = 'marketplace';
+                this.hasLoadedMarketplace = true;
+                await this.loadMarketplaceCatalog({ silent: true, force: true });
+                this.notify('投稿已加入本地市场', 'success');
+            } catch (error) {
+                this.notify('投稿失败: ' + error.message, 'error');
+            } finally {
+                this.marketplaceSubmitSaving = false;
+            }
+        },
+
+        async startMarketplaceImport(item) {
+            if (!item || !item.id) {
+                return;
+            }
+
+            this.marketplaceImportingId = item.id;
+            try {
+                const url = this.appendMarketplaceClientVersion('/api/marketplace/items/' + encodeURIComponent(item.id));
+                const detail = await this.apiRequest(url);
+                if (detail.item_type === 'command_bundle') {
+                    await this.importMarketplaceCommandBundle(detail);
+                    return;
+                }
+                if (detail.item_type === 'response_parser') {
+                    await this.importMarketplaceParserPackage(detail);
+                    return;
+                }
+
+                this.marketplacePendingImport = detail;
+                this.marketplaceImportStrategy = 'overwrite';
+                this.marketplaceImportPresetName = (detail.name || detail.preset_name || '市场预设').trim();
+                this.showMarketplaceImportDialog = true;
+            } catch (error) {
+                this.notify('加载导入内容失败: ' + error.message, 'error');
+            } finally {
+                this.marketplaceImportingId = null;
+            }
+        },
+
+        async confirmMarketplaceImport() {
+            if (!this.marketplacePendingImport) {
+                return;
+            }
+
+            try {
+                if (this.marketplaceImportStrategy === 'save_as_preset') {
+                    await this.applyMarketplaceSiteSaveAsPreset();
+                } else {
+                    await this.applyMarketplaceSiteOverwrite();
+                }
+                this.showMarketplaceImportDialog = false;
+                this.marketplacePendingImport = null;
+                this.activeTab = 'config';
+            } catch (error) {
+                this.notify('导入失败: ' + error.message, 'error');
+            }
+        },
+
+        getSingleImportedSite(detail) {
+            const siteConfig = detail && detail.site_config;
+            if (!this.validateImportedConfig(siteConfig)) {
+                throw new Error('市场配置格式无效');
+            }
+
+            const domains = Object.keys(siteConfig || {});
+            if (domains.length !== 1) {
+                throw new Error('当前仅支持单站点配置导入');
+            }
+
+            const domain = domains[0];
+            const normalizedMap = this.normalizeConfig(siteConfig);
+            const normalizedSite = normalizedMap[domain];
+            if (!normalizedSite) {
+                throw new Error('站点配置解析失败');
+            }
+
+            return { domain, site: normalizedSite };
+        },
+
+        async applyMarketplaceSiteOverwrite() {
+            const imported = this.getSingleImportedSite(this.marketplacePendingImport);
+            this.sites[imported.domain] = imported.site;
+            this.currentDomain = imported.domain;
+            await this.apiRequest('/api/config', {
+                method: 'POST',
+                body: JSON.stringify({ config: this.sites })
+            });
+            this.notify('站点配置已覆盖导入: ' + imported.domain, 'success');
+        },
+
+        async applyMarketplaceSiteSaveAsPreset() {
+            const imported = this.getSingleImportedSite(this.marketplacePendingImport);
+            const newPresetName = String(this.marketplaceImportPresetName || '').trim();
+            if (!newPresetName) {
+                throw new Error('请填写另存为预设名称');
+            }
+
+            const targetSite = this.sites[imported.domain]
+                ? JSON.parse(JSON.stringify(this.sites[imported.domain]))
+                : { default_preset: newPresetName, presets: {} };
+
+            if (targetSite.presets && targetSite.presets[newPresetName]) {
+                throw new Error('该预设名已存在，请换一个名字');
+            }
+
+            const importedPresets = imported.site.presets || {};
+            const sourcePresetName = imported.site.default_preset && importedPresets[imported.site.default_preset]
+                ? imported.site.default_preset
+                : Object.keys(importedPresets)[0];
+            if (!sourcePresetName) {
+                throw new Error('导入内容缺少预设');
+            }
+
+            targetSite.presets = targetSite.presets || {};
+            targetSite.presets[newPresetName] = JSON.parse(JSON.stringify(importedPresets[sourcePresetName]));
+            targetSite.default_preset = targetSite.default_preset || newPresetName;
+            this.sites[imported.domain] = targetSite;
+            this.currentDomain = imported.domain;
+
+            await this.apiRequest('/api/config', {
+                method: 'POST',
+                body: JSON.stringify({ config: this.sites })
+            });
+            this.notify('站点配置已另存为预设: ' + newPresetName, 'success');
+        },
+
+        prepareCommandImportPayload(command) {
+            const cloned = JSON.parse(JSON.stringify(command || {}));
+            delete cloned.id;
+            delete cloned.last_triggered;
+            delete cloned.trigger_count;
+            return cloned;
+        },
+
+        async importMarketplaceCommandBundle(detail) {
+            const bundle = detail && detail.command_bundle;
+            const commands = Array.isArray(bundle && bundle.commands) ? bundle.commands : [];
+            if (!commands.length) {
+                throw new Error('命令包为空');
+            }
+
+            const idMap = {};
+            const importedCommands = [];
+
+            for (const command of commands) {
+                const oldId = command.id;
+                const payload = this.prepareCommandImportPayload(command);
+                const response = await this.apiRequest('/api/commands', {
+                    method: 'POST',
+                    body: JSON.stringify(payload)
+                });
+                const created = response.command;
+                importedCommands.push(created);
+                if (oldId && created && created.id) {
+                    idMap[oldId] = created.id;
+                }
+            }
+
+            for (let index = 0; index < commands.length; index++) {
+                const original = commands[index];
+                const created = importedCommands[index];
+                if (!original || !created || !original.trigger) {
+                    continue;
+                }
+
+                const trigger = JSON.parse(JSON.stringify(original.trigger));
+                if (trigger.command_id && idMap[trigger.command_id]) {
+                    trigger.command_id = idMap[trigger.command_id];
+                }
+                if (Array.isArray(trigger.command_ids)) {
+                    trigger.command_ids = trigger.command_ids.map(commandId => idMap[commandId] || commandId);
+                }
+
+                await this.apiRequest('/api/commands/' + encodeURIComponent(created.id), {
+                    method: 'PUT',
+                    body: JSON.stringify({ trigger })
+                });
+            }
+
+            this.notify('命令包已导入，共 ' + importedCommands.length + ' 条命令', 'success');
+        },
+
+        async importMarketplaceParserPackage(detail) {
+            const parserPackage = detail && detail.parser_package;
+            const parserId = String((parserPackage && parserPackage.parser_id) || detail.parser_id || '').trim();
+            if (!parserPackage || !parserId) {
+                throw new Error('解析器包内容无效');
+            }
+
+            const confirmed = window.confirm(
+                '导入解析器会写入 app/core/parsers 并注册到当前应用，这会执行 Python 代码。确认继续吗？'
+            );
+            if (!confirmed) {
+                return;
+            }
+
+            try {
+                const result = await this.apiRequest('/api/parsers/install', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        parser_package: parserPackage,
+                        overwrite: false
+                    })
+                });
+                this.notify((result && result.message) || ('解析器已导入: ' + parserId), 'success');
+            } catch (error) {
+                if (error.status !== 409) {
+                    throw error;
+                }
+
+                const replace = window.confirm('同名解析器已存在。是否覆盖已安装的版本？');
+                if (!replace) {
+                    return;
+                }
+
+                const result = await this.apiRequest('/api/parsers/install', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        parser_package: parserPackage,
+                        overwrite: true
+                    })
+                });
+                this.notify((result && result.message) || ('解析器已覆盖安装: ' + parserId), 'success');
             }
         },
 
@@ -2922,22 +3655,6 @@ const app = createApp({
             if (['FILL_INPUT', 'CLICK', 'STREAM_WAIT'].includes(step.action)) {
                 step.value = null
                 if (!step.target) step.target = ''
-            } else if (step.action === 'PAGE_FETCH') {
-                step.target = ''
-                step.optional = true
-                step.value = null
-            } else if (step.action === 'READONLY_HINT') {
-                step.target = ''
-                const current = (step.value && typeof step.value === 'object' && !Array.isArray(step.value))
-                    ? step.value
-                    : {}
-                step.value = {
-                    title: String(current.title || '提示'),
-                    text: String(current.text || '这是一条只读提示，不会在执行时触发页面操作。'),
-                    tone: ['info', 'success', 'warning', 'danger'].includes(String(current.tone || '').trim().toLowerCase())
-                        ? String(current.tone || '').trim().toLowerCase()
-                        : 'info'
-                }
             } else if (step.action === 'COORD_CLICK') {
                 step.target = ''
                 step.value = {
@@ -2980,13 +3697,6 @@ const app = createApp({
                     { action: 'STREAM_WAIT', target: 'result_container', optional: false, value: null }
                 ],
                 'simple': [
-                    { action: 'FILL_INPUT', target: 'input_box', optional: false, value: null },
-                    { action: 'KEY_PRESS', target: 'Enter', optional: false, value: null },
-                    { action: 'STREAM_WAIT', target: 'result_container', optional: false, value: null }
-                ],
-                'experimental_hint': [
-                    { action: 'READONLY_HINT', target: '', optional: false, value: { title: '提示', text: '这是一条只读提示，不会影响执行，只用于说明当前工作流中的特殊行为。', tone: 'info' } },
-                    { action: 'PAGE_FETCH', target: '', optional: true, value: null },
                     { action: 'FILL_INPUT', target: 'input_box', optional: false, value: null },
                     { action: 'KEY_PRESS', target: 'Enter', optional: false, value: null },
                     { action: 'STREAM_WAIT', target: 'result_container', optional: false, value: null }
@@ -3173,6 +3883,8 @@ const app = createApp({
                 const health = await this.apiRequest('/health', {
                     timeoutMs: timeoutMs || 2500
                 })
+                this.appVersion = String(health.version || '').trim()
+                saveStoredMarketplaceClientVersion(this.appVersion)
                 this.browserStatus = health.browser || {}
                 this.authEnabled = health.config?.auth_enabled || false
                 return true
@@ -3212,11 +3924,12 @@ const app = createApp({
 // ========== 组件注册 ==========
 app.component('sidebar-component', window.SidebarComponent);
 app.component('config-tab', window.ConfigTab);
-app.component('request-monitor-tab', window.RequestMonitorTab);
+app.component('marketplace-tab', window.MarketplaceTab);
 app.component('tabpool-tab', window.TabPoolTabComponent);
 app.component('commands-tab', window.CommandsTabComponent);  // 🆕 命令系统
 app.component('logs-tab', window.LogsTab);
 app.component('settings-tab', window.SettingsTab);
+app.component('stats-tab', window.StatsTab);
 app.component('json-preview-dialog', window.JsonPreviewDialog);
 app.component('token-dialog', window.TokenDialog);
 app.component('step-templates-dialog', window.StepTemplatesDialog);

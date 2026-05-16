@@ -57,3 +57,12 @@ git提交.py
 
 download_images/
 image/
+
+# 运行时数据
+data/
+
+# 开发规范/规划文档
+.trae/
+
+# 备份目录
+备份/

@@ -38,6 +38,7 @@ from app.utils.human_mouse import (
     human_scroll,
     human_scroll_path,
     cdp_precise_click,
+    _dispatch_mouse_move,
 )
 from app.core.stream_monitor import StreamMonitor
 from app.core.network_monitor import (
@@ -1869,8 +1870,6 @@ class WorkflowExecutor:
         if self._mouse_pos is not None:
             return self._mouse_pos
 
-        from app.utils.human_mouse import _dispatch_mouse_move
-
         vw, vh = self._get_viewport_size()
         origin_x = random.randint(max(40, int(vw * 0.18)), max(60, int(vw * 0.42)))
         origin_y = random.randint(max(40, int(vh * 0.16)), max(60, int(vh * 0.45)))
@@ -2112,7 +2111,6 @@ class WorkflowExecutor:
                 check_cancelled=self._check_cancelled
             )
         else:
-            from app.utils.human_mouse import _dispatch_mouse_move
             _dispatch_mouse_move(self.tab, click_x, click_y)
             self._mouse_pos = (click_x, click_y)
         
@@ -3570,7 +3568,6 @@ class WorkflowExecutor:
         logger.debug("[STEALTH] 执行页面预热")
         
         try:
-            from app.utils.human_mouse import _dispatch_mouse_move
             
             vw, vh = self._get_viewport_size()
             

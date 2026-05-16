@@ -26,6 +26,8 @@ from app.models.schemas import (
     get_default_attachment_monitor_config,
     get_default_send_confirmation_config,
 )
+from app.core import browser as browser_module
+from app.core.extractors import ExtractorRegistry
 from app.services.extractor_manager import extractor_manager
 from app.services.parser_manager import parser_manager
 from app.utils.site_rules import derive_site_card_id, get_site_rule
@@ -33,6 +35,7 @@ from app.core.request_transport import (
     get_default_request_transport_config,
     normalize_request_transport_config,
 )
+from .cache import ConfigCache
 from .managers import GlobalConfigManager, ImagePresetsManager
 from .processors import HTMLCleaner, SelectorValidator, AIAnalyzer
 
@@ -130,6 +133,9 @@ class ConfigEngine:
         self.global_config = GlobalConfigManager()
         self.image_presets = ImagePresetsManager(ConfigConstants.IMAGE_PRESETS_FILE)
         
+        # 初始化缓存层
+        self._cache = ConfigCache(ttl=5.0)
+        
         # 加载配置
         self._load_config()
         self._migrate_global_commands()
@@ -190,16 +196,18 @@ class ConfigEngine:
             return
 
         try:
-            current_mtime = os.path.getmtime(self.config_file) if os.path.exists(self.config_file) else 0.0
-            current_local_mtime = os.path.getmtime(self.local_sites_file) if os.path.exists(self.local_sites_file) else 0.0
-            if current_mtime != self.last_mtime or current_local_mtime != self.last_local_mtime:
-                logger.debug(f"⚡ 检测到配置文件变化 (new mtime: {current_mtime})")
+            config_changed = self._cache.check_file_mtime(self.config_file) if os.path.exists(self.config_file) else False
+            local_changed = self._cache.check_file_mtime(self.local_sites_file) if os.path.exists(self.local_sites_file) else False
+            if config_changed or local_changed:
+                logger.debug(f"⚡ 检测到配置文件变化")
                 self.reload_config()
         except Exception as e:
             logger.error(f"检查文件变化失败: {e}")
 
     def reload_config(self):
         """重新加载配置（Hot Reload）"""
+        self._cache.invalidate()
+
         if not os.path.exists(self.config_file):
             logger.warning("重载失败：配置文件不存在")
             return
@@ -781,11 +789,18 @@ class ConfigEngine:
         """获取指定站点的默认预设名称（已解析回退）"""
         self.refresh_if_changed()
 
+        cache_key = f"default_preset:{domain}"
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return cached
+
         site = self.sites.get(domain)
         if not site:
             return None
 
-        return self._resolve_default_preset_name(site)
+        result = self._resolve_default_preset_name(site)
+        self._cache.set(cache_key, result)
+        return result
 
     def _extract_startup_url_from_script(self, script: str) -> str:
         text = str(script or "").strip()
@@ -1075,8 +1090,6 @@ class ConfigEngine:
             return 0
 
         try:
-            from app.core import browser as browser_module
-
             instance = getattr(browser_module, "_browser_instance", None)
             if instance is None:
                 return 0
@@ -1235,7 +1248,7 @@ class ConfigEngine:
             if not domain.startswith('_')
         }
     
-    def get_site_config(self, domain: str, html_content: str, 
+    def get_site_config(self, domain: str, html_content: str,
                         preset_name: str = None) -> Optional[SiteConfig]:
         """
         获取站点配置（缓存 + AI 分析）
@@ -1247,7 +1260,13 @@ class ConfigEngine:
         """
         self.refresh_if_changed()
 
+        cache_key = f"site_config:{domain}:{preset_name}"
+
         if domain in self.sites:
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                return copy.deepcopy(cached)
+
             config = self._get_site_data(domain, preset_name)
             
             if config is None:
@@ -1281,7 +1300,9 @@ class ConfigEngine:
             
             used_preset = preset_name or self.get_default_preset(domain) or DEFAULT_PRESET_NAME
             logger.debug(f"使用缓存配置: {domain} [预设: {used_preset}]")
-            return copy.deepcopy(config)
+            result = copy.deepcopy(config)
+            self._cache.set(cache_key, result)
+            return result
         
         logger.info(f"🔍 未知域名 {domain}，启动 AI 识别...")
         
@@ -1898,12 +1919,21 @@ class ConfigEngine:
     def get_site_extractor(self, domain: str, preset_name: str = None):
         """获取站点的提取器实例"""
         self.refresh_if_changed()
+
+        cache_key = f"extractor:{domain}:{preset_name}"
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return cached
         
         data = self._get_site_data(domain, preset_name)
         if data is not None:
-            return extractor_manager.get_extractor_for_site(data)
+            result = extractor_manager.get_extractor_for_site(data)
+            self._cache.set(cache_key, result)
+            return result
         
-        return extractor_manager.get_extractor()
+        result = extractor_manager.get_extractor()
+        self._cache.set(cache_key, result)
+        return result
     
     def set_site_extractor(self, domain: str, extractor_id: str, 
                            preset_name: str = None) -> bool:
@@ -1915,7 +1945,6 @@ class ConfigEngine:
             logger.warning(f"站点或预设不存在: {domain}/{preset_name}")
             return False
         
-        from app.core.extractors import ExtractorRegistry
         if not ExtractorRegistry.exists(extractor_id):
             logger.error(f"提取器不存在: {extractor_id}")
             return False
@@ -1955,12 +1984,19 @@ class ConfigEngine:
             完整的流式配置（包含默认值）
         """
         self.refresh_if_changed()
+
+        cache_key = f"stream_config:{domain}:{preset_name}"
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            return copy.deepcopy(cached)
         
         default_config = get_default_stream_config()
         
         data = self._get_site_data(domain, preset_name)
         if data is None:
-            return copy.deepcopy(default_config)
+            result = copy.deepcopy(default_config)
+            self._cache.set(cache_key, result)
+            return result
         
         stream_config = data.get("stream_config", {})
         
@@ -2009,6 +2045,7 @@ class ConfigEngine:
                 if key in network_config:
                     result["network"][key] = network_config[key]
         
+        self._cache.set(cache_key, result)
         return result
     
     def set_site_stream_config(self, domain: str, config: Dict[str, Any], 

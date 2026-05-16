@@ -32,6 +32,7 @@ from app.services.command_defs import ACTION_TYPES, TRIGGER_TYPES, CommandFlowAb
 from app.services.command_engine_actions import CommandEngineActionsMixin
 from app.services.command_engine_results import CommandEngineResultsMixin
 from app.services.command_engine_runtime import CommandEngineRuntimeMixin
+from app.services.config_engine import ConfigConstants, config_engine
 from app.utils.site_url import extract_remote_site_domain
 
 if TYPE_CHECKING:
@@ -126,14 +127,13 @@ class CommandEngine(CommandEngineRuntimeMixin, CommandEngineResultsMixin, Comman
 
     def _get_config_engine(self):
         if self._config_engine is None:
-            from app.services.config_engine import config_engine
             self._config_engine = config_engine
         return self._config_engine
 
     def _get_browser(self):
         if self._browser is None:
-            from app.core.browser import get_browser
-            self._browser = get_browser(auto_connect=False)
+            import app.core.browser as _browser_mod
+            self._browser = _browser_mod.get_browser(auto_connect=False)
         return self._browser
 
     def _suspend_tab_global_network(self, session: 'TabSession', reason: str = "command"):
@@ -734,13 +734,11 @@ return (function() {
 
     def _get_commands_file(self) -> str:
         if self._commands_file is None:
-            from app.services.config_engine import ConfigConstants
             self._commands_file = ConfigConstants.COMMANDS_FILE
         return self._commands_file
 
     def _get_commands_local_file(self) -> str:
         if self._commands_local_file is None:
-            from app.services.config_engine import ConfigConstants
             self._commands_local_file = ConfigConstants.COMMANDS_LOCAL_FILE
         return self._commands_local_file
 
