@@ -8,8 +8,11 @@ aistudio_parser.py - Google AI Studio 响应解析器
 - 包含 thinking 内容（需过滤）
 """
 
+from __future__ import annotations
+
 import json
-from typing import Dict, Any, List, Optional
+import re
+from typing import Any, Dict, List, Tuple
 
 from app.core.config import logger
 from .base import ResponseParser
@@ -22,6 +25,10 @@ class AIStudioParser(ResponseParser):
     URL 特征: MakerSuiteService/GenerateContent
     响应格式: JSON+Protobuf (嵌套数组)
     """
+
+    _VISIBLE_TEXT_BLOCK_RE = re.compile(
+        r'null,"((?:\\.|[^"\\])*)"\]\],"model"'
+    )
     
     def __init__(self):
         self._accumulated_content = ""
@@ -39,90 +46,190 @@ class AIStudioParser(ResponseParser):
         }
         
         try:
-            if isinstance(raw_response, bytes):
-                raw_response = raw_response.decode('utf-8', errors='ignore')
-            
-            # 解析 JSON（DrissionPage 可能已经解析成列表）
-            if isinstance(raw_response, str):
-                data = json.loads(raw_response)
-            elif isinstance(raw_response, list):
-                data = raw_response
-            else:
-                raw_response = str(raw_response)
-                data = json.loads(raw_response)
-            
-            # 提取所有文本块
-            content, is_done = self._extract_content(data)
-            
-            if content:
-                # 计算增量
-                if len(content) > len(self._accumulated_content):
-                    delta = content[len(self._accumulated_content):]
-                    result["content"] = delta
-                    self._accumulated_content = content
-            
+            payloads = self._decode_payloads(raw_response)
+            content = ""
+            is_done = False
+
+            for data in payloads:
+                current_content, current_done = self._extract_content(data)
+                if current_content:
+                    content = current_content
+                if current_done:
+                    is_done = True
+
+            if not content:
+                content = self._extract_visible_text_from_raw_body(raw_response)
+
+            if content and len(content) > len(self._accumulated_content):
+                delta = content[len(self._accumulated_content):]
+                result["content"] = delta
+                self._accumulated_content = content
+
             result["done"] = is_done
-            
+
         except json.JSONDecodeError as e:
             logger.debug(f"[AIStudioParser] JSON 解析失败: {e}")
             result["error"] = str(e)
         except Exception as e:
             logger.debug(f"[AIStudioParser] 解析异常: {e}")
             result["error"] = str(e)
-        
+
         return result
-    
+
     def reset(self):
         """重置状态"""
         self._accumulated_content = ""
         self._is_done = False
-    
-    def _extract_content(self, data: Any) -> tuple:
+
+    @staticmethod
+    def _normalize_raw_text(raw_response: Any) -> str:
+        if isinstance(raw_response, bytes):
+            raw_response = raw_response.decode("utf-8", errors="ignore")
+        elif not isinstance(raw_response, str):
+            raw_response = str(raw_response)
+
+        text = raw_response.lstrip("\ufeff")
+        stripped = text.lstrip()
+        if stripped.startswith(")]}'"):
+            stripped = stripped[4:].lstrip("\r\n")
+        return stripped
+
+    def _decode_payloads(self, raw_response: Any) -> List[Any]:
+        if isinstance(raw_response, (list, dict)):
+            return [raw_response]
+
+        normalized = self._normalize_raw_text(raw_response)
+        if not normalized:
+            return []
+
+        try:
+            return [json.loads(normalized)]
+        except json.JSONDecodeError as exc:
+            payloads = self._decode_json_prefix_values(normalized)
+            if payloads:
+                return payloads
+            logger.debug_throttled(
+                f"aistudio.incomplete_json.{id(self)}",
+                "[AIStudioParser] JSON 未完整，继续等待流增长 "
+                f"(body_len={len(normalized)}, error={exc})",
+                interval_sec=3.0,
+            )
+            return []
+
+    @classmethod
+    def _extract_visible_text_from_raw_body(cls, raw_response: Any) -> str:
+        raw_text = cls._normalize_raw_text(raw_response)
+        if not raw_text:
+            return ""
+
+        pieces: List[str] = []
+        for match in cls._VISIBLE_TEXT_BLOCK_RE.finditer(raw_text):
+            piece = cls._decode_json_fragment(match.group(1))
+            if piece:
+                pieces.append(piece)
+
+        return "".join(pieces)
+
+    @staticmethod
+    def _decode_json_fragment(value: str) -> str:
+        text = str(value or "")
+        if not text:
+            return ""
+
+        try:
+            decoded = json.loads(f'"{text}"')
+            return decoded if isinstance(decoded, str) else ""
+        except json.JSONDecodeError:
+            return (
+                text.replace("\\n", "\n")
+                .replace("\\r", "\r")
+                .replace("\\t", "\t")
+                .replace('\\"', '"')
+                .replace("\\\\", "\\")
+            )
+
+    @staticmethod
+    def _decode_json_prefix_values(raw_text: str) -> List[Any]:
+        decoder = json.JSONDecoder()
+        values: List[Any] = []
+        index = 0
+        length = len(raw_text)
+
+        while index < length:
+            while index < length and raw_text[index].isspace():
+                index += 1
+            if index >= length:
+                break
+
+            try:
+                value, next_index = decoder.raw_decode(raw_text, index)
+            except json.JSONDecodeError:
+                break
+
+            values.append(value)
+            index = next_index
+
+        return values
+
+    @staticmethod
+    def _normalize_outer_blocks(data: Any) -> List[Any]:
+        if not isinstance(data, list) or not data:
+            return []
+
+        if any(isinstance(item, list) for item in data):
+            if (
+                len(data) == 1
+                and isinstance(data[0], list)
+                and any(isinstance(item, list) for item in data[0])
+            ):
+                return data[0]
+            return data
+
+        return []
+
+    def _extract_content(self, data: Any) -> Tuple[str, bool]:
         """
         从响应数据中提取文本内容
-        
+
         Returns:
             (accumulated_text, is_done)
         """
         try:
-            if not isinstance(data, list) or len(data) == 0:
+            outer = self._normalize_outer_blocks(data)
+            if not outer:
                 return "", False
-            
-            outer = data[0]
-            if not isinstance(outer, list):
-                return "", False
-            
+
             accumulated = ""
             is_done = False
-            
+
             for block in outer:
                 if not isinstance(block, list):
                     continue
-                
+
                 # 检查是否是统计块（结束标志之一）
                 if self._is_stats_block(block):
                     is_done = True
                     continue
-                
+
                 # 提取文本
                 text, block_done, is_thinking = self._extract_block_content(block)
-                
+
                 # 跳过 thinking 内容
                 if is_thinking:
                     continue
-                
+
                 if text:
                     accumulated += text
-                
+
                 if block_done:
                     is_done = True
-            
+
             return accumulated, is_done
-            
+
         except Exception as e:
             logger.debug(f"[AIStudioParser] _extract_content 异常: {e}")
             return "", False
-    
+
     def _is_stats_block(self, block: list) -> bool:
         """检查是否是统计块（响应结束）"""
         try:
@@ -138,7 +245,7 @@ class AIStudioParser(ResponseParser):
     def _extract_block_content(self, block: list) -> tuple:
         """
         从单个块提取内容
-        
+
         Returns:
             (text, is_done, is_thinking)
         """
@@ -171,10 +278,17 @@ class AIStudioParser(ResponseParser):
             if not isinstance(content_arr, list):
                 return "", False, False
             
-            # 提取文本 (索引 1)
+            # 提取文本 (优先索引 1，必要时回退到首个非空字符串)
             text = ""
             if len(content_arr) > 1 and isinstance(content_arr[1], str):
                 text = content_arr[1]
+            elif len(content_arr) > 1:
+                string_candidates = [
+                    item for item in content_arr[1:]
+                    if isinstance(item, str) and item.strip()
+                ]
+                if string_candidates:
+                    text = max(string_candidates, key=len)
             
             # 判断是否是 thinking
             # thinking 块特征：len >= 13 且索引 12 == 1
@@ -195,25 +309,25 @@ class AIStudioParser(ResponseParser):
                     is_done = True
             
             return text, is_done, is_thinking
-            
+
         except Exception as e:
             logger.debug(f"[AIStudioParser] _extract_block_content 异常: {e}")
             return "", False, False
-    
+
     # ============ 元数据 ============
-    
+
     @classmethod
     def get_id(cls) -> str:
         return "aistudio"
-    
+
     @classmethod
     def get_name(cls) -> str:
         return "Google AI Studio"
-    
+
     @classmethod
     def get_description(cls) -> str:
         return "解析 Google AI Studio (MakerSuite) 的 GenerateContent 响应"
-    
+
     @classmethod
     def get_supported_patterns(cls) -> List[str]:
         return ["MakerSuiteService/GenerateContent", "GenerateContent"]

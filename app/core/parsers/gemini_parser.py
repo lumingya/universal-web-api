@@ -25,14 +25,82 @@ from .base import ResponseParser
 _ESCAPE_FIXER = re.compile(r"\\([<>`#*_\[\]()])")  # 常见转义符号：HTML/CSS/Markdown
 _EOL_FIXER = re.compile(r"\\\\n")                 # \\n  →  \n
 _STANDALONE_BS = re.compile(r"\\\n")              # backslash + real LF
+_REASONING_HINTS = (
+    "i'm now ",
+    "i am now ",
+    "i've ",
+    "i have ",
+    "i must ",
+    "i clarified",
+    "i've clarified",
+    "i have clarified",
+    "user's request",
+    "assistant persona",
+    "brainstorm",
+    "analyzing",
+    "analysis",
+    "focusing on",
+    "clarifying",
+    "refining",
+    "crafting",
+    "delivering",
+    "defining",
+    "prioritizing",
+    "interpr",
+)
+_REASONING_PROCESS_HINTS = (
+    "define",
+    "defined",
+    "defining",
+    "develop",
+    "developing",
+    "draft",
+    "drafting",
+    "craft",
+    "crafted",
+    "crafting",
+    "focus",
+    "focusing",
+    "clarif",
+    "refin",
+    "break",
+    "breaking",
+    "apply",
+    "applying",
+    "confirm",
+    "confirming",
+)
+_REASONING_META_HINTS = (
+    "task",
+    "request",
+    "user",
+    "intent",
+    "persona",
+    "story",
+    "parameter",
+    "format",
+    "constraint",
+    "component",
+    "narrative",
+    "title",
+    "scene",
+    "style",
+    "protagonist",
+    "plot",
+    "character",
+    "dialogue",
+    "ending",
+    "climax",
+    "structure",
+)
 
 
 def _clean_escaped(text: str) -> str:
     """
     Gemini 返回的字符串仍可能残留多余的反斜杠：
-      1. \<ctx\>        →  <ctx>
-      2. \\n            →  \n  →  换行
-      3. \`code\`       →  `code`
+      1. \\<ctx\\>      →  <ctx>
+      2. \\\\n          →  \n  →  换行
+      3. \\`code\\`     →  `code`
       4. 反斜杠 + 真 \n  →  真 \n
     """
     if "\\" not in text:
@@ -142,6 +210,148 @@ class GeminiParser(ResponseParser):
             for item in value.values():
                 yield from cls._iter_content_candidates(item)
 
+    @staticmethod
+    def _decode_content_text(content: str) -> str:
+        try:
+            decoded = json.loads(f'"{content}"')
+            if isinstance(decoded, str):
+                content = decoded
+        except json.JSONDecodeError:
+            content = _clean_escaped(content)
+        return _clean_escaped(content)
+
+    @staticmethod
+    def _looks_like_reasoning(value: str) -> bool:
+        text = str(value or "").strip()
+        if not text:
+            return False
+
+        lowered = " ".join(text.lower().split())
+        if not lowered:
+            return False
+
+        looks_like_structured_answer = text.startswith(
+            ("{", "```json", "```", "<render", "<segment", "<kaitou", "<scene")
+        ) or any(token in text for token in ('"role"', '"content"', '"tool_calls"', '"decision"'))
+
+        if text.startswith("**") and any(hint in lowered for hint in _REASONING_HINTS):
+            return True
+
+        if (
+            not looks_like_structured_answer
+            and lowered.startswith(("i'm ", "i am ", "i've ", "i have "))
+            and any(hint in lowered for hint in _REASONING_PROCESS_HINTS)
+            and any(hint in lowered for hint in _REASONING_META_HINTS)
+        ):
+            return True
+
+        return any(
+            marker in lowered
+            for marker in (
+                "i'm now carefully",
+                "i am now carefully",
+                "i'm now focused",
+                "i am now focused",
+                "i've established",
+                "i have established",
+                "the user's compositional request",
+                "the user's intent",
+                "helpful assistant persona",
+            )
+        )
+
+    @classmethod
+    def _score_candidate(cls, value: str) -> int:
+        text = str(value or "").strip()
+        if not text:
+            return -10_000
+
+        score = 0
+        lowered = text.lower()
+
+        if text.startswith(("{", "```json", "```", "<render", "<segment", "<kaitou", "<scene")):
+            score += 120
+        if any(token in text for token in ('"role"', '"content"', '"tool_calls"', '"decision"', '"name"', '"description"')):
+            score += 80
+        if any("\u4e00" <= ch <= "\u9fff" for ch in text):
+            score += 60
+        if text.startswith(("http://", "https://", "data:image", "blob:")):
+            score += 40
+        if "\n" in text or "\r" in text:
+            score += 10
+        if len(text) >= 80:
+            score += 10
+        elif len(text) >= 24:
+            score += 5
+
+        if cls._looks_like_reasoning(text):
+            score -= 400
+        elif text.startswith("**"):
+            score -= 30
+
+        if lowered.startswith(("r_", "c_", "rc_")) and len(text) <= 80:
+            score -= 200
+
+        return score
+
+    @classmethod
+    def _select_best_candidate(cls, value: Any) -> Optional[str]:
+        seen: set[str] = set()
+        best_text: Optional[str] = None
+        best_score: Optional[int] = None
+
+        for candidate in cls._iter_content_candidates(value):
+            decoded = cls._decode_content_text(candidate)
+            normalized = decoded.strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+
+            score = cls._score_candidate(decoded)
+            if (
+                best_text is None
+                or best_score is None
+                or score > best_score
+                or (score == best_score and len(decoded) > len(best_text))
+            ):
+                best_text = decoded
+                best_score = score
+
+        if best_text is None or best_score is None or best_score <= 0:
+            return None
+
+        return best_text
+
+    @classmethod
+    def _extract_direct_answer(cls, inner: Any) -> Optional[str]:
+        content_block = cls._list_get(inner, 4)
+        if not isinstance(content_block, list):
+            return None
+
+        best_text: Optional[str] = None
+        best_score: Optional[int] = None
+
+        for item in content_block:
+            direct_payload = cls._list_get(item, 1)
+            if direct_payload is None:
+                continue
+
+            candidate = cls._select_best_candidate(direct_payload)
+            if not candidate:
+                continue
+
+            score = cls._score_candidate(candidate)
+            if (
+                best_text is None
+                or best_score is None
+                or score > best_score
+                or (score == best_score and len(candidate) > len(best_text))
+            ):
+                best_text = candidate
+                best_score = score
+
+        return best_text
+
     # ---------- 内部逻辑 ---------- #
     def _parse(self, raw_text: str) -> Tuple[Optional[str], bool]:
         """
@@ -215,31 +425,14 @@ class GeminiParser(ResponseParser):
                 return None
             inner = json.loads(inner_raw)  # type: ignore[arg-type]
 
-            content = self._nested_list_get(inner, 4, 0, 1, 0)
-            if not isinstance(content, str) or not content.strip():
-                content_block = self._list_get(inner, 4)
-                candidates = list(self._iter_content_candidates(content_block))
-                if not candidates:
-                    return None
-                content = max(candidates, key=len)
-            if not isinstance(content, str):
-                return None
-
-            # ---------- 反转义 ----------
-            try:
-                # content 仍是 *裸* 的转义字符串（无外围引号）
-                # 用 json.loads 再解一次
-                content = json.loads(f'"{content}"')
-            except json.JSONDecodeError:
-                # 若仍失败，再做一次“人工”清洗
-                content = _clean_escaped(content)
-
-            # 最后再跑一次清洗，确保无漏网
-            return _clean_escaped(content)
+            return self._extract_direct_answer(inner)
 
         except Exception as exc:  # pragma: no cover
             logger.debug(f"[GeminiParser] 提取失败: {exc}")
             return None
+
+    def should_fallback_to_dom_when_no_visible_content(self) -> bool:
+        return True
 
     # ---------- 元数据 ---------- #
     @classmethod

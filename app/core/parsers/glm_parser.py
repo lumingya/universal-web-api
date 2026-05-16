@@ -28,12 +28,14 @@ class GLMParser(ResponseParser):
         self._pending = ""
         self._rendered_text = ""
         self._think_text = ""
+        self._has_seen_visible_text = False
 
     def reset(self) -> None:
         self._last_raw_length = 0
         self._pending = ""
         self._rendered_text = ""
         self._think_text = ""
+        self._has_seen_visible_text = False
 
     def parse_chunk(self, raw_response: str) -> Dict[str, Any]:
         result: Dict[str, Any] = {
@@ -124,19 +126,20 @@ class GLMParser(ResponseParser):
             if intervene_text and top_status in self._TERMINAL_STATUSES:
                 delta = self._compute_delta(self._rendered_text, intervene_text)
                 self._rendered_text = intervene_text
+                if intervene_text:
+                    self._has_seen_visible_text = True
                 return delta, True
-            return "", top_status in self._TERMINAL_STATUSES
+            return "", bool(self._has_seen_visible_text and top_status in self._TERMINAL_STATUSES)
 
         visible_snapshot = self._rendered_text
-        done = top_status in self._TERMINAL_STATUSES
+        saw_visible_text_in_payload = False
+        done = bool(self._has_seen_visible_text and top_status in self._TERMINAL_STATUSES)
 
         for part in parts:
             if not isinstance(part, dict):
                 continue
 
             part_status = str(part.get("status") or "").strip().lower()
-            if part_status in self._TERMINAL_STATUSES:
-                done = True
 
             content_items = part.get("content")
             if not isinstance(content_items, list):
@@ -150,12 +153,6 @@ class GLMParser(ResponseParser):
                     self._think_text = str(item.get("think") or self._think_text)
                     continue
                 if item_type == "tool_calls":
-                    tool_calls = item.get("tool_calls") or {}
-                    tool_name = ""
-                    if isinstance(tool_calls, dict):
-                        tool_name = str(tool_calls.get("name") or "").strip().lower()
-                    if tool_name == "finish":
-                        done = True
                     continue
                 if item_type != "text":
                     continue
@@ -163,7 +160,9 @@ class GLMParser(ResponseParser):
                 snapshot = str(item.get("text") or "")
                 if snapshot:
                     visible_snapshot = snapshot
-                if part_status in self._TERMINAL_STATUSES:
+                    saw_visible_text_in_payload = True
+                    self._has_seen_visible_text = True
+                if part_status in self._TERMINAL_STATUSES and (snapshot or self._has_seen_visible_text):
                     done = True
 
         if intervene_text and done and not visible_snapshot:

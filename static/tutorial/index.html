@@ -958,7 +958,7 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
             <h2>🌊 响应检测配置</h2>
             <p>系统需要知道 AI 什么时候开始输出、什么时候算真的说完。这里提供两种模式：默认的 DOM 模式，以及更进阶的网络拦截模式。</p>
 
-            <h3 id="non-stream-listener-basics">什么时候该看非流式监听？</h3>
+            <h3 id="non-stream-listener-basics">什么时候该看网络监听？</h3>
             <div class="tutorial-cta-grid">
                 <div class="tutorial-cta-card">
                     <h4>大多数时候先留在 DOM 模式</h4>
@@ -966,7 +966,7 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
                 </div>
                 <div class="tutorial-cta-card">
                     <h4>遇到这些情况再切网络拦截</h4>
-                    <p>代码块总是缺、公式总是乱、网页里看得到内容却很难完整提取，或者站点走的是“一次返回整包 JSON / 文本”的接口，这时再切到网络拦截更合适。</p>
+                    <p>代码块总是缺、公式总是乱、网页里看得到内容却很难完整提取，或者站点走的是底层 XHR / Fetch 接口时，这时再切到网络拦截更合适。若站点本身是整包 JSON / 文本返回，它依然会表现成一次性完成。</p>
                     <div class="tutorial-pill-list">
                         <span class="tutorial-pill"><strong>listen_pattern</strong> 请求关键词</span>
                         <span class="tutorial-pill"><strong>parser</strong> 响应解析器</span>
@@ -1076,7 +1076,7 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
             </table>
 
             <div class="note">
-                <p><strong>💡 关于超时配置：</strong>慢速思考模型（如 o1、Claude 长推理）建议先把「全局硬超时」调高。非流式监听站点里，这个值就是一整轮对话允许等待的最长时间；如果响应会分段返回，再按需要补调「静默超时」。</p>
+                <p><strong>💡 关于超时配置：</strong>慢速思考模型（如 o1、Claude 长推理）建议先把「全局硬超时」调高。网络监听里，这个值就是一整轮对话允许等待的最长时间；如果响应会分段返回，再按需要补调「静默超时」。</p>
             </div>
 
             <div class="highlight-box">

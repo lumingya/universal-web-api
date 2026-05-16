@@ -90,6 +90,7 @@ class NetworkMonitor:
     DEFAULT_HARD_TIMEOUT = 300             # 全局硬超时
     DEFAULT_RESPONSE_INTERVAL = 0.5        # 响应轮询间隔
     DEFAULT_SILENCE_THRESHOLD = 3.0        # 静默超时（无新数据）
+    DEFAULT_FIRST_CONTENT_TIMEOUT = 15.0   # 命中目标流后，等待首个有效正文的宽限
     DEFAULT_INITIAL_TARGET_BODY_WAIT = 4.0  # 首个目标响应空 body 时的补等宽限
     MAX_LISTEN_RESTARTS = 3                # 监听状态异常后的最大重建次数
     CANCEL_CHECK_SLICE = 1.0              # 长等待期间的取消检查切片（秒）
@@ -147,6 +148,24 @@ class NetworkMonitor:
             "silence_threshold",
             self.DEFAULT_SILENCE_THRESHOLD
         )
+        first_content_timeout = network_config.get(
+            "first_content_timeout",
+            max(
+                self.DEFAULT_FIRST_CONTENT_TIMEOUT,
+                float(self._silence_threshold or self.DEFAULT_SILENCE_THRESHOLD) * 4.0,
+            ),
+        )
+        try:
+            first_content_timeout = float(first_content_timeout)
+        except Exception:
+            first_content_timeout = max(
+                self.DEFAULT_FIRST_CONTENT_TIMEOUT,
+                float(self._silence_threshold or self.DEFAULT_SILENCE_THRESHOLD) * 4.0,
+            )
+        self._first_content_timeout = min(
+            max(first_content_timeout, float(self._silence_threshold or self.DEFAULT_SILENCE_THRESHOLD)),
+            max(float(self._hard_timeout or self.DEFAULT_HARD_TIMEOUT), 1.0),
+        )
         initial_target_body_wait = network_config.get(
             "initial_target_body_wait",
             max(
@@ -187,7 +206,8 @@ class NetworkMonitor:
         logger.debug(
             f"[NetworkMonitor] 初始化完成 "
             f"(pattern={self._listen_pattern!r}, "
-            f"parser={parser.get_id()})"
+            f"parser={parser.get_id()}, "
+            f"first_content_timeout={self._first_content_timeout})"
         )
 
     def _handle_parse_result(self, parse_result: Dict[str, Any]) -> Dict[str, Any]:
@@ -218,6 +238,12 @@ class NetworkMonitor:
             "content": "",
             "done": False,
         }
+
+    def _should_fallback_to_dom_on_empty_stream(self) -> bool:
+        try:
+            return bool(self.parser.should_fallback_to_dom_when_no_visible_content())
+        except Exception:
+            return False
 
     def _listen_is_active(self) -> bool:
         try:
@@ -796,10 +822,6 @@ class NetworkMonitor:
             raw_body, raw_body_source = self._extract_raw_body(response)
             next_body = self._normalize_raw_body(raw_body)
             if len(next_body) > previous_len:
-                logger.debug(
-                    f"[NetworkMonitor] 流响应继续增长 "
-                    f"(source={raw_body_source}, size={len(next_body)} chars)"
-                )
                 return next_body, raw_body_source
 
             if self._stream_capture_complete(response):
@@ -875,9 +897,11 @@ class NetworkMonitor:
                 encoding="utf-8",
                 newline="\n",
             )
-            logger.debug(
+            logger.debug_throttled(
+                f"network.parser_debug_dump.{id(self)}",
                 "[NetworkMonitor] 网络解析调试快照已写入 "
-                f"({dump_path}, parser={parser_id}, body_len={len(raw_body_text)}, truncated={truncated})"
+                f"({dump_path}, parser={parser_id}, body_len={len(raw_body_text)}, truncated={truncated})",
+                interval_sec=3.0,
             )
         except Exception as exc:
             logger.debug(f"[NetworkMonitor] 写入网络解析调试快照失败: {exc}")
@@ -994,6 +1018,10 @@ class NetworkMonitor:
         non_target_skips = 0
         empty_body_skips = 0
         stream_target_hits = 0
+        active_stream_response = None
+        active_stream_event: Dict[str, Any] = {}
+        active_stream_body = ""
+        active_stream_body_source = ""
 
         while True:
             # 检查全局超时
@@ -1034,13 +1062,119 @@ class NetworkMonitor:
             # 检查是否为无效响应
             if response is None or response is False:
                 elapsed = time.time() - phase_start
-                
+
                 if not has_seen_stream_target:
                     logger.warning(f"[NetworkMonitor] 目标流响应超时 ({elapsed:.1f}s)，触发回退")
                     raise NetworkMonitorTimeout(f"目标流响应超时（{elapsed:.1f}s）")
-                
+
+                if active_stream_response is not None:
+                    next_body, next_source = self._wait_for_stream_progress(
+                        active_stream_response,
+                        active_stream_body,
+                        active_stream_body_source,
+                    )
+                    if next_body and next_body != active_stream_body:
+                        active_stream_body = next_body
+                        active_stream_body_source = next_source
+                        last_activity_time = time.time()
+                        logger.debug_throttled(
+                            f"network.active_stream_growth.{id(self)}",
+                            "[NetworkMonitor] 活跃流响应仍在增长 "
+                            f"(source={next_source}, size={len(next_body)} chars)",
+                            interval_sec=3.0,
+                        )
+                        try:
+                            parse_result = self.parser.parse_chunk(active_stream_body)
+                        except Exception as e:
+                            logger.warning(f"[NetworkMonitor] 活跃流二次解析异常: {e}")
+                            continue
+
+                        self._write_parser_debug_dump(
+                            active_stream_body,
+                            active_stream_event,
+                            parse_result,
+                            active_stream_body_source,
+                            True,
+                        )
+                        parse_result = self._handle_parse_result(parse_result)
+                        if parse_result.get("error"):
+                            continue
+
+                        self._last_stream_event = dict(active_stream_event or {})
+                        self._last_stream_raw_body = str(active_stream_body or "")
+                        self._last_stream_parse_result = dict(parse_result or {})
+                        try:
+                            media_state = self.parser.get_media_generation_state(
+                                raw_response=active_stream_body,
+                                parse_result=parse_result,
+                            )
+                            self._last_media_generation_state = (
+                                dict(media_state) if isinstance(media_state, dict) else {}
+                            )
+                        except Exception as parser_exc:
+                            logger.debug(f"[NetworkMonitor] 媒体状态提取失败（忽略）: {parser_exc}")
+                        content = parse_result.get("content", "")
+                        done = parse_result.get("done", False)
+                        if content:
+                            self._total_chunks += 1
+                            self._total_content_chars += len(content)
+                            logger.debug(
+                                f"[NetworkMonitor] 输出片段 #{self._total_chunks} "
+                                f"(len={len(content)}, total_chars={self._total_content_chars}, "
+                                f"preview={_debug_preview(content)})"
+                            )
+                            yield self.formatter.pack_chunk(content, completion_id=completion_id)
+
+                        if done:
+                            logger.debug("[NetworkMonitor] 检测到结束标志，完成监听")
+                            break
+
+                        continue
+
+                    if self._stream_capture_complete(active_stream_response):
+                        if self._total_chunks == 0 and self._should_fallback_to_dom_on_empty_stream():
+                            logger.warning(
+                                "[NetworkMonitor] 流响应已结束但仍无有效正文，回退到 DOM 监听 "
+                                f"(source={active_stream_body_source}, body_len={len(active_stream_body or '')})"
+                            )
+                            raise NetworkMonitorTimeout("目标流未产出有效正文")
+                        logger.debug("[NetworkMonitor] 活跃流响应已完成，结束监听")
+                        break
+
                 silence_duration = time.time() - last_activity_time
-                if silence_duration > self._silence_threshold:
+                effective_silence_threshold = float(self._silence_threshold)
+                if (
+                    active_stream_response is not None
+                    and self._total_chunks == 0
+                    and not self._stream_capture_complete(active_stream_response)
+                ):
+                    effective_silence_threshold = max(
+                        float(self._first_content_timeout),
+                        float(self._silence_threshold),
+                    )
+                    logger.debug_throttled(
+                        f"network.wait_first_content.{id(self)}",
+                        "[NetworkMonitor] 尚未拿到首个有效正文，延长首段等待 "
+                        f"(idle={silence_duration:.1f}s, "
+                        f"limit={effective_silence_threshold:.1f}s, "
+                        f"body_len={len(active_stream_body or '')})",
+                        interval_sec=4.0,
+                    )
+
+                if silence_duration > effective_silence_threshold:
+                    if (
+                        active_stream_response is not None
+                        and self._total_chunks == 0
+                        and self._should_fallback_to_dom_on_empty_stream()
+                    ):
+                        logger.warning(
+                            "[NetworkMonitor] 首段等待超时且仍无有效正文，回退到 DOM 监听 "
+                            f"(idle={silence_duration:.1f}s, limit={effective_silence_threshold:.1f}s, "
+                            f"body_len={len(active_stream_body or '')})"
+                        )
+                        raise NetworkMonitorTimeout(
+                            f"目标流未产出有效正文（{silence_duration:.1f}s）"
+                        )
                     logger.debug(f"[NetworkMonitor] 静默超时 ({silence_duration:.1f}s)，结束监听")
                     break
                 continue
@@ -1095,6 +1229,10 @@ class NetworkMonitor:
             if stream_target_hits == 1:
                 logger.debug("[NetworkMonitor] 已捕获到首个有效流响应")
             last_activity_time = time.time()
+            active_stream_response = None
+            active_stream_event = dict(event or {})
+            active_stream_body = ""
+            active_stream_body_source = ""
 
             # 检查响应对象结构
             response_obj = getattr(response, "response", None)
@@ -1200,12 +1338,20 @@ class NetworkMonitor:
                 if next_body and next_body != raw_body:
                     raw_body = next_body
                     raw_body_source = next_source
+                    last_activity_time = time.time()
                     try:
                         parse_result = self.parser.parse_chunk(raw_body)
                     except Exception as e:
                         logger.warning(f"[NetworkMonitor] 二次解析异常: {e}")
                         continue
 
+            self._write_parser_debug_dump(
+                raw_body,
+                event,
+                parse_result,
+                raw_body_source,
+                is_event_stream,
+            )
             parse_result = self._handle_parse_result(parse_result)
             if parse_result.get("error"):
                 continue
@@ -1222,13 +1368,11 @@ class NetworkMonitor:
                 )
             except Exception as parser_exc:
                 logger.debug(f"[NetworkMonitor] 媒体状态提取失败（忽略）: {parser_exc}")
-            self._write_parser_debug_dump(
-                raw_body,
-                event,
-                parse_result,
-                raw_body_source,
-                is_event_stream,
-            )
+            if is_event_stream:
+                active_stream_response = response
+                active_stream_event = dict(event or {})
+                active_stream_body = str(raw_body or "")
+                active_stream_body_source = raw_body_source
 
             # 提取内容
             content = parse_result.get("content", "")
