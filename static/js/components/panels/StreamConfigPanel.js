@@ -352,7 +352,7 @@ window.StreamConfigPanel = {
             <div v-show="!collapsed" class="p-4 space-y-4">
                 <div v-if="!guideExpanded">
                     <button @click="guideExpanded = true" type="button" class="dashboard-guide-toggle dashboard-guide-toggle--violet">
-                        <span>非流式引导</span>
+                        <span>网络模式引导</span>
                         <span v-html="$icons.chevronDown"></span>
                     </button>
                 </div>
@@ -367,10 +367,10 @@ window.StreamConfigPanel = {
                     </div>
                     <div class="mt-3">
                         <div class="text-base font-semibold text-slate-900 dark:text-slate-50">
-                            DOM 模式（流式）与 网络拦截（非流式）
+                            DOM 模式与网络监听模式
                         </div>
                         <p class="mt-1.5 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                            网络拦截是<strong>非流式</strong>获取底层请求，而 DOM 监听是<strong>流式</strong>读取页面展示内容。如果遇到包含复杂 JSON 结构或 LaTeX 数学公式的场景，DOM 提取会比较困难，此时请使用网络拦截。如果站点默认未开启该模式，说明尚未为其适配好网络解析器。
+                            网络监听会优先读取底层请求响应；如果站点走的是 <strong>fetch/xhr 流式</strong>，现在可以直接增量输出；如果站点本身返回的是整包 JSON / 文本，那它看起来仍会像一次性完成。DOM 模式则是盯着页面展示内容变化来输出。遇到复杂 JSON、代码块或 LaTeX 数学公式时，网络监听通常更容易拿到干净原文。
                         </p>
                     </div>
 
@@ -386,11 +386,11 @@ window.StreamConfigPanel = {
                     <div class="dashboard-guide-actions">
                         <button @click="openTutorial('non-stream-listener-basics')" class="dashboard-guide-btn">
                             <span v-html="$icons.arrowTopRightOnSquare"></span>
-                            dom和非流式区别
+                            DOM 和网络监听区别
                         </button>
                         <button @click="openTutorial('non-stream-parser-guide')" class="dashboard-guide-btn dashboard-guide-btn--secondary">
                             <span v-html="$icons.folderOpen"></span>
-                            从零配置一个解析器教程
+                            网络解析器教程
                         </button>
                     </div>
                 </div>
@@ -483,7 +483,7 @@ window.StreamConfigPanel = {
                                 </div>
                                 <div class="dashboard-mini-card">
                                     <div class="dashboard-mini-card-title">第 3 步：补超时</div>
-                                    <div class="dashboard-mini-card-copy">非流式站点一般只需要调全局硬超时和静默超时，等慢站点时把整体等待时间拉高就行。</div>
+                                    <div class="dashboard-mini-card-copy">慢站点先把全局硬超时和静默超时调高；流式站点主要看静默超时，整包返回站点则更依赖整体等待窗口。</div>
                                 </div>
                             </div>
                         </div>
@@ -621,7 +621,7 @@ window.StreamConfigPanel = {
                                 <span class="text-sm text-gray-500 dark:text-gray-400">秒</span>
                             </div>
                             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                                非流式监听里，这就是一次完整对话允许等待的最长时间。
+                                网络监听里，这就是一次完整对话允许等待的最长时间。
                             </p>
                         </div>
                     </div>

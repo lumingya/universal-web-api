@@ -222,3 +222,148 @@ def test_stream_output_falls_back_when_first_target_body_never_arrives(monkeypat
 
     with pytest.raises(NetworkMonitorTimeout, match="正文未就绪"):
         list(monitor._stream_output_phase("cid"))
+
+
+class _GrowingBodyParser(ResponseParser):
+    def parse_chunk(self, raw_response: str):
+        ready = "answer-ready" in str(raw_response or "")
+        return {
+            "content": "final-answer" if ready else "",
+            "images": [],
+            "done": ready,
+            "error": None,
+        }
+
+    def reset(self):
+        return None
+
+    @classmethod
+    def get_id(cls) -> str:
+        return "growing-body-parser"
+
+
+class _StreamingResponse:
+    url = _TargetRequest.url
+    status = 200
+    _response = {}
+
+    def __init__(self):
+        self._stream = {"fullText": "data: {\"status\":\"init\"}\n\n", "complete": False}
+
+
+class _StreamingPacket:
+    request = _TargetRequest()
+
+    def __init__(self):
+        self.response = _StreamingResponse()
+
+
+def test_stream_output_keeps_polling_active_stream_without_new_packets(monkeypatch):
+    packet = _StreamingPacket()
+    state = {"calls": 0}
+
+    def wait_impl(listen, timeout):
+        state["calls"] += 1
+        if state["calls"] == 1:
+            return packet
+        return False
+
+    monitor = _monitor(
+        wait_impl,
+        pattern="api/v0/chat/completion",
+        parser=_GrowingBodyParser(),
+        formatter=_DummyFormatter(),
+        network_config={
+            "response_interval": 0.01,
+            "silence_threshold": 0.02,
+        },
+    )
+    monitor._is_listening = True
+
+    monkeypatch.setattr(monitor, "_is_event_stream_response", lambda response: True)
+    progress_calls = {"count": 0}
+
+    def fake_wait_for_stream_progress(response, current_body, current_source):
+        progress_calls["count"] += 1
+        if progress_calls["count"] == 1:
+            response.response._stream["fullText"] = "data: {\"status\":\"streaming\",\"text\":\"answer-ready\"}\n\n"
+            response.response._stream["complete"] = True
+            return response.response._stream["fullText"], "response._stream.fullText"
+        return current_body, current_source
+
+    monkeypatch.setattr(monitor, "_wait_for_stream_progress", fake_wait_for_stream_progress)
+
+    chunks = list(monitor._stream_output_phase("cid"))
+
+    assert chunks == ["final-answer"]
+    assert progress_calls["count"] >= 1
+
+
+def test_first_content_timeout_extends_initial_idle_window():
+    monitor = _monitor(
+        lambda listen, timeout: False,
+        network_config={
+            "silence_threshold": 3.0,
+        },
+    )
+
+    assert monitor._first_content_timeout >= 12.0
+    assert monitor._first_content_timeout >= monitor._silence_threshold
+
+
+class _ErrorBodyParser(ResponseParser):
+    def parse_chunk(self, raw_response: str):
+        return {
+            "content": "",
+            "images": [],
+            "done": False,
+            "error": "partial-json",
+        }
+
+    def reset(self):
+        return None
+
+    @classmethod
+    def get_id(cls) -> str:
+        return "error-body-parser"
+
+
+def test_stream_output_writes_debug_dump_even_when_parser_returns_error(monkeypatch):
+    state = {"calls": 0}
+
+    def wait_impl(listen, timeout):
+        state["calls"] += 1
+        if state["calls"] == 1:
+            return _TargetPacket()
+        return False
+
+    monitor = _monitor(
+        wait_impl,
+        pattern="api/v0/chat/completion",
+        parser=_ErrorBodyParser(),
+        formatter=_DummyFormatter(),
+        network_config={
+            "response_interval": 0.01,
+            "silence_threshold": 0.01,
+        },
+    )
+    monitor._is_listening = True
+
+    monkeypatch.setattr(monitor, "_is_event_stream_response", lambda response: False)
+    monkeypatch.setattr(
+        monitor,
+        "_wait_for_stream_body",
+        lambda response, initial_body, initial_source, wait_budget=None: ("body-ready", "body"),
+    )
+
+    dump_calls = {"count": 0}
+
+    def fake_debug_dump(*args, **kwargs):
+        dump_calls["count"] += 1
+
+    monkeypatch.setattr(monitor, "_write_parser_debug_dump", fake_debug_dump)
+
+    chunks = list(monitor._stream_output_phase("cid"))
+
+    assert chunks == []
+    assert dump_calls["count"] >= 1

@@ -79,6 +79,14 @@ class ResponseParser(ABC):
         """
         return False
 
+    def should_fallback_to_dom_when_no_visible_content(self) -> bool:
+        """
+        网络流存在但长期拿不到可见正文时，是否优先回退 DOM 监听。
+
+        适用于网络协议里混入推理/中间态，而页面真实正文由前端二次拼装的站点。
+        """
+        return False
+
     def get_media_generation_state(
         self,
         raw_response: str = "",
