@@ -13,13 +13,24 @@ v2.0 改动：
 - execute_workflow 改为接收 tab_session 参数
 """
 
+import ast
+import base64
+import binascii
+import contextlib
 import json
+import logging
 import os
 import socket
 import threading
-import time
-import contextlib
+import time as time_module
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
+from pathlib import Path
 from typing import Optional, List, Dict, Any, Generator, Callable
+from urllib.parse import urlparse
+
+import requests
 from DrissionPage import Chromium, ChromiumPage, ChromiumOptions
 
 from app.core.config import (
@@ -32,11 +43,15 @@ from app.core.config import (
     SSEFormatter,
     MessageValidator,
 )
+from app.core.elements import ElementFinder
+from app.core.extractors.media_extractor import media_extractor
+from app.core.session_manager import session_manager as _session_manager
+from app.core.tab_pool import TabPoolManager, TabSession
+from app.core.workflow import WorkflowExecutor
+from app.services.command_engine import command_engine
+from app.services.config_engine import config_engine
 from app.utils.image_handler import extract_images_from_messages
 from app.utils.site_url import extract_remote_site_domain
-from app.core.workflow import WorkflowExecutor
-from app.core.tab_pool import TabPoolManager, TabSession
-from app.core.session_manager import session_manager as _session_manager
 
 
 def _looks_like_transient_local_debug_error(error: Any) -> bool:
@@ -142,23 +157,24 @@ class BrowserCore:
         - 类列表对象: tuple/其他可迭代 → 转换为 list 处理
         """
         content_type = type(content).__name__
-        content_preview = ""
-        try:
-            content_str_temp = str(content)
-            content_len = len(content_str_temp)
-            content_preview = (
-                repr(content_str_temp[:120])
-                if content_len > 120
-                else repr(content_str_temp)
+        if logger._level <= logging.DEBUG:
+            content_preview = ""
+            try:
+                content_str_temp = str(content)
+                content_len = len(content_str_temp)
+                content_preview = (
+                    repr(content_str_temp[:120])
+                    if content_len > 120
+                    else repr(content_str_temp)
+                )
+            except Exception:
+                content_len = -1
+                content_preview = "[无法预览]"
+
+            logger.debug(
+                f"[CONTENT_PARSE] 开始解析: type={content_type}, "
+                f"raw_len={content_len}, preview={content_preview}"
             )
-        except Exception:
-            content_len = -1
-            content_preview = "[无法预览]"
-        
-        logger.debug(
-            f"[CONTENT_PARSE] 开始解析: type={content_type}, "
-            f"raw_len={content_len}, preview={content_preview}"
-        )
         
         if content is None:
             logger.debug("[CONTENT_PARSE] 内容为 None，返回空字符串")
@@ -178,7 +194,6 @@ class BrowserCore:
                 
                 if parsed is None:
                     try:
-                        import ast
                         parsed = ast.literal_eval(stripped)
                         parse_method = "literal_eval"
                     except (ValueError, SyntaxError):
@@ -221,29 +236,32 @@ class BrowserCore:
             image_count = 0
             skipped_count = 0
             unknown_types = []
-            samples = []
-            
+            if logger._level <= logging.DEBUG:
+                samples = []
+            else:
+                samples = None
+
             for idx, item in enumerate(content):
                 if not isinstance(item, dict):
                     skipped_count += 1
-                    if len(samples) < 3:
+                    if logger._level <= logging.DEBUG and samples is not None and len(samples) < 3:
                         samples.append(f"skip[{idx}]={type(item).__name__}")
                     continue
-                
+
                 item_type = str(item.get("type", "") or "").strip()
-                
+
                 if item_type == "text":
                     text_content = str(item.get("text", "") or "")
                     text_parts.append(text_content)
                     text_item_count += 1
-                    if len(samples) < 3:
+                    if logger._level <= logging.DEBUG and samples is not None and len(samples) < 3:
                         preview = (
                             repr(text_content[:40])
                             if len(text_content) > 40
                             else repr(text_content)
                         )
                         samples.append(f"text[{idx}]={preview}")
-                
+
                 elif item_type == "image_url":
                     image_count += 1
                     text_parts.append(f"[图片{image_count}]")
@@ -254,28 +272,29 @@ class BrowserCore:
                         else str(image_url_obj)
                     )
                     url_preview = "[data_uri]" if "base64" in url_text[:50] else url_text[:50]
-                    if len(samples) < 3:
+                    if logger._level <= logging.DEBUG and samples is not None and len(samples) < 3:
                         samples.append(f"image[{idx}]={url_preview}")
-                
+
                 else:
                     unknown_types.append(item_type or "<empty>")
-                    if len(samples) < 3:
+                    if logger._level <= logging.DEBUG and samples is not None and len(samples) < 3:
                         samples.append(f"unknown[{idx}]={item_type or '<empty>'}")
-            
+
             result = " ".join(text_parts)
-            extras = []
-            if skipped_count:
-                extras.append(f"skipped={skipped_count}")
-            if unknown_types:
-                unknown_preview = ", ".join(sorted(set(unknown_types))[:3])
-                extras.append(f"unknown={len(unknown_types)}[{unknown_preview}]")
-            sample_summary = "; ".join(samples) if samples else "none"
-            extra_text = f", {', '.join(extras)}" if extras else ""
-            logger.debug(
-                "[CONTENT_PARSE] 多模态解析完成: "
-                f"text_items={text_item_count}, images={image_count}, "
-                f"result_len={len(result)}, samples={sample_summary}{extra_text}"
-            )
+            if logger._level <= logging.DEBUG:
+                extras = []
+                if skipped_count:
+                    extras.append(f"skipped={skipped_count}")
+                if unknown_types:
+                    unknown_preview = ", ".join(sorted(set(unknown_types))[:3])
+                    extras.append(f"unknown={len(unknown_types)}[{unknown_preview}]")
+                sample_summary = "; ".join(samples) if samples else "none"
+                extra_text = f", {', '.join(extras)}" if extras else ""
+                logger.debug(
+                    "[CONTENT_PARSE] 多模态解析完成: "
+                    f"text_items={text_item_count}, images={image_count}, "
+                    f"result_len={len(result)}, samples={sample_summary}{extra_text}"
+                )
             return result
         
         logger.warning(f"[CONTENT_PARSE] ⚠️ 未知内容类型: {content_type}，返回占位符")
@@ -350,7 +369,6 @@ class BrowserCore:
 
         try:
             from app.services.request_manager import request_manager
-
             ctx = request_manager.get_request(task)
         except Exception:
             return snapshot
@@ -473,7 +491,6 @@ class BrowserCore:
                 pass
 
         try:
-            from app.services.request_manager import request_manager
             cancelled = bool(request_manager.cancel_request(request_id, "task_ownership_lost"))
             if cancelled:
                 logger.warning(
@@ -600,7 +617,6 @@ class BrowserCore:
     
     def _get_config_engine(self):
         if self.config_engine is None:
-            from app.services.config_engine import config_engine
             self.config_engine = config_engine
         return self.config_engine
     
@@ -997,7 +1013,6 @@ class BrowserCore:
                     task_id=task_id,
                 )
                 try:
-                    from app.services.command_engine import command_engine
                     command_engine.schedule_deferred_workflow_commands(session, delay_sec=0.25)
                 except Exception:
                     pass
@@ -1084,7 +1099,6 @@ class BrowserCore:
                     task_id=task_id,
                 )
                 try:
-                    from app.services.command_engine import command_engine
                     command_engine.schedule_deferred_workflow_commands(session, delay_sec=0.25)
                 except Exception:
                     pass
@@ -1177,7 +1191,6 @@ class BrowserCore:
                     task_id=task_id,
                 )
                 try:
-                    from app.services.command_engine import command_engine
                     command_engine.schedule_deferred_workflow_commands(session, delay_sec=0.25)
                 except Exception:
                     pass
@@ -1189,8 +1202,8 @@ class BrowserCore:
         if not request_id:
             return
         try:
-            setattr(session, "_bound_request_id", request_id)
             from app.services.request_manager import request_manager
+            setattr(session, "_bound_request_id", request_id)
             bind_ok = bool(request_manager.bind_tab(request_id, session.id))
             logger.debug(
                 f"[{session.id}] 绑定请求标签页: request={request_id}, "
@@ -1376,8 +1389,6 @@ class BrowserCore:
             return
 
         try:
-            from app.services.command_engine import command_engine
-
             command_engine.emit_external_command_result_event(
                 session,
                 source_command_id="evt_stream_terminal_error",
@@ -1427,8 +1438,8 @@ class BrowserCore:
         workflow_abort_message = ""
         command_engine = None
         try:
-            from app.services.command_engine import command_engine as _command_engine
-            command_engine = _command_engine
+            import app.services.command_engine as _ce_mod
+            command_engine = _ce_mod.command_engine
             workflow_priority_value = command_engine._normalize_priority(
                 workflow_priority, command_engine._get_request_priority_baseline()
             )
@@ -1930,19 +1941,13 @@ class BrowserCore:
         media_generation_state: Optional[Dict[str, Any]] = None,
     ) -> List[Dict]:
         """流式输出结束后提取多模态资源。"""
-        from app.core.elements import ElementFinder
-        from app.core.extractors.media_extractor import media_extractor
         
         debounce = image_config.get("debounce_seconds", 2.0)
         effective_stop_checker = stop_checker or self._should_stop_checker
         if debounce > 0:
-            elapsed = 0
-            step = 0.1
-            while elapsed < debounce:
-                if effective_stop_checker():
-                    return []
-                time.sleep(step)
-                elapsed += step
+            threading.Event().wait(timeout=debounce)
+            if effective_stop_checker():
+                return []
         
         finder = ElementFinder(tab)
 
@@ -2108,7 +2113,7 @@ class BrowserCore:
                 wait_satisfied = False
 
                 while time.time() < deadline and not effective_stop_checker():
-                    time.sleep(max(0.2, poll_interval))
+                    threading.Event().wait(timeout=max(0.2, poll_interval))
                     elements, container_mode = _find_candidate_elements(timeout=0.5)
                     if not elements:
                         continue
@@ -2230,11 +2235,6 @@ class BrowserCore:
         max_size_mb: int = 10,
     ) -> List[Dict]:
         """Download remote audio/video URLs to local files so downstream clients get stable local URLs."""
-        import time as time_module
-        import uuid
-        from pathlib import Path
-        from urllib.parse import urlparse
-        import requests
 
         if not media_items or tab is None:
             return media_items
@@ -2273,23 +2273,19 @@ class BrowserCore:
             "Accept": "*/*",
         }
 
-        result = []
-        for item in media_items:
-            filepath = None
+        def _process_one(idx, item):
             if item.get("kind") != "url":
-                result.append(item)
-                continue
+                return idx, item
 
             media_type = str(item.get("media_type") or "").lower()
             if media_type not in {"audio", "video"}:
-                result.append(item)
-                continue
+                return idx, item
 
             url = str(item.get("url") or "").strip()
             if not (url.startswith("http://") or url.startswith("https://")):
-                result.append(item)
-                continue
+                return idx, item
 
+            filepath = None
             try:
                 response = requests.get(
                     url,
@@ -2301,24 +2297,20 @@ class BrowserCore:
                 )
             except Exception as exc:
                 logger.warning(f"{media_type} 下载失败，保留远程链接: {exc}")
-                result.append(item)
-                continue
+                return idx, item
 
             try:
                 if response.status_code != 200:
                     logger.warning(f"{media_type} 下载失败，HTTP {response.status_code}")
-                    result.append(item)
-                    continue
+                    return idx, item
 
                 content_type = str(response.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
                 if media_type == "audio" and "audio" not in content_type:
                     logger.warning(f"音频下载返回非音频类型，保留远程链接: {content_type or 'unknown'}")
-                    result.append(item)
-                    continue
+                    return idx, item
                 if media_type == "video" and "video" not in content_type:
                     logger.warning(f"视频下载返回非视频类型，保留远程链接: {content_type or 'unknown'}")
-                    result.append(item)
-                    continue
+                    return idx, item
 
                 ext = ext_map.get(content_type)
                 if not ext:
@@ -2344,8 +2336,8 @@ class BrowserCore:
                 new_item["byte_size"] = written
                 new_item["source"] = "local_file"
                 new_item["local_path"] = str(filepath)
-                result.append(new_item)
                 logger.debug(f"✅ {media_type} 已保存到本地: {filename} ({written} bytes)")
+                return idx, new_item
             except Exception as exc:
                 logger.warning(f"{media_type} 落盘失败，保留远程链接: {exc}")
                 try:
@@ -2353,22 +2345,23 @@ class BrowserCore:
                         filepath.unlink()
                 except Exception:
                     pass
-                result.append(item)
+                return idx, item
             finally:
                 response.close()
+
+        result = [None] * len(media_items)
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            futures = {executor.submit(_process_one, idx, item): idx for idx, item in enumerate(media_items)}
+            for future in as_completed(futures):
+                idx, processed_item = future.result()
+                result[idx] = processed_item
 
         return result
 
     def _try_screenshot_images_to_local(self, tab, last_element, images: List[Dict], image_config: Dict = None) -> List[Dict]:
-        """
-        优先下载图片（更精准），下载失败才截图。
+        """优先下载图片（更精准），下载失败才截图。
         基于实测 API：img_ele.attr('src'), page.cookies(), get_screenshot(path)
         """
-        from pathlib import Path
-        import time as time_module
-        import uuid
-        from urllib.parse import urlparse
-        import requests
 
         if not images:
             return images
@@ -2479,11 +2472,13 @@ class BrowserCore:
 
         new_images = list(images)
         localized_count = 0
+        claim_lock = threading.Lock()
 
-        for target_index in reversed(remote_indexes):
+        def _process_one(target_index):
             target_image = images[target_index]
             target_url = str(target_image.get("url") or "").strip()
-            img_ele = _claim_image_element(target_url)
+            with claim_lock:
+                img_ele = _claim_image_element(target_url)
             saved = False
 
             base_name = f"{int(time_module.time())}_{uuid.uuid4().hex[:8]}"
@@ -2538,7 +2533,7 @@ class BrowserCore:
 
             if not saved:
                 logger.warning(f"图片[{target_index}] 保存失败：下载和截图均失败")
-                continue
+                return None
 
             local_url = f"/download_images/{filename}"
             new_item = dict(target_image)
@@ -2547,8 +2542,17 @@ class BrowserCore:
             new_item["source"] = "local_file"
             new_item["local_path"] = str(out_path)
             new_item["byte_size"] = out_path.stat().st_size
-            new_images[target_index] = new_item
-            localized_count += 1
+            return target_index, new_item
+
+        save_results = [None] * len(remote_indexes)
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = {executor.submit(_process_one, idx): i for i, idx in enumerate(remote_indexes)}
+            for future in as_completed(futures):
+                result = future.result()
+                if result is not None:
+                    target_idx, new_item = result
+                    new_images[target_idx] = new_item
+                    localized_count += 1
 
         if localized_count > 0:
             logger.debug(f"✅ 图片本地化完成: {localized_count}/{len(remote_indexes)} 张")
@@ -2557,11 +2561,6 @@ class BrowserCore:
 
     def _persist_data_uri_media_to_local(self, media_items: List[Dict]) -> List[Dict]:
         """Persist extracted data-uri media so downstream Markdown can reuse the existing URL flow."""
-        import base64
-        import binascii
-        import uuid
-        from pathlib import Path
-        from datetime import datetime
 
         if not media_items:
             return media_items
@@ -2791,39 +2790,31 @@ class BrowserCore:
             return []
 
     def _download_url_images(self, images: List[Dict], tab=None) -> List[Dict]:
-        """
-        在浏览器内通过 Canvas 压缩图片，保存到本地并返回可访问 URL
+        """在浏览器内通过 Canvas 压缩图片，保存到本地并返回可访问 URL
         
         流程：
         1. 浏览器 Canvas 压缩 → base64
         2. 后端解码 → 保存到 download_images/
         3. 返回 /download_images/xxx.jpg URL
         """
-        import base64
-        import uuid
-        from pathlib import Path
-        from datetime import datetime
-        
-        result = []
-        
-        # 确保目录存在
+
+        if not images:
+            return images
+
         save_dir = Path("download_images")
         save_dir.mkdir(exist_ok=True)
         canvas_image_max_size = AppConfig.get_canvas_image_max_size()
 
-        for img in images:
+        def _process_one(idx, img):
             if img.get('kind') != 'url':
-                result.append(img)
-                continue
-            
+                return idx, img
+
             url = img.get('url')
             if not url:
-                result.append(img)
-                continue
-            
+                return idx, img
+
             if not tab:
-                result.append(img)
-                continue
+                return idx, img
             
             try:
                 # 🔑 在浏览器中用 Canvas 加载并压缩图片
@@ -2989,19 +2980,24 @@ class BrowserCore:
                         new_img['source'] = 'local_file'
                         new_img['local_path'] = str(filepath)
                         
-                        result.append(new_img)
                         logger.info(f"✅ 图片已保存: {filename} ({len(image_bytes)} bytes)")
-                        continue
-                
+                        return idx, new_img
+
                 error_msg = download_result.get('error', 'Unknown') if download_result else 'No result'
                 logger.warning(f"⚠️ 图片处理失败: {error_msg}")
-            
+
             except Exception as e:
                 logger.warning(f"⚠️ 图片保存异常: {str(e)[:100]}")
-            
-            # 失败时保留原 URL
-            result.append(img)
-        
+
+            return idx, img
+
+        result = [None] * len(images)
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = {executor.submit(_process_one, idx, img): idx for idx, img in enumerate(images)}
+            for future in as_completed(futures):
+                idx, processed_img = future.result()
+                result[idx] = processed_img
+
         return result
 
     def _check_page_status(self, tab) -> Dict[str, Any]:

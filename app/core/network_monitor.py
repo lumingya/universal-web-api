@@ -10,6 +10,7 @@ app/core/network_monitor.py - 网络响应拦截监听器
 
 import time
 import json
+import logging
 import re
 from typing import Generator, Optional, Dict, Callable, Any
 from pathlib import Path
@@ -1068,12 +1069,13 @@ class NetworkMonitor:
 
             if not self._matches_stream_target(event):
                 non_target_skips += 1
-                logger.debug_throttled(
-                    "network.non_target_response",
-                    f"[NetworkMonitor] 非流式目标响应，跳过解析 "
-                    f"(count={non_target_skips}, url={event.get('url', '')[:100]})",
-                    interval_sec=5.0,
-                )
+                if logger._level <= logging.DEBUG:
+                    logger.debug_throttled(
+                        "network.non_target_response",
+                        f"[NetworkMonitor] 非流式目标响应，跳过解析 "
+                        f"(count={non_target_skips}, url={event.get('url', '')[:100]})",
+                        interval_sec=5.0,
+                    )
                 continue
 
             if not has_seen_stream_target:
@@ -1081,13 +1083,14 @@ class NetworkMonitor:
                 logger.debug("[NetworkMonitor] 已捕获到首个流目标响应")
             stream_target_hits += 1
 
-            logger.debug_throttled(
-                "network.stream_target_hit",
-                "[NetworkMonitor] 命中流目标 "
-                f"(status={event.get('status')}, method={event.get('method')}, "
-                f"url={event.get('url', '')[:120]}, count={stream_target_hits})",
-                interval_sec=3.0,
-            )
+            if logger._level <= logging.DEBUG:
+                logger.debug_throttled(
+                    "network.stream_target_hit",
+                    "[NetworkMonitor] 命中流目标 "
+                    f"(status={event.get('status')}, method={event.get('method')}, "
+                    f"url={event.get('url', '')[:120]}, count={stream_target_hits})",
+                    interval_sec=3.0,
+                )
 
             if stream_target_hits == 1:
                 logger.debug("[NetworkMonitor] 已捕获到首个有效流响应")
@@ -1158,21 +1161,23 @@ class NetworkMonitor:
                     raise NetworkMonitorTimeout(
                         f"目标流响应正文未就绪（{body_wait_elapsed:.1f}s）"
                     )
-                logger.debug_throttled(
-                    "network.empty_body",
-                    "[NetworkMonitor] 响应体为空，跳过 "
-                    f"(count={empty_body_skips}, stream={is_event_stream}, source={raw_body_source})",
-                    interval_sec=5.0,
-                )
+                if logger._level <= logging.DEBUG:
+                    logger.debug_throttled(
+                        "network.empty_body",
+                        "[NetworkMonitor] 响应体为空，跳过 "
+                        f"(count={empty_body_skips}, stream={is_event_stream}, source={raw_body_source})",
+                        interval_sec=5.0,
+                    )
                 continue
 
-            logger.debug_throttled(
-                "network.body_captured",
-                f"[NetworkMonitor] 捕获响应 "
-                f"(responses={total_responses}, targets={stream_target_hits}, "
-                f"source={raw_body_source}, size={len(raw_body)} chars)",
-                interval_sec=3.0,
-            )
+            if logger._level <= logging.DEBUG:
+                logger.debug_throttled(
+                    "network.body_captured",
+                    f"[NetworkMonitor] 捕获响应 "
+                    f"(responses={total_responses}, targets={stream_target_hits}, "
+                    f"source={raw_body_source}, size={len(raw_body)} chars)",
+                    interval_sec=3.0,
+                )
 
             # 解析响应
             try:

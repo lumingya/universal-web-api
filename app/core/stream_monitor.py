@@ -10,6 +10,7 @@ v5.5 修改：
 
 import re
 import time
+import logging
 import threading
 from typing import Generator, Optional, Callable, Tuple, Dict, List, Any
 
@@ -196,6 +197,7 @@ class StreamMonitor:
         self.finder = finder
         self.formatter = formatter
         self._should_stop = stop_checker or (lambda: False)
+        self._stop_event = threading.Event()
         self.extractor = extractor if extractor is not None else DeepBrowserExtractor()
         
         # 图片配置
@@ -209,10 +211,67 @@ class StreamMonitor:
             self.DEFAULT_HARD_TIMEOUT
         )
 
+        # 🆕 事件驱动 DOM 监控模式
+        self._monitor_mode = self._stream_config.get("mode", "polling")  # "polling" | "event"
+        self._dom_change_event = threading.Event()  # CDP 事件通知信号
+        self._cdp_listener_started = False
+
         self._stream_ctx: Optional[StreamContext] = None
         self._final_complete_text = ""
         self._final_images: List[Dict] = []
         self._generating_checker: Optional[GeneratingStatusCache] = None
+
+    def _start_cdp_dom_listener(self, selector: str):
+        """通过 CDP DOM 事件启动被动监听。"""
+        js_code = """
+        (function(selector) {
+            if (window.__STREAM_MONITOR_CDP_OBSERVER__) {
+                window.__STREAM_MONITOR_CDP_OBSERVER__.disconnect();
+            }
+            var target = document.querySelector(selector) || document.body;
+            var observer = new MutationObserver(function(mutations) {
+                window.__STREAM_MONITOR_CDP_MUTATION_FLAG__ = true;
+                window.__STREAM_MONITOR_CDP_MUTATION_COUNT__ =
+                    (window.__STREAM_MONITOR_CDP_MUTATION_COUNT__ || 0) + mutations.length;
+            });
+            observer.observe(target, {
+                childList: true,
+                subtree: true,
+                characterData: true
+            });
+            window.__STREAM_MONITOR_CDP_OBSERVER__ = observer;
+            window.__STREAM_MONITOR_CDP_MUTATION_FLAG__ = false;
+            window.__STREAM_MONITOR_CDP_MUTATION_COUNT__ = 0;
+            return true;
+        })(arguments[0]);
+        """
+        try:
+            self.tab.run_js(js_code, selector)
+            self._cdp_listener_started = True
+        except Exception as e:
+            logger.debug(f"[CDP] DOM listener failed, fallback to polling: {e}")
+            self._monitor_mode = "polling"
+
+    def _check_cdp_mutation_flag(self) -> bool:
+        """检查 CDP MutationObserver 是否标记了变更。"""
+        if not self._cdp_listener_started:
+            return False
+        try:
+            flag = self.tab.run_js("return window.__STREAM_MONITOR_CDP_MUTATION_FLAG__ || false;")
+            if flag:
+                self.tab.run_js("window.__STREAM_MONITOR_CDP_MUTATION_FLAG__ = false;")
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _tab_is_active(self) -> bool:
+        """检查浏览器标签页是否仍然活跃。"""
+        try:
+            _ = self.tab.title
+            return True
+        except Exception:
+            return False
 
     def _sanitize_stream_text(self, text: str) -> str:
         if not text:
@@ -235,6 +294,10 @@ class StreamMonitor:
         self._stream_ctx = ctx
         self._final_images = []
         self._generating_checker = GeneratingStatusCache(self.tab)
+
+        # 🆕 event 模式：启动 CDP DOM 监听
+        if self._monitor_mode == "event":
+            self._start_cdp_dom_listener(selector)
 
         # ===== 阶段 0：instant baseline =====
         ctx.instant_baseline = self._get_latest_message_snapshot(selector)
@@ -308,7 +371,7 @@ class StreamMonitor:
                     ctx.active_turn_baseline_len = ctx.instant_last_node_len
                     break
 
-            time.sleep(0.2)
+            self._stop_event.wait(timeout=0.2)
 
         if ctx.user_baseline is None:
             logger.debug("[Timeout] 未检测到用户消息上屏，使用 instant baseline")
@@ -343,7 +406,7 @@ class StreamMonitor:
                     logger.warning(f"[Timeout] 等待 AI 开始超时（{elapsed:.1f}s）")
                     break
 
-                time.sleep(0.3)
+                self._stop_event.wait(timeout=0.3)
 
         # ===== 阶段 3：增量输出 =====
         if ctx.active_turn_started:
@@ -537,12 +600,12 @@ class StreamMonitor:
             current_text_len = len(current_text)
             current_image_count = snap.get('image_count', 0)  # 🆕
             
-            # 🆕 检测图片变化
             if current_image_count > last_image_count:
-                logger.debug(f"[Image Change] 图片数量变化: {last_image_count} -> {current_image_count}")
+                if logger._level <= logging.DEBUG:
+                    logger.debug(f"[Image Change] 图片数量变化: {last_image_count} -> {current_image_count}")
                 ctx.images_detected = True
                 ctx.content_ever_changed = True
-                silence_start = time.time()  # 重置静默计时
+                silence_start = time.time()
                 last_image_count = current_image_count
 
             # 检测内容折叠
@@ -559,7 +622,7 @@ class StreamMonitor:
                     silence_start = time.time()
                     has_output = False
                     last_text_len = current_text_len
-                    time.sleep(0.2)
+                    self._stop_event.wait(timeout=0.2)
                     continue
             else:
                 content_shrink_count = 0
@@ -586,7 +649,7 @@ class StreamMonitor:
                         last_image_count = current_image_count
 
                         if not current_text:
-                            time.sleep(0.2)
+                            self._stop_event.wait(timeout=0.2)
                             continue
             else:
                 ctx.pending_new_anchor = None
@@ -604,7 +667,7 @@ class StreamMonitor:
                         if element_missing_count >= max_element_missing:
                             logger.warning("元素持续丢失，退出监控")
                             break
-                    time.sleep(0.2)
+                    self._stop_event.wait(timeout=0.2)
                     continue
             else:
                 element_missing_count = 0
@@ -672,7 +735,8 @@ class StreamMonitor:
             if ctx.content_ever_changed:
                 if (ctx.stable_text_count >= stable_count_threshold and
                         silence_duration > silence_threshold):
-                    logger.debug(f"生成结束 (稳定{ctx.stable_text_count}次, 静默{silence_duration:.1f}s)")
+                    if logger._level <= logging.DEBUG:
+                        logger.debug(f"生成结束 (稳定{ctx.stable_text_count}次, 静默{silence_duration:.1f}s)")
                     break
                 elif silence_duration > silence_threshold_fallback * 3:
                     logger.info(f"[Exit] 生成结束（超长静默 {silence_duration:.1f}s）")
@@ -682,8 +746,8 @@ class StreamMonitor:
                     and not still_generating
                     and silence_duration > max(3.0, silence_threshold)
                 ):
-                    # 图片流式响应要等到生成指示器消失后，再按正常静默阈值退出
-                    logger.debug(f"[Exit] 图片生成完成（静默 {silence_duration:.1f}s）")
+                    if logger._level <= logging.DEBUG:
+                        logger.debug(f"[Exit] 图片生成完成（静默 {silence_duration:.1f}s）")
                     break
             else:
                 if not still_generating and not has_output:
@@ -692,13 +756,15 @@ class StreamMonitor:
                         logger.info("[Exit] 检测到快速回复（无增量但有最终内容/图片）")
                         break
 
-            sleep_elapsed = 0.0
-            while sleep_elapsed < current_interval:
-                if self._should_stop():
-                    break
-                step = min(0.1, current_interval - sleep_elapsed)
-                time.sleep(step)
-                sleep_elapsed += step
+            if self._monitor_mode == "event":
+                self._dom_change_event.clear()
+                self._dom_change_event.wait(timeout=current_interval)
+                if self._tab_is_active():
+                    self._dom_change_event.set()
+            else:
+                self._stop_event.wait(timeout=current_interval)
+            if self._should_stop():
+                break
 
         if not self._should_stop():
             yield from self._final_settle_and_output(selector, ctx, completion_id=completion_id)
@@ -723,7 +789,7 @@ class StreamMonitor:
             if now - stable_start >= settle_time:
                 break
 
-            time.sleep(0.15)
+            self._stop_event.wait(timeout=0.15)
             snap = self._get_snapshot_prefer_anchor(selector, ctx.output_target_anchor)
 
             changed = False

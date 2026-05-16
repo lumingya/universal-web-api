@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 
 from app.core.config import atomic_write_json, get_logger
 from app.services.command_defs import _new_command_id, get_default_command
+from app.services.config_engine import ConfigConstants
 
 logger = get_logger("CMD_ENG.STORAGE")
 
@@ -24,7 +25,6 @@ class CommandEngineStorageMixin:
 
     def _get_commands_file(self) -> str:
         if self._commands_file is None:
-            from app.services.config_engine import ConfigConstants
             self._commands_file = ConfigConstants.COMMANDS_FILE
         return self._commands_file
 

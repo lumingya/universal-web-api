@@ -11,6 +11,8 @@ Observed stream traits:
 from __future__ import annotations
 
 import json
+import time
+from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from app.core.config import logger
@@ -398,8 +400,6 @@ class DeepSeekParser(ResponseParser):
         }
 
     def export_debug_snapshot(self, raw_response: str = "") -> str:
-        import time
-        from pathlib import Path
 
         payload = {
             **self.export_debug_data(raw_response),

@@ -16,6 +16,7 @@ from typing import List
 
 from app.core.config import logger, BrowserConstants
 from app.core.tab_pool import get_clipboard_lock
+from app.utils.image_handler import copy_image_to_clipboard
 from app.utils.platform import get_primary_modifier_key
 from app.utils.system_clipboard import supports_native_image_clipboard
 from .attachment_monitor import AttachmentMonitor
@@ -334,7 +335,6 @@ class ImageInputHandler:
         return True
 
     def _paste_single_image(self, image_path: str, index: int) -> bool:
-        from app.utils.image_handler import copy_image_to_clipboard
 
         quick_probe_wait = 3.0
         quick_probe_idle_timeout = 2.5

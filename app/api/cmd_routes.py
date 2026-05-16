@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException, Depends, Header
 from pydantic import BaseModel, Field
 
 from app.core.config import AppConfig, get_logger
+from app.core import get_browser
 from app.services.command_engine import command_engine
 from app.services.request_manager import request_manager, RequestStatus
 
@@ -337,8 +338,6 @@ async def test_command(command_id: str, authenticated: bool = Depends(verify_aut
         raise HTTPException(status_code=404, detail="command_not_found")
 
     try:
-        from app.core.browser import get_browser
-
         browser = get_browser(auto_connect=False)
         pool = browser.tab_pool
 
@@ -458,7 +457,6 @@ async def execute_command_group(
     acquire_policy = str(body.acquire_policy or "inherit_session").strip() if body else "inherit_session"
 
     try:
-        from app.core.browser import get_browser
         browser = get_browser(auto_connect=False)
         pool = browser.tab_pool
 

@@ -17,11 +17,13 @@ except ImportError:
     HAS_REQUESTS = False
 
 from app.core.config import get_logger
+from app.core.parsers.deepseek_parser import DeepSeekParser
 from app.core.request_transport import (
     execute_request_transport,
     get_default_request_transport_config,
 )
 from app.services.command_defs import ACTION_TYPES, TRIGGER_TYPES, CommandFlowAbort
+from app.utils.human_mouse import cdp_precise_click, smooth_move_mouse
 from app.utils.site_url import extract_remote_site_domain
 
 if TYPE_CHECKING:
@@ -608,7 +610,6 @@ class CommandEngineActionsMixin:
                             if click_x_raw is not None and click_y_raw is not None:
                                 click_x = int(click_x_raw) + __import__('random').randint(-4, 4)
                                 click_y = int(click_y_raw) + __import__('random').randint(-4, 4)
-                                from app.utils.human_mouse import cdp_precise_click, smooth_move_mouse
                                 # 平滑移动到坐标再进行精确按压
                                 smooth_move_mouse(tab, (click_x - 50, click_y - 50), (click_x, click_y))
                                 time.sleep(__import__('random').uniform(0.05, 0.15))
@@ -639,7 +640,6 @@ class CommandEngineActionsMixin:
             try:
                 x = int(action.get("x", 0))
                 y = int(action.get("y", 0))
-                from app.utils.human_mouse import cdp_precise_click
                 # cdp_precise_click handles its own debug logging and execution securely via CDP
                 success = cdp_precise_click(tab, x, y)
                 if success:
@@ -1356,8 +1356,6 @@ class CommandEngineActionsMixin:
 
         if raw_text and "text/event-stream" in content_type.lower():
             try:
-                from app.core.parsers.deepseek_parser import DeepSeekParser
-
                 parser = DeepSeekParser()
                 parsed = parser.parse_chunk(raw_text)
                 parsed_content = str(parsed.get("content", "") or "")
@@ -1859,9 +1857,6 @@ class CommandEngineActionsMixin:
                 return {"mode": "advanced", "result": f"js_failed: {e}", "steps": []}
 
         if lang == "python":
-            import json as json_module
-            from app.services.request_manager import request_manager
-
             def _check_cancelled() -> bool:
                 request_ids = []
                 try:
@@ -1878,6 +1873,7 @@ class CommandEngineActionsMixin:
                 except Exception:
                     pass
                 try:
+                    from app.services.request_manager import request_manager
                     for request_id in request_ids:
                         ctx = request_manager.get_request(request_id)
                         if ctx is not None and ctx.should_stop():
@@ -1903,7 +1899,7 @@ class CommandEngineActionsMixin:
                 "config_engine": self._get_config_engine(),
                 "logger": logger,
                 "time": time,
-                "json": json_module,
+                "json": json,
                 "check_cancelled": _check_cancelled,
                 "raise_if_cancelled": _raise_if_cancelled,
                 "result": "",

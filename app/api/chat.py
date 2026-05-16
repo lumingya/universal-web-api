@@ -20,8 +20,12 @@ from fastapi import APIRouter, Request, HTTPException, Header, Depends
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
 
+import copy
+
 from app.core.config import AppConfig, get_logger, SSEFormatter
+from app.api import tab_routes as tab_routes_api
 from app.core import get_browser
+from app.services.config_engine import config_engine
 from app.services.request_manager import (
     request_manager, 
     RequestContext, 
@@ -179,7 +183,6 @@ DEFAULT_RESPONSE_FORMAT_HINTS = {
 def _get_response_format_hint(format_type: str) -> str:
     """获取指定格式类型的提示词模板"""
     try:
-        from app.services.config_engine import config_engine
         hints = config_engine.global_config.get("response_format_hints")
         if hints and isinstance(hints, dict) and format_type in hints:
             return hints[format_type]
@@ -210,7 +213,6 @@ def _apply_response_format(messages: list, response_format: dict) -> list:
         except Exception:
             hint = hint_template.replace("{schema}", str(schema_content))
     
-    import copy
     new_messages = copy.deepcopy(messages)
     
     for i in range(len(new_messages) - 1, -1, -1):
@@ -293,7 +295,6 @@ async def chat_completions(
 
     if route_domain:
         logger.info(f"模型路由命中: model={body.model!r} -> {route_domain}")
-        from app.api import tab_routes as tab_routes_api
 
         route_body = tab_routes_api.ChatRequest(**body.model_dump())
         return await tab_routes_api.chat_with_route_domain(

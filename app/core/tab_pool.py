@@ -20,6 +20,7 @@ from contextlib import asynccontextmanager
 from urllib.parse import urlsplit
 
 from app.core.config import logger, BrowserConstants
+from app.services.config_engine import config_engine
 from app.utils.site_url import (
     extract_remote_site_domain,
     get_preferred_route_domain,
@@ -231,7 +232,6 @@ class TabSession:
         
         # Trigger command checks outside the lock to avoid blocking
         try:
-            from app.services.command_engine import command_engine
             if check_triggers:
                 command_engine.check_triggers(self)
         except Exception as e:
@@ -563,7 +563,6 @@ class _GlobalNetworkInterceptionManager:
 
     def _dispatch_event(self, session: TabSession, event: Dict[str, Any]):
         try:
-            from app.services.command_engine import command_engine
             command_engine.handle_network_event(session, event)
         except Exception as e:
             logger.debug(f"[GlobalNet] 事件上报失败（忽略）: {e}")
@@ -879,8 +878,6 @@ class TabPoolManager:
             return False
 
         try:
-            from app.services.config_engine import config_engine
-
             advanced = config_engine.get_site_advanced_config(normalized_domain)
             return bool(advanced.get("independent_cookies", False))
         except Exception as e:
@@ -893,8 +890,6 @@ class TabPoolManager:
             return False
 
         try:
-            from app.services.config_engine import config_engine
-
             advanced = config_engine.get_site_advanced_config(normalized_domain)
             return bool(advanced.get("independent_cookies_auto_takeover", False))
         except Exception as e:
@@ -1802,7 +1797,6 @@ class TabPoolManager:
         cancelled = False
         try:
             from app.services.request_manager import request_manager
-
             cancelled = bool(request_manager.cancel_request(task_id, reason))
         except Exception as e:
             logger.debug(f"[{session.id}] cancel on invalid session failed (ignored): {e}")

@@ -23,6 +23,7 @@ from fastapi.responses import JSONResponse
 
 from app.core.config import AppConfig, get_logger, log_collector, BrowserConstants
 from app.core import get_browser, BrowserConnectionError
+import app.core.browser as browser_module
 from app.core.session_manager import session_manager
 from app.services.config_engine import config_engine, ConfigConstants
 from app.services.stats_recorder import stats_recorder
@@ -185,7 +186,6 @@ def _schedule_service_restart(delay_seconds: float = 1.0) -> None:
         logger.warning("配置已更新，服务即将重启...")
         logger.warning("=" * 60)
 
-        import os
         os._exit(3)
 
     asyncio.create_task(trigger_restart())
@@ -730,7 +730,6 @@ async def import_settings_backup(
             _write_json_file(Path("config/browser_config.json"), files["browser_constants"])
             imported_sections.append("browser_constants")
             try:
-                from app.core.config import BrowserConstants
                 if hasattr(BrowserConstants, "reload"):
                     BrowserConstants.reload()
             except Exception as reload_error:
@@ -801,7 +800,6 @@ async def save_browser_constants(
         _write_json_file(Path("config/browser_config.json"), config)
 
         try:
-            from app.core.config import BrowserConstants
             if hasattr(BrowserConstants, 'reload'):
                 BrowserConstants.reload()
                 logger.info("浏览器常量已热重载")
@@ -814,8 +812,6 @@ async def save_browser_constants(
         try:
             tab_pool_config = config.get("tab_pool") or {}
             if isinstance(tab_pool_config, dict):
-                import app.core.browser as browser_module
-
                 browser_instance = getattr(browser_module, "_browser_instance", None)
                 live_tab_pool = getattr(browser_instance, "_tab_pool", None) if browser_instance else None
                 if live_tab_pool is not None:

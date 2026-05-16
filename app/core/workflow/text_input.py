@@ -1773,7 +1773,6 @@ class TextInputHandler:
         2. Prefer site-native upload entry points and file inputs.
         3. Only fall back to clipboard file paste when there was no ambiguous upload activity.
         """
-        from app.core.tab_pool import get_clipboard_lock
 
         threshold = self._file_paste_config.get("threshold", 50000)
         logger.info(

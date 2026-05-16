@@ -5,9 +5,10 @@ app/services/config - 配置管理模块
 - 导出配置引擎单例（保持向后兼容）
 """
 
+from .cache import ConfigCache
 from .engine import ConfigEngine, ConfigConstants, DEFAULT_WORKFLOW
 
 # 创建单例
 config_engine = ConfigEngine()
 
-__all__ = ['config_engine', 'ConfigEngine', 'ConfigConstants', 'DEFAULT_WORKFLOW']
+__all__ = ['ConfigCache', 'config_engine', 'ConfigEngine', 'ConfigConstants', 'DEFAULT_WORKFLOW']
