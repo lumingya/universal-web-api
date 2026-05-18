@@ -515,6 +515,8 @@ class StreamMonitor:
         initial_snap = self._get_snapshot_prefer_anchor(selector, None)
         ctx.output_target_count = initial_snap['groups_count']
         ctx.output_target_anchor = initial_snap['anchor']
+        last_text_len = int(initial_snap.get('text_len', 0) or 0)
+        last_image_count = int(initial_snap.get('image_count', ctx.baseline_image_count) or 0)
 
         peak_text_len = 0
         content_shrink_count = 0
@@ -582,7 +584,7 @@ class StreamMonitor:
                         peak_text_len = 0
                         silence_start = time.time()
                         has_output = False
-                        last_text_len = 0
+                        last_text_len = current_text_len
                         last_image_count = current_image_count
 
                         if not current_text:
@@ -659,7 +661,13 @@ class StreamMonitor:
                 current_interval = min(current_interval * 1.5, max_interval)
 
             if current_text_len != last_text_len:
-                ctx.content_ever_changed = True
+                # 基线文本（如用户 prompt 回显）不算“AI 有效变化”，避免图片任务被过早收尾。
+                effective_baseline_len = int(ctx.active_turn_baseline_len or 0)
+                if (
+                    current_text_len > effective_baseline_len + 2
+                    or last_text_len > effective_baseline_len + 2
+                ):
+                    ctx.content_ever_changed = True
                 last_text_len = current_text_len
 
             silence_duration = time.time() - silence_start
@@ -668,13 +676,36 @@ class StreamMonitor:
             silence_threshold = BrowserConstants.STREAM_SILENCE_THRESHOLD
             silence_threshold_fallback = BrowserConstants.STREAM_SILENCE_THRESHOLD_FALLBACK
             stable_count_threshold = BrowserConstants.STREAM_STABLE_COUNT_THRESHOLD
+            image_modalities = self._image_config.get("modalities") or {}
+            image_mode_enabled = (
+                self._image_extraction_enabled and bool(image_modalities.get("image"))
+            )
+            no_visible_progress = (
+                image_mode_enabled
+                and not ctx.images_detected
+                and not has_output
+                and ctx.sent_content_length <= 0
+                and current_image_count <= max(int(ctx.baseline_image_count or 0), 0)
+                and current_text_len <= int(ctx.active_turn_baseline_len or 0) + 2
+            )
+            no_progress_wait_limit = float(
+                self._image_config.get("dom_image_no_output_timeout_seconds")
+                or max(45.0, float(silence_threshold_fallback) * 4.0)
+            )
+            no_progress_hard_limit = float(
+                self._image_config.get("dom_image_no_output_hard_timeout_seconds") or 0.0
+            )
+            elapsed_since_phase_start = time.time() - phase_start
+            suppress_fast_exit = False
+            if no_visible_progress and elapsed_since_phase_start < no_progress_wait_limit:
+                suppress_fast_exit = True
 
             if ctx.content_ever_changed:
-                if (ctx.stable_text_count >= stable_count_threshold and
+                if (not suppress_fast_exit and ctx.stable_text_count >= stable_count_threshold and
                         silence_duration > silence_threshold):
                     logger.debug(f"生成结束 (稳定{ctx.stable_text_count}次, 静默{silence_duration:.1f}s)")
                     break
-                elif silence_duration > silence_threshold_fallback * 3:
+                elif (not suppress_fast_exit and silence_duration > silence_threshold_fallback * 3):
                     logger.info(f"[Exit] 生成结束（超长静默 {silence_duration:.1f}s）")
                     break
                 elif (
@@ -686,7 +717,31 @@ class StreamMonitor:
                     logger.debug(f"[Exit] 图片生成完成（静默 {silence_duration:.1f}s）")
                     break
             else:
-                if not still_generating and not has_output:
+                if (
+                    image_mode_enabled
+                    and no_visible_progress
+                    and still_generating
+                    and no_progress_hard_limit > 0
+                    and elapsed_since_phase_start >= no_progress_hard_limit
+                ):
+                    logger.warning(
+                        "[Exit] 图片模式无可见进展，达到硬等待上限后结束 "
+                        f"(elapsed={elapsed_since_phase_start:.1f}s, "
+                        f"hard_limit={no_progress_hard_limit:.1f}s)"
+                    )
+                    break
+                if (
+                    image_mode_enabled
+                    and no_visible_progress
+                    and not still_generating
+                    and elapsed_since_phase_start >= no_progress_wait_limit
+                ):
+                    logger.info(
+                        "[Exit] 图片模式无可见进展，达到最长等待后结束 "
+                        f"(elapsed={elapsed_since_phase_start:.1f}s)"
+                    )
+                    break
+                if not suppress_fast_exit and not still_generating and not has_output:
                     # 🆕 如果有图片但没文本，也认为是有效回复
                     if ctx.images_detected or current_text_len > ctx.active_turn_baseline_len + 5:
                         logger.info("[Exit] 检测到快速回复（无增量但有最终内容/图片）")

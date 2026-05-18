@@ -82,7 +82,7 @@ const BROWSER_CONSTANTS_SCHEMA = {
         desc: '模拟人类操作的随机延迟范围',
         items: {
             STEALTH_DELAY_MIN: {
-                label: '隐身延迟下限',
+                label: '低熵延迟下限',
                 unit: '秒',
                 type: 'number',
                 step: 0.05,
@@ -90,7 +90,7 @@ const BROWSER_CONSTANTS_SCHEMA = {
                 default: 0.03
             },
             STEALTH_DELAY_MAX: {
-                label: '隐身延迟上限',
+                label: '低熵延迟上限',
                 unit: '秒',
                 type: 'number',
                 step: 0.05,

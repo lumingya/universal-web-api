@@ -22,6 +22,7 @@ lmarena_parser.py - Arena.ai 响应解析器
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 from app.core.config import logger
@@ -69,6 +70,74 @@ _CP1252_TO_LATIN1 = str.maketrans({
 })
 
 
+def _looks_like_image_ref(value: str) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    lowered = text.lower()
+    if lowered.startswith(("http://", "https://", "data:image/", "blob:")):
+        return True
+    return any(token in lowered for token in (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".svg", ".avif"))
+
+
+def _extract_arena_image_items(
+    payload: str,
+    seen_refs: set[str],
+    *,
+    source: str,
+) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+
+    try:
+        data = json.loads(payload)
+    except (json.JSONDecodeError, ValueError):
+        return items
+
+    entries = data if isinstance(data, list) else [data]
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+
+        entry_type = str(entry.get("type") or "").strip().lower()
+        if entry_type and entry_type != "image":
+            continue
+
+        image_ref = ""
+        for key in ("image", "url", "src"):
+            candidate = str(entry.get(key) or "").strip()
+            if _looks_like_image_ref(candidate):
+                image_ref = candidate
+                break
+
+        if not image_ref:
+            continue
+
+        dedupe_key = f"image:{image_ref}"
+        if dedupe_key in seen_refs:
+            continue
+        seen_refs.add(dedupe_key)
+
+        mime = str(entry.get("mimeType") or entry.get("mime") or "").strip() or None
+        kind = "data_uri" if image_ref.startswith("data:image/") else "url"
+        items.append(
+            {
+                "media_type": "image",
+                "kind": kind,
+                "url": image_ref if kind == "url" else None,
+                "data_uri": image_ref if kind == "data_uri" else None,
+                "mime": mime,
+                "byte_size": None,
+                "alt": str(entry.get("alt") or "").strip(),
+                "width": entry.get("width"),
+                "height": entry.get("height"),
+                "detected_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "source": source,
+            }
+        )
+
+    return items
+
+
 class LmarenaParser(ResponseParser):
     """
     Arena.ai 响应解析器
@@ -79,6 +148,7 @@ class LmarenaParser(ResponseParser):
 
     def __init__(self) -> None:
         self._accumulated = ""
+        self._seen_image_refs: set[str] = set()
 
     # ============ 对外接口 ============
 
@@ -104,6 +174,7 @@ class LmarenaParser(ResponseParser):
 
         try:
             content_parts: list[str] = []
+            images: list[Dict[str, Any]] = []
             done = False
 
             for line in raw_response.split("\n"):
@@ -122,6 +193,15 @@ class LmarenaParser(ResponseParser):
                     text = self._parse_text_chunk(payload)
                     if text is not None:
                         content_parts.append(text)
+
+                elif prefix == "a2":
+                    images.extend(
+                        _extract_arena_image_items(
+                            payload,
+                            self._seen_image_refs,
+                            source="lmarena_stream",
+                        )
+                    )
 
                 elif prefix == "ad":
                     if self._is_finish_signal(payload):
@@ -145,6 +225,8 @@ class LmarenaParser(ResponseParser):
                     result["content"] = new_content
                     self._accumulated = new_content
 
+            if images:
+                result["images"] = images
             result["done"] = done
 
         except Exception as e:
@@ -156,6 +238,7 @@ class LmarenaParser(ResponseParser):
     def reset(self) -> None:
         """重置状态"""
         self._accumulated = ""
+        self._seen_image_refs.clear()
 
     # ============ 内部方法 ============
 
@@ -239,4 +322,8 @@ class LmarenaParser(ResponseParser):
         return ["nextjs-api/stream/create-evaluation"]
 
 
-__all__ = ["LmarenaParser"]
+__all__ = [
+    "LmarenaParser",
+    "_CP1252_TO_LATIN1",
+    "_extract_arena_image_items",
+]

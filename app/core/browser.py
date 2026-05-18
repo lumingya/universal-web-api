@@ -19,6 +19,7 @@ import socket
 import threading
 import time
 import contextlib
+import random
 import shutil
 import subprocess
 from typing import Optional, List, Dict, Any, Generator, Callable
@@ -419,6 +420,40 @@ class BrowserCore:
                 prompt_parts.append(f"{role}: {text}")
         
         return "\n\n".join(prompt_parts)
+
+    def _build_prompt_padding_line(self, config: Dict[str, Any]) -> str:
+        marker_text = str(config.get("marker_text") or "").strip()
+        segments_per_side = config.get("segments_per_side", 12)
+        try:
+            segment_count = int(segments_per_side)
+        except (TypeError, ValueError):
+            segment_count = 12
+        segment_count = max(1, min(segment_count, 64))
+
+        fragments = []
+        for _ in range(segment_count):
+            if random.random() < 0.5:
+                fragments.append(random.choice("abcdefghijklmnopq"))
+            else:
+                fragments.append(str(random.randint(1, 999999)))
+
+        padding_text = "".join(fragments)
+        if not marker_text:
+            return padding_text
+        if marker_text.endswith((':', '：')):
+            return f"{marker_text}{padding_text}"
+        return f"{marker_text}:{padding_text}"
+
+    def _apply_prompt_padding(self, prompt: str, config: Dict[str, Any]) -> str:
+        if not prompt:
+            return prompt
+        if not isinstance(config, dict) or not bool(config.get("enabled")):
+            return prompt
+
+        prefix = self._build_prompt_padding_line(config)
+        suffix = self._build_prompt_padding_line(config)
+        return f"{prefix}\n{prompt}\n{suffix}"
+
     def _get_upload_history_images_flag(self, default: bool = True) -> bool:
         """
         获取是否上传历史对话图片的开关。
@@ -1731,6 +1766,7 @@ class BrowserCore:
         )
         stream_config = site_config.get("stream_config", {}) or {}
         file_paste_config = site_config.get("file_paste", {}) or {}
+        prompt_padding_config = site_config.get("prompt_padding", {}) or {}
 
         audio_capture_preload_enabled = (
             bool(modalities.get("audio"))
@@ -1854,8 +1890,11 @@ class BrowserCore:
                 "已自动忽略图片并继续执行纯文本对话。"
             )
         
+        prompt_text = self._build_prompt_from_messages(messages)
+        prompt_text = self._apply_prompt_padding(prompt_text, prompt_padding_config)
+
         context = {
-            "prompt": self._build_prompt_from_messages(messages),
+            "prompt": prompt_text,
             "images": user_images
         }
         
@@ -2086,6 +2125,7 @@ class BrowserCore:
                         stop_checker=_combined_stop_checker,
                         response_text_hint="".join(streamed_text_parts),
                         media_generation_state=getattr(executor, "_last_stream_media_state", None),
+                        stream_media_items=getattr(executor, "_last_stream_media_items", None),
                     )
                     
                     if media_items:
@@ -2252,6 +2292,7 @@ class BrowserCore:
         stop_checker: Optional[Callable[[], bool]] = None,
         response_text_hint: str = "",
         media_generation_state: Optional[Dict[str, Any]] = None,
+        stream_media_items: Optional[List[Dict[str, Any]]] = None,
     ) -> List[Dict]:
         """流式输出结束后提取多模态资源。"""
         from app.core.elements import ElementFinder
@@ -2275,6 +2316,34 @@ class BrowserCore:
                 elapsed += step
         
         finder = ElementFinder(tab)
+        fallback_stream_media_items = self._dedupe_media_items(
+            [dict(item) for item in (stream_media_items or []) if isinstance(item, dict)]
+        )
+
+        def _apply_stream_media_fallback(dom_media_items: List[Dict]) -> List[Dict]:
+            if not fallback_stream_media_items:
+                return list(dom_media_items or [])
+
+            merged = list(dom_media_items or [])
+            ready_types = {
+                str(item.get("media_type") or "").strip().lower()
+                for item in merged
+                if str(item.get("url") or item.get("data_uri") or "").strip()
+            }
+
+            appended = 0
+            for item in fallback_stream_media_items:
+                media_type = str(item.get("media_type") or "").strip().lower()
+                if not media_type or media_type in ready_types:
+                    continue
+                merged.append(dict(item))
+                ready_types.add(media_type)
+                appended += 1
+
+            if appended:
+                logger.debug(f"DOM 媒体缺失，已回退合并网络流媒体: {appended} 项")
+
+            return self._dedupe_media_items(merged)
 
         def _find_candidate_elements(timeout: float = 1.0):
             primary_elements = []
@@ -2316,12 +2385,18 @@ class BrowserCore:
                 )
                 if should_try_page_audio_capture:
                     logger.debug("结果容器为空，尝试页面级音频播放捕获回退")
-                    return self._capture_audio_via_page_playback(
+                    captured_audio_items = self._capture_audio_via_page_playback(
                         tab=tab,
                         target_element=None,
                         image_config=image_config,
                         stop_checker=effective_stop_checker,
                     )
+                    if captured_audio_items:
+                        return _apply_stream_media_fallback(captured_audio_items)
+
+                if fallback_stream_media_items:
+                    logger.debug("结果容器为空，直接回退到网络流媒体结果")
+                    return list(fallback_stream_media_items)
                 return []
             
             last_element = elements[-1]
@@ -2346,7 +2421,9 @@ class BrowserCore:
                 )
 
             media_items = [] if only_audio_mode else _extract_media_once(last_element)
-            ready_media_items = self._filter_ready_media_items(media_items, image_config)
+            ready_media_items = _apply_stream_media_fallback(
+                self._filter_ready_media_items(media_items, image_config)
+            )
             pending_media_items = [
                 item for item in media_items
                 if self._is_pending_media_item(item, image_config)
@@ -2458,7 +2535,9 @@ class BrowserCore:
                         continue
                     last_element = elements[-1]
                     media_items = _extract_media_once(last_element)
-                    ready_media_items = self._filter_ready_media_items(media_items, image_config)
+                    ready_media_items = _apply_stream_media_fallback(
+                        self._filter_ready_media_items(media_items, image_config)
+                    )
                     image_items = [item for item in ready_media_items if item.get("media_type") == "image"]
                     audio_items = [item for item in ready_media_items if item.get("media_type") == "audio"]
                     video_items = [item for item in ready_media_items if item.get("media_type") == "video"]
@@ -2486,6 +2565,44 @@ class BrowserCore:
                         f"kinds={','.join(sorted(pending_kinds))}, late_wait={late_wait_timeout:.1f}s"
                     )
 
+            should_probe_late_image_render = (
+                bool(modalities.get("image"))
+                and not image_items
+                and not pending_kinds
+                and not only_audio_mode
+                and not effective_stop_checker()
+                and len(str(response_text_hint or "").strip()) <= 32
+            )
+            if should_probe_late_image_render:
+                late_image_wait_timeout = float(
+                    image_config.get("late_image_render_timeout_seconds")
+                    or max(45.0, float(image_config.get("load_timeout_seconds", 5.0) or 5.0) * 8.0)
+                )
+                poll_interval = float(image_config.get("late_render_poll_seconds") or 1.0)
+                deadline = time.time() + late_image_wait_timeout
+
+                while time.time() < deadline and not effective_stop_checker():
+                    time.sleep(max(0.2, poll_interval))
+                    elements, container_mode = _find_candidate_elements(timeout=0.5)
+                    if not elements:
+                        continue
+
+                    last_element = elements[-1]
+                    media_items = _extract_media_once(last_element)
+                    ready_media_items = _apply_stream_media_fallback(
+                        self._filter_ready_media_items(media_items, image_config)
+                    )
+                    image_items = [item for item in ready_media_items if item.get("media_type") == "image"]
+                    audio_items = [item for item in ready_media_items if item.get("media_type") == "audio"]
+                    video_items = [item for item in ready_media_items if item.get("media_type") == "video"]
+
+                    if image_items:
+                        logger.debug(
+                            "无显式占位信号，但已在延迟轮询中捕获到图片结果: "
+                            f"late_wait={late_image_wait_timeout:.1f}s, container={container_mode or 'unknown'}"
+                        )
+                        break
+
             should_try_audio_capture = (
                 bool((image_config.get("modalities") or {}).get("audio"))
                 and bool(image_config.get("audio_capture_enabled", True))
@@ -2501,7 +2618,7 @@ class BrowserCore:
                     response_text_hint=response_text_hint,
                 )
                 if captured_audio_items:
-                    ready_media_items = list(ready_media_items) + captured_audio_items
+                    ready_media_items = self._dedupe_media_items(list(ready_media_items) + captured_audio_items)
                     audio_items = [item for item in ready_media_items if item.get("media_type") == "audio"]
             
             # 🆕 如果图片是不可直连的外链（如 googleusercontent），尝试截图落盘并替换为本地 URL
@@ -2558,13 +2675,10 @@ class BrowserCore:
         if not bool(trigger_result.get("clicked")) and target_element is not None and target_element is not tab:
             trigger_result = media_extractor.trigger_audio_playback(tab, image_config)
         if not bool(trigger_result.get("clicked")):
-            logger.debug(f"页面音频捕获未触发播放按钮: {trigger_result}")
+            logger.debug("页面音频捕获未触发")
             return []
 
-        logger.debug(
-            "页面音频捕获已触发播放按钮: "
-            f"text={trigger_result.get('text')!r}, candidates={trigger_result.get('candidate_count')}"
-        )
+        logger.debug("页面音频捕获已触发")
 
         if network_capture_enabled:
             network_audio_items = media_extractor.capture_network_audio(

@@ -597,7 +597,7 @@ class CommandEngineActionsMixin:
                         is_stealth = site_cfg.get("stealth", False) if site_cfg else False
                         
                         if is_stealth:
-                            logger.debug(f"[CMD] 准备隐身模式点击元素: {selector}")
+                            logger.debug(f"[CMD] 准备低熵模式点击元素: {selector}")
                             # 尝试通过 JS 获取元素中心坐标
                             rect = ele.run_js(
                                 "const r = this.getBoundingClientRect();"
@@ -614,13 +614,13 @@ class CommandEngineActionsMixin:
                                 time.sleep(__import__('random').uniform(0.05, 0.15))
                                 success = cdp_precise_click(tab, click_x, click_y)
                                 if success:
-                                    logger.debug(f"[CMD] 元素已隐身点击: {selector} at ({click_x}, {click_y})")
+                                    logger.debug(f"[CMD] 元素已低熵点击: {selector} at ({click_x}, {click_y})")
                                     return f"element_stealth_clicked:{selector}"
                                 else:
-                                    logger.warning(f"[CMD] 元素隐身点击事件派发失败: {selector}")
+                                    logger.warning(f"[CMD] 元素低熵点击事件派发失败: {selector}")
                                     return f"element_stealth_click_failed:{selector}"
                             else:
-                                logger.warning(f"[CMD] 隐身点击无法获取目标坐标，取消普通点击降级: {selector}")
+                                logger.warning(f"[CMD] 低熵点击无法获取目标坐标，取消普通点击降级: {selector}")
                                 return f"element_stealth_click_unavailable:{selector}"
                         else:
                             ele.click()

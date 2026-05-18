@@ -216,6 +216,27 @@ def get_default_file_paste_config() -> 'FilePasteConfig':
         },
     }
 
+
+class PromptPaddingConfig(TypedDict, total=False):
+    """
+    提示词首尾填充配置
+
+    用于 sites.json 中的 prompt_padding 字段
+    """
+    enabled: bool
+    marker_text: str
+    segments_per_side: int
+
+
+def get_default_prompt_padding_config() -> 'PromptPaddingConfig':
+    """获取默认的提示词首尾填充配置"""
+    return {
+        "enabled": False,
+        "marker_text": "测试号，无实际意义",
+        "segments_per_side": 12,
+    }
+
+
 class ExtractionModalitiesConfig(TypedDict, total=False):
     """多模态提取开关"""
     image: bool
@@ -355,6 +376,7 @@ class SiteConfig(TypedDict, total=False):
     stream_config: StreamConfig
     image_extraction: ImageExtractionConfig  # 🆕 新增
     file_paste: FilePasteConfig
+    prompt_padding: PromptPaddingConfig
     extractor_id: str                        # 提取器 ID（已有）
     extractor_verified: bool                 # 提取器验证状态（已有）
 
@@ -952,6 +974,18 @@ def validate_site_config(config: Dict[str, Any]) -> bool:
                     return False
                 if any(not isinstance(item, str) for item in value):
                     return False
+
+    if "prompt_padding" in config:
+        if not isinstance(config["prompt_padding"], dict):
+            return False
+
+        prompt_padding = config["prompt_padding"]
+        if "enabled" in prompt_padding and not isinstance(prompt_padding["enabled"], bool):
+            return False
+        if "marker_text" in prompt_padding and not isinstance(prompt_padding["marker_text"], str):
+            return False
+        if "segments_per_side" in prompt_padding and not isinstance(prompt_padding["segments_per_side"], int):
+            return False
     
     return True
 
@@ -1116,6 +1150,8 @@ __all__ = [
     'get_default_image_extraction_config',
     'FilePasteConfig',
     'get_default_file_paste_config',
+    'PromptPaddingConfig',
+    'get_default_prompt_padding_config',
 ]
 
 

@@ -228,6 +228,8 @@ class BrowserConstants:
         'PAGE_INTERACTION_STABLE_SAMPLES': 2,
         'PAGE_INTERACTION_SAMPLE_INTERVAL': 0.12,
         'PAGE_INTERACTION_RECT_TOLERANCE': 3,
+        'WORKFLOW_WAKE_TAB_BEFORE_INTERACTION': True,
+        'WORKFLOW_FOCUS_EMULATION_ON_INTERACTION': True,
         'DEFAULT_ELEMENT_TIMEOUT': 3,
         'FALLBACK_ELEMENT_TIMEOUT': 1,
         'ELEMENT_CACHE_MAX_AGE': 5.0,
@@ -252,7 +254,8 @@ class BrowserConstants:
         'GLOBAL_NETWORK_INTERCEPTION_WAIT_TIMEOUT': 0.5,
         'GLOBAL_NETWORK_INTERCEPTION_RETRY_DELAY': 1.0,
         'NETWORK_DEBUG_CAPTURE_ENABLED': False,
-        'NETWORK_DEBUG_CAPTURE_MAX_BODY_CHARS': 200000,
+        'NETWORK_DEBUG_CAPTURE_MAX_BODY_CHARS': 50000,
+        'NETWORK_DEBUG_CAPTURE_MAX_FILES_PER_REQUEST': 3,
         'NETWORK_DEBUG_CAPTURE_PARSER_FILTER': '',
         'CONVERSATION_TIMEOUT_THRESHOLD': 0.0,
         'FORCE_NEW_CONVERSATION': False,
@@ -290,6 +293,8 @@ class BrowserConstants:
     PAGE_INTERACTION_STABLE_SAMPLES = 2
     PAGE_INTERACTION_SAMPLE_INTERVAL = 0.12
     PAGE_INTERACTION_RECT_TOLERANCE = 3
+    WORKFLOW_WAKE_TAB_BEFORE_INTERACTION = True
+    WORKFLOW_FOCUS_EMULATION_ON_INTERACTION = True
     
     # 元素查找
     DEFAULT_ELEMENT_TIMEOUT = 3
@@ -338,7 +343,8 @@ class BrowserConstants:
 
     # 网络解析调试捕获
     NETWORK_DEBUG_CAPTURE_ENABLED = False
-    NETWORK_DEBUG_CAPTURE_MAX_BODY_CHARS = 200000
+    NETWORK_DEBUG_CAPTURE_MAX_BODY_CHARS = 50000
+    NETWORK_DEBUG_CAPTURE_MAX_FILES_PER_REQUEST = 3
     NETWORK_DEBUG_CAPTURE_PARSER_FILTER = ""
 
     # 对话会话控制
@@ -682,9 +688,6 @@ _VERIFY_OK_EXACT_PATTERN = re.compile(
 _SEND_SUCCESS_RETRY_PATTERN = re.compile(r"^发送成功 \(重试([\d.]+)s\)$")
 _FILE_PASTE_DONE_PATTERN = re.compile(r"^\[FILE_PASTE\] 文件粘贴完成 \((\d+) 字符\)$")
 _CLIPBOARD_OK_PATTERN = re.compile(r"^\[CLIPBOARD_OK\] 粘贴成功，长度 (\d+)$")
-_NETWORK_OUTPUT_CHUNK_PATTERN = re.compile(
-    r"^\[NetworkMonitor\] 输出片段 #(\d+) \(len=(\d+), total_chars=(\d+), preview=(.+)\)$"
-)
 _FILE_PASTE_UPLOAD_SIGNAL_PATTERN = re.compile(
     r"^\[FILE_PASTE\] 检测到文件上传信号 "
     r"\(file_count=(\d+), matched_name=(True|False), "
@@ -994,14 +997,6 @@ def _cuteify_debug_message(logger_name: str, message_text: str) -> str:
     if text == "[NetworkMonitor] 检测到结束标志，完成监听":
         return cute("小鹿看到结束标记啦，这轮监听可以收尾了喵")
 
-    network_chunk_match = _NETWORK_OUTPUT_CHUNK_PATTERN.match(text)
-    if network_chunk_match:
-        chunk_no, chunk_len, total_chars, preview = network_chunk_match.groups()
-        return cute(
-            f"小鹿又叼来一段响应啦（第 {chunk_no} 段，本段 {chunk_len} 字符，"
-            f"累计 {total_chars} 字符，预览“{preview}”）"
-        )
-
     file_paste_signal_match = _FILE_PASTE_UPLOAD_SIGNAL_PATTERN.match(text)
     if file_paste_signal_match:
         file_count, matched_name, matched_file_node, file_node_count = file_paste_signal_match.groups()
@@ -1120,8 +1115,8 @@ def _cuteify_debug_message(logger_name: str, message_text: str) -> str:
     if text == "[SEND] 已通过网络监听捕获到发送后的目标流事件":
         return cute("小鹿已经盯到发送后的目标流事件啦喵")
 
-    if text == "[STEALTH] 隐身模式已启用":
-        return cute("小鹿已经切进隐身模式啦")
+    if text == "[STEALTH] 低熵模式已启用":
+        return cute("小鹿已经切进低熵模式啦")
 
     stealth_retry_match = _STEALTH_SEND_RETRY_PATTERN.match(text)
     if stealth_retry_match:
@@ -1191,7 +1186,7 @@ def _cuteify_debug_message(logger_name: str, message_text: str) -> str:
         return cute("小鹿按配置跳过了额外粘贴核对喵，直接继续后面的动作")
 
     if text == "[STEALTH] 执行页面预热":
-        return cute("小鹿先活动活动爪子喵，准备开始隐身操作啦")
+        return cute("小鹿先活动活动爪子喵，准备开始低熵操作啦")
     if text.startswith("[STEALTH] 页面预热完成（") and text.endswith(" 次移动）"):
         move_count = text.removeprefix("[STEALTH] 页面预热完成（").removesuffix(" 次移动）")
         return cute(f"小鹿热身完毕喵，一共晃了 {move_count} 次小步子")

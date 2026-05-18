@@ -194,10 +194,14 @@ class NetworkMonitor:
         self._total_content_chars = 0
         self._prefetched_responses = []
         self._debug_capture_counter = 0
+        self._debug_capture_session_key = f"{int(time.time() * 1000)}_{id(self):x}"
+        self._debug_capture_written_stages = set()
+        self._debug_capture_has_content_snapshot = False
         self._last_stream_event: Dict[str, Any] = {}
         self._last_stream_raw_body: str = ""
         self._last_stream_parse_result: Dict[str, Any] = {}
         self._last_media_generation_state: Dict[str, Any] = {}
+        self._last_stream_media_items: list[Dict[str, Any]] = []
         self._send_attempt_baseline_targets = 0
         self._send_attempt_baseline_requests = 0
         self._send_attempt_marked_at = 0.0
@@ -243,6 +247,62 @@ class NetworkMonitor:
             return bool(self.parser.should_fallback_to_dom_when_no_visible_content())
         except Exception:
             return False
+
+    @staticmethod
+    def _extract_http_status(event: Dict[str, Any]) -> int:
+        try:
+            return int(event.get("status") or 0)
+        except Exception:
+            return 0
+
+    @staticmethod
+    def _extract_http_error_detail(raw_body: str) -> str:
+        text = str(raw_body or "").strip()
+        if not text:
+            return ""
+
+        try:
+            data = json.loads(text)
+        except Exception:
+            data = None
+
+        if isinstance(data, dict):
+            for key in ("message", "error", "detail", "title", "reason"):
+                value = data.get(key)
+                if isinstance(value, str) and value.strip():
+                    return " ".join(value.split())[:240]
+                if isinstance(value, dict):
+                    nested = value.get("message") or value.get("detail")
+                    if isinstance(nested, str) and nested.strip():
+                        return " ".join(nested.split())[:240]
+
+        return " ".join(text.split())[:240]
+
+    @classmethod
+    def _build_http_status_error_text(cls, event: Dict[str, Any], raw_body: str = "") -> str:
+        status_code = cls._extract_http_status(event)
+        if status_code <= 0:
+            return ""
+
+        reason_map = {
+            400: "Bad Request",
+            401: "Unauthorized",
+            403: "Forbidden",
+            404: "Not Found",
+            408: "Request Timeout",
+            409: "Conflict",
+            422: "Unprocessable Entity",
+            429: "Too Many Requests",
+            500: "Internal Server Error",
+            502: "Bad Gateway",
+            503: "Service Unavailable",
+            504: "Gateway Timeout",
+        }
+        reason = reason_map.get(status_code, "HTTP Error")
+        detail = cls._extract_http_error_detail(raw_body)
+        if detail:
+            return f"HTTP {status_code} {reason}: {detail}"
+        return f"HTTP {status_code} {reason}"
 
     def _listen_is_active(self) -> bool:
         try:
@@ -847,11 +907,16 @@ class NetworkMonitor:
             if parser_filter and parser_id != parser_filter:
                 return
 
+            capture_stage = self._select_network_debug_capture_stage(parse_result)
+            if not capture_stage:
+                return
+
             self._debug_capture_counter += 1
             max_chars = self._get_network_debug_capture_max_body_chars()
             raw_body_text = str(raw_body or "")
             truncated = len(raw_body_text) > max_chars
             stored_body = raw_body_text[:max_chars] if truncated else raw_body_text
+            has_content = bool(str(parse_result.get("content", "") or ""))
 
             parser_debug = None
             if hasattr(self.parser, "export_debug_data"):
@@ -863,7 +928,9 @@ class NetworkMonitor:
             payload = {
                 "captured_at": int(time.time()),
                 "parser": parser_id,
+                "capture_session": self._debug_capture_session_key,
                 "capture_index": self._debug_capture_counter,
+                "capture_stage": capture_stage,
                 "event": {
                     "url": str(event.get("url", "") or ""),
                     "method": str(event.get("method", "") or ""),
@@ -888,7 +955,8 @@ class NetworkMonitor:
             dump_dir = Path("logs") / "network_parser_debug"
             dump_dir.mkdir(parents=True, exist_ok=True)
             filename = (
-                f"{int(time.time())}_{self._debug_capture_counter:03d}_{parser_id or 'unknown'}.json"
+                f"{self._debug_capture_session_key}_{self._debug_capture_counter:03d}_"
+                f"{capture_stage}_{parser_id or 'unknown'}.json"
             )
             dump_path = dump_dir / filename
             dump_path.write_text(
@@ -896,14 +964,48 @@ class NetworkMonitor:
                 encoding="utf-8",
                 newline="\n",
             )
+            self._debug_capture_written_stages.add(capture_stage)
+            if has_content:
+                self._debug_capture_has_content_snapshot = True
             logger.debug_throttled(
                 f"network.parser_debug_dump.{id(self)}",
                 "[NetworkMonitor] 网络解析调试快照已写入 "
-                f"({dump_path}, parser={parser_id}, body_len={len(raw_body_text)}, truncated={truncated})",
+                f"({dump_path}, stage={capture_stage}, parser={parser_id}, "
+                f"body_len={len(raw_body_text)}, truncated={truncated})",
                 interval_sec=3.0,
             )
         except Exception as exc:
             logger.debug(f"[NetworkMonitor] 写入网络解析调试快照失败: {exc}")
+
+    def _select_network_debug_capture_stage(self, parse_result: Dict[str, Any]) -> str:
+        error_text = str(parse_result.get("error") or "").strip()
+        has_content = bool(str(parse_result.get("content", "") or ""))
+        done = bool(parse_result.get("done", False))
+
+        if error_text:
+            stage = "error"
+        elif done:
+            stage = "done"
+        elif self._debug_capture_counter == 0:
+            stage = "initial"
+        elif has_content and not self._debug_capture_has_content_snapshot:
+            stage = "first_content"
+        else:
+            return ""
+
+        if stage in self._debug_capture_written_stages:
+            return ""
+
+        max_files = self._get_network_debug_capture_max_files_per_request()
+        remaining_slots = max_files - self._debug_capture_counter
+        if remaining_slots <= 0:
+            return ""
+
+        # 预留最后一个槽位给结束态，避免中途流式增量把限额写满。
+        if stage == "first_content" and remaining_slots <= 1:
+            return ""
+
+        return stage
 
     @staticmethod
     def _is_network_debug_capture_enabled() -> bool:
@@ -918,7 +1020,15 @@ class NetworkMonitor:
             value = int(BrowserConstants.get("NETWORK_DEBUG_CAPTURE_MAX_BODY_CHARS"))
             return max(2000, value)
         except Exception:
-            return 200000
+            return 50000
+
+    @staticmethod
+    def _get_network_debug_capture_max_files_per_request() -> int:
+        try:
+            value = int(BrowserConstants.get("NETWORK_DEBUG_CAPTURE_MAX_FILES_PER_REQUEST"))
+            return max(2, value)
+        except Exception:
+            return 3
 
     @staticmethod
     def _get_network_debug_capture_parser_filter() -> str:
@@ -988,6 +1098,7 @@ class NetworkMonitor:
         self._last_stream_raw_body = ""
         self._last_stream_parse_result = {}
         self._last_media_generation_state = {}
+        self._last_stream_media_items = []
         
         # 兜底：如果 pre_start 未被调用，在此启动（可能错过首包）
         if not self._is_listening or not self._listen_is_active():
@@ -1102,6 +1213,7 @@ class NetworkMonitor:
                         self._last_stream_event = dict(active_stream_event or {})
                         self._last_stream_raw_body = str(active_stream_body or "")
                         self._last_stream_parse_result = dict(parse_result or {})
+                        self._record_parse_result_media(parse_result)
                         try:
                             media_state = self.parser.get_media_generation_state(
                                 raw_response=active_stream_body,
@@ -1117,11 +1229,6 @@ class NetworkMonitor:
                         if content:
                             self._total_chunks += 1
                             self._total_content_chars += len(content)
-                            logger.debug(
-                                f"[NetworkMonitor] 输出片段 #{self._total_chunks} "
-                                f"(len={len(content)}, total_chars={self._total_content_chars}, "
-                                f"preview={_debug_preview(content)})"
-                            )
                             yield self.formatter.pack_chunk(content, completion_id=completion_id)
 
                         if done:
@@ -1312,6 +1419,16 @@ class NetworkMonitor:
                 interval_sec=3.0,
             )
 
+            status_code = self._extract_http_status(event)
+            if status_code >= 400 and self._extract_http_error_detail(raw_body):
+                error_text = self._build_http_status_error_text(event, raw_body)
+                logger.warning(
+                    "[NetworkMonitor] 目标流返回异常状态码，终止工作流 "
+                    f"(status={status_code}, url={event.get('url', '')[:120]}, "
+                    f"body_len={len(raw_body)})"
+                )
+                raise NetworkMonitorTerminalError(error_text or f"HTTP {status_code}")
+
             # 解析响应
             try:
                 parse_result = self.parser.parse_chunk(raw_body)
@@ -1353,6 +1470,7 @@ class NetworkMonitor:
             self._last_stream_event = dict(event or {})
             self._last_stream_raw_body = str(raw_body or "")
             self._last_stream_parse_result = dict(parse_result or {})
+            self._record_parse_result_media(parse_result)
             try:
                 media_state = self.parser.get_media_generation_state(
                     raw_response=raw_body,
@@ -1377,16 +1495,6 @@ class NetworkMonitor:
                 last_activity_time = time.time()
                 self._total_chunks += 1
                 self._total_content_chars += len(content)
-                if (
-                    self._total_chunks <= 3
-                    or self._total_chunks % 10 == 0
-                    or done
-                ):
-                    logger.debug(
-                        f"[NetworkMonitor] 输出片段 #{self._total_chunks} "
-                        f"(len={len(content)}, total_chars={self._total_content_chars}, "
-                        f"preview={_debug_preview(content)})"
-                    )
                 yield self.formatter.pack_chunk(content, completion_id=completion_id)
 
             if done:
@@ -1403,6 +1511,65 @@ class NetworkMonitor:
 
     def get_media_generation_state(self) -> Dict[str, Any]:
         return dict(self._last_media_generation_state or {})
+
+    def get_stream_media_items(self) -> list[Dict[str, Any]]:
+        return [dict(item) for item in (self._last_stream_media_items or []) if isinstance(item, dict)]
+
+    def _record_parse_result_media(self, parse_result: Dict[str, Any]) -> None:
+        raw_items = parse_result.get("images")
+        if not isinstance(raw_items, list) or not raw_items:
+            return
+
+        seen = {
+            (
+                str(item.get("media_type") or "image").strip().lower(),
+                str(item.get("url") or item.get("data_uri") or "").strip(),
+            )
+            for item in (self._last_stream_media_items or [])
+            if isinstance(item, dict)
+        }
+
+        for raw_item in raw_items:
+            if isinstance(raw_item, str):
+                normalized = {
+                    "media_type": "image",
+                    "kind": "url",
+                    "url": raw_item,
+                    "data_uri": None,
+                    "mime": None,
+                    "byte_size": None,
+                    "source": f"{self.parser.get_id()}_stream",
+                }
+            elif isinstance(raw_item, dict):
+                normalized = dict(raw_item)
+            else:
+                continue
+
+            media_type = str(normalized.get("media_type") or "image").strip().lower() or "image"
+            if normalized.get("data_uri"):
+                normalized["kind"] = "data_uri"
+                normalized["url"] = None
+                ref = str(normalized.get("data_uri") or "").strip()
+            else:
+                normalized["kind"] = "url"
+                normalized["data_uri"] = None
+                ref = str(normalized.get("url") or normalized.get("src") or "").strip()
+                normalized["url"] = ref or None
+
+            if not ref:
+                continue
+
+            key = (media_type, ref)
+            if key in seen:
+                continue
+
+            seen.add(key)
+            normalized["media_type"] = media_type
+            normalized.pop("src", None)
+            normalized.setdefault("mime", None)
+            normalized.setdefault("byte_size", None)
+            normalized.setdefault("source", f"{self.parser.get_id()}_stream")
+            self._last_stream_media_items.append(normalized)
         
     def _cleanup(self):
         """

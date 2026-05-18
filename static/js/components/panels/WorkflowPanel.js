@@ -413,7 +413,7 @@ window.WorkflowPanel = {
                                        class="border dark:border-gray-600 px-2 py-1.5 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent w-28 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                                        placeholder="终点 Y">
                                 <div class="w-full text-xs text-gray-500 dark:text-gray-400">
-                                    使用 viewport CSS 坐标。普通模式直接派发滚轮，隐身模式会按站点 stealth 配置走人类化轨迹。
+                                    使用 viewport CSS 坐标。普通模式直接派发滚轮，低熵模式会按站点 stealth 配置走人类化轨迹。
                                 </div>
                             </div>
 

@@ -549,7 +549,7 @@ class TextInputHandler:
             logger.warning("[FILE_PASTE] 剪贴板追加引导文本未生效，回退到原子追加")
 
         if self.stealth_mode:
-            logger.warning("[FILE_PASTE] 隐身模式下跳过 JS 回退追加，避免增加风控风险")
+            logger.warning("[FILE_PASTE] 低熵模式下跳过 JS 回退追加，避免增加风控风险")
             return False
 
         if self.set_input_atomic(ele, hint_text, mode="append"):
@@ -1024,6 +1024,22 @@ class TextInputHandler:
         
         self.tab.actions.key_down(modifier)
         time.sleep(random.uniform(between_min, between_max))
+
+        if len(targets) == 1:
+            target = targets[0]
+            self.tab.actions.key_down(target)
+            time.sleep(random.uniform(down_up_min, down_up_max))
+
+            # 少量“交叉释放”模拟：先松修饰键再松目标键
+            if random.random() < 0.2:
+                self.tab.actions.key_up(modifier)
+                time.sleep(random.uniform(0.01, 0.04))
+                self.tab.actions.key_up(target)
+            else:
+                self.tab.actions.key_up(target)
+                time.sleep(random.uniform(0.01, 0.04))
+                self.tab.actions.key_up(modifier)
+            return
         
         for i, target in enumerate(targets):
             self.tab.actions.key_down(target)
@@ -1587,8 +1603,8 @@ class TextInputHandler:
 
         start_x = max(8, min(viewport_w - 8, target_x - random.randint(160, 280)))
         start_y = max(8, min(viewport_h - 8, target_y - random.randint(100, 180)))
-        mid_x = int((start_x + target_x) / 2)
-        mid_y = int((start_y + target_y) / 2)
+        pre_start_x = max(8, min(viewport_w - 8, start_x - random.randint(40, 110)))
+        pre_start_y = max(8, min(viewport_h - 8, start_y - random.randint(20, 90)))
 
         drag_data = {
             "items": [],
@@ -1599,9 +1615,9 @@ class TextInputHandler:
         try:
             smooth_move_mouse(
                 self.tab,
-                from_pos=(start_x, start_y),
-                to_pos=(target_x, target_y),
-                duration=random.uniform(0.18, 0.42),
+                from_pos=(pre_start_x, pre_start_y),
+                to_pos=(start_x, start_y),
+                duration=random.uniform(0.08, 0.2),
                 check_cancelled=self._check_cancelled,
             )
 
@@ -1613,17 +1629,33 @@ class TextInputHandler:
                 data=drag_data,
                 modifiers=0,
             )
-            time.sleep(random.uniform(0.03, 0.08))
+            time.sleep(random.uniform(0.02, 0.06))
 
-            self.tab.run_cdp(
-                "Input.dispatchDragEvent",
-                type="dragOver",
-                x=mid_x,
-                y=mid_y,
-                data=drag_data,
-                modifiers=0,
-            )
-            time.sleep(random.uniform(0.04, 0.1))
+            # 连续 dragOver：沿轨迹派发，避免“仅 1~2 次 over”的机械特征
+            over_steps = random.randint(7, 13)
+            for i in range(1, over_steps + 1):
+                if self._check_cancelled():
+                    return False
+
+                raw_t = i / over_steps
+                eased_t = 1 - (1 - raw_t) ** 3
+                x = int(round(start_x + (target_x - start_x) * eased_t))
+                y = int(round(start_y + (target_y - start_y) * eased_t))
+
+                # 中段允许轻微抖动，首尾收敛
+                envelope = max(0.0, 1.0 - abs(raw_t - 0.5) * 2.0)
+                x += int(round(random.gauss(0, 1.0 * envelope)))
+                y += int(round(random.gauss(0, 0.8 * envelope)))
+
+                self.tab.run_cdp(
+                    "Input.dispatchDragEvent",
+                    type="dragOver",
+                    x=x,
+                    y=y,
+                    data=drag_data,
+                    modifiers=0,
+                )
+                time.sleep(random.uniform(0.01, 0.03))
 
             self.tab.run_cdp(
                 "Input.dispatchDragEvent",
@@ -1633,7 +1665,7 @@ class TextInputHandler:
                 data=drag_data,
                 modifiers=0,
             )
-            time.sleep(random.uniform(0.04, 0.1))
+            time.sleep(random.uniform(0.02, 0.06))
 
             self.tab.run_cdp(
                 "Input.dispatchDragEvent",
@@ -1944,9 +1976,13 @@ class TextInputHandler:
                 if not self.ensure_input_focus(ele):
                     raise WorkflowError("clipboard_focus_failed")
             
-            # 全选（人类化时序）
-            self._press_primary_combo('A', humanized=True)
-            self._smart_delay(0.08, 0.18)
+            # 仅在已有内容时执行全选，避免“空输入框也 Ctrl+A”的机器特征
+            current_len = self.get_input_len(ele)
+            if current_len > 0:
+                self._press_primary_combo('A', humanized=True)
+                self._smart_delay(0.08, 0.18)
+            else:
+                logger.debug("[STEALTH] 输入框为空，跳过 Ctrl+A")
             
             if self._check_cancelled():
                 return
@@ -1995,7 +2031,7 @@ class TextInputHandler:
         except WorkflowError:
             raise
         except Exception as e:
-            logger.error(f"[STEALTH] 剪贴板粘贴失败: {e}，停止本次隐身输入")
+            logger.error(f"[STEALTH] 剪贴板粘贴失败: {e}，停止本次低熵输入")
             raise WorkflowError("clipboard_paste_failed") from e
     # ================= 剪贴板模式输入 =================
     
@@ -2040,9 +2076,13 @@ class TextInputHandler:
             if self._check_cancelled():
                 return
         
-            # 2. 全选（人类化时序）—— 粘贴会自动覆盖选中内容，无需 Delete
-            self._press_primary_combo('A', humanized=True)
-            self._smart_delay(0.03, 0.08)
+            # 2. 仅在已有内容时全选；空框时直接粘贴更像真实操作
+            current_len = self.get_input_len(ele)
+            if current_len > 0:
+                self._press_primary_combo('A', humanized=True)
+                self._smart_delay(0.03, 0.08)
+            else:
+                logger.debug("[STEALTH] 输入框为空，跳过 Ctrl+A")
         
             if self._check_cancelled():
                 return
@@ -2092,7 +2132,7 @@ class TextInputHandler:
         except WorkflowError:
             raise
         except Exception as e:
-            logger.error(f"[STEALTH] 剪贴板粘贴失败: {e}，停止本次隐身输入")
+            logger.error(f"[STEALTH] 剪贴板粘贴失败: {e}，停止本次低熵输入")
             raise WorkflowError("clipboard_paste_failed") from e
     
     def verify_clipboard_result(self, ele, expected_text: str):

@@ -101,7 +101,7 @@ const BROWSER_CONSTANTS_SCHEMA = {
         desc: '模拟人类操作的随机延迟范围',
         items: {
             STEALTH_DELAY_MIN: {
-                label: '隐身延迟下限',
+                label: '低熵延迟下限',
                 unit: '秒',
                 type: 'number',
                 step: 0.05,
@@ -109,7 +109,7 @@ const BROWSER_CONSTANTS_SCHEMA = {
                 default: 0.03
             },
             STEALTH_DELAY_MAX: {
-                label: '隐身延迟上限',
+                label: '低熵延迟上限',
                 unit: '秒',
                 type: 'number',
                 step: 0.05,
@@ -350,7 +350,7 @@ const BROWSER_CONSTANTS_SCHEMA = {
             },
             NETWORK_DEBUG_CAPTURE_ENABLED: {
                 label: '启用响应调试捕获',
-                desc: '命中网络解析器时，把原始响应、事件信息和解析摘要落盘到 logs/network_parser_debug，方便开发新解析器。',
+                desc: '命中网络解析器时，只保存少量关键快照到 logs/network_parser_debug，方便开发新解析器，同时避免刷爆磁盘。',
                 type: 'switch',
                 default: false
             },
@@ -361,7 +361,16 @@ const BROWSER_CONSTANTS_SCHEMA = {
                 type: 'number',
                 min: 2000,
                 step: 1000,
-                default: 200000
+                default: 50000
+            },
+            NETWORK_DEBUG_CAPTURE_MAX_FILES_PER_REQUEST: {
+                label: '单次请求最多文件数',
+                unit: '个',
+                desc: '每次请求只保留起始、首个有效内容、结束/报错这类关键快照，超过这个数量后不再继续落盘。',
+                type: 'number',
+                min: 2,
+                step: 1,
+                default: 3
             },
             NETWORK_DEBUG_CAPTURE_PARSER_FILTER: {
                 label: '解析器过滤',
@@ -2644,7 +2653,7 @@ const app = createApp({
             // 预设内的字段列表（用于清理顶层残留）
             const PRESET_FIELDS = [
                 'selectors', 'workflow', 'stealth', 'stream_config',
-                'image_extraction', 'file_paste',
+                'image_extraction', 'file_paste', 'prompt_padding',
                 'extractor_id', 'extractor_verified'
             ]
             for (const [k, v] of Object.entries(raw || {})) {

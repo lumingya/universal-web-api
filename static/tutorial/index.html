@@ -1235,15 +1235,15 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
             </div>
         </section>
 
-        <!-- ==================== 隐身模式 ==================== -->
+        <!-- ==================== 低熵模式 ==================== -->
         <section id="stealth-mode">
-            <h2>🛡️ 隐身模式（低干扰操作）</h2>
-            <p>隐身模式会把点击、移动、滚动和输入节奏做得更接近人工操作，用于改善某些站点上的界面兼容性和执行稳定性。</p>
+            <h2>🛡️ 低熵模式（低干扰操作）</h2>
+            <p>低熵模式会把点击、移动、滚动和输入节奏做得更接近人工操作，用于改善某些站点上的界面兼容性和执行稳定性。</p>
 
             <h3>核心原理</h3>
             <p>开启后，脚本的点击、鼠标移动、滚动和操作间隔都会更平缓，不再是“瞬移 + 立即点击”的激进轨迹。</p>
             <table>
-                <tr><th>操作</th><th>普通模式</th><th>隐身模式</th></tr>
+                <tr><th>操作</th><th>普通模式</th><th>低熵模式</th></tr>
                 <tr><td>点击</td><td>直接 CDP 命令</td><td>模拟按压 -> 微移 -> 释放</td></tr>
                 <tr><td>移动</td><td>瞬间跳转</td><td>人类化曲线移动</td></tr>
                 <tr><td>空闲</td><td>无动作</td><td>随机微漂移（模拟手抖）</td></tr>
@@ -1259,7 +1259,7 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
             </ul>
 
             <div class="info-box">
-                <p><strong>📍 配置方式：</strong>控制面板 -> 选择站点 -> 页面顶部勾选「隐身模式」。这里保留的是现有 UI 名称；这个设置会<strong>按预设独立</strong>保存。</p>
+                <p><strong>📍 配置方式：</strong>控制面板 -> 选择站点 -> 页面顶部勾选「低熵模式」。这个设置会<strong>按预设独立</strong>保存。</p>
             </div>
 
             <h3>DrissionPage 补丁（必看）</h3>
@@ -1275,7 +1275,7 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
             </div>
 
             <div class="highlight-box">
-                <p><strong>⚠️ Arena.ai 特别说明：</strong>即便开启了隐身模式并关闭了网络监听，在半小时内连续对话约 10 条也依然很容易触发 Cloudflare 验证。这说明该站点本身就不适合长时间连续测试；开启该模式也不能保证稳定通过，更稳妥的做法仍然是降低频率。</p>
+                <p><strong>⚠️ Arena.ai 特别说明：</strong>即便开启了低熵模式并关闭了网络监听，在半小时内连续对话约 10 条也依然很容易触发 Cloudflare 验证。这说明该站点本身就不适合长时间连续测试；开启该模式也不能保证稳定通过，更稳妥的做法仍然是降低频率。</p>
             </div>
         </section>
         <!-- ==================== 自动化命令 ==================== -->
@@ -1449,7 +1449,7 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
                 </tr>
                 <tr>
                     <td><code>click_coordinates</code></td>
-                    <td>精准点击指定坐标 (隐身防风控)</td>
+                    <td>精准点击指定坐标 (低熵防风控)</td>
                     <td>X 坐标、Y 坐标</td>
                 </tr>
             </table>
@@ -1887,8 +1887,8 @@ BROWSER_PROFILE_NAME=Default</code></pre>
                 <p style="color: var(--desc-color); font-size: 0.9rem; margin-bottom: 10px;">模拟人类操作的随机延迟范围，防止被网站检测为机器人</p>
                 <table>
                     <tr><th>配置项</th><th>默认值</th><th>说明</th></tr>
-                    <tr><td>隐身延迟下限</td><td><code>0.1</code> 秒</td><td>隐蔽操作的最小延迟</td></tr>
-                    <tr><td>隐身延迟上限</td><td><code>0.3</code> 秒</td><td>隐蔽操作的最大延迟</td></tr>
+                    <tr><td>低熵延迟下限</td><td><code>0.1</code> 秒</td><td>低熵操作的最小延迟</td></tr>
+                    <tr><td>低熵延迟上限</td><td><code>0.3</code> 秒</td><td>低熵操作的最大延迟</td></tr>
                     <tr><td>动作延迟下限</td><td><code>0.15</code> 秒</td><td>点击/输入等动作的最小延迟</td></tr>
                     <tr><td>动作延迟上限</td><td><code>0.3</code> 秒</td><td>点击/输入等动作的最大延迟</td></tr>
                 </table>

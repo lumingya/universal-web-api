@@ -39,7 +39,7 @@ from app.services.tool_calling import (
     normalize_tool_request,
     summarize_messages_for_debug,
 )
-from app.utils.model_routing import collect_route_domain_models, resolve_model_route_domain
+from app.utils.model_routing import collect_route_domain_models, inspect_model_route
 
 logger = get_logger("API.CHAT")
 
@@ -285,13 +285,26 @@ async def chat_completions(
     try:
         browser = get_browser(auto_connect=False)
         tabs = browser.tab_pool.get_tabs_with_index()
-        route_domain = resolve_model_route_domain(body.model, tabs)
+        route_info = inspect_model_route(body.model, tabs)
+        route_domain = str(route_info.get("route_domain") or "")
     except Exception as e:
         logger.debug(f"模型路由解析失败（已忽略）: {e}")
+        route_info = {
+            "normalized_model": str(body.model or "").strip().lower(),
+            "route_domain": "",
+            "matched_id": "",
+            "match_type": "error",
+            "available_model_ids": [],
+        }
         route_domain = ""
 
     if route_domain:
-        logger.info(f"模型路由命中: model={body.model!r} -> {route_domain}")
+        logger.info(
+            "模型路由命中: "
+            f"model={body.model!r}, normalized={route_info.get('normalized_model')!r}, "
+            f"matched_id={route_info.get('matched_id')!r}, match_type={route_info.get('match_type')}, "
+            f"route_domain={route_domain}, available={route_info.get('available_model_ids')}"
+        )
         from app.api import tab_routes as tab_routes_api
 
         route_body = tab_routes_api.ChatRequest(**body.model_dump())
@@ -303,6 +316,12 @@ async def chat_completions(
             selector=None,
             preset_name=body.preset_name,
             authenticated=authenticated,
+        )
+    elif route_info.get("match_type") == "none" and route_info.get("normalized_model"):
+        logger.debug(
+            "模型路由未命中: "
+            f"model={body.model!r}, normalized={route_info.get('normalized_model')!r}, "
+            f"available={route_info.get('available_model_ids')}"
         )
 
     ctx = request_manager.create_request()

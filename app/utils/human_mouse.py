@@ -73,7 +73,8 @@ def smooth_move_mouse(
     """
     人类化平滑鼠标移动
     
-    使用二次贝塞尔插值 + 高斯噪声 + 正弦缓动。
+    使用二次贝塞尔插值 + 高斯噪声 + 非对称 ease-out 缓动，
+    并叠加轻微高频 tremor，模拟“快速接近 + 末端瞄准”。
     
     Args:
         tab: DrissionPage 标签页
@@ -121,14 +122,19 @@ def smooth_move_mouse(
     ctrl_y = (y0 + y1) / 2 + perp_y * arc_offset
     start_time = time.perf_counter()
     
+    tremor_hz = random.uniform(8.0, 12.0)
+    tremor_amp_x = random.uniform(0.2, 0.8)
+    tremor_amp_y = random.uniform(0.2, 0.8)
+    tremor_phase = random.uniform(0, math.pi * 2)
+
     # 逐步移动
     for i in range(1, steps + 1):
         if check_cancelled and check_cancelled():
             return (x0, y0)
         
-        # 正弦缓动 (ease-in-out)
+        # 非对称缓动：前段更快接近，后段更长时间微调
         raw_t = i / steps
-        t = 0.5 - 0.5 * math.cos(raw_t * math.pi)
+        t = 1 - (1 - raw_t) ** 3
         
         # 二次贝塞尔插值
         bx = (1 - t) ** 2 * x0 + 2 * (1 - t) * t * ctrl_x + t ** 2 * x1
@@ -138,9 +144,14 @@ def smooth_move_mouse(
         envelope = math.sin(raw_t * math.pi)
         nx = random.gauss(0, noise_scale * envelope)
         ny = random.gauss(0, noise_scale * envelope)
+
+        # 高频低幅手部颤抖（tremor）
+        tremor_theta = tremor_phase + raw_t * duration * tremor_hz * 2 * math.pi
+        tremor_x = math.sin(tremor_theta) * tremor_amp_x
+        tremor_y = math.cos(tremor_theta) * tremor_amp_y
         
-        fx = int(bx + nx)
-        fy = int(by + ny)
+        fx = int(round(bx + nx + tremor_x))
+        fy = int(round(by + ny + tremor_y))
         
         _dispatch_mouse_move(tab, fx, fy)
         

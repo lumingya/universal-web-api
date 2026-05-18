@@ -17,7 +17,8 @@ window.ConfigTab = {
         'image-config-panel': window.ImageConfigPanel,
         'stream-config-panel': window.StreamConfigPanel,
         'workflow-panel': window.WorkflowPanel,
-        'file-paste-panel': window.FilePastePanel
+        'file-paste-panel': window.FilePastePanel,
+        'prompt-padding-panel': window.PromptPaddingPanel
     },
     data() {
         return {
@@ -37,6 +38,7 @@ window.ConfigTab = {
             imageConfigCollapsed: true,
             streamConfigCollapsed: true,
             filePasteCollapsed: true,
+            promptPaddingCollapsed: true,
             advancedConfigCollapsed: true,
 
             advancedConfigSaving: false,
@@ -134,6 +136,13 @@ window.ConfigTab = {
                 this.presetConfig.file_paste = {};
             }
             return this.presetConfig.file_paste;
+        },
+        promptPaddingConfigRef() {
+            if (!this.presetConfig) return {};
+            if (!this.presetConfig.prompt_padding || typeof this.presetConfig.prompt_padding !== 'object') {
+                this.presetConfig.prompt_padding = {};
+            }
+            return this.presetConfig.prompt_padding;
         },
         siteAdvancedConfig() {
             if (!this.currentConfig) {
@@ -297,13 +306,15 @@ window.ConfigTab = {
                 : (rawStreamMode === 'dom' ? 'DOM 模式' : (rawStreamMode || 'DOM 模式'));
             const imageEnabled = !!(config && config.image_extraction && config.image_extraction.enabled);
             const filePasteEnabled = !!(config && config.file_paste && config.file_paste.enabled);
+            const promptPaddingEnabled = !!(config && config.prompt_padding && config.prompt_padding.enabled);
 
             return [
                 { label: '选择器', value: String(selectors) },
                 { label: '工作流', value: workflowSteps + ' 步' },
                 { label: '流式', value: streamMode, compact: true },
                 { label: '图片提取', value: imageEnabled ? '开启' : '关闭' },
-                { label: '文件粘贴', value: filePasteEnabled ? '开启' : '关闭' }
+                { label: '文件粘贴', value: filePasteEnabled ? '开启' : '关闭' },
+                { label: '首尾填充', value: promptPaddingEnabled ? '开启' : '关闭' }
             ];
         },
 
@@ -314,7 +325,8 @@ window.ConfigTab = {
                 stream_config: '流式配置',
                 image_extraction: '图片提取',
                 file_paste: '文件粘贴',
-                stealth: '隐身模式',
+                prompt_padding: '首尾填充',
+                stealth: '低熵模式',
                 extractor_id: '提取器',
                 extractor_verified: '提取器验证'
             };
@@ -324,6 +336,7 @@ window.ConfigTab = {
                 'stream_config',
                 'image_extraction',
                 'file_paste',
+                'prompt_padding',
                 'stealth',
                 'extractor_id',
                 'extractor_verified'
@@ -1134,6 +1147,13 @@ window.ConfigTab = {
                     :selected-preset="selectedPreset"
                     :collapsed="filePasteCollapsed"
                     @update:collapsed="filePasteCollapsed = $event"
+                />
+                <prompt-padding-panel v-if="presetConfig"
+                    :prompt-padding-config="promptPaddingConfigRef"
+                    :current-domain="currentDomain"
+                    :selected-preset="selectedPreset"
+                    :collapsed="promptPaddingCollapsed"
+                    @update:collapsed="promptPaddingCollapsed = $event"
                 />
                 <!-- 高级功能折叠面板 -->
                 <div class="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg shadow-sm">

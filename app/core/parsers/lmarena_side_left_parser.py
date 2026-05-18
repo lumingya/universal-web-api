@@ -14,7 +14,7 @@ from typing import Any, Dict, List
 
 from app.core.config import logger
 from .base import ResponseParser
-from .lmarena_parser import _CP1252_TO_LATIN1
+from .lmarena_parser import _CP1252_TO_LATIN1, _extract_arena_image_items
 
 
 class LmarenaSideLeftParser(ResponseParser):
@@ -27,6 +27,7 @@ class LmarenaSideLeftParser(ResponseParser):
 
     def __init__(self) -> None:
         self._accumulated = ""
+        self._seen_image_refs: set[str] = set()
 
     def parse_chunk(self, raw_response: str) -> Dict[str, Any]:
         result: Dict[str, Any] = {
@@ -46,6 +47,7 @@ class LmarenaSideLeftParser(ResponseParser):
 
         try:
             content_parts: List[str] = []
+            images: List[Dict[str, Any]] = []
             done = False
 
             for line in raw_response.split("\n"):
@@ -65,6 +67,14 @@ class LmarenaSideLeftParser(ResponseParser):
                     text = self._parse_text_chunk(payload)
                     if text is not None:
                         content_parts.append(text)
+                elif prefix == "a2":
+                    images.extend(
+                        _extract_arena_image_items(
+                            payload,
+                            self._seen_image_refs,
+                            source="lmarena_side_left_stream",
+                        )
+                    )
                 # left/modelA done
                 elif prefix == "ad":
                     if self._is_finish_signal(payload):
@@ -87,6 +97,8 @@ class LmarenaSideLeftParser(ResponseParser):
                     result["content"] = new_content
                     self._accumulated = new_content
 
+            if images:
+                result["images"] = images
             result["done"] = done
 
         except Exception as e:
@@ -97,6 +109,7 @@ class LmarenaSideLeftParser(ResponseParser):
 
     def reset(self):
         self._accumulated = ""
+        self._seen_image_refs.clear()
 
     def should_abort_on_error(self) -> bool:
         # Side-by-side left mode only trusts the left stream. If the left channel

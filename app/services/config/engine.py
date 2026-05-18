@@ -22,6 +22,7 @@ from app.models.schemas import (
     SelectorDefinition,
     get_default_image_extraction_config,
     get_default_file_paste_config,
+    get_default_prompt_padding_config,
     get_default_site_advanced_config,
     get_default_attachment_monitor_config,
     get_default_send_confirmation_config,
@@ -66,7 +67,7 @@ DEFAULT_PRESET_NAME = "主预设"
 # 预设内包含的配置字段（用于迁移和校验）
 PRESET_FIELDS = [
     "selectors", "workflow", "stream_config",
-    "image_extraction", "file_paste", "stealth",
+    "image_extraction", "file_paste", "prompt_padding", "stealth",
     "extractor_id", "extractor_verified"
 ]
 
@@ -1275,6 +1276,17 @@ class ConfigEngine:
                 if normalized_file_paste != config.get("file_paste"):
                     config["file_paste"] = normalized_file_paste
                     changed = True
+
+            if "prompt_padding" not in config:
+                config["prompt_padding"] = get_default_prompt_padding_config()
+                changed = True
+            else:
+                normalized_prompt_padding = self._validate_prompt_padding_config(
+                    config.get("prompt_padding", {})
+                )
+                if normalized_prompt_padding != config.get("prompt_padding"):
+                    config["prompt_padding"] = normalized_prompt_padding
+                    changed = True
             
             if changed:
                 self._save_config()
@@ -1297,7 +1309,8 @@ class ConfigEngine:
                 "stealth": self._guess_stealth(domain),
                 "stream_config": copy.deepcopy(get_default_stream_config()),
                 "image_extraction": get_default_image_extraction_config(),
-                "file_paste": get_default_file_paste_config()
+                "file_paste": get_default_file_paste_config(),
+                "prompt_padding": get_default_prompt_padding_config(),
             }
             
             self.sites[domain] = {
@@ -1320,7 +1333,8 @@ class ConfigEngine:
             "stealth": False,
             "stream_config": copy.deepcopy(get_default_stream_config()),
             "image_extraction": get_default_image_extraction_config(),
-            "file_paste": get_default_file_paste_config()
+            "file_paste": get_default_file_paste_config(),
+            "prompt_padding": get_default_prompt_padding_config(),
         }
         
         self.sites[domain] = {
@@ -1350,7 +1364,7 @@ class ConfigEngine:
         if "stealth_default" in rule:
             enabled = bool(rule.get("stealth_default"))
             if enabled:
-                logger.info(f"检测到默认启用隐身模式的域名: {domain}")
+                logger.info(f"检测到默认启用低熵模式的域名: {domain}")
             return enabled
         return False
     
@@ -1359,6 +1373,7 @@ class ConfigEngine:
         migrated_count = 0
         default_image_config = get_default_image_extraction_config()
         default_file_paste = get_default_file_paste_config()
+        default_prompt_padding = get_default_prompt_padding_config()
         obsolete_stream_keys = {
             "silence_threshold",
             "initial_wait",
@@ -1390,6 +1405,19 @@ class ConfigEngine:
                     preset_data["file_paste"] = copy.deepcopy(default_file_paste)
                     migrated_count += 1
                     logger.debug(f"迁移: {domain}/{preset_name} (添加 file_paste)")
+                
+                if "prompt_padding" not in preset_data:
+                    preset_data["prompt_padding"] = copy.deepcopy(default_prompt_padding)
+                    migrated_count += 1
+                    logger.debug(f"迁移: {domain}/{preset_name} (添加 prompt_padding)")
+                else:
+                    normalized_prompt_padding = self._validate_prompt_padding_config(
+                        preset_data.get("prompt_padding", {})
+                    )
+                    if normalized_prompt_padding != preset_data.get("prompt_padding"):
+                        preset_data["prompt_padding"] = normalized_prompt_padding
+                        migrated_count += 1
+                        logger.debug(f"迁移: {domain}/{preset_name} (规范化 prompt_padding)")
 
                 stream_config = preset_data.get("stream_config")
                 moved_attachment_rules = False
@@ -1781,6 +1809,36 @@ class ConfigEngine:
             )
         
         return result
+
+    def get_site_prompt_padding_config(self, domain: str, preset_name: str = None) -> Dict[str, Any]:
+        """获取站点的提示词首尾填充配置"""
+        self.refresh_if_changed()
+
+        data = self._get_site_data(domain, preset_name)
+        if data is None:
+            return copy.deepcopy(get_default_prompt_padding_config())
+
+        return self._validate_prompt_padding_config(data.get("prompt_padding", {}))
+
+    def set_site_prompt_padding_config(
+        self,
+        domain: str,
+        config: Dict[str, Any],
+        preset_name: str = None,
+    ) -> bool:
+        """设置站点的提示词首尾填充配置"""
+        self.refresh_if_changed()
+
+        data = self._get_site_data(domain, preset_name)
+        if data is None:
+            logger.warning(f"站点或预设不存在: {domain}/{preset_name}")
+            return False
+
+        data["prompt_padding"] = self._validate_prompt_padding_config(config)
+        self._save_config()
+
+        logger.info(f"站点 {domain} [{preset_name or DEFAULT_PRESET_NAME}] 提示词首尾填充配置已更新")
+        return True
     
     def _validate_file_paste_config(
         self,
@@ -1870,6 +1928,30 @@ class ConfigEngine:
             result["attachment_monitor"] = self._validate_attachment_monitor_config(legacy_attachment_monitor)
         
         return result
+
+    def _validate_prompt_padding_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """验证并规范化提示词首尾填充配置。"""
+        result = copy.deepcopy(get_default_prompt_padding_config())
+
+        if not isinstance(config, dict):
+            return result
+
+        if "enabled" in config:
+            result["enabled"] = bool(config.get("enabled"))
+
+        if "marker_text" in config:
+            marker_text = str(config.get("marker_text") or "").strip()
+            result["marker_text"] = marker_text[:80]
+
+        if "segments_per_side" in config:
+            try:
+                segments_per_side = int(config.get("segments_per_side"))
+            except (TypeError, ValueError):
+                segments_per_side = int(result["segments_per_side"])
+            result["segments_per_side"] = max(1, min(segments_per_side, 64))
+
+        return result
+
     # ================= 图片预设管理 =================
     
     def list_image_presets(self):

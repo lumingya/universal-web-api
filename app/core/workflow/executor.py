@@ -10,6 +10,7 @@ app/core/workflow/executor.py - 工作流执行器
 
 import copy
 import json
+import math
 import time
 import random
 import threading
@@ -271,6 +272,7 @@ class WorkflowExecutor:
         self._last_input_element = None
         self._last_input_target_key = ""
         self._last_stream_media_state = {}
+        self._last_stream_media_items: list[Dict[str, Any]] = []
         self._request_transport = normalize_request_transport_config(
             (stream_config or {}).get("request_transport")
         )
@@ -426,7 +428,7 @@ class WorkflowExecutor:
             logger.debug(f"[IMAGE] 图片提取已启用")
         
         if self.stealth_mode:
-            logger.debug("[STEALTH] 隐身模式已启用")
+            logger.debug("[STEALTH] 低熵模式已启用")
 
     @staticmethod
     def _coerce_bool(value: Any, default: bool = False) -> bool:
@@ -721,11 +723,13 @@ class WorkflowExecutor:
     @contextmanager
     def _page_interaction_slot(self, action: str, target_key: str = ""):
         settings = self._get_page_interaction_settings()
+        label = f"{action}:{target_key}" if target_key else str(action or "interaction")
+
         if not settings["enabled"]:
-            yield True
+            with self._wake_page_for_interaction(label):
+                yield True
             return
 
-        label = f"{action}:{target_key}" if target_key else str(action or "interaction")
         session_id = str(getattr(self.session, "id", "") or "")
         with _PAGE_INTERACTION_GATE.hold(
             label=label,
@@ -735,7 +739,64 @@ class WorkflowExecutor:
             min_interval=settings["min_interval"],
             cancel_checker=self._check_cancelled,
         ) as acquired:
-            yield acquired
+            if not acquired:
+                yield False
+                return
+            with self._wake_page_for_interaction(label):
+                yield True
+
+    def _get_workflow_wake_settings(self) -> Dict[str, bool]:
+        return {
+            "wake_before_interaction": self._coerce_bool(
+                BrowserConstants.get("WORKFLOW_WAKE_TAB_BEFORE_INTERACTION"),
+                True,
+            ),
+            "focus_emulation": self._coerce_bool(
+                BrowserConstants.get("WORKFLOW_FOCUS_EMULATION_ON_INTERACTION"),
+                True,
+            ),
+        }
+
+    @contextmanager
+    def _wake_page_for_interaction(self, label: str):
+        settings = self._get_workflow_wake_settings()
+        if not settings["wake_before_interaction"]:
+            yield
+            return
+
+        focus_emulation_enabled = False
+        try:
+            if settings["focus_emulation"]:
+                try:
+                    self.tab.run_cdp("Emulation.setFocusEmulationEnabled", enabled=True)
+                    focus_emulation_enabled = True
+                except Exception as e:
+                    logger.debug_throttled(
+                        f"interaction.focus_emulation.{label}",
+                        f"[INTERACT] 焦点模拟启用失败（忽略）: target={label}, error={e}",
+                        interval_sec=10.0,
+                    )
+            try:
+                self.tab.run_cdp("Page.setWebLifecycleState", state="active")
+            except Exception as e:
+                logger.debug_throttled(
+                    f"interaction.lifecycle_wake.{label}",
+                    f"[INTERACT] 页面唤醒失败（忽略）: target={label}, error={e}",
+                    interval_sec=10.0,
+                )
+            try:
+                self.tab.run_js(
+                    "return {readyState: document.readyState || '', hidden: !!document.hidden, visibilityState: document.visibilityState || ''};"
+                )
+            except Exception:
+                pass
+            yield
+        finally:
+            if focus_emulation_enabled:
+                try:
+                    self.tab.run_cdp("Emulation.setFocusEmulationEnabled", enabled=False)
+                except Exception:
+                    pass
 
     @staticmethod
     def _is_rect_stable(previous: Dict[str, Any], current: Dict[str, Any], tolerance: int) -> bool:
@@ -759,21 +820,22 @@ class WorkflowExecutor:
                     }
                     const rect = el.getBoundingClientRect();
                     const style = window.getComputedStyle(el);
-                    const text = [
+                    const signalText = [
                         el.getAttribute('aria-label'),
                         el.getAttribute('title'),
                         el.getAttribute('data-testid'),
-                        el.className,
                         el.innerText,
                         el.textContent
                     ].join(' ').toLowerCase();
+                    const classText = String(el.className || '').toLowerCase();
                     const disabled = !!el.disabled || el.getAttribute('aria-disabled') === 'true';
                     const hidden = style.display === 'none'
                         || style.visibility === 'hidden'
                         || Number(style.opacity || '1') < 0.05;
                     const pointerEventsNone = style.pointerEvents === 'none';
                     const busy = el.getAttribute('aria-busy') === 'true'
-                        || /loading|pending|sending|uploading|disable(?:d)?/.test(text);
+                        || /loading|pending|sending|uploading/.test(signalText)
+                        || /(^|[\\s:_-])(loading|pending|sending|uploading)(?=$|[\\s:_-])/.test(classText);
                     const sizeOk = rect.width >= 1 && rect.height >= 1;
                     const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
                     const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
@@ -1188,10 +1250,11 @@ class WorkflowExecutor:
         if spread <= 0:
             total_delay = min_sec
         else:
-            mean = min_sec + spread * 0.38
-            std = max(0.004, spread / 5)
-            total_delay = random.gauss(mean, std)
-            total_delay = max(min_sec, min(total_delay, max_sec))
+            # 反应时更接近右偏分布：短延迟常见，长延迟偶发
+            median_guess = max(0.004, min_sec + spread * 0.32)
+            sigma = 0.42
+            sampled = random.lognormvariate(math.log(median_guess), sigma)
+            total_delay = max(min_sec, min(sampled, max_sec))
 
         pause_prob = float(BrowserConstants.get("STEALTH_PAUSE_PROBABILITY") or 0.0)
         pause_max = max(0.0, float(BrowserConstants.get("STEALTH_PAUSE_EXTRA_MAX") or 0.0))
@@ -1442,7 +1505,9 @@ class WorkflowExecutor:
             
             elif action in ("STREAM_WAIT", "STREAM_OUTPUT"):
                 user_input = context.get("prompt", "") if context else ""
-                
+                self._last_stream_media_state = {}
+                self._last_stream_media_items = []
+
                 # 网络流式输出与网络异常拦截解耦：
                 # - mode=network: 走网络流式（可回退 DOM）
                 # - mode!=network 且启用拦截: 后台消费网络事件，前台仍走 DOM
@@ -1473,6 +1538,11 @@ class WorkflowExecutor:
                                 if self._network_monitor is not None
                                 else {}
                             )
+                            self._last_stream_media_items = (
+                                self._network_monitor.get_stream_media_items()
+                                if self._network_monitor is not None
+                                else []
+                            )
                             monitor_used = "network"
 
                     except NetworkInterceptionTriggered as e:
@@ -1494,6 +1564,7 @@ class WorkflowExecutor:
                             completion_id=self._completion_id
                         )
                         self._last_stream_media_state = {}
+                        self._last_stream_media_items = []
                         monitor_used = "dom_fallback"
                     
                     except NetworkMonitorError as e:
@@ -1507,6 +1578,7 @@ class WorkflowExecutor:
                             completion_id=self._completion_id
                         )
                         self._last_stream_media_state = {}
+                        self._last_stream_media_items = []
                         monitor_used = "dom_fallback"
                 
                 else:
@@ -1548,6 +1620,7 @@ class WorkflowExecutor:
                             completion_id=self._completion_id
                         )
                         self._last_stream_media_state = {}
+                        self._last_stream_media_items = []
                         monitor_used = "dom"
                     finally:
                         if event_thread is not None:
@@ -2073,7 +2146,7 @@ class WorkflowExecutor:
         
         关键：
         - 所有路径均使用 cdp_precise_click（force=0.5），绝不降级到 ele.click()
-        - 坐标获取失败时，尝试 JS 获取 getBoundingClientRect 作为最后手段
+        - 坐标仅走原生属性链路，失败即抛错，不执行页面 JS 坐标注入
         - 若坐标完全无法获取，抛出异常由上层处理（而非偷偷用 ele.click() 触发 CF）
         """
         if self._check_cancelled():
@@ -2081,27 +2154,16 @@ class WorkflowExecutor:
         
         # 1. 获取元素坐标（多重尝试）
         target = self._get_element_viewport_pos(ele)
-        
         if target is None:
-            # 最后手段：通过 JS 获取坐标（仅在原生属性全部失败时）
-            try:
-                rect = ele.run_js(
-                    "const r = this.getBoundingClientRect();"
-                    "return {x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2)}"
-                )
-                if rect and rect.get('x') and rect.get('y'):
-                    target = (int(rect['x']), int(rect['y']))
-                    logger.debug(f"[STEALTH] 原生属性获取坐标失败，JS getBoundingClientRect 获取: {target}")
-            except Exception as e:
-                logger.debug(f"[STEALTH] JS 坐标获取也失败: {e}")
+            raise Exception("[STEALTH] 无法通过原生链路获取元素坐标，拒绝注入 JS 与 ele.click() 降级")
         
-        if target is None:
-            # 🔴 绝不降级到 ele.click()，抛出异常
-            raise Exception("[STEALTH] 无法获取元素坐标，拒绝使用 ele.click()（会触发 CF）")
-        
-        # 随机偏移（不精确命中中心）
-        click_x = target[0] + random.randint(-6, 6)
-        click_y = target[1] + random.randint(-4, 4)
+        # 二维高斯落点：中心密集、边缘稀疏，更接近人类点击热力图
+        sigma_x = 3.0
+        sigma_y = 2.0
+        click_x = target[0] + int(random.gauss(0, sigma_x))
+        click_y = target[1] + int(random.gauss(0, sigma_y))
+        click_x = max(target[0] - 8, min(target[0] + 8, click_x))
+        click_y = max(target[1] - 6, min(target[1] + 6, click_y))
         
         # 2. 平滑移动鼠标到目标
         if self._mouse_pos is not None:
@@ -2131,6 +2193,14 @@ class WorkflowExecutor:
             )
         else:
             time.sleep(random.uniform(0.015, 0.035))
+
+        if self._check_cancelled():
+            return
+
+        # 点击前确认停顿：右偏分布，常见短停顿，偶发更长确认
+        hesitation = random.lognormvariate(math.log(0.15), 0.4)
+        hesitation = max(0.06, min(hesitation, 0.4))
+        self._idle_wait(hesitation)
         
         # 4. 精确 CDP 点击（含 force=0.5 修复）
         success = cdp_precise_click(
@@ -2355,6 +2425,11 @@ class WorkflowExecutor:
             require_attachment_confirmation = recent_image_upload or (
                 recent_file_upload and not confirmed_file_upload
             )
+            require_send_enabled = True
+            if recent_image_upload:
+                # Arena 等站点在图片预览已就绪后仍可能短暂维持 disabled，
+                # 这里放宽 gate，后续交给发送确认阶段判定是否真正发出。
+                require_send_enabled = False
             if reuse_existing_tracking:
                 logger.debug(
                     "[SEND] Recent attachment upload detected before submit; "
@@ -2367,7 +2442,7 @@ class WorkflowExecutor:
                 )
             result = self._attachment_monitor.wait_until_ready(
                 require_observed=require_attachment_confirmation,
-                require_send_enabled=True,
+                require_send_enabled=require_send_enabled,
                 accept_existing=not require_attachment_confirmation,
                 start_new_tracking=not reuse_existing_tracking,
                 max_wait=max_wait,
@@ -3456,7 +3531,7 @@ class WorkflowExecutor:
         隐身模式发送（零 JS 注入）
         
         - 无图片：直接点击
-        - 有图片：盲等待+重试
+        - 有图片：先单击并观察发送信号，仅在未确认时做少量重试
         """
         has_images = False
         if hasattr(self, '_context') and self._context:
@@ -3467,35 +3542,135 @@ class WorkflowExecutor:
             logger.info("[STEALTH] 发送完成（无图片）")
             return
         
-        max_wait = float(BrowserConstants.get('STEALTH_SEND_IMAGE_WAIT') or 8.0)
-        retry_interval = float(BrowserConstants.get('STEALTH_SEND_IMAGE_RETRY_INTERVAL') or 1.2)
+        default_wait = float(BrowserConstants.get('STEALTH_SEND_IMAGE_WAIT') or 8.0)
+        observe_window = self._get_send_confirmation_window(
+            "attachment_observe_window",
+            default_wait,
+            min_value=0.0,
+            max_value=60.0,
+            raw_only=True,
+        )
+        retry_interval = self._get_send_confirmation_window(
+            "retry_interval",
+            float(BrowserConstants.get('STEALTH_SEND_IMAGE_RETRY_INTERVAL') or 1.2),
+            min_value=0.0,
+            max_value=30.0,
+            raw_only=True,
+        )
+        pre_retry_probe_window = self._get_send_confirmation_window(
+            "pre_retry_probe_window",
+            0.12,
+            min_value=0.0,
+            max_value=5.0,
+            raw_only=True,
+        )
+        retry_observe_window = self._get_send_confirmation_window(
+            "retry_observe_window",
+            float(getattr(BrowserConstants, "SEND_RETRY_OBSERVE_WINDOW", 0.9)),
+            min_value=0.0,
+            max_value=15.0,
+            raw_only=True,
+        )
+        max_retry_count = self._get_send_confirmation_int(
+            "max_retry_count",
+            1,
+            min_value=0,
+            max_value=3,
+            raw_only=True,
+        )
+        trust_network_activity = self._get_send_confirmation_flag(
+            "trust_network_activity",
+            True,
+            raw_only=True,
+        )
+        trust_generating_indicator = self._get_send_confirmation_flag(
+            "trust_generating_indicator",
+            True,
+            raw_only=True,
+        )
+        trust_send_disabled_with_input_shrink = self._get_send_confirmation_flag(
+            "trust_send_disabled_with_input_shrink",
+            True,
+            raw_only=True,
+        )
+        before_len = self._safe_get_input_len_by_key("input_box")
+        if self._network_monitor is not None:
+            self._network_monitor.mark_send_attempt()
         
-        logger.info(f"[STEALTH] 有图片，发送后等待上传 (max_wait={max_wait}s)")
+        logger.info(
+            "[STEALTH] 有图片，发送后观察确认 "
+            f"(observe={observe_window:.1f}s, max_retry={max_retry_count})"
+        )
         
         self._execute_click(selector, target_key, optional)
+        time.sleep(0.25)
+        after_len = self._safe_get_input_len_by_key("input_box")
+        if self._is_send_success(before_len, after_len):
+            logger.info("[STEALTH] 发送成功（输入框已缩短）")
+            return
+        if self._observe_send_without_retry(
+            selector,
+            before_len,
+            max_wait=observe_window,
+            trust_network_activity=trust_network_activity,
+            trust_generating_indicator=trust_generating_indicator,
+            trust_send_disabled_with_input_shrink=trust_send_disabled_with_input_shrink,
+        ):
+            logger.info("[STEALTH] 发送成功（首击后信号确认）")
+            return
         
-        elapsed = 0.0
-        retry_count = 0
-        while elapsed < max_wait:
+        for retry_count in range(1, max_retry_count + 1):
             if self._check_cancelled():
                 return
-            
-            wait_step = min(retry_interval, max_wait - elapsed)
-            wait_step = wait_step * random.uniform(0.8, 1.2)
-            time.sleep(wait_step)
-            elapsed += wait_step
-            
-            retry_count += 1
+
+            if retry_interval > 0:
+                time.sleep(retry_interval)
+
+            if pre_retry_probe_window > 0 and self._observe_send_without_retry(
+                selector,
+                before_len,
+                max_wait=pre_retry_probe_window,
+                trust_network_activity=trust_network_activity,
+                trust_generating_indicator=trust_generating_indicator,
+                trust_send_disabled_with_input_shrink=trust_send_disabled_with_input_shrink,
+            ):
+                logger.info(f"[STEALTH] 发送成功（重试前观察确认，第 {retry_count} 轮）")
+                return
+
+            post_state = self._probe_send_post_click_state(selector)
+            if bool(post_state.get("generating")) or bool(post_state.get("sendLooksLikeStop")):
+                logger.info(
+                    f"[STEALTH] 检测到页面进入生成态，停止重试 (retry={retry_count}/{max_retry_count})"
+                )
+                return
+
             try:
                 self._execute_click(selector, target_key, True)
-                if retry_count <= 3 or retry_count % 3 == 0 or elapsed >= max_wait:
-                    logger.debug(
-                        f"[STEALTH] 发送重试 #{retry_count} (elapsed={elapsed:.1f}s)"
-                    )
+                logger.debug(f"[STEALTH] 发送重试 #{retry_count}")
             except Exception:
-                pass
-        
-        logger.info(f"[STEALTH] 发送完成（图片模式，重试 {retry_count} 次）")
+                logger.debug(f"[STEALTH] 发送重试 #{retry_count} 执行失败，继续观察")
+
+            time.sleep(0.25)
+            retry_after_len = self._safe_get_input_len_by_key("input_box")
+            if self._is_send_success(before_len, retry_after_len):
+                logger.info(f"[STEALTH] 发送成功（第 {retry_count} 次重试后输入框缩短）")
+                return
+
+            if self._observe_send_without_retry(
+                selector,
+                before_len,
+                max_wait=retry_observe_window,
+                trust_network_activity=trust_network_activity,
+                trust_generating_indicator=trust_generating_indicator,
+                trust_send_disabled_with_input_shrink=trust_send_disabled_with_input_shrink,
+            ):
+                logger.info(f"[STEALTH] 发送成功（第 {retry_count} 次重试后信号确认）")
+                return
+
+        logger.warning(
+            "[STEALTH] 图片发送未拿到确认信号，结束重试并交由后续监听 "
+            f"(max_retry={max_retry_count}, observe={observe_window:.1f}s)"
+        )
     
     def _safe_get_input_len_by_key(self, target_key: str) -> int:
         """读取输入框当前长度"""

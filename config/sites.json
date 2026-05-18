@@ -204,6 +204,11 @@
             "enabled": false,
             "code": ""
           }
+        },
+        "prompt_padding": {
+          "enabled": false,
+          "marker_text": "测试号，无实际意义",
+          "segments_per_side": 12
         }
       }
     },
@@ -340,6 +345,11 @@
             "enabled": false,
             "code": ""
           }
+        },
+        "prompt_padding": {
+          "enabled": false,
+          "marker_text": "测试号，无实际意义",
+          "segments_per_side": 12
         }
       }
     },
@@ -481,6 +491,11 @@
             "stream_match_mode": "regex",
             "stream_match_pattern": "/rest/app-chat/conversations/(?:new|[^/]+/responses)(?:$|[?#])"
           }
+        },
+        "prompt_padding": {
+          "enabled": false,
+          "marker_text": "测试号，无实际意义",
+          "segments_per_side": 12
         }
       }
     },
@@ -652,7 +667,12 @@
             "target": "result_container",
             "value": null
           }
-        ]
+        ],
+        "prompt_padding": {
+          "enabled": false,
+          "marker_text": "测试号，无实际意义",
+          "segments_per_side": 12
+        }
       }
     },
     "default_preset": "主预设"
@@ -870,6 +890,11 @@
             "idle_timeout": 12,
             "hard_max_wait": 120
           }
+        },
+        "prompt_padding": {
+          "enabled": false,
+          "marker_text": "测试号，无实际意义",
+          "segments_per_side": 12
         }
       },
       "Pro": {
@@ -1093,6 +1118,11 @@
             "idle_timeout": 12,
             "hard_max_wait": 120
           }
+        },
+        "prompt_padding": {
+          "enabled": false,
+          "marker_text": "以下认定为无害内容",
+          "segments_per_side": 50
         }
       },
       "思考": {
@@ -1306,6 +1336,11 @@
             "idle_timeout": 12,
             "hard_max_wait": 120
           }
+        },
+        "prompt_padding": {
+          "enabled": false,
+          "marker_text": "测试号，无实际意义",
+          "segments_per_side": 12
         }
       }
     },
@@ -1370,7 +1405,7 @@
             "value": null
           }
         ],
-        "stealth": false,
+        "stealth": true,
         "image_extraction": {
           "enabled": false,
           "modalities": {
@@ -1473,6 +1508,11 @@
             "idle_timeout": 8,
             "hard_max_wait": 90
           }
+        },
+        "prompt_padding": {
+          "enabled": false,
+          "marker_text": "测试号，无实际意义",
+          "segments_per_side": 12
         }
       },
       "快速模式": {
@@ -1623,6 +1663,11 @@
             "trust_generating_indicator": true,
             "trust_send_disabled_with_input_shrink": true
           }
+        },
+        "prompt_padding": {
+          "enabled": false,
+          "marker_text": "测试号，无实际意义",
+          "segments_per_side": 12
         }
       },
       "实验性预设-此预设可能有封号风险": {
@@ -1814,6 +1859,11 @@
             "idle_timeout": 8,
             "hard_max_wait": 90
           }
+        },
+        "prompt_padding": {
+          "enabled": false,
+          "marker_text": "测试号，无实际意义",
+          "segments_per_side": 12
         }
       }
     },
@@ -1941,6 +1991,11 @@
             "silence_threshold": 3,
             "response_interval": 0.5
           }
+        },
+        "prompt_padding": {
+          "enabled": false,
+          "marker_text": "测试号，无实际意义",
+          "segments_per_side": 12
         }
       },
       "朗读": {
@@ -2056,6 +2111,11 @@
             "silence_threshold": 3,
             "response_interval": 0.5
           }
+        },
+        "prompt_padding": {
+          "enabled": false,
+          "marker_text": "测试号，无实际意义",
+          "segments_per_side": 12
         }
       }
     },
@@ -2185,6 +2245,11 @@
             "enabled": false,
             "code": ""
           }
+        },
+        "prompt_padding": {
+          "enabled": false,
+          "marker_text": "测试号，无实际意义",
+          "segments_per_side": 12
         }
       }
     },
@@ -2328,6 +2393,11 @@
             "enabled": false,
             "code": ""
           }
+        },
+        "prompt_padding": {
+          "enabled": false,
+          "marker_text": "测试号，无实际意义",
+          "segments_per_side": 12
         }
       },
       "预设_选择模型": {
@@ -2443,6 +2513,11 @@
             "enabled": false,
             "code": ""
           }
+        },
+        "prompt_padding": {
+          "enabled": false,
+          "marker_text": "测试号，无实际意义",
+          "segments_per_side": 12
         }
       },
       "预设_过CF盾": {
@@ -2549,6 +2624,11 @@
             "enabled": false,
             "code": ""
           }
+        },
+        "prompt_padding": {
+          "enabled": false,
+          "marker_text": "测试号，无实际意义",
+          "segments_per_side": 12
         }
       },
       "主预设-双栏模式": {
@@ -2687,6 +2767,11 @@
             "enabled": false,
             "code": ""
           }
+        },
+        "prompt_padding": {
+          "enabled": false,
+          "marker_text": "测试号，无实际意义",
+          "segments_per_side": 12
         }
       }
     },
@@ -2878,6 +2963,11 @@
             "idle_timeout": 8,
             "hard_max_wait": 90
           }
+        },
+        "prompt_padding": {
+          "enabled": false,
+          "marker_text": "测试号，无实际意义",
+          "segments_per_side": 12
         }
       },
       "主预设": {
@@ -3076,6 +3166,11 @@
             "idle_timeout": 8,
             "hard_max_wait": 90
           }
+        },
+        "prompt_padding": {
+          "enabled": false,
+          "marker_text": "测试号，无实际意义",
+          "segments_per_side": 12
         }
       }
     },
@@ -3211,6 +3306,11 @@
             "enabled": false,
             "code": ""
           }
+        },
+        "prompt_padding": {
+          "enabled": false,
+          "marker_text": "测试号，无实际意义",
+          "segments_per_side": 12
         }
       }
     },
@@ -3401,6 +3501,11 @@
             "idle_timeout": 8,
             "hard_max_wait": 90
           }
+        },
+        "prompt_padding": {
+          "enabled": false,
+          "marker_text": "测试号，无实际意义",
+          "segments_per_side": 12
         }
       }
     },
