@@ -148,12 +148,18 @@ window.ConfigTab = {
             if (!this.currentConfig) {
                 return {
                     independent_cookies: false,
-                    independent_cookies_auto_takeover: false
+                    independent_cookies_auto_takeover: false,
+                    input_box_stability_wait_enabled: false,
+                    input_box_stability_wait_after_new_chat_only: true,
+                    input_box_stability_wait_timeout: 1.5
                 };
             }
             return {
                 independent_cookies: false,
                 independent_cookies_auto_takeover: false,
+                input_box_stability_wait_enabled: false,
+                input_box_stability_wait_after_new_chat_only: true,
+                input_box_stability_wait_timeout: 1.5,
                 ...(this.currentConfig.advanced || {})
             };
         },
@@ -636,6 +642,52 @@ window.ConfigTab = {
             }
         },
 
+        sanitizeInputStabilityWaitTimeout(value) {
+            const parsed = Number(value);
+            if (!Number.isFinite(parsed)) {
+                return 1.5;
+            }
+            return Math.min(10, Math.max(0.2, parsed));
+        },
+
+        buildSiteAdvancedPayload(overrides = {}) {
+            return {
+                independent_cookies: !!this.siteAdvancedConfig.independent_cookies,
+                independent_cookies_auto_takeover: !!this.siteAdvancedConfig.independent_cookies_auto_takeover,
+                input_box_stability_wait_enabled: !!this.siteAdvancedConfig.input_box_stability_wait_enabled,
+                input_box_stability_wait_after_new_chat_only: !!this.siteAdvancedConfig.input_box_stability_wait_after_new_chat_only,
+                input_box_stability_wait_timeout: this.sanitizeInputStabilityWaitTimeout(
+                    this.siteAdvancedConfig.input_box_stability_wait_timeout
+                ),
+                ...overrides
+            };
+        },
+
+        async persistSiteAdvancedConfig(nextAdvanced, previousAdvanced) {
+            const token = localStorage.getItem('api_token');
+            const headers = { 'Content-Type': 'application/json' };
+            if (token) headers['Authorization'] = 'Bearer ' + token;
+
+            const response = await fetch('/api/sites/' + encodeURIComponent(this.currentDomain) + '/advanced-config', {
+                method: 'PUT',
+                headers,
+                body: JSON.stringify(nextAdvanced)
+            });
+
+            if (!response.ok) {
+                const err = await response.json().catch(() => ({}));
+                this.currentConfig.advanced = previousAdvanced;
+                throw new Error(err.detail || ('HTTP ' + response.status));
+            }
+
+            const data = await response.json().catch(() => ({}));
+            this.currentConfig.advanced = {
+                ...previousAdvanced,
+                ...(data.advanced || nextAdvanced)
+            };
+            this.$emit('reload-config');
+        },
+
         async updateIndependentCookies(enabled, event) {
             if (!this.currentDomain || !this.currentConfig) return;
             const nextEnabled = !!enabled;
@@ -660,34 +712,18 @@ window.ConfigTab = {
 
             this.advancedConfigSaving = true;
             const previousAdvanced = { ...(this.currentConfig.advanced || {}) };
-            this.currentConfig.advanced = {
-                ...previousAdvanced,
+            const nextAdvanced = this.buildSiteAdvancedPayload({
                 independent_cookies: nextEnabled,
                 independent_cookies_auto_takeover: !!previousAdvanced.independent_cookies_auto_takeover
+            });
+            this.currentConfig.advanced = {
+                ...previousAdvanced,
+                ...nextAdvanced
             };
 
             try {
-                const token = localStorage.getItem('api_token');
-                const headers = { 'Content-Type': 'application/json' };
-                if (token) headers['Authorization'] = 'Bearer ' + token;
-
-                const response = await fetch('/api/sites/' + encodeURIComponent(this.currentDomain) + '/advanced-config', {
-                    method: 'PUT',
-                    headers,
-                    body: JSON.stringify({
-                        independent_cookies: nextEnabled,
-                        independent_cookies_auto_takeover: !!this.currentConfig.advanced.independent_cookies_auto_takeover
-                    })
-                });
-
-                if (!response.ok) {
-                    const err = await response.json().catch(() => ({}));
-                    throw new Error(err.detail || ('HTTP ' + response.status));
-                }
-
-                this.$emit('reload-config');
+                await this.persistSiteAdvancedConfig(nextAdvanced, previousAdvanced);
             } catch (e) {
-                this.currentConfig.advanced = previousAdvanced;
                 console.error('保存站点高级配置失败:', e);
                 alert('保存失败: ' + e.message);
             } finally {
@@ -700,33 +736,86 @@ window.ConfigTab = {
 
             this.advancedConfigSaving = true;
             const previousAdvanced = { ...(this.currentConfig.advanced || {}) };
+            const nextAdvanced = this.buildSiteAdvancedPayload({
+                independent_cookies_auto_takeover: !!enabled
+            });
             this.currentConfig.advanced = {
                 ...previousAdvanced,
-                independent_cookies_auto_takeover: !!enabled
+                ...nextAdvanced
             };
 
             try {
-                const token = localStorage.getItem('api_token');
-                const headers = { 'Content-Type': 'application/json' };
-                if (token) headers['Authorization'] = 'Bearer ' + token;
-
-                const response = await fetch('/api/sites/' + encodeURIComponent(this.currentDomain) + '/advanced-config', {
-                    method: 'PUT',
-                    headers,
-                    body: JSON.stringify({
-                        independent_cookies: !!this.siteAdvancedConfig.independent_cookies,
-                        independent_cookies_auto_takeover: !!enabled
-                    })
-                });
-
-                if (!response.ok) {
-                    const err = await response.json().catch(() => ({}));
-                    throw new Error(err.detail || ('HTTP ' + response.status));
-                }
-
-                this.$emit('reload-config');
+                await this.persistSiteAdvancedConfig(nextAdvanced, previousAdvanced);
             } catch (e) {
-                this.currentConfig.advanced = previousAdvanced;
+                console.error('保存站点高级配置失败:', e);
+                alert('保存失败: ' + e.message);
+            } finally {
+                this.advancedConfigSaving = false;
+            }
+        },
+
+        async updateInputStabilityWaitEnabled(enabled) {
+            if (!this.currentDomain || !this.currentConfig) return;
+
+            this.advancedConfigSaving = true;
+            const previousAdvanced = { ...(this.currentConfig.advanced || {}) };
+            const nextAdvanced = this.buildSiteAdvancedPayload({
+                input_box_stability_wait_enabled: !!enabled
+            });
+            this.currentConfig.advanced = {
+                ...previousAdvanced,
+                ...nextAdvanced
+            };
+
+            try {
+                await this.persistSiteAdvancedConfig(nextAdvanced, previousAdvanced);
+            } catch (e) {
+                console.error('保存站点高级配置失败:', e);
+                alert('保存失败: ' + e.message);
+            } finally {
+                this.advancedConfigSaving = false;
+            }
+        },
+
+        async updateInputStabilityWaitAfterNewChatOnly(enabled) {
+            if (!this.currentDomain || !this.currentConfig) return;
+
+            this.advancedConfigSaving = true;
+            const previousAdvanced = { ...(this.currentConfig.advanced || {}) };
+            const nextAdvanced = this.buildSiteAdvancedPayload({
+                input_box_stability_wait_after_new_chat_only: !!enabled
+            });
+            this.currentConfig.advanced = {
+                ...previousAdvanced,
+                ...nextAdvanced
+            };
+
+            try {
+                await this.persistSiteAdvancedConfig(nextAdvanced, previousAdvanced);
+            } catch (e) {
+                console.error('保存站点高级配置失败:', e);
+                alert('保存失败: ' + e.message);
+            } finally {
+                this.advancedConfigSaving = false;
+            }
+        },
+
+        async updateInputStabilityWaitTimeout(value) {
+            if (!this.currentDomain || !this.currentConfig) return;
+
+            this.advancedConfigSaving = true;
+            const previousAdvanced = { ...(this.currentConfig.advanced || {}) };
+            const nextAdvanced = this.buildSiteAdvancedPayload({
+                input_box_stability_wait_timeout: this.sanitizeInputStabilityWaitTimeout(value)
+            });
+            this.currentConfig.advanced = {
+                ...previousAdvanced,
+                ...nextAdvanced
+            };
+
+            try {
+                await this.persistSiteAdvancedConfig(nextAdvanced, previousAdvanced);
+            } catch (e) {
                 console.error('保存站点高级配置失败:', e);
                 alert('保存失败: ' + e.message);
             } finally {
@@ -1224,6 +1313,52 @@ window.ConfigTab = {
                             >
                                 {{ isolatedTabCreating ? '创建中...' : '新建独立 Cookie 会话（单独窗口）' }}
                             </button>
+                        </div>
+
+                        <div class="border-t dark:border-gray-700 pt-4 space-y-3">
+                            <div>
+                                <div class="text-sm font-medium text-gray-900 dark:text-white">输入框稳定等待</div>
+                                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                    在执行 <code>FILL_INPUT</code> 前，额外等待输入框节点连续稳定几次。适合解决点完 <code>new_chat_btn</code> 后输入框偶发重建、导致后续粘贴时序不稳的问题。
+                                </p>
+                            </div>
+
+                            <label class="flex items-center gap-3 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    class="rounded"
+                                    :checked="siteAdvancedConfig.input_box_stability_wait_enabled"
+                                    :disabled="advancedConfigSaving"
+                                    @change="updateInputStabilityWaitEnabled($event.target.checked)"
+                                >
+                                <span>启用输入框稳定等待</span>
+                            </label>
+
+                            <label class="flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400 cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    class="rounded"
+                                    :checked="siteAdvancedConfig.input_box_stability_wait_after_new_chat_only"
+                                    :disabled="advancedConfigSaving || !siteAdvancedConfig.input_box_stability_wait_enabled"
+                                    @change="updateInputStabilityWaitAfterNewChatOnly($event.target.checked)"
+                                >
+                                <span>仅在刚点击 new_chat_btn 后启用</span>
+                            </label>
+
+                            <label class="flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400">
+                                <span>最长等待</span>
+                                <input
+                                    type="number"
+                                    min="0.2"
+                                    max="10"
+                                    step="0.1"
+                                    class="w-24 rounded border dark:border-gray-600 px-2 py-1 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                                    :value="siteAdvancedConfig.input_box_stability_wait_timeout"
+                                    :disabled="advancedConfigSaving || !siteAdvancedConfig.input_box_stability_wait_enabled"
+                                    @change="updateInputStabilityWaitTimeout($event.target.value)"
+                                >
+                                <span>秒</span>
+                            </label>
                         </div>
                     </div>
                 </div>

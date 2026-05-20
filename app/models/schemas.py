@@ -355,6 +355,9 @@ class SiteAdvancedConfig(TypedDict, total=False):
     """站点级高级功能配置（不随预设切换）"""
     independent_cookies: bool
     independent_cookies_auto_takeover: bool
+    input_box_stability_wait_enabled: bool
+    input_box_stability_wait_after_new_chat_only: bool
+    input_box_stability_wait_timeout: float
 
 
 def get_default_site_advanced_config() -> 'SiteAdvancedConfig':
@@ -362,6 +365,9 @@ def get_default_site_advanced_config() -> 'SiteAdvancedConfig':
     return {
         "independent_cookies": False,
         "independent_cookies_auto_takeover": False,
+        "input_box_stability_wait_enabled": False,
+        "input_box_stability_wait_after_new_chat_only": True,
+        "input_box_stability_wait_timeout": 1.5,
     }
 
 

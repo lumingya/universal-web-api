@@ -884,10 +884,26 @@ class ConfigEngine:
         if not isinstance(raw_config, dict):
             raw_config = {}
 
-        return {
+        normalized = {
             **get_default_site_advanced_config(),
             **copy.deepcopy(raw_config),
         }
+        normalized["independent_cookies"] = bool(normalized.get("independent_cookies", False))
+        normalized["independent_cookies_auto_takeover"] = bool(
+            normalized.get("independent_cookies_auto_takeover", False)
+        )
+        normalized["input_box_stability_wait_enabled"] = bool(
+            normalized.get("input_box_stability_wait_enabled", False)
+        )
+        normalized["input_box_stability_wait_after_new_chat_only"] = bool(
+            normalized.get("input_box_stability_wait_after_new_chat_only", True)
+        )
+        try:
+            timeout_value = float(normalized.get("input_box_stability_wait_timeout", 1.5))
+        except Exception:
+            timeout_value = 1.5
+        normalized["input_box_stability_wait_timeout"] = max(0.2, min(timeout_value, 10.0))
+        return normalized
 
     def set_site_advanced_config(self, domain: str, config: Dict[str, Any]) -> bool:
         """设置站点级高级配置。"""
@@ -906,6 +922,17 @@ class ConfigEngine:
         normalized["independent_cookies_auto_takeover"] = bool(
             normalized.get("independent_cookies_auto_takeover", False)
         )
+        normalized["input_box_stability_wait_enabled"] = bool(
+            normalized.get("input_box_stability_wait_enabled", False)
+        )
+        normalized["input_box_stability_wait_after_new_chat_only"] = bool(
+            normalized.get("input_box_stability_wait_after_new_chat_only", True)
+        )
+        try:
+            timeout_value = float(normalized.get("input_box_stability_wait_timeout", 1.5))
+        except Exception:
+            timeout_value = 1.5
+        normalized["input_box_stability_wait_timeout"] = max(0.2, min(timeout_value, 10.0))
 
         site["advanced"] = normalized
         return self._save_config()

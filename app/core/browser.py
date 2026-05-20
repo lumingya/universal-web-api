@@ -1899,6 +1899,7 @@ class BrowserCore:
         }
         
         extractor = config_engine.get_site_extractor(domain, preset_name=effective_preset_name)
+        site_advanced_config = config_engine.get_site_advanced_config(domain)
         logger.debug(f"[{session.id}] 使用提取器: {extractor.get_id()} [预设: {resolved_preset_name}]")
 
         try:
@@ -1942,6 +1943,7 @@ class BrowserCore:
             image_config=image_config,
             stream_config=stream_config,
             file_paste_config=file_paste_config,
+            site_advanced_config=site_advanced_config,
             selectors=selectors,
             session=session,
         )
@@ -1954,135 +1956,136 @@ class BrowserCore:
         conversation_activity_marked = False
         
         try:
-            step_index = 0
-            while step_index < len(workflow):
-                step = workflow[step_index]
-                if command_engine is not None:
-                    command_engine.update_workflow_runtime_step(session, step_index, step)
+            with executor.workflow_execution_scope():
+                step_index = 0
+                while step_index < len(workflow):
+                    step = workflow[step_index]
+                    if command_engine is not None:
+                        command_engine.update_workflow_runtime_step(session, step_index, step)
 
-                stop_reason = str(getattr(session, "_workflow_stop_reason", "") or "").strip()
-                if stop_reason == "command_interrupt" or (
-                    command_engine is not None and command_engine.workflow_interrupt_requested(session)
-                ):
-                    interrupt_result = (
-                        command_engine.handle_pending_workflow_interrupts(session)
-                        if command_engine is not None
-                        else {"handled": False, "abort": False, "message": ""}
-                    )
-                    if interrupt_result.get("abort"):
-                        workflow_aborted = True
-                        workflow_abort_message = str(
-                            interrupt_result.get("message") or "工作流已被命令打断"
+                    stop_reason = str(getattr(session, "_workflow_stop_reason", "") or "").strip()
+                    if stop_reason == "command_interrupt" or (
+                        command_engine is not None and command_engine.workflow_interrupt_requested(session)
+                    ):
+                        interrupt_result = (
+                            command_engine.handle_pending_workflow_interrupts(session)
+                            if command_engine is not None
+                            else {"handled": False, "abort": False, "message": ""}
                         )
-                        logger.warning(
-                            f"[{session.id}] 工作流被命令打断: "
-                            f"{interrupt_result.get('abort_by') or 'unknown'}"
-                        )
-                        yield self.formatter.pack_error(
-                            workflow_abort_message,
-                            code="workflow_interrupted",
-                        )
+                        if interrupt_result.get("abort"):
+                            workflow_aborted = True
+                            workflow_abort_message = str(
+                                interrupt_result.get("message") or "工作流已被命令打断"
+                            )
+                            logger.warning(
+                                f"[{session.id}] 工作流被命令打断: "
+                                f"{interrupt_result.get('abort_by') or 'unknown'}"
+                            )
+                            yield self.formatter.pack_error(
+                                workflow_abort_message,
+                                code="workflow_interrupted",
+                            )
+                            break
+                        if interrupt_result.get("handled"):
+                            logger.info(f"[{session.id}] 工作流恢复执行")
+                            continue
+
+                    if effective_stop_checker():
+                        if getattr(session, "_workflow_user_stop_logged", False):
+                            break
+                        if stop_reason == "timeout":
+                            logger.warning(f"[{session.id}] 工作流因超时停止")
+                        else:
+                            logger.info(f"[{session.id}] 工作流被用户中断")
+                        setattr(session, "_workflow_user_stop_logged", True)
                         break
-                    if interrupt_result.get("handled"):
-                        logger.info(f"[{session.id}] 工作流恢复执行")
-                        continue
 
-                if effective_stop_checker():
-                    if getattr(session, "_workflow_user_stop_logged", False):
-                        break
-                    if stop_reason == "timeout":
-                        logger.warning(f"[{session.id}] 工作流因超时停止")
-                    else:
-                        logger.info(f"[{session.id}] 工作流被用户中断")
-                    setattr(session, "_workflow_user_stop_logged", True)
-                    break
-                
-                action = step.get('action', '')
-                target_key = step.get('target', '')
-                optional = step.get('optional', False)
-                param_value = step.get('value')
-                action_upper = str(action or "").strip().upper()
-                target_key_normalized = str(target_key or "").strip().lower()
+                    action = step.get('action', '')
+                    target_key = step.get('target', '')
+                    optional = step.get('optional', False)
+                    param_value = step.get('value')
+                    action_upper = str(action or "").strip().upper()
+                    target_key_normalized = str(target_key or "").strip().lower()
 
-                if skip_new_chat and (
-                    target_key_normalized in {"new_chat_btn", "new_chat", "new_conversation"}
-                    or action_upper in {"NEW_CHAT", "NEW_CONVERSATION"}
-                ):
-                    logger.debug(
-                        f"[{session.id}] 会话仍有效，跳过新建对话步骤 "
-                        f"(action={action_upper or '-'}, target={target_key_normalized or '-'})"
-                    )
-                    step_index += 1
-                    continue
-                
-                selector = selectors.get(target_key, '')
-                
-                if not selector and action not in ("WAIT", "KEY_PRESS", "COORD_CLICK", "COORD_SCROLL", "JS_EXEC", "READONLY_HINT", "PAGE_FETCH"):
-                    if optional:
+                    if skip_new_chat and (
+                        target_key_normalized in {"new_chat_btn", "new_chat", "new_conversation"}
+                        or action_upper in {"NEW_CHAT", "NEW_CONVERSATION"}
+                    ):
+                        logger.debug(
+                            f"[{session.id}] 会话仍有效，跳过新建对话步骤 "
+                            f"(action={action_upper or '-'}, target={target_key_normalized or '-'})"
+                        )
                         step_index += 1
                         continue
-                    else:
-                        yield self.formatter.pack_error(
-                            f"缺少配置: {target_key}",
-                            code="missing_selector"
-                        )
-                        break
-                
-                try:
-                    for chunk in executor.execute_step(
-                        action=action,
-                        selector=selector,
-                        target_key=target_key,
-                        value=param_value,
-                        optional=optional,
-                        context=context
-                    ):
-                        delta_content = self._extract_stream_delta_content(chunk)
-                        if delta_content:
-                            streamed_text_parts.append(delta_content)
-                        yield chunk
-                    
-                    logger.debug(f"[PROBE] execute_step 完成: action={action}, target={target_key}")
 
-                    if effective_stop_checker():
-                        logger.info(f"[{session.id}] 步骤完成后检测到取消，提前结束工作流")
-                        break
-                    
-                    page_fetch_sent = False
-                    if action in ("STREAM_WAIT", "STREAM_OUTPUT"):
-                        result_container_selector = selector
-                    if (
-                        action == "PAGE_FETCH"
-                        and hasattr(executor, "consume_last_request_transport_sent")
-                    ):
-                        page_fetch_sent = bool(executor.consume_last_request_transport_sent())
-                        if page_fetch_sent:
-                            step_index = executor._consume_request_transport_followup_steps(
-                                workflow,
-                                step_index,
+                    selector = selectors.get(target_key, '')
+
+                    if not selector and action not in ("WAIT", "KEY_PRESS", "COORD_CLICK", "COORD_SCROLL", "JS_EXEC", "READONLY_HINT", "PAGE_FETCH"):
+                        if optional:
+                            step_index += 1
+                            continue
+                        else:
+                            yield self.formatter.pack_error(
+                                f"缺少配置: {target_key}",
+                                code="missing_selector"
                             )
-                    if (
-                        not conversation_activity_marked
-                        and (
-                            self._step_submits_conversation_request(action, target_key, param_value)
-                            or page_fetch_sent
-                            or action_upper in {"STREAM_WAIT", "STREAM_OUTPUT"}
-                        )
-                    ):
-                        session.mark_conversation_activity(domain, resolved_preset_name)
-                        conversation_activity_marked = True
-                    step_index += 1
-                        
-                except (ElementNotFoundError, WorkflowError):
-                    break
-                except Exception as e:
-                    if effective_stop_checker():
-                        logger.info(f"[{session.id}] 取消后忽略步骤异常: {e}")
+                            break
+
+                    try:
+                        for chunk in executor.execute_step(
+                            action=action,
+                            selector=selector,
+                            target_key=target_key,
+                            value=param_value,
+                            optional=optional,
+                            context=context
+                        ):
+                            delta_content = self._extract_stream_delta_content(chunk)
+                            if delta_content:
+                                streamed_text_parts.append(delta_content)
+                            yield chunk
+
+                        logger.debug(f"[PROBE] execute_step 完成: action={action}, target={target_key}")
+
+                        if effective_stop_checker():
+                            logger.info(f"[{session.id}] 步骤完成后检测到取消，提前结束工作流")
+                            break
+
+                        page_fetch_sent = False
+                        if action in ("STREAM_WAIT", "STREAM_OUTPUT"):
+                            result_container_selector = selector
+                        if (
+                            action == "PAGE_FETCH"
+                            and hasattr(executor, "consume_last_request_transport_sent")
+                        ):
+                            page_fetch_sent = bool(executor.consume_last_request_transport_sent())
+                            if page_fetch_sent:
+                                step_index = executor._consume_request_transport_followup_steps(
+                                    workflow,
+                                    step_index,
+                                )
+                        if (
+                            not conversation_activity_marked
+                            and (
+                                self._step_submits_conversation_request(action, target_key, param_value)
+                                or page_fetch_sent
+                                or action_upper in {"STREAM_WAIT", "STREAM_OUTPUT"}
+                            )
+                        ):
+                            session.mark_conversation_activity(domain, resolved_preset_name)
+                            conversation_activity_marked = True
+                        step_index += 1
+
+                    except (ElementNotFoundError, WorkflowError):
                         break
-                    if not optional:
-                        yield self.formatter.pack_error(f"执行中断: {str(e)}")
-                        break
-            
+                    except Exception as e:
+                        if effective_stop_checker():
+                            logger.info(f"[{session.id}] 取消后忽略步骤异常: {e}")
+                            break
+                        if not optional:
+                            yield self.formatter.pack_error(f"执行中断: {str(e)}")
+                            break
+
             if (
                 not workflow_aborted
                 and command_engine is not None

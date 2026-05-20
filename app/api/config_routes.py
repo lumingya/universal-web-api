@@ -219,6 +219,7 @@ def _execute_workflow_editor_test_payload(
             getattr(tab, "html", "") or "",
             preset_name=preset_name
         ) or {}
+        site_advanced_config = config_engine.get_site_advanced_config(domain)
 
         extractor = config_engine.get_site_extractor(domain, preset_name=preset_name)
         executor = WorkflowExecutor(
@@ -229,6 +230,7 @@ def _execute_workflow_editor_test_payload(
             image_config=image_config,
             stream_config=test_stream_config or resolved_site_config.get("stream_config") or {},
             file_paste_config=file_paste_config,
+            site_advanced_config=site_advanced_config,
             selectors=selectors,
             session=session,
         )
@@ -239,55 +241,56 @@ def _execute_workflow_editor_test_payload(
             "images": [],
         }
 
-        step_index = 0
-        while step_index < len(workflow):
-            step = workflow[step_index]
-            action = str(step.get("action") or "").strip()
-            target_key = str(step.get("target") or "")
-            optional = bool(step.get("optional", False))
-            value = step.get("value")
-            selector = selectors.get(target_key, "")
-            current_index = step_index + 1
+        with executor.workflow_execution_scope():
+            step_index = 0
+            while step_index < len(workflow):
+                step = workflow[step_index]
+                action = str(step.get("action") or "").strip()
+                target_key = str(step.get("target") or "")
+                optional = bool(step.get("optional", False))
+                value = step.get("value")
+                selector = selectors.get(target_key, "")
+                current_index = step_index + 1
 
-            logger.debug(
-                "[WFE_TEST] step "
-                f"index={current_index} action={action!r} target={target_key!r} "
-                f"selector={selector!r} optional={optional}"
-            )
-
-            if progress_callback:
-                progress_callback(
-                    "step",
-                    f"执行 {current_index}/{len(workflow)} · {action_labels.get(action, action)}"
+                logger.debug(
+                    "[WFE_TEST] step "
+                    f"index={current_index} action={action!r} target={target_key!r} "
+                    f"selector={selector!r} optional={optional}"
                 )
 
-            if not action:
-                raise HTTPException(status_code=400, detail="workflow 中存在缺少 action 的步骤")
+                if progress_callback:
+                    progress_callback(
+                        "step",
+                        f"执行 {current_index}/{len(workflow)} · {action_labels.get(action, action)}"
+                    )
 
-            if action == "FILL_INPUT" and value is not None:
-                context["prompt"] = str(value)
+                if not action:
+                    raise HTTPException(status_code=400, detail="workflow 中存在缺少 action 的步骤")
 
-            for _ in executor.execute_step(
-                action=action,
-                selector=selector,
-                target_key=target_key,
-                value=value,
-                optional=optional,
-                context=context
-            ):
-                pass
+                if action == "FILL_INPUT" and value is not None:
+                    context["prompt"] = str(value)
 
-            executed += 1
-            if (
-                action == "PAGE_FETCH"
-                and hasattr(executor, "consume_last_request_transport_sent")
-                and executor.consume_last_request_transport_sent()
-            ):
-                step_index = executor._consume_request_transport_followup_steps(
-                    workflow,
-                    step_index,
-                )
-            step_index += 1
+                for _ in executor.execute_step(
+                    action=action,
+                    selector=selector,
+                    target_key=target_key,
+                    value=value,
+                    optional=optional,
+                    context=context
+                ):
+                    pass
+
+                executed += 1
+                if (
+                    action == "PAGE_FETCH"
+                    and hasattr(executor, "consume_last_request_transport_sent")
+                    and executor.consume_last_request_transport_sent()
+                ):
+                    step_index = executor._consume_request_transport_followup_steps(
+                        workflow,
+                        step_index,
+                    )
+                step_index += 1
 
         logger.debug(
             "[WFE_TEST] done "
@@ -378,6 +381,9 @@ class SiteAdvancedConfigRequest(BaseModel):
     """站点级高级配置更新请求。"""
     independent_cookies: bool = Field(default=False)
     independent_cookies_auto_takeover: bool = Field(default=False)
+    input_box_stability_wait_enabled: bool = Field(default=False)
+    input_box_stability_wait_after_new_chat_only: bool = Field(default=True)
+    input_box_stability_wait_timeout: float = Field(default=1.5)
 
 
 class PresetConfigUpdateRequest(BaseModel):
@@ -948,6 +954,9 @@ async def set_site_advanced_config(
     payload = {
         "independent_cookies": bool(body.independent_cookies),
         "independent_cookies_auto_takeover": bool(body.independent_cookies_auto_takeover),
+        "input_box_stability_wait_enabled": bool(body.input_box_stability_wait_enabled),
+        "input_box_stability_wait_after_new_chat_only": bool(body.input_box_stability_wait_after_new_chat_only),
+        "input_box_stability_wait_timeout": float(body.input_box_stability_wait_timeout),
     }
 
     try:

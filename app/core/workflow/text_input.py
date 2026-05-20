@@ -432,6 +432,47 @@ class TextInputHandler:
             )
         return False
 
+    def _ensure_input_focus_native(self, ele, attempts: int = 2) -> bool:
+        """低熵模式专用：只用原生聚焦，并确认焦点真的落在目标输入框。"""
+        last_state = {}
+        total_attempts = max(1, int(attempts or 1))
+
+        for attempt in range(total_attempts):
+            try:
+                owner = getattr(ele, "owner", None)
+                backend_id = getattr(ele, "_backend_id", None)
+                if owner is not None and backend_id is not None:
+                    owner._run_cdp("DOM.focus", backendNodeId=backend_id)
+                    time.sleep(0.04)
+                    state = self._probe_focus_state(ele)
+                    if bool(state.get("activeWithin")) or bool(state.get("selectionWithin")):
+                        return True
+                    last_state = state
+            except Exception as e:
+                logger.debug(f"[STEALTH] 原生聚焦失败: {e}")
+
+            try:
+                if hasattr(ele, "_input_focus"):
+                    ele._input_focus()
+                    time.sleep(0.04)
+                    state = self._probe_focus_state(ele)
+                    if bool(state.get("activeWithin")) or bool(state.get("selectionWithin")):
+                        return True
+                    last_state = state
+            except Exception as e:
+                logger.debug(f"[STEALTH] 备用原生聚焦失败: {e}")
+
+            if attempt < total_attempts - 1:
+                time.sleep(0.05)
+
+        logger.debug(
+            "[STEALTH] 原生聚焦后未能确认焦点 "
+            f"(active_within={bool(last_state.get('activeWithin'))}, "
+            f"selection_within={bool(last_state.get('selectionWithin'))}, "
+            f"active_tag={last_state.get('activeTag')!r})"
+        )
+        return False
+
     def verify_paste_result_minimal(self, ele, expected_text: str) -> bool:
         """最小化校验粘贴结果，避免整页全选后脚本误判成功。"""
         expected = self.normalize_for_compare(expected_text)
@@ -511,42 +552,44 @@ class TextInputHandler:
         if not hint_text.strip():
             return True
 
-        # 上传控件经常会抢走焦点，先显式把焦点拉回真实输入框末尾。
-        self.focus_to_end(ele)
-        time.sleep(0.06)
-
-        if not self.ensure_input_focus(ele):
-            logger.warning("[FILE_PASTE] 追加引导文本前重新聚焦失败，尝试直接回退追加")
+        if self.stealth_mode:
+            if not self._ensure_input_focus_native(ele):
+                logger.warning("[FILE_PASTE] 低熵模式下原生聚焦失败，跳过引导文本追加")
+                return False
         else:
-            clipboard_lock = get_clipboard_lock()
-            with clipboard_lock:
-                original_cb = ""
-                try:
-                    original_cb = pyperclip.paste()
-                except Exception:
-                    pass
+            # 上传控件经常会抢走焦点，先显式把焦点拉回真实输入框末尾。
+            self.focus_to_end(ele)
+            time.sleep(0.06)
 
-                try:
-                    pyperclip.copy(hint_text)
-                    time.sleep(random.uniform(0.06, 0.12))
-
-                    if self.stealth_mode:
-                        self._press_primary_combo('V', humanized=True)
-                    else:
-                        self._press_primary_combo('V')
-
-                    time.sleep(random.uniform(0.2, 0.4))
-                finally:
+            if not self.ensure_input_focus(ele):
+                logger.warning("[FILE_PASTE] 追加引导文本前重新聚焦失败，尝试直接回退追加")
+            else:
+                clipboard_lock = get_clipboard_lock()
+                with clipboard_lock:
+                    original_cb = ""
                     try:
-                        pyperclip.copy(original_cb)
+                        original_cb = pyperclip.paste()
                     except Exception:
                         pass
 
-            self._smart_delay(0.15, 0.3)
-            if self._input_contains_text_loose(ele, hint_text):
-                return True
+                    try:
+                        pyperclip.copy(hint_text)
+                        time.sleep(random.uniform(0.06, 0.12))
 
-            logger.warning("[FILE_PASTE] 剪贴板追加引导文本未生效，回退到原子追加")
+                        self._press_primary_combo('V')
+
+                        time.sleep(random.uniform(0.2, 0.4))
+                    finally:
+                        try:
+                            pyperclip.copy(original_cb)
+                        except Exception:
+                            pass
+
+                self._smart_delay(0.15, 0.3)
+                if self._input_contains_text_loose(ele, hint_text):
+                    return True
+
+                logger.warning("[FILE_PASTE] 剪贴板追加引导文本未生效，回退到原子追加")
 
         if self.stealth_mode:
             logger.warning("[FILE_PASTE] 低熵模式下跳过 JS 回退追加，避免增加风控风险")
@@ -1824,7 +1867,10 @@ class TextInputHandler:
             ele.click()
             self._smart_delay(0.15, 0.35)
 
-            if not self.ensure_input_focus(ele):
+            if self.stealth_mode:
+                if not self._ensure_input_focus_native(ele):
+                    raise WorkflowError("input_focus_failed")
+            elif not self.ensure_input_focus(ele):
                 raise WorkflowError("input_focus_failed")
 
             if self._check_cancelled():
@@ -1968,13 +2014,9 @@ class TextInputHandler:
             if self._check_cancelled():
                 return
 
-            if not self.ensure_input_focus(ele, log_failure=False):
-                self.physical_activate(ele)
-                time.sleep(0.08)
-                self.focus_to_end(ele)
-                time.sleep(0.05)
-                if not self.ensure_input_focus(ele):
-                    raise WorkflowError("clipboard_focus_failed")
+            if not self._ensure_input_focus_native(ele):
+                logger.warning("[STEALTH] 输入框原生聚焦失败，停止本次低熵输入")
+                raise WorkflowError("clipboard_focus_failed")
             
             # 仅在已有内容时执行全选，避免“空输入框也 Ctrl+A”的机器特征
             current_len = self.get_input_len(ele)
@@ -2065,13 +2107,9 @@ class TextInputHandler:
             ele.click()
             self._smart_delay(0.06, 0.12)
 
-            if not self.ensure_input_focus(ele, log_failure=False):
-                self.physical_activate(ele)
-                time.sleep(0.08)
-                self.focus_to_end(ele)
-                time.sleep(0.05)
-                if not self.ensure_input_focus(ele):
-                    raise WorkflowError("clipboard_focus_failed")
+            if not self._ensure_input_focus_native(ele):
+                logger.warning("[STEALTH] 输入框原生聚焦失败，停止本次低熵输入")
+                raise WorkflowError("clipboard_focus_failed")
         
             if self._check_cancelled():
                 return

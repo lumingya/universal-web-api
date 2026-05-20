@@ -251,6 +251,7 @@ class WorkflowExecutor:
                  image_config: Dict = None,
                  stream_config: Dict = None,
                  file_paste_config: Dict = None,
+                 site_advanced_config: Dict = None,
                  selectors: Dict = None,
                  session = None):
         self.tab = tab
@@ -264,6 +265,7 @@ class WorkflowExecutor:
         self._image_config = image_config or {}  
         self._stream_config = stream_config or {}
         self._file_paste_config = file_paste_config or {}
+        self._site_advanced_config = site_advanced_config or {}
         self._selectors = selectors or {}
         
         # 🆕 初始化双 Monitor（优先网络，回退 DOM）
@@ -280,6 +282,12 @@ class WorkflowExecutor:
         self._request_transport_bypass = False
         self._last_request_transport_sent = False
         self._last_send_attempt_state: Dict[str, Any] = {}
+        self._input_stability_wait_pending = False
+        self._last_fill_completed_at = 0.0
+        self._last_fill_text_length = 0
+        self._last_fill_after_new_chat = False
+        self._workflow_scope_depth = 0
+        self._workflow_focus_emulation_active = False
         
         # 检查是否启用网络监听模式
         self._stream_mode = stream_config.get("mode", "dom") if stream_config else "dom"
@@ -720,6 +728,189 @@ class WorkflowExecutor:
             ),
         }
 
+    def _get_input_stability_wait_settings(self) -> Dict[str, Any]:
+        advanced = self._site_advanced_config if isinstance(self._site_advanced_config, dict) else {}
+        timeout = self._coerce_float(
+            advanced.get("input_box_stability_wait_timeout"),
+            1.5,
+            minimum=0.2,
+        )
+        return {
+            "enabled": self._coerce_bool(
+                advanced.get("input_box_stability_wait_enabled"),
+                False,
+            ),
+            "after_new_chat_only": self._coerce_bool(
+                advanced.get("input_box_stability_wait_after_new_chat_only"),
+                True,
+            ),
+            "timeout": min(timeout, 10.0),
+            "stable_samples": 2,
+            "sample_interval": 0.18,
+        }
+
+    def _clear_target_element_cache(self, selector: str, target_key: str = "") -> None:
+        if selector:
+            self.finder.remove_from_cache(selector)
+
+        for fallback_selector in ElementFinder.FALLBACK_SELECTORS.get(target_key or "", []):
+            self.finder.remove_from_cache(fallback_selector)
+
+    @staticmethod
+    def _build_element_stability_signature(ele) -> Optional[tuple]:
+        if ele is None:
+            return None
+
+        backend_id = getattr(ele, "_backend_id", None)
+        tag = str(getattr(ele, "tag", "") or "")
+
+        try:
+            rect = getattr(ele, "rect", None)
+            location = getattr(rect, "location", None) or (0, 0)
+            size = getattr(rect, "size", None) or (0, 0)
+            return (
+                backend_id,
+                tag,
+                int(location[0]),
+                int(location[1]),
+                int(size[0]),
+                int(size[1]),
+            )
+        except Exception:
+            if backend_id is None and not tag:
+                return None
+            return (backend_id, tag)
+
+    def _wait_for_fill_target_stability(self, selector: str, target_key: str):
+        settings = self._get_input_stability_wait_settings()
+        if not settings["enabled"] or (target_key or "") != "input_box":
+            return None
+
+        if settings["after_new_chat_only"] and not self._input_stability_wait_pending:
+            return None
+
+        self._input_stability_wait_pending = False
+        stable_needed = max(1, int(settings["stable_samples"]))
+        sample_interval = max(0.05, float(settings["sample_interval"]))
+        deadline = time.time() + max(0.2, float(settings["timeout"]))
+        stable_count = 0
+        last_signature = None
+        latest_element = None
+
+        while time.time() < deadline:
+            if self._check_cancelled():
+                return latest_element
+
+            self._clear_target_element_cache(selector, target_key)
+            sample = self.finder.find_with_fallback(
+                selector,
+                target_key,
+                timeout=min(sample_interval, 0.3),
+            )
+            signature = self._build_element_stability_signature(sample)
+            latest_element = sample or latest_element
+
+            if signature is not None and signature == last_signature:
+                stable_count += 1
+            else:
+                stable_count = 1 if signature is not None else 0
+                last_signature = signature
+
+            if stable_count >= stable_needed and latest_element is not None:
+                logger.debug(
+                    "[FILL_STABLE] 输入框已稳定 "
+                    f"(target={target_key}, samples={stable_count}, timeout={settings['timeout']:.2f}s)"
+                )
+                return latest_element
+
+            time.sleep(sample_interval)
+
+        logger.debug_throttled(
+            f"fill.stability.{target_key or 'input'}",
+            f"[FILL_STABLE] 输入框稳定等待超时，继续沿用原流程: target={target_key}, timeout={settings['timeout']:.2f}s",
+            interval_sec=5.0,
+        )
+        return latest_element
+
+    def _note_fill_completion(self, text: str, *, after_new_chat: bool = False) -> None:
+        self._last_fill_completed_at = time.time()
+        self._last_fill_text_length = max(0, len(text or ""))
+        self._last_fill_after_new_chat = bool(after_new_chat)
+
+    def _get_recent_fill_send_wait_timeout(self, target_key: str, default_timeout: float) -> float:
+        if (target_key or "") != "send_btn":
+            return default_timeout
+
+        completed_at = float(getattr(self, "_last_fill_completed_at", 0.0) or 0.0)
+        if completed_at <= 0:
+            return default_timeout
+
+        fill_age = time.time() - completed_at
+        if fill_age < 0 or fill_age > 12.0:
+            return default_timeout
+
+        text_len = int(getattr(self, "_last_fill_text_length", 0) or 0)
+        if text_len <= 0:
+            return default_timeout
+
+        extra_timeout = 0.0
+        if bool(getattr(self, "_last_fill_after_new_chat", False)):
+            extra_timeout += 1.2
+        if text_len >= 20000:
+            extra_timeout += min(2.8, text_len / 60000.0)
+
+        if extra_timeout <= 0:
+            return default_timeout
+        return min(6.0, max(default_timeout, default_timeout + extra_timeout))
+
+    def _refresh_target_element(self, selector: str, target_key: str, *, timeout: float = 0.3):
+        if not selector and not target_key:
+            return None
+
+        self._clear_target_element_cache(selector, target_key)
+        try:
+            return self.finder.find_with_fallback(
+                selector,
+                target_key,
+                timeout=timeout,
+            )
+        except Exception:
+            return None
+
+    def _element_accepts_text_input(self, ele) -> bool:
+        if ele is None:
+            return False
+
+        try:
+            result = self.tab.run_js(
+                """
+                try {
+                    const el = arguments[0];
+                    if (!el || !el.isConnected) return false;
+                    const tag = (el.tagName || '').toLowerCase();
+                    return tag === 'textarea'
+                        || tag === 'input'
+                        || !!el.isContentEditable
+                        || el.getAttribute('contenteditable') === 'true';
+                } catch (e) {
+                    return false;
+                }
+                """,
+                ele,
+            )
+        except Exception:
+            return False
+        return bool(result)
+
+    def _resolve_active_text_input(self):
+        try:
+            active_ele = self.tab.run_js("return document.activeElement")
+        except Exception:
+            active_ele = None
+        if self._element_accepts_text_input(active_ele):
+            return active_ele
+        return None
+
     @contextmanager
     def _page_interaction_slot(self, action: str, target_key: str = ""):
         settings = self._get_page_interaction_settings()
@@ -758,8 +949,66 @@ class WorkflowExecutor:
         }
 
     @contextmanager
+    def workflow_execution_scope(self):
+        """Keep stealth focus emulation active for the whole workflow run."""
+        if not self.stealth_mode:
+            yield
+            return
+
+        self._workflow_scope_depth += 1
+        started_here = self._workflow_scope_depth == 1
+        if started_here:
+            self._begin_stealth_workflow_scope()
+
+        try:
+            yield
+        finally:
+            self._workflow_scope_depth = max(0, self._workflow_scope_depth - 1)
+            if started_here:
+                self._end_stealth_workflow_scope()
+
+    def _begin_stealth_workflow_scope(self):
+        logger.debug("[STEALTH] 工作流开始前启用焦点模拟")
+
+        try:
+            self.tab.run_cdp("Emulation.setFocusEmulationEnabled", enabled=True)
+            self._workflow_focus_emulation_active = True
+        except Exception as e:
+            self._workflow_focus_emulation_active = False
+            logger.debug_throttled(
+                "workflow.stealth_focus_emulation.start",
+                f"[STEALTH] 工作流级焦点模拟启用失败（忽略）: error={e}",
+                interval_sec=10.0,
+            )
+
+        try:
+            self.tab.run_cdp("Page.setWebLifecycleState", state="active")
+        except Exception as e:
+            logger.debug_throttled(
+                "workflow.stealth_lifecycle.start",
+                f"[STEALTH] 工作流开始前页面唤醒失败（忽略）: error={e}",
+                interval_sec=10.0,
+            )
+
+    def _end_stealth_workflow_scope(self):
+        if not self._workflow_focus_emulation_active:
+            return
+
+        try:
+            self.tab.run_cdp("Emulation.setFocusEmulationEnabled", enabled=False)
+        except Exception:
+            pass
+        finally:
+            self._workflow_focus_emulation_active = False
+
+    @contextmanager
     def _wake_page_for_interaction(self, label: str):
         settings = self._get_workflow_wake_settings()
+        if self.stealth_mode:
+            with self._wake_page_for_stealth_interaction(label):
+                yield
+            return
+
         if not settings["wake_before_interaction"]:
             yield
             return
@@ -790,6 +1039,45 @@ class WorkflowExecutor:
                 )
             except Exception:
                 pass
+            yield
+        finally:
+            if focus_emulation_enabled:
+                try:
+                    self.tab.run_cdp("Emulation.setFocusEmulationEnabled", enabled=False)
+                except Exception:
+                    pass
+
+    @contextmanager
+    def _wake_page_for_stealth_interaction(self, label: str):
+        """
+        低熵模式下的最小唤醒。
+
+        不强制激活标签页或切到前台，只使用不会抢焦点的 CDP 能力，
+        尽量减少后台页被冻结、坐标读取或鼠标事件派发被拖延的概率。
+        """
+        focus_emulation_enabled = False
+
+        try:
+            if not self._workflow_focus_emulation_active:
+                try:
+                    self.tab.run_cdp("Emulation.setFocusEmulationEnabled", enabled=True)
+                    focus_emulation_enabled = True
+                except Exception as e:
+                    logger.debug_throttled(
+                        f"interaction.stealth_focus_emulation.{label}",
+                        f"[STEALTH] 焦点模拟启用失败（忽略）: target={label}, error={e}",
+                        interval_sec=10.0,
+                    )
+
+            try:
+                self.tab.run_cdp("Page.setWebLifecycleState", state="active")
+            except Exception as e:
+                logger.debug_throttled(
+                    f"interaction.stealth_lifecycle.{label}",
+                    f"[STEALTH] 页面唤醒失败（忽略）: target={label}, error={e}",
+                    interval_sec=10.0,
+                )
+
             yield
         finally:
             if focus_emulation_enabled:
@@ -874,11 +1162,12 @@ class WorkflowExecutor:
             }
         return state if isinstance(state, dict) else {"interactable": False, "connected": False}
 
-    def _wait_for_element_interactable(self, ele, target_key: str = "") -> None:
+    def _wait_for_element_interactable(self, ele, selector: str = "", target_key: str = ""):
         settings = self._get_page_interaction_settings()
-        timeout = settings["ready_timeout"]
+        base_timeout = settings["ready_timeout"]
+        timeout = self._get_recent_fill_send_wait_timeout(target_key, base_timeout)
         if timeout <= 0:
-            return
+            return ele
 
         stable_needed = settings["stable_samples"]
         sample_interval = settings["sample_interval"]
@@ -886,16 +1175,34 @@ class WorkflowExecutor:
         stable_count = 0
         last_state: Optional[Dict[str, Any]] = None
         deadline = time.time() + timeout
+        latest_element = ele
+
+        if timeout > base_timeout + 0.01:
+            logger.debug_throttled(
+                f"interaction.wait.extend.{target_key or 'element'}",
+                "[INTERACT] 检测到刚完成新会话/长文本填充，放宽发送按钮等待 "
+                f"(target={target_key or '-'}, timeout={timeout:.2f}s)",
+                interval_sec=5.0,
+            )
 
         while time.time() < deadline:
             if self._check_cancelled():
-                return
+                return latest_element
 
-            current_state = self._sample_element_interactable_state(ele)
+            if target_key in {"input_box", "send_btn"} and (selector or target_key):
+                refreshed = self._refresh_target_element(
+                    selector,
+                    target_key,
+                    timeout=min(sample_interval, 0.3),
+                )
+                if refreshed is not None:
+                    latest_element = refreshed
+
+            current_state = self._sample_element_interactable_state(latest_element)
             if current_state.get("interactable"):
                 stable_count = stable_count + 1 if self._is_rect_stable(last_state, current_state, tolerance) else 1
                 if stable_count >= stable_needed:
-                    return
+                    return latest_element
             else:
                 stable_count = 0
 
@@ -907,6 +1214,7 @@ class WorkflowExecutor:
             f"[INTERACT] 元素稳定等待超时: target={target_key or '-'}, state={last_state}",
             interval_sec=5.0,
         )
+        return latest_element
 
     @staticmethod
     def _normalize_attachment_rule_list(raw_value) -> list:
@@ -1812,7 +2120,7 @@ class WorkflowExecutor:
                         break
                     found_element = True
 
-                    self._wait_for_element_interactable(ele, target_key)
+                    ele = self._wait_for_element_interactable(ele, selector, target_key)
 
                     if self.stealth_mode:
                         self._stealth_click_element(ele)
@@ -1825,6 +2133,8 @@ class WorkflowExecutor:
                     BrowserConstants.ACTION_DELAY_MIN,
                     BrowserConstants.ACTION_DELAY_MAX
                 )
+                if target_key in {"new_chat_btn", "new_chat", "new_conversation"}:
+                    self._input_stability_wait_pending = True
                 return
 
             except Exception as click_err:
@@ -2151,11 +2461,14 @@ class WorkflowExecutor:
         """
         if self._check_cancelled():
             return
+
+        click_started_at = time.perf_counter()
         
         # 1. 获取元素坐标（多重尝试）
         target = self._get_element_viewport_pos(ele)
         if target is None:
             raise Exception("[STEALTH] 无法通过原生链路获取元素坐标，拒绝注入 JS 与 ele.click() 降级")
+        target_ready_at = time.perf_counter()
         
         # 二维高斯落点：中心密集、边缘稀疏，更接近人类点击热力图
         sigma_x = 3.0
@@ -2177,6 +2490,7 @@ class WorkflowExecutor:
             from app.utils.human_mouse import _dispatch_mouse_move
             _dispatch_mouse_move(self.tab, click_x, click_y)
             self._mouse_pos = (click_x, click_y)
+        move_finished_at = time.perf_counter()
         
         if self._check_cancelled():
             return
@@ -2225,6 +2539,20 @@ class WorkflowExecutor:
         
         # 更新鼠标位置
         self._mouse_pos = (click_x, click_y)
+        click_finished_at = time.perf_counter()
+
+        coord_elapsed = target_ready_at - click_started_at
+        move_elapsed = move_finished_at - target_ready_at
+        click_elapsed = click_finished_at - move_finished_at
+        total_elapsed = click_finished_at - click_started_at
+
+        if total_elapsed > 1.2 or coord_elapsed > 0.8 or move_elapsed > 0.8 or click_elapsed > 0.8:
+            logger.warning(
+                "[STEALTH] 人类化点击耗时异常 "
+                f"(coord={coord_elapsed:.2f}s, move={move_elapsed:.2f}s, "
+                f"click={click_elapsed:.2f}s, total={total_elapsed:.2f}s, "
+                f"target=({target[0]}, {target[1]}), click=({click_x}, {click_y}))"
+            )
         
         logger.debug(f"[STEALTH] 人类化点击完成: ({click_x}, {click_y})")
     
@@ -3800,21 +4128,35 @@ class WorkflowExecutor:
             if not acquired or self._check_cancelled():
                 return
 
+            fill_after_new_chat = bool(
+                (target_key or "") == "input_box" and self._input_stability_wait_pending
+            )
             ele = self.finder.find_with_fallback(selector, target_key)
             if not ele:
                 if not optional:
                     raise ElementNotFoundError("找不到输入框")
                 return
 
+            ele = self._wait_for_element_interactable(ele, selector, target_key)
+            stabilized_ele = self._wait_for_fill_target_stability(selector, target_key)
+            if stabilized_ele is not None:
+                ele = stabilized_ele
+
             self._last_input_element = ele
             self._last_input_target_key = target_key or ""
             self._text_handler.set_active_input_context(selector=selector, target_key=target_key)
 
-            self._wait_for_element_interactable(ele, target_key)
-
             if self.stealth_mode:
                 self._stealth_click_element(ele)
                 time.sleep(random.uniform(0.04, 0.10))
+                active_input = self._resolve_active_text_input()
+                if active_input is not None:
+                    ele = active_input
+                else:
+                    refreshed_input = self._refresh_target_element(selector, target_key, timeout=0.25)
+                    if refreshed_input is not None:
+                        ele = refreshed_input
+                self._last_input_element = ele
                 self._text_handler.fill_via_clipboard_no_click(ele, text)
             else:
                 self._text_handler.fill_via_js(ele, text)
@@ -3824,6 +4166,9 @@ class WorkflowExecutor:
                 if images:
                     if not self._image_handler.paste_images(images):
                         raise WorkflowError("image_paste_unconfirmed")
+
+            self._last_input_element = self._resolve_active_text_input() or ele
+            self._note_fill_completion(text, after_new_chat=fill_after_new_chat)
         
         # ===== 隐身模式：粘贴后仅保留极短缓冲，避免节奏被故意拖慢 =====
         if self.stealth_mode and len(text) > 0:
