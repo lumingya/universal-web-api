@@ -1,5 +1,3 @@
-// ========== 元素定义 Schema ==========
-
 const DEFAULT_SELECTOR_DEFINITIONS = [
     {
         key: "input_box",
@@ -34,24 +32,6 @@ const DEFAULT_SELECTOR_DEFINITIONS = [
     {
         key: "generating_indicator",
         description: "生成中指示器（如停止按钮、加载动画，用于检测是否还在输出）",
-        enabled: false,
-        required: false
-    },
-    {
-        key: "upload_btn",
-        description: "打开文件选择器的上传按钮（点击后通常会弹出原生选文件）",
-        enabled: false,
-        required: false
-    },
-    {
-        key: "file_input",
-        description: "原生文件输入框（input[type=file]），用于直接注入文件",
-        enabled: false,
-        required: false
-    },
-    {
-        key: "drop_zone",
-        description: "支持拖拽上传的区域（某些站点不支持粘贴但支持拖拽）",
         enabled: false,
         required: false
     }
@@ -146,7 +126,7 @@ const BROWSER_CONSTANTS_SCHEMA = {
         }
     },
     text_input: {
-        label: '文本输入',
+        label: '长文本分块大小',
         icon: '⌨️',
         items: {
             TEXT_INPUT_CHUNK_SIZE: {
@@ -157,6 +137,24 @@ const BROWSER_CONSTANTS_SCHEMA = {
                 min: 1000,
                 step: 1000,
                 default: 30000
+            }
+        }
+    },
+    logging: {
+        label: '日志',
+        icon: '🪄',
+        items: {
+            LOG_INFO_CUTE_MODE: {
+                label: 'INFO 日志可爱化',
+                desc: '开启后，日志列表会优先显示润色后的 INFO 文案；原始日志不会丢失，鼠标悬停日志正文仍可查看原文。',
+                type: 'switch',
+                default: false
+            },
+            LOG_DEBUG_CUTE_MODE: {
+                label: 'DEBUG 日志可爱化',
+                desc: '开启后，日志列表会优先显示润色后的主要 DEBUG 文案；原始日志不会丢失，鼠标悬停日志正文仍可查看原文。',
+                type: 'switch',
+                default: false
             }
         }
     },
@@ -230,15 +228,7 @@ const BROWSER_CONSTANTS_SCHEMA = {
                 type: 'number',
                 min: 1,
                 default: 8
-            }
-        }
-    },
-    streamAdvanced: {
-        label: '流式监控（高级）',
-        icon: '⚙️',
-        collapsed: true,
-        desc: '这里只保留当前版本仍在生效的兼容参数，大多数站点不用改。',
-        items: {
+            },
             STREAM_CONTENT_SHRINK_TOLERANCE: {
                 label: '内容收缩容忍次数',
                 desc: '允许回复在小范围内回退多少字符仍不当成异常。用于容忍编辑器重排、占位符回收这类轻微波动。',
@@ -318,6 +308,134 @@ const BROWSER_CONSTANTS_SCHEMA = {
                 step: 0.1,
                 min: 0.2,
                 default: 1.0
+            },
+            NETWORK_DEBUG_CAPTURE_ENABLED: {
+                label: '启用响应调试捕获',
+                desc: '命中网络解析器时，只保存少量关键快照到 logs/network_parser_debug，方便开发新解析器，同时避免刷爆磁盘。',
+                type: 'switch',
+                default: false
+            },
+            NETWORK_DEBUG_CAPTURE_MAX_BODY_CHARS: {
+                label: '最大正文长度',
+                unit: '字符',
+                desc: '单次捕获最多保存多少字符的原始 body，防止超大流响应占满磁盘。',
+                type: 'number',
+                min: 2000,
+                step: 1000,
+                default: 50000
+            },
+            NETWORK_DEBUG_CAPTURE_MAX_FILES_PER_REQUEST: {
+                label: '单次请求最多文件数',
+                unit: '个',
+                desc: '每次请求只保留起始、首个有效内容、结束/报错这类关键快照，超过这个数量后不再继续落盘。',
+                type: 'number',
+                min: 2,
+                step: 1,
+                default: 3
+            },
+            NETWORK_DEBUG_CAPTURE_PARSER_FILTER: {
+                label: '解析器过滤',
+                desc: '留空表示捕获全部解析器；填 deepseek、qwen 这类 ID 时只捕获指定解析器。',
+                type: 'text',
+                default: ''
+            }
+        }
+    },
+    commandPeriodic: {
+        label: '命令调度',
+        icon: '⚡',
+        collapsed: true,
+        items: {
+            COMMAND_PERIODIC_CHECK_ENABLED: {
+                label: '启用全局周期检测',
+                desc: '控制命令系统的空闲标签页周期扫描开关',
+                type: 'switch',
+                default: true
+            },
+            COMMAND_PERIODIC_CHECK_INTERVAL_SEC: {
+                label: '全局检测间隔',
+                unit: '秒',
+                desc: '命令系统的默认周期检测间隔',
+                type: 'number',
+                step: 0.5,
+                min: 1,
+                default: 8.0
+            },
+            COMMAND_PERIODIC_CHECK_JITTER_SEC: {
+                label: '全局检测抖动',
+                unit: '秒',
+                desc: '为周期检测增加少量随机抖动，避免固定节奏碰撞',
+                type: 'number',
+                step: 0.2,
+                min: 0,
+                default: 2.0
+            }
+        }
+    },
+    tabPool: {
+        label: '标签页池',
+        icon: '🗂️',
+        collapsed: true,
+        items: {
+            TAB_POOL_MAX_TABS: {
+                label: '最大标签页数',
+                desc: '超过后不再自动纳入新的标签页',
+                type: 'number',
+                min: 1,
+                default: 5
+            },
+            TAB_POOL_MIN_TABS: {
+                label: '最小保留标签页数',
+                desc: '标签页池尽量维持的最小可用数量',
+                type: 'number',
+                min: 1,
+                default: 1
+            },
+            TAB_POOL_IDLE_TIMEOUT: {
+                label: '空闲超时',
+                unit: '秒',
+                desc: '标签页空闲多久后允许被回收或重置',
+                type: 'number',
+                min: 10,
+                default: 300
+            },
+            TAB_POOL_ACQUIRE_TIMEOUT: {
+                label: '占用等待超时',
+                unit: '秒',
+                desc: '获取标签页会话的最大等待时间',
+                type: 'number',
+                min: 1,
+                default: 60
+            },
+            TAB_POOL_STUCK_TIMEOUT: {
+                label: '卡死强制释放超时',
+                unit: '秒',
+                desc: '标签页忙碌超过该时长后，系统会尝试取消任务并强制释放',
+                type: 'number',
+                min: 10,
+                default: 180
+            }
+        }
+    },
+    conversation: {
+        label: '对话复用',
+        icon: '💬',
+        collapsed: true,
+        items: {
+            CONVERSATION_TIMEOUT_THRESHOLD: {
+                label: '对话复用窗口',
+                unit: '秒',
+                desc: '大于 0 时，同一标签页在这个时间窗口内会复用当前对话；设为 0 表示关闭复用（默认）。',
+                type: 'number',
+                min: 0,
+                step: 10,
+                default: 0
+            },
+            FORCE_NEW_CONVERSATION: {
+                label: '强制新建对话',
+                desc: '开启后，即使设置了复用窗口，也始终强制新建对话。',
+                type: 'switch',
+                default: false
             }
         }
     }
@@ -326,6 +444,7 @@ const BROWSER_CONSTANTS_SCHEMA = {
 // 环境变量 Schema
 const ENV_CONFIG_SCHEMA = {
     service: {
+        apply: 'service',
         label: '服务配置',
         icon: '🖥️',
         items: {
@@ -342,6 +461,12 @@ const ENV_CONFIG_SCHEMA = {
                 max: 65535,
                 default: 8199
             },
+            PUBLIC_BASE_URL: {
+                label: '公开访问地址',
+                desc: '用于生成返回给客户端的可访问链接，例如图片下载地址',
+                type: 'text',
+                default: 'http://127.0.0.1:8199'
+            },
             APP_DEBUG: {
                 label: '调试模式',
                 desc: '开启 API 文档和详细错误',
@@ -357,6 +482,7 @@ const ENV_CONFIG_SCHEMA = {
         }
     },
     auth: {
+        apply: 'service',
         label: '认证配置',
         icon: '🔐',
         items: {
@@ -374,6 +500,7 @@ const ENV_CONFIG_SCHEMA = {
         }
     },
     cors: {
+        apply: 'service',
         label: 'CORS 配置',
         icon: '🌐',
         items: {
@@ -391,6 +518,7 @@ const ENV_CONFIG_SCHEMA = {
         }
     },
     browser: {
+        apply: 'launcher',
         label: '浏览器配置',
         icon: '🌍',
         items: {
@@ -400,10 +528,35 @@ const ENV_CONFIG_SCHEMA = {
                 min: 1024,
                 max: 65535,
                 default: 9222
+            },
+            BROWSER_PATH: {
+                label: '自定义浏览器路径',
+                desc: '可选，留空时自动检测 Chrome、Edge、Brave 等浏览器',
+                type: 'text',
+                default: ''
+            },
+            BROWSER_PROFILE_DIR: {
+                label: '浏览器配置目录',
+                desc: '留空时使用项目内的 chrome_profile 目录',
+                type: 'text',
+                default: ''
+            },
+            BROWSER_PROFILE_NAME: {
+                label: '浏览器配置名称',
+                desc: '例如 Default、Profile 1',
+                type: 'text',
+                default: ''
+            },
+            PROFILE_CLEAN_ENABLED: {
+                label: '启动时清理浏览器缓存',
+                desc: '每次启动脚本时自动清理 ShaderCache、GPUCache 等垃圾缓存，保留登录态和 Cookie',
+                type: 'switch',
+                default: false
             }
         }
     },
     proxy: {
+        apply: 'launcher',
         label: '代理配置',
         icon: '🔀',
         items: {
@@ -428,6 +581,7 @@ const ENV_CONFIG_SCHEMA = {
         }
     },
     dashboard: {
+        apply: 'service',
         label: 'Dashboard 配置',
         icon: '📊',
         items: {
@@ -443,7 +597,27 @@ const ENV_CONFIG_SCHEMA = {
             }
         }
     },
+    update: {
+        apply: 'launcher',
+        label: '更新配置',
+        icon: '🔄',
+        items: {
+            AUTO_UPDATE_ENABLED: {
+                label: '启用自动更新',
+                desc: '启动脚本会在启动前检查并应用更新',
+                type: 'switch',
+                default: true
+            },
+            GITHUB_REPO: {
+                label: 'GitHub 仓库',
+                desc: '自动更新检查使用的仓库，格式为 owner/repo',
+                type: 'text',
+                default: 'lumingya/universal-web-api'
+            }
+        }
+    },
     ai: {
+        apply: 'service',
         label: 'AI 分析配置',
         icon: '🤖',
         desc: '辅助 AI 用于自动分析页面结构',
@@ -457,6 +631,13 @@ const ENV_CONFIG_SCHEMA = {
                 label: 'API 地址',
                 type: 'text',
                 default: 'http://127.0.0.1:5104/v1'
+            },
+            HELPER_API_PROVIDER: {
+                label: 'API 提供商',
+                desc: '支持 auto、openai、gemini、claude',
+                type: 'select',
+                options: ['auto', 'openai', 'gemini', 'claude'],
+                default: 'auto'
             },
             HELPER_MODEL: {
                 label: '模型名称',
@@ -541,19 +722,21 @@ const ENV_CONFIG_SCHEMA = {
         }
     },
     files: {
+        apply: 'service',
         label: '配置文件',
         icon: '📁',
         items: {
             SITES_CONFIG_FILE: {
                 label: '站点配置文件路径',
                 type: 'text',
-                default: 'sites.json'
+                default: 'config/sites.json'
             }
         }
     }
 };
 
+// ========== Vue 应用 ==========
 
 window.DEFAULT_SELECTOR_DEFINITIONS = DEFAULT_SELECTOR_DEFINITIONS;
-window.BROWSER_CONSTANTS_SCHEMA = BROWSER_CONSTANTS_SCHEMA;
-window.ENV_CONFIG_SCHEMA = ENV_CONFIG_SCHEMA;
+window.BROWSER_CONSTANTS_SCHEMA = BROWSER_CONSTANTS_SCHEMA;
+window.ENV_CONFIG_SCHEMA = ENV_CONFIG_SCHEMA;

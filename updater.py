@@ -43,6 +43,15 @@ DEFAULT_PRESERVE = get_default_update_preserve_patterns()
 SITES_CONFIG_PATH = Path("config") / "sites.json"
 COMMANDS_CONFIG_PATH = Path("config") / "commands.json"
 COMMAND_PRESERVE_FIELDS = ("enabled", "group_name", "last_triggered", "trigger_count")
+BACKUP_EXCLUDE_NAMES = {
+    ".git",
+    ".update_temp",
+    "__pycache__",
+    "venv",
+    "logs",
+    "temp",
+    "chrome_profile",
+}
 
 class Colors:
     CYAN = '\033[96m'
@@ -74,15 +83,11 @@ def log_debug(msg: str):
         print(f"[{colored('DEBUG', Colors.YELLOW)}] {msg}")
 
 def create_ssl_context():
-    """创建宽松的 SSL 上下文"""
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    return ctx
+    """创建默认的 SSL 上下文，启用证书链和主机名校验。"""
+    return ssl.create_default_context()
 
 def get_opener():
-    """创建支持重定向的 opener"""
-    # 创建支持 SSL 的 handler
+    """创建使用默认 TLS 校验的 opener。"""
     https_handler = urllib.request.HTTPSHandler(context=create_ssl_context())
     opener = urllib.request.build_opener(https_handler)
     return opener
@@ -102,13 +107,9 @@ def http_request_with_retry(url: str, headers: dict = None, timeout: int = API_T
             
             req = urllib.request.Request(url, headers=headers)
             
-            try:
-                with urllib.request.urlopen(req, timeout=timeout) as response:
-                    return response.read()
-            except ssl.SSLError:
-                opener = get_opener()
-                with opener.open(req, timeout=timeout) as response:
-                    return response.read()
+            opener = get_opener()
+            with opener.open(req, timeout=timeout) as response:
+                return response.read()
                     
         except IncompleteRead as e:
             log_warning(f"数据读取不完整: {len(e.partial)} bytes")
@@ -268,11 +269,9 @@ def download_file_robust(url: str, dest_path: Path) -> bool:
             }
             req = urllib.request.Request(url, headers=headers)
             
-            # 使用自定义 opener 处理 SSL 和重定向
-            ctx = create_ssl_context()
-            
-            # 打开连接
-            response = urllib.request.urlopen(req, timeout=DOWNLOAD_TIMEOUT, context=ctx)
+            # 使用默认 TLS 校验与标准重定向处理
+            opener = get_opener()
+            response = opener.open(req, timeout=DOWNLOAD_TIMEOUT)
             
             # 获取最终 URL（处理重定向后）
             final_url = response.geturl()
@@ -456,20 +455,33 @@ def download_file_robust(url: str, dest_path: Path) -> bool:
     
     return False
 
+def _iter_project_backup_items(project_dir: Path, backup_dir: Optional[Path] = None) -> list[Path]:
+    items = []
+    backup_name = backup_dir.name if backup_dir else ""
+    for item in project_dir.iterdir():
+        name = item.name
+        if name in BACKUP_EXCLUDE_NAMES:
+            continue
+        if backup_name and name == backup_name:
+            continue
+        if name.startswith("backup_"):
+            continue
+        items.append(item)
+    return items
+
 def backup_current(project_dir: Path) -> Optional[Path]:
-    """备份当前配置"""
+    """备份当前项目快照，便于更新失败后回滚。"""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_dir = project_dir / f"backup_{timestamp}"
     
     try:
-        backup_items = ['.env', 'config', 'VERSION']
         backup_dir.mkdir(exist_ok=True)
+        backup_items = _iter_project_backup_items(project_dir, backup_dir)
         
         count = 0
-        for item in backup_items:
-            src = project_dir / item
+        for src in backup_items:
             if src.exists():
-                dst = backup_dir / item
+                dst = backup_dir / src.name
                 if src.is_dir():
                     shutil.copytree(src, dst)
                 else:
@@ -485,6 +497,43 @@ def backup_current(project_dir: Path) -> Optional[Path]:
     except Exception as e:
         log_warning(f"备份失败: {e}")
         return None
+
+def restore_from_backup(project_dir: Path, backup_dir: Optional[Path]) -> bool:
+    """从备份目录恢复项目快照。"""
+    if not backup_dir or not backup_dir.exists():
+        log_error("没有可用备份，无法回滚")
+        return False
+
+    try:
+        restore_items = [item for item in backup_dir.iterdir()]
+        restored = 0
+        for src in restore_items:
+            if not src.exists():
+                continue
+
+            dst = project_dir / src.name
+            if dst.exists():
+                if dst.is_dir():
+                    shutil.rmtree(dst)
+                else:
+                    dst.unlink()
+
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            if src.is_dir():
+                shutil.copytree(src, dst)
+            else:
+                shutil.copy2(src, dst)
+            restored += 1
+
+        if restored <= 0:
+            log_error(f"备份目录中没有可恢复项目: {backup_dir}")
+            return False
+
+        log_success(f"已从备份回滚 {restored} 项: {backup_dir.name}")
+        return True
+    except Exception as e:
+        log_error(f"回滚失败: {e}")
+        return False
 
 def should_preserve(path: Path, preserve_patterns: list) -> bool:
     """检查是否应保留"""
@@ -518,24 +567,23 @@ def load_commands_config(path: Path) -> list:
         if isinstance(data, list):
             return [cmd for cmd in data if isinstance(cmd, dict)]
 
-        log_warning(f"命令配置格式无效，按空列表处理: {path}")
-        return []
+        raise ValueError(f"命令配置格式无效: {path}")
     except Exception as e:
-        log_warning(f"加载命令配置失败，按空列表处理: {path} ({e})")
-        return []
+        raise RuntimeError(f"加载命令配置失败: {path} ({e})") from e
 
 def load_sites_config(path: Path) -> dict:
-    """加载站点配置，兼容空文件和 JSON 异常。"""
+    """加载站点配置。解析失败时中断合并，避免误覆盖本地数据。"""
     if not path.exists():
         return {}
 
     try:
         with open(path, 'r', encoding='utf-8') as f:
             data = json.load(f)
-        return data if isinstance(data, dict) else {}
+        if isinstance(data, dict):
+            return data
+        raise ValueError(f"站点配置格式无效: {path}")
     except Exception as e:
-        log_warning(f"加载站点配置失败，按空对象处理: {path} ({e})")
-        return {}
+        raise RuntimeError(f"加载站点配置失败: {path} ({e})") from e
 
 def merge_site_records(existing: dict, incoming: dict) -> dict:
     """递归合并站点配置，优先保留用户本地值。"""
@@ -835,15 +883,20 @@ def check_and_update(repo: str = None, force: bool = False, preserve: list = Non
     
     zip_path = download_dir / "update.zip"
     
+    backup_dir = None
     try:
         if not download_file_robust(download_url, zip_path):
             log_error("下载失败")
             return False
         
         print()
-        backup_current(project_dir)
+        backup_dir = backup_current(project_dir)
+        if backup_dir is None:
+            log_error("更新前备份失败，已中止更新")
+            return False
         
         if not extract_and_update(zip_path, project_dir, preserve):
+            restore_from_backup(project_dir, backup_dir)
             return False
         
         update_version_file(project_dir, latest_version)
@@ -855,6 +908,10 @@ def check_and_update(repo: str = None, force: bool = False, preserve: list = Non
         print()
         
         return True
+    except Exception:
+        if backup_dir is not None:
+            restore_from_backup(project_dir, backup_dir)
+        raise
         
     finally:
         # 清理临时目录
@@ -944,15 +1001,20 @@ def update_to_version(tag: str, repo: str = None, preserve: list = None) -> bool
     download_dir.mkdir(exist_ok=True)
     zip_path = download_dir / "update.zip"
 
+    backup_dir = None
     try:
         if not download_file_robust(download_url, zip_path):
             log_error("下载失败")
             return False
 
         print()
-        backup_current(project_dir)
+        backup_dir = backup_current(project_dir)
+        if backup_dir is None:
+            log_error("切换版本前备份失败，已中止操作")
+            return False
 
         if not extract_and_update(zip_path, project_dir, preserve):
+            restore_from_backup(project_dir, backup_dir)
             return False
 
         # 写入目标版本号
@@ -966,6 +1028,10 @@ def update_to_version(tag: str, repo: str = None, preserve: list = None) -> bool
         print()
 
         return True
+    except Exception:
+        if backup_dir is not None:
+            restore_from_backup(project_dir, backup_dir)
+        raise
 
     finally:
         if download_dir.exists():

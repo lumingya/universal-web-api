@@ -1,19 +1,26 @@
 // Dashboard methods extracted from dashboard.js
 (() => {
-    const DEFAULT_SELECTOR_DEFINITIONS = window.DEFAULT_SELECTOR_DEFINITIONS || [];
-    const BROWSER_CONSTANTS_SCHEMA = window.BROWSER_CONSTANTS_SCHEMA || {};
-    const ENV_CONFIG_SCHEMA = window.ENV_CONFIG_SCHEMA || {};
+    const DEFAULT_SELECTOR_DEFINITIONS = window.DEFAULT_SELECTOR_DEFINITIONS || []
+    const BROWSER_CONSTANTS_SCHEMA = window.BROWSER_CONSTANTS_SCHEMA || {}
+    const ENV_CONFIG_SCHEMA = window.ENV_CONFIG_SCHEMA || {}
 
     window.DashboardMethods = {
-
         async initializeDashboard() {
-            await Promise.all([
-                this.loadConfig(true),
-                this.loadHealthStatus({ silent: true })
-            ])
+            await this.loadConfig(true)
 
             this.startLogPolling()
+            await this.loadHealthStatus({ silent: true, timeoutMs: 2500 }).catch(() => false)
+            this.startRequestHistoryPolling()
             this.ensureTabDataLoaded(this.activeTab)
+
+            // 每 2 秒刷新系统状态
+            this.fetchSystemStats({ timeoutMs: 5000 }).catch(() => {})
+            if (this.systemStatsTimer) {
+                clearInterval(this.systemStatsTimer)
+            }
+            this.systemStatsTimer = setInterval(() => {
+                this.fetchSystemStats({ timeoutMs: 5000 }).catch(() => {})
+            }, 15000)
         },
 
         startLogPolling() {
@@ -34,6 +41,40 @@
 
             clearInterval(this.logPollingTimer)
             this.logPollingTimer = null
+        },
+
+        markTabAsVisited(tab) {
+            const key = String(tab || '').trim()
+            if (!key || this.mountedTabs[key]) {
+                return
+            }
+            this.mountedTabs = {
+                ...this.mountedTabs,
+                [key]: true
+            }
+        },
+
+        shouldRenderTab(tab) {
+            return this.activeTab === tab || !!this.mountedTabs[tab]
+        },
+
+        startRequestHistoryPolling() {
+            if (this.requestHistoryTimer) {
+                clearInterval(this.requestHistoryTimer)
+            }
+            this.requestHistoryTimer = setInterval(() => {
+                if (this.activeTab === 'monitor' && document.visibilityState !== 'hidden') {
+                    this.fetchRequestHistory({ silent: true, ifChanged: true }).catch(() => {})
+                }
+            }, 3000)
+        },
+
+        stopRequestHistoryPolling() {
+            if (!this.requestHistoryTimer) {
+                return
+            }
+            clearInterval(this.requestHistoryTimer)
+            this.requestHistoryTimer = null
         },
         // ========== 初始化 ==========
 
@@ -90,6 +131,7 @@
 
         async apiRequest(url, options = {}) {
             const token = localStorage.getItem('api_token')
+            const timeoutMs = Number(options.timeoutMs || 0)
             const headers = {
                 'Content-Type': 'application/json',
                 ...options.headers
@@ -99,9 +141,22 @@
                 headers['Authorization'] = 'Bearer ' + token
             }
 
+            const fetchOptions = { ...options }
+            delete fetchOptions.timeoutMs
+
+            let timeoutId = null
+            let controller = null
+            if (timeoutMs > 0 && typeof AbortController !== 'undefined') {
+                controller = new AbortController()
+                fetchOptions.signal = controller.signal
+                timeoutId = setTimeout(() => {
+                    controller.abort()
+                }, timeoutMs)
+            }
+
             try {
                 const response = await fetch(url, {
-                    ...options,
+                    ...fetchOptions,
                     headers
                 })
 
@@ -118,10 +173,17 @@
 
                 return await response.json()
             } catch (error) {
+                if (error && error.name === 'AbortError') {
+                    throw new Error('REQUEST_TIMEOUT')
+                }
                 if (error.message !== 'UNAUTHORIZED') {
                     console.error('API 请求错误:', error)
                 }
                 throw error
+            } finally {
+                if (timeoutId) {
+                    clearTimeout(timeoutId)
+                }
             }
         },
 
@@ -133,12 +195,13 @@
 
             this.isLoading = true
             try {
-                const data = await this.apiRequest('/api/config')
+                const data = await this.apiRequest('/api/config', { timeoutMs: 5000 })
                 this.sites = this.normalizeConfig(data)
 
                 if (!this.currentDomain && Object.keys(this.sites).length > 0) {
                     this.currentDomain = Object.keys(this.sites)[0]
                 }
+                saveStoredSitesCache(this.sites, this.currentDomain)
 
                 if (!silent) {
                     this.notify('配置已刷新 (' + Object.keys(this.sites).length + ' 个站点)', 'success')
@@ -146,7 +209,9 @@
                 return true
             } catch (error) {
                 this.notify('加载配置失败: ' + error.message, 'error')
-                this.sites = {}
+                if (Object.keys(this.sites || {}).length === 0) {
+                    this.sites = {}
+                }
                 return false
             } finally {
                 this.isLoading = false
@@ -169,39 +234,6 @@
                 this.notify('保存失败: ' + error.message, 'error')
             } finally {
                 this.isSaving = false
-            }
-        },
-
-        async refreshStatus() {
-            const [configOk, healthOk] = await Promise.all([
-                this.loadConfig(true),
-                this.loadHealthStatus()
-            ])
-
-            if (configOk || healthOk) {
-                this.notify('状态已刷新', 'success')
-            } else {
-                this.notify('刷新失败', 'error')
-            }
-        },
-
-        async loadHealthStatus({ silent = false } = {}) {
-            try {
-                const health = await this.apiRequest('/health')
-                this.browserStatus = health.browser || {}
-                this.authEnabled = health.config?.auth_enabled || false
-                return true
-            } catch (error) {
-                if (error.message === 'UNAUTHORIZED') {
-                    this.authEnabled = true
-                    return true
-                }
-
-                console.error('状态检查失败:', error)
-                if (!silent) {
-                    this.notify('状态检查失败: ' + error.message, 'error')
-                }
-                return false
             }
         },
 
@@ -350,6 +382,10 @@
             if (!this.currentDomain || !this.currentConfig) return;
 
             const pc = this.getActivePresetConfig()
+            const previousImageConfig = pc
+                ? JSON.parse(JSON.stringify(pc.image_extraction || {}))
+                : null
+
             if (pc) pc.image_extraction = newConfig;
 
             try {
@@ -359,23 +395,14 @@
                     method: 'PUT',
                     body: JSON.stringify(payload)
                 });
-                this.notify('图片配置已保存', 'success');
+                this.notify('多模态提取配置已保存', 'success');
             } catch (error) {
+                if (pc) {
+                    pc.image_extraction = previousImageConfig || {}
+                }
                 console.error('保存图片配置失败:', error);
-                this.notify('保存图片配置失败: ' + error.message, 'error');
+                this.notify('保存多模态提取配置失败: ' + error.message, 'error');
             }
-        },
-
-        // 🆕 测试图片提取
-        async testImageExtraction() {
-            if (!this.currentDomain) {
-                this.notify('请先选择站点', 'warning'); // 适配当前的 notify 方法
-                return;
-            }
-
-            this.notify('图片提取测试功能开发中...', 'info');
-            // TODO: 实现测试逻辑
-            // 可以发送一个测试请求，然后显示返回的图片
         },
 
         // 🆕 重新加载当前站点配置（应用预设后调用）
@@ -396,68 +423,171 @@
                 this.notify('加载失败: ' + error.message, 'error');
             }
         },
+
+        async openMainCompareSummaryDialog() {
+            this.showMainCompareSummaryDialog = true;
+            await this.loadMainCompareSummary();
+        },
+
+        closeMainCompareSummaryDialog() {
+            this.showMainCompareSummaryDialog = false;
+        },
+
+        async loadMainCompareSummary() {
+            this.mainCompareSummaryLoading = true;
+            this.mainCompareSummaryError = '';
+            try {
+                const data = await this.apiRequest('/api/config/compare-main-summary');
+                this.mainCompareSummaryItems = Array.isArray(data.items) ? data.items : [];
+                this.mainCompareSummaryCounts = {
+                    same: 0,
+                    different: 0,
+                    local_only_preset: 0,
+                    local_only_site: 0,
+                    main_only_preset: 0,
+                    main_only_site: 0,
+                    ...(data.counts || {})
+                };
+                this.mainCompareSummaryPath = String(data.path || 'config/sites.json').trim() || 'config/sites.json';
+                return true;
+            } catch (error) {
+                this.mainCompareSummaryItems = [];
+                this.mainCompareSummaryError = error.message;
+                return false;
+            } finally {
+                this.mainCompareSummaryLoading = false;
+            }
+        },
+
+        getMainCompareStatusClass(status) {
+            if (status === 'different') {
+                return 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300';
+            }
+            if (status === 'local_only_preset') {
+                return 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-900/30 dark:text-blue-300';
+            }
+            if (status === 'local_only_site') {
+                return 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-800 dark:bg-rose-900/30 dark:text-rose-300';
+            }
+            return 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300';
+        },
+
+        getMainCompareStatusText(status) {
+            if (status === 'different') return '字段不同';
+            if (status === 'local_only_preset') return '本地自定义预设';
+            if (status === 'local_only_site') return '本地自定义站点';
+            return '与官方一致';
+        },
+
+        async waitForConfigTabRef() {
+            for (let attempt = 0; attempt < 30; attempt++) {
+                await this.$nextTick();
+                const ref = this.$refs.configTab;
+                if (ref && typeof ref.openConfigCompareForPreset === 'function') {
+                    return ref;
+                }
+                await new Promise(resolve => setTimeout(resolve, 60));
+            }
+            return null;
+        },
+
+        async openMainCompareDetail(item) {
+            if (!item || !item.domain) {
+                return;
+            }
+
+            this.showMainCompareSummaryDialog = false;
+            this.activeTab = 'config';
+            this.currentDomain = item.domain;
+
+            const configTab = await this.waitForConfigTabRef();
+            if (!configTab) {
+                this.notify('配置面板尚未准备好', 'error');
+                return;
+            }
+
+            const targetPreset = String(item.local_preset_name || '').trim();
+            await configTab.openConfigCompareForPreset(targetPreset);
+        },
         // ========== 日志相关 ==========
 
         async pollLogs() {
-            if (this.pauseLogs) return;
+            if (this.pauseLogs || document.visibilityState === 'hidden') return;
 
             try {
-                const result = await this.apiRequest('/api/logs?since=' + this.lastLogTimestamp);
+                const result = await this.apiRequest('/api/logs?after_seq=' + this.lastLogSeq);
 
                 if (result.logs && result.logs.length > 0) {
-                    result.logs.forEach(log => {
-                        this.logs.push({
-                            id: Date.now() + Math.random(),
+                    const nextLogs = result.logs.map(log => {
+                        const messageText = log.message_text || log.display_message || log.message || '';
+                        const kind = log.kind || log.level;
+                        return {
+                            id: log.seq || (Date.now() + Math.random()),
+                            seq: log.seq || 0,
                             timestamp: new Date(log.timestamp * 1000).toLocaleTimeString() + '.' +
                                 String(Math.floor((log.timestamp % 1) * 1000)).padStart(3, '0'),
-                            level: this.parseLogLevel(log.message),
-                            message: log.message
-                        });
-                    });
-
-                    if (this.logs.length > 500) {
-                        this.logs = this.logs.slice(-500);
-                    }
-
-                    this.$nextTick(() => {
-                        if (this.$refs.logContainer) {
-                            this.$refs.logContainer.scrollTop = this.$refs.logContainer.scrollHeight;
+                            level: this.normalizeLogLevel(kind, messageText),
+                            rawLevel: String(log.level || '').toUpperCase(),
+                            kind: String(kind || '').toUpperCase(),
+                            logger: log.logger || '',
+                            requestId: log.request_id || 'SYSTEM',
+                            message: log.display_message || log.message || messageText,
+                            messageText,
+                            originalMessageText: log.original_message_text || messageText,
+                            messageAlias: log.message_alias || ''
                         }
                     });
-
-                    this.lastLogTimestamp = result.timestamp;
+                    this.logs = this.logs.concat(nextLogs).slice(-500);
                 }
+                this.lastLogSeq = Number(result.next_seq || this.lastLogSeq || 0);
+                this.lastLogTimestamp = Number(result.timestamp || this.lastLogTimestamp || 0);
             } catch (error) {
                 console.debug('日志轮询失败:', error.message);
             }
         },
 
-        parseLogLevel(message) {
-            if (message.includes('[AI]') || message.includes('AI')) return 'AI';
-            if (message.includes('[ERROR]') || message.includes('ERROR')) return 'ERROR';
-            if (message.includes('[WARN]') || message.includes('WARNING')) return 'WARN';
+        normalizeLogLevel(level, message) {
+            const normalized = String(level || '').toUpperCase();
+            if (normalized === 'WARNING') return 'WARN';
+            if (normalized === 'CRITICAL') return 'ERROR';
+            if (normalized === 'SUCCESS') return 'OK';
+            if (normalized === 'DEBUG' || normalized === 'WARN' || normalized === 'ERROR') {
+                return normalized;
+            }
+
+            if (normalized === 'INFO') {
+                if (message.includes('[AI]')) return 'AI';
+                if (message.includes('[OK]') || message.includes('[SUCCESS]') || message.includes('✅')) return 'OK';
+                return 'INFO';
+            }
+
+            if (message.includes('[AI]')) return 'AI';
+            if (message.includes('[ERROR]')) return 'ERROR';
+            if (message.includes('[WARN]') || message.includes('[WARNING]')) return 'WARN';
             if (message.includes('[OK]') || message.includes('[SUCCESS]') || message.includes('✅')) return 'OK';
             return 'INFO';
         },
 
         getLogColorClass(level) {
             const colors = {
-                'INFO': 'bg-gray-50 dark:bg-gray-900',
+                'INFO': 'bg-green-50 dark:bg-green-900/20',
                 'AI': 'bg-purple-50 dark:bg-purple-900/20',
                 'OK': 'bg-green-50 dark:bg-green-900/20',
                 'WARN': 'bg-yellow-50 dark:bg-yellow-900/20',
-                'ERROR': 'bg-red-50 dark:bg-red-900/20'
+                'ERROR': 'bg-red-50 dark:bg-red-900/20',
+                'KEY': 'bg-sky-50 dark:bg-sky-900/20'
             };
             return colors[level] || colors['INFO'];
         },
 
         getLogLevelClass(level) {
             const colors = {
-                'INFO': 'text-gray-600 dark:text-gray-400',
+                'INFO': 'text-green-600 dark:text-green-400',
                 'AI': 'text-purple-600 dark:text-purple-400',
                 'OK': 'text-green-600 dark:text-green-400',
                 'WARN': 'text-yellow-600 dark:text-yellow-400',
-                'ERROR': 'text-red-600 dark:text-red-400'
+                'ERROR': 'text-red-600 dark:text-red-400',
+                'KEY': 'text-sky-500 dark:text-sky-300'
             };
             return colors[level] || colors['INFO'];
         },
@@ -465,7 +595,6 @@
         clearLogs() {
             if (confirm('确定清除所有日志吗？')) {
                 this.logs = [];
-                this.lastLogTimestamp = Date.now() / 1000;
 
                 this.apiRequest('/api/logs', { method: 'DELETE' })
                     .catch(() => { });
@@ -614,6 +743,42 @@
             return true;
         },
 
+        mergeSiteConfigs(existingSite, importedSite) {
+            const normalizedImported = this.normalizeConfig({ imported: importedSite || {} }).imported
+            if (!normalizedImported) {
+                return existingSite || null
+            }
+
+            if (!existingSite) {
+                return normalizedImported
+            }
+
+            const normalizedExisting = this.normalizeConfig({ existing: existingSite }).existing || {
+                default_preset: '主预设',
+                presets: {}
+            }
+
+            const mergedPresets = {
+                ...(normalizedExisting.presets || {}),
+                ...(normalizedImported.presets || {})
+            }
+
+            let mergedDefault = normalizedImported.default_preset
+            if (!mergedDefault || !mergedPresets[mergedDefault]) {
+                mergedDefault = normalizedExisting.default_preset
+            }
+            if (!mergedDefault || !mergedPresets[mergedDefault]) {
+                mergedDefault = mergedPresets['主预设'] ? '主预设' : (Object.keys(mergedPresets)[0] || '主预设')
+            }
+
+            return {
+                ...normalizedExisting,
+                ...normalizedImported,
+                presets: mergedPresets,
+                default_preset: mergedDefault
+            }
+        },
+
         async executeImport() {
             if (!this.importedConfig) return;
 
@@ -632,14 +797,19 @@
                     return;
                 }
 
-                // 检查是否会覆盖
-                if (this.sites[domain] && this.importMode !== 'replace') {
-                    if (!confirm('站点 "' + domain + '" 已存在，是否覆盖？')) {
+                const exists = !!this.sites[domain];
+                if (exists) {
+                    const message = this.importMode === 'replace'
+                        ? '站点 "' + domain + '" 已存在，将完整替换该站点的当前配置，是否继续？'
+                        : '站点 "' + domain + '" 已存在，将按预设合并导入，同名预设会被覆盖，是否继续？';
+                    if (!confirm(message)) {
                         return;
                     }
                 }
 
-                this.sites[domain] = normalizedSite;
+                this.sites[domain] = this.importMode === 'replace'
+                    ? normalizedSite
+                    : this.mergeSiteConfigs(this.sites[domain], normalizedSite);
                 this.currentDomain = domain;
 
                 try {
@@ -738,6 +908,187 @@
             this.exportSingleSite(this.currentDomain);
         },
 
+        triggerSettingsBackupImport() {
+            if (this.$refs.backupImportInput) {
+                this.$refs.backupImportInput.click();
+            }
+        },
+
+        handleSettingsBackupImportFile(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = async (e) => {
+                try {
+                    const payload = JSON.parse(e.target.result);
+                    await this.importSettingsBackup(payload);
+                } catch (error) {
+                    this.notify('完整备份导入失败: ' + error.message, 'error');
+                }
+            };
+            reader.readAsText(file, 'utf-8');
+
+            event.target.value = '';
+        },
+
+        getDashboardPreferencesBackup() {
+            let apiToken = '';
+            try {
+                apiToken = localStorage.getItem('api_token') || '';
+            } catch (e) {
+                apiToken = '';
+            }
+
+            return {
+                dark_mode: !!this.darkMode,
+                api_token: apiToken
+            };
+        },
+
+        applyDashboardPreferencesBackup(preferences) {
+            if (!preferences || typeof preferences !== 'object') return;
+
+            if (typeof preferences.dark_mode === 'boolean') {
+                this.darkMode = preferences.dark_mode;
+            }
+
+            if (typeof preferences.api_token === 'string') {
+                const token = preferences.api_token.trim();
+                try {
+                    if (token) {
+                        localStorage.setItem('api_token', token);
+                    } else {
+                        localStorage.removeItem('api_token');
+                    }
+                } catch (e) { }
+                this.tempToken = token;
+            }
+        },
+
+        async exportSettingsBackup() {
+            try {
+                const payload = await this.apiRequest('/api/settings/backup');
+                const exportPayload = {
+                    ...payload,
+                    dashboard_preferences: this.getDashboardPreferencesBackup()
+                };
+                const dataStr = JSON.stringify(exportPayload, null, 2);
+                const blob = new Blob([dataStr], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'settings-backup-' + Date.now() + '.json';
+                a.click();
+                URL.revokeObjectURL(url);
+
+                this.notify('完整配置备份已导出', 'success');
+            } catch (error) {
+                this.notify('完整备份导出失败: ' + error.message, 'error');
+            }
+        },
+
+        normalizeBrowserConstantsForEditor(rawConfig = {}) {
+            const raw = rawConfig && typeof rawConfig === 'object' ? rawConfig : {};
+            const normalized = {};
+
+            for (const group of Object.values(BROWSER_CONSTANTS_SCHEMA)) {
+                for (const [key, field] of Object.entries(group.items || {})) {
+                    normalized[key] = field.default;
+                }
+            }
+
+            for (const key of Object.keys(normalized)) {
+                if (key.startsWith('TAB_POOL_')) {
+                    continue;
+                }
+                if (Object.prototype.hasOwnProperty.call(raw, key)) {
+                    normalized[key] = raw[key];
+                }
+            }
+
+            const tabPool = raw.tab_pool && typeof raw.tab_pool === 'object' ? raw.tab_pool : {};
+            normalized.TAB_POOL_MAX_TABS = raw.TAB_POOL_MAX_TABS ?? tabPool.max_tabs ?? normalized.TAB_POOL_MAX_TABS;
+            normalized.TAB_POOL_MIN_TABS = raw.TAB_POOL_MIN_TABS ?? tabPool.min_tabs ?? normalized.TAB_POOL_MIN_TABS;
+            normalized.TAB_POOL_IDLE_TIMEOUT = raw.TAB_POOL_IDLE_TIMEOUT ?? tabPool.idle_timeout ?? normalized.TAB_POOL_IDLE_TIMEOUT;
+            normalized.TAB_POOL_ACQUIRE_TIMEOUT = raw.TAB_POOL_ACQUIRE_TIMEOUT ?? tabPool.acquire_timeout ?? normalized.TAB_POOL_ACQUIRE_TIMEOUT;
+            normalized.TAB_POOL_STUCK_TIMEOUT = raw.TAB_POOL_STUCK_TIMEOUT ?? tabPool.stuck_timeout ?? normalized.TAB_POOL_STUCK_TIMEOUT;
+
+            return normalized;
+        },
+
+        serializeBrowserConstants(editorConfig = {}, rawBase = {}) {
+            const base = rawBase && typeof rawBase === 'object'
+                ? JSON.parse(JSON.stringify(rawBase))
+                : {};
+            const merged = this.normalizeBrowserConstantsForEditor(editorConfig);
+            const obsoleteKeys = [
+                'DEFAULT_PORT',
+                'STREAM_RERENDER_WAIT',
+                'STREAM_MIN_VALID_LENGTH',
+                'STREAM_INITIAL_ELEMENT_WAIT',
+                'STREAM_MAX_ABNORMAL_COUNT',
+                'STREAM_MAX_ELEMENT_MISSING',
+                'STREAM_CONTENT_SHRINK_THRESHOLD'
+            ];
+
+            for (const key of obsoleteKeys) {
+                delete base[key];
+            }
+
+            for (const key of Object.keys(merged)) {
+                if (key.startsWith('TAB_POOL_')) {
+                    continue;
+                }
+                base[key] = merged[key];
+            }
+
+            const existingTabPool = base.tab_pool && typeof base.tab_pool === 'object' ? base.tab_pool : {};
+            base.tab_pool = {
+                ...existingTabPool,
+                max_tabs: merged.TAB_POOL_MAX_TABS,
+                min_tabs: merged.TAB_POOL_MIN_TABS,
+                idle_timeout: merged.TAB_POOL_IDLE_TIMEOUT,
+                acquire_timeout: merged.TAB_POOL_ACQUIRE_TIMEOUT,
+                stuck_timeout: merged.TAB_POOL_STUCK_TIMEOUT
+            };
+
+            return base;
+        },
+
+        async importSettingsBackup(payload) {
+            if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+                throw new Error('备份文件格式无效');
+            }
+
+            const result = await this.apiRequest('/api/settings/backup', {
+                method: 'POST',
+                body: JSON.stringify(payload)
+            });
+
+            this.applyDashboardPreferencesBackup(payload.dashboard_preferences);
+
+            if (!result.will_restart) {
+                await Promise.all([
+                    this.loadConfig(true),
+                    this.loadEnvConfig(),
+                    this.loadBrowserConstants(),
+                    this.loadUpdatePreserveSettings(),
+                    this.loadSelectorDefinitions()
+                ]);
+            }
+
+            const sections = Array.isArray(result.imported_sections)
+                ? result.imported_sections.join('、')
+                : '';
+            this.notify(
+                result.will_restart
+                    ? '完整备份已导入，服务将自动重启' + (sections ? '：' + sections : '')
+                    : '完整备份已导入' + (sections ? '：' + sections : ''),
+                result.will_restart ? 'warning' : 'success'
+            );
+        },
+
         // ========== 环境配置 ==========
 
         async loadEnvConfig() {
@@ -768,16 +1119,67 @@
             return defaults;
         },
 
+        normalizeEnvCompareValue(value) {
+            if (value === undefined || value === null) return '';
+            if (typeof value === 'boolean') return value ? 'true' : 'false';
+            return String(value);
+        },
+
+        getEnvFieldMeta(fieldKey) {
+            for (const group of Object.values(ENV_CONFIG_SCHEMA)) {
+                if (!group || !group.items || !Object.prototype.hasOwnProperty.call(group.items, fieldKey)) {
+                    continue;
+                }
+
+                const field = group.items[fieldKey] || {};
+                return {
+                    ...field,
+                    apply: field.apply || group.apply || 'service'
+                };
+            }
+
+            return null;
+        },
+
+        getEnvChangedKeys() {
+            const current = this.envConfig || {};
+            const original = this.envConfigOriginal || {};
+            const keys = new Set([
+                ...Object.keys(current),
+                ...Object.keys(original)
+            ]);
+
+            return Array.from(keys).filter((key) => {
+                return this.normalizeEnvCompareValue(current[key]) !== this.normalizeEnvCompareValue(original[key]);
+            });
+        },
+
         async saveEnvConfig() {
             this.isSavingEnv = true;
             try {
+                const changedKeys = this.getEnvChangedKeys();
                 await this.apiRequest('/api/settings/env', {
                     method: 'POST',
                     body: JSON.stringify({ config: this.envConfig })
                 });
 
                 this.envConfigOriginal = JSON.parse(JSON.stringify(this.envConfig));
-                this.notify('环境配置已保存（部分配置需重启生效）', 'success');
+                const launcherKeys = changedKeys.filter((key) => {
+                    return (this.getEnvFieldMeta(key)?.apply || 'service') === 'launcher';
+                });
+
+                if (launcherKeys.length > 0) {
+                    const launcherLabels = launcherKeys.map((key) => {
+                        return this.getEnvFieldMeta(key)?.label || key;
+                    }).join(', ');
+
+                    this.notify(
+                        '环境配置已保存。服务会自动重启，但以下启动型配置要完全生效，请关闭当前浏览器和脚本后重新运行 start.bat：' + launcherLabels,
+                        'warning'
+                    );
+                } else {
+                    this.notify('环境配置已保存，服务将自动重启后生效', 'success');
+                }
             } catch (error) {
                 this.notify('保存失败: ' + error.message, 'error');
             } finally {
@@ -794,18 +1196,85 @@
 
         // ========== 浏览器常量 ==========
 
+        normalizeBrowserConstantsForEditor(rawConfig = {}) {
+            const raw = rawConfig && typeof rawConfig === 'object' ? rawConfig : {};
+            const normalized = {};
+
+            for (const group of Object.values(BROWSER_CONSTANTS_SCHEMA)) {
+                for (const [key, field] of Object.entries(group.items || {})) {
+                    normalized[key] = field.default;
+                }
+            }
+
+            for (const key of Object.keys(normalized)) {
+                if (key.startsWith('TAB_POOL_')) {
+                    continue;
+                }
+                if (Object.prototype.hasOwnProperty.call(raw, key)) {
+                    normalized[key] = raw[key];
+                }
+            }
+
+            const tabPool = raw.tab_pool && typeof raw.tab_pool === 'object' ? raw.tab_pool : {};
+            normalized.TAB_POOL_MAX_TABS = raw.TAB_POOL_MAX_TABS ?? tabPool.max_tabs ?? normalized.TAB_POOL_MAX_TABS;
+            normalized.TAB_POOL_MIN_TABS = raw.TAB_POOL_MIN_TABS ?? tabPool.min_tabs ?? normalized.TAB_POOL_MIN_TABS;
+            normalized.TAB_POOL_IDLE_TIMEOUT = raw.TAB_POOL_IDLE_TIMEOUT ?? tabPool.idle_timeout ?? normalized.TAB_POOL_IDLE_TIMEOUT;
+            normalized.TAB_POOL_ACQUIRE_TIMEOUT = raw.TAB_POOL_ACQUIRE_TIMEOUT ?? tabPool.acquire_timeout ?? normalized.TAB_POOL_ACQUIRE_TIMEOUT;
+            normalized.TAB_POOL_STUCK_TIMEOUT = raw.TAB_POOL_STUCK_TIMEOUT ?? tabPool.stuck_timeout ?? normalized.TAB_POOL_STUCK_TIMEOUT;
+
+            return normalized;
+        },
+
+        serializeBrowserConstants(editorConfig = {}, rawBase = {}) {
+            const base = rawBase && typeof rawBase === 'object'
+                ? JSON.parse(JSON.stringify(rawBase))
+                : {};
+            const merged = this.normalizeBrowserConstantsForEditor(editorConfig);
+            const obsoleteKeys = [
+                'DEFAULT_PORT',
+                'STREAM_RERENDER_WAIT',
+                'STREAM_MIN_VALID_LENGTH',
+                'STREAM_INITIAL_ELEMENT_WAIT',
+                'STREAM_MAX_ABNORMAL_COUNT',
+                'STREAM_MAX_ELEMENT_MISSING',
+                'STREAM_CONTENT_SHRINK_THRESHOLD'
+            ];
+
+            for (const key of obsoleteKeys) {
+                delete base[key];
+            }
+
+            for (const key of Object.keys(merged)) {
+                if (key.startsWith('TAB_POOL_')) {
+                    continue;
+                }
+                base[key] = merged[key];
+            }
+
+            const existingTabPool = base.tab_pool && typeof base.tab_pool === 'object' ? base.tab_pool : {};
+            base.tab_pool = {
+                ...existingTabPool,
+                max_tabs: merged.TAB_POOL_MAX_TABS,
+                min_tabs: merged.TAB_POOL_MIN_TABS,
+                idle_timeout: merged.TAB_POOL_IDLE_TIMEOUT,
+                acquire_timeout: merged.TAB_POOL_ACQUIRE_TIMEOUT,
+                stuck_timeout: merged.TAB_POOL_STUCK_TIMEOUT
+            };
+
+            return base;
+        },
+
         async loadBrowserConstants() {
             this.isLoadingConstants = true;
             try {
                 const data = await this.apiRequest('/api/settings/browser-constants');
-                this.browserConstants = {
-                    ...this.getBrowserConstantsDefaults(),
-                    ...(data.config || {})
-                };
+                this.browserConstantsRaw = JSON.parse(JSON.stringify(data.config || {}));
+                this.browserConstants = this.normalizeBrowserConstantsForEditor(this.browserConstantsRaw);
                 this.browserConstantsOriginal = JSON.parse(JSON.stringify(this.browserConstants));
             } catch (error) {
                 console.error('加载浏览器常量失败:', error);
                 this.browserConstants = this.getBrowserConstantsDefaults();
+                this.browserConstantsRaw = this.serializeBrowserConstants(this.browserConstants, {});
                 this.browserConstantsOriginal = JSON.parse(JSON.stringify(this.browserConstants));
             } finally {
                 this.isLoadingConstants = false;
@@ -813,23 +1282,20 @@
         },
 
         getBrowserConstantsDefaults() {
-            const defaults = {};
-            for (const group of Object.values(BROWSER_CONSTANTS_SCHEMA)) {
-                for (const [key, field] of Object.entries(group.items)) {
-                    defaults[key] = field.default;
-                }
-            }
-            return defaults;
+            return this.normalizeBrowserConstantsForEditor({});
         },
 
         async saveBrowserConstants() {
             this.isSavingConstants = true;
             try {
+                const payload = this.serializeBrowserConstants(this.browserConstants, this.browserConstantsRaw);
                 await this.apiRequest('/api/settings/browser-constants', {
                     method: 'POST',
-                    body: JSON.stringify({ config: this.browserConstants })
+                    body: JSON.stringify({ config: payload })
                 });
 
+                this.browserConstantsRaw = JSON.parse(JSON.stringify(payload));
+                this.browserConstants = this.normalizeBrowserConstantsForEditor(payload);
                 this.browserConstantsOriginal = JSON.parse(JSON.stringify(this.browserConstants));
                 this.notify('浏览器常量已保存', 'success');
             } catch (error) {
@@ -844,6 +1310,147 @@
 
             this.browserConstants = this.getBrowserConstantsDefaults();
             this.notify('已重置为默认值，请点击保存以应用', 'info');
+        },
+
+        // ========== 更新白名单 ==========
+
+        async loadUpdatePreserveSettings() {
+            this.isLoadingUpdatePreserve = true;
+            try {
+                const data = await this.apiRequest('/api/settings/update-preserve');
+                this.updatePreserveOptions = Array.isArray(data.options) ? data.options : [];
+                this.updatePreserveSelected = Array.isArray(data.selected_patterns) ? data.selected_patterns.slice() : [];
+                this.updatePreserveSelectedOriginal = JSON.parse(JSON.stringify(this.updatePreserveSelected));
+            } catch (error) {
+                console.error('加载更新白名单失败:', error);
+                this.updatePreserveOptions = [];
+                this.updatePreserveSelected = [];
+                this.updatePreserveSelectedOriginal = [];
+            } finally {
+                this.isLoadingUpdatePreserve = false;
+            }
+        },
+
+        toggleUpdatePreserve(pattern) {
+            const value = String(pattern || '').trim();
+            if (!value) return;
+            const next = new Set(this.updatePreserveSelected || []);
+            if (next.has(value)) {
+                next.delete(value);
+            } else {
+                next.add(value);
+            }
+            this.updatePreserveSelected = Array.from(next);
+        },
+
+        async saveUpdatePreserveSettings() {
+            this.isSavingUpdatePreserve = true;
+            try {
+                const data = await this.apiRequest('/api/settings/update-preserve', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        selected_patterns: this.updatePreserveSelected
+                    })
+                });
+                this.updatePreserveSelected = Array.isArray(data.selected_patterns)
+                    ? data.selected_patterns.slice()
+                    : this.updatePreserveSelected;
+                this.updatePreserveSelectedOriginal = JSON.parse(JSON.stringify(this.updatePreserveSelected));
+                this.notify('更新白名单已保存，下次自动更新生效', 'success');
+            } catch (error) {
+                this.notify('保存失败: ' + error.message, 'error');
+            } finally {
+                this.isSavingUpdatePreserve = false;
+            }
+        },
+
+        resetUpdatePreserveSettings() {
+            this.updatePreserveSelected = JSON.parse(JSON.stringify(this.updatePreserveSelectedOriginal));
+            this.notify('已恢复到上次保存的更新白名单', 'info');
+        },
+
+        // ========== 版本管理方法 ==========
+
+        async loadReleases() {
+            this.releasesLoading = true;
+            this.releasesError = '';
+            try {
+                const data = await this.apiRequest('/api/update/releases');
+                this.releases = Array.isArray(data.releases) ? data.releases : [];
+                this.releasesCurrentVersion = data.current_version || '';
+            } catch (error) {
+                this.releasesError = '加载失败: ' + error.message;
+                this.releases = [];
+            } finally {
+                this.releasesLoading = false;
+            }
+        },
+
+        async switchToVersion(tag) {
+            if (this.switchingTag) {
+                this.notify('已有版本切换任务正在运行，请稍候', 'warning');
+                return;
+            }
+            if (!confirm('确定要切换到 ' + tag + ' 吗？\n切换完成后服务将自动重启，页面需要手动刷新。')) {
+                return;
+            }
+            this.switchingTag = tag;
+            try {
+                await this.apiRequest('/api/update/switch', {
+                    method: 'POST',
+                    body: JSON.stringify({ tag: tag })
+                });
+                this.notify('版本切换任务已启动：' + tag + '，下载中...', 'info');
+                this.startSwitchStatusPolling();
+            } catch (error) {
+                this.notify('启动版本切换失败: ' + error.message, 'error');
+                this.switchingTag = null;
+            }
+        },
+
+        startSwitchStatusPolling() {
+            this.stopSwitchStatusPolling();
+            this.switchStatusPolling = setInterval(async () => {
+                try {
+                    const status = await this.apiRequest('/api/update/status');
+                    if (!status.running) {
+                        this.stopSwitchStatusPolling();
+                        if (status.success === true) {
+                            this.notify('版本 ' + status.tag + ' 切换成功，服务正在重启，请稍后刷新页面', 'success');
+                        } else if (status.success === false) {
+                            var errMsg = status.error ? '：' + status.error : '';
+                            this.notify('版本 ' + status.tag + ' 切换失败' + errMsg, 'error');
+                            this.switchingTag = null;
+                        }
+                    }
+                } catch (e) {
+                    // 服务重启中，连接可能断开
+                }
+            }, 2000);
+        },
+
+        stopSwitchStatusPolling() {
+            if (this.switchStatusPolling) {
+                clearInterval(this.switchStatusPolling);
+                this.switchStatusPolling = null;
+            }
+        },
+
+        showChangelog(tag, body) {
+            this.changelogTag = tag;
+            this.changelogContent = body || '（无更新说明）';
+            this.showChangelogModal = true;
+        },
+
+        formatReleaseDate(isoStr) {
+            if (!isoStr) return '—';
+            try {
+                var d = new Date(isoStr);
+                var pad = function(n) { return String(n).padStart(2, '0'); };
+                return d.getFullYear() + '/' + pad(d.getMonth()+1) + '/' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+            } catch (e) {
+                return isoStr;
+            }
         },
 
         // ========== 元素定义管理方法 ==========
@@ -994,138 +1601,142 @@
             this.selectorDefinitions[newIndex] = temp;
         },
 
-        // ========== 提取器管理方法 ==========
-
-        async loadExtractors() {
-            this.isLoadingExtractors = true;
-            try {
-                const data = await this.apiRequest('/api/extractors');
-                this.extractors = data.extractors || [];
-                this.defaultExtractorId = data.default || 'deep_mode_v1';
-            } catch (error) {
-                console.error('加载提取器列表失败:', error);
-                this.extractors = [];
-            } finally {
-                this.isLoadingExtractors = false;
-            }
-        },
-
-        async setDefaultExtractor(extractorId) {
-            try {
-                await this.apiRequest('/api/extractors/default', {
-                    method: 'PUT',
-                    body: JSON.stringify({ extractor_id: extractorId })
-                });
-                this.defaultExtractorId = extractorId;
-                this.notify('默认提取器已设置为: ' + extractorId, 'success');
-            } catch (error) {
-                this.notify('设置失败: ' + error.message, 'error');
-            }
-        },
-
-        async exportExtractorConfig() {
-            try {
-                const response = await fetch('/api/extractors/export');
-                const config = await response.json();
-                
-                const dataStr = JSON.stringify(config, null, 2);
-                const blob = new Blob([dataStr], { type: 'application/json' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = 'extractors-config-' + Date.now() + '.json';
-                a.click();
-                URL.revokeObjectURL(url);
-                
-                this.notify('提取器配置已导出', 'success');
-            } catch (error) {
-                this.notify('导出失败: ' + error.message, 'error');
-            }
-        },
-
-        async importExtractorConfig(config) {
-            try {
-                await this.apiRequest('/api/extractors/import', {
-                    method: 'POST',
-                    body: JSON.stringify(config)
-                });
-                await this.loadExtractors();
-                this.notify('提取器配置导入成功', 'success');
-            } catch (error) {
-                this.notify('导入失败: ' + error.message, 'error');
-            }
-        },
-
-        async setSiteExtractor(domain, extractorId) {
-            try {
-                const presetName = this.getActivePresetName()
-                await this.apiRequest('/api/sites/' + encodeURIComponent(domain) + '/extractor', {
-                    method: 'PUT',
-                    body: JSON.stringify({ extractor_id: extractorId, preset_name: presetName })
-                });
-
-                // 更新当前预设的本地状态
-                const pc = this.getActivePresetConfig()
-                if (pc) {
-                    pc.extractor_id = extractorId;
-                    pc.extractor_verified = false;
-                }
-
-                this.notify('站点 ' + domain + ' 已绑定提取器: ' + extractorId, 'success');
-            } catch (error) {
-                this.notify('设置失败: ' + error.message, 'error');
-            }
-        },
-
-        openVerifyDialog(domain) {
-            const pc = this.getActivePresetConfig()
-            const extractorId = pc?.extractor_id || this.defaultExtractorId;
-            const extractor = this.extractors.find(e => e.id === extractorId);
-            
-            this.verifyDialogDomain = domain;
-            this.verifyDialogExtractorName = extractor?.name || extractorId;
-            this.showVerifyDialog = true;
-        },
-
-        async handleVerifyResult({ domain, passed }) {
-            if (passed) {
-                try {
-                    await this.apiRequest('/api/sites/' + encodeURIComponent(domain) + '/extractor/verify', {
-                        method: 'POST',
-                        body: JSON.stringify({ verified: true })
-                    });
-                    
-                    const pc = this.getActivePresetConfig()
-                    if (pc) {
-                        pc.extractor_verified = true;
-                    }
-                    
-                    this.notify('验证状态已更新', 'success');
-                } catch (error) {
-                    console.error('更新验证状态失败:', error);
-                }
-            }
-        },
-
         changeTab(tab) {
+            this.markTabAsVisited(tab)
             this.activeTab = tab;
         },
 
         async ensureTabDataLoaded(tab) {
+            if (tab === 'monitor') {
+                const now = Date.now()
+                const stale = now - Number(this.requestHistoryFetchedAt || 0) > 2000
+                await Promise.all([
+                    this.fetchRequestHistory({ silent: true, ifChanged: !stale }),
+                    this.fetchSystemStats({ timeoutMs: 5000 })
+                ]);
+                return;
+            }
             if (tab === 'settings' && !this.hasLoadedSettings) {
                 this.hasLoadedSettings = true;
                 await Promise.all([
                     this.loadEnvConfig(),
                     this.loadBrowserConstants(),
-                    this.loadSelectorDefinitions()
+                    this.loadUpdatePreserveSettings(),
+                    this.loadSelectorDefinitions(),
+                    this.loadReleases()
                 ]);
                 return;
             }
+        },
 
-            if (tab === 'extractors' && !this.hasLoadedExtractors) {
-                this.hasLoadedExtractors = true;
-                await this.loadExtractors();
+        async fetchRequestHistory({ silent = false, ifChanged = false, force = false } = {}) {
+            if (this.requestHistoryLoading) {
+                return this.requestHistory;
             }
+            const now = Date.now();
+            if (!force && ifChanged && now - Number(this.requestHistoryFetchedAt || 0) < 1200) {
+                return this.requestHistory;
+            }
+            this.requestHistoryLoading = true;
+            if (!silent) {
+                this.requestHistoryError = '';
+            }
+            try {
+                const data = await this.apiRequest('/api/system/request-history?limit=200', {
+                    timeoutMs: 5000
+                });
+                const revision = String(data.revision || '');
+                if (!ifChanged || force || !this.requestHistoryRevision || revision !== this.requestHistoryRevision) {
+                    const detailCache = new Map(
+                        this.requestHistory
+                            .filter(item => item && item.detail_loaded && item.id)
+                            .map(item => [String(item.history_key || item.id), item])
+                    );
+                    const records = Array.isArray(data.records) ? data.records : [];
+                    this.requestHistory = records.map(item => {
+                        const cached = detailCache.get(String(item && (item.history_key || item.id) || ''));
+                        return cached ? { ...item, ...cached } : item;
+                    });
+                    this.requestHistoryRevision = revision;
+                }
+                this.requestHistoryFetchedAt = Date.now();
+                this.requestHistoryError = '';
+                return this.requestHistory;
+            } catch (error) {
+                this.requestHistoryError = error.message || '请求历史加载失败';
+                return this.requestHistory;
+            } finally {
+                this.requestHistoryLoading = false;
+            }
+        },
+
+        async fetchRequestHistoryDetail(requestId) {
+            const id = String(requestId || '').trim();
+            if (!id || this.requestHistoryDetailLoading[id]) {
+                return null;
+            }
+
+            const matchesRequestHistoryId = (item) => {
+                if (!item) return false;
+                return String(item.history_key || '').trim() === id || String(item.id || '').trim() === id;
+            };
+            const existingIndex = this.requestHistory.findIndex(matchesRequestHistoryId);
+            if (existingIndex >= 0 && this.requestHistory[existingIndex].detail_loaded) {
+                return this.requestHistory[existingIndex];
+            }
+
+            this.requestHistoryDetailLoading = {
+                ...this.requestHistoryDetailLoading,
+                [id]: true
+            };
+            try {
+                const detail = await this.apiRequest('/api/system/request-history/' + encodeURIComponent(id), {
+                    timeoutMs: 5000
+                });
+                const detailKey = String(detail && detail.history_key || '').trim();
+                const detailId = String(detail && detail.id || '').trim();
+                const index = this.requestHistory.findIndex(item => {
+                    if (!item) return false;
+                    return String(item.history_key || '').trim() === (detailKey || id)
+                        || String(item.history_key || '').trim() === id
+                        || (
+                            !detailKey
+                            && detailId
+                            && String(item.id || '').trim() === detailId
+                        )
+                        || String(item.id || '').trim() === id;
+                });
+                if (index >= 0) {
+                    const updated = {
+                        ...this.requestHistory[index],
+                        ...(detail || {}),
+                        detail_loaded: true,
+                        has_detail: true
+                    };
+                    const nextHistory = this.requestHistory.slice();
+                    nextHistory[index] = updated;
+                    this.requestHistory = nextHistory;
+                    return updated;
+                }
+                return detail || null;
+            } catch (error) {
+                this.notify('加载请求详情失败: ' + error.message, 'error');
+                return null;
+            } finally {
+                const nextLoading = { ...this.requestHistoryDetailLoading };
+                delete nextLoading[id];
+                this.requestHistoryDetailLoading = nextLoading;
+            }
+        },
+
+        downloadDataAsJson(filename, payloadText) {
+            const blob = new Blob([payloadText], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = filename;
+            link.click();
+            URL.revokeObjectURL(url);
         },
 
         // ========== 预设辅助方法 ==========
@@ -1157,13 +1768,36 @@
             if (!this.currentConfig) return null
             const presets = this.currentConfig.presets
             if (!presets) return this.currentConfig
-            const name = this.getActivePresetName()
+            const name = this.resolveExistingPresetName(this.currentConfig, this.getActivePresetName())
             const configuredDefault = this.currentConfig.default_preset
             return presets[name]
                 || (configuredDefault ? presets[configuredDefault] : null)
                 || presets['主预设']
                 || Object.values(presets)[0]
                 || null
+        },
+
+        resolveExistingPresetName(site, presetName) {
+            const presets = site && site.presets
+            const normalized = String(presetName || '').trim()
+            if (!presets || typeof presets !== 'object' || !normalized) {
+                return normalized
+            }
+            if (presets[normalized]) {
+                return normalized
+            }
+            if (normalized.startsWith('预设_')) {
+                const stripped = normalized.slice(3).trim()
+                if (stripped && presets[stripped]) {
+                    return stripped
+                }
+            } else {
+                const prefixed = '预设_' + normalized
+                if (presets[prefixed]) {
+                    return prefixed
+                }
+            }
+            return normalized
         },
 
         // ========== 数据操作 ==========
@@ -1173,7 +1807,7 @@
             // 预设内的字段列表（用于清理顶层残留）
             const PRESET_FIELDS = [
                 'selectors', 'workflow', 'stealth', 'stream_config',
-                'image_extraction', 'file_paste',
+                'image_extraction', 'file_paste', 'prompt_padding',
                 'extractor_id', 'extractor_verified'
             ]
             for (const [k, v] of Object.entries(raw || {})) {
@@ -1266,6 +1900,17 @@
                     const y = Number(step.value?.y)
                     if (!Number.isFinite(x) || !Number.isFinite(y)) {
                         this.notify('步骤 ' + (i + 1) + ': 请输入有效的 X/Y 坐标', 'error')
+                        return false
+                    }
+                }
+
+                if (step.action === 'COORD_SCROLL') {
+                    const startX = Number(step.value?.start_x)
+                    const startY = Number(step.value?.start_y)
+                    const endX = Number(step.value?.end_x)
+                    const endY = Number(step.value?.end_y)
+                    if (![startX, startY, endX, endY].every(Number.isFinite)) {
+                        this.notify('步骤 ' + (i + 1) + ': 请输入完整的起点/终点坐标', 'error')
                         return false
                     }
                 }
@@ -1440,12 +2085,36 @@
             if (['FILL_INPUT', 'CLICK', 'STREAM_WAIT'].includes(step.action)) {
                 step.value = null
                 if (!step.target) step.target = ''
+            } else if (step.action === 'PAGE_FETCH') {
+                step.target = ''
+                step.optional = true
+                step.value = null
+            } else if (step.action === 'READONLY_HINT') {
+                step.target = ''
+                const current = (step.value && typeof step.value === 'object' && !Array.isArray(step.value))
+                    ? step.value
+                    : {}
+                step.value = {
+                    title: String(current.title || '提示'),
+                    text: String(current.text || '这是一条只读提示，不会在执行时触发页面操作。'),
+                    tone: ['info', 'success', 'warning', 'danger'].includes(String(current.tone || '').trim().toLowerCase())
+                        ? String(current.tone || '').trim().toLowerCase()
+                        : 'info'
+                }
             } else if (step.action === 'COORD_CLICK') {
                 step.target = ''
                 step.value = {
                     x: Number(step.value?.x ?? 0),
                     y: Number(step.value?.y ?? 0),
                     random_radius: Number(step.value?.random_radius ?? 10)
+                }
+            } else if (step.action === 'COORD_SCROLL') {
+                step.target = ''
+                step.value = {
+                    start_x: Number(step.value?.start_x ?? 0),
+                    start_y: Number(step.value?.start_y ?? 0),
+                    end_x: Number(step.value?.end_x ?? 0),
+                    end_y: Number(step.value?.end_y ?? 300)
                 }
             } else if (step.action === 'KEY_PRESS') {
                 step.value = null
@@ -1463,22 +2132,6 @@
             this.showStepTemplates = true
         },
 
-        handleExtractorImportFile(event) {
-            const file = event.target.files[0];
-            if (!file) return;
-
-            const reader = new FileReader();
-            reader.onload = (e) => {
-                try {
-                    const config = JSON.parse(e.target.result);
-                    this.importExtractorConfig(config);
-                } catch (error) {
-                    this.notify('JSON 解析失败: ' + error.message, 'error');
-                }
-            };
-            reader.readAsText(file);
-            event.target.value = '';
-        },
         applyTemplate(type) {
             const templates = {
                 'default': [
@@ -1490,6 +2143,13 @@
                     { action: 'STREAM_WAIT', target: 'result_container', optional: false, value: null }
                 ],
                 'simple': [
+                    { action: 'FILL_INPUT', target: 'input_box', optional: false, value: null },
+                    { action: 'KEY_PRESS', target: 'Enter', optional: false, value: null },
+                    { action: 'STREAM_WAIT', target: 'result_container', optional: false, value: null }
+                ],
+                'experimental_hint': [
+                    { action: 'READONLY_HINT', target: '', optional: false, value: { title: '提示', text: '这是一条只读提示，不会影响执行，只用于说明当前工作流中的特殊行为。', tone: 'info' } },
+                    { action: 'PAGE_FETCH', target: '', optional: true, value: null },
                     { action: 'FILL_INPUT', target: 'input_box', optional: false, value: null },
                     { action: 'KEY_PRESS', target: 'Enter', optional: false, value: null },
                     { action: 'STREAM_WAIT', target: 'result_container', optional: false, value: null }
@@ -1575,7 +2235,8 @@
 
             const site = JSON.parse(JSON.stringify(this.sites[this.currentDomain] || {}))
             const presets = site.presets || { '主预设': {} }
-            const presetName = this.getActivePresetName()
+            const activePresetName = this.getActivePresetName()
+            const presetName = this.resolveExistingPresetName(site, activePresetName) || activePresetName
             const currentPreset = presets[presetName] || presets['主预设'] || {}
             const { domain, preset_name, timestamp, ...presetPatch } = parsed
 
@@ -1620,7 +2281,77 @@
             this.loadConfig(true)
         },
 
-        // ========== Toast 通知 ==========
+        restoreSitesCache() {
+            const cached = loadStoredSitesCache()
+            if (!cached || !cached.sites) {
+                return
+            }
+            this.sites = this.normalizeConfig(cached.sites)
+            const domains = Object.keys(this.sites)
+            if (domains.length === 0) {
+                return
+            }
+            if (cached.currentDomain && this.sites[cached.currentDomain]) {
+                this.currentDomain = cached.currentDomain
+                return
+            }
+            if (!this.currentDomain) {
+                this.currentDomain = domains[0]
+            }
+        },
+
+        async refreshStatus() {
+            const [configOk, healthOk] = await Promise.all([
+                this.loadConfig(true),
+                this.loadHealthStatus({ timeoutMs: 2500 }),
+                this.fetchSystemStats({ timeoutMs: 5000 })
+            ])
+
+            if (configOk || healthOk) {
+                this.notify('状态已刷新', 'success')
+            } else {
+                this.notify('刷新失败', 'error')
+            }
+        },
+
+        async fetchSystemStats({ timeoutMs = 0 } = {}) {
+            if (this.isFetchingSystemStats) {
+                return this.systemStats
+            }
+            this.isFetchingSystemStats = true
+            try {
+                this.systemStats = await this.apiRequest('/api/system/stats', {
+                    timeoutMs: timeoutMs || 5000
+                })
+                return this.systemStats
+            } catch (error) {
+                return this.systemStats
+            } finally {
+                this.isFetchingSystemStats = false
+            }
+        },
+
+        async loadHealthStatus({ silent = false, timeoutMs = 0 } = {}) {
+            try {
+                const health = await this.apiRequest('/health', {
+                    timeoutMs: timeoutMs || 2500
+                })
+                this.browserStatus = health.browser || {}
+                this.authEnabled = health.config?.auth_enabled || false
+                return true
+            } catch (error) {
+                if (error.message === 'UNAUTHORIZED') {
+                    this.authEnabled = true
+                    return true
+                }
+
+                console.error('状态检查失败:', error)
+                if (!silent) {
+                    this.notify('状态检查失败: ' + error.message, 'error')
+                }
+                return false
+            }
+        },
 
         notify(message, type) {
             if (!type) type = 'info'
@@ -1638,5 +2369,5 @@
                 return t.id !== id
             })
         }
-    };
+    }
 })();

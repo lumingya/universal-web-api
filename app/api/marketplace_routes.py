@@ -5,6 +5,7 @@ app/api/marketplace_routes.py - 配置市场 API
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from app.api.deps import verify_auth
@@ -43,7 +44,11 @@ async def get_marketplace_catalog(
     authenticated: bool = Depends(verify_auth),
 ):
     try:
-        return marketplace_service.list_catalog(force_refresh=refresh, app_version=app_version)
+        return await run_in_threadpool(
+            marketplace_service.list_catalog,
+            refresh,
+            app_version,
+        )
     except Exception as exc:
         logger.error(f"获取插件市场失败: {exc}")
         raise HTTPException(status_code=500, detail=str(exc))
@@ -57,7 +62,12 @@ async def get_marketplace_item(
     authenticated: bool = Depends(verify_auth),
 ):
     try:
-        return marketplace_service.get_item(item_id, force_refresh=refresh, app_version=app_version)
+        return await run_in_threadpool(
+            marketplace_service.get_item,
+            item_id,
+            refresh,
+            app_version,
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except Exception as exc:
@@ -71,7 +81,10 @@ async def submit_marketplace_item(
     authenticated: bool = Depends(verify_auth),
 ):
     try:
-        result = marketplace_service.submit_item(body.model_dump())
+        result = await run_in_threadpool(
+            marketplace_service.submit_item,
+            body.model_dump(),
+        )
         return {
             "success": True,
             **result,
@@ -87,7 +100,10 @@ async def get_marketplace_review_status(
     authenticated: bool = Depends(verify_auth),
 ):
     try:
-        return marketplace_service.get_review_status(x_github_token or "")
+        return await run_in_threadpool(
+            marketplace_service.get_review_status,
+            x_github_token or "",
+        )
     except Exception as exc:
         logger.error(f"获取市场审核权限失败: {exc}")
         raise HTTPException(status_code=400, detail=str(exc))
@@ -101,7 +117,11 @@ async def approve_marketplace_issue(
     authenticated: bool = Depends(verify_auth),
 ):
     try:
-        return marketplace_service.approve_pending_issue(issue_number, x_github_token or "")
+        return await run_in_threadpool(
+            marketplace_service.approve_pending_issue,
+            issue_number,
+            x_github_token or "",
+        )
     except Exception as exc:
         logger.error(f"审核通过市场投稿失败: issue={issue_number}, error={exc}")
         raise HTTPException(status_code=400, detail=str(exc))
@@ -115,7 +135,11 @@ async def reject_marketplace_issue(
     authenticated: bool = Depends(verify_auth),
 ):
     try:
-        return marketplace_service.reject_pending_issue(issue_number, x_github_token or "")
+        return await run_in_threadpool(
+            marketplace_service.reject_pending_issue,
+            issue_number,
+            x_github_token or "",
+        )
     except Exception as exc:
         logger.error(f"拒绝市场投稿失败: issue={issue_number}, error={exc}")
         raise HTTPException(status_code=400, detail=str(exc))
@@ -129,7 +153,11 @@ async def remove_marketplace_item(
     authenticated: bool = Depends(verify_auth),
 ):
     try:
-        return marketplace_service.remove_item(item_id, x_github_token or "")
+        return await run_in_threadpool(
+            marketplace_service.remove_item,
+            item_id,
+            x_github_token or "",
+        )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except Exception as exc:

@@ -11,7 +11,7 @@ __pycache__/
 venv/
 ENV/
 .venv/
-
+temp/
 # 浏览器配置（含用户登录态，绝对不能提交！）
 chrome_profile/
 

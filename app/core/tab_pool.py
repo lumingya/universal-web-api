@@ -89,6 +89,7 @@ class TabSession:
     status: TabStatus = TabStatus.IDLE
     current_task_id: Optional[str] = None
     current_domain: Optional[str] = None
+    last_known_url: Optional[str] = None
     created_at: float = field(default_factory=time.time)
     last_used_at: float = field(default_factory=time.time)
     request_count: int = 0
@@ -122,16 +123,24 @@ class TabSession:
             self.transient_disconnect_reason = None
 
     def is_healthy(self) -> bool:
-        """检查标签页是否健康（增强版 + 无效协议过滤）"""
-        if self.status == TabStatus.CLOSED:
+        """检查标签页是否健康，避免在忙碌时额外触发 live CDP 读取。"""
+        with self._lock:
+            status = self.status
+            cached_url = str(self.last_known_url or "").strip()
+            cached_domain = str(self.current_domain or "").strip()
+
+        if status == TabStatus.CLOSED:
             return False
 
-        try:
-            url = self.tab.url
+        if status == TabStatus.BUSY:
+            if cached_url:
+                return not _should_skip_pool_url(cached_url)
+            return bool(cached_domain)
+
+        url = self._safe_get_url()
+        if url:
             return not _should_skip_pool_url(url)
-
-        except Exception:
-            return False
+        return False
 
     def _debug_summary_unlocked(self) -> str:
         status_value = getattr(self.status, "value", str(self.status))
@@ -414,9 +423,12 @@ class TabSession:
         )
 
     def get_info(self) -> Dict:
+        with self._lock:
+            status = self.status
+            last_used_at = self.last_used_at
         busy_duration = None
-        if self.status == TabStatus.BUSY:
-            busy_duration = round(time.time() - self.last_used_at, 1)
+        if status == TabStatus.BUSY:
+            busy_duration = round(time.time() - last_used_at, 1)
 
         current_url = self._safe_get_url()
         current_domain = self._refresh_current_domain(current_url)
@@ -424,7 +436,7 @@ class TabSession:
         return {
             "id": self.id,
             "persistent_index": self.persistent_index,
-            "status": self.status.value,
+            "status": status.value,
             "current_task": self.current_task_id,
             "current_domain": current_domain,
             "route_domain": get_preferred_route_domain(current_domain),
@@ -448,12 +460,15 @@ class TabSession:
             resolved = ""
 
         if resolved:
-            self.current_domain = resolved
+            with self._lock:
+                self.current_domain = resolved
             return resolved
 
-        fallback = str(self.current_domain or "").strip()
+        with self._lock:
+            fallback = str(self.current_domain or "").strip()
         if _should_skip_pool_url(current_url) or "://" in current_url:
-            self.current_domain = None
+            with self._lock:
+                self.current_domain = None
             return ""
         return fallback
 
@@ -472,11 +487,29 @@ class TabSession:
         scheme = parsed.scheme if parsed.scheme in {"http", "https", "ws", "wss"} else "https"
         return f"{scheme}://{domain}/"
 
-    def _safe_get_url(self) -> str:
-        try:
-            return self.tab.url or ""
-        except:
+    def _remember_url(self, url: str) -> str:
+        normalized = str(url or "").strip()
+        with self._lock:
+            self.last_known_url = normalized or None
+        return normalized
+
+    def _safe_get_url(self, allow_live_when_busy: bool = False) -> str:
+        with self._lock:
+            status = self.status
+            cached_url = str(self.last_known_url or "").strip()
+
+        if status == TabStatus.CLOSED:
             return ""
+        if status == TabStatus.BUSY and not allow_live_when_busy:
+            return cached_url
+
+        try:
+            current_url = self._remember_url(self.tab.url or "")
+            if current_url:
+                return current_url
+        except Exception:
+            pass
+        return cached_url
 
 
 @dataclass
@@ -889,7 +922,7 @@ class TabPoolManager:
         self._global_network_monitor: Optional[_GlobalNetworkInterceptionManager] = None
         if self._global_network_enabled:
             self._global_network_monitor = _GlobalNetworkInterceptionManager(
-                get_session_fn=self._get_session_for_monitor,
+                get_session_fn=self._get_session_for_monitor_snapshot,
                 is_shutdown_fn=lambda: self._shutdown,
                 listen_pattern=self._global_network_listen_pattern,
                 wait_timeout=self._global_network_wait_timeout,
@@ -1038,9 +1071,9 @@ class TabPoolManager:
             if now < expire_at:
                 continue
             self._orphaned_isolated_contexts.pop(context_id, None)
+            self._dispose_browser_context(context_id)
             logger.info(
-                f"[TabPool] forgot orphaned isolated context after grace "
-                f"(skip auto-dispose for safety): {context_id}"
+                f"[TabPool] disposed orphaned isolated context after grace: {context_id}"
             )
 
     def _dispose_browser_context(self, browser_context_id: Optional[str]) -> None:
@@ -1416,6 +1449,12 @@ class TabPoolManager:
         with self._lock:
             return self._tabs.get(session_id)
 
+    def _get_session_for_monitor_snapshot(self, session_id: str) -> Optional[TabSession]:
+        # Global monitor workers may be joined while the pool lock is held elsewhere.
+        # Use a lock-free snapshot lookup here so the worker can observe removal and exit
+        # instead of blocking behind the pool lock during shutdown/rebind paths.
+        return self._tabs.get(session_id)
+
     def _start_global_monitor_for_session(self, session: Optional[TabSession]):
         if not session or not self._global_network_monitor:
             return
@@ -1432,18 +1471,17 @@ class TabPoolManager:
         return bool(self._global_network_monitor.stop_for_session(session_id, reason=reason, join=wait))
 
     def suspend_global_network_monitor(self, tab_id: str, reason: str = "manual"):
-        with self._lock:
-            self._stop_global_monitor_for_session(tab_id, reason=reason)
+        self._stop_global_monitor_for_session(tab_id, reason=reason)
 
     def resume_global_network_monitor(self, tab_id: str, reason: str = "manual"):
         with self._lock:
             session = self._tabs.get(tab_id)
-            if not session:
-                return
-            if session.status != TabStatus.IDLE or not session.is_healthy():
-                return
-            self._start_global_monitor_for_session(session)
-            logger.debug(f"[GlobalNet] 恢复监听: {tab_id} ({reason})")
+        if not session:
+            return
+        if session.status != TabStatus.IDLE or not session.is_healthy():
+            return
+        self._start_global_monitor_for_session(session)
+        logger.debug(f"[GlobalNet] 恢复监听: {tab_id} ({reason})")
 
     def _get_domain_abbr(self, url: str) -> str:
         try:
@@ -1521,6 +1559,7 @@ class TabPoolManager:
             browser_context_id=browser_context_id,
             is_isolated_context=bool(is_isolated_context),
         )
+        session._remember_url(url)
 
         try:
             session.current_domain = extract_remote_site_domain(url)
@@ -1611,8 +1650,10 @@ class TabPoolManager:
                     continue
                 if not session.is_isolated_context:
                     continue
+                if session.status == TabStatus.BUSY:
+                    continue
                 try:
-                    _ = session.tab.url
+                    _ = session._remember_url(session.tab.url or "")
                     session.clear_transient_disconnect()
                     continue
                 except Exception:
@@ -2841,11 +2882,19 @@ class TabPoolManager:
             return list(self._tabs.values())
 
     def shutdown(self):
+        monitor = None
+        context_ids = set()
         with self._lock:
             self._shutdown = True
-            if self._global_network_monitor:
-                self._global_network_monitor.shutdown()
-            for context_id in set(self._isolated_context_by_raw_id.values()):
+            monitor = self._global_network_monitor
+            context_ids = set(self._isolated_context_by_raw_id.values())
+            self._global_network_monitor = None
+
+        if monitor:
+            monitor.shutdown()
+
+        with self._lock:
+            for context_id in context_ids:
                 self._dispose_browser_context(context_id)
             self._tabs.clear()
             self._known_tab_ids.clear()
