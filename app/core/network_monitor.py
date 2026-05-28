@@ -15,6 +15,11 @@ from typing import Generator, Optional, Dict, Callable, Any
 from pathlib import Path
 
 from app.core.config import logger, SSEFormatter, BrowserConstants
+from app.core.background_image_downloader import (
+    background_image_downloader,
+    build_image_download_request_context,
+    normalize_remote_image_url,
+)
 from app.core.parsers import ParserRegistry, ResponseParser
 
 
@@ -202,6 +207,7 @@ class NetworkMonitor:
         self._last_stream_parse_result: Dict[str, Any] = {}
         self._last_media_generation_state: Dict[str, Any] = {}
         self._last_stream_media_items: list[Dict[str, Any]] = []
+        self._prefetched_image_urls: set[str] = set()
         self._send_attempt_baseline_targets = 0
         self._send_attempt_baseline_requests = 0
         self._send_attempt_marked_at = 0.0
@@ -1099,6 +1105,7 @@ class NetworkMonitor:
         self._last_stream_parse_result = {}
         self._last_media_generation_state = {}
         self._last_stream_media_items = []
+        self._prefetched_image_urls = set()
         
         # 兜底：如果 pre_start 未被调用，在此启动（可能错过首包）
         if not self._is_listening or not self._listen_is_active():
@@ -1515,6 +1522,22 @@ class NetworkMonitor:
     def get_stream_media_items(self) -> list[Dict[str, Any]]:
         return [dict(item) for item in (self._last_stream_media_items or []) if isinstance(item, dict)]
 
+    def _prefetch_image_url(self, url: str) -> bool:
+        normalized = normalize_remote_image_url(url)
+        if not normalized or normalized in self._prefetched_image_urls:
+            return False
+
+        cookies_dict, headers = build_image_download_request_context(self.tab)
+        result = background_image_downloader.start_download(
+            normalized,
+            cookies=cookies_dict,
+            headers=headers,
+        )
+        if result:
+            self._prefetched_image_urls.add(normalized)
+            return True
+        return False
+
     def _record_parse_result_media(self, parse_result: Dict[str, Any]) -> None:
         raw_items = parse_result.get("images")
         if not isinstance(raw_items, list) or not raw_items:
@@ -1570,6 +1593,8 @@ class NetworkMonitor:
             normalized.setdefault("byte_size", None)
             normalized.setdefault("source", f"{self.parser.get_id()}_stream")
             self._last_stream_media_items.append(normalized)
+            if media_type == "image" and normalized.get("kind") == "url":
+                self._prefetch_image_url(normalized.get("url"))
         
     def _cleanup(self):
         """

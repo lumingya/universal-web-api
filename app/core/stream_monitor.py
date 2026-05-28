@@ -14,6 +14,11 @@ import threading
 from typing import Generator, Optional, Callable, Tuple, Dict, List, Any
 
 from app.core.config import logger, BrowserConstants, SSEFormatter
+from app.core.background_image_downloader import (
+    background_image_downloader,
+    build_image_download_request_context,
+    normalize_remote_image_url,
+)
 from app.core.elements import ElementFinder
 from app.core.extractors.base import BaseExtractor
 from app.core.extractors.deep_mode import DeepBrowserExtractor
@@ -273,6 +278,7 @@ class StreamMonitor:
         self._final_images: List[Dict] = []
         self._generating_checker: Optional[GeneratingStatusCache] = None
         self._expect_image_output = False
+        self._prefetched_image_urls: set[str] = set()
 
     def _sanitize_stream_text(self, text: str) -> str:
         if not text:
@@ -339,9 +345,11 @@ class StreamMonitor:
 
         scored.sort(key=lambda item: item[:4], reverse=True)
         best = scored[0]
-        logger.debug(
+        logger.debug_throttled(
+            "latest_visual_reply_selection",
             "[latest_visual_reply] 选中视觉最新回复容器: "
-            f"index={best[4]}, column={column}, bottom={best[0]:.1f}, left={best[5]:.1f}, total={len(elements)}"
+            f"index={best[4]}, column={column}, bottom={best[0]:.1f}, left={best[5]:.1f}, total={len(elements)}",
+            interval_sec=5.0
         )
         target = best[6]
         return target, self.extractor.get_anchor(target)
@@ -358,6 +366,7 @@ class StreamMonitor:
         self._stream_ctx = ctx
         self._final_images = []
         self._generating_checker = GeneratingStatusCache(self.tab)
+        self._prefetched_image_urls = set()
         self._expect_image_output = (
             self._image_extraction_enabled
             and bool((self._image_config.get("modalities") or {}).get("image"))
@@ -430,6 +439,7 @@ class StreamMonitor:
                     ctx.active_turn_started = True
                     ctx.active_turn_baseline_len = ctx.instant_last_node_len
                     ctx.images_detected = True
+                    self._prefetch_snapshot_image_urls(current_snapshot)
                     break
                 
                 if current_text_len > ctx.instant_last_node_len + 10:
@@ -492,7 +502,8 @@ class StreamMonitor:
             'text_len': 0, 
             'is_generating': False,
             'image_count': 0,      # 🆕
-            'has_images': False    # 🆕
+            'has_images': False,   # 🆕
+            'image_urls': [],      # 🆕
         }
         try:
             eles = self.finder.find_all(selector, timeout=0.5)
@@ -511,11 +522,10 @@ class StreamMonitor:
 
             # 🆕 图片检测（轻量级，只计数）
             try:
-                img_count = last_ele.run_js("""
-                    return (this.querySelectorAll('img') || []).length;
-                """) or 0
-                result['image_count'] = int(img_count)
-                result['has_images'] = img_count > 0
+                image_info = self._extract_image_info(last_ele)
+                result['image_count'] = int(image_info.get('count', 0) or 0)
+                result['has_images'] = bool(result['image_count'] > 0)
+                result['image_urls'] = list(image_info.get('urls') or [])
             except Exception as e:
                 logger.debug(f"图片计数失败: {e}")
 
@@ -536,7 +546,8 @@ class StreamMonitor:
             'text_len': 0, 
             'is_generating': False,
             'image_count': 0,      # 🆕
-            'has_images': False    # 🆕
+            'has_images': False,   # 🆕
+            'image_urls': [],      # 🆕
         }
         try:
             eles = self.finder.find_all(selector, timeout=0.5)
@@ -562,9 +573,10 @@ class StreamMonitor:
 
             # 🆕 图片检测
             try:
-                img_count = target.run_js("return (this.querySelectorAll('img') || []).length;") or 0
-                result['image_count'] = int(img_count)
-                result['has_images'] = img_count > 0
+                image_info = self._extract_image_info(target)
+                result['image_count'] = int(image_info.get('count', 0) or 0)
+                result['has_images'] = bool(result['image_count'] > 0)
+                result['image_urls'] = list(image_info.get('urls') or [])
             except Exception:
                 pass
 
@@ -576,6 +588,61 @@ class StreamMonitor:
             logger.debug(f"Prefer-anchor Snapshot 异常: {e}")
 
         return result
+
+    def _extract_image_info(self, element) -> Dict[str, Any]:
+        script = """
+        const nodes = Array.from(this.querySelectorAll('img') || []);
+        const urls = [];
+        const seen = new Set();
+        for (const img of nodes) {
+            try {
+                const src = String(img.currentSrc || img.getAttribute('src') || img.src || '').trim();
+                if (!src || seen.has(src)) continue;
+                if (!/^https?:\\/\\//i.test(src)) continue;
+                seen.add(src);
+                urls.push(src);
+            } catch {}
+        }
+        return { count: nodes.length, urls };
+        """
+        info = element.run_js(script) or {}
+        return {
+            "count": int(info.get("count", 0) or 0),
+            "urls": [
+                normalize_remote_image_url(url)
+                for url in (info.get("urls") or [])
+                if normalize_remote_image_url(url)
+            ],
+        }
+
+    def _prefetch_snapshot_image_urls(self, snap: Dict[str, Any]) -> int:
+        urls = []
+        seen = set()
+        for raw_url in snap.get("image_urls") or []:
+            normalized = normalize_remote_image_url(raw_url)
+            if not normalized or normalized in seen or normalized in self._prefetched_image_urls:
+                continue
+            seen.add(normalized)
+            urls.append(normalized)
+
+        if not urls:
+            return 0
+
+        cookies_dict, headers = build_image_download_request_context(self.tab)
+        started = 0
+        for url in urls:
+            result = background_image_downloader.start_download(
+                url,
+                cookies=cookies_dict,
+                headers=headers,
+            )
+            if result:
+                self._prefetched_image_urls.add(url)
+                started += 1
+
+        if started:
+            logger.debug(f"[DOM Prefetch] 已提交后台图片下载: {started} 个")
+        return started
 
     def _get_active_turn_text(self, selector: str) -> str:
         """回退：取最后一个元素的文本"""
@@ -618,6 +685,7 @@ class StreamMonitor:
         baseline_img = baseline.get('image_count', 0)
         if current_img > baseline_img:
             ctx.images_detected = True
+            self._prefetch_snapshot_image_urls(current)
             return True, f"检测到新图片 ({baseline_img} -> {current_img})"
         
         return False, ""
@@ -672,6 +740,7 @@ class StreamMonitor:
                 logger.debug(f"[Image Change] 图片数量变化: {last_image_count} -> {current_image_count}")
                 ctx.images_detected = True
                 ctx.content_ever_changed = True
+                self._prefetch_snapshot_image_urls(snap)
                 silence_start = time.time()  # 重置静默计时
                 last_image_count = current_image_count
 
@@ -1060,6 +1129,10 @@ class StreamMonitor:
     def get_final_images(self) -> List[Dict]:
         """获取最终提取的图片（供外部调用）"""
         return self._final_images
+
+    def has_detected_images(self) -> bool:
+        """返回本轮流式监听期间是否曾观测到图片出现。"""
+        return bool(getattr(self._stream_ctx, "images_detected", False))
 
 
 __all__ = ['StreamContext', 'GeneratingStatusCache', 'StreamMonitor']
