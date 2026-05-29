@@ -276,6 +276,7 @@ class StreamMonitor:
         self._stream_ctx: Optional[StreamContext] = None
         self._final_complete_text = ""
         self._final_images: List[Dict] = []
+        self._final_image_urls: List[str] = []
         self._generating_checker: Optional[GeneratingStatusCache] = None
         self._expect_image_output = False
         self._prefetched_image_urls: set[str] = set()
@@ -365,6 +366,7 @@ class StreamMonitor:
         ctx = StreamContext()
         self._stream_ctx = ctx
         self._final_images = []
+        self._final_image_urls = []
         self._generating_checker = GeneratingStatusCache(self.tab)
         self._prefetched_image_urls = set()
         self._expect_image_output = (
@@ -1000,6 +1002,15 @@ class StreamMonitor:
 
         final_snap = self._get_snapshot_prefer_anchor(selector, ctx.output_target_anchor)
         final_text = final_snap.get('text', "") or ""
+        final_image_urls = [
+            normalize_remote_image_url(url)
+            for url in (final_snap.get('image_urls') or [])
+            if normalize_remote_image_url(url)
+        ]
+        if final_snap.get('has_images'):
+            ctx.images_detected = True
+            self._prefetch_snapshot_image_urls(final_snap)
+        self._final_image_urls = final_image_urls
 
         # 文本补齐
         if final_text:
@@ -1048,6 +1059,18 @@ class StreamMonitor:
                 logger.debug(f"[Final] 提取到 {len(images)} 张图片")
 
                 logger.debug("[Final] 已提取图片，但已禁用 StreamMonitor 图片 chunk 输出（由 BrowserCore 统一发送本地图片）")
+            elif final_image_urls:
+                self._final_images = [
+                    {
+                        "kind": "url",
+                        "url": url,
+                        "data_uri": None,
+                        "media_type": "image",
+                        "source": "stream_snapshot",
+                    }
+                    for url in final_image_urls
+                ]
+                logger.debug(f"[Final] 图片提取超时后回退到快照 URL: {len(self._final_images)} 张")
 
         logger.debug(f"流式监听结束: {ctx.sent_content_length}字符, {len(self._final_images)}张图片")
 
@@ -1133,6 +1156,10 @@ class StreamMonitor:
     def has_detected_images(self) -> bool:
         """返回本轮流式监听期间是否曾观测到图片出现。"""
         return bool(getattr(self._stream_ctx, "images_detected", False))
+
+    def get_final_image_urls(self) -> List[str]:
+        """获取最终 settle 快照中识别到的远程图片 URL。"""
+        return list(self._final_image_urls)
 
 
 __all__ = ['StreamContext', 'GeneratingStatusCache', 'StreamMonitor']

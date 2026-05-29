@@ -1519,14 +1519,17 @@ class BrowserWorkflowMixin:
                 stream_media_items = getattr(executor, "_last_stream_media_items", None)
                 dom_stream_media_items = []
                 dom_image_detected = False
+                dom_final_image_urls = []
                 try:
                     stream_monitor = getattr(executor, "_stream_monitor", None)
                     if stream_monitor is not None:
                         dom_stream_media_items = stream_monitor.get_final_images() or []
                         dom_image_detected = bool(stream_monitor.has_detected_images())
+                        dom_final_image_urls = stream_monitor.get_final_image_urls() or []
                 except Exception:
                     dom_stream_media_items = []
                     dom_image_detected = False
+                    dom_final_image_urls = []
 
                 should_run_media_postprocess, media_postprocess_diag = self._should_run_media_postprocess(
                     image_config,
@@ -1536,6 +1539,7 @@ class BrowserWorkflowMixin:
                     stream_media_items=stream_media_items,
                     dom_stream_media_items=dom_stream_media_items,
                     dom_image_detected=dom_image_detected,
+                    dom_final_image_urls=dom_final_image_urls,
                 )
                 if not should_run_media_postprocess:
                     logger.debug(

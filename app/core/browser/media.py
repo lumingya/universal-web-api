@@ -398,6 +398,7 @@ class BrowserMediaMixin:
         stream_media_items: Optional[List[Dict[str, Any]]] = None,
         dom_stream_media_items: Optional[List[Dict[str, Any]]] = None,
         dom_image_detected: bool = False,
+        dom_final_image_urls: Optional[List[str]] = None,
     ) -> tuple[bool, Dict[str, Any]]:
         modalities = dict((image_config or {}).get("modalities") or {})
         enabled_types = sorted({
@@ -407,6 +408,7 @@ class BrowserMediaMixin:
         })
         stream_media_count = sum(1 for item in (stream_media_items or []) if isinstance(item, dict))
         dom_stream_media_count = sum(1 for item in (dom_stream_media_items or []) if isinstance(item, dict))
+        dom_final_image_url_count = sum(1 for item in (dom_final_image_urls or []) if str(item or "").strip())
         force_postprocess = bool((image_config or {}).get("force_postprocess"))
         media_state = dict(media_generation_state or {})
         media_state_pending = bool(media_state.get("pending"))
@@ -432,6 +434,7 @@ class BrowserMediaMixin:
             "stream_media_count": stream_media_count,
             "dom_stream_media_count": dom_stream_media_count,
             "dom_image_detected": bool(dom_image_detected),
+            "dom_final_image_url_count": dom_final_image_url_count,
             "force_postprocess": force_postprocess,
             "media_state_pending": media_state_pending,
             "media_state_type": media_state_type,
@@ -453,6 +456,9 @@ class BrowserMediaMixin:
             return True, diagnostics
         if dom_stream_media_count > 0:
             diagnostics["decision"] = "dom_stream_media_items"
+            return True, diagnostics
+        if dom_final_image_url_count > 0 and "image" in enabled_types:
+            diagnostics["decision"] = "dom_final_image_urls"
             return True, diagnostics
         if bool(dom_image_detected) and "image" in enabled_types:
             diagnostics["decision"] = "dom_image_detected"

@@ -1877,7 +1877,7 @@
           "segments_per_side": 12
         }
       },
-      "实验性预设-此预设可能有封号风险": {
+      "实验性预设-此预设可能增加封号风险": {
         "selectors": {
           "input_box": "textarea",
           "send_btn": "div.bf38813a > div > div[role='button']",

@@ -16,7 +16,7 @@ set "SCRIPT_DIR="
 
 echo.
 echo ========================================
-echo   Universal Web-to-API 启动脚本
+echo    Universal Web-to-API 启动脚本
 echo ========================================
 echo.
 
@@ -48,24 +48,24 @@ if not defined BROWSER_PROFILE_NAME set "BROWSER_PROFILE_NAME="
 if not defined PROFILE_CLEAN_ENABLED set "PROFILE_CLEAN_ENABLED=false"
 
 echo.
-echo   当前配置:
-echo     APP_HOST     : %APP_HOST%
-echo     APP_PORT     : %APP_PORT%
-echo     BROWSER_PORT : %BROWSER_PORT%
-echo     AUTO_UPDATE  : %AUTO_UPDATE_ENABLED%
+echo    当前配置:
+echo         APP_HOST     : %APP_HOST%
+echo         APP_PORT     : %APP_PORT%
+echo         BROWSER_PORT : %BROWSER_PORT%
+echo         AUTO_UPDATE  : %AUTO_UPDATE_ENABLED%
 if defined BROWSER_PROFILE_DIR (
-    echo     PROFILE_DIR   : %BROWSER_PROFILE_DIR%
+    echo         PROFILE_DIR   : %BROWSER_PROFILE_DIR%
 ) else (
-    echo     PROFILE_DIR   : %cd%\chrome_profile
+    echo         PROFILE_DIR   : %cd%\chrome_profile
 )
 if defined BROWSER_PROFILE_NAME (
-    echo     PROFILE_NAME  : %BROWSER_PROFILE_NAME%
+    echo         PROFILE_NAME  : %BROWSER_PROFILE_NAME%
 )
-echo     PROFILE_CLEAN : %PROFILE_CLEAN_ENABLED%
+echo         PROFILE_CLEAN : %PROFILE_CLEAN_ENABLED%
 if /I "%PROXY_ENABLED%"=="true" (
-    echo     PROXY        : %PROXY_ADDRESS%
+    echo         PROXY        : %PROXY_ADDRESS%
 ) else (
-    echo     PROXY        : 已禁用
+    echo         PROXY        : 已禁用
 )
 echo.
 
@@ -86,13 +86,13 @@ if %errorlevel% neq 0 (
     ) else (
         echo [ERROR] 未找到 Python 命令
         echo.
-        echo   可能的原因:
-        echo     1. 尚未安装 Python
-        echo     2. Python 未添加到系统 PATH 环境变量
+        echo    可能的原因:
+        echo         1. 尚未安装 Python
+        echo         2. Python 未添加到系统 PATH 环境变量
         echo.
-        echo   解决方案:
-        echo     1. 从 https://www.python.org/downloads/ 下载安装 Python 3.8+
-        echo     2. 安装时务必勾选 "Add Python to PATH"
+        echo    解决方案:
+        echo         1. 从 https://www.python.org/downloads/ 下载安装 Python 3.10+
+        echo         2. 安装时务必勾线 "Add Python to PATH"
         echo.
         pause
         exit /b 1
@@ -116,17 +116,17 @@ if /I "!PYTHON_CMD!"=="python" (
 if "!IS_STORE_PYTHON!"=="1" (
     echo [ERROR] 检测到 Windows Store Python 占位符
     echo.
-    echo   路径: !PYTHON_PATH!
+    echo    路径: !PYTHON_PATH!
     echo.
-    echo   这不是真正的 Python，而是 Windows Store 的跳转链接。
-    echo   它会导致虚拟环境创建失败。
+    echo    这不是真正的 Python，而是 Windows Store 的跳转链接。
+    echo    它会导致虚拟环境创建失败。
     echo.
-    echo   解决方案:
-    echo     1. 按 Win+I 打开设置
-    echo     2. 搜索 "应用执行别名" 或 "管理应用执行别名"
-    echo     3. 找到 python.exe 和 python3.exe，将它们关闭
-    echo     4. 从 https://www.python.org/downloads/ 安装完整版 Python
-    echo        安装时务必勾选 "Add Python to PATH"
+    echo    解决方案:
+    echo         1. 按 Win+I 打开设置
+    echo         2. 搜索 "应用执行别名" 或 "管理应用执行别名"
+    echo         3. 找到 python.exe 和 python3.exe，将它们关闭
+    echo         4. 从 https://www.python.org/downloads/ 安装完整版 Python
+    echo            安装时务必勾选 "Add Python to PATH"
     echo.
     pause
     exit /b 1
@@ -147,18 +147,18 @@ REM 检查版本号是否获取成功
 if not defined PYTHON_VERSION (
     echo [ERROR] 无法获取 Python 版本信息
     echo.
-    echo   检测到的 Python 路径: !PYTHON_PATH!
+    echo    检测到的 Python 路径: !PYTHON_PATH!
     echo.
-    echo   可能的原因:
-    echo     1. Python 安装不完整或已损坏
-    echo     2. Python 解释器无法正常执行
+    echo    可能的原因:
+    echo         1. Python 安装不完整或已损坏
+    echo         2. Python 解释器无法正常执行
     echo.
-    echo   诊断步骤 - 请手动运行以下命令:
-    echo     python --version
-    echo     python -c "print('hello')"
+    echo    诊断步骤 - 请手动运行以下命令:
+    echo         python --version
+    echo         python -c "print('hello')"
     echo.
-    echo   如果上述命令报错，请重新安装 Python:
-    echo     https://www.python.org/downloads/
+    echo    如果上述命令报错，请重新安装 Python:
+    echo         https://www.python.org/downloads/
     echo.
     pause
     exit /b 1
@@ -181,10 +181,10 @@ if defined PY_MAJOR if defined PY_MINOR (
 if "!VERSION_OK!"=="0" (
     echo [ERROR] Python 版本过低
     echo.
-    echo   当前版本: Python !PYTHON_VERSION!
-    echo   最低要求: Python 3.8+
+    echo    当前版本: Python !PYTHON_VERSION!
+    echo    最低要求: Python 3.8+
     echo.
-    echo   请从 https://www.python.org/downloads/ 下载最新版本
+    echo    请从 https://www.python.org/downloads/ 下载最新版本
     echo.
     pause
     exit /b 1
@@ -213,7 +213,7 @@ if /I "%AUTO_UPDATE_ENABLED%"=="true" (
     echo.
 ) else (
     echo [INFO] 自动更新已禁用
-    echo       如需启用，请修改 .env 中的 AUTO_UPDATE_ENABLED=true
+    echo        如需启用，请修改 .env 中的 AUTO_UPDATE_ENABLED=true
     echo.
 )
 
@@ -265,17 +265,17 @@ if not exist "venv" (
         echo.
         echo [ERROR] 创建虚拟环境失败
         echo.
-        echo   可能的原因:
-        echo     1. Python 安装不完整（缺少 venv 模块）
-        echo     2. 当前目录没有写入权限
-        echo     3. 磁盘空间不足
-        echo     4. 杀毒软件阻止
+        echo    可能的原因:
+        echo         1. Python 安装不完整（缺少 venv 模块）
+        echo         2. 当前目录没有写入权限
+        echo         3. 磁盘空间不足
+        echo         4. 杀毒软件阻止
         echo.
-        echo   解决方案:
-        echo     1. 确保安装了完整版 Python（非精简版）
-        echo     2. 尝试以管理员身份运行此脚本
-        echo     3. 尝试运行: python -m ensurepip --upgrade
-        echo     4. 临时关闭杀毒软件后重试
+        echo    解决方案:
+        echo         1. 确保安装了完整版 Python（非精简版）
+        echo         2. 尝试以管理员身份运行此脚本
+        echo         3. 尝试运行: python -m ensurepip --upgrade
+        echo         4. 临时关闭杀毒软件后重试
         echo.
         pause
         exit /b 1
@@ -290,9 +290,9 @@ if not exist "venv\Scripts\activate.bat" (
     echo.
     echo [ERROR] 虚拟环境损坏，缺少 activate.bat
     echo.
-    echo   解决方案:
-    echo     1. 删除 venv 文件夹: rmdir /s /q venv
-    echo     2. 重新运行此脚本
+    echo    解决方案:
+    echo         1. 删除 venv 文件夹: rmdir /s /q venv
+    echo         2. 重新运行此脚本
     echo.
     pause
     exit /b 1
@@ -302,9 +302,9 @@ if not exist "venv\Scripts\python.exe" (
     echo.
     echo [ERROR] 虚拟环境损坏，缺少 python.exe
     echo.
-    echo   解决方案:
-    echo     1. 删除 venv 文件夹: rmdir /s /q venv
-    echo     2. 重新运行此脚本
+    echo    解决方案:
+    echo         1. 删除 venv 文件夹: rmdir /s /q venv
+    echo         2. 重新运行此脚本
     echo.
     pause
     exit /b 1
@@ -322,7 +322,7 @@ REM 检查 requirements.txt 是否存在
 if not exist "requirements.txt" (
     echo [ERROR] 缺少 requirements.txt 文件
     echo.
-    echo   请确保项目文件完整，或从 GitHub 重新下载
+    echo    请确保项目文件完整，或从 GitHub 重新下载
     echo.
     pause
     exit /b 1
@@ -380,16 +380,16 @@ if "!NEED_INSTALL!"=="1" (
         echo.
         echo [ERROR] 依赖安装失败（已尝试 PyPI 和国内镜像）
         echo.
-        echo   可能的原因:
-        echo     1. 网络连接问题（无法访问 PyPI）
-        echo     2. pip 版本过低
-        echo     3. 某些包需要 C++ 编译器
+        echo    可能的原因:
+        echo         1. 网络连接问题（无法访问 PyPI）
+        echo         2. pip 版本过低
+        echo         3. 某些包需要 C++ 编译器
         echo.
-        echo   解决方案:
-        echo     1. 检查网络连接，尝试访问 https://pypi.org
-        echo     2. 升级 pip: python -m pip install --upgrade pip
-        echo     3. 手动重试国内镜像:
-        echo        pip install -r requirements.txt -i !PIP_MIRROR_URL!
+        echo    解决方案:
+        echo         1. 检查网络连接，尝试访问 https://pypi.org
+        echo         2. 升级 pip: python -m pip install --upgrade pip
+        echo         3. 手动重试国内镜像:
+        echo             pip install -r requirements.txt -i !PIP_MIRROR_URL!
         echo.
         REM 安装失败时删除哈希，确保下次重试
         if exist "!REQ_HASH_FILE!" del "!REQ_HASH_FILE!"
@@ -422,7 +422,7 @@ if exist "patch_drissionpage.py" (
     venv\Scripts\python.exe patch_drissionpage.py
     if !errorlevel! neq 0 (
         echo [WARN] 补丁应用失败，网络监听模式可能触发 CF 检测
-        echo        项目仍可正常运行（DOM 模式不受影响）
+        echo         项目仍可正常运行（DOM 模式不受影响）
     )
 ) else (
     echo [WARN] 未找到 patch_drissionpage.py，跳过补丁
@@ -514,16 +514,16 @@ if defined BROWSER_EXE goto :BROWSER_FOUND
 echo.
 echo [ERROR] 找不到任何可用的 Chromium 内核浏览器
 echo.
-echo   已检测以下浏览器 (按优先级排序):
-echo     1. Chrome
-echo     2. Microsoft Edge
-echo     3. Brave
-echo     4. Vivaldi
-echo     5. Opera
+echo    已检测以下浏览器 (按优先级排序):
+echo         1. Chrome
+echo         2. Microsoft Edge
+echo         3. Brave
+echo         4. Vivaldi
+echo         5. Opera
 echo.
-echo   解决方案:
-echo     - 安装上述任一浏览器
-echo     - 或在 .env 文件中设置 BROWSER_PATH=你的浏览器完整路径
+echo    解决方案:
+echo         - 安装上述任一浏览器
+echo         - 或在 .env 文件中设置 BROWSER_PATH=你的浏览器完整路径
 echo.
 pause
 exit /b 1
@@ -577,34 +577,34 @@ echo.
 
 REM ---------- 8) 显示版本信息 ----------
 if exist "VERSION" (
-    echo   版本信息:
-    echo   ----------------------------------------
+    echo    版本信息:
+    echo    ----------------------------------------
     type VERSION
     echo.
-    echo   ----------------------------------------
+    echo    ----------------------------------------
 )
 
 REM ---------- 9) 启动服务 ----------
 echo ========================================
-echo   服务启动中...
+echo    服务启动中...
 echo ========================================
 echo.
-echo   API 地址:    http://%APP_HOST%:%APP_PORT%
-echo   控制面板:    http://%APP_HOST%:%APP_PORT%/
-echo   API 文档:    http://%APP_HOST%:%APP_PORT%/docs
+echo    API 地址:     http://%APP_HOST%:%APP_PORT%
+echo    控制面板:     http://%APP_HOST%:%APP_PORT%/
+echo    API 文档:     http://%APP_HOST%:%APP_PORT%/docs
 echo.
-echo   项目结构:
-echo     配置目录:  %PROJECT_DIR%\config
-echo     静态资源:  %PROJECT_DIR%\static
+echo    项目结构:
+echo         配置目录:  %PROJECT_DIR%\config
+echo         静态资源:  %PROJECT_DIR%\static
 echo.
 if /I "%AUTO_UPDATE_ENABLED%"=="true" (
-    echo   [WARN] 自动更新: 已启用
+    echo    [WARN] 自动更新: 已启用
 ) else (
-    echo   自动更新: 已禁用
+    echo    自动更新: 已禁用
 )
 echo.
-echo   按 Ctrl+C 停止服务
-echo   配置修改后会自动重启
+echo    按 Ctrl+C 停止服务
+echo    配置修改后会自动重启
 echo ========================================
 echo.
 
@@ -626,7 +626,7 @@ if !EXIT_CODE! equ 3 (
     REM 退出码 3 = 配置更新需要重启
     echo.
     echo ========================================
-    echo   检测到配置更新，正在重启服务...
+    echo    检测到配置更新，正在重启服务...
     echo ========================================
     timeout /t 2 /nobreak >nul
     goto :SERVICE_LOOP

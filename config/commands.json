@@ -786,8 +786,8 @@
       "group_name": "gemini",
       "script": "",
       "script_lang": "javascript",
-      "last_triggered": 1779730323.5727315,
-      "trigger_count": 7,
+      "last_triggered": 1779995273.9857564,
+      "trigger_count": 2,
       "stop_on_error": false,
       "log_enabled": true,
       "log_level": "GLOBAL"
@@ -1033,8 +1033,8 @@
       "group_name": "gemini",
       "script": "",
       "script_lang": "javascript",
-      "last_triggered": 1779801923.8992045,
-      "trigger_count": 13064,
+      "last_triggered": 1780014418.9877286,
+      "trigger_count": 4455,
       "log_enabled": false,
       "log_level": "GLOBAL",
       "stop_on_error": false
@@ -1376,7 +1376,7 @@
     {
       "id": "cmd_arena_ip_rotate_q4",
       "name": "ARENA_EVERY4_ROTATE_IP",
-      "enabled": true,
+      "enabled": false,
       "log_enabled": true,
       "log_level": "ERROR",
       "mode": "advanced",
@@ -1414,8 +1414,8 @@
       "group_name": "arena",
       "script": "import json as _json\nimport time as _time\nimport urllib.parse\nimport requests\n\nraise_if_cancelled()\nCLASH_API = 'http://127.0.0.1:9097'.rstrip('/')\nCLASH_SECRET = '1'\nSELECTOR_CANDIDATES = ['\\u826f\\u5fc3\\u4e91', 'GLOBAL']\nWHITELIST = [\n    '\\U0001f1ed\\U0001f1f0\\u9999\\u6e2f\\u4e13\\u7ebf02|BGP|\\u6d41\\u5a92\\u4f53',\n    '\\U0001f1ed\\U0001f1f0\\u9999\\u6e2f\\u9ad8\\u901f02|BGP|\\u6d41\\u5a92\\u4f53',\n    '\\U0001f1ed\\U0001f1f0\\u9999\\u6e2f\\u4e13\\u7ebf03|BGP|\\u6d41\\u5a92\\u4f53',\n    '\\U0001f1f8\\U0001f1ec\\u65b0\\u52a0\\u5761\\u9ad8\\u901f06|BGP|\\u6d41\\u5a92\\u4f53',\n    '\\U0001f1ef\\U0001f1f5\\u65e5\\u672c\\u4e13\\u7ebf02|BGP|\\u6d41\\u5a92\\u4f53',\n    '\\U0001f1f8\\U0001f1ec\\u65b0\\u52a0\\u5761\\u4e13\\u7ebf03|BGP|\\u6d41\\u5a92\\u4f53',\n    '\\U0001f1f8\\U0001f1ec\\u65b0\\u52a0\\u5761\\u9ad8\\u901f03|BGP|\\u6d41\\u5a92\\u4f53',\n    '\\U0001f1f8\\U0001f1ec\\u65b0\\u52a0\\u5761\\u9ad8\\u901f04|BGP|\\u6d41\\u5a92\\u4f53',\n]\nheaders = {'Content-Type': 'application/json'}\nif CLASH_SECRET:\n    headers['Authorization'] = f'Bearer {CLASH_SECRET}'\n\nselector_name = ''\nselector_url = ''\nselector_data = None\nlast_error = ''\nfor candidate in SELECTOR_CANDIDATES:\n    raise_if_cancelled()\n    try:\n        url = CLASH_API + '/proxies/' + urllib.parse.quote(candidate, safe='')\n        resp = requests.get(url, headers=headers, timeout=5)\n        resp.raise_for_status()\n        data = resp.json()\n        allowed = [name for name in WHITELIST if name in (data.get('all') or [])]\n        if not allowed:\n            last_error = f'no_whitelist_nodes_in_selector:{candidate}'\n            continue\n        selector_name = candidate\n        selector_url = url\n        selector_data = data\n        break\n    except Exception as exc:\n        last_error = f'{candidate}:{exc}'\n\nif not selector_data:\n    result = _json.dumps({'ok': False, 'error': last_error or 'selector_unavailable'}, ensure_ascii=False)\nelse:\n    raise_if_cancelled()\n    allowed = [name for name in WHITELIST if name in (selector_data.get('all') or [])]\n    current = str(selector_data.get('now') or '')\n    next_node = allowed[(allowed.index(current) + 1) % len(allowed)] if current in allowed else allowed[0]\n    if next_node == current:\n        result = _json.dumps({'ok': True, 'switched': False, 'selector': selector_name, 'node': current, 'pool_size': len(allowed)}, ensure_ascii=False)\n    else:\n        switch_resp = requests.put(selector_url, json={'name': next_node}, headers=headers, timeout=5)\n        switch_resp.raise_for_status()\n        logger.info(f'[CMD] Arena IP rotate: {selector_name} {current} -> {next_node}')\n        try:\n            _time.sleep(1.0)\n            tab.refresh()\n            _time.sleep(2.0)\n        except Exception as refresh_exc:\n            logger.warning(f'[CMD] Arena IP rotate refresh failed: {refresh_exc}')\n        result = _json.dumps({'ok': True, 'switched': True, 'selector': selector_name, 'from': current, 'to': next_node, 'pool_size': len(allowed)}, ensure_ascii=False)",
       "script_lang": "python",
-      "last_triggered": 1779715372.2003307,
-      "trigger_count": 7
+      "last_triggered": 1780013980.5873723,
+      "trigger_count": 2
     }
   ]
 }

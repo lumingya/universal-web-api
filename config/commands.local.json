@@ -153,7 +153,7 @@
     {
       "id": "cmd_arena_ip_rotate_q4",
       "name": "ARENA_EVERY4_ROTATE_IP",
-      "enabled": true,
+      "enabled": false,
       "group_name": "arena"
     }
   ]
