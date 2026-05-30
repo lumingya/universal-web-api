@@ -293,7 +293,8 @@ window.CommandsTabComputed = {
                     'location.reload();';
             } else {
                 return '# Python 脚本\n' +
-                    '# 可用变量: tab, session, browser, config_engine, logger, time, json\n\n' +
+                    '# 默认使用受限沙箱；可用变量: tab, session, browser, config_engine, logger, time, json\n' +
+                    '# 默认允许导入: json, time, datetime, math, requests, urllib.parse\n\n' +
                     'logger.info(f"当前 URL: {tab.url}")\n' +
                     'logger.info(f"请求次数: {session.request_count}")\n\n' +
                     '# 清除 cookies 并刷新\n' +

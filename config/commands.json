@@ -320,7 +320,7 @@
     {
       "id": "cmd_cf_pagecheck_arena_verify",
       "name": "自动过cf盾",
-      "enabled": true,
+      "enabled": false,
       "mode": "simple",
       "trigger": {
         "type": "page_check",
@@ -372,7 +372,7 @@
       "group_name": "arena",
       "script": "",
       "script_lang": "javascript",
-      "last_triggered": 1773823912.412253,
+      "last_triggered": 1780072414.1921036,
       "trigger_count": 2,
       "log_enabled": true,
       "log_level": "GLOBAL",
@@ -1033,8 +1033,8 @@
       "group_name": "gemini",
       "script": "",
       "script_lang": "javascript",
-      "last_triggered": 1780014418.9877286,
-      "trigger_count": 4455,
+      "last_triggered": 1780072433.6104295,
+      "trigger_count": 6,
       "log_enabled": false,
       "log_level": "GLOBAL",
       "stop_on_error": false

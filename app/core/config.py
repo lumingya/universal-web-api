@@ -32,6 +32,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_LOG_DIR = PROJECT_ROOT / "logs"
 _shared_file_log_handler: Optional[logging.Handler] = None
 _shared_file_log_handler_lock = threading.Lock()
+_logger_setup_lock = threading.RLock()
+_logger_registry_lock = threading.Lock()
+_logger_registry: Dict[str, "SecureLogger"] = {}
 # ================= 环境变量加载 =================
 
 
@@ -460,29 +463,184 @@ class LogCollector:
 log_collector = LogCollector()
 
 
+_SENSITIVE_KEY_HINTS = (
+    "authorization",
+    "cookie",
+    "set-cookie",
+    "password",
+    "passwd",
+    "secret",
+    "token",
+    "api_key",
+    "apikey",
+    "access_key",
+    "refresh_token",
+    "session",
+    "csrf",
+)
+_REDACTED_TEXT = "******"
+_SENSITIVE_TEXT_PATTERNS = (
+    (
+        re.compile(r"(?i)\b(Bearer)\s+([A-Za-z0-9._~+/=-]{8,})"),
+        r"\1 ******",
+    ),
+    (
+        re.compile(r"(?i)\b(Authorization|Cookie|Set-Cookie)\s*:\s*[^\r\n;]+(?:;[^\r\n]*)?"),
+        lambda match: f"{match.group(1)}: ******",
+    ),
+    (
+        re.compile(
+            r"(?i)([?&](?:access_token|refresh_token|id_token|token|api_key|apikey|key|secret|password)=)"
+            r"[^&\s]+"
+        ),
+        r"\1******",
+    ),
+    (
+        re.compile(
+            r"(?i)(\b(?:access_token|refresh_token|id_token|token|api_key|apikey|secret|password)"
+            r"\s*=\s*)[^\s,&;]+"
+        ),
+        r"\1******",
+    ),
+    (
+        re.compile(
+            r'(?i)("(?:authorization|cookie|set-cookie|password|passwd|secret|token|api_key|apikey|'
+            r'access_token|refresh_token|session|csrf)"\s*:\s*)"[^"]*"'
+        ),
+        r'\1"******"',
+    ),
+    (
+        re.compile(
+            r'(?i)("(?:authorization|cookie|set-cookie|password|passwd|secret|token|api_key|apikey|'
+            r'access_token|refresh_token|session|csrf)"\s*:\s*")[^"\r\n]*$'
+        ),
+        r'\1******',
+    ),
+)
+
+
+def _is_sensitive_key(key: Any) -> bool:
+    normalized = str(key or "").strip().lower().replace("-", "_")
+    return any(hint.replace("-", "_") in normalized for hint in _SENSITIVE_KEY_HINTS)
+
+
+def _sanitize_sensitive_text(text: str) -> str:
+    sanitized = str(text or "")
+    if not sanitized:
+        return sanitized
+    for pattern, replacement in _SENSITIVE_TEXT_PATTERNS:
+        sanitized = pattern.sub(replacement, sanitized)
+    return sanitized
+
+
+def sanitize_sensitive_data(value: Any, *, _depth: int = 0) -> Any:
+    """Return a sanitized copy suitable for logs and debug artifacts."""
+    if _depth > 8:
+        return "[max-depth]"
+
+    if isinstance(value, dict):
+        sanitized_dict = {}
+        for key, item in value.items():
+            if _is_sensitive_key(key):
+                sanitized_dict[key] = _REDACTED_TEXT
+            else:
+                sanitized_dict[key] = sanitize_sensitive_data(item, _depth=_depth + 1)
+        return sanitized_dict
+
+    if isinstance(value, list):
+        return [sanitize_sensitive_data(item, _depth=_depth + 1) for item in value]
+
+    if isinstance(value, tuple):
+        return tuple(sanitize_sensitive_data(item, _depth=_depth + 1) for item in value)
+
+    if isinstance(value, str):
+        return _sanitize_sensitive_text(value)
+
+    return value
+
+
+def _truncate_long_message(text: str, max_chars: int) -> tuple[str, bool]:
+    raw_text = str(text or "")
+    if max_chars <= 0 or len(raw_text) <= max_chars:
+        return raw_text, False
+    omitted = len(raw_text) - max_chars
+    return (
+        f"{raw_text[:max_chars]}... [truncated {omitted} chars; see app.log for full sanitized text]",
+        True,
+    )
+
+
+def _get_log_display_limit(env_name: str, default: int) -> int:
+    return _get_positive_int_env(env_name, default)
+
+
+def _record_request_id(record: logging.LogRecord) -> str:
+    return str(getattr(record, "codex_request_id", "") or "SYSTEM")
+
+
+def _record_logger_name(record: logging.LogRecord) -> str:
+    return str(
+        getattr(record, "codex_logger_name", "") or getattr(record, "name", "") or ""
+    ).upper()[:8]
+
+
+def _record_kind(record: logging.LogRecord) -> str:
+    return str(getattr(record, "codex_kind", "") or record.levelname or "INFO").upper()
+
+
+def _record_display_message(record: logging.LogRecord) -> str:
+    message = str(getattr(record, "codex_display_message_text", "") or "")
+    if not message:
+        message = str(record.getMessage() or "")
+    return _sanitize_sensitive_text(message)
+
+
+def _format_log_display_line(
+    record: logging.LogRecord,
+    message: str,
+    *,
+    max_chars: int = 0,
+) -> tuple[str, bool]:
+    import datetime
+
+    now = datetime.datetime.fromtimestamp(
+        float(getattr(record, "created", time.time()) or time.time())
+    ).strftime("%H:%M:%S")
+    request_id = _record_request_id(record)
+    logger_name = _record_logger_name(record)
+    prefix = f"{now} │ {request_id:<8} │ {logger_name:<8} │ "
+    body, truncated = _truncate_long_message(str(message or ""), max_chars)
+    body = body.replace("\n", "\n" + " " * len(prefix))
+    return f"{prefix}{body}", truncated
+
+
 class _WebLogHandler(logging.Handler):
     """将日志发送到 Web 收集器（内部类）"""
 
     def emit(self, record):
         try:
-            msg = self.format(record)
-            raw_message = str(getattr(record, "codex_message", "") or "")
+            raw_message = _sanitize_sensitive_text(str(getattr(record, "codex_message", "") or ""))
             if not raw_message:
-                raw_message = str(record.getMessage() or msg)
-            message_text = str(getattr(record, "codex_display_message_text", "") or "")
-            original_message_text = str(
+                raw_message = _sanitize_sensitive_text(str(record.getMessage() or ""))
+            message_text = _record_display_message(record)
+            original_message_text = _sanitize_sensitive_text(str(
                 getattr(record, "codex_original_message_text", "") or raw_message
-            )
-            parts = str(msg).split(" │ ", 3)
-            if not message_text and len(parts) == 4 and parts[3].strip():
-                message_text = parts[3]
+            ))
             if not message_text:
                 message_text = raw_message
-            logger_name = str(
-                getattr(record, "codex_logger_name", "") or getattr(record, "name", "") or ""
-            ).upper()[:8]
-            request_id = str(getattr(record, "codex_request_id", "") or "SYSTEM")
-            kind = str(getattr(record, "codex_kind", "") or record.levelname or "INFO").upper()
+            web_limit = _get_log_display_limit("LOG_WEB_MAX_CHARS", 2000)
+            message_text, message_truncated = _truncate_long_message(message_text, web_limit)
+            original_message_text, original_truncated = _truncate_long_message(
+                original_message_text,
+                web_limit,
+            )
+            msg, line_truncated = _format_log_display_line(
+                record,
+                message_text,
+            )
+            logger_name = _record_logger_name(record)
+            request_id = _record_request_id(record)
+            kind = _record_kind(record)
             log_collector.add({
                 "timestamp": float(getattr(record, "created", time.time()) or time.time()),
                 "level": str(record.levelname or "INFO").upper(),
@@ -494,6 +652,7 @@ class _WebLogHandler(logging.Handler):
                 "message_alias": message_text if message_text != original_message_text else "",
                 "logger": logger_name,
                 "request_id": request_id,
+                "truncated": bool(message_truncated or original_truncated or line_truncated),
             })
         except Exception:
             self.handleError(record)
@@ -571,7 +730,7 @@ class _ConsoleColorFormatter(logging.Formatter):
     )
 
     def __init__(self):
-        super().__init__("%(message)s")
+        super().__init__()
         self._use_color = _should_use_console_color()
 
     def _resolve_tone(self, record: logging.LogRecord, message: str) -> Optional[str]:
@@ -589,25 +748,71 @@ class _ConsoleColorFormatter(logging.Formatter):
         return None
 
     def format(self, record: logging.LogRecord) -> str:
-        message = super().format(record)
-        if not self._use_color:
-            return message
+        message = _record_display_message(record)
+        console_limit = _get_log_display_limit("LOG_CONSOLE_MAX_CHARS", 1200)
+        message, _ = _truncate_long_message(message, console_limit)
+        formatted, _ = _format_log_display_line(record, message)
+        if record.exc_info:
+            exc_text = self.formatException(record.exc_info)
+            if exc_text:
+                formatted = f"{formatted}\n{exc_text}"
 
-        tone = self._resolve_tone(record, message)
+        if not self._use_color:
+            return formatted
+
+        tone = self._resolve_tone(record, formatted)
         if not tone:
-            return message
+            return formatted
 
         color = self.COLORS.get(tone)
         if not color:
-            return message
+            return formatted
 
-        return f"{color}{message}{self.RESET}"
+        return f"{color}{formatted}{self.RESET}"
+
+
+class _FileLogFormatter(logging.Formatter):
+    """文件日志使用结构化字段，避免控制台前缀被再次包裹。"""
+
+    def __init__(self):
+        super().__init__("%(asctime)s | %(levelname)s | %(name)s | %(message)s", "%Y-%m-%d %H:%M:%S")
+
+    def format(self, record: logging.LogRecord) -> str:
+        original_message = str(
+            getattr(record, "codex_original_message_text", "") or record.getMessage() or ""
+        )
+        message = _sanitize_sensitive_text(original_message)
+        prefix = (
+            f"{self.formatTime(record, self.datefmt)} | "
+            f"{record.levelname} | "
+            f"{_record_logger_name(record) or record.name} | "
+        )
+        formatted = f"{prefix}{message.replace(chr(10), chr(10) + ' ' * len(prefix))}"
+        if record.exc_info:
+            exc_text = self.formatException(record.exc_info)
+            if exc_text:
+                formatted = f"{formatted}\n{exc_text}"
+        return formatted
+
+
+class _DisplayLogFormatter(logging.Formatter):
+    """保留旧式单行展示前缀，供兼容 handler 使用。"""
+
+    def format(self, record: logging.LogRecord) -> str:
+        message = _record_display_message(record)
+        formatted, _ = _format_log_display_line(record, message)
+        if record.exc_info:
+            exc_text = self.formatException(record.exc_info)
+            if exc_text:
+                formatted = f"{formatted}\n{exc_text}"
+        return formatted
 
 
 # 创建全局 Web 日志处理器
 _web_log_handler = _WebLogHandler()
 _web_log_handler.setLevel(logging.DEBUG)
-_web_log_handler.setFormatter(logging.Formatter('%(message)s'))
+_web_log_handler.setFormatter(_DisplayLogFormatter())
+setattr(_web_log_handler, "_codex_secure_handler", "web")
 
 
 def _get_positive_int_env(name: str, default: int) -> int:
@@ -659,12 +864,8 @@ def get_shared_file_log_handler() -> Optional[logging.Handler]:
                 encoding="utf-8",
             )
             handler.setLevel(logging.DEBUG)
-            handler.setFormatter(
-                logging.Formatter(
-                    '%(asctime)s | %(levelname)s | %(name)s | %(message)s',
-                    '%Y-%m-%d %H:%M:%S',
-                )
-            )
+            handler.setFormatter(_FileLogFormatter())
+            setattr(handler, "_codex_secure_handler", "file")
             _shared_file_log_handler = handler
         except Exception as e:
             try:
@@ -1487,38 +1688,48 @@ class SecureLogger:
     
     def _setup_logger(self, name: str, level: int) -> logging.Logger:
         logger = logging.getLogger(name)
-        
-        # 防止日志向上层冒泡导致重复打印
-        logger.propagate = False 
-        
-        # 清除旧 handler
-        if logger.handlers:
-            logger.handlers.clear()
-        
-        # 控制台输出 handler
-        console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setLevel(logging.DEBUG)
-        console_handler.setFormatter(_ConsoleColorFormatter())
-        logger.addHandler(console_handler)
 
-        file_handler = get_shared_file_log_handler()
-        if file_handler is not None:
-            logger.addHandler(file_handler)
-        
-        # Web 前端日志收集 handler（始终添加）
-        logger.addHandler(_web_log_handler)
-        
-        logger.setLevel(logging.DEBUG)
+        with _logger_setup_lock:
+            # 防止日志向上层冒泡导致重复打印
+            logger.propagate = False
+
+            existing_kinds = {
+                getattr(handler, "_codex_secure_handler", None)
+                for handler in logger.handlers
+            }
+
+            if "console" not in existing_kinds:
+                console_handler = logging.StreamHandler(sys.stdout)
+                console_handler.setLevel(logging.DEBUG)
+                console_handler.setFormatter(_ConsoleColorFormatter())
+                setattr(console_handler, "_codex_secure_handler", "console")
+                logger.addHandler(console_handler)
+
+            file_handler = get_shared_file_log_handler()
+            if file_handler is not None and file_handler not in logger.handlers:
+                logger.addHandler(file_handler)
+
+            if _web_log_handler not in logger.handlers:
+                logger.addHandler(_web_log_handler)
+
+            logger.setLevel(logging.DEBUG)
         return logger
 
     def _format(self, level_key: str, msg: str) -> str:
         """核心格式化逻辑（简洁版）"""
-        import datetime
-        now = datetime.datetime.now().strftime('%H:%M:%S')
-        
-        request_id = _request_context.get()
-        ctx_str = request_id if request_id else "SYSTEM"
-        return f"{now} │ {ctx_str:<8} │ {self._name:<8} │ {msg}"
+        record = logging.LogRecord(
+            name=self._name,
+            level=self.LEVEL_MAP.get(str(level_key or "").upper(), logging.INFO),
+            pathname="",
+            lineno=0,
+            msg=str(msg or ""),
+            args=(),
+            exc_info=None,
+        )
+        record.codex_request_id = _request_context.get() or "SYSTEM"
+        record.codex_logger_name = self._name
+        formatted, _ = _format_log_display_line(record, msg)
+        return formatted
 
     def _make_debug_throttle_key(self, key: str) -> str:
         normalized = str(key or "").strip() or "__default__"
@@ -1564,10 +1775,9 @@ class SecureLogger:
             display_message_text = _cuteify_info_message(self._name, original_message_text)
         elif upper_level_key == "DEBUG":
             display_message_text = _cuteify_debug_message(self._name, original_message_text)
-        formatted = self._format(level_key, display_message_text)
         self._logger.log(
             level,
-            formatted,
+            original_message_text,
             exc_info=exc_info,
             extra={
                 "codex_request_id": request_id,
@@ -1990,7 +2200,13 @@ class MessageValidator:
 
 def get_logger(name: str) -> SecureLogger:
     """获取 SecureLogger 实例（统一日志入口）"""
-    return SecureLogger(name)
+    normalized = str(name or "APP").strip() or "APP"
+    with _logger_registry_lock:
+        instance = _logger_registry.get(normalized)
+        if instance is None:
+            instance = SecureLogger(normalized)
+            _logger_registry[normalized] = instance
+        return instance
 
 
 # 创建常用 logger 实例（向后兼容）

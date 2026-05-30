@@ -60,9 +60,25 @@ window.ConfigTab = {
             defaultImageConfig: {
                 enabled: false,
                 modalities: {
-                    image: false,
-                    audio: false,
-                    video: false
+                    image: {
+                        enabled: false,
+                        run_policy: 'disabled',
+                        quick_probe_timeout_seconds: 1.0,
+                        late_wait_timeout_seconds: 45.0,
+                        blind_wait_timeout_seconds: 1.0
+                    },
+                    audio: {
+                        enabled: false,
+                        run_policy: 'disabled',
+                        quick_probe_timeout_seconds: 1.0,
+                        capture_timeout_seconds: 12.0
+                    },
+                    video: {
+                        enabled: false,
+                        run_policy: 'disabled',
+                        quick_probe_timeout_seconds: 1.0,
+                        late_wait_timeout_seconds: 90.0
+                    }
                 },
                 selector: 'img',
                 audio_selector: 'audio, audio source',
@@ -72,8 +88,20 @@ window.ConfigTab = {
                 wait_for_load: true,
                 load_timeout_seconds: 5.0,
                 download_blobs: true,
+                audio_capture_enabled: true,
                 src_allow_patterns: [],
                 max_size_mb: 10,
+                canvas_export_mime: 'image/jpeg',
+                canvas_export_quality: 0.88,
+                audio_network_capture: {
+                    enabled: false,
+                    timeout_seconds: 2.5,
+                    transport: 'page_websocket_probe',
+                    url_patterns: ['voicegenie', 'speech', 'audio', 'tts'],
+                    extractor: 'voicegenie_ogg_pages',
+                    settle_seconds: 0.35,
+                    max_payload_bytes: 10 * 1024 * 1024
+                },
                 mode: 'all'
             },
             defaultStreamConfig: {
@@ -103,12 +131,38 @@ window.ConfigTab = {
         imageConfig() {
             if (!this.presetConfig) return this.defaultImageConfig;
             const current = this.presetConfig.image_extraction || {};
+            const currentModalities = (current && current.modalities) || {};
+            const mergeModality = (type) => {
+                const defaults = ((this.defaultImageConfig.modalities || {})[type]) || {};
+                const value = currentModalities[type];
+                const enabledRunPolicy = type === 'audio' ? 'probe_if_trigger_found' : 'on_signal';
+                if (value && typeof value === 'object' && !Array.isArray(value)) {
+                    const enabled = !!value.enabled;
+                    const hasRunPolicy = Object.prototype.hasOwnProperty.call(value, 'run_policy') && !!value.run_policy;
+                    return {
+                        ...defaults,
+                        ...value,
+                        enabled,
+                        run_policy: hasRunPolicy ? value.run_policy : (enabled ? enabledRunPolicy : 'disabled')
+                    };
+                }
+                return {
+                    ...defaults,
+                    enabled: !!value,
+                    run_policy: value ? enabledRunPolicy : 'disabled'
+                };
+            };
             return {
                 ...this.defaultImageConfig,
                 ...current,
                 modalities: {
-                    ...(this.defaultImageConfig.modalities || {}),
-                    ...((current && current.modalities) || {})
+                    image: mergeModality('image'),
+                    audio: mergeModality('audio'),
+                    video: mergeModality('video')
+                },
+                audio_network_capture: {
+                    ...(this.defaultImageConfig.audio_network_capture || {}),
+                    ...((current && current.audio_network_capture) || {})
                 }
             };
         },

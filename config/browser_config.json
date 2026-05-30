@@ -64,7 +64,8 @@
     "enabled_route_methods": [
       "domain",
       "fixed_tab",
-      "exact_url"
+      "exact_url",
+      "exact_url_preset"
     ]
   },
   "UPLOAD_HISTORY_IMAGES": false,

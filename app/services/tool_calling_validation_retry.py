@@ -347,7 +347,24 @@ def _build_partial_tool_success_response(
 
 def _build_tool_calling_degraded_response(
     parsed: Optional[Dict[str, Any]],
+    inspection: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    if isinstance(inspection, dict):
+        rejected_tool_calls = [
+            item for item in (inspection.get("rejected_tool_calls") or [])
+            if isinstance(item, dict)
+        ]
+        if rejected_tool_calls:
+            logger.warning(
+                "[tool_calling] 修复耗尽后保留原始 tool_calls 以闭合客户端工具协议 "
+                f"count={len(rejected_tool_calls)}"
+            )
+            return {
+                "mode": "tool_calls",
+                "content": None,
+                "tool_calls": copy.deepcopy(rejected_tool_calls),
+            }
+
     content = ""
     if isinstance(parsed, dict) and not parsed.get("tool_calls"):
         content = str(parsed.get("content") or "").strip()
@@ -909,16 +926,47 @@ def _build_compact_tool_retry_context(
     max_messages: int = 3,
     max_chars: int = 2200,
 ) -> str:
+    items = list(messages or [])
     selected: List[str] = []
-    for msg in reversed(messages or []):
+    anchor_indexes = set()
+
+    for index, msg in enumerate(items):
+        if not isinstance(msg, dict):
+            continue
+        role = str(msg.get("role", "") or "").strip().lower()
+        if role != "system":
+            continue
+        block = _format_anchor_message_for_retry_context(msg, "Original System Message")
+        if block:
+            selected.append(block)
+            anchor_indexes.add(index)
+        break
+
+    for index, msg in enumerate(items):
+        if not isinstance(msg, dict):
+            continue
+        role = str(msg.get("role", "") or "").strip().lower()
+        if role != "user":
+            continue
+        block = _format_anchor_message_for_retry_context(msg, "Original User Request")
+        if block:
+            selected.append(block)
+            anchor_indexes.add(index)
+        break
+
+    recent: List[str] = []
+    for index, msg in reversed(list(enumerate(items))):
+        if index in anchor_indexes:
+            continue
         block = _format_message_for_retry_context(msg)
         if not block:
             continue
-        selected.append(block)
-        if len(selected) >= max_messages:
+        recent.append(block)
+        if len(recent) >= max_messages:
             break
 
-    selected.reverse()
+    recent.reverse()
+    selected.extend(recent)
     if not selected:
         return ""
 
@@ -934,6 +982,15 @@ def _build_compact_tool_retry_context(
         parts.append(trimmed)
         used += len(trimmed) + 2
     return "\n\n".join(parts)
+
+
+def _format_anchor_message_for_retry_context(msg: Any, label: str) -> str:
+    if not isinstance(msg, dict):
+        return ""
+    content = _serialize_content(msg.get("content", "")).strip()
+    if not content:
+        return ""
+    return f"[{label}]\n" + _trim_retry_text(content, 1200)
 
 
 def _format_message_for_retry_context(msg: Any) -> str:

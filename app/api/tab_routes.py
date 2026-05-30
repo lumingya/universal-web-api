@@ -15,7 +15,8 @@ import asyncio
 import queue
 import threading
 from pathlib import Path
-from typing import Optional, Any, Dict, List
+from typing import Optional, Any, Dict, List, Mapping
+from urllib.parse import quote
 
 from fastapi import APIRouter, Request, HTTPException, Header, Depends, Query
 from fastapi.params import Param
@@ -43,6 +44,7 @@ from app.services.tool_calling import (
 )
 from app.utils.site_url import (
     encode_tab_url_route_token,
+    extract_remote_site_domain,
     normalize_exact_tab_url,
     normalize_route_domain,
     route_domain_matches,
@@ -65,6 +67,30 @@ def _normalize_optional_tab_index_value(value: Any) -> Optional[int]:
     if value in (None, ""):
         return None
     return int(value)
+
+
+HEADER_VALUE_QUOTE_SAFE = ":/?#[]@!$&'()*+,;=%-._~"
+
+
+def _encode_response_header_value(value: Any) -> str:
+    text = "" if value is None else str(value)
+    try:
+        text.encode("latin-1")
+        needs_quote = any(ord(ch) < 32 or ord(ch) == 127 for ch in text)
+    except UnicodeEncodeError:
+        needs_quote = True
+
+    if not needs_quote:
+        return text
+    return quote(text, safe=HEADER_VALUE_QUOTE_SAFE)
+
+
+def _encode_response_headers(headers: Optional[Mapping[str, Any]]) -> Dict[str, str]:
+    if not headers:
+        return {}
+    return {str(key): _encode_response_header_value(value) for key, value in headers.items()}
+
+
 FOLLOW_DEFAULT_PRESET = "__DEFAULT__"
 STREAM_QUEUE_POLL_TIMEOUT = 0.5
 SSE_HEARTBEAT_INTERVAL = 15.0
@@ -76,8 +102,9 @@ TAB_ROUTE_METHOD_OPTIONS = [
     {"value": "domain", "label": "站点域名路由"},
     {"value": "fixed_tab", "label": "固定标签页路由"},
     {"value": "exact_url", "label": "标签页 URL 路由"},
+    {"value": "exact_url_preset", "label": "URL 绑定预设路由"},
 ]
-DEFAULT_TAB_ROUTE_METHODS = {"domain", "fixed_tab", "exact_url"}
+DEFAULT_TAB_ROUTE_METHODS = {"domain", "fixed_tab", "exact_url", "exact_url_preset"}
 TAB_SELECTOR_OPTIONS = {"first_idle", "round_robin", "random"}
 _route_round_robin_cursor: Dict[str, int] = {}
 _route_round_robin_lock = threading.Lock()
@@ -401,6 +428,7 @@ def _build_tab_resolution_headers(
     route_domain: str = "",
     exact_url: str = "",
     selector: str = "",
+    preset_name: str = "",
 ) -> Dict[str, str]:
     headers: Dict[str, str] = {}
     if not tab_info:
@@ -428,7 +456,10 @@ def _build_tab_resolution_headers(
     if selector:
         headers["X-Tab-Selection-Mode"] = selector
 
-    return headers
+    if preset_name:
+        headers["X-Resolved-Preset-Name"] = preset_name
+
+    return _encode_response_headers(headers)
 
 
 def _build_stream_headers(extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
@@ -438,8 +469,53 @@ def _build_stream_headers(extra: Optional[Dict[str, str]] = None) -> Dict[str, s
         "X-Accel-Buffering": "no",
     }
     if extra:
-        headers.update(extra)
+        headers.update(_encode_response_headers(extra))
     return headers
+
+
+def _get_tab_config_domain(tab_info: Dict[str, Any]) -> str:
+    domain = str(tab_info.get("current_domain") or tab_info.get("route_domain") or "").strip()
+    if domain:
+        return domain
+
+    url = str(tab_info.get("url") or "").strip()
+    try:
+        return extract_remote_site_domain(url) or ""
+    except Exception:
+        return ""
+
+
+def _resolve_strict_tab_preset(tab_info: Dict[str, Any], preset_name: str) -> Dict[str, str]:
+    requested = str(preset_name or "").strip()
+    if not requested:
+        raise HTTPException(status_code=400, detail="预设名称不能为空")
+
+    domain = _get_tab_config_domain(tab_info)
+    if not domain:
+        raise HTTPException(status_code=400, detail="URL 路由已匹配标签页，但无法解析站点域名")
+
+    try:
+        from app.services.config_engine import config_engine
+
+        preset_names = config_engine.list_presets(domain)
+        preset_map = {str(name): True for name in preset_names}
+        resolved = config_engine._resolve_preset_alias_key(requested, preset_map)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"校验 URL 绑定预设失败: {e}")
+        raise HTTPException(status_code=500, detail=f"校验预设失败: {e}")
+
+    if not preset_map:
+        raise HTTPException(status_code=404, detail=f"URL 路由对应站点 '{domain}' 没有可用预设")
+
+    if resolved not in preset_map:
+        raise HTTPException(status_code=404, detail=f"URL 路由对应站点 '{domain}' 找不到预设: {requested}")
+
+    return {
+        "domain": domain,
+        "preset_name": resolved,
+    }
 
 # ================= 请求模型 =================
 
@@ -765,6 +841,48 @@ async def list_models_with_exact_tab_url(
     return response
 
 
+@router.get("/tab-url/{url_token}/{preset_name}/v1/models")
+async def list_models_with_exact_tab_url_and_preset(
+    url_token: str,
+    preset_name: str,
+    authenticated: bool = Depends(verify_auth)
+):
+    """为 URL 绑定预设路由提供 OpenAI 兼容模型列表接口。"""
+    route_token = str(url_token or "").strip().lower()
+    if not route_token:
+        raise HTTPException(status_code=400, detail="URL 路由无效")
+
+    browser = get_browser(auto_connect=False)
+    tab_info = _resolve_target_tab(
+        browser,
+        url_token=route_token,
+        selector="round_robin",
+    )
+    preset_resolution = _resolve_strict_tab_preset(tab_info, preset_name)
+
+    payload = {
+        "object": "list",
+        "data": [
+            {
+                "id": "web-browser",
+                "object": "model",
+                "created": int(time.time()),
+                "owned_by": "universal-web-api"
+            }
+        ]
+    }
+    response = JSONResponse(content=payload)
+    response.headers.update(
+        _build_tab_resolution_headers(
+            tab_info,
+            exact_url=str(tab_info.get("url") or ""),
+            selector="exact_url_preset",
+            preset_name=preset_resolution["preset_name"],
+        )
+    )
+    return response
+
+
 async def _chat_with_resolved_tab(
     request: Request,
     body: ChatRequest,
@@ -773,7 +891,7 @@ async def _chat_with_resolved_tab(
     tab_index: int,
     resolved_headers: Optional[Dict[str, str]] = None,
 ):
-    headers = resolved_headers or {}
+    headers = _encode_response_headers(resolved_headers)
 
     if has_tool_calling_request(
         messages=body.messages,
@@ -810,7 +928,7 @@ async def _chat_with_exact_url(
     exact_url: str,
     resolved_headers: Optional[Dict[str, str]] = None,
 ):
-    headers = resolved_headers or {}
+    headers = _encode_response_headers(resolved_headers)
 
     if has_tool_calling_request(
         messages=body.messages,
@@ -1024,6 +1142,65 @@ async def chat_with_exact_tab_url(
         logger.info(
             f"开始 (URL 路由 {exact_url} -> 标签页 #{resolved_tab_index}, "
             f"preset={resolved_preset_name or '<follow-tab/default>'})"
+        )
+        return await _chat_with_exact_url(
+            request,
+            body,
+            ctx,
+            exact_url=exact_url,
+            resolved_headers=resolved_headers,
+        )
+
+
+@router.post("/tab-url/{url_token}/{preset_name}/v1/chat/completions")
+async def chat_with_exact_tab_url_and_preset(
+    url_token: str,
+    preset_name: str,
+    request: Request,
+    body: ChatRequest,
+    authenticated: bool = Depends(verify_auth)
+):
+    """使用 URL 绑定预设路由进行聊天。URL 和预设都必须严格命中。"""
+    route_token = str(url_token or "").strip().lower()
+    if not route_token:
+        raise HTTPException(status_code=400, detail="URL 路由无效")
+
+    browser = get_browser(auto_connect=False)
+    tab_info = _resolve_target_tab(
+        browser,
+        url_token=route_token,
+        selector="round_robin",
+    )
+    resolved_tab_index = int(tab_info.get("persistent_index") or 0)
+    if resolved_tab_index < 1:
+        raise HTTPException(status_code=500, detail="resolved_tab_index_invalid")
+
+    preset_resolution = _resolve_strict_tab_preset(tab_info, preset_name)
+    resolved_preset_name = preset_resolution["preset_name"]
+    if resolved_preset_name != body.preset_name:
+        body = body.model_copy(update={"preset_name": resolved_preset_name})
+
+    exact_url = str(tab_info.get("url") or "").strip()
+    resolved_headers = _build_tab_resolution_headers(
+        tab_info,
+        exact_url=exact_url,
+        selector="exact_url_preset",
+        preset_name=resolved_preset_name,
+    )
+
+    ctx = request_manager.create_request()
+    request_manager.record_request_input(
+        ctx,
+        body.model_dump(),
+        endpoint=f"/tab-url/{url_token}/{preset_name}/v1/chat/completions",
+        route_domain=preset_resolution["domain"],
+        tab_index=resolved_tab_index,
+        preset_name=resolved_preset_name,
+    )
+    with logger.context(ctx.request_id):
+        logger.info(
+            f"开始 (URL 绑定预设 {exact_url} -> 标签页 #{resolved_tab_index}, "
+            f"preset={resolved_preset_name})"
         )
         return await _chat_with_exact_url(
             request,

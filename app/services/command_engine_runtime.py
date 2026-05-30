@@ -187,69 +187,25 @@ class CommandEngineRuntimeMixin:
         if not items:
             return
 
-        def _run_deferred():
-            acquired = False
-            task_id = f"workflow_resume_{int(time.time() * 1000)}"
-            try:
-                if hasattr(session, "acquire_for_command"):
-                    acquired = bool(session.acquire_for_command(task_id))
-                if not acquired:
-                    logger.info(
-                        f"[CMD] 跳过延后命令补跑（标签页忙碌）: {getattr(session, 'id', '')}"
-                    )
-                    with self._lock:
-                        existing = list(getattr(session, "_pending_post_workflow_commands", None) or [])
-                        setattr(
-                            session,
-                            "_pending_post_workflow_commands",
-                            self._dedupe_deferred_items(existing + items),
-                        )
-                    return
+        requeued = 0
+        for item in items:
+            command = copy.deepcopy((item or {}).get("command") or {})
+            if not command or not command.get("enabled", True):
+                continue
+            dispatched = self._execute_command_async(
+                command,
+                session,
+                chain=list((item or {}).get("chain") or []),
+                interrupt_context=copy.deepcopy((item or {}).get("interrupt_context") or {}) or None,
+                trigger_rollback=copy.deepcopy((item or {}).get("trigger_rollback") or {}) or None,
+            )
+            if dispatched:
+                requeued += 1
 
-                for item in items:
-                    command = copy.deepcopy((item or {}).get("command") or {})
-                    if not command or not command.get("enabled", True):
-                        continue
-                    chain = list((item or {}).get("chain") or [])
-                    interrupt_context = copy.deepcopy((item or {}).get("interrupt_context") or {})
-                    exec_key = (command.get("id"), getattr(session, "id", ""))
-                    with self._lock:
-                        if exec_key in self._executing:
-                            continue
-                        self._executing.add(exec_key)
-                    with self._command_logging_context(command):
-                        try:
-                            logger.info(
-                                f"[CMD] 恢复后补跑延后命令: {command.get('name')} "
-                                f"(标签页={getattr(session, 'id', '')})"
-                            )
-                            self._execute_command(
-                                command,
-                                session,
-                                chain=chain,
-                                interrupt_context=interrupt_context or None,
-                            )
-                        finally:
-                            with self._lock:
-                                self._executing.discard(exec_key)
-            finally:
-                if acquired:
-                    try:
-                        browser = self._get_browser()
-                        pool = getattr(browser, "_tab_pool", None)
-                        if pool is not None and hasattr(pool, "release"):
-                            pool.release(session.id, check_triggers=False)
-                        else:
-                            session.release(clear_page=False, check_triggers=False)
-                    except Exception as e:
-                        logger.debug(f"[CMD] deferred release failed (ignored): {e}")
-
-        thread = threading.Thread(
-            target=_run_deferred,
-            daemon=True,
-            name=f"cmd-resume-{getattr(session, 'id', 'tab')}",
+        logger.info(
+            f"[CMD] 已将延后命令交回命令调度器执行 "
+            f"(标签页={getattr(session, 'id', '')}, count={requeued})"
         )
-        thread.start()
 
     def schedule_deferred_workflow_commands(
         self,
@@ -259,16 +215,18 @@ class CommandEngineRuntimeMixin:
     ):
         delay = max(0.0, float(delay_sec or 0.0))
 
-        def _delayed_flush():
-            if delay > 0:
-                time.sleep(delay)
-            self.flush_deferred_workflow_commands(session)
-
         thread = threading.Thread(
-            target=_delayed_flush,
+            target=self.flush_deferred_workflow_commands,
+            args=(session,),
             daemon=True,
             name=f"cmd-resume-delay-{getattr(session, 'id', 'tab')}",
         )
+        if delay > 0:
+            # Timer waits before dispatching, while command execution itself stays in
+            # the command scheduler path instead of touching the tab from this helper.
+            thread = threading.Timer(delay, self.flush_deferred_workflow_commands, args=(session,))
+            thread.daemon = True
+            thread.name = f"cmd-resume-delay-{getattr(session, 'id', 'tab')}"
         thread.start()
 
     def _get_workflow_interrupt_policy(self, command: Dict[str, Any]) -> str:

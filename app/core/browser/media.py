@@ -15,6 +15,12 @@ from typing import Optional, List, Dict, Any, Callable, TYPE_CHECKING
 import requests
 
 from app.core.config import logger, AppConfig, BrowserConstants
+from app.models.schemas import (
+    get_enabled_modalities,
+    get_modality_policy,
+    get_modality_run_policy,
+    is_modality_enabled,
+)
 from app.core.background_image_downloader import (
     background_image_downloader,
     build_image_download_request_context,
@@ -29,6 +35,93 @@ if TYPE_CHECKING:
 
 class BrowserMediaMixin:
     """媒体文件提取、音频后处理（FFmpeg/FFprobe）、本地落盘、视觉/截图本地化混入类"""
+
+    @staticmethod
+    def _media_modalities(image_config: Dict[str, Any]) -> Dict[str, Any]:
+        return dict((image_config or {}).get("modalities") or {})
+
+    @staticmethod
+    def _media_enabled_types(image_config: Dict[str, Any]) -> List[str]:
+        return sorted(get_enabled_modalities((image_config or {}).get("modalities") or {}))
+
+    @staticmethod
+    def _media_policy(image_config: Dict[str, Any], media_type: str) -> Dict[str, Any]:
+        return dict(get_modality_policy((image_config or {}).get("modalities") or {}, media_type))
+
+    @staticmethod
+    def _media_run_policy(image_config: Dict[str, Any], media_type: str) -> str:
+        return get_modality_run_policy((image_config or {}).get("modalities") or {}, media_type)
+
+    @staticmethod
+    def _media_policy_allows_signal_wait(image_config: Dict[str, Any], media_type: str) -> bool:
+        return BrowserMediaMixin._media_run_policy(image_config, media_type) in {
+            "on_signal",
+            "probe_if_trigger_found",
+            "always_probe",
+        }
+
+    @staticmethod
+    def _media_policy_allows_audio_probe(
+        image_config: Dict[str, Any],
+        *,
+        signal_seen: bool = False,
+    ) -> bool:
+        policy = BrowserMediaMixin._media_run_policy(image_config, "audio")
+        if policy == "always_probe":
+            return True
+        if policy == "probe_if_trigger_found":
+            return True
+        if policy == "on_signal" and signal_seen:
+            return True
+        return False
+
+    @staticmethod
+    def _media_quick_probe_timeout(image_config: Dict[str, Any], default: float = 1.0) -> float:
+        values = []
+        for media_type in BrowserMediaMixin._media_enabled_types(image_config):
+            policy = BrowserMediaMixin._media_policy(image_config, media_type)
+            try:
+                values.append(float(policy.get("quick_probe_timeout_seconds") or default))
+            except (TypeError, ValueError):
+                pass
+        if not values:
+            return default
+        return max(0.1, min(max(values), 10.0))
+
+    @staticmethod
+    def _media_late_wait_timeout(
+        image_config: Dict[str, Any],
+        media_type: str,
+        fallback: float,
+    ) -> float:
+        policy = BrowserMediaMixin._media_policy(image_config, media_type)
+        try:
+            return max(0.2, min(float(policy.get("late_wait_timeout_seconds") or fallback), 300.0))
+        except (TypeError, ValueError):
+            return fallback
+
+    @staticmethod
+    def _media_blind_wait_timeout(
+        image_config: Dict[str, Any],
+        media_type: str,
+        fallback: float,
+    ) -> float:
+        policy = BrowserMediaMixin._media_policy(image_config, media_type)
+        raw_value = policy.get("blind_wait_timeout_seconds")
+        if raw_value is None:
+            raw_value = image_config.get("blind_wait_timeout_seconds")
+        try:
+            return max(0.0, min(float(raw_value if raw_value is not None else fallback), 300.0))
+        except (TypeError, ValueError):
+            return fallback
+
+    @staticmethod
+    def _media_audio_capture_timeout(image_config: Dict[str, Any], fallback: float) -> float:
+        policy = BrowserMediaMixin._media_policy(image_config, "audio")
+        try:
+            return max(0.2, min(float(policy.get("capture_timeout_seconds") or fallback), 180.0))
+        except (TypeError, ValueError):
+            return fallback
 
     @staticmethod
     def _build_localized_image_item(
@@ -400,16 +493,17 @@ class BrowserMediaMixin:
         dom_image_detected: bool = False,
         dom_final_image_urls: Optional[List[str]] = None,
     ) -> tuple[bool, Dict[str, Any]]:
-        modalities = dict((image_config or {}).get("modalities") or {})
-        enabled_types = sorted({
-            media_type
-            for media_type in ("image", "audio", "video")
-            if bool(modalities.get(media_type))
-        })
+        modalities = self._media_modalities(image_config)
+        enabled_types = self._media_enabled_types(image_config)
         stream_media_count = sum(1 for item in (stream_media_items or []) if isinstance(item, dict))
         dom_stream_media_count = sum(1 for item in (dom_stream_media_items or []) if isinstance(item, dict))
         dom_final_image_url_count = sum(1 for item in (dom_final_image_urls or []) if str(item or "").strip())
         force_postprocess = bool((image_config or {}).get("force_postprocess"))
+        direct_postprocess_modalities = [
+            media_type
+            for media_type in (image_config or {}).get("direct_postprocess_modalities", [])
+            if media_type in enabled_types
+        ]
         media_state = dict(media_generation_state or {})
         media_state_pending = bool(media_state.get("pending"))
         media_state_type = str(media_state.get("media_type") or "").strip().lower()
@@ -431,11 +525,16 @@ class BrowserMediaMixin:
         image_marker_hit = any(marker in combined_hint for marker in image_markers)
         diagnostics: Dict[str, Any] = {
             "enabled_types": enabled_types,
+            "run_policies": {
+                media_type: self._media_run_policy(image_config, media_type)
+                for media_type in enabled_types
+            },
             "stream_media_count": stream_media_count,
             "dom_stream_media_count": dom_stream_media_count,
             "dom_image_detected": bool(dom_image_detected),
             "dom_final_image_url_count": dom_final_image_url_count,
             "force_postprocess": force_postprocess,
+            "direct_postprocess_modalities": direct_postprocess_modalities,
             "media_state_pending": media_state_pending,
             "media_state_type": media_state_type,
             "media_state_hint_len": len(media_state_hint),
@@ -485,8 +584,12 @@ class BrowserMediaMixin:
                 diagnostics["decision"] = "image_marker_hint"
                 return True, diagnostics
 
-        diagnostics["decision"] = "no_media_signal"
-        return False, diagnostics
+        if direct_postprocess_modalities:
+            diagnostics["decision"] = "direct_postprocess_modalities"
+            return True, diagnostics
+
+        diagnostics["decision"] = "generic_dom_quick_scan"
+        return True, diagnostics
 
     def _extract_media_after_stream(
         self,
@@ -501,16 +604,37 @@ class BrowserMediaMixin:
         request_text_hint: str = "",
         media_generation_state: Optional[Dict[str, Any]] = None,
         stream_media_items: Optional[List[Dict[str, Any]]] = None,
+        direct_modalities: Optional[List[str]] = None,
     ) -> List[Dict]:
         """流式输出结束后提取多模态资源。"""
         from app.core.elements import ElementFinder
         from app.core.extractors.media_extractor import media_extractor
-        
-        modalities = image_config.get("modalities") or {}
+
+        image_config = dict(image_config or {})
+        direct_scan_only = False
+        if direct_modalities:
+            requested_direct_modalities = {
+                str(item or "").strip().lower()
+                for item in direct_modalities
+                if str(item or "").strip().lower() in {"image", "audio", "video"}
+            }
+            if requested_direct_modalities:
+                direct_scan_only = True
+                scoped_modalities = {}
+                for media_type in ("image", "audio", "video"):
+                    policy = self._media_policy(image_config, media_type)
+                    if media_type not in requested_direct_modalities:
+                        policy["enabled"] = False
+                        policy["run_policy"] = "disabled"
+                    scoped_modalities[media_type] = policy
+                image_config["modalities"] = scoped_modalities
+                image_config["wait_for_load"] = False
+                image_config["audio_capture_enabled"] = False
+        modalities = self._media_modalities(image_config)
         only_audio_mode = (
-            bool(modalities.get("audio"))
-            and not bool(modalities.get("image"))
-            and not bool(modalities.get("video"))
+            is_modality_enabled(modalities, "audio")
+            and not is_modality_enabled(modalities, "image")
+            and not is_modality_enabled(modalities, "video")
         )
         debounce = 0.0 if only_audio_mode else image_config.get("debounce_seconds", 2.0)
         effective_stop_checker = stop_checker or self._should_stop_checker
@@ -582,13 +706,44 @@ class BrowserMediaMixin:
                 return fallback_elements, "message_wrapper"
 
             return [], ""
+
+        def _audio_trigger_available(target_element=None, *, signal_seen: bool = False) -> bool:
+            if not is_modality_enabled(image_config.get("modalities") or {}, "audio"):
+                return False
+            if not bool(image_config.get("audio_capture_enabled", True)):
+                return False
+            if not self._media_policy_allows_audio_probe(image_config, signal_seen=signal_seen):
+                return False
+            policy = self._media_run_policy(image_config, "audio")
+            if policy == "always_probe":
+                return True
+            for current_target in [target_element, tab]:
+                if current_target is None:
+                    continue
+                try:
+                    probe_result = media_extractor.probe_audio_trigger(current_target, image_config)
+                except Exception:
+                    probe_result = {}
+                if bool(probe_result.get("found")) or int(probe_result.get("candidate_count") or 0) > 0:
+                    logger.debug(
+                        "页面音频触发入口快速探测命中: "
+                        f"policy={policy}, signal_seen={signal_seen}, "
+                        f"candidate_count={probe_result.get('candidate_count')}, "
+                        f"selector={probe_result.get('selector_used')!r}"
+                    )
+                    return True
+            logger.debug(
+                "页面音频触发入口快速探测未命中，跳过播放录音等待: "
+                f"policy={policy}, signal_seen={signal_seen}"
+            )
+            return False
         
         try:
-            elements, container_mode = _find_candidate_elements(timeout=1)
+            quick_probe_timeout = self._media_quick_probe_timeout(image_config, default=1.0)
+            elements, container_mode = _find_candidate_elements(timeout=quick_probe_timeout)
             if not elements:
                 should_try_page_audio_capture = (
-                    bool((image_config.get("modalities") or {}).get("audio"))
-                    and bool(image_config.get("audio_capture_enabled", True))
+                    _audio_trigger_available(None, signal_seen=False)
                     and not effective_stop_checker()
                 )
                 if should_try_page_audio_capture:
@@ -791,23 +946,46 @@ class BrowserMediaMixin:
             if (
                 has_generated_image_hint
                 or (media_state_pending and media_state_type == "image")
-            ) and not image_items:
+            ) and not image_items and self._media_policy_allows_signal_wait(image_config, "image"):
                 pending_kinds.add("image")
-            if media_state_pending and media_state_type == "audio" and not (audio_items or video_items):
+            if (
+                media_state_pending
+                and media_state_type == "audio"
+                and not (audio_items or video_items)
+                and self._media_policy_allows_signal_wait(image_config, "audio")
+            ):
                 pending_kinds.add("audio")
-            if media_state_pending and media_state_type == "video" and not video_items:
+            if (
+                media_state_pending
+                and media_state_type == "video"
+                and not video_items
+                and self._media_policy_allows_signal_wait(image_config, "video")
+            ):
                 pending_kinds.add("video")
-            if pending_audio_hint and not (audio_items or video_items):
+            if (
+                pending_audio_hint
+                and not (audio_items or video_items)
+                and self._media_policy_allows_signal_wait(image_config, "audio")
+            ):
                 pending_kinds.add("audio")
-            if pending_video_hint and not video_items:
+            if (
+                pending_video_hint
+                and not video_items
+                and self._media_policy_allows_signal_wait(image_config, "video")
+            ):
                 pending_kinds.add("video")
 
-            if pending_kinds and not effective_stop_checker():
+            if pending_kinds and not direct_scan_only and not effective_stop_checker():
                 base_timeout = float(image_config.get("load_timeout_seconds", 5.0) or 5.0)
                 late_wait_timeout = float(
                     image_config.get("late_render_timeout_seconds")
                     or max(30.0, base_timeout * 6.0)
                 )
+                for pending_kind in pending_kinds:
+                    late_wait_timeout = max(
+                        late_wait_timeout,
+                        self._media_late_wait_timeout(image_config, pending_kind, late_wait_timeout),
+                    )
                 state_wait_timeout = media_state.get("wait_timeout_seconds")
                 try:
                     if state_wait_timeout is not None:
@@ -864,7 +1042,8 @@ class BrowserMediaMixin:
                     )
 
             should_probe_late_image_render = (
-                bool(modalities.get("image"))
+                is_modality_enabled(modalities, "image")
+                and self._media_policy_allows_signal_wait(image_config, "image")
                 and not image_items
                 and not pending_kinds
                 and not only_audio_mode
@@ -877,6 +1056,20 @@ class BrowserMediaMixin:
                     image_config.get("late_image_render_timeout_seconds")
                     or max(45.0, float(image_config.get("load_timeout_seconds", 5.0) or 5.0) * 8.0)
                 )
+                late_image_wait_timeout = self._media_blind_wait_timeout(
+                    image_config,
+                    "image",
+                    self._media_late_wait_timeout(
+                        image_config,
+                        "image",
+                        late_image_wait_timeout,
+                    ),
+                )
+                if late_image_wait_timeout <= 0:
+                    logger.debug("无显式占位信号，图片盲等已按配置跳过")
+                    should_probe_late_image_render = False
+
+            if should_probe_late_image_render:
                 poll_interval = float(image_config.get("late_render_poll_seconds") or 1.0)
                 deadline = time.time() + late_image_wait_timeout
 
@@ -906,8 +1099,10 @@ class BrowserMediaMixin:
                         break
 
             should_try_audio_capture = (
-                bool((image_config.get("modalities") or {}).get("audio"))
-                and bool(image_config.get("audio_capture_enabled", True))
+                _audio_trigger_available(
+                    last_element,
+                    signal_seen=bool("audio" in pending_kinds or pending_audio_hint or media_state_type == "audio"),
+                )
                 and not audio_items
                 and not effective_stop_checker()
             )
@@ -1064,6 +1259,7 @@ class BrowserMediaMixin:
             image_config.get("audio_capture_max_wait_seconds")
             or max(8.0, float(image_config.get("load_timeout_seconds", 5.0) or 5.0) * 1.8)
         )
+        max_wait = self._media_audio_capture_timeout(image_config, max_wait)
         hint_text = str(effective_response_text_hint or "").strip()
         if hint_text:
             try:
@@ -1770,7 +1966,7 @@ class BrowserMediaMixin:
             image_config = site_config.get("image_extraction", {}) or {}
             modalities = image_config.get("modalities") or {}
             image_extraction_enabled = bool(image_config.get("enabled", False)) or any(
-                bool(modalities.get(key)) for key in ("image", "audio", "video")
+                is_modality_enabled(modalities, key) for key in ("image", "audio", "video")
             )
             if not image_extraction_enabled:
                 return []

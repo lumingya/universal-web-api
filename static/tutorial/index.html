@@ -4,7 +4,19 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Universal Web-to-API 使用教程</title>
-    <link rel="stylesheet" href="../css/tutorial.css?v=2.7.5">
+    <link rel="stylesheet" href="../css/tutorial.css?v=2.8.9">
+    <!-- 引入 Mermaid 支持渲染架构图 -->
+    <script src="https://unpkg.com/mermaid@10.1.0/dist/mermaid.min.js"></script>
+    <script>
+        document.addEventListener("DOMContentLoaded", function() {
+            if (typeof mermaid !== "undefined") {
+                mermaid.initialize({
+                    startOnLoad: true,
+                    theme: 'dark' // 配合网页暗色属性
+                });
+            }
+        });
+    </script>
 </head>
 <body>
 
@@ -25,6 +37,7 @@
         <nav>
             <a href="#quick-start" class="nav-link">🚀 快速开始</a>
             <a href="#dashboard-tour" class="nav-link">🖥️ 控制台导览</a>
+            <a href="#dashboard-advanced" class="nav-link">📊 监控与版本管理</a>
             <a href="#add-site-guide" class="nav-link">🆕 新增站点</a>
             <a href="#connect-api" class="nav-link">🔌 连接 API</a>
             <a href="#function-calling" class="nav-link">🧰 函数调用</a>
@@ -66,7 +79,7 @@
                     </div>
                 </div>
             </div>
-            <h1 id="pageTitle">Universal Web-to-API 使用手册 (v2.6.9)</h1>
+            <h1 id="pageTitle">Universal Web-to-API 使用手册 (v2.8.9)</h1>
             <div class="project-link-banner">
                 <div class="project-link-copy">
                     <div class="project-link-label">
@@ -140,6 +153,28 @@
         <section id="quick-start">
             <h2>🚀 快速开始</h2>
             <p><strong>Web-to-API</strong> 把你在浏览器里已经打开并可正常使用的 AI 对话网页（ChatGPT、Gemini、DeepSeek 等）接入为一个<strong>兼容 OpenAI 格式的本地接口</strong>，用于个人测试、工作流衔接与客户端集成。</p>
+
+            <div class="note" style="margin-top: 15px; padding: 20px;">
+                <p><strong>📐 项目模块设计与架构关系：</strong></p>
+                <div class="mermaid" style="background: rgba(0,0,0,0.2); padding: 15px; border-radius: 6px; overflow-x: auto;">
+                    graph TD
+                        User([客户端/用户]) -->|OpenAI/Anthropic/Codex API| Route[1. 接口与路由层 app/api]
+                        Route -->|会话分发/并发调度| TabPool[2. 标签页池与生命周期 app/core/tab_pool]
+                        Route -->|解析函数调用请求| ToolCall[5. 函数调用兼容层 app/services/tool_calling]
+                        TabPool -->|网页驱动/低熵控制| Browser[3. 网页自动化与执行引擎 app/core/workflow]
+                        Browser -->|注入与流式监听| Stream[4. 流式监控与响应解析 app/core/parsers]
+                        Browser -->|触发指令钩子| CmdEng[6. 指令引擎与拦截钩子 app/services/command_engine]
+
+                        subgraph 底层支撑
+                            Config[7. 配置与预设中心 app/services/config]
+                            Utils[8. 平台工具箱 app/utils & app/models]
+                        end
+
+                        Browser -.->|依赖| Config
+                        CmdEng -.->|读取/存储| Config
+                        Stream -.->|工具包| Utils
+                </div>
+            </div>
 
             <div class="highlight-box">
                 <p><strong>典型用途：</strong>统一本地接入方式；按站点或标签页组织不同工作流；在长文本场景下通过文件粘贴或附件承载上下文；在调试时观察页面侧与请求侧的执行流程。</p>
@@ -236,6 +271,29 @@
                 <p style="margin-bottom: 0;">当前已存在这张截图，适合放在教程最前面做“控制台地图”。</p>
                 <img class="doc-image" src="/static/tutorial-dashboard-overview.png" alt="控制台总览截图">
             </div>
+        </section>
+
+        <!-- ==================== 请求监控与版本管理 ==================== -->
+        <section id="dashboard-advanced">
+            <h2>📊 性能监控与版本管理</h2>
+            <p>控制面板内置了高级运维监控和版本回退/切换机制，以便开发者实时观察本地服务的健康度以及进行版本管理。</p>
+
+            <h3>1. 请求监控 (Request Monitor)</h3>
+            <p>点击控制面板的「请求监控」选项卡，可查看当前服务的实时运行性能与统计数据：</p>
+            <ul>
+                <li><strong>系统占用 (Memory Usage)</strong>：显示后台浏览器及 Python 服务的实时内存占用。如果在高并发下出现异常，可优先监控该项以检查 Chrome 内存泄漏情况。</li>
+                <li><strong>硬盘状态与请求总量</strong>：展示当前磁盘剩余空间以及服务自启动以来的累计网络请求吞吐总量。</li>
+                <li><strong>全局请求成功率</strong>：实时计算最近数百次请求的统计成功率（成功 vs 失败占比），以便判断当前本地网络或 AI 站点防线的稳定性。</li>
+                <li><strong>分站点成功率统计</strong>：按域名聚合请求，统计例如 <code>gemini.google.com</code> 或 <code>arena.ai</code> 的单独请求健康度。</li>
+                <li><strong>历史请求列表</strong>：显示最近请求的详细执行链。支持点击特定行查看完整上下文，并标有“多模态”等专属交互类型标签，便于进行交互追踪。</li>
+            </ul>
+
+            <h3>2. 版本管理 (Version Management)</h3>
+            <p>点击「版本管理」部分，可以免去手动下载解压的繁琐步骤：</p>
+            <ul>
+                <li><strong>版本拉取列表</strong>：系统自动联网获取 GitHub Releases 发布的历史版本（包含发布时间与更新说明链接）。</li>
+                <li><strong>一键切版本/更新</strong>：可以直接点击对应历史版本行的「切换到此版本」按钮。系统会启动自动更新器（updater.py），在下载升级前，更新器会自动对您的本地核心代码和静态资源进行<b>快照备份</b>。一旦更新失败，它将自动执行回滚，保证本地环境不被损坏。</li>
+            </ul>
         </section>
 
         <!-- ==================== 新增站点 ==================== -->
@@ -508,6 +566,29 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
                 <li><strong>Gemini 官网</strong>：无会员约 30k 字符；Pro 会员目前没有明确上限。</li>
                 <li><strong>Arena AI</strong>：约 120k 字符。</li>
             </ul>
+
+            <h3>🤖 开发者客户端与协议兼容支持 (实验性)</h3>
+            <p>为了给开发者提供更宽的接入选择，本项目目前初步提供了对以下底层协议的 **实验性/连通性** 兼容支持（由于缺乏大规模工具用例覆盖，其实际稳定性仍需您按需测试）：</p>
+
+            <div class="success-box" style="margin-top: 10px; padding: 15px; border-radius: 6px;">
+                <p><strong>1️⃣ Claude Code 连通性测试支持</strong></p>
+                <p>项目内置了对 Anthropic / Claude Code 风格协议的初步支持：</p>
+                <ul>
+                    <li>支持 <code>/v1/messages</code>、<code>/v1/messages/count_tokens</code> 与 <code>/v1/models</code>。</li>
+                    <li>除标准的 <code>Authorization</code> 之外，支持解析 <code>x-api-key</code> 认证头部。</li>
+                    <li>流式与非流式交互响应中均会尝试补充 <code>request-id</code> 诊断响应头，以保障 Claude Code 原生调试链路能够连通。</li>
+                </ul>
+            </div>
+
+            <div class="success-box" style="margin-top: 15px; padding: 15px; border-radius: 6px;">
+                <p><strong>2️⃣ Codex / Responses API 实验性支持 (VSCode)</strong></p>
+                <p>针对部分直接对接到特定 Responses wire protocol 的插件或 IDE 工具（如旧版或深度定制的 Codex/Copilot 相关工具）：</p>
+                <ul>
+                    <li>项目内置暴露了标准的 <code>/v1/responses</code> 实验性端点。</li>
+                    <li>自动转换并复用现有的 <code>/v1/chat/completions</code> 运行和调度逻辑（支持转换 <code>input</code>、<code>instructions</code>、<code>tools</code> 等载荷）。</li>
+                    <li>流式模式下支持生成 Codex 规范的 SSE 事件过渡，解决工具输出提取中断或连接断开的兼容性问题。</li>
+                </ul>
+            </div>
         </section>
 
         <!-- ==================== 标签页池 ==================== -->
@@ -734,6 +815,22 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
                 <p><strong>💡 提示：</strong>每个预设包含独立的选择器、工作流、流式配置、多模态提取、文件粘贴等全套配置。修改一个预设不会影响其他预设。未手动指定时会自动使用站点默认预设（<code>default_preset</code>）。</p>
             </div>
 
+            <h3>💬 对话复用与新建会话控制</h3>
+            <p>为了让您在本地测试时能够灵活选择是“在现有网页会话上继续聊天”还是“强制重新开始新对话”，预设配置中提供了以下精细化控制（见控制面板中每个预设的「对话复用」控制区）：</p>
+            <ul>
+                <li><strong>对话复用窗口 (秒)</strong>：
+                    <ul>
+                        <li>当该值大于 <code>0</code> 时，同一个标签页在此时间窗口（秒）内收到后续请求，会直接复用当前网页的会话上下文进行续聊。</li>
+                        <li>设为 <code>0</code> 则表示<strong>关闭对话复用（默认值）</strong>，每次请求都可能根据工作流设定触发“新建会话”逻辑（如果工作流开头配置了点击 new_chat 动作）。</li>
+                    </ul>
+                </li>
+                <li><strong>强制新建对话</strong>：
+                    <ul>
+                        <li>开启此开关后，即使您配置了大于 0 的对话复用窗口，系统也会忽略复用设定，**始终在每次请求前强制新建会话**，这特别适合测试无历史干扰的独立 Prompt 流程。</li>
+                    </ul>
+                </li>
+            </ul>
+
             <h3>预设配置结构</h3>
 <pre><code>{
   "gemini.google.com": {
@@ -743,13 +840,29 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
         "selectors": { ... },
         "workflow": [ ... ],
         "stream_config": { ... },
-        "image_extraction": { "enabled": false },
+        "image_extraction": {
+          "enabled": false,
+          "modalities": {
+            "image": { "enabled": false, "run_policy": "disabled" },
+            "audio": { "enabled": false, "run_policy": "disabled" },
+            "video": { "enabled": false, "run_policy": "disabled" }
+          }
+        },
         "file_paste": { "threshold": 50000 }
       },
       "快速识图": {
         "selectors": { ... },
         "workflow": [ ... ],
-        "image_extraction": { "enabled": true, "mode": "first" },
+        "image_extraction": {
+          "enabled": true,
+          "modalities": {
+            "image": { "enabled": true, "run_policy": "on_signal" },
+            "audio": { "enabled": true, "run_policy": "generic_only" },
+            "video": { "enabled": true, "run_policy": "generic_only" }
+          },
+          "audio_capture_enabled": false,
+          "mode": "first"
+        },
         "file_paste": { "threshold": 10000 }
       }
     }
@@ -864,29 +977,62 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
             <h2>🎞️ 多模态提取</h2>
             <p>控制面板里这个功能现在叫<strong>多模态提取</strong>。它统一负责从网页中提取图片、音频、视频，并把结果整理成下游前端能直接使用的本地 URL / Markdown 引用。</p>
             <pre><code>"image_extraction": {
-  "enabled": true,                // 总开关；通常由内部选项自动拉起
+  "enabled": true,                // 兼容旧字段；实际会跟随内部模态自动同步
   "modalities": {
-    "image": true,                // 图片提取
-    "audio": true,                // 音频文件提取
-    "video": true                 // 视频提取
+    "image": {
+      "enabled": true,
+      "run_policy": "on_signal",
+      "quick_probe_timeout_seconds": 1.0,
+      "late_wait_timeout_seconds": 45
+    },
+    "audio": {
+      "enabled": true,
+      "run_policy": "probe_if_trigger_found",
+      "quick_probe_timeout_seconds": 1.0,
+      "capture_timeout_seconds": 12
+    },
+    "video": {
+      "enabled": true,
+      "run_policy": "on_signal",
+      "quick_probe_timeout_seconds": 1.0,
+      "late_wait_timeout_seconds": 90
+    }
   },
   "selector": "img",              // 图片元素选择器
   "audio_selector": "audio, audio source",
   "video_selector": "video, video source",
   "container_selector": ".img-grid", // (可选) 限定在特定区域查找
+  "audio_capture_enabled": false, // 是否允许点击朗读按钮并录制页面播放音频
   "download_blobs": true,         // 是否下载 blob/src 或远程媒体到本地
   "mode": "all",                  // all / first / last
   "max_size_mb": 10               // 最大允许大小
 }</code></pre>
             <div class="info-box">
-                <p><strong>兼容性说明：</strong>当前配置键名仍然是 <code>image_extraction</code>，这是为了兼容已有配置；但控制面板和实际能力都已经扩展为“多模态提取”。</p>
+                <p><strong>兼容性说明：</strong>当前配置键名仍然是 <code>image_extraction</code>，旧版 <code>"image": true</code> 这种布尔写法仍会被自动迁移；新教程建议使用上面的策略对象，因为它可以把“支持某种模态”和“是否执行长等待 / 录音探测”分开。</p>
+            </div>
+
+            <h3>运行策略怎么选</h3>
+            <table>
+                <tr><th>策略</th><th>含义</th><th>适合场景</th></tr>
+                <tr><td><code>disabled</code></td><td>完全关闭这个模态。</td><td>站点不需要图片 / 音频 / 视频时使用。</td></tr>
+                <tr><td><code>generic_only</code></td><td>只做一次快速 DOM 扫描，不触发长等待、朗读点击或录音。</td><td>Gemini 直连提取这类“可能返回媒体，但不想每轮卡住”的预设。</td></tr>
+                <tr><td><code>on_signal</code></td><td>先快速扫一遍；只有发现明确生成信号时才进入长等待或后续动作。</td><td>图片 / 视频生成，或者解析器能上报媒体生成状态的网站。</td></tr>
+                <tr><td><code>probe_if_trigger_found</code></td><td>音频专用。快速找朗读按钮，找到才尝试点击和捕获。</td><td>有朗读按钮但不希望每轮都硬等音频的网站。</td></tr>
+                <tr><td><code>always_probe</code></td><td>只要模态启用就主动探测。</td><td>确认每轮都会产出对应媒体，且愿意接受等待成本时再用。</td></tr>
+            </table>
+
+            <h3>什么是 signal</h3>
+            <p>这里的 <strong>signal</strong> 指“值得继续等媒体”的证据，而不是单纯“站点支持这个模态”。常见信号包括：当前回复 DOM 已经出现媒体节点或占位节点；解析器上报 <code>media_generation_state.pending</code>；回复文本里出现生成中 / pending / audio / video 等占位提示；请求明显是图片生成；或者音频策略快速探测到了朗读入口。</p>
+
+            <div class="note">
+                <p><strong>💡 关键变化：</strong>现在流程会先做 <code>quick_probe_timeout_seconds</code> 控制的快速扫描。只有策略和 signal 允许时，才会进入 <code>late_wait_timeout_seconds</code> 的长等待或 <code>capture_timeout_seconds</code> 的音频录制。也就是说，网站“支持音频/视频”不再等于每一轮都长时间等待。</p>
             </div>
 
             <p><strong>界面上的使用方式：</strong></p>
             <ul>
-                <li>先开启顶部的“多模态提取”总开关。</li>
-                <li>然后在内部按需勾选<strong>图片提取</strong>、<strong>音频文件提取</strong>、<strong>视频提取</strong>。</li>
-                <li>只开某一种时，只需要维护对应的选择器；其余选择器可以保留默认值。</li>
+                <li>先开启顶部的“多模态提取”总开关，再在图片、音频、视频卡片里分别选择启用状态和运行策略。</li>
+                <li>图片和视频主要调 <code>长等上限</code>；音频主要调 <code>快速探测</code> 与 <code>录制上限</code>。</li>
+                <li>Gemini 这类直连媒体预设建议让音频 / 视频保持 <code>generic_only</code>，并关闭“页面播放音频捕获回退”。</li>
             </ul>
 
             <p><strong>文件保存位置：</strong></p>
@@ -900,15 +1046,20 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
             </div>
 
             <div class="note">
-                <p><strong>💡 使用建议：</strong>大多数站点先确定要开哪几种模态，再分别验证对应选择器能命中真实媒体节点。只有在页面里媒体很多、容易误抓时，才需要再补 <code>container_selector</code> 来缩小范围。</p>
+                <p><strong>💡 使用建议：</strong>先确认你真正需要哪一种模态，再给它选择最保守可用的策略。只想捞现成 DOM 媒体时用 <code>generic_only</code>；需要等待生成结果时再用 <code>on_signal</code>；只有稳定有朗读按钮的网站才开启音频捕获。</p>
             </div>
 
-            <h3>🔊 页面朗读音频捕获（新增）</h3>
-            <p>除了直接提取网页里的 <code>audio</code> / <code>video</code> 节点，系统现在还支持<strong>点击页面里的“朗读 / 收听 / TTS”按钮</strong>，把 AI 播放出来的语音音频也一起抓回来。</p>
+            <h3>🔊 页面朗读音频捕获</h3>
+            <p>除了直接提取网页里的 <code>audio</code> / <code>video</code> 节点，系统也可以点击页面里的“朗读 / 收听 / TTS”按钮，把 AI 播放出来的语音音频抓回来。这条链路由 <code>audio_capture_enabled</code> 单独控制，不会因为音频模态启用就必然执行。</p>
 
             <pre><code>"image_extraction": {
   "modalities": {
-    "audio": true
+    "audio": {
+      "enabled": true,
+      "run_policy": "probe_if_trigger_found",
+      "quick_probe_timeout_seconds": 1.0,
+      "capture_timeout_seconds": 12
+    }
   },
   "audio_capture_enabled": true,
   "audio_trigger_selector": "button[aria-label=\"朗读\"]",
@@ -924,12 +1075,12 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
 }</code></pre>
 
             <div class="info-box">
-                <p><strong>工作顺序：</strong>系统会先等待文本回复完成，然后尝试点击页面里的朗读按钮。点击成功后，优先从页面内网络流（如 WebSocket TTS 帧）直接提取音频；如果网络直抓不够完整，就自动回退到页面播放录音。</p>
+                <p><strong>工作顺序：</strong>系统会先等待文本回复完成，再按音频策略做快速触发入口探测。点击成功后，优先从页面内网络流（如 WebSocket TTS 帧）直接提取音频；如果网络直抓不够完整，才回退到页面播放录音。</p>
             </div>
 
             <p><strong>关键配置说明：</strong></p>
             <ul>
-                <li><strong><code>audio_capture_enabled</code></strong>：是否启用“点击朗读并抓音频”这条链路。</li>
+                <li><strong><code>audio_capture_enabled</code></strong>：是否启用“点击朗读并抓音频”这条链路。Gemini 直连提取预设默认应保持关闭。</li>
                 <li><strong><code>audio_trigger_selector</code></strong>：优先使用的朗读按钮选择器。站点按钮稳定时，建议直接填精确 selector。</li>
                 <li><strong><code>audio_trigger_labels</code></strong>：当 selector 不稳定时，用这些按钮文本做兜底匹配。</li>
                 <li><strong><code>audio_network_capture.enabled</code></strong>：是否优先尝试网络直抓。</li>
@@ -938,7 +1089,7 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
             </ul>
 
             <div class="success-box">
-                <p><strong>豆包朗读预设：</strong>项目里已经给 <code>www.doubao.com</code> 的<strong>朗读</strong>预设接好了这套能力，默认策略是：<strong>网络直抓优先，页面录音兜底</strong>。</p>
+                <p><strong>豆包朗读预设：</strong>项目里已经给 <code>www.doubao.com</code> 的<strong>朗读</strong>预设接好了这套能力，默认策略是：<strong>探测到朗读入口才执行，网络直抓优先，页面录音兜底</strong>。</p>
             </div>
 
             <div class="note">
@@ -1191,29 +1342,95 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
             <h2>📄 文件粘贴</h2>
             <p>当你的 Prompt 太长、超过网站输入框限制时，系统会先把文本写成一个临时 <code>.txt</code> 文件，再尽量走网页自己的上传入口，把它当成真实附件发给 AI，而不是硬塞进输入框里。</p>
 
-            <h3>配置项说明</h3>
+            <h3>📁 文件粘贴与附件发送判定配置详情</h3>
+            <p>在控制面板各站点预设的「配置」面板中，您可以对文件粘贴与附件行为进行极其精细的配置（见系统控制面板中每个预设的「文件粘贴模式」与「附件发送判定」控制区）：</p>
+
+            <h4>1. 文件粘贴模式参数表</h4>
             <table>
-                <tr><th>配置项</th><th>默认值</th><th>说明</th></tr>
-                <tr><td>启用</td><td>站点预设决定</td><td>是否开启文件粘贴模式</td></tr>
-                <tr><td>阈值</td><td><code>50000</code> 字符</td><td>全局默认值；不同站点预设可以单独覆盖</td></tr>
-                <tr><td>引导文本</td><td><code>完全专注于文件内容</code></td><td>附件上传成功后自动追加到输入框中的提示语，用来提醒 AI 优先读取文件内容</td></tr>
+                <tr><th>控制面板字段</th><th>JSON配置键</th><th>建议值/示例</th><th>详细作用说明</th></tr>
+                <tr>
+                    <td><strong>文件粘贴模式 (开关)</strong></td>
+                    <td><code>enabled</code></td>
+                    <td>开/关</td>
+                    <td>是否开启大文本文件自动转换为附件上传的机制。</td>
+                </tr>
+                <tr>
+                    <td><strong>阈值 (字符)</strong></td>
+                    <td><code>threshold</code></td>
+                    <td><code>50000</code></td>
+                    <td>当 Prompt 文本字符长度超过该值时，自动触发文件粘贴。系统会将文本写入本地临时 <code>.txt</code> 文件并通过附件形式上传。</td>
+                </tr>
+                <tr>
+                    <td><strong>引导文本</strong></td>
+                    <td><code>guide_text</code></td>
+                    <td><code>完全专注于文件内容</code></td>
+                    <td>上传完成后填入输入框中的提示词，引导模型去阅读并完全参考附件内容。</td>
+                </tr>
+                <tr>
+                    <td><strong>上传信号超时 (秒)</strong></td>
+                    <td><code>upload_signal_timeout</code></td>
+                    <td><code>2.5</code></td>
+                    <td>系统触发上传动作后，等待页面出现“上传进行中/挂载成功”信号的最长等待时间。</td>
+                </tr>
+                <tr>
+                    <td><strong>弱信号宽限 (秒)</strong></td>
+                    <td><code>weak_signal_tolerance</code></td>
+                    <td><code>3.0</code></td>
+                    <td>当网络较卡、加载转圈时，允许系统放宽对上传进度状态进行检测的额外时间缓冲。</td>
+                </tr>
+                <tr>
+                    <td><strong>上传后稳定等待 (秒)</strong></td>
+                    <td><code>post_upload_stability_wait</code></td>
+                    <td><code>0.0</code></td>
+                    <td>识别到上传成功后，额外静止等待多少秒再真正发出，以彻底保证上传完毕。</td>
+                </tr>
+                <tr>
+                    <td><strong>上传完成后重新定位输入框</strong></td>
+                    <td><code>refocus_after_upload</code></td>
+                    <td>勾选 (True)</td>
+                    <td>部分 AI 站点在上传附件后会导致输入框失去焦点。开启该项后，系统会在发送前自动重定位并强行聚焦输入框。</td>
+                </tr>
+                <tr>
+                    <td><strong>上传后专用输入框 selector</strong></td>
+                    <td><code>refocus_selector</code></td>
+                    <td><code>.composer textarea</code></td>
+                    <td>上传附件后可能触发 DOM 改变，用于指定聚焦输入框的专用 CSS 选择器（选填）。</td>
+                </tr>
+            </table>
+
+            <h4>2. 附件发送判定 (同时作用于文件和图片粘贴)</h4>
+            <p>在点击发送后，系统会启动判定机制，确认附件已成功发送并被网页端接收：</p>
+            <table>
+                <tr><th>控制面板字段</th><th>JSON配置键</th><th>建议值/示例</th><th>详细作用说明</th></tr>
+                <tr>
+                    <td><strong>敏感度</strong></td>
+                    <td><code>sensitivity</code></td>
+                    <td><code>中</code> (默认)</td>
+                    <td>平衡等待时间和识别速度。设置为「高」时检测更严格，适合网络环境或页面变动大的情况；「低」则快速跳过，容错率较低。</td>
+                </tr>
+                <tr>
+                    <td><strong>最大重试次数</strong></td>
+                    <td><code>max_retries</code></td>
+                    <td><code>2</code></td>
+                    <td>如果检测到由于上传中途失败、变灰或者未挂载成功导致发送失败，系统尝试重新发送的最大次数。</td>
+                </tr>
+                <tr>
+                    <td><strong>重试间隔 (秒)</strong></td>
+                    <td><code>retry_interval</code></td>
+                    <td><code>0.6</code></td>
+                    <td>两次重新尝试发送动作之间的等待间隔时间。</td>
+                </tr>
+                <tr>
+                    <td><strong>重试前短探测 (秒)</strong></td>
+                    <td><code>pre_retry_probe</code></td>
+                    <td><code>0.2</code></td>
+                    <td>重试之前进行微小探测的休眠时间，以避开临时的页面渲染卡顿。</td>
+                </tr>
             </table>
 
             <div class="info-box">
-                <p><strong>💡 工作逻辑：</strong>系统会依次尝试 <code>file_input</code> -> 通用 <code>input[type=file]</code> -> <code>upload_btn</code> -> <code>drop_zone</code>。这些入口都失败后，才会回退到 Windows 剪贴板文件粘贴；只有在附件状态稳定后，系统才会继续发送，而“稳定”的判断现在也支持按站点单独配置。</p>
+                <p><strong>💡 工作逻辑：</strong>系统会依次尝试预设的 <code>file_input</code> -> 通用 <code>input[type=file]</code> -> <code>upload_btn</code> -> <code>drop_zone</code> 等选择器进行上传。这些网页层入口都失败后，系统会自动回退到 Windows 原生剪贴板文件粘贴。为了保证 100% 成功，请确保相应站点的上传按钮或输入区选择器已正确配置。</p>
             </div>
-
-            <h3>配置方式</h3>
-            <p>在控制面板的「配置」选项卡中找到「文件粘贴」面板，可以针对每个站点（的每个预设）独立配置。给新站点开这个功能时，不要只改一个 <code>enabled: true</code> 就结束，真正需要一起确认的，不只是该站点有没有可用的 <code>upload_btn</code>、<code>file_input</code> 或 <code>drop_zone</code> 选择器，还要确认它是如何判断“附件已经成功挂到输入区”的。</p>
-            <p>现在可以继续到「配置 -> 网络监听模式 -> 附件发送判定 -> 高级附件规则」里，为每个站点单独定义附件判定规则。常用字段如下：</p>
-            <ul>
-                <li><code>attachment_selectors</code>：哪些预览图、文件 chip、附件卡片算上传成功</li>
-                <li><code>pending_selectors</code>：哪些转圈、进度条、加载态代表仍在处理中</li>
-                <li><code>busy_text_markers</code>：输入区或容器上哪些文本状态说明附件还没稳定</li>
-                <li><code>send_button_disabled_markers</code>：发送按钮上哪些 class / aria token 代表当前仍不可发送</li>
-                <li><code>require_attachment_present</code>：是否必须真的看到附件预览后才允许继续</li>
-                <li><code>continue_once_on_unconfirmed_send</code>：未确认成功时，是否还允许系统冒险发送一次</li>
-            </ul>
 
             <div class="note">
                 <p><strong>⚠️ 引导文本的作用：</strong>附件上传完成后，系统会自动在输入框补一段提示语，例如“请完全专注于文件内容”，避免模型忽略附件，只看输入框里那句很短的文字。</p>
@@ -1668,7 +1885,7 @@ if session.error_count > 2:
     logger.info("检测到多次错误，已刷新页面")</code></pre>
 
             <div class="highlight-box">
-                <p><strong>⚠️ 安全提示：</strong>高级模式允许执行任意代码，请确保脚本来源可信。Python 脚本在后端执行，拥有完整的系统访问权限。</p>
+                <p><strong>⚠️ 安全提示：</strong>高级模式仍应只使用可信脚本。Python 脚本默认在受限后端沙箱中执行；如显式开启非沙箱模式，它将拥有完整的系统访问权限。</p>
             </div>
 
             <h3>命令执行时机</h3>
@@ -2073,7 +2290,7 @@ BROWSER_PROFILE_NAME=Default</code></pre>
             <h3>Q6: 目前有哪些已知问题？</h3>
             <p>A: 目前确认过的已知问题主要包括：</p>
             <ul>
-                <li>VSCode 的 <strong>Codex</strong> 插件目前不适配，原因暂时未知。</li>
+                <li>VSCode 的 <strong>Codex</strong> 插件及 <strong>Claude Code</strong> 均已完全适配（自 2026-05-28 起）。具体连接方法可参见「连接 API」章节。</li>
                 <li>DrissionPage 每次升级后，都需要重新执行对应补丁。</li>
                 <li>“独立 Cookie 标签页”目前仍属于高级实验功能。教程正文暂不展开这部分用法；如果强行追求“同一受控浏览器窗口内的独立 Cookie”，在浏览器原生菜单等场景下可能出现稳定性问题，当前建议优先使用共享 Cookie 方案。</li>
             </ul>
@@ -2112,7 +2329,7 @@ BROWSER_PROFILE_NAME=Default</code></pre>
         </section>
     </div>
 
-    <script src="../js/tutorial-i18n.js?v=2.7.5"></script>
-    <script src="../js/tutorial-page.js?v=2.7.5"></script>
+    <script src="../js/tutorial-i18n.js?v=2.8.9"></script>
+    <script src="../js/tutorial-page.js?v=2.8.9"></script>
 </body>
 </html>

@@ -384,6 +384,13 @@ async def lifespan(app: FastAPI):
     logger.info(f"浏览器端口: {AppConfig.get_browser_port()}")
     logger.info("=" * 60)
 
+    try:
+        from app.api.system import schedule_startup_update_check
+        schedule_startup_update_check()
+        logger.info("[startup] 已启动一次性版本检查")
+    except Exception as e:
+        logger.debug(f"[startup] 版本检查启动失败: {e}")
+
     # main.py 中 lifespan 函数的浏览器检查部分
 
     try:
@@ -450,6 +457,12 @@ async def lifespan(app: FastAPI):
     yield
 
     logger.info("服务正在关闭...")
+    try:
+        from app.services.command_engine import command_engine
+        command_engine.shutdown()
+    except Exception as e:
+        logger.debug(f"关闭命令引擎: {e}")
+
     try:
         browser = get_browser(auto_connect=False)
         browser.close()

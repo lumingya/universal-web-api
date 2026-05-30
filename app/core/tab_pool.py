@@ -1108,6 +1108,26 @@ class TabPoolManager:
             logger.debug(f"[TabPool] close raw tab failed ({raw_tab_id}): {e}")
             return False
 
+    def _close_raw_tabs_async(self, raw_tab_ids: List[str], reason: str = "") -> None:
+        targets = [str(raw_id or "").strip() for raw_id in raw_tab_ids or [] if str(raw_id or "").strip()]
+        if not targets:
+            return
+
+        def _close_targets():
+            for raw_id in targets:
+                closed = self._close_raw_tab(raw_id)
+                logger.debug(
+                    f"[TabPool] close removed target raw={raw_id} "
+                    f"closed={closed} reason={reason or '-'}"
+                )
+
+        thread = threading.Thread(
+            target=_close_targets,
+            daemon=True,
+            name=f"tab-close-{targets[0][:8]}",
+        )
+        thread.start()
+
     def _arm_isolated_rebind_grace(self, session: TabSession, reason: str, detail: str) -> bool:
         now = time.time()
         same_reason = session.transient_disconnect_reason == reason
@@ -1478,6 +1498,29 @@ class TabPoolManager:
         if not self._global_network_monitor:
             return True
         return bool(self._global_network_monitor.stop_for_session(session_id, reason=reason, join=wait))
+
+    def _prepare_acquired_session_for_handoff(
+        self,
+        session: TabSession,
+        reason: str,
+        *,
+        rollback_request_count: bool = True,
+    ) -> bool:
+        if self._stop_global_monitor_for_session(session.id, reason=reason, wait=True):
+            return True
+
+        logger.warning(
+            f"[{session.id}] global monitor did not stop before handoff "
+            f"(reason={reason}); marking session unhealthy"
+        )
+        session.release(
+            clear_page=False,
+            check_triggers=False,
+            rollback_request_count=rollback_request_count,
+        )
+        session.mark_error("global_monitor_stop_timeout")
+        self._condition.notify_all()
+        return False
 
     def suspend_global_network_monitor(self, tab_id: str, reason: str = "manual"):
         self._stop_global_monitor_for_session(tab_id, reason=reason)
@@ -1942,14 +1985,12 @@ class TabPoolManager:
                             logger.debug(f"[{session.id}] stuck cancel failed (ignored): {e}")
                     snapshot = self._describe_session(session)
                     logger.warning(
-                        f"[{session.id}] stuck for {busy_duration:.0f}s, force release "
+                        f"[{session.id}] stuck for {busy_duration:.0f}s, retire session "
                         f"(task={task_id or '-'}, cancelled={cancelled}, "
                         f"snapshot={snapshot})"
                     )
-                    session.force_release(clear_page=False, check_triggers=False)
-                    if session.status == TabStatus.IDLE:
-                        self._start_global_monitor_for_session(session)
-                        released_any = True
+                    session.mark_error("stuck_timeout")
+                    released_any = True
 
         if released_any:
             self._condition.notify_all()
@@ -1960,7 +2001,10 @@ class TabPoolManager:
         with self._condition:
             if self._shutdown:
                 return False
-            return bool(self._check_stuck_tabs())
+            changed = bool(self._check_stuck_tabs())
+            if changed:
+                self._cleanup_unhealthy_tabs()
+            return changed
 
     def _cancel_active_request_for_session(
         self,
@@ -2046,7 +2090,7 @@ class TabPoolManager:
                     detail=f"status={getattr(getattr(session, 'status', None), 'value', 'unknown')}",
                 )
                 logger.warning(f"[{tab_id}] 不健康或错误状态，从池中移除")
-                self._stop_global_monitor_for_session(tab_id, reason="unhealthy")
+                self._stop_global_monitor_for_session(tab_id, reason="unhealthy", wait=True)
 
                 # 清理映射表，允许相同 raw_tab_id 被重新扫描
                 raw_ids_to_remove = [
@@ -2071,6 +2115,7 @@ class TabPoolManager:
 
                 self._tabs.pop(tab_id, None)
                 self._on_session_removed(tab_id)
+                self._close_raw_tabs_async(raw_ids_to_remove, reason="unhealthy")
             except Exception as e:
                 logger.warning(f"[TabPool] cleanup remove failed for tab {tab_id}: {e}")
 
@@ -2329,7 +2374,12 @@ class TabPoolManager:
                         else session.acquire_for_command(task_id)
                     )
                     if acquired:
-                        self._stop_global_monitor_for_session(session.id, reason="acquire_by_raw_tab_id")
+                        if not self._prepare_acquired_session_for_handoff(
+                            session,
+                            "acquire_by_raw_tab_id",
+                            rollback_request_count=count_request,
+                        ):
+                            continue
                         if self._auto_activate_on_acquire and session.id != self._active_session_id:
                             session.activate()
                             self._active_session_id = session.id
@@ -2451,7 +2501,8 @@ class TabPoolManager:
                             logger.debug(f"[{session.id}] defer acquire to high-priority command")
                             continue
                         if session.acquire(task_id):
-                            self._stop_global_monitor_for_session(session.id, reason="acquire")
+                            if not self._prepare_acquired_session_for_handoff(session, "acquire"):
+                                continue
                             if self._auto_activate_on_acquire and session.id != self._active_session_id:
                                 session.activate()
                                 self._active_session_id = session.id
@@ -2567,7 +2618,8 @@ class TabPoolManager:
                             continue
 
                         if session.status == TabStatus.IDLE and session.acquire(task_id):
-                            self._stop_global_monitor_for_session(session.id, reason="acquire_by_exact_url")
+                            if not self._prepare_acquired_session_for_handoff(session, "acquire_by_exact_url"):
+                                continue
                             if self._auto_activate_on_acquire and session.id != self._active_session_id:
                                 session.activate()
                                 self._active_session_id = session.id
@@ -2682,7 +2734,8 @@ class TabPoolManager:
                         continue
 
                     if session.status == TabStatus.IDLE and session.acquire(task_id):
-                        self._stop_global_monitor_for_session(session.id, reason="acquire_by_index")
+                        if not self._prepare_acquired_session_for_handoff(session, "acquire_by_index"):
+                            continue
                         if self._auto_activate_on_acquire and session.id != self._active_session_id:
                             session.activate()
                             self._active_session_id = session.id
@@ -2780,7 +2833,8 @@ class TabPoolManager:
                             logger.debug(f"[{session.id}] defer by route-domain acquire to high-priority command")
                             continue
                         if session.status == TabStatus.IDLE and session.acquire(task_id):
-                            self._stop_global_monitor_for_session(session.id, reason="acquire_by_route_domain")
+                            if not self._prepare_acquired_session_for_handoff(session, "acquire_by_route_domain"):
+                                continue
                             if self._auto_activate_on_acquire and session.id != self._active_session_id:
                                 session.activate()
                                 self._active_session_id = session.id
@@ -2863,7 +2917,7 @@ class TabPoolManager:
                     cancel_error = str(e)
                     logger.debug(f"[{session.id}] 取消任务失败（忽略）: {e}")
 
-            self._stop_global_monitor_for_session(session.id, reason=f"terminate:{reason}")
+            self._stop_global_monitor_for_session(session.id, reason=f"terminate:{reason}", wait=True)
 
             was_busy = session.status == TabStatus.BUSY
             if was_busy:

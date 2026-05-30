@@ -18,6 +18,7 @@ import re
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Any, TYPE_CHECKING
 from urllib.parse import urlsplit
 
@@ -78,6 +79,14 @@ class CommandEngine(CommandEngineRuntimeMixin, CommandEngineResultsMixin, Comman
         self._running_high_by_session: Dict[str, int] = {}
         self._pending_high_by_domain: Dict[str, int] = {}
         self._running_high_by_domain: Dict[str, int] = {}
+        try:
+            _max_async_workers = int(os.getenv("CMD_ASYNC_MAX_WORKERS", "20"))
+        except Exception:
+            _max_async_workers = 20
+        self._command_executor = ThreadPoolExecutor(
+            max_workers=max(1, _max_async_workers),
+            thread_name_prefix="cmd-exec",
+        )
         try:
             _baseline = int(os.getenv("CMD_REQUEST_PRIORITY_BASELINE", "2"))
         except Exception:
@@ -642,6 +651,12 @@ return (function() {
         thread = self._periodic_thread
         if thread and thread.is_alive():
             thread.join(timeout=1.0)
+        try:
+            self._command_executor.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            self._command_executor.shutdown(wait=False)
+        except Exception as e:
+            logger.debug(f"[CMD] 命令线程池关闭失败（忽略）: {e}")
 
     def _periodic_loop(self):
         while not self._periodic_stop_event.wait(1.0):

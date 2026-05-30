@@ -185,6 +185,16 @@ function saveStoredSitesCache(sites, currentDomain) {
             releasesLoading: false,
             releasesError: '',
             releasesCurrentVersion: '',
+            updateCheck: {
+                checked: false,
+                checking: false,
+                available: false,
+                current_version: '',
+                latest_version: '',
+                latest_tag: '',
+                error: ''
+            },
+            updateCheckTimer: null,
             switchingTag: null,           // 正在切换的 tag
             switchStatusPolling: null,    // 轮询定时器
             showChangelogModal: false,
@@ -237,6 +247,10 @@ function saveStoredSitesCache(sites, currentDomain) {
         // 检测更新白名单是否有变更
         updatePreserveChanged() {
             return JSON.stringify(this.updatePreserveSelected) !== JSON.stringify(this.updatePreserveSelectedOriginal);
+        },
+
+        updateAvailable() {
+            return !!(this.updateCheck && this.updateCheck.available);
         },
 
         mainCompareVisibleItems() {
@@ -305,6 +319,10 @@ function saveStoredSitesCache(sites, currentDomain) {
         if (this.systemStatsTimer) {
             clearInterval(this.systemStatsTimer)
             this.systemStatsTimer = null
+        }
+        if (this.updateCheckTimer) {
+            clearTimeout(this.updateCheckTimer)
+            this.updateCheckTimer = null
         }
     },
     }

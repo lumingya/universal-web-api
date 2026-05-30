@@ -10,6 +10,9 @@
 
             this.startLogPolling()
             await this.loadHealthStatus({ silent: true, timeoutMs: 2500 }).catch(() => false)
+            this.loadUpdateCheck({ silent: true })
+                .then((status) => this.scheduleUpdateCheckStatusRefresh(status))
+                .catch(() => {})
             this.startRequestHistoryPolling()
             this.ensureTabDataLoaded(this.activeTab)
 
@@ -1371,6 +1374,57 @@
 
         // ========== 版本管理方法 ==========
 
+        applyUpdateCheck(data) {
+            const current = this.updateCheck && typeof this.updateCheck === 'object'
+                ? this.updateCheck
+                : {};
+            this.updateCheck = {
+                checked: !!(data && data.checked),
+                checking: !!(data && data.checking),
+                available: !!(data && data.available),
+                current_version: String((data && data.current_version) || current.current_version || ''),
+                latest_version: String((data && data.latest_version) || current.latest_version || ''),
+                latest_tag: String((data && data.latest_tag) || current.latest_tag || ''),
+                published_at: String((data && data.published_at) || current.published_at || ''),
+                repo: String((data && data.repo) || current.repo || ''),
+                checked_at: data && data.checked_at ? data.checked_at : (current.checked_at || null),
+                error: String((data && data.error) || '')
+            };
+            if (this.updateCheck.current_version && !this.releasesCurrentVersion) {
+                this.releasesCurrentVersion = this.updateCheck.current_version;
+            }
+            return this.updateCheck;
+        },
+
+        async loadUpdateCheck({ silent = false } = {}) {
+            try {
+                const data = await this.apiRequest('/api/update/check', { timeoutMs: 2500 });
+                return this.applyUpdateCheck(data);
+            } catch (error) {
+                if (!silent) {
+                    this.notify('版本检查状态读取失败: ' + error.message, 'error');
+                }
+                throw error;
+            }
+        },
+
+        scheduleUpdateCheckStatusRefresh(status, attempt = 0) {
+            if (this.updateCheckTimer) {
+                clearTimeout(this.updateCheckTimer);
+                this.updateCheckTimer = null;
+            }
+            const stillPending = status && (status.checking || !status.checked);
+            if (!stillPending || attempt >= 12) {
+                return;
+            }
+            this.updateCheckTimer = setTimeout(() => {
+                this.updateCheckTimer = null;
+                this.loadUpdateCheck({ silent: true })
+                    .then((nextStatus) => this.scheduleUpdateCheckStatusRefresh(nextStatus, attempt + 1))
+                    .catch(() => {});
+            }, 1500);
+        },
+
         async loadReleases() {
             this.releasesLoading = true;
             this.releasesError = '';
@@ -1378,6 +1432,9 @@
                 const data = await this.apiRequest('/api/update/releases');
                 this.releases = Array.isArray(data.releases) ? data.releases : [];
                 this.releasesCurrentVersion = data.current_version || '';
+                if (data.update_check) {
+                    this.applyUpdateCheck(data.update_check);
+                }
             } catch (error) {
                 this.releasesError = '加载失败: ' + error.message;
                 this.releases = [];

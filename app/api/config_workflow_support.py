@@ -131,6 +131,7 @@ def _execute_workflow_editor_test_payload(
 
     task_id = f"workflow_editor_test_{int(time.time() * 1000)}"
     session = None
+    executor = None
     started_at = time.time()
 
     try:
@@ -287,6 +288,11 @@ def _execute_workflow_editor_test_payload(
             "_tab_ref": tab,
         }
     finally:
+        if executor is not None:
+            try:
+                executor.cleanup_after_workflow()
+            except Exception as e:
+                logger.debug(f"[WFE_TEST] executor cleanup skipped: {e}")
         if session is not None and getattr(browser_instance, "tab_pool", None) is not None:
             logger.debug(f"[WFE_TEST] release session={session.id!r}")
             browser_instance.tab_pool.release(session.id, check_triggers=False)

@@ -1,5 +1,25 @@
 # 更新日志
 
+## 2026-05-30
+
+change:
+- Python 脚本安全沙箱限制：高级 Python 脚本默认受限执行，AST 拦截危险操作（如 `open`、`eval`、`exec`、`os`、`subprocess`、`sys` 等及 dunder 逃逸路径），仅保留 `json`、`time`、`requests`、`urllib.parse` 白名单。支持通过环境变量 `CMD_ALLOW_UNSAFE_PYTHON_COMMANDS=true` 恢复未受限执行行为。
+- 文件追加写入路径边界限制：`append_file` 默认只允许写入至 `data/command_outputs` 目录下，并引入路径边界检查，防止通过 `../` 或绝对路径进行目录遍历逃逸。可通过 `CMD_APPEND_FILE_BASE_DIR` 自定义安全目录。
+- 日志脱敏与安全强化：新增统一脱敏函数，自动对 `Authorization`、`Cookie`、`token`、`password`、`secret` 等敏感项进行遮蔽；网络解析 debug 快照写盘前同样会对 `raw_body`、`URL`、`content_preview`、`parser_debug`、`error` 进行脱敏。
+- 附件监控安全混淆：废除固定明文的 `window.__ATTACHMENT_MONITOR__` 主入口，改用每个执行器随机生成的非枚举 window key，并在新版本注入时清理旧入口。
+- 发送重试冷却限制：发送新增 `retry_cooldown_window` 机制，默认冷却时间为 `1.5s`，避免页面慢清空或慢进入生成态时因二次点击导致重复发送；前端配置面板同步新增“最小冷却窗”输入项。
+- 日志拆分与格式优化：拆分文件/控制台/Web 的日志格式化，文件日志不再套用控制台前缀并修复双重时间戳；控制台和 Web 端支持多行缩进和超长展示截断。
+- 线程安全 Logger 单例：为 `get_logger()` 加了线程安全单例注册表，避免并发场景下重复构造 `SecureLogger` 以及 `handlers.clear()` 的竞争风险。
+
+fix:
+- Claude / OpenAI 工具调用兼容性修复：修复流式 `tool_calls.index` 处理、Anthropic 增量工具流及 SSE 分包缓冲问题。保障 `tool_result` 顺序无误、孤儿回退与图片多模态数据不丢失，并在失败降级时仍正常保留 `tool_calls` 闭合协议。
+- XML 与路径解析修复：提升工具解析对 XML 缺失 wrapper 标签的自愈能力，支持直子参数（如 `<invoke><path>...</path></invoke>`）解析，保障 schema string 精度保真，并修复 Windows 路径下的反斜杠解析问题。
+- 标签页并发与调度优化：优化全局网络监听交接等待逻辑；残留 worker 超时后正常标记 tab 状态为 `ERROR`，且命令恢复能正常交回调度器，避免 `ERROR` tab 延迟释放并被错误改回 `IDLE`。
+- 并发轮询与性能提升：异步命令使用 `ThreadPoolExecutor` 限制线程数（默认上限 20，支持使用 `CMD_ASYNC_MAX_WORKERS` 调整）；等待标签页时优先使用 TabPool condition 唤醒，消除了 50ms 空转轮询；退出应用时同步执行命令引擎的 shutdown。
+- 内存与资源释放保障：在工作流结束和可视化编辑器测试结束时显式清理附件监控，降低常驻 Tab 残留 Observer / DOM 引用的内存泄漏风险。
+- 多模态提取机制优化：完善音频/WebSocket payload 上限、Blob 流式限量读取限制；Canvas 默认使用 JPEG 格式并允许调整质量；补充录音/浏览器 TTS 的熔断限制，并在网络流未完成（not done）时降级 fallback；支持图片盲等配置。
+- 前端旧版配置兼容：优化前端配置转换，兼容旧的 `modalities: { image: true, audio: true }` 配置并正确映射为新的策略对象，避免在 UI 中被误判为 disabled。
+
 ## 2026-05-28
 
 new:

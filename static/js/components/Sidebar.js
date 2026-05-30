@@ -9,6 +9,7 @@ window.SidebarComponent = {
         hasToken: { type: Boolean, default: false },
         darkMode: { type: Boolean, default: false },
         activeTab: { type: String, default: 'config' },  // ✨ 新增
+        updateAvailable: { type: Boolean, default: false },
         systemStats: { type: Object, default: () => ({ memory_mb: 0, disk_status: '未知', total_requests: 0 }) }
     },
     emits: [
@@ -114,11 +115,17 @@ window.SidebarComponent = {
                         📊 监控
                     </button>
                     <button @click="$emit('change-tab', 'settings')"
-                            :class="['flex-1 py-2 text-xs font-medium transition-colors border-b-2',
-                                     activeTab === 'settings' 
-                                     ? 'border-blue-500 text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20' 
+                            :title="updateAvailable ? '发现新版本' : '设置'"
+                            :class="['relative flex flex-1 items-center justify-center gap-1 py-2 text-xs font-medium transition-colors border-b-2',
+                                     activeTab === 'settings'
+                                     ? 'border-blue-500 text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20'
                                      : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50']">
-                        🔧 设置
+                        <span class="relative inline-flex items-center justify-center">
+                            🔧
+                            <span v-if="updateAvailable"
+                                  class="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-white dark:ring-gray-800"></span>
+                        </span>
+                        <span>设置</span>
                     </button>
                 </div>
             </div>

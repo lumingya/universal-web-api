@@ -64,6 +64,48 @@ def _extract_stream_error_message(chunk: Any) -> str:
         return ""
 
 
+def _retire_bound_tab_after_worker_leak(ctx: RequestContext, reason: str) -> None:
+    tab_id = str(ctx.tab_id or "").strip()
+    if not tab_id:
+        return
+    try:
+        browser = get_browser(auto_connect=False)
+        pool = getattr(browser, "_tab_pool", None)
+        session = getattr(pool, "_tabs", {}).get(tab_id) if pool is not None else None
+        if session is None:
+            return
+
+        current_task = str(getattr(session, "current_task_id", "") or "").strip()
+        bound_request_id = str(getattr(session, "_bound_request_id", "") or "").strip()
+        if current_task and current_task != ctx.request_id:
+            logger.warning(
+                f"[{tab_id}] 工作线程残留但标签页已被其他任务接管，跳过隔离 "
+                f"(request={ctx.request_id}, current_task={current_task})"
+            )
+            return
+        if bound_request_id and bound_request_id != ctx.request_id:
+            logger.warning(
+                f"[{tab_id}] 工作线程残留但绑定请求已变化，跳过隔离 "
+                f"(request={ctx.request_id}, bound={bound_request_id})"
+            )
+            return
+
+        if hasattr(session, "mark_error"):
+            session.mark_error(reason)
+        if pool is not None and hasattr(pool, "_condition"):
+            try:
+                with pool._condition:
+                    pool._condition.notify_all()
+            except Exception:
+                pass
+        logger.warning(
+            f"[{tab_id}] 工作线程未能及时退出，已标记标签页为 ERROR 等待池清理 "
+            f"(request={ctx.request_id}, reason={reason})"
+        )
+    except Exception as e:
+        logger.debug(f"标记残留工作线程标签页失败（忽略）: {e}")
+
+
 def _extract_chunk_media_items(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     media_items: List[Dict[str, Any]] = []
 
@@ -1179,11 +1221,14 @@ async def _stream_with_lifecycle(
         worker_thread.start()
 
         last_sse_emit_at = time.monotonic()
+        done_emitted = False
+        client_disconnected = False
 
         while True:
             if await request.is_disconnected():
                 logger.debug("客户端断开")
                 ctx.request_cancel("client_disconnected")
+                client_disconnected = True
                 break
 
             try:
@@ -1216,6 +1261,8 @@ async def _stream_with_lifecycle(
             request_manager.capture_response_chunk(ctx, chunk)
             yield chunk
             last_sse_emit_at = time.monotonic()
+            if isinstance(chunk, str) and chunk.startswith("data: [DONE]"):
+                done_emitted = True
             error_message = _extract_stream_error_message(chunk)
             if error_message:
                 logger.warning(f"流式响应返回错误事件: {error_message}")
@@ -1223,6 +1270,11 @@ async def _stream_with_lifecycle(
                 ctx.mark_failed(error_message)
                 break
             await asyncio.sleep(0)
+
+        if not client_disconnected and not done_emitted:
+            done_chunk = _pack_done()
+            request_manager.capture_response_chunk(ctx, done_chunk)
+            yield done_chunk
 
         if not ctx.should_stop() and ctx.status == RequestStatus.RUNNING:
             ctx.mark_completed()
@@ -1242,6 +1294,8 @@ async def _stream_with_lifecycle(
         if worker_thread and worker_thread.is_alive():
             ctx.request_cancel("cleanup")
             worker_thread.join(timeout=2.0)
+            if worker_thread.is_alive():
+                _retire_bound_tab_after_worker_leak(ctx, "worker_cleanup_timeout")
 
         if chunk_queue is not None:
             try:
@@ -1473,6 +1527,7 @@ async def _stream_tool_calling_with_lifecycle(
             await asyncio.sleep(0)
     except Exception as e:
         yield _pack_error(f"执行错误: {str(e)}", "tool_calling_failed")
+        yield _pack_done()
 
 
 def _pack_error(message: str, code: str = "error") -> str:

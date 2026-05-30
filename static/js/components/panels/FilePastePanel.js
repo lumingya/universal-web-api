@@ -29,6 +29,7 @@ window.FilePastePanel = {
                 attachment_sensitivity: 'medium',
                 max_retry_count: 2,
                 retry_interval: 0.6,
+                retry_cooldown_window: 1.5,
                 retry_action: 'click_send_btn',
                 retry_key_combo: 'Enter',
                 retry_on_unconfirmed_send: true,
@@ -336,7 +337,7 @@ window.FilePastePanel = {
                         </div>
                     </div>
 
-                    <div class="mt-4 grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div class="mt-4 grid grid-cols-1 md:grid-cols-4 gap-4">
                         <div>
                             <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">最大重试次数</label>
                             <div class="flex items-center gap-2">
@@ -356,6 +357,19 @@ window.FilePastePanel = {
                                 <input type="number"
                                        :value="resolvedFilePaste.send_confirmation.retry_interval"
                                        @input="updateSendConfirmationField('retry_interval', parseFloat($event.target.value) || 0)"
+                                       min="0"
+                                       max="30"
+                                       step="0.1"
+                                       class="flex-1 border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent">
+                                <span class="text-sm text-gray-500 dark:text-gray-400">秒</span>
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">最小冷却窗</label>
+                            <div class="flex items-center gap-2">
+                                <input type="number"
+                                       :value="resolvedFilePaste.send_confirmation.retry_cooldown_window"
+                                       @input="updateSendConfirmationField('retry_cooldown_window', parseFloat($event.target.value) || 0)"
                                        min="0"
                                        max="30"
                                        step="0.1"

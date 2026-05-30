@@ -17,12 +17,18 @@ window.ImageConfigPanel = {
         };
     },
     computed: {
+        modalityPolicies() {
+            return {
+                image: this.normalizeModalityPolicy('image', (this.imageConfig.modalities || {}).image),
+                audio: this.normalizeModalityPolicy('audio', (this.imageConfig.modalities || {}).audio),
+                video: this.normalizeModalityPolicy('video', (this.imageConfig.modalities || {}).video)
+            };
+        },
         modalities() {
             return {
-                image: false,
-                audio: false,
-                video: false,
-                ...(this.imageConfig.modalities || {})
+                image: !!this.modalityPolicies.image.enabled,
+                audio: !!this.modalityPolicies.audio.enabled,
+                video: !!this.modalityPolicies.video.enabled
             };
         },
         isEnabled() {
@@ -49,14 +55,24 @@ window.ImageConfigPanel = {
                 url_patterns: ['voicegenie', 'speech', 'audio', 'tts'],
                 extractor: 'voicegenie_ogg_pages',
                 settle_seconds: 0.35,
+                max_payload_bytes: 10 * 1024 * 1024,
                 ...((this.imageConfig && this.imageConfig.audio_network_capture) || {})
             };
+        },
+        audioNetworkMaxPayloadMb() {
+            const raw = Number(this.audioNetworkCapture.max_payload_bytes || 0);
+            const fallback = Number(this.imageConfig.max_size_mb || 10);
+            if (!Number.isFinite(raw) || raw <= 0) return fallback;
+            return Math.round((raw / 1024 / 1024) * 10) / 10;
         },
         audioNetworkUrlPatternsText() {
             const patterns = Array.isArray(this.audioNetworkCapture.url_patterns)
                 ? this.audioNetworkCapture.url_patterns
                 : [];
             return patterns.join('\n');
+        },
+        audioCaptureEnabled() {
+            return this.imageConfig.audio_capture_enabled !== false;
         }
     },
     watch: {
@@ -83,21 +99,95 @@ window.ImageConfigPanel = {
         },
 
         buildNextConfig(patch = {}) {
+            const nextModalities = {
+                ...this.modalityPolicies
+            };
+            if (patch && patch.modalities && typeof patch.modalities === 'object') {
+                for (const type of ['image', 'audio', 'video']) {
+                    if (Object.prototype.hasOwnProperty.call(patch.modalities, type)) {
+                        nextModalities[type] = this.normalizeModalityPolicy(
+                            type,
+                            patch.modalities[type],
+                            nextModalities[type]
+                        );
+                    }
+                }
+            }
             const next = {
                 ...this.imageConfig,
                 ...patch,
-                modalities: {
-                    ...this.modalities,
-                    ...((patch && patch.modalities) || {})
-                }
+                modalities: nextModalities
             };
-            next.enabled = ['image', 'audio', 'video'].some(key => !!next.modalities[key]);
+            next.enabled = ['image', 'audio', 'video'].some(key => !!(next.modalities[key] && next.modalities[key].enabled));
             return next;
         },
 
         updateField(field, value) {
             const newConfig = this.buildNextConfig({ [field]: value });
             this.$emit('update-image-config', newConfig);
+        },
+
+        numberOrFallback(value, fallback) {
+            const parsed = Number(value);
+            return Number.isFinite(parsed) ? parsed : fallback;
+        },
+
+        defaultModalityPolicy(type, enabled = false) {
+            const base = {
+                enabled: !!enabled,
+                run_policy: enabled ? 'on_signal' : 'disabled',
+                quick_probe_timeout_seconds: 1.0
+            };
+            if (type === 'audio') {
+                return {
+                    ...base,
+                    run_policy: enabled ? 'probe_if_trigger_found' : 'disabled',
+                    capture_timeout_seconds: 12.0
+                };
+            }
+            if (type === 'video') {
+                return {
+                    ...base,
+                    late_wait_timeout_seconds: 90.0
+                };
+            }
+            return {
+                ...base,
+                late_wait_timeout_seconds: 45.0,
+                blind_wait_timeout_seconds: 1.0
+            };
+        },
+
+        normalizeModalityPolicy(type, value, fallback = null) {
+            const current = fallback || this.defaultModalityPolicy(type, false);
+            if (value && typeof value === 'object' && !Array.isArray(value)) {
+                const enabled = !!value.enabled;
+                const allowedPolicies = ['disabled', 'generic_only', 'on_signal', 'probe_if_trigger_found', 'always_probe'];
+                let runPolicy = String(value.run_policy || current.run_policy || '').trim();
+                if (!allowedPolicies.includes(runPolicy)) {
+                    runPolicy = enabled ? this.defaultModalityPolicy(type, true).run_policy : 'disabled';
+                }
+                if (!enabled) {
+                    runPolicy = 'disabled';
+                }
+                return {
+                    ...this.defaultModalityPolicy(type, enabled),
+                    ...current,
+                    ...value,
+                    enabled,
+                    run_policy: runPolicy
+                };
+            }
+            return this.defaultModalityPolicy(type, !!value);
+        },
+
+        updateModalityPolicy(type, patch = {}) {
+            const current = this.modalityPolicies[type] || this.defaultModalityPolicy(type, false);
+            const nextPolicy = this.normalizeModalityPolicy(type, { ...current, ...(patch || {}) }, current);
+            this.updateField('modalities', {
+                ...this.modalityPolicies,
+                [type]: nextPolicy
+            });
         },
 
         updateSrcAllowPatterns(text) {
@@ -125,11 +215,11 @@ window.ImageConfigPanel = {
         },
 
         toggleModality(type) {
-            const nextModalities = {
-                ...this.modalities,
-                [type]: !this.modalities[type]
-            };
-            this.updateField('modalities', nextModalities);
+            const enabled = !this.modalities[type];
+            this.updateModalityPolicy(type, {
+                enabled,
+                run_policy: enabled ? this.defaultModalityPolicy(type, true).run_policy : 'disabled'
+            });
         },
 
         modalityCardClass(type) {
@@ -280,6 +370,46 @@ window.ImageConfigPanel = {
                                     <div class="toggle-bg"></div>
                                 </label>
                             </div>
+                            <div class="mt-4 grid grid-cols-3 gap-2">
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">运行策略</label>
+                                    <select :value="modalityPolicies.image.run_policy"
+                                            @change="updateModalityPolicy('image', { run_policy: $event.target.value, enabled: $event.target.value !== 'disabled' })"
+                                            class="w-full border dark:border-gray-600 px-2 py-1.5 rounded-md text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
+                                        <option value="disabled">disabled</option>
+                                        <option value="generic_only">generic_only</option>
+                                        <option value="on_signal">on_signal</option>
+                                        <option value="always_probe">always_probe</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">快速探测</label>
+                                    <input type="number"
+                                           :value="modalityPolicies.image.quick_probe_timeout_seconds"
+                                           @input="updateModalityPolicy('image', { quick_probe_timeout_seconds: numberOrFallback($event.target.value, 1) })"
+                                           min="0.1" max="10" step="0.1"
+                                           :disabled="!modalities.image"
+                                           class="w-full border dark:border-gray-600 px-2 py-1.5 rounded-md text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">长等上限</label>
+                                    <input type="number"
+                                           :value="modalityPolicies.image.late_wait_timeout_seconds"
+                                           @input="updateModalityPolicy('image', { late_wait_timeout_seconds: numberOrFallback($event.target.value, 45) })"
+                                           min="0.2" max="300" step="1"
+                                           :disabled="!modalities.image || modalityPolicies.image.run_policy === 'generic_only'"
+                                           class="w-full border dark:border-gray-600 px-2 py-1.5 rounded-md text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50">
+                                </div>
+                            </div>
+                            <div class="mt-2">
+                                <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">无占位盲等</label>
+                                <input type="number"
+                                       :value="modalityPolicies.image.blind_wait_timeout_seconds"
+                                       @input="updateModalityPolicy('image', { blind_wait_timeout_seconds: numberOrFallback($event.target.value, 1) })"
+                                       min="0" max="300" step="0.5"
+                                       :disabled="!modalities.image || modalityPolicies.image.run_policy === 'generic_only'"
+                                       class="w-full border dark:border-gray-600 px-2 py-1.5 rounded-md text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50">
+                            </div>
                         </div>
 
                         <div :class="['border rounded-xl p-4 transition-colors', modalityCardClass('audio')]">
@@ -293,6 +423,38 @@ window.ImageConfigPanel = {
                                     <div class="toggle-bg"></div>
                                 </label>
                             </div>
+                            <div class="mt-4 grid grid-cols-3 gap-2">
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">运行策略</label>
+                                    <select :value="modalityPolicies.audio.run_policy"
+                                            @change="updateModalityPolicy('audio', { run_policy: $event.target.value, enabled: $event.target.value !== 'disabled' })"
+                                            class="w-full border dark:border-gray-600 px-2 py-1.5 rounded-md text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
+                                        <option value="disabled">disabled</option>
+                                        <option value="generic_only">generic_only</option>
+                                        <option value="on_signal">on_signal</option>
+                                        <option value="probe_if_trigger_found">probe_if_trigger_found</option>
+                                        <option value="always_probe">always_probe</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">快速探测</label>
+                                    <input type="number"
+                                           :value="modalityPolicies.audio.quick_probe_timeout_seconds"
+                                           @input="updateModalityPolicy('audio', { quick_probe_timeout_seconds: numberOrFallback($event.target.value, 1) })"
+                                           min="0.1" max="10" step="0.1"
+                                           :disabled="!modalities.audio"
+                                           class="w-full border dark:border-gray-600 px-2 py-1.5 rounded-md text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">录制上限</label>
+                                    <input type="number"
+                                           :value="modalityPolicies.audio.capture_timeout_seconds"
+                                           @input="updateModalityPolicy('audio', { capture_timeout_seconds: numberOrFallback($event.target.value, 12) })"
+                                           min="0.2" max="180" step="0.5"
+                                           :disabled="!modalities.audio || !['probe_if_trigger_found', 'always_probe', 'on_signal'].includes(modalityPolicies.audio.run_policy)"
+                                           class="w-full border dark:border-gray-600 px-2 py-1.5 rounded-md text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50">
+                                </div>
+                            </div>
                         </div>
 
                         <div :class="['border rounded-xl p-4 transition-colors', modalityCardClass('video')]">
@@ -305,6 +467,37 @@ window.ImageConfigPanel = {
                                     <input type="checkbox" :checked="modalities.video" @change="toggleModality('video')" class="sr-only peer">
                                     <div class="toggle-bg"></div>
                                 </label>
+                            </div>
+                            <div class="mt-4 grid grid-cols-3 gap-2">
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">运行策略</label>
+                                    <select :value="modalityPolicies.video.run_policy"
+                                            @change="updateModalityPolicy('video', { run_policy: $event.target.value, enabled: $event.target.value !== 'disabled' })"
+                                            class="w-full border dark:border-gray-600 px-2 py-1.5 rounded-md text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
+                                        <option value="disabled">disabled</option>
+                                        <option value="generic_only">generic_only</option>
+                                        <option value="on_signal">on_signal</option>
+                                        <option value="always_probe">always_probe</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">快速探测</label>
+                                    <input type="number"
+                                           :value="modalityPolicies.video.quick_probe_timeout_seconds"
+                                           @input="updateModalityPolicy('video', { quick_probe_timeout_seconds: numberOrFallback($event.target.value, 1) })"
+                                           min="0.1" max="10" step="0.1"
+                                           :disabled="!modalities.video"
+                                           class="w-full border dark:border-gray-600 px-2 py-1.5 rounded-md text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">长等上限</label>
+                                    <input type="number"
+                                           :value="modalityPolicies.video.late_wait_timeout_seconds"
+                                           @input="updateModalityPolicy('video', { late_wait_timeout_seconds: numberOrFallback($event.target.value, 90) })"
+                                           min="0.2" max="300" step="1"
+                                           :disabled="!modalities.video || modalityPolicies.video.run_policy === 'generic_only'"
+                                           class="w-full border dark:border-gray-600 px-2 py-1.5 rounded-md text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50">
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -389,6 +582,31 @@ window.ImageConfigPanel = {
                     </div>
                 </div>
 
+                <div :class="inputWrapClass(modalities.image)" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Canvas 导出格式</label>
+                        <select :value="imageConfig.canvas_export_mime || 'image/jpeg'"
+                                @change="updateField('canvas_export_mime', $event.target.value)"
+                                :disabled="!modalities.image"
+                                class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent disabled:cursor-not-allowed">
+                            <option value="image/jpeg">JPEG</option>
+                            <option value="image/webp">WebP</option>
+                            <option value="image/png">PNG</option>
+                        </select>
+                        <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">用于 blob 图片 Canvas 兜底导出。JPEG/WebP 体积更小。</p>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Canvas 导出质量</label>
+                        <input type="number"
+                               :value="imageConfig.canvas_export_quality === undefined ? 0.88 : imageConfig.canvas_export_quality"
+                               @input="updateField('canvas_export_quality', numberOrFallback($event.target.value, 0.88))"
+                               min="0.1" max="1" step="0.01"
+                               :disabled="!modalities.image || (imageConfig.canvas_export_mime || 'image/jpeg') === 'image/png'"
+                               class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed">
+                        <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">仅 JPEG/WebP 生效，建议 0.80-0.92。</p>
+                    </div>
+                </div>
+
                 <div class="border-t dark:border-gray-700 pt-4">
                     <div class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">高级选项</div>
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -416,12 +634,23 @@ window.ImageConfigPanel = {
                 </div>
 
                 <div v-if="modalities.audio" class="border-t dark:border-gray-700 pt-4">
-                    <div class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">网络音频捕获</div>
+                    <div class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">音频捕获</div>
+
+                    <div class="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg mb-3">
+                        <div>
+                            <div class="text-sm font-medium text-gray-700 dark:text-gray-300">页面播放音频捕获回退</div>
+                            <div class="text-xs text-gray-500 dark:text-gray-400">直接提取不到音频时，允许触发页面播放并录制音频。Gemini 直连提取预设应保持关闭。</div>
+                        </div>
+                        <label class="toggle-label scale-90">
+                            <input type="checkbox" :checked="audioCaptureEnabled" @change="updateField('audio_capture_enabled', $event.target.checked)" class="sr-only peer">
+                            <div class="toggle-bg"></div>
+                        </label>
+                    </div>
 
                     <div class="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg">
                         <div>
                             <div class="text-sm font-medium text-gray-700 dark:text-gray-300">启用网络音频捕获</div>
-                            <div class="text-xs text-gray-500 dark:text-gray-400">优先尝试从页面内 WebSocket / 网络流直接提取音频，失败后再回退到页面录音。</div>
+                            <div class="text-xs text-gray-500 dark:text-gray-400">优先尝试从页面内 WebSocket / 网络流直接提取音频；是否继续回退到页面录音由上方开关控制。</div>
                         </div>
                         <label class="toggle-label scale-90">
                             <input type="checkbox" :checked="audioNetworkCapture.enabled" @change="updateAudioNetworkCapture({ enabled: $event.target.checked })" class="sr-only peer">
@@ -435,7 +664,7 @@ window.ImageConfigPanel = {
                                 <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">捕获超时 (秒)</label>
                                 <input type="number"
                                        :value="audioNetworkCapture.timeout_seconds"
-                                       @input="updateAudioNetworkCapture({ timeout_seconds: parseFloat($event.target.value) || 2.5 })"
+                                       @input="updateAudioNetworkCapture({ timeout_seconds: numberOrFallback($event.target.value, 2.5) })"
                                        min="0.1" max="15" step="0.1"
                                        :disabled="!audioNetworkCapture.enabled"
                                        class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent disabled:cursor-not-allowed">
@@ -465,10 +694,20 @@ window.ImageConfigPanel = {
                                 <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">稳定等待窗口 (秒)</label>
                                 <input type="number"
                                        :value="audioNetworkCapture.settle_seconds"
-                                       @input="updateAudioNetworkCapture({ settle_seconds: parseFloat($event.target.value) || 0.35 })"
+                                       @input="updateAudioNetworkCapture({ settle_seconds: numberOrFallback($event.target.value, 0.35) })"
                                        min="0.05" max="5" step="0.05"
                                        :disabled="!audioNetworkCapture.enabled"
                                        class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent disabled:cursor-not-allowed">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">单条载荷上限 (MB)</label>
+                                <input type="number"
+                                       :value="audioNetworkMaxPayloadMb"
+                                       @input="updateAudioNetworkCapture({ max_payload_bytes: Math.round(numberOrFallback($event.target.value, 10) * 1024 * 1024) })"
+                                       min="0.1" max="100" step="0.5"
+                                       :disabled="!audioNetworkCapture.enabled"
+                                       class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent disabled:cursor-not-allowed">
+                                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">超过上限的二进制帧只记录摘要，不回传 Base64。</p>
                             </div>
                         </div>
 

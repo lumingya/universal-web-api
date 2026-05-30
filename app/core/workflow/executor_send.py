@@ -356,6 +356,7 @@ class WorkflowExecutorSendMixin:
             "retry_observe_window": float(
                 getattr(BrowserConstants, "SEND_RETRY_OBSERVE_WINDOW", 0.9)
             ),
+            "retry_cooldown_window": 1.5,
             "attachment_observe_window": float(
                 getattr(BrowserConstants, "ATTACHMENT_SEND_OBSERVE_WINDOW", 6.0)
             ),
@@ -473,6 +474,37 @@ class WorkflowExecutorSendMixin:
         if retry_action == "key_press":
             return f"KEY_PRESS({config.get('retry_key_combo') or 'Enter'})"
         return "CLICK(send_btn)"
+
+    def _wait_before_send_retry(
+        self,
+        *,
+        last_send_action_at: float,
+        retry_interval: float,
+        cooldown_window: float,
+        deadline: Optional[float] = None,
+    ) -> bool:
+        """Wait before a retry so slow UIs are not double-clicked immediately."""
+        interval_wait = max(0.0, float(retry_interval or 0.0))
+        cooldown_wait = 0.0
+        if cooldown_window > 0 and last_send_action_at > 0:
+            cooldown_wait = max(0.0, float(cooldown_window) - (time.time() - last_send_action_at))
+
+        wait_for = max(interval_wait, cooldown_wait)
+        if deadline is not None:
+            wait_for = min(wait_for, max(0.0, float(deadline) - time.time()))
+
+        if wait_for <= 0:
+            return True
+
+        if cooldown_wait > interval_wait + 0.01:
+            logger.debug(f"[SEND] 发送重试冷却等待 {cooldown_wait:.2f}s")
+
+        end_at = time.time() + wait_for
+        while time.time() < end_at:
+            if self._check_cancelled():
+                return False
+            time.sleep(min(0.1, max(0.0, end_at - time.time())))
+        return True
 
     def _execute_send_retry_action(
         self,
@@ -1008,6 +1040,13 @@ class WorkflowExecutorSendMixin:
             max_value=max_wait,
             raw_only=True,
         )
+        retry_cooldown_window = self._get_send_confirmation_window(
+            "retry_cooldown_window",
+            1.5,
+            min_value=0.0,
+            max_value=max_wait,
+            raw_only=True,
+        )
         send_observe_window = self._get_send_confirmation_window(
             "post_click_observe_window",
             getattr(BrowserConstants, "SEND_POST_CLICK_OBSERVE_WINDOW", 1.8),
@@ -1056,6 +1095,7 @@ class WorkflowExecutorSendMixin:
         if self._network_monitor is not None:
             self._network_monitor.mark_send_attempt()
         self._execute_click(selector, target_key, optional)
+        last_send_action_at = time.time()
 
         time.sleep(0.25)
         after_len = self._safe_get_input_len_by_key("input_box")
@@ -1136,9 +1176,12 @@ class WorkflowExecutorSendMixin:
                         if self._check_cancelled():
                             return
 
-                        wait_for = max(0.0, min(retry_interval, max_wait))
-                        if wait_for > 0:
-                            time.sleep(wait_for)
+                        if not self._wait_before_send_retry(
+                            last_send_action_at=last_send_action_at,
+                            retry_interval=retry_interval,
+                            cooldown_window=retry_cooldown_window,
+                        ):
+                            return
 
                         pre_retry_probe_window = min(
                             max(0.0, retry_probe_window),
@@ -1167,6 +1210,7 @@ class WorkflowExecutorSendMixin:
                             optional,
                             retry_action_config=retry_action_config,
                         )
+                        last_send_action_at = time.time()
                         time.sleep(0.25)
                         retry_after_len = self._safe_get_input_len_by_key("input_box")
                         retry_network_probe = {"matched": False}
@@ -1254,11 +1298,13 @@ class WorkflowExecutorSendMixin:
             if self._check_cancelled():
                 return
 
-            remaining = max(0.0, deadline - time.time())
-            step = min(retry_interval, remaining)
-            if step <= 0:
-                break
-            time.sleep(step)
+            if not self._wait_before_send_retry(
+                last_send_action_at=last_send_action_at,
+                retry_interval=retry_interval,
+                cooldown_window=retry_cooldown_window,
+                deadline=deadline,
+            ):
+                return
 
             remaining = max(0.0, deadline - time.time())
             if remaining > 0 and self._observe_send_without_retry(
@@ -1281,6 +1327,7 @@ class WorkflowExecutorSendMixin:
                 optional,
                 retry_action_config=retry_action_config,
             )
+            last_send_action_at = time.time()
 
             if time.time() < deadline:
                 time.sleep(min(0.25, max(0.0, deadline - time.time())))
@@ -1340,6 +1387,13 @@ class WorkflowExecutorSendMixin:
             max_value=30.0,
             raw_only=True,
         )
+        retry_cooldown_window = self._get_send_confirmation_window(
+            "retry_cooldown_window",
+            1.5,
+            min_value=0.0,
+            max_value=30.0,
+            raw_only=True,
+        )
         pre_retry_probe_window = self._get_send_confirmation_window(
             "pre_retry_probe_window",
             0.12,
@@ -1379,13 +1433,14 @@ class WorkflowExecutorSendMixin:
         before_len = self._safe_get_input_len_by_key("input_box")
         if self._network_monitor is not None:
             self._network_monitor.mark_send_attempt()
-        
+
         logger.info(
             "[STEALTH] 有图片，发送后观察确认 "
             f"(observe={observe_window:.1f}s, max_retry={max_retry_count})"
         )
-        
+
         self._execute_click(selector, target_key, optional)
+        last_send_action_at = time.time()
         time.sleep(0.25)
         after_len = self._safe_get_input_len_by_key("input_box")
         if self._is_send_success(before_len, after_len):
@@ -1406,8 +1461,12 @@ class WorkflowExecutorSendMixin:
             if self._check_cancelled():
                 return
 
-            if retry_interval > 0:
-                time.sleep(retry_interval)
+            if not self._wait_before_send_retry(
+                last_send_action_at=last_send_action_at,
+                retry_interval=retry_interval,
+                cooldown_window=retry_cooldown_window,
+            ):
+                return
 
             if pre_retry_probe_window > 0 and self._observe_send_without_retry(
                 selector,
@@ -1429,6 +1488,7 @@ class WorkflowExecutorSendMixin:
 
             try:
                 self._execute_click(selector, target_key, True)
+                last_send_action_at = time.time()
                 logger.debug(f"[STEALTH] 发送重试 #{retry_count}")
             except Exception:
                 logger.debug(f"[STEALTH] 发送重试 #{retry_count} 执行失败，继续观察")

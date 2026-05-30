@@ -8,7 +8,7 @@ schemas.py - 数据模型和 API Schema 定义
 """
 
 import copy
-from typing import TypedDict, List, Optional, Literal, Dict, Any
+from typing import TypedDict, List, Optional, Literal, Dict, Any, Union
 from pydantic import BaseModel
 
 # ================= 动作类型 =================
@@ -237,11 +237,32 @@ def get_default_prompt_padding_config() -> 'PromptPaddingConfig':
     }
 
 
+ModalityRunPolicy = Literal[
+    "disabled",
+    "generic_only",
+    "on_signal",
+    "probe_if_trigger_found",
+    "always_probe",
+]
+
+
+class ModalityPolicyConfig(TypedDict, total=False):
+    """单个模态的运行策略。"""
+    enabled: bool
+    run_policy: ModalityRunPolicy
+    selector: str
+    container_selector: Optional[str]
+    quick_probe_timeout_seconds: float
+    capture_timeout_seconds: float
+    late_wait_timeout_seconds: float
+    blind_wait_timeout_seconds: float
+
+
 class ExtractionModalitiesConfig(TypedDict, total=False):
-    """多模态提取开关"""
-    image: bool
-    audio: bool
-    video: bool
+    """多模态提取开关与运行策略。旧版 bool 配置仍兼容。"""
+    image: Union[bool, ModalityPolicyConfig]
+    audio: Union[bool, ModalityPolicyConfig]
+    video: Union[bool, ModalityPolicyConfig]
 
 
 class AudioNetworkCaptureConfig(TypedDict, total=False):
@@ -252,6 +273,7 @@ class AudioNetworkCaptureConfig(TypedDict, total=False):
     url_patterns: List[str]
     extractor: Literal["voicegenie_ogg_pages", "voicegenie_binary_stream"]
     settle_seconds: float
+    max_payload_bytes: int
 
 
 class AudioBrowserTtsFallbackConfig(TypedDict, total=False):
@@ -275,6 +297,120 @@ class AudioBrowserTtsFallbackConfig(TypedDict, total=False):
     samantha_web: str
 
 
+MODALITY_TYPES = ("image", "audio", "video")
+MODALITY_RUN_POLICY_VALUES = {
+    "disabled",
+    "generic_only",
+    "on_signal",
+    "probe_if_trigger_found",
+    "always_probe",
+}
+
+
+def get_default_modality_policy(media_type: str, enabled: bool = False) -> ModalityPolicyConfig:
+    """获取单模态默认运行策略。"""
+    media_type = str(media_type or "").strip().lower()
+    policy: ModalityPolicyConfig = {
+        "enabled": bool(enabled),
+        "run_policy": "disabled" if not enabled else "on_signal",
+        "quick_probe_timeout_seconds": 1.0,
+    }
+    if media_type == "audio":
+        policy.update({
+            "run_policy": "probe_if_trigger_found" if enabled else "disabled",
+            "capture_timeout_seconds": 12.0,
+        })
+    elif media_type == "video":
+        policy.update({
+            "run_policy": "on_signal" if enabled else "disabled",
+            "late_wait_timeout_seconds": 90.0,
+        })
+    elif media_type == "image":
+        policy.update({
+            "run_policy": "on_signal" if enabled else "disabled",
+            "late_wait_timeout_seconds": 45.0,
+            "blind_wait_timeout_seconds": 1.0,
+        })
+    return policy
+
+
+def normalize_modality_policy(media_type: str, raw_value: Any) -> ModalityPolicyConfig:
+    """把旧 bool 或新对象配置规范化成策略对象。"""
+    if isinstance(raw_value, dict):
+        enabled = bool(raw_value.get("enabled", False))
+        result = get_default_modality_policy(media_type, enabled=enabled)
+        run_policy = str(raw_value.get("run_policy") or result.get("run_policy") or "").strip().lower()
+        if run_policy not in MODALITY_RUN_POLICY_VALUES:
+            run_policy = str(result.get("run_policy") or "disabled")
+        if not enabled:
+            run_policy = "disabled"
+        result["run_policy"] = run_policy  # type: ignore[typeddict-item]
+
+        if "quick_probe_timeout_seconds" in raw_value:
+            try:
+                result["quick_probe_timeout_seconds"] = max(0.1, min(float(raw_value["quick_probe_timeout_seconds"]), 10.0))
+            except (TypeError, ValueError):
+                pass
+        if "capture_timeout_seconds" in raw_value:
+            try:
+                result["capture_timeout_seconds"] = max(0.2, min(float(raw_value["capture_timeout_seconds"]), 180.0))
+            except (TypeError, ValueError):
+                pass
+        if "late_wait_timeout_seconds" in raw_value:
+            try:
+                result["late_wait_timeout_seconds"] = max(0.2, min(float(raw_value["late_wait_timeout_seconds"]), 300.0))
+            except (TypeError, ValueError):
+                pass
+        if "blind_wait_timeout_seconds" in raw_value:
+            try:
+                result["blind_wait_timeout_seconds"] = max(0.0, min(float(raw_value["blind_wait_timeout_seconds"]), 300.0))
+            except (TypeError, ValueError):
+                pass
+        if "selector" in raw_value:
+            selector = str(raw_value.get("selector") or "").strip()
+            if selector:
+                result["selector"] = selector
+        if "container_selector" in raw_value:
+            container_selector = str(raw_value.get("container_selector") or "").strip()
+            result["container_selector"] = container_selector or None
+        return result
+
+    return get_default_modality_policy(media_type, enabled=bool(raw_value))
+
+
+def normalize_modalities_config(raw_modalities: Any) -> ExtractionModalitiesConfig:
+    """规范化 image/audio/video 三个模态配置。"""
+    raw = raw_modalities if isinstance(raw_modalities, dict) else {}
+    return {
+        media_type: normalize_modality_policy(media_type, raw.get(media_type, False))
+        for media_type in MODALITY_TYPES
+    }
+
+
+def get_modality_policy(modalities: Any, media_type: str) -> ModalityPolicyConfig:
+    """读取单模态策略，兼容旧 bool。"""
+    raw = modalities.get(media_type) if isinstance(modalities, dict) else False
+    return normalize_modality_policy(media_type, raw)
+
+
+def is_modality_enabled(modalities: Any, media_type: str) -> bool:
+    """判断模态是否启用，避免 bool(dict) 误判。"""
+    return bool(get_modality_policy(modalities, media_type).get("enabled", False))
+
+
+def get_modality_run_policy(modalities: Any, media_type: str) -> str:
+    """读取模态运行策略。"""
+    return str(get_modality_policy(modalities, media_type).get("run_policy") or "disabled")
+
+
+def get_enabled_modalities(modalities: Any) -> List[str]:
+    """返回已启用模态列表。"""
+    return [
+        media_type for media_type in MODALITY_TYPES
+        if is_modality_enabled(modalities, media_type)
+    ]
+
+
 class ImageExtractionConfig(TypedDict, total=False):
     """
     多模态提取配置
@@ -291,6 +427,7 @@ class ImageExtractionConfig(TypedDict, total=False):
     latest_visual_column: Literal["left", "right"] # latest_visual_reply 同一行内优先左栏或右栏
     allow_container_fallback: bool   # 当前回复内无媒体时是否回退到容器/整页
     force_postprocess: bool          # 是否强制执行收尾多模态后处理（由配置显式声明）
+    direct_postprocess_modalities: List[Literal["image", "audio", "video"]] # 允许无额外信号直接执行 DOM 收尾提取的模态
     debounce_seconds: float          # 文本稳定后等待时间
     wait_for_load: bool              # 是否等待媒体加载完成
     load_timeout_seconds: float      # 等待加载的超时时间
@@ -328,6 +465,7 @@ class SendConfirmationConfig(TypedDict, total=False):
     attachment_observe_window: float
     max_retry_count: int
     retry_interval: float
+    retry_cooldown_window: float
     retry_action: Literal["click_send_btn", "key_press"]
     retry_key_combo: str
     retry_on_unconfirmed_send: bool
@@ -675,11 +813,7 @@ def get_default_image_extraction_config() -> ImageExtractionConfig:
     """获取默认的多模态提取配置"""
     return {
         "enabled": False,
-        "modalities": {
-            "image": False,
-            "audio": False,
-            "video": False,
-        },
+        "modalities": normalize_modalities_config({}),
         "selector": "img",
         "audio_selector": "audio, audio source",
         "video_selector": "video, video source",
@@ -690,6 +824,8 @@ def get_default_image_extraction_config() -> ImageExtractionConfig:
         "load_timeout_seconds": 5.0,
         "download_blobs": True,
         "max_size_mb": 10,
+        "canvas_export_mime": "image/jpeg",
+        "canvas_export_quality": 0.88,
         "src_allow_patterns": [],
         "mode": "all",
         "audio_capture_enabled": True,
@@ -712,6 +848,7 @@ def get_default_image_extraction_config() -> ImageExtractionConfig:
             "url_patterns": ["voicegenie", "speech", "audio", "tts"],
             "extractor": "voicegenie_binary_stream",
             "settle_seconds": 0.35,
+            "max_payload_bytes": 10 * 1024 * 1024,
         },
         "audio_browser_tts_fallback": {
             "enabled": False,
@@ -816,6 +953,7 @@ def validate_site_config(config: Dict[str, Any]) -> bool:
                 "retry_observe_window",
                 "attachment_observe_window",
                 "retry_interval",
+                "retry_cooldown_window",
             ]
             int_fields = [
                 "max_retry_count",
@@ -942,6 +1080,7 @@ def validate_site_config(config: Dict[str, Any]) -> bool:
                 "retry_observe_window",
                 "attachment_observe_window",
                 "retry_interval",
+                "retry_cooldown_window",
             ]
             int_fields = [
                 "max_retry_count",
@@ -1052,6 +1191,7 @@ def get_default_send_confirmation_config() -> SendConfirmationConfig:
         "attachment_observe_window": 6.0,
         "max_retry_count": 2,
         "retry_interval": 0.6,
+        "retry_cooldown_window": 1.5,
         "retry_action": "click_send_btn",
         "retry_key_combo": "Enter",
         "retry_on_unconfirmed_send": True,
@@ -1199,6 +1339,14 @@ __all__ = [
     'merge_stream_config',
     'ImageData',
     'ImageExtractionConfig',
+    'ModalityPolicyConfig',
+    'ModalityRunPolicy',
+    'normalize_modalities_config',
+    'normalize_modality_policy',
+    'get_modality_policy',
+    'is_modality_enabled',
+    'get_modality_run_policy',
+    'get_enabled_modalities',
     'get_default_image_extraction_config',
     'FilePasteConfig',
     'get_default_file_paste_config',

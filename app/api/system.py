@@ -1475,6 +1475,135 @@ _version_switch_state: dict = {
     "error": None,
 }
 
+_update_check_lock = _threading.Lock()
+_update_check_state: dict = {
+    "checked": False,
+    "checking": False,
+    "available": False,
+    "current_version": APP_VERSION,
+    "latest_version": "",
+    "latest_tag": "",
+    "published_at": "",
+    "repo": "",
+    "checked_at": None,
+    "error": "",
+}
+_startup_update_check_scheduled = False
+
+
+def _get_update_check_state() -> Dict[str, Any]:
+    with _update_check_lock:
+        return dict(_update_check_state)
+
+
+def _set_update_check_state(**changes: Any) -> Dict[str, Any]:
+    with _update_check_lock:
+        _update_check_state.update(changes)
+        return dict(_update_check_state)
+
+
+def _build_update_check_payload(release: Optional[dict], repo: str) -> Dict[str, Any]:
+    from updater import compare_versions, get_current_version, normalize_version
+
+    current_version = get_current_version()
+    latest_tag = ""
+    latest_version = ""
+    published_at = ""
+
+    if release:
+        latest_tag = str(release.get("tag_name") or "").strip()
+        published_at = str(release.get("published_at") or "").strip()
+        if latest_tag:
+            latest_version = normalize_version(latest_tag)
+
+    return {
+        "checked": True,
+        "checking": False,
+        "available": bool(latest_version and compare_versions(current_version, latest_version) < 0),
+        "current_version": current_version,
+        "latest_version": latest_version,
+        "latest_tag": latest_tag,
+        "published_at": published_at,
+        "repo": repo,
+        "checked_at": int(time.time()),
+        "error": "",
+    }
+
+
+def _run_update_check(repo: Optional[str] = None) -> Dict[str, Any]:
+    from updater import DEFAULT_REPO, fetch_latest_release, get_current_version
+
+    target_repo = str(repo or os.getenv("GITHUB_REPO", DEFAULT_REPO) or DEFAULT_REPO).strip()
+    if not target_repo:
+        target_repo = DEFAULT_REPO
+
+    _set_update_check_state(checking=True, repo=target_repo, error="")
+    try:
+        release = fetch_latest_release(target_repo)
+        if not release:
+            raise RuntimeError("无法获取最新版本信息")
+        payload = _build_update_check_payload(release, target_repo)
+        logger.info(
+            f"[startup] 版本检查完成: 当前 v{payload['current_version']}，"
+            f"最新 {payload['latest_tag'] or '未知'}，"
+            f"{'有新版本' if payload['available'] else '已是最新'}"
+        )
+        return _set_update_check_state(**payload)
+    except Exception as exc:
+        logger.warning(f"版本检查失败: {exc}")
+        return _set_update_check_state(
+            checked=True,
+            checking=False,
+            available=False,
+            current_version=get_current_version(),
+            checked_at=int(time.time()),
+            error=str(exc),
+        )
+
+
+def schedule_startup_update_check() -> None:
+    """启动时只触发一次后台版本检查，供控制面板红点读取。"""
+    global _startup_update_check_scheduled
+
+    with _update_check_lock:
+        if _startup_update_check_scheduled or _update_check_state.get("checking"):
+            return
+        _startup_update_check_scheduled = True
+        _update_check_state["checking"] = True
+        _update_check_state["error"] = ""
+
+    t = _threading.Thread(
+        target=_run_update_check,
+        daemon=True,
+        name="startup-update-check",
+    )
+    t.start()
+
+
+def _apply_release_list_update_check(releases_raw: list, repo: str) -> Dict[str, Any]:
+    release = releases_raw[0] if releases_raw else None
+    try:
+        payload = _build_update_check_payload(release, repo)
+    except Exception as exc:
+        logger.warning(f"更新版本提示状态失败: {exc}")
+        return _get_update_check_state()
+    return _set_update_check_state(**payload)
+
+
+@router.get("/api/update/check")
+async def get_update_check(authenticated: bool = Depends(verify_auth)):
+    """读取启动时缓存的版本检查状态。不会访问 GitHub。"""
+    return _get_update_check_state()
+
+
+@router.post("/api/update/check")
+async def refresh_update_check(
+    repo: Optional[str] = None,
+    authenticated: bool = Depends(verify_auth),
+):
+    """手动触发一次版本检查。"""
+    return await asyncio.to_thread(_run_update_check, repo)
+
 
 @router.get("/api/update/releases")
 async def get_releases(
@@ -1487,6 +1616,7 @@ async def get_releases(
         target_repo = repo or os.getenv("GITHUB_REPO", DEFAULT_REPO)
         releases_raw = await asyncio.to_thread(fetch_all_releases, target_repo)
         current_version = get_current_version()
+        update_check = _apply_release_list_update_check(releases_raw, target_repo)
         result = []
         for r in releases_raw:
             tag = str(r.get("tag_name") or "").strip()
@@ -1499,7 +1629,7 @@ async def get_releases(
                 "zipball_url": r.get("zipball_url") or "",
                 "is_current": normalize_version(tag) == normalize_version(current_version),
             })
-        return {"releases": result, "current_version": current_version}
+        return {"releases": result, "current_version": current_version, "update_check": update_check}
     except Exception as e:
         logger.error(f"获取 Release 列表失败: {e}")
         raise HTTPException(status_code=500, detail=f"获取失败: {str(e)}")

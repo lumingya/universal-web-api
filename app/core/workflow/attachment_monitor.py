@@ -7,6 +7,7 @@ attachment previews, pending indicators, and send button busy state.
 
 import copy
 import json
+import secrets
 import time
 from typing import Any, Callable, Dict, Iterable, Optional
 
@@ -15,8 +16,22 @@ from app.core.config import BrowserConstants, logger
 
 _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
 (() => {
-  const KEY = "__ATTACHMENT_MONITOR__";
+  const KEY = "__ATTACHMENT_MONITOR_KEY__";
+  const LEGACY_KEY = "__ATTACHMENT_MONITOR__";
   const W = window;
+
+  if (KEY !== LEGACY_KEY && W[LEGACY_KEY]) {
+    try {
+      if (typeof W[LEGACY_KEY].disconnect === "function") {
+        W[LEGACY_KEY].disconnect();
+      }
+    } catch (error) {}
+    try {
+      delete W[LEGACY_KEY];
+    } catch (error) {
+      try { W[LEGACY_KEY] = null; } catch (_) {}
+    }
+  }
 
   const defaultRootSelectors = [
     ".message-input-wrapper",
@@ -502,7 +517,20 @@ _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
     };
   }
 
-  const monitor = (W[KEY] = W[KEY] || {});
+  const existing = W[KEY];
+  const monitor = existing && typeof existing === "object" ? existing : {};
+  if (existing !== monitor) {
+    try {
+      Object.defineProperty(W, KEY, {
+        value: monitor,
+        writable: true,
+        configurable: true,
+        enumerable: false,
+      });
+    } catch (error) {
+      W[KEY] = monitor;
+    }
+  }
 
   monitor.disconnect = function() {
     if (monitor.observer) {
@@ -513,6 +541,16 @@ _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
     monitor.observer = null;
     monitor.root = null;
     monitor.send = null;
+    monitor.options = null;
+    monitor.baseline = null;
+    monitor.lastMutationSummary = "";
+  };
+
+  monitor.destroy = function() {
+    monitor.disconnect();
+    monitor.mutationCount = 0;
+    monitor.startedAt = 0;
+    monitor.lastMutationAt = 0;
   };
 
   monitor.ensure = function() {
@@ -536,7 +574,12 @@ _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
     );
     monitor.send = findSendButton(monitor.root, monitor.options);
 
-    if (monitor.root && typeof MutationObserver === "function") {
+    const shouldObserveRoot =
+      monitor.root &&
+      monitor.root !== document.body &&
+      monitor.root !== document.documentElement;
+
+    if (shouldObserveRoot && typeof MutationObserver === "function") {
       monitor.observer = new MutationObserver((mutations) => {
         monitor.mutationCount += mutations.length;
         monitor.lastMutationAt = Date.now();
@@ -610,6 +653,7 @@ class AttachmentMonitor:
         self._selectors = selectors or {}
         self._config = config or {}
         self._check_cancelled = check_cancelled_fn or (lambda: False)
+        self._window_key = f"_x{secrets.token_hex(16)}"
 
     def _selector_value(self, key: str) -> str:
         value = self._selectors.get(key)
@@ -656,8 +700,17 @@ class AttachmentMonitor:
             logger.debug(f"[ATTACHMENT] JS execution failed: {exc}")
             return None
 
+    def _window_key_js(self) -> str:
+        return json.dumps(self._window_key)
+
+    def _bootstrap_script(self) -> str:
+        return _ATTACHMENT_MONITOR_BOOTSTRAP_JS.replace(
+            '"__ATTACHMENT_MONITOR_KEY__"',
+            self._window_key_js(),
+        )
+
     def ensure_installed(self) -> bool:
-        result = self._run_js(f"return {_ATTACHMENT_MONITOR_BOOTSTRAP_JS.strip()};")
+        result = self._run_js(f"return {self._bootstrap_script().strip()};")
         return bool(result)
 
     def _build_options(self, expected_names: Optional[Iterable[str]] = None) -> Dict[str, Any]:
@@ -682,8 +735,9 @@ class AttachmentMonitor:
         if not self.ensure_installed():
             return {}
         options = json.dumps(self._build_options(expected_names), ensure_ascii=False)
+        key = self._window_key_js()
         result = self._run_js(
-            f"return (window.__ATTACHMENT_MONITOR__ && window.__ATTACHMENT_MONITOR__.begin({options})) || null;"
+            f"return (function() {{ const monitor = window[{key}]; return (monitor && monitor.begin({options})) || null; }})();"
         )
         return result if isinstance(result, dict) else {}
 
@@ -691,10 +745,33 @@ class AttachmentMonitor:
         if not self.ensure_installed():
             return {}
         options = json.dumps(self._build_options(expected_names), ensure_ascii=False)
+        key = self._window_key_js()
         result = self._run_js(
-            f"return (window.__ATTACHMENT_MONITOR__ && window.__ATTACHMENT_MONITOR__.snapshot({options})) || null;"
+            f"return (function() {{ const monitor = window[{key}]; return (monitor && monitor.snapshot({options})) || null; }})();"
         )
         return result if isinstance(result, dict) else {}
+
+    def destroy(self) -> None:
+        key = self._window_key_js()
+        self._run_js(
+            f"""
+            return (function() {{
+                const key = {key};
+                const monitor = window[key];
+                if (monitor && typeof monitor.destroy === 'function') {{
+                    monitor.destroy();
+                }} else if (monitor && typeof monitor.disconnect === 'function') {{
+                    monitor.disconnect();
+                }}
+                try {{
+                    delete window[key];
+                }} catch (error) {{
+                    try {{ window[key] = null; }} catch (_) {{}}
+                }}
+                return true;
+            }})();
+            """
+        )
 
     def run_state_probe(self, state: Optional[Dict[str, Any]] = None, stage: str = "") -> Dict[str, Any]:
         probe_config = self._config_dict("state_probe")

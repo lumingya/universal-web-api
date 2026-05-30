@@ -1,10 +1,10 @@
+import ast
 import copy
 import json
 import os
 import random
 import re
 import string
-import threading
 import time
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
@@ -32,6 +32,28 @@ logger = get_logger("CMD_ENG")
 
 
 class CommandEngineActionsMixin:
+    _PYTHON_SANDBOX_ALLOWED_IMPORTS = frozenset({
+        "datetime",
+        "json",
+        "math",
+        "time",
+    })
+    _PYTHON_SANDBOX_BLOCKED_CALLS = frozenset({
+        "__import__",
+        "breakpoint",
+        "compile",
+        "dir",
+        "eval",
+        "exec",
+        "getattr",
+        "globals",
+        "input",
+        "locals",
+        "open",
+        "setattr",
+        "vars",
+    })
+
     @staticmethod
     def _is_action_soft_failure(action_result: Any) -> bool:
         return isinstance(action_result, dict) and action_result.get("ok") is False
@@ -57,6 +79,18 @@ class CommandEngineActionsMixin:
             return None
 
         return f"return {normalized};"
+
+    @staticmethod
+    def _wait_for_command_retry(condition: Any, timeout: float = 0.05):
+        wait_timeout = max(0.01, float(timeout or 0.05))
+        if condition is not None:
+            try:
+                with condition:
+                    condition.wait(timeout=wait_timeout)
+                return
+            except Exception:
+                pass
+        time.sleep(wait_timeout)
 
     def _run_command_js(self, tab: Any, code: Any) -> Any:
         result = tab.run_js(code)
@@ -113,12 +147,19 @@ class CommandEngineActionsMixin:
             trigger = command.get("trigger", {}) or {}
             acquire_timeout = max(1.0, self._coerce_float(trigger.get("acquire_timeout_sec", 20), 20.0))
             deadline = time.time() + acquire_timeout
+            retry_condition = None
+            try:
+                browser = self._get_browser()
+                pool = getattr(browser, "_tab_pool", None)
+                retry_condition = getattr(pool, "_condition", None)
+            except Exception:
+                retry_condition = None
 
             try:
                 while time.time() < deadline:
                     if is_high and domain_sensitive:
                         if self._has_busy_peer_on_domain(domain, exclude_session_id=session.id):
-                            time.sleep(0.05)
+                            self._wait_for_command_retry(retry_condition)
                             continue
 
                     if not is_high:
@@ -128,7 +169,7 @@ class CommandEngineActionsMixin:
                             queued_count = int(status_counts.get("queued", 0) or 0)
                             running_count = int(status_counts.get("running", 0) or 0)
                             if queued_count > 0 or running_count > 0:
-                                time.sleep(0.05)
+                                self._wait_for_command_retry(retry_condition)
                                 continue
                         except Exception:
                             pass
@@ -139,7 +180,7 @@ class CommandEngineActionsMixin:
                     status_value = str(getattr(getattr(session, "status", None), "value", "")).lower()
                     if status_value in {"closed", "error"}:
                         break
-                    time.sleep(0.05)
+                    self._wait_for_command_retry(retry_condition)
 
                 if not acquired:
                     logger.info(
@@ -229,12 +270,7 @@ class CommandEngineActionsMixin:
                 _run_impl()
 
         try:
-            thread = threading.Thread(
-                target=_run,
-                daemon=True,
-                name=f"cmd-{command['id'][:8]}"
-            )
-            thread.start()
+            self._command_executor.submit(_run)
         except Exception:
             with self._lock:
                 if is_high:
@@ -1424,6 +1460,46 @@ class CommandEngineActionsMixin:
 
         return parsed_content
 
+    def _get_append_file_base_dir(self) -> str:
+        raw_base = str(os.getenv("CMD_APPEND_FILE_BASE_DIR", "") or "").strip()
+        if raw_base:
+            base_dir = raw_base
+        else:
+            try:
+                from app.core.config import PROJECT_ROOT
+                base_dir = os.path.join(str(PROJECT_ROOT), "data", "command_outputs")
+            except Exception:
+                base_dir = os.path.join(os.getcwd(), "data", "command_outputs")
+        return os.path.abspath(os.path.expanduser(base_dir))
+
+    @staticmethod
+    def _is_path_within_base(target_path: str, base_dir: str) -> bool:
+        try:
+            base_norm = os.path.normcase(os.path.normpath(os.path.realpath(base_dir)))
+            target_norm = os.path.normcase(os.path.normpath(os.path.realpath(target_path)))
+            return os.path.commonpath([base_norm, target_norm]) == base_norm
+        except Exception:
+            return False
+
+    def _resolve_append_file_path(self, file_path: str) -> Dict[str, str]:
+        raw_path = str(file_path or "").strip()
+        if not raw_path:
+            raise ValueError("empty_file_path")
+
+        base_dir = self._get_append_file_base_dir()
+        expanded_path = os.path.expanduser(raw_path)
+        if os.path.isabs(expanded_path):
+            target_path = os.path.abspath(expanded_path)
+        else:
+            target_path = os.path.abspath(os.path.join(base_dir, expanded_path))
+
+        if not self._is_path_within_base(target_path, base_dir):
+            raise PermissionError(
+                f"append_file path escapes safe base: path={target_path}, base={base_dir}"
+            )
+
+        return {"path": target_path, "base_dir": base_dir}
+
     def _execute_append_file_action(self, action: Dict, session: 'TabSession') -> Any:
         ctx = self._build_template_context(session)
         file_path = self._render_template(action.get("file_path", ""), ctx).strip()
@@ -1436,10 +1512,17 @@ class CommandEngineActionsMixin:
         encoding = str(action.get("encoding", "utf-8") or "utf-8").strip() or "utf-8"
 
         try:
-            normalized_path = os.path.abspath(file_path)
+            resolved = self._resolve_append_file_path(file_path)
+            normalized_path = resolved["path"]
+            base_dir = resolved["base_dir"]
             parent_dir = os.path.dirname(normalized_path)
             if create_dirs and parent_dir:
                 os.makedirs(parent_dir, exist_ok=True)
+            if not self._is_path_within_base(normalized_path, base_dir):
+                raise PermissionError(
+                    f"append_file path escapes safe base after directory creation: "
+                    f"path={normalized_path}, base={base_dir}"
+                )
 
             write_text = content + ("\n" if append_newline else "")
             with open(normalized_path, "a", encoding=encoding, newline="") as f:
@@ -1452,6 +1535,7 @@ class CommandEngineActionsMixin:
             return {
                 "ok": True,
                 "path": normalized_path,
+                "base_dir": base_dir,
                 "chars": len(write_text),
                 "preview": self._preview_text(write_text),
             }
@@ -1841,6 +1925,180 @@ class CommandEngineActionsMixin:
 
     # ================= 高级模式 =================
 
+    @staticmethod
+    def _command_env_flag(name: str, default: bool = False) -> bool:
+        raw = os.getenv(name)
+        if raw is None:
+            return default
+        return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+    def _get_python_sandbox_allowed_imports(self) -> set:
+        allowed = set(self._PYTHON_SANDBOX_ALLOWED_IMPORTS)
+        extra = str(os.getenv("CMD_PYTHON_SANDBOX_ALLOWED_IMPORTS", "") or "").strip()
+        if extra:
+            for name in extra.split(","):
+                normalized = str(name or "").strip()
+                if normalized:
+                    allowed.add(normalized)
+        if HAS_REQUESTS and self._command_env_flag("CMD_PYTHON_SANDBOX_ALLOW_REQUESTS", True):
+            allowed.add("requests")
+            allowed.add("urllib.parse")
+        return allowed
+
+    @staticmethod
+    def _is_python_import_allowed(module_name: str, allowed_imports: set) -> bool:
+        normalized = str(module_name or "").strip()
+        if not normalized:
+            return False
+        return any(
+            normalized == allowed or normalized.startswith(f"{allowed}.")
+            for allowed in allowed_imports
+        )
+
+    def _guarded_python_import(self, allowed_imports: set):
+        real_import = __import__
+
+        def _import(name, globals=None, locals=None, fromlist=(), level=0):
+            if level != 0:
+                raise ImportError("relative imports are disabled in command python sandbox")
+            module_name = str(name or "").strip()
+            if not self._is_python_import_allowed(module_name, allowed_imports):
+                raise ImportError(f"import disabled in command python sandbox: {module_name}")
+            return real_import(name, globals, locals, fromlist, level)
+
+        return _import
+
+    def _validate_python_script_safety(self, script: str, allowed_imports: set) -> None:
+        tree = ast.parse(script)
+        blocked_attrs = {
+            "__builtins__",
+            "__class__",
+            "__dict__",
+            "__globals__",
+            "__mro__",
+            "__subclasses__",
+            "builtins",
+            "ctypes",
+            "importlib",
+            "os",
+            "pathlib",
+            "shutil",
+            "socket",
+            "subprocess",
+            "sys",
+        }
+        blocked_attr_calls = {
+            "chmod",
+            "chown",
+            "execl",
+            "execle",
+            "execlp",
+            "execlpe",
+            "execv",
+            "execve",
+            "execvp",
+            "execvpe",
+            "kill",
+            "mkdir",
+            "open",
+            "popen",
+            "remove",
+            "rename",
+            "replace",
+            "rmdir",
+            "spawnl",
+            "spawnle",
+            "spawnlp",
+            "spawnlpe",
+            "spawnv",
+            "spawnve",
+            "spawnvp",
+            "spawnvpe",
+            "system",
+            "unlink",
+        }
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if not self._is_python_import_allowed(alias.name, allowed_imports):
+                        raise PermissionError(f"import disabled: {alias.name}")
+            elif isinstance(node, ast.ImportFrom):
+                module_name = str(node.module or "").strip()
+                if not module_name or not self._is_python_import_allowed(module_name, allowed_imports):
+                    raise PermissionError(f"import disabled: {module_name or '<relative>'}")
+            elif isinstance(node, ast.Name):
+                if node.id in self._PYTHON_SANDBOX_BLOCKED_CALLS:
+                    raise PermissionError(f"name disabled: {node.id}")
+                if node.id.startswith("__") and node.id.endswith("__"):
+                    raise PermissionError(f"dunder name disabled: {node.id}")
+            elif isinstance(node, ast.Attribute):
+                attr = str(node.attr or "")
+                if attr in blocked_attrs or (attr.startswith("__") and attr.endswith("__")):
+                    raise PermissionError(f"attribute disabled: {attr}")
+            elif isinstance(node, ast.Call):
+                func = node.func
+                if isinstance(func, ast.Name) and func.id in self._PYTHON_SANDBOX_BLOCKED_CALLS:
+                    raise PermissionError(f"call disabled: {func.id}")
+                if isinstance(func, ast.Attribute):
+                    attr = str(func.attr or "")
+                    if attr in blocked_attr_calls or attr in blocked_attrs:
+                        raise PermissionError(f"call disabled: {attr}")
+
+    def _build_python_safe_builtins(self, allowed_imports: set) -> Dict[str, Any]:
+        safe_builtins = {
+            "ArithmeticError": ArithmeticError,
+            "AssertionError": AssertionError,
+            "AttributeError": AttributeError,
+            "BaseException": BaseException,
+            "ConnectionError": ConnectionError,
+            "Exception": Exception,
+            "ImportError": ImportError,
+            "IndexError": IndexError,
+            "KeyError": KeyError,
+            "LookupError": LookupError,
+            "NameError": NameError,
+            "PermissionError": PermissionError,
+            "RuntimeError": RuntimeError,
+            "StopIteration": StopIteration,
+            "TimeoutError": TimeoutError,
+            "TypeError": TypeError,
+            "ValueError": ValueError,
+            "ZeroDivisionError": ZeroDivisionError,
+            "__import__": self._guarded_python_import(allowed_imports),
+            "abs": abs,
+            "all": all,
+            "any": any,
+            "bool": bool,
+            "dict": dict,
+            "enumerate": enumerate,
+            "filter": filter,
+            "float": float,
+            "format": format,
+            "hasattr": hasattr,
+            "int": int,
+            "isinstance": isinstance,
+            "issubclass": issubclass,
+            "len": len,
+            "list": list,
+            "map": map,
+            "max": max,
+            "min": min,
+            "next": next,
+            "range": range,
+            "repr": repr,
+            "reversed": reversed,
+            "round": round,
+            "set": set,
+            "slice": slice,
+            "sorted": sorted,
+            "str": str,
+            "sum": sum,
+            "tuple": tuple,
+            "zip": zip,
+        }
+        return safe_builtins
+
     def _execute_advanced(self, command: Dict, session: 'TabSession') -> Dict[str, Any]:
         script = command.get("script", "")
         lang = command.get("script_lang", "javascript")
@@ -1909,7 +2167,17 @@ class CommandEngineActionsMixin:
                 "result": "",
             }
             try:
-                exec(script, {"__builtins__": __builtins__}, context)
+                if self._command_env_flag("CMD_ALLOW_UNSAFE_PYTHON_COMMANDS", False):
+                    logger.warning("[CMD] Python 脚本正在以非沙箱模式执行，请仅用于完全可信配置")
+                    exec(script, {"__builtins__": __builtins__}, context)
+                else:
+                    allowed_imports = self._get_python_sandbox_allowed_imports()
+                    self._validate_python_script_safety(script, allowed_imports)
+                    exec(
+                        script,
+                        {"__builtins__": self._build_python_safe_builtins(allowed_imports)},
+                        context,
+                    )
                 logger.info("[CMD] Python 脚本执行完成")
                 return {"mode": "advanced", "result": context.get("result", ""), "steps": []}
             except Exception as e:

@@ -26,6 +26,11 @@ from app.models.schemas import (
     get_default_site_advanced_config,
     get_default_attachment_monitor_config,
     get_default_send_confirmation_config,
+    get_modality_policy,
+    get_enabled_modalities,
+    is_modality_enabled,
+    normalize_modalities_config,
+    normalize_modality_policy,
 )
 from app.services.extractor_manager import extractor_manager
 from app.services.parser_manager import parser_manager
@@ -1535,11 +1540,7 @@ class ConfigEngine:
         
         raw_modalities = config.get("modalities")
         if isinstance(raw_modalities, dict):
-            normalized_modalities = copy.deepcopy(result.get("modalities") or {})
-            for key in ("image", "audio", "video"):
-                if key in raw_modalities:
-                    normalized_modalities[key] = bool(raw_modalities[key])
-            result["modalities"] = normalized_modalities
+            result["modalities"] = normalize_modalities_config(raw_modalities)
 
         legacy_enabled = None
         if "enabled" in config:
@@ -1550,13 +1551,13 @@ class ConfigEngine:
             legacy_enabled is not None
             and not isinstance(raw_modalities, dict)
         ):
-            result["modalities"]["image"] = legacy_enabled
+            result["modalities"]["image"] = normalize_modality_policy("image", legacy_enabled)
         elif legacy_enabled is not None and isinstance(raw_modalities, dict):
             if not legacy_enabled:
                 for key in ("image", "audio", "video"):
-                    result["modalities"][key] = False
-            elif not any(bool(result["modalities"].get(key)) for key in ("image", "audio", "video")):
-                result["modalities"]["image"] = True
+                    result["modalities"][key] = normalize_modality_policy(key, False)
+            elif not get_enabled_modalities(result.get("modalities")):
+                result["modalities"]["image"] = normalize_modality_policy("image", True)
         
         if "selector" in config and config["selector"]:
             result["selector"] = str(config["selector"]).strip()
@@ -1592,6 +1593,21 @@ class ConfigEngine:
 
         if "force_postprocess" in config:
             result["force_postprocess"] = bool(config["force_postprocess"])
+
+        if "direct_postprocess_modalities" in config:
+            raw_direct_modalities = config.get("direct_postprocess_modalities")
+            if isinstance(raw_direct_modalities, (list, tuple, set)):
+                allowed_direct_modalities = []
+                for item in raw_direct_modalities:
+                    media_type = str(item or "").strip().lower()
+                    if (
+                        media_type in {"image", "audio", "video"}
+                        and is_modality_enabled(result.get("modalities"), media_type)
+                        and media_type not in allowed_direct_modalities
+                    ):
+                        allowed_direct_modalities.append(media_type)
+                if allowed_direct_modalities:
+                    result["direct_postprocess_modalities"] = allowed_direct_modalities
         
         if "debounce_seconds" in config:
             try:
@@ -1838,10 +1854,7 @@ class ConfigEngine:
             except (ValueError, TypeError):
                 pass
 
-        result["enabled"] = any(
-            bool((result.get("modalities") or {}).get(key))
-            for key in ("image", "audio", "video")
-        )
+        result["enabled"] = bool(get_enabled_modalities(result.get("modalities")))
         
         return result
         # ================= 文件粘贴配置管理 =================
@@ -2318,6 +2331,7 @@ class ConfigEngine:
             "retry_observe_window": (0.0, 15.0),
             "attachment_observe_window": (0.0, 30.0),
             "retry_interval": (0.0, 30.0),
+            "retry_cooldown_window": (0.0, 30.0),
         }
         for key, (minimum, maximum) in numeric_ranges.items():
             if key not in config:

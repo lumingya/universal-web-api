@@ -325,6 +325,14 @@ class WorkflowExecutor(
         if self.stealth_mode:
             logger.debug("[STEALTH] 低熵模式已启用")
 
+    def cleanup_after_workflow(self) -> None:
+        """Release page-side helpers installed for this executor."""
+        try:
+            if self._attachment_monitor is not None:
+                self._attachment_monitor.destroy()
+        except Exception as e:
+            logger.debug(f"[Executor] 附件监控清理失败（忽略）: {e}")
+
     @staticmethod
     def _coerce_bool(value: Any, default: bool = False) -> bool:
         if isinstance(value, bool):

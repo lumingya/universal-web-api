@@ -1394,7 +1394,7 @@ window.CommandsTabTemplate = `
                                 <div class="md:col-span-2">
                                     <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">文件路径</label>
                                     <input v-model.trim="action.file_path" type="text"
-                                           placeholder="例如：logs\\accounts.txt 或 C:\\data\\accounts.txt"
+                                           placeholder="例如：logs\\accounts.txt（相对于安全输出目录）"
                                            class="w-full rounded border px-2 py-1.5 text-sm font-mono dark:border-gray-600 dark:bg-gray-700 dark:text-white">
                                 </div>
                                 <div>
@@ -1422,7 +1422,7 @@ window.CommandsTabTemplate = `
                                           class="w-full rounded border px-2 py-1.5 text-sm font-mono dark:border-gray-600 dark:bg-gray-700 dark:text-white"></textarea>
                             </div>
 
-                            <p class="mt-2 text-xs text-amber-700 dark:text-amber-300">支持模板变量。你可以分多步追加：先追加账号，再追加密码，再追加分隔线，不会覆盖之前内容。</p>
+                            <p class="mt-2 text-xs text-amber-700 dark:text-amber-300">支持模板变量。路径会被限制在后端安全输出目录内；如需自定义目录，请设置 CMD_APPEND_FILE_BASE_DIR。</p>
                         </div>
 
                         <!-- 代理切换详细配置（当某个 switch_proxy 动作时显示） -->

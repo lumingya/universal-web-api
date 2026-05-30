@@ -16,6 +16,7 @@ from typing import List, Optional, Any, Dict
 from datetime import datetime
 
 from app.core.config import get_logger
+from app.models.schemas import normalize_modalities_config
 
 logger = get_logger("IMG_EXT")
 
@@ -24,22 +25,21 @@ def get_default_image_extraction_config() -> Dict:
     """获取默认的多模态提取配置"""
     return {
         "enabled": False,
-        "modalities": {
-            "image": False,
-            "audio": False,
-            "video": False,
-        },
+        "modalities": normalize_modalities_config({}),
         "selector": "img",
         "audio_selector": "audio, audio source",
         "video_selector": "video, video source",
         "container_selector": None,
         "final_target_strategy": "container",
         "allow_container_fallback": True,
+        "force_postprocess": False,
         "debounce_seconds": 2.0,
         "wait_for_load": True,
         "load_timeout_seconds": 5.0,
         "download_blobs": True,
         "max_size_mb": 10,
+        "canvas_export_mime": "image/jpeg",
+        "canvas_export_quality": 0.88,
         "src_allow_patterns": [],
         "mode": "all",
         "audio_capture_enabled": True,
@@ -101,7 +101,9 @@ class ImageExtractor:
             maxBytes = 10485760,
             srcAllowPatterns = [],
             mode = "all",
-            allowContainerFallback = true
+            allowContainerFallback = true,
+            canvasExportMime = "image/jpeg",
+            canvasExportQuality = 0.88
         } = opts || {};
 
         // ===== 1. 确定根元素 =====
@@ -239,6 +241,39 @@ class ImageExtractor:
             };
         }
 
+        async function fetchBlobWithLimit(src, limitBytes) {
+            const response = await fetch(src);
+            const contentType = String(response && response.headers && response.headers.get("content-type") || "");
+            const contentLength = Number(response && response.headers && response.headers.get("content-length") || 0) || 0;
+            if (limitBytes && contentLength && contentLength > limitBytes) {
+                throw new Error("blob_too_large:" + contentLength);
+            }
+
+            if (response && response.body && typeof response.body.getReader === "function") {
+                const reader = response.body.getReader();
+                const chunks = [];
+                let total = 0;
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    if (!value) continue;
+                    total += Number(value.byteLength || value.length || 0) || 0;
+                    if (limitBytes && total > limitBytes) {
+                        try { await reader.cancel(); } catch {}
+                        throw new Error("blob_too_large:" + total);
+                    }
+                    chunks.push(value);
+                }
+                return new Blob(chunks, { type: contentType });
+            }
+
+            const blob = await response.blob();
+            if (limitBytes && blob.size > limitBytes) {
+                throw new Error("blob_too_large:" + blob.size);
+            }
+            return blob;
+        }
+
         async function imageElementToDataUri(img) {
             if (!img) {
                 throw new Error("img_missing");
@@ -268,15 +303,17 @@ class ImageExtractor:
             ctx.drawImage(img, 0, 0, width, height);
 
             let dataUri;
+            const exportMime = String(canvasExportMime || "image/jpeg");
+            const exportQuality = Number(canvasExportQuality || 0.88);
             try {
-                dataUri = canvas.toDataURL("image/png");
+                dataUri = canvas.toDataURL(exportMime, exportQuality);
             } catch (e) {
                 throw new Error("canvas_export_failed:" + String(e).slice(0, 80));
             }
 
             return {
                 dataUri: dataUri,
-                mime: "image/png",
+                mime: exportMime,
                 byteSize: estimateByteSizeFromDataUri(dataUri),
                 source: "blob_canvas"
             };
@@ -368,8 +405,7 @@ class ImageExtractor:
                 let fetchError = null;
 
                 try {
-                    const res = await fetch(x.src);
-                    const blob = await res.blob();
+                    const blob = await fetchBlobWithLimit(x.src, maxBytes);
 
                     // 校验类型
                     if (!blob.type || !blob.type.startsWith("image/")) {
@@ -377,14 +413,12 @@ class ImageExtractor:
                         continue;
                     }
                     
-                    // 校验大小
-                    if (maxBytes && blob.size > maxBytes) {
-                        warnings.push("blob_too_large:" + blob.size);
-                        continue;
-                    }
-
                     converted = await blobToDataUri(blob);
                 } catch (e) {
+                    if (String(e || "").includes("blob_too_large:")) {
+                        warnings.push(String(e).replace(/^Error:\s*/, ""));
+                        continue;
+                    }
                     fetchError = e;
                 }
 
@@ -470,7 +504,9 @@ class ImageExtractor:
             "maxBytes": final_config.get("max_size_mb", 10) * 1024 * 1024,
             "srcAllowPatterns": final_config.get("src_allow_patterns", []) or [],
             "mode": final_config.get("mode", "all"),
-            "allowContainerFallback": bool(final_config.get("allow_container_fallback", True))
+            "allowContainerFallback": bool(final_config.get("allow_container_fallback", True)),
+            "canvasExportMime": final_config.get("canvas_export_mime", "image/jpeg"),
+            "canvasExportQuality": float(final_config.get("canvas_export_quality", 0.88) or 0.88),
         }
         
         try:

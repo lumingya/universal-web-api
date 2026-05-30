@@ -22,6 +22,7 @@ from app.core.extractors.image_extractor import (
     get_default_image_extraction_config,
     image_extractor,
 )
+from app.models.schemas import is_modality_enabled, normalize_modalities_config, get_modality_policy
 
 logger = get_logger("MEDIA_EXT")
 
@@ -30,6 +31,7 @@ PAGE_TTS_WS_PROBE_INSTALL_JS = r"""
 return (function(opts) {
     const stateKey = "__uwaTtsWsProbe";
     const maxLogs = Math.max(16, Number(opts && opts.maxLogs || 128) || 128);
+    const maxPayloadBytes = Math.max(0, Number(opts && opts.maxPayloadBytes || 4 * 1024 * 1024) || 0);
     const urlPatterns = Array.isArray(opts && opts.urlPatterns)
         ? opts.urlPatterns
             .map(item => String(item || "").trim().toLowerCase())
@@ -43,7 +45,27 @@ return (function(opts) {
                 installed: true,
                 logs: [],
                 push(item) {
-                    this.logs.push({ t: Date.now(), ...(item || {}) });
+                    const next = { t: Date.now(), ...(item || {}) };
+                    if (maxPayloadBytes > 0) {
+                        const size = Number(next.size || next.byte_size || 0) || 0;
+                        if (size > maxPayloadBytes) {
+                            delete next.base64;
+                            delete next.text;
+                            next.payload_omitted = true;
+                            next.payload_limit = maxPayloadBytes;
+                        }
+                        if (typeof next.base64 === "string" && next.base64.length > Math.ceil(maxPayloadBytes * 4 / 3) + 16) {
+                            delete next.base64;
+                            next.payload_omitted = true;
+                            next.payload_limit = maxPayloadBytes;
+                        }
+                        if (typeof next.text === "string" && next.text.length > maxPayloadBytes) {
+                            next.text = next.text.slice(0, maxPayloadBytes);
+                            next.truncated = true;
+                            next.payload_limit = maxPayloadBytes;
+                        }
+                    }
+                    this.logs.push(next);
                     if (this.logs.length > maxLogs) {
                         this.logs.splice(0, this.logs.length - maxLogs);
                     }
@@ -102,32 +124,50 @@ return (function(opts) {
         matchesUrlPattern(url) || looksLikeAudioContentType(contentType)
     );
 
+    const blobToBase64 = (blob) => new Promise((resolve, reject) => {
+        try {
+            const reader = new FileReader();
+            reader.onerror = () => reject(new Error("read_failed"));
+            reader.onload = () => {
+                const result = String(reader.result || "");
+                resolve(result.split(",", 2)[1] || "");
+            };
+            reader.readAsDataURL(blob);
+        } catch (error) {
+            reject(error);
+        }
+    });
     const toBase64 = async (data) => {
         if (typeof data === "string") {
+            if (maxPayloadBytes > 0 && data.length > maxPayloadBytes) {
+                return { kind: "text", text: data.slice(0, maxPayloadBytes), size: data.length, truncated: true };
+            }
             return { kind: "text", text: data, size: data.length };
         }
 
-        let bytes = null;
+        let blob = null;
+        let size = 0;
         if (data instanceof Blob) {
-            bytes = new Uint8Array(await data.arrayBuffer());
+            blob = data;
+            size = Number(data.size || 0) || 0;
         } else if (data instanceof ArrayBuffer) {
-            bytes = new Uint8Array(data);
+            size = Number(data.byteLength || 0) || 0;
+            blob = new Blob([data]);
         } else if (ArrayBuffer.isView(data)) {
-            bytes = new Uint8Array(data.buffer.slice(0));
+            size = Number(data.byteLength || 0) || 0;
+            blob = new Blob([data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)]);
         } else {
             return { kind: typeof data, text: String(data), size: 0 };
         }
 
-        let binary = "";
-        const chunkSize = 0x8000;
-        for (let i = 0; i < bytes.length; i += chunkSize) {
-            binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunkSize)));
+        if (maxPayloadBytes > 0 && size > maxPayloadBytes) {
+            return { kind: "binary", size, payload_omitted: true, payload_limit: maxPayloadBytes };
         }
 
         return {
             kind: "binary",
-            size: bytes.length,
-            base64: btoa(binary),
+            size,
+            base64: await blobToBase64(blob),
         };
     };
     const pushBinary = async ({ url, data, transport, contentType, status, method }) => {
@@ -151,12 +191,6 @@ return (function(opts) {
         ws.addEventListener("open", () => state.push({ dir: "ws-open", url }));
         ws.addEventListener("close", () => state.push({ dir: "ws-close", url }));
         ws.addEventListener("error", () => state.push({ dir: "ws-error", url }));
-
-        const rawSend = ws.send;
-        ws.send = function(data) {
-            Promise.resolve(toBase64(data)).then((info) => state.push({ dir: "send", url, ...(info || {}) }));
-            return rawSend.apply(this, arguments);
-        };
 
         ws.addEventListener("message", (event) => {
             Promise.resolve(toBase64(event.data)).then((info) => state.push({ dir: "recv", url, ...(info || {}) }));
@@ -251,22 +285,30 @@ return (function(opts) {
     }
 
     if (!state._xhrPatched && typeof window.XMLHttpRequest !== "undefined") {
+        const xhrMeta = new WeakMap();
         const origOpen = XMLHttpRequest.prototype.open;
         const origSend = XMLHttpRequest.prototype.send;
         XMLHttpRequest.prototype.open = function(method, url, ...rest) {
             try {
-                this.__uwaProbeMethod = String(method || "GET").toUpperCase();
-                this.__uwaProbeUrl = normalizeUrl(url);
+                const previous = xhrMeta.get(this) || {};
+                xhrMeta.set(this, {
+                    ...previous,
+                    method: String(method || "GET").toUpperCase(),
+                    url: normalizeUrl(url),
+                });
             } catch {}
             return origOpen.call(this, method, url, ...rest);
         };
         XMLHttpRequest.prototype.send = function(...args) {
             try {
-                if (!this.__uwaProbeLoadendInstalled) {
-                    this.__uwaProbeLoadendInstalled = true;
+                const installMeta = xhrMeta.get(this) || {};
+                if (!installMeta.loadendInstalled) {
+                    installMeta.loadendInstalled = true;
+                    xhrMeta.set(this, installMeta);
                     this.addEventListener("loadend", () => {
-                        const responseUrl = normalizeUrl(this.responseURL || this.__uwaProbeUrl || "");
-                        const method = String(this.__uwaProbeMethod || "GET").toUpperCase();
+                        const meta = xhrMeta.get(this) || {};
+                        const responseUrl = normalizeUrl(this.responseURL || meta.url || "");
+                        const method = String(meta.method || "GET").toUpperCase();
                         let contentType = "";
                         try {
                             contentType = String(
@@ -358,7 +400,7 @@ return (function(opts) {
                     dir: "http-error",
                     transport: "xhr",
                     phase: "install",
-                    url: normalizeUrl(this && this.__uwaProbeUrl),
+                    url: normalizeUrl((xhrMeta.get(this) || {}).url),
                     message: String(error && (error.message || error.name) || error || "xhr_install_error").slice(0, 200),
                 });
             }
@@ -369,12 +411,28 @@ return (function(opts) {
 
     if (!state._patched) {
         const RawWS = window.WebSocket;
+        if (!state._wsSendPatched && RawWS && RawWS.prototype && typeof RawWS.prototype.send === "function") {
+            const rawProtoSend = RawWS.prototype.send;
+            const patchedSend = function(data) {
+                const url = String(this && this.url || "");
+                Promise.resolve(toBase64(data)).then((info) => state.push({ dir: "send", url, ...(info || {}) }));
+                return rawProtoSend.apply(this, arguments);
+            };
+            try {
+                patchedSend.toString = function() { return rawProtoSend.toString(); };
+            } catch {}
+            RawWS.prototype.send = patchedSend;
+            state._wsSendPatched = true;
+        }
         function WrappedWebSocket(...args) {
             const ws = new RawWS(...args);
             return patchSocket(ws);
         }
         WrappedWebSocket.prototype = RawWS.prototype;
         Object.assign(WrappedWebSocket, RawWS);
+        try {
+            WrappedWebSocket.toString = function() { return RawWS.toString(); };
+        } catch {}
         window.WebSocket = WrappedWebSocket;
         state._patched = true;
     }
@@ -484,6 +542,7 @@ return (async function(opts) {
 
     const wsUrl = "wss://ws-samantha.doubao.com/samantha/audio/tts?" + query.toString();
     const timeoutMs = Math.max(3000, Math.min(120000, Number(input.timeout_ms || input.timeoutMs || 30000) || 30000));
+    const maxBytes = Math.max(0, Number(input.max_bytes || input.maxBytes || 0) || 0);
     const existing = window[stateKey];
     if (existing && existing.active) {
         return {
@@ -530,7 +589,12 @@ return (async function(opts) {
         let binary = "";
         const chunkSize = 0x8000;
         for (let i = 0; i < u8.length; i += chunkSize) {
-            binary += String.fromCharCode.apply(null, Array.from(u8.subarray(i, i + chunkSize)));
+            const chunk = u8.subarray(i, i + chunkSize);
+            let part = "";
+            for (let j = 0; j < chunk.length; j += 1) {
+                part += String.fromCharCode(chunk[j]);
+            }
+            binary += part;
         }
         return btoa(binary);
     };
@@ -631,6 +695,17 @@ return (async function(opts) {
                 bytes = new Uint8Array(event.data.buffer.slice(0));
             }
             if (!bytes || !bytes.length) {
+                return;
+            }
+            if (maxBytes && state.received_bytes + bytes.length > maxBytes) {
+                state.error = "audio_too_large:" + String(state.received_bytes + bytes.length);
+                state.phase = "size_limit";
+                pushEvent("audio_too_large", {
+                    bytes: bytes.length,
+                    totalBytes: state.received_bytes,
+                    limit: maxBytes,
+                });
+                try { ws.close(); } catch {}
                 return;
             }
             state.audio_chunks.push(bytes);
@@ -894,6 +969,39 @@ class MediaExtractor:
             };
         }
 
+        async function fetchBlobWithLimit(src, limitBytes) {
+            const response = await fetch(src);
+            const contentType = String(response && response.headers && response.headers.get("content-type") || "");
+            const contentLength = Number(response && response.headers && response.headers.get("content-length") || 0) || 0;
+            if (limitBytes && contentLength && contentLength > limitBytes) {
+                throw new Error("blob_too_large:" + contentLength);
+            }
+
+            if (response && response.body && typeof response.body.getReader === "function") {
+                const reader = response.body.getReader();
+                const chunks = [];
+                let total = 0;
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    if (!value) continue;
+                    total += Number(value.byteLength || value.length || 0) || 0;
+                    if (limitBytes && total > limitBytes) {
+                        try { await reader.cancel(); } catch {}
+                        throw new Error("blob_too_large:" + total);
+                    }
+                    chunks.push(value);
+                }
+                return new Blob(chunks, { type: contentType });
+            }
+
+            const blob = await response.blob();
+            if (limitBytes && blob.size > limitBytes) {
+                throw new Error("blob_too_large:" + blob.size);
+            }
+            return blob;
+        }
+
         let items = nodes.map((node, index) => {
             const source = pickSource(node);
             const mediaNode = source.mediaNode;
@@ -936,12 +1044,7 @@ class MediaExtractor:
 
             if (downloadBlobs && src.startsWith("blob:")) {
                 try {
-                    const response = await fetch(src);
-                    const blob = await response.blob();
-                    if (maxBytes && blob.size > maxBytes) {
-                        warnings.push("blob_too_large:" + blob.size);
-                        continue;
-                    }
+                    const blob = await fetchBlobWithLimit(src, maxBytes);
                     const converted = await blobToDataUri(blob);
                     out.push({
                         index: item.index,
@@ -955,6 +1058,10 @@ class MediaExtractor:
                     });
                     continue;
                 } catch (error) {
+                    if (String(error || "").includes("blob_too_large:")) {
+                        warnings.push(String(error).replace(/^Error:\s*/, ""));
+                        continue;
+                    }
                     warnings.push("blob_convert_failed:" + String(error).slice(0, 80));
                 }
             }
@@ -980,6 +1087,7 @@ class MediaExtractor:
         const now = () => Date.now();
         const mutePlayback = !opts || opts.mutePlayback !== false;
         const activityThreshold = Math.max(0.0001, Number(opts && opts.activityThreshold || 0.006) || 0.006);
+        const maxCaptureBytes = Math.max(0, Number(opts && opts.maxCaptureBytes || 0) || 0);
         const mimeCandidates = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus"];
         const chooseMimeType = () => {
             if (typeof MediaRecorder === "undefined") return "";
@@ -1046,6 +1154,7 @@ class MediaExtractor:
                             }
                             meta.sessionId = this.currentSessionId;
                             meta.chunks = [];
+                            meta.totalBytes = 0;
                             meta.lastDataAt = 0;
                             meta.lastActiveAt = 0;
                             meta.lastRms = 0;
@@ -1209,13 +1318,32 @@ class MediaExtractor:
             meta.recorder = recorder;
             meta.mimeType = String(recorder.mimeType || meta.mimeType || "audio/webm");
             meta.chunks = [];
+            meta.totalBytes = 0;
             meta.lastDataAt = 0;
             meta.lastActiveAt = 0;
             meta.lastRms = 0;
             recorder.ondataavailable = (event) => {
                 try {
                     if (event && event.data && event.data.size > 0) {
+                        const nextSize = Number(event.data.size || 0) || 0;
+                        const totalBytes = Number(meta.totalBytes || 0) || 0;
+                        if (maxCaptureBytes && totalBytes + nextSize > maxCaptureBytes) {
+                            meta.captureLimitExceeded = true;
+                            state.pushEvent("capture_limit_exceeded", {
+                                kind: meta.kind,
+                                limit: maxCaptureBytes,
+                                totalBytes,
+                                nextSize,
+                            });
+                            try {
+                                if (recorder.state !== "inactive") recorder.stop();
+                            } catch (stopError) {
+                                state.pushError(dataStage + "_stop_after_limit", stopError);
+                            }
+                            return;
+                        }
                         meta.chunks.push(event.data);
+                        meta.totalBytes = totalBytes + nextSize;
                         meta.lastDataAt = now();
                     }
                 } catch (error) {
@@ -1293,6 +1421,7 @@ class MediaExtractor:
                 recorder: null,
                 mimeType: "audio/webm",
                 chunks: [],
+                totalBytes: 0,
                 lastDataAt: 0,
                 lastActiveAt: 0,
                 lastRms: 0,
@@ -1416,6 +1545,7 @@ class MediaExtractor:
                 stream: null,
                 mimeType: "",
                 chunks: [],
+                totalBytes: 0,
                 lastDataAt: 0,
                 playbackState: "idle",
                 lastPlaybackEventAt: 0,
@@ -1507,6 +1637,7 @@ class MediaExtractor:
                 recorder: null,
                 mimeType: "audio/webm",
                 chunks: [],
+                totalBytes: 0,
                 lastDataAt: 0,
                 tappedNodes: new WeakSet(),
                 lastActiveAt: 0,
@@ -2028,6 +2159,17 @@ class MediaExtractor:
             };
         }
 
+        if (opts && opts.probeOnly) {
+            return {
+                clicked: false,
+                found: true,
+                candidate_count: candidates.length,
+                text: candidates[0].text,
+                score: candidates[0].score,
+                selector_used: triggerSelector || selectors.join(", "),
+            };
+        }
+
         const target = candidates[0].node;
         try {
             try {
@@ -2066,30 +2208,32 @@ class MediaExtractor:
         final_config = get_default_image_extraction_config()
         if config:
             final_config.update(config)
-            if isinstance(config.get("modalities"), dict):
-                final_config["modalities"] = {
-                    **(get_default_image_extraction_config().get("modalities") or {}),
-                    **(config.get("modalities") or {}),
-                }
+            final_config["modalities"] = normalize_modalities_config(config.get("modalities") or {})
 
         final_config["enabled"] = bool(final_config.get("enabled")) or any(
-            bool((final_config.get("modalities") or {}).get(key))
+            is_modality_enabled(final_config.get("modalities") or {}, key)
             for key in ("image", "audio", "video")
         )
 
         modalities = dict(final_config.get("modalities") or {})
         enabled = bool(final_config.get("enabled"))
-        if not enabled and not any(bool(modalities.get(key)) for key in ("image", "audio", "video")):
+        if not enabled and not any(is_modality_enabled(modalities, key) for key in ("image", "audio", "video")):
             return []
         if not element:
             return []
 
         media_items: List[Dict] = []
 
-        if bool(modalities.get("image")):
+        if is_modality_enabled(modalities, "image"):
+            image_policy = get_modality_policy(modalities, "image")
+            image_config = dict(final_config)
+            if image_policy.get("selector"):
+                image_config["selector"] = image_policy.get("selector")
+            if "container_selector" in image_policy:
+                image_config["container_selector"] = image_policy.get("container_selector")
             images = image_extractor.extract(
                 element,
-                config=final_config,
+                config=image_config,
                 container_selector_fallback=container_selector_fallback,
             )
             for item in images:
@@ -2099,23 +2243,25 @@ class MediaExtractor:
                     "label": item.get("alt"),
                 })
 
-        if bool(modalities.get("audio")):
+        if is_modality_enabled(modalities, "audio"):
+            audio_policy = get_modality_policy(modalities, "audio")
             media_items.extend(
                 self._extract_media_type(
                     element=element,
                     media_type="audio",
-                    selector=final_config.get("audio_selector", "audio, audio source"),
+                    selector=audio_policy.get("selector") or final_config.get("audio_selector", "audio, audio source"),
                     config=final_config,
                     container_selector_fallback=container_selector_fallback,
                 )
             )
 
-        if bool(modalities.get("video")):
+        if is_modality_enabled(modalities, "video"):
+            video_policy = get_modality_policy(modalities, "video")
             media_items.extend(
                 self._extract_media_type(
                     element=element,
                     media_type="video",
-                    selector=final_config.get("video_selector", "video, video source"),
+                    selector=video_policy.get("selector") or final_config.get("video_selector", "video, video source"),
                     config=final_config,
                     container_selector_fallback=container_selector_fallback,
                 )
@@ -2133,6 +2279,7 @@ class MediaExtractor:
             "mutePlayback": bool(final_config.get("audio_capture_mute_playback", True)),
             "preserveGraph": True,
             "activityThreshold": float(final_config.get("audio_capture_activity_threshold") or 0.006),
+            "maxCaptureBytes": int(final_config.get("max_size_mb", 10) * 1024 * 1024),
         }
         opts_json = json.dumps(opts, ensure_ascii=False, separators=(",", ":"))
         init_body = self.INSTALL_PAGE_AUDIO_CAPTURE_JS.lstrip()
@@ -2160,6 +2307,7 @@ class MediaExtractor:
                     "mutePlayback": bool(final_config.get("audio_capture_mute_playback", True)),
                     "preserveGraph": bool(final_config.get("audio_capture_preserve_graph", True)),
                     "activityThreshold": float(final_config.get("audio_capture_activity_threshold") or 0.006),
+                    "maxCaptureBytes": int(final_config.get("max_size_mb", 10) * 1024 * 1024),
                 },
             )
             return True
@@ -2191,6 +2339,8 @@ class MediaExtractor:
         self,
         element: Any,
         config: Optional[Dict] = None,
+        *,
+        probe_only: bool = False,
     ) -> Dict[str, Any]:
         if not element:
             return {}
@@ -2202,6 +2352,7 @@ class MediaExtractor:
         js_opts = {
             "audioTriggerSelector": final_config.get("audio_trigger_selector") or "",
             "audioTriggerLabels": final_config.get("audio_trigger_labels") or [],
+            "probeOnly": bool(probe_only),
         }
 
         try:
@@ -2210,6 +2361,13 @@ class MediaExtractor:
         except Exception as exc:
             logger.debug(f"触发页面音频播放失败（已忽略）: {exc}")
             return {}
+
+    def probe_audio_trigger(
+        self,
+        element: Any,
+        config: Optional[Dict] = None,
+    ) -> Dict[str, Any]:
+        return self.trigger_audio_playback(element, config=config, probe_only=True)
 
     def install_audio_network_probe(self, tab: Any, config: Optional[Dict] = None) -> bool:
         return self._install_audio_network_probe(tab, config=config, clear=True)
@@ -2233,6 +2391,7 @@ class MediaExtractor:
                 {
                     "clear": bool(clear),
                     "maxLogs": int(network_config.get("max_logs") or 1024),
+                    "maxPayloadBytes": int(network_config.get("max_payload_bytes") or final_config.get("max_size_mb", 10) * 1024 * 1024),
                     "urlPatterns": network_config.get("url_patterns") or [],
                 },
             )
@@ -2250,6 +2409,7 @@ class MediaExtractor:
                 {
                     "clear": True,
                     "maxLogs": 256,
+                    "maxPayloadBytes": int(get_default_image_extraction_config().get("max_size_mb", 10) * 1024 * 1024),
                     "urlPatterns": [],
                 },
             )
@@ -2294,6 +2454,7 @@ class MediaExtractor:
             "pitch": int(fallback_config.get("pitch") or 0),
             "format": str(fallback_config.get("format") or "aac").strip().lower() or "aac",
             "timeout_ms": timeout_ms,
+            "max_bytes": int(final_config.get("max_size_mb", 10) * 1024 * 1024),
             "pc_version": str(fallback_config.get("pc_version") or "3.20.2").strip() or "3.20.2",
             "aid": str(fallback_config.get("aid") or "497858").strip() or "497858",
             "real_aid": str(fallback_config.get("real_aid") or "497858").strip() or "497858",

@@ -604,15 +604,21 @@ const ENV_CONFIG_SCHEMA = {
         items: {
             AUTO_UPDATE_ENABLED: {
                 label: '启用自动更新',
-                desc: '启动脚本会在启动前检查并应用更新',
+                desc: '开启后 start.bat 会在启动前检查并自动应用更新；关闭后仍会在服务启动后检查新版本，只提示手动更新',
                 type: 'switch',
                 default: true
             },
             GITHUB_REPO: {
                 label: 'GitHub 仓库',
-                desc: '自动更新检查使用的仓库，格式为 owner/repo',
+                desc: '自动更新和启动版本检查使用的仓库，格式为 owner/repo',
                 type: 'text',
                 default: 'lumingya/universal-web-api'
+            },
+            PYTHON_INSTALL_VERSION: {
+                label: 'Python 自动安装版本',
+                desc: 'start.bat 在未找到 Python 时下载的固定版本，默认与你当前机器一致',
+                type: 'text',
+                default: '3.13.6'
             }
         }
     },

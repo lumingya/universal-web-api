@@ -23,9 +23,10 @@ window.TabPoolTabComponent = {
             routeMethodOptions: [
                 { value: 'domain', label: '站点域名路由' },
                 { value: 'fixed_tab', label: '固定标签页路由' },
-                { value: 'exact_url', label: '标签页 URL 路由' }
+                { value: 'exact_url', label: '标签页 URL 路由' },
+                { value: 'exact_url_preset', label: 'URL 绑定预设路由' }
             ],
-            enabledRouteMethods: ['domain', 'fixed_tab', 'exact_url'],
+            enabledRouteMethods: ['domain', 'fixed_tab', 'exact_url', 'exact_url_preset'],
             routeMethodUpdating: false,
             showRouteSettings: false
         };
@@ -424,6 +425,7 @@ window.TabPoolTabComponent = {
                     <li v-if="isRouteMethodEnabled('domain')">• <strong>指定站点域名</strong>：<code class="bg-blue-100 dark:bg-blue-800 px-1 rounded">/url/gemini.com/v1/chat/completions</code> - 自动匹配该站点的标签页</li>
                     <li v-if="isRouteMethodEnabled('fixed_tab')">• <strong>指定标签页</strong>：<code class="bg-blue-100 dark:bg-blue-800 px-1 rounded">/tab/{编号}/v1/chat/completions</code> - 使用特定标签页</li>
                     <li v-if="isRouteMethodEnabled('exact_url')">• <strong>标签页 URL 路由</strong>：<code class="bg-blue-100 dark:bg-blue-800 px-1 rounded">/tab-url/{token}/v1/chat/completions</code> - 只匹配当前已打开的 URL，相同 URL 会轮询，不会回退到别的 URL</li>
+                    <li v-if="isRouteMethodEnabled('exact_url_preset')">• <strong>URL 绑定预设</strong>：<code class="bg-blue-100 dark:bg-blue-800 px-1 rounded">/tab-url/{token}/{预设}/v1/chat/completions</code> - 先严格匹配已打开 URL，再严格使用对应站点预设</li>
                     <li>• 标签页编号在脚本运行期间保持不变，关闭标签页不会影响其他编号</li>
                 </ul>
             </div>
@@ -522,6 +524,16 @@ window.TabPoolTabComponent = {
                                             {{ getDomainRoutePrefix(tab) }}/{{ getDisplayedPreset(tab) }}/v1/chat/completions
                                         </code>
                                         <button @click="copyPresetEndpoint(getDomainRoutePrefix(tab), getDisplayedPreset(tab), '已复制预设域名路由')"
+                                                class="text-xs text-blue-500 hover:text-blue-700 dark:text-blue-400">
+                                            📋 复制
+                                        </button>
+                                    </div>
+                                    <div v-if="isRouteMethodEnabled('exact_url_preset') && getExactUrlRoutePrefix(tab)" class="flex flex-wrap items-center gap-2">
+                                        <span class="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">URL 绑定预设路由</span>
+                                        <code class="text-xs bg-gray-100 dark:bg-gray-700 px-2 py-1 rounded text-gray-700 dark:text-gray-300">
+                                            {{ getExactUrlRoutePrefix(tab) }}/{{ getDisplayedPreset(tab) }}/v1/chat/completions
+                                        </code>
+                                        <button @click="copyPresetEndpoint(getExactUrlRoutePrefix(tab), getDisplayedPreset(tab), '已复制 URL 绑定预设路由')"
                                                 class="text-xs text-blue-500 hover:text-blue-700 dark:text-blue-400">
                                             📋 复制
                                         </button>

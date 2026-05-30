@@ -6,7 +6,7 @@
         },
         ui: {
             navTitle: '📑 Navigation',
-            pageHeaderTitle: 'Universal Web-to-API Guide (v2.6.9)',
+            pageHeaderTitle: 'Universal Web-to-API Guide (v2.8.9)',
             projectLinkLabel: 'Project Link',
             projectLinkDescription: 'Need the source code, release notes, or the issue tracker? Start here.',
             projectLinkButton: 'Open Repository',
@@ -646,13 +646,29 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
         "selectors": { ... },
         "workflow": [ ... ],
         "stream_config": { ... },
-        "image_extraction": { "enabled": false },
+        "image_extraction": {
+          "enabled": false,
+          "modalities": {
+            "image": { "enabled": false, "run_policy": "disabled" },
+            "audio": { "enabled": false, "run_policy": "disabled" },
+            "video": { "enabled": false, "run_policy": "disabled" }
+          }
+        },
         "file_paste": { "threshold": 50000 }
       },
       "Fast vision": {
         "selectors": { ... },
         "workflow": [ ... ],
-        "image_extraction": { "enabled": true, "mode": "first" },
+        "image_extraction": {
+          "enabled": true,
+          "modalities": {
+            "image": { "enabled": true, "run_policy": "on_signal" },
+            "audio": { "enabled": true, "run_policy": "generic_only" },
+            "video": { "enabled": true, "run_policy": "generic_only" }
+          },
+          "audio_capture_enabled": false,
+          "mode": "first"
+        },
         "file_paste": { "threshold": 10000 }
       }
     }
@@ -765,26 +781,58 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
         <pre><code>"image_extraction": {
   "enabled": true,
   "modalities": {
-    "image": true,
-    "audio": true,
-    "video": true
+    "image": {
+      "enabled": true,
+      "run_policy": "on_signal",
+      "quick_probe_timeout_seconds": 1.0,
+      "late_wait_timeout_seconds": 45
+    },
+    "audio": {
+      "enabled": true,
+      "run_policy": "probe_if_trigger_found",
+      "quick_probe_timeout_seconds": 1.0,
+      "capture_timeout_seconds": 12
+    },
+    "video": {
+      "enabled": true,
+      "run_policy": "on_signal",
+      "quick_probe_timeout_seconds": 1.0,
+      "late_wait_timeout_seconds": 90
+    }
   },
   "selector": "img",
   "audio_selector": "audio, audio source",
   "video_selector": "video, video source",
   "container_selector": ".img-grid",
+  "audio_capture_enabled": false,
   "download_blobs": true,
   "mode": "all",
   "max_size_mb": 10
 }</code></pre>
         <div class="info-box">
-            <p><strong>Compatibility note:</strong> the stored config key is still <code>image_extraction</code> for backward compatibility, even though the UI and capability are now multimodal.</p>
+            <p><strong>Compatibility note:</strong> the stored config key is still <code>image_extraction</code>. Legacy boolean values such as <code>"image": true</code> are still normalized automatically, but the recommended format is now a per-modality strategy object so "site supports this modality" is separate from "run long waits or audio capture every turn".</p>
+        </div>
+        <h3>Choosing a run policy</h3>
+        <table>
+            <tr><th>Policy</th><th>Meaning</th><th>Use it when</th></tr>
+            <tr><td><code>disabled</code></td><td>Turns this modality off completely.</td><td>The site does not need image, audio, or video extraction.</td></tr>
+            <tr><td><code>generic_only</code></td><td>Runs one quick DOM scan only; no long wait, read-aloud click, or recording.</td><td>A preset may return media, but you do not want each round to pause, such as Gemini direct media extraction.</td></tr>
+            <tr><td><code>on_signal</code></td><td>Scans quickly first; heavier waiting runs only after a clear generation signal.</td><td>Image/video generation, or sites whose parser reports media generation state.</td></tr>
+            <tr><td><code>probe_if_trigger_found</code></td><td>Audio-oriented. Quickly checks for a read-aloud trigger and captures only if one is found.</td><td>The page has a read-aloud button, but most turns should not pay the capture cost.</td></tr>
+            <tr><td><code>always_probe</code></td><td>Actively probes whenever the modality is enabled.</td><td>You know every turn produces that media and accept the waiting cost.</td></tr>
+        </table>
+
+        <h3>What counts as a signal?</h3>
+        <p>A <strong>signal</strong> means evidence worth waiting for, not merely that the site supports a modality. Common signals include media or placeholder nodes in the current reply DOM, parser-reported <code>media_generation_state.pending</code>, pending-generation words in the reply, image-generation request hints, or a quick audio probe finding a read-aloud trigger.</p>
+
+        <div class="note">
+            <p><strong>💡 Key change:</strong> the pipeline now starts with a quick scan controlled by <code>quick_probe_timeout_seconds</code>. It only enters <code>late_wait_timeout_seconds</code> long waits or <code>capture_timeout_seconds</code> audio recording when the policy and signal allow it. Supporting audio/video no longer means every round waits for audio/video.</p>
         </div>
         <p><strong>How to use it in the UI:</strong></p>
         <ul>
-            <li>Enable the top-level multimodal switch first.</li>
-            <li>Then enable the inner options for <strong>image</strong>, <strong>audio file</strong>, and <strong>video</strong> as needed.</li>
-            <li>If you only need one modality, you usually only need to maintain the selector for that specific modality.</li>
+            <li>Enable the top-level multimodal switch, then choose enabled state and run policy separately inside the image, audio, and video cards.</li>
+            <li>For image/video, tune the long-wait limit. For audio, tune quick probe and capture limits.</li>
+            <li>For Gemini-style direct media presets, keep audio/video on <code>generic_only</code> and keep page playback audio capture off.</li>
         </ul>
         <p><strong>Saved locations:</strong></p>
         <ul>
@@ -797,7 +845,54 @@ curl "http://127.0.0.1:8199/tab/2/v1/chat/completions?preset_name=pro" ^
         </div>
 
         <div class="note">
-            <p><strong>💡 Practical advice:</strong> decide which modalities you need first, then verify the corresponding selectors against real media nodes. Only add <code>container_selector</code> when the page contains too many unrelated media elements and you need to narrow the search area.</p>
+            <p><strong>💡 Practical advice:</strong> decide which modality you truly need, then choose the most conservative policy that works. Use <code>generic_only</code> when you only want existing DOM media, <code>on_signal</code> when generated media may need waiting, and audio capture only on sites with a stable read-aloud entry point.</p>
+        </div>
+
+        <h3>🔊 Page Playback Audio Capture</h3>
+        <p>Besides reading existing <code>audio</code> / <code>video</code> nodes, the system can click a page-level <strong>read aloud / listen / TTS</strong> button and capture the spoken audio. This path is controlled separately by <code>audio_capture_enabled</code>; enabling the audio modality alone does not force it to run.</p>
+
+        <pre><code>"image_extraction": {
+  "modalities": {
+    "audio": {
+      "enabled": true,
+      "run_policy": "probe_if_trigger_found",
+      "quick_probe_timeout_seconds": 1.0,
+      "capture_timeout_seconds": 12
+    }
+  },
+  "audio_capture_enabled": true,
+  "audio_trigger_selector": "button[aria-label=\"Read aloud\"]",
+  "audio_trigger_labels": ["Read aloud", "Listen", "TTS"],
+  "audio_network_capture": {
+    "enabled": true,
+    "transport": "page_websocket_probe",
+    "url_patterns": ["voicegenie"],
+    "extractor": "voicegenie_ogg_pages",
+    "timeout_seconds": 2.5,
+    "settle_seconds": 0.35
+  }
+}</code></pre>
+
+        <div class="info-box">
+            <p><strong>Order of operations:</strong> after the text reply finishes, the system runs the audio trigger probe according to the audio policy. If clicking succeeds, it first tries direct in-page network capture, such as WebSocket TTS frames; only then does it fall back to recording page playback.</p>
+        </div>
+
+        <p><strong>Key fields:</strong></p>
+        <ul>
+            <li><strong><code>audio_capture_enabled</code></strong>: enables the read-aloud click and audio capture path. Gemini direct extraction presets should keep it off by default.</li>
+            <li><strong><code>audio_trigger_selector</code></strong>: preferred read-aloud button selector. Use a precise selector when the site markup is stable.</li>
+            <li><strong><code>audio_trigger_labels</code></strong>: fallback text labels when the selector is unstable.</li>
+            <li><strong><code>audio_network_capture.enabled</code></strong>: tries network capture before page playback recording.</li>
+            <li><strong><code>audio_network_capture.url_patterns</code></strong>: captures only audio network streams whose URL matches these keywords.</li>
+            <li><strong><code>audio_network_capture.extractor</code></strong>: network stream aggregator. Doubao read-aloud currently uses <code>voicegenie_ogg_pages</code>.</li>
+        </ul>
+
+        <div class="success-box">
+            <p><strong>Doubao read-aloud preset:</strong> the <code>www.doubao.com</code> read-aloud preset already uses this path. Its default strategy is: run only after a trigger is found, prefer network capture, and fall back to page playback recording.</p>
+        </div>
+
+        <div class="note">
+            <p><strong>Playback note:</strong> if you want to hear the audio from the controlled browser, make sure that controlled Chrome was not started with <code>--mute-audio</code>. Refreshing the page cannot remove process-level mute; restart the controlled Chrome instance on port 9222.</p>
         </div>
     `;
 
@@ -1245,7 +1340,7 @@ if session.error_count > 2:
     logger.info("Page refreshed after repeated errors")</code></pre>
 
         <div class="highlight-box">
-            <p><strong>⚠️ Safety:</strong> advanced mode can execute arbitrary code. Python scripts run on the backend and have full system access, so only use trusted code.</p>
+            <p><strong>⚠️ Safety:</strong> only use trusted scripts in advanced mode. Python scripts run in a restricted backend sandbox by default; if unsafe mode is explicitly enabled, they have full system access.</p>
         </div>
     `;
 

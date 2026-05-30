@@ -16,7 +16,7 @@ set "SCRIPT_DIR="
 
 echo.
 echo ========================================
-echo    Universal Web-to-API 启动脚本
+echo   Universal Web-to-API 启动脚本
 echo ========================================
 echo.
 
@@ -39,6 +39,9 @@ if not defined APP_PORT set "APP_PORT=8199"
 if not defined BROWSER_PORT set "BROWSER_PORT=9222"
 if not defined AUTO_UPDATE_ENABLED set "AUTO_UPDATE_ENABLED=true"
 if not defined GITHUB_REPO set "GITHUB_REPO=lumingya/universal-web-api"
+if not defined PYTHON_INSTALL_VERSION set "PYTHON_INSTALL_VERSION=3.13.6"
+for /f "tokens=1,2 delims=." %%A in ("%PYTHON_INSTALL_VERSION%") do set "PYTHON_INSTALL_MAJOR_MINOR=%%A.%%B"
+set "PYTHON_INSTALL_SHORT=%PYTHON_INSTALL_MAJOR_MINOR:.=%"
 if not defined PROXY_ENABLED set "PROXY_ENABLED=false"
 if not defined PROXY_ADDRESS set "PROXY_ADDRESS="
 if not defined PROXY_BYPASS set "PROXY_BYPASS=localhost,127.0.0.1"
@@ -84,18 +87,17 @@ if %errorlevel% neq 0 (
         set "PYTHON_PATH=%cd%\venv\Scripts\python.exe"
         echo [WARN] 未找到系统 Python，使用现有虚拟环境 Python: !PYTHON_PATH!
     ) else (
-        echo [ERROR] 未找到 Python 命令
-        echo.
-        echo    可能的原因:
-        echo         1. 尚未安装 Python
-        echo         2. Python 未添加到系统 PATH 环境变量
-        echo.
-        echo    解决方案:
-        echo         1. 从 https://www.python.org/downloads/ 下载安装 Python 3.10+
-        echo         2. 安装时务必勾线 "Add Python to PATH"
-        echo.
-        pause
-        exit /b 1
+        echo [WARN] 未找到 Python 命令
+        call :FindInstalledPython
+        if errorlevel 1 (
+            call :OfferPythonInstall "未找到 Python 命令"
+            if errorlevel 1 (
+                pause
+                exit /b 1
+            )
+        ) else (
+            echo [OK] 找到 Python: !PYTHON_PATH!
+        )
     )
 )
 
@@ -128,17 +130,21 @@ if "!IS_STORE_PYTHON!"=="1" (
     echo         4. 从 https://www.python.org/downloads/ 安装完整版 Python
     echo            安装时务必勾选 "Add Python to PATH"
     echo.
-    pause
-    exit /b 1
+    call :OfferPythonInstall "检测到 Windows Store Python 占位符"
+    if errorlevel 1 (
+        pause
+        exit /b 1
+    )
 )
 
 REM 尝试获取版本号（方法1: sys.version_info）
+:CHECK_PYTHON_VERSION
 set "PYTHON_VERSION="
-for /f "tokens=*" %%i in ('!PYTHON_CMD! -c "import sys; print(sys.version_info.major,sys.version_info.minor,sep=chr(46))" 2^>nul') do set "PYTHON_VERSION=%%i"
+for /f "tokens=*" %%i in ('"!PYTHON_CMD!" -c "import sys; print(sys.version_info.major,sys.version_info.minor,sep=chr(46))" 2^>nul') do set "PYTHON_VERSION=%%i"
 
 REM 方法2: 如果方法1失败，尝试解析 --version 输出
 if not defined PYTHON_VERSION (
-    for /f "tokens=2 delims= " %%i in ('!PYTHON_CMD! --version 2^>^&1') do (
+    for /f "tokens=2 delims= " %%i in ('"!PYTHON_CMD!" --version 2^>^&1') do (
         for /f "tokens=1,2 delims=." %%a in ("%%i") do set "PYTHON_VERSION=%%a.%%b"
     )
 )
@@ -160,8 +166,12 @@ if not defined PYTHON_VERSION (
     echo    如果上述命令报错，请重新安装 Python:
     echo         https://www.python.org/downloads/
     echo.
-    pause
-    exit /b 1
+    call :OfferPythonInstall "无法获取 Python 版本信息"
+    if errorlevel 1 (
+        pause
+        exit /b 1
+    )
+    goto :CHECK_PYTHON_VERSION
 )
 
 REM 检查版本是否满足要求 (>= 3.8)
@@ -184,10 +194,14 @@ if "!VERSION_OK!"=="0" (
     echo    当前版本: Python !PYTHON_VERSION!
     echo    最低要求: Python 3.8+
     echo.
-    echo    请从 https://www.python.org/downloads/ 下载最新版本
+    echo    建议安装固定版本 Python !PYTHON_INSTALL_VERSION!
     echo.
-    pause
-    exit /b 1
+    call :OfferPythonInstall "Python 版本过低"
+    if errorlevel 1 (
+        pause
+        exit /b 1
+    )
+    goto :CHECK_PYTHON_VERSION
 )
 
 echo [OK] Python !PYTHON_VERSION!
@@ -201,7 +215,7 @@ if /I "%AUTO_UPDATE_ENABLED%"=="true" (
     echo.
     if exist "updater.py" (
         echo [INFO] 检查 GitHub 最新版本...
-        !PYTHON_CMD! updater.py
+        "!PYTHON_CMD!" updater.py
         if !errorlevel! equ 0 (
             echo [INFO] 自动更新已应用，继续启动服务...
         ) else (
@@ -213,7 +227,8 @@ if /I "%AUTO_UPDATE_ENABLED%"=="true" (
     echo.
 ) else (
     echo [INFO] 自动更新已禁用
-    echo        如需启用，请修改 .env 中的 AUTO_UPDATE_ENABLED=true
+    echo        本次不会自动应用更新；服务启动后仍会检查新版本并在设置图标提示
+    echo        如需自动应用更新，请修改 .env 中的 AUTO_UPDATE_ENABLED=true
     echo.
 )
 
@@ -260,7 +275,7 @@ echo ----------------------------------------
 
 if not exist "venv" (
     echo [INFO] 创建虚拟环境...
-    python -m venv venv 2>&1
+    "!PYTHON_CMD!" -m venv venv 2>&1
     if !errorlevel! neq 0 (
         echo.
         echo [ERROR] 创建虚拟环境失败
@@ -600,7 +615,7 @@ echo.
 if /I "%AUTO_UPDATE_ENABLED%"=="true" (
     echo    [WARN] 自动更新: 已启用
 ) else (
-    echo    自动更新: 已禁用
+    echo    自动更新: 已禁用（仍会启动后检查新版本）
 )
 echo.
 echo    按 Ctrl+C 停止服务
@@ -642,6 +657,108 @@ goto :SERVICE_LOOP
 REM ===============================
 REM 子程序区域
 REM ===============================
+
+:OfferPythonInstall
+echo.
+echo [INFO] %~1
+echo.
+echo    可自动下载安装固定版本 Python !PYTHON_INSTALL_VERSION! (64-bit)
+echo    下载来源: https://www.python.org/ftp/python/!PYTHON_INSTALL_VERSION!/python-!PYTHON_INSTALL_VERSION!-amd64.exe
+echo    安装范围: 当前用户
+echo.
+set "INSTALL_PYTHON_CHOICE="
+set /p "INSTALL_PYTHON_CHOICE=是否自动下载并安装 Python !PYTHON_INSTALL_VERSION!？(Y/N): "
+if /I not "!INSTALL_PYTHON_CHOICE!"=="Y" (
+    echo [INFO] 已取消自动安装 Python
+    exit /b 1
+)
+
+call :DownloadAndInstallPython
+if errorlevel 1 exit /b 1
+
+call :FindInstalledPython
+if errorlevel 1 (
+    echo [ERROR] Python 安装完成后仍未找到可用解释器
+    echo        请重新打开终端后再运行 start.bat，或手动检查安装状态
+    exit /b 1
+)
+
+echo [OK] Python 已就绪: !PYTHON_PATH!
+exit /b 0
+
+:DownloadAndInstallPython
+set "PYTHON_INSTALL_URL=https://www.python.org/ftp/python/!PYTHON_INSTALL_VERSION!/python-!PYTHON_INSTALL_VERSION!-amd64.exe"
+set "PYTHON_INSTALLER=%TEMP%\python-!PYTHON_INSTALL_VERSION!-amd64.exe"
+
+echo.
+echo [INFO] 正在下载 Python !PYTHON_INSTALL_VERSION!...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ProgressPreference='SilentlyContinue'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri '!PYTHON_INSTALL_URL!' -OutFile '!PYTHON_INSTALLER!'"
+if errorlevel 1 (
+    echo [ERROR] Python 安装包下载失败
+    exit /b 1
+)
+
+if not exist "!PYTHON_INSTALLER!" (
+    echo [ERROR] Python 安装包不存在: !PYTHON_INSTALLER!
+    exit /b 1
+)
+
+echo [INFO] 正在静默安装 Python !PYTHON_INSTALL_VERSION!...
+start /wait "" "!PYTHON_INSTALLER!" /quiet InstallAllUsers=0 PrependPath=1 Include_launcher=1 Include_pip=1 Include_test=0 SimpleInstall=1
+set "PYTHON_INSTALL_EXIT=!errorlevel!"
+if not "!PYTHON_INSTALL_EXIT!"=="0" if not "!PYTHON_INSTALL_EXIT!"=="3010" (
+    echo [ERROR] Python 安装失败，安装器退出码: !PYTHON_INSTALL_EXIT!
+    exit /b 1
+)
+
+if exist "!PYTHON_INSTALLER!" del /q "!PYTHON_INSTALLER!" >nul 2>&1
+exit /b 0
+
+:FindInstalledPython
+set "PYTHON_CMD="
+set "PYTHON_PATH="
+
+set "LOCAL_PYTHON=%LOCALAPPDATA%\Programs\Python\Python!PYTHON_INSTALL_SHORT!\python.exe"
+if exist "!LOCAL_PYTHON!" (
+    set "PYTHON_CMD=!LOCAL_PYTHON!"
+    set "PYTHON_PATH=!LOCAL_PYTHON!"
+    set "PATH=%LOCALAPPDATA%\Programs\Python\Python!PYTHON_INSTALL_SHORT!;%LOCALAPPDATA%\Programs\Python\Python!PYTHON_INSTALL_SHORT!\Scripts;%PATH%"
+    exit /b 0
+)
+
+set "SYSTEM_PYTHON=%ProgramFiles%\Python!PYTHON_INSTALL_SHORT!\python.exe"
+if exist "!SYSTEM_PYTHON!" (
+    set "PYTHON_CMD=!SYSTEM_PYTHON!"
+    set "PYTHON_PATH=!SYSTEM_PYTHON!"
+    exit /b 0
+)
+
+where py >nul 2>&1
+if !errorlevel! equ 0 (
+    for /f "tokens=*" %%i in ('py -!PYTHON_INSTALL_MAJOR_MINOR! -c "import sys; print(sys.executable)" 2^>nul') do (
+        if not defined PYTHON_PATH set "PYTHON_PATH=%%i"
+    )
+    if defined PYTHON_PATH (
+        set "PYTHON_CMD=!PYTHON_PATH!"
+        exit /b 0
+    )
+)
+
+where python >nul 2>&1
+if !errorlevel! equ 0 (
+    for /f "tokens=*" %%i in ('where python 2^>nul') do (
+        if not defined PYTHON_PATH set "PYTHON_PATH=%%i"
+    )
+    if defined PYTHON_PATH (
+        echo "!PYTHON_PATH!" | findstr /i "WindowsApps" >nul 2>&1
+        if !errorlevel! neq 0 (
+            set "PYTHON_CMD=python"
+            exit /b 0
+        )
+    )
+)
+
+exit /b 1
 
 :check_debug_port
 set "DEBUG_PORT_OK=0"

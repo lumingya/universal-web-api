@@ -6,96 +6,122 @@
 
 📖 Documentation • [English](./README.md) • [简体中文](./README.zh-CN.md)
 
-Connect AI websites you already use in your browser, such as ChatGPT, DeepSeek, Claude, or Gemini, to a standard local OpenAI-compatible interface for personal testing, workflow orchestration, and client integration.
+**Universal Web API** is a **local API bridge & debugging tool** designed for developers. It converts AI web services (e.g., ChatGPT, DeepSeek, Claude, Gemini) logged in your local browser into local standard OpenAI/Anthropic-compatible APIs.
 
-## Features
+This project is dedicated to helping developers perform **workflow orchestration, client integration testing, and personal office automation locally**, ensuring data privacy and security without exposing API keys to third parties.
 
-**Workflow-driven**
-Browser automation is abstracted into visual workflows. It is highly configurable and lets you extend support to additional sites as needed.
+> ⚠️ **Compliance & Security Statement**: This tool runs entirely on the user's local system as a bridge helper. It **does not** provide any functionality to bypass authentication (login), crack security defenses (such as captcha solvers), or reverse-engineer encrypted APIs. Users must log into their own valid accounts in the controlled browser. Do not use this tool for high-frequency automated requests or commercial purposes.
 
-**Flexible request routing**
-Built-in tab pooling supports routing by tab, by site, and by round-robin, so concurrent requests work naturally.
+---
 
-**Full multimodal extraction**
-Extract text, images, audio, and video from AI web apps based on configuration, and automatically download them locally.
+## 📐 Project Architecture (Mermaid)
 
-**Network-layer monitoring**
-Observe and parse target network responses based on configuration so you can debug the output flow of adapted sites.
+```mermaid
+graph TD
+    User([Client/User]) -->|OpenAI/Anthropic/Codex API| Route[1. API & Routing Layer app/api]
+    Route -->|Session Dispatch/Concurrency| TabPool[2. Tab Pool & Lifecycle app/core/tab_pool]
+    Route -->|Parse Tool Request| ToolCall[5. Tool Calling Adapter app/services/tool_calling]
+    TabPool -->|Browser Control/Anti-detection| Browser[3. Automation & Workflow Engine app/core/workflow]
+    Browser -->|Monitor Stream| Stream[4. Stream Monitor & Parsers app/core/parsers]
+    Browser -->|Trigger Command Hook| CmdEng[6. Command Engine app/services/command_engine]
+    
+    subgraph Core Utilities
+        Config[7. Config & Presets app/services/config]
+        Utils[8. Shared Utilities app/utils & app/models]
+    end
+    
+    Browser -.->|Depends| Config
+    CmdEng -.->|Read/Write| Config
+    Stream -.->|Helpers| Utils
+```
 
-**File paste**
-Oversized text can be staged as a temporary file before sending, which is useful on sites that handle long context better through file-style inputs. Windows keeps the native clipboard fallback, while other platforms rely on site-native upload entry points.
+---
 
-**Isolated cookie mode**
-Create isolated cookie sessions for the same site so different browser contexts can be kept separate.
+## 🌟 Highlights
 
-## Limitations
+*   **⚡ Zero-config Standard Compatibility**: Fully compatible with OpenAI standard API (including `/v1/chat/completions` and `/v1/models`) with experimental compatibility support for third-party developer tools (such as `/v1/messages` connectivity testing for Claude Code and `/v1/responses` endpoint for Codex plugins).
+*   **🛠️ Local Controlled Browser Drive**: Lightweight automation of Chromium-based browsers (Chrome / Edge, etc.) using DrissionPage. All data stays local for end-to-end privacy.
+*   **🛡️ Human-like Interaction**: Built-in keyboard keypress simulations, focus emulation, and mouse path movements to minimize account detection.
+*   **📦 Intelligent Tab Pooling**: Multi-tab concurrency, site routing, and load-balancing round-robins to maximize local testing throughput.
+*   **📡 Dual-channel Stream Parsing**: Combined CDP network interception and DOM mutation monitoring to stream increments in real-time, regardless of the site's rendering technique.
+*   **📎 Multimodal & Attachment Self-healing**:
+    *   Extract and download text, images, audio, and video content locally from web sessions.
+    *   Oversized prompts are automatically staged as local temporary files for upload (for sites that handle file-style inputs better).
+*   **🧩 Robust Tool Calling**: Injects schema verification feedback loops into web sessions. If a web model produces invalid arguments, it automatically triggers local correction prompts, boosting tool-calling reliability.
 
-> ⚠️ **Windows remains the most complete path**. `start.bat` and the native file / image clipboard upload flow are preserved for Windows users.
->
-> ⚠️ **macOS / Linux can now start through `python3 start.py`**. On those platforms, attachments rely on page-native `file input`, `drop zone`, or upload-button flows instead of OS-level file / image clipboard paste.
->
-> ⚠️ If a target site only accepts clipboard-style attachment paste and exposes no usable upload entry point, **Windows is still recommended** for full parity.
->
-> ⚠️ Requires **Python 3.10+**.
+---
 
-## Supported Sites
+## 🚀 Quick Start
 
-| Site | URL | Notes |
-|------|-----|-------|
-| ChatGPT | chatgpt.com | About 200k max single-send length |
-| DeepSeek | chat.deepseek.com | Reply-reading issues in thinking mode |
-| Gemini | gemini.google.com | About 30k on free accounts; no clear limit observed on Pro |
-| Claude | claude.ai | Site-level parsing and adaptation supported |
-| Kimi | www.kimi.com | — |
-| Qwen | chat.qwen.ai | Qwen page adaptation supported |
-| Grok | grok.com | — |
-| Doubao | www.doubao.com | New domain adapted |
-| AI Studio | aistudio.google.com | — |
-| Arena AI | arena.ai | Sensitive to IP quality; see notes |
+### Prerequisites
+1. OS: Windows (Fully supported) / macOS or Linux (Core features supported)
+2. Requirements: **Python 3.10+** and a Chromium-based browser (Chrome, Edge, or Brave) installed.
 
-> Sites not listed here can still be adapted through AI-based page analysis. See [Add a New Site](./static/tutorial/index.html#add-site-guide).
+### Setup Steps
 
-## Quick Start
+1. **Download & Extract**: Download the latest release from [Releases](../../releases) and extract it to a path **without non-ASCII (e.g. Chinese) characters**.
+2. **Start the Service**:
+   * **Windows**: Double-click **`start.bat`**.
+   * **macOS / Linux**: Run **`python3 start.py`** in your terminal.
+3. **Initialization**: Once dependencies are validated and installed, a controlled browser window will pop up automatically, and the console will be accessible at `http://127.0.0.1:8199`.
+4. **Log In**: In the controlled browser, log in to your own AI web accounts (e.g., chatgpt.com, claude.ai).
+5. **Configure Clients**: In any client, set the API configurations:
+   * **Base URL**: `http://127.0.0.1:8199/v1`
+   * **API Key**: If auth token verification is disabled, use any value (e.g., `sk-local`). If enabled, use your custom configured token.
 
-1. Download and extract the package from [Releases](../../releases) into a directory **without Chinese characters in the path**
-2. Make sure Chrome / Edge / Brave or another Chromium-based browser is installed
-3. Start the project:
-   - **Windows**: double-click **`start.bat`**
-   - **macOS / Linux**: run **`python3 start.py`**
-4. Wait for dependency installation and browser startup to finish
-5. Open the dashboard at `http://127.0.0.1:8199`
-6. Log in to your AI account in the browser that opens automatically
-7. In any client that supports the OpenAI API, use:
-   - **Base URL**: `http://127.0.0.1:8199/v1`
-   - **API Key**: if built-in auth is disabled, use a placeholder value such as `sk-local`; if auth is enabled, it must match your configured auth token
+---
 
-For non-Windows deployments, prefer site configurations that expose `file_input`, `drop_zone`, or an upload button when you need image or file attachments.
+## 🎯 Supported Sites
 
-For detailed instructions, see the [full tutorial](./static/tutorial/index.html#quick-start).
+Built-in automation rules are available for several mainstream AI websites. For unlisted sites, you can use the built-in AI assistant to analyze page DOM structures and generate adaptations. See [Add a New Site Guide](./static/tutorial/index.html#add-site-guide).
 
-## Documentation
+| Site Name | URL | Notes |
+| :--- | :--- | :--- |
+| **ChatGPT** | chatgpt.com | Supports extremely long prompts via file uploads |
+| **DeepSeek** | chat.deepseek.com | Adapted for reasoning/thinking stream output extraction |
+| **Gemini** | gemini.google.com | Excellent for testing local multimodal workflows |
+| **Claude** | claude.ai | Comprehensive page interaction and attachment handling |
+| **Kimi** | www.kimi.com | Excellent long-context file-paste support |
+| **Qwen** | chat.qwen.ai | DOM rules adapted for domestic LLM web automation |
+| **Grok** | grok.com | Decodes native websocket/HTTP stream response data |
+| **Doubao** | www.doubao.com | Fully adapted for the latest page structures |
+| **AI Studio** | aistudio.google.com | High-throughput developers testing environment |
+| **Arena AI** | arena.ai | Comparative debugging (sensitive to IP quality) |
 
-| Document | Description |
-|------|------|
-| [Full Tutorial](./static/tutorial/index.html#quick-start) | Installation, startup, login, and dashboard overview |
-| [Connect API](./static/tutorial/index.html#connect-api) | Common parameters, routing modes, and request examples |
-| [Add a New Site](./static/tutorial/index.html#add-site-guide) | AI auto-recognition and manual site configuration |
-| [Function Calling](./static/tutorial/index.html#function-calling) | Tool-calling compatibility and usage guidance |
-| [Tab Pool and Presets](./static/tutorial/index.html#tab-pool) | Multi-tab concurrency and preset usage |
-| [Core Configuration](./static/tutorial/index.html#selectors) | Selectors, workflow, streaming, multimodal extraction, and file paste |
-| [Advanced Configuration](./static/tutorial/index.html#stealth-mode) | Low-interference mode, AI element recognition, and environment settings |
-| [Notes and Known Limits](./static/tutorial/index.html#faq) | Runtime limits, known issues, and special-site notes |
-| [FAQ](./static/tutorial/index.html#faq) | Troubleshooting startup failures, timeouts, and repeated failures |
-| [Parameter Reference](./static/tutorial/index.html#env-config) | Detailed explanation of configuration options |
+---
 
-## Feedback
+## 📖 Documentation
 
-If you run into problems, you can join the QQ group **1073037753** or open an issue in [Issues](../../issues).
+Detailed HTML guides are hosted locally and can be accessed via the dashboard after launch:
 
-## Disclaimer
+| Section | Description |
+| :--- | :--- |
+| 📖 [Full Tutorial](./static/tutorial/index.html#quick-start) | Installation, platform differences, and UI dashboard guides |
+| 🔗 [Connect API](./static/tutorial/index.html#connect-api) | Request parameters, routing modes (Default, Domain, Stable Tab), and code examples |
+| 🧩 [Function Calling](./static/tutorial/index.html#function-calling) | Validation repair strategy and multi-turn prompt engineering explanations |
+| 🔄 [Tab Pool and Presets](./static/tutorial/index.html#tab-pool) | Configuring concurrency limits and custom task presets |
+| 🛠️ [Core Selector Configuration](./static/tutorial/index.html#selectors) | CSS selector mapping, visual workflows, and streaming options |
+| 🛡️ [Stealth & Advanced Options](./static/tutorial/index.html#stealth-mode) | Anti-detection settings, browser fingerprint overrides, and low-interference modes |
+| ❓ [Limitations & FAQ](./static/tutorial/index.html#faq) | Timeout troubleshooting, captcha handling, and OS differences |
 
-This project is for learning, research, and technical discussion only. Make sure you comply with the target site's Terms of Service, and do not use it for commercial purposes or high-frequency automated requests. See the [usage notes in the tutorial](./static/tutorial/index.html#author-note).
+---
 
-## License
+## 🤝 Feedback & Discussion
 
-[AGPL-3.0](./LICENSE)
+* If you run into issues, join the QQ Group **1073037753**.
+* You can also open issues or suggest features in the GitHub [Issues](../../issues) tracker.
+
+---
+
+## ⚖️ Disclaimer
+
+1. **Purpose**: This project is intended solely for personal technical research, educational demonstration, and testing. Do not deploy it in production environments or use it for commercial profit-making activities.
+2. **Compliance**: Before using this software, read and comply with the target sites' Terms of Service. Users are solely responsible for account limitations, suspensions, or disputes arising from using this automation tool.
+3. **No Hacking**: This software does not engage in network intrusion, cracking, reverse engineering of APIs, or bypassing payment walls. All interactions are achieved by automating actions in a legitimate browser owned and logged in by the user.
+4. **Liability**: The maintainers assume no liability for any direct or indirect damage or loss (including account bans, business losses, or data loss) resulting from using this software.
+
+---
+
+## 📄 License
+
+This project is licensed under the [AGPL-3.0](./LICENSE).

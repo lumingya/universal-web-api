@@ -14,7 +14,12 @@ import re
 from typing import Generator, Optional, Dict, Callable, Any
 from pathlib import Path
 
-from app.core.config import logger, SSEFormatter, BrowserConstants
+from app.core.config import (
+    logger,
+    SSEFormatter,
+    BrowserConstants,
+    sanitize_sensitive_data,
+)
 from app.core.background_image_downloader import (
     background_image_downloader,
     build_image_download_request_context,
@@ -922,14 +927,19 @@ class NetworkMonitor:
             raw_body_text = str(raw_body or "")
             truncated = len(raw_body_text) > max_chars
             stored_body = raw_body_text[:max_chars] if truncated else raw_body_text
+            stored_body = str(sanitize_sensitive_data(stored_body))
             has_content = bool(str(parse_result.get("content", "") or ""))
 
             parser_debug = None
             if hasattr(self.parser, "export_debug_data"):
                 try:
-                    parser_debug = self.parser.export_debug_data(raw_body_text)
+                    parser_debug = sanitize_sensitive_data(
+                        self.parser.export_debug_data(raw_body_text)
+                    )
                 except Exception as parser_exc:
                     parser_debug = {"error": str(parser_exc)}
+
+            content_preview = str(parse_result.get("content", "") or "")[:800]
 
             payload = {
                 "captured_at": int(time.time()),
@@ -938,7 +948,7 @@ class NetworkMonitor:
                 "capture_index": self._debug_capture_counter,
                 "capture_stage": capture_stage,
                 "event": {
-                    "url": str(event.get("url", "") or ""),
+                    "url": sanitize_sensitive_data(str(event.get("url", "") or "")),
                     "method": str(event.get("method", "") or ""),
                     "status": int(event.get("status", 0) or 0),
                     "timestamp": float(event.get("timestamp", 0) or 0),
@@ -950,9 +960,9 @@ class NetworkMonitor:
                 "raw_body": stored_body,
                 "parse_result": {
                     "content_len": len(str(parse_result.get("content", "") or "")),
-                    "content_preview": str(parse_result.get("content", "") or "")[:800],
+                    "content_preview": sanitize_sensitive_data(content_preview),
                     "done": bool(parse_result.get("done", False)),
-                    "error": str(parse_result.get("error") or ""),
+                    "error": sanitize_sensitive_data(str(parse_result.get("error") or "")),
                     "image_count": len(parse_result.get("images", []) or []),
                 },
                 "parser_debug": parser_debug,
@@ -1139,6 +1149,7 @@ class NetworkMonitor:
         active_stream_event: Dict[str, Any] = {}
         active_stream_body = ""
         active_stream_body_source = ""
+        completed_by_done = False
 
         while True:
             # 检查全局超时
@@ -1239,6 +1250,7 @@ class NetworkMonitor:
                             yield self.formatter.pack_chunk(content, completion_id=completion_id)
 
                         if done:
+                            completed_by_done = True
                             logger.debug("[NetworkMonitor] 检测到结束标志，完成监听")
                             break
 
@@ -1251,6 +1263,17 @@ class NetworkMonitor:
                                 f"(source={active_stream_body_source}, body_len={len(active_stream_body or '')})"
                             )
                             raise NetworkMonitorTimeout("目标流未产出有效正文")
+                        if (
+                            self._total_chunks > 0
+                            and not completed_by_done
+                            and self._should_fallback_to_dom_on_empty_stream()
+                        ):
+                            logger.warning(
+                                "[NetworkMonitor] 流响应已结束但未收到完成标志，回退到 DOM 补齐 "
+                                f"(source={active_stream_body_source}, chunks={self._total_chunks}, "
+                                f"body_len={len(active_stream_body or '')})"
+                            )
+                            raise NetworkMonitorTimeout("目标流未收到完成标志")
                         logger.debug("[NetworkMonitor] 活跃流响应已完成，结束监听")
                         break
 
@@ -1287,6 +1310,20 @@ class NetworkMonitor:
                         )
                         raise NetworkMonitorTimeout(
                             f"目标流未产出有效正文（{silence_duration:.1f}s）"
+                        )
+                    if (
+                        active_stream_response is not None
+                        and self._total_chunks > 0
+                        and not completed_by_done
+                        and self._should_fallback_to_dom_on_empty_stream()
+                    ):
+                        logger.warning(
+                            "[NetworkMonitor] 流式响应静默但未收到完成标志，回退到 DOM 补齐 "
+                            f"(idle={silence_duration:.1f}s, chunks={self._total_chunks}, "
+                            f"body_len={len(active_stream_body or '')})"
+                        )
+                        raise NetworkMonitorTimeout(
+                            f"目标流未完整结束（{silence_duration:.1f}s）"
                         )
                     logger.debug(f"[NetworkMonitor] 静默超时 ({silence_duration:.1f}s)，结束监听")
                     break
@@ -1505,6 +1542,7 @@ class NetworkMonitor:
                 yield self.formatter.pack_chunk(content, completion_id=completion_id)
 
             if done:
+                completed_by_done = True
                 logger.debug("[NetworkMonitor] 检测到结束标志，完成监听")
                 break
 

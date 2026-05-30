@@ -17,6 +17,7 @@ from app.utils.site_url import extract_remote_site_domain
 from app.utils.image_handler import extract_images_from_messages
 from app.core.workflow import WorkflowExecutor
 from app.core.tab_pool import TabSession
+from app.models.schemas import get_modality_run_policy, is_modality_enabled
 
 if TYPE_CHECKING:
     from .main import BrowserCore
@@ -232,6 +233,12 @@ class BrowserWorkflowMixin:
         current_task_id = str(getattr(session, "current_task_id", "") or "").strip()
         session_status = getattr(getattr(session, "status", None), "value", "")
         request_state = self._get_request_state_snapshot(expected_task_id) if expected_task_id else {}
+        if session_status in {"error", "closed"}:
+            logger.warning(
+                f"[{session.id}] 跳过释放：标签页已处于不可复用状态 "
+                f"(expected_task={expected_task_id or '-'}, status={session_status})"
+            )
+            return
         if expected_task_id:
             if current_task_id and current_task_id != expected_task_id:
                 if request_state.get("terminal"):
@@ -953,6 +960,7 @@ class BrowserWorkflowMixin:
         effective_stop_checker = stop_checker or self._should_stop_checker
         workflow_priority_value = 2
         workflow_runtime = None
+        executor = None
         workflow_aborted = False
         workflow_abort_message = ""
         command_engine = None
@@ -1072,7 +1080,7 @@ class BrowserWorkflowMixin:
         image_config = site_config.get("image_extraction", {})
         modalities = image_config.get("modalities") or {}
         image_extraction_enabled = bool(image_config.get("enabled", False)) or any(
-            bool(modalities.get(key)) for key in ("image", "audio", "video")
+            is_modality_enabled(modalities, key) for key in ("image", "audio", "video")
         )
         stream_config = site_config.get("stream_config", {}) or {}
         file_paste_config = site_config.get("file_paste", {}) or {}
@@ -1086,7 +1094,8 @@ class BrowserWorkflowMixin:
         )
 
         audio_capture_preload_enabled = (
-            bool(modalities.get("audio"))
+            is_modality_enabled(modalities, "audio")
+            and get_modality_run_policy(modalities, "audio") == "always_probe"
             and bool(image_config.get("audio_capture_enabled", True))
             and bool(image_config.get("audio_capture_preload_enabled", True))
         )
@@ -1576,6 +1585,11 @@ class BrowserWorkflowMixin:
                                 f"[WORKFLOW] 复用 DOM 监听已提取的媒体结果: {len(media_items)} 项"
                             )
                         else:
+                            direct_modalities = (
+                                media_postprocess_diag.get("direct_postprocess_modalities")
+                                if media_postprocess_diag.get("decision") == "direct_postprocess_modalities"
+                                else None
+                            )
                             media_items = self._extract_media_after_stream(
                                 tab=tab,
                                 extractor=extractor,
@@ -1588,6 +1602,7 @@ class BrowserWorkflowMixin:
                                 request_text_hint=request_text_hint,
                                 media_generation_state=media_generation_state,
                                 stream_media_items=stream_media_items,
+                                direct_modalities=direct_modalities,
                             )
                     
                     if media_items:
@@ -1634,6 +1649,11 @@ class BrowserWorkflowMixin:
                 yield self.formatter.pack_error(f"系统错误: {str(e)}")
             yield self.formatter.pack_finish()
         finally:
+            if executor is not None:
+                try:
+                    executor.cleanup_after_workflow()
+                except Exception as e:
+                    logger.debug(f"[{session.id}] 工作流执行器清理失败（忽略）: {e}")
             if command_engine is not None and workflow_runtime is not None:
                 try:
                     stop_reason = str(getattr(session, "_workflow_stop_reason", "") or "").strip()

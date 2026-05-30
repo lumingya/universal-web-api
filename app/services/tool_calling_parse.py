@@ -121,7 +121,7 @@ def iter_tool_stream_chunks(model: str, parsed: Dict[str, Any]) -> Iterable[str]
 
     first_delta: Dict[str, Any] = {"role": "assistant"}
     if parsed.get("tool_calls"):
-        first_delta["tool_calls"] = parsed["tool_calls"]
+        first_delta["tool_calls"] = _tool_calls_for_stream_delta(parsed["tool_calls"])
     elif parsed.get("content"):
         first_delta["content"] = str(parsed.get("content") or "")
 
@@ -146,6 +146,20 @@ def iter_tool_stream_chunks(model: str, parsed: Dict[str, Any]) -> Iterable[str]
         }
     )
     yield "data: [DONE]\n\n"
+
+
+def _tool_calls_for_stream_delta(tool_calls: Any) -> List[Dict[str, Any]]:
+    normalized: List[Dict[str, Any]] = []
+    for fallback_index, item in enumerate(tool_calls or []):
+        if not isinstance(item, dict):
+            continue
+        delta_item = dict(item)
+        try:
+            delta_item["index"] = int(delta_item.get("index"))
+        except Exception:
+            delta_item["index"] = fallback_index
+        normalized.append(delta_item)
+    return normalized
 
 _TOOL_CALLING_PLACEHOLDER_URL_RE = re.compile(
     r"^\s*https?://(?:[\w.-]+\.)?googleusercontent\.com/"
@@ -319,6 +333,7 @@ def _extract_json_candidates(text: str) -> List[str]:
         stripped = re.sub(r"\s*```$", "", stripped)
 
     candidates.append(stripped)
+    candidates.extend(_extract_balanced_json_object_candidates(stripped))
 
     start = stripped.find("{")
     end = stripped.rfind("}")
@@ -334,6 +349,43 @@ def _extract_json_candidates(text: str) -> List[str]:
         seen.add(key)
         result.append(key)
     return result
+
+
+def _extract_balanced_json_object_candidates(text: str) -> List[str]:
+    value = str(text or "")
+    candidates: List[str] = []
+    for start, ch in enumerate(value):
+        if ch != "{":
+            continue
+
+        depth = 0
+        in_string = False
+        escape = False
+        for index in range(start, len(value)):
+            current = value[index]
+            if in_string:
+                if escape:
+                    escape = False
+                elif current == "\\":
+                    escape = True
+                elif current == '"':
+                    in_string = False
+                continue
+
+            if current == '"':
+                in_string = True
+                continue
+            if current == "{":
+                depth += 1
+                continue
+            if current == "}":
+                depth -= 1
+                if depth == 0:
+                    candidates.append(value[start : index + 1])
+                    break
+                if depth < 0:
+                    break
+    return candidates
 
 
 def _normalize_parsed_payload(
@@ -500,12 +552,77 @@ def _decode_tool_arguments(tool_call: Dict[str, Any]) -> Optional[Dict[str, Any]
     return None
 
 
+_WINDOWS_PATH_IN_JSON_STRING_RE = re.compile(r"(^|[^\w])(?:[A-Za-z]:\\|\\\\)")
+
+
+def _escape_windows_path_backslashes_in_json_strings(text: str) -> str:
+    value = str(text or "")
+    repaired: List[str] = []
+    i = 0
+    while i < len(value):
+        if value[i] != '"':
+            repaired.append(value[i])
+            i += 1
+            continue
+
+        start = i
+        i += 1
+        body_chars: List[str] = []
+        escape = False
+        while i < len(value):
+            ch = value[i]
+            if ch == '"' and not escape:
+                break
+            body_chars.append(ch)
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            i += 1
+
+        body = "".join(body_chars)
+        if _WINDOWS_PATH_IN_JSON_STRING_RE.search(body):
+            body = _escape_single_windows_path_backslashes(body)
+
+        repaired.append('"')
+        repaired.append(body)
+        if i < len(value) and value[i] == '"':
+            repaired.append('"')
+            i += 1
+        else:
+            repaired.append(value[start + 1 + len(body_chars) :])
+            break
+
+    return "".join(repaired)
+
+
+def _escape_single_windows_path_backslashes(body: str) -> str:
+    repaired: List[str] = []
+    i = 0
+    while i < len(body):
+        ch = body[i]
+        if ch != "\\":
+            repaired.append(ch)
+            i += 1
+            continue
+
+        if i + 1 < len(body) and body[i + 1] == "\\":
+            repaired.append("\\\\")
+            i += 2
+            continue
+
+        repaired.append("\\\\")
+        i += 1
+    return "".join(repaired)
+
+
 def _repair_json_like_argument_string(raw: str) -> str:
     text = str(raw or "")
     stripped = text.lstrip()
     if not stripped or stripped[0] not in "{[":
         return text
 
+    text = _escape_windows_path_backslashes_in_json_strings(text)
     text = _escape_control_chars_in_json_strings(text)
 
     # Best-effort fix for nested JSON strings carrying Windows paths like
@@ -903,6 +1020,10 @@ _TOOL_XML_INVOKE_OPEN_RE = re.compile(
     r"<\s*(?:call|invoke)\b[^>]*>",
     flags=re.IGNORECASE,
 )
+_TOOL_XML_INVOKE_CLOSE_RE = re.compile(
+    r"<\s*/\s*(?:call|invoke)\s*>",
+    flags=re.IGNORECASE,
+)
 _TOOL_XML_STRING_PARAM_NAMES = {
     "command",
     "content",
@@ -999,8 +1120,65 @@ def _find_tool_xml_wrapper_end(masked: str, start: int) -> int:
     return -1
 
 
+def _find_tool_xml_invoke_end(masked: str, start: int) -> int:
+    depth = 1
+    index = max(0, start)
+    while index < len(masked):
+        if masked.startswith("<![CDATA[", index):
+            cdata_end = masked.find("]]>", index + 9)
+            if cdata_end == -1:
+                return -1
+            index = cdata_end + 3
+            continue
+
+        open_match = _TOOL_XML_INVOKE_OPEN_RE.match(masked, index)
+        if open_match:
+            depth += 1
+            index = open_match.end()
+            continue
+
+        close_match = _TOOL_XML_INVOKE_CLOSE_RE.match(masked, index)
+        if close_match:
+            depth -= 1
+            index = close_match.end()
+            if depth == 0:
+                return index
+            continue
+
+        index += 1
+    return -1
+
+
 def _repair_missing_tool_xml_wrapper(text: str) -> str:
     masked = _mask_ignored_tool_markup_regions(text)
+    wrapper_open = _TOOL_XML_WRAPPER_OPEN_RE.search(masked)
+    invoke_ranges: List[Tuple[int, int]] = []
+    search_from = 0
+    while True:
+        invoke_match = _TOOL_XML_INVOKE_OPEN_RE.search(masked, search_from)
+        if not invoke_match:
+            break
+        if wrapper_open and wrapper_open.start() <= invoke_match.start():
+            search_from = invoke_match.end()
+            continue
+        invoke_end = _find_tool_xml_invoke_end(masked, invoke_match.end())
+        if invoke_end == -1:
+            search_from = invoke_match.end()
+            continue
+        invoke_ranges.append((invoke_match.start(), invoke_end))
+        search_from = invoke_end
+
+    if invoke_ranges:
+        start = invoke_ranges[0][0]
+        end = invoke_ranges[-1][1]
+        return (
+            text[:start]
+            + f"<{_PREFERRED_XML_WRAPPER_TAG}>"
+            + text[start:end]
+            + f"</{_PREFERRED_XML_WRAPPER_TAG}>"
+            + text[end:]
+        )
+
     invoke_match = _TOOL_XML_INVOKE_OPEN_RE.search(masked)
     close_match = _TOOL_XML_WRAPPER_CLOSE_RE.search(masked)
     if not invoke_match or not close_match:
@@ -1038,14 +1216,50 @@ def _append_xml_value(target: Dict[str, Any], key: str, value: Any) -> None:
     target[key] = value
 
 
-def _parse_xml_scalar_value(raw_text: str, param_name: str = "") -> Any:
+def _schema_prefers_string(schema: Any) -> bool:
+    if not isinstance(schema, dict):
+        return False
+    schema_type = schema.get("type")
+    if isinstance(schema_type, str):
+        return schema_type.strip().lower() == "string"
+    if isinstance(schema_type, list):
+        return any(str(item).strip().lower() == "string" for item in schema_type)
+    return False
+
+
+def _schema_property_schema(schema: Any, field_name: str) -> Optional[Dict[str, Any]]:
+    if not isinstance(schema, dict):
+        return None
+    properties = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
+    prop_schema = properties.get(field_name)
+    if isinstance(prop_schema, dict):
+        return prop_schema
+    return None
+
+
+def _tool_parameters_schema(tool_def: Any) -> Dict[str, Any]:
+    if not isinstance(tool_def, dict):
+        return {}
+    function_data = tool_def.get("function") if isinstance(tool_def.get("function"), dict) else {}
+    parameters = function_data.get("parameters")
+    if isinstance(parameters, dict):
+        return parameters
+    parameters = tool_def.get("parameters")
+    return parameters if isinstance(parameters, dict) else {}
+
+
+def _parse_xml_scalar_value(
+    raw_text: str,
+    param_name: str = "",
+    param_schema: Optional[Dict[str, Any]] = None,
+) -> Any:
     text = html.unescape(str(raw_text or ""))
     stripped = text.strip()
     if not stripped:
         return ""
 
     normalized_name = str(param_name or "").strip().lower()
-    if normalized_name not in _TOOL_XML_STRING_PARAM_NAMES:
+    if not _schema_prefers_string(param_schema) and normalized_name not in _TOOL_XML_STRING_PARAM_NAMES:
         try:
             parsed = json.loads(stripped)
         except Exception:
@@ -1066,17 +1280,26 @@ def _parse_xml_scalar_value(raw_text: str, param_name: str = "") -> Any:
     return stripped
 
 
-def _parse_xml_element_value(element: ET.Element, field_name: str = "") -> Any:
+def _parse_xml_element_value(
+    element: ET.Element,
+    field_name: str = "",
+    param_schema: Optional[Dict[str, Any]] = None,
+) -> Any:
     children = list(element)
     if not children:
-        return _parse_xml_scalar_value(element.text or "", field_name)
+        return _parse_xml_scalar_value(element.text or "", field_name, param_schema)
 
     result: Dict[str, Any] = {}
     for child in children:
         child_name = _xml_local_name(child.tag)
         if not child_name:
             continue
-        _append_xml_value(result, child_name, _parse_xml_element_value(child, child_name))
+        child_schema = _schema_property_schema(param_schema, child_name)
+        _append_xml_value(
+            result,
+            child_name,
+            _parse_xml_element_value(child, child_name, child_schema),
+        )
 
     if len(result) == 1 and "item" in result:
         items = result["item"]
@@ -1089,11 +1312,14 @@ def _parse_xml_element_value(element: ET.Element, field_name: str = "") -> Any:
         if child.tail and child.tail.strip():
             text_parts.append(child.tail)
     if text_parts:
-        result["_text"] = _parse_xml_scalar_value("".join(text_parts), field_name)
+        result["_text"] = _parse_xml_scalar_value("".join(text_parts), field_name, param_schema)
     return result
 
 
-def _parse_xml_invoke_arguments(invoke: ET.Element) -> Optional[Dict[str, Any]]:
+def _parse_xml_invoke_arguments(
+    invoke: ET.Element,
+    tool_def: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
     children = list(invoke)
     if not children:
         inner_text = str(invoke.text or "").strip()
@@ -1112,13 +1338,29 @@ def _parse_xml_invoke_arguments(invoke: ET.Element) -> Optional[Dict[str, Any]]:
         return None
 
     arguments: Dict[str, Any] = {}
+    parameters_schema = _tool_parameters_schema(tool_def)
     for child in children:
-        if _xml_local_name(child.tag) not in {_PREFERRED_XML_ARG_TAG, _LEGACY_XML_ARG_TAG}:
-            continue
-        param_name = str(child.attrib.get("name", "") or "").strip()
+        child_tag = _xml_local_name(child.tag)
+        is_named_arg = child_tag in {_PREFERRED_XML_ARG_TAG, _LEGACY_XML_ARG_TAG}
+        if is_named_arg:
+            param_name = str(child.attrib.get("name", "") or "").strip()
+        else:
+            param_name = child_tag
         if not param_name:
             continue
-        _append_xml_value(arguments, param_name, _parse_xml_element_value(child, param_name))
+        schema_properties = (
+            parameters_schema.get("properties")
+            if isinstance(parameters_schema.get("properties"), dict)
+            else {}
+        )
+        if not is_named_arg and param_name not in schema_properties:
+            continue
+        param_schema = _schema_property_schema(parameters_schema, param_name)
+        _append_xml_value(
+            arguments,
+            param_name,
+            _parse_xml_element_value(child, param_name, param_schema),
+        )
     return arguments
 
 
@@ -1143,7 +1385,7 @@ def _parse_wrapped_xml_tool_calls(
         name = _resolve_tool_name(raw_name, allowed_tools)
         if not name:
             continue
-        arguments = _parse_xml_invoke_arguments(child)
+        arguments = _parse_xml_invoke_arguments(child, allowed_tools.get(name))
         if arguments is None:
             continue
         tool_calls.append(

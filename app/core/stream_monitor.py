@@ -10,7 +10,6 @@ v5.5 修改：
 
 import re
 import time
-import threading
 from typing import Generator, Optional, Callable, Tuple, Dict, List, Any
 
 from app.core.config import logger, BrowserConstants, SSEFormatter
@@ -22,6 +21,7 @@ from app.core.background_image_downloader import (
 from app.core.elements import ElementFinder
 from app.core.extractors.base import BaseExtractor
 from app.core.extractors.deep_mode import DeepBrowserExtractor
+from app.models.schemas import is_modality_enabled
 
 _GEMINI_IMAGE_PLACEHOLDER_RE = re.compile(
     r"^\s*https?://(?:[\w.-]+\.)?googleusercontent\.com/image_generation_content/\d+\s*$",
@@ -371,7 +371,7 @@ class StreamMonitor:
         self._prefetched_image_urls = set()
         self._expect_image_output = (
             self._image_extraction_enabled
-            and bool((self._image_config.get("modalities") or {}).get("image"))
+            and is_modality_enabled(self._image_config.get("modalities") or {}, "image")
             and _looks_like_image_generation_request(user_input)
         )
         logger.debug(
@@ -1086,65 +1086,44 @@ class StreamMonitor:
         
 
         
-        result_container = {"images": []}
-        extraction_error = {"error": None}
-
-        def extract_with_timeout():
-            """在独立线程中执行提取"""
-            try:
-                eles = self.finder.find_all(selector, timeout=1)
-                if not eles:
-                    return
-
-                strategy = self._get_final_target_strategy()
-                target = None
-
-                if strategy == "latest_reply" and ctx.output_target_anchor:
-                    for ele in reversed(eles):
-                        try:
-                            anchor = self.extractor.get_anchor(ele)
-                        except Exception:
-                            anchor = ""
-                        if anchor and anchor == ctx.output_target_anchor:
-                            target = ele
-                            break
-
-                if target is None:
-                    target, _ = self._select_candidate_element(eles)
-                    if target is None:
-                        return
-                
-                # 使用提取器的 extract_images 方法
-                if hasattr(self.extractor, 'extract_images'):
-                    images = self.extractor.extract_images(
-                        target,
-                        config=self._image_config,
-                        container_selector_fallback=selector
-                    )
-                    result_container["images"] = images
-            
-            except Exception as e:
-                extraction_error["error"] = e
-        
+        started_at = time.time()
         try:
-            # 启动提取线程
-            extraction_thread = threading.Thread(target=extract_with_timeout, daemon=True)
-            extraction_thread.start()
-            
-            # 等待超时
-            extraction_thread.join(timeout=timeout)
-            
-            # 检查是否超时
-            if extraction_thread.is_alive():
-                logger.warning(f"[Final] 图片提取超时（{timeout}s），跳过")
+            # DrissionPage/CDP 对象不能跨线程安全调用；最终图片提取保持在当前工作流线程串行执行。
+            eles = self.finder.find_all(selector, timeout=min(1.0, max(0.1, float(timeout or 1.0))))
+            if not eles:
                 return []
-            
-            # 检查是否有错误
-            if extraction_error["error"]:
-                raise extraction_error["error"]
-            
-            return result_container["images"]
-        
+
+            strategy = self._get_final_target_strategy()
+            target = None
+
+            if strategy == "latest_reply" and ctx.output_target_anchor:
+                for ele in reversed(eles):
+                    try:
+                        anchor = self.extractor.get_anchor(ele)
+                    except Exception:
+                        anchor = ""
+                    if anchor and anchor == ctx.output_target_anchor:
+                        target = ele
+                        break
+
+            if target is None:
+                target, _ = self._select_candidate_element(eles)
+                if target is None:
+                    return []
+
+            if not hasattr(self.extractor, 'extract_images'):
+                return []
+
+            images = self.extractor.extract_images(
+                target,
+                config=self._image_config,
+                container_selector_fallback=selector
+            )
+            elapsed = time.time() - started_at
+            if elapsed > float(timeout or 0):
+                logger.warning(f"[Final] 图片提取耗时超过配置窗口: {elapsed:.1f}s > {float(timeout or 0):.1f}s")
+            return images
+
         except Exception as e:
             logger.error(f"[Final] 图片提取失败: {e}")
             return []
