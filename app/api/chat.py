@@ -29,6 +29,14 @@ from app.services.request_manager import (
     RequestStatus, 
     watch_client_disconnect
 )
+from app.services.request_lifecycle import (
+    TrackedWorkerExecutionCancelled,
+    get_max_request_execute_time_sec,
+    mark_request_hard_timeout,
+    put_worker_queue_item,
+    retire_bound_tab_after_worker_leak as _shared_retire_bound_tab_after_worker_leak,
+    run_tracked_blocking_call,
+)
 from app.services.tool_calling import (
     build_tool_completion_response,
     complete_tool_calling_roundtrip_async,
@@ -53,23 +61,19 @@ class _ToolCallingExecutionCancelled(Exception):
     """Raised when a non-stream tool-calling worker is still running after cancellation."""
 
 
-def _set_worker_future_result(
-    future: "asyncio.Future[Any]",
-    *,
-    result: Any = None,
-    error: Optional[BaseException] = None,
-) -> None:
-    if future.done():
-        return
-    if error is not None:
-        future.set_exception(error)
-        return
-    future.set_result(result)
-
-
 def _get_tool_calling_cancel_reason(ctx: RequestContext) -> str:
     reason = str(ctx.cancel_reason or "").strip()
     return reason or "tool_calling_cancelled"
+
+
+def _is_absolute_request_timeout_error(error: Any) -> bool:
+    return str(error or "").strip() == "absolute_request_timeout"
+
+
+def _format_tool_calling_error(error: Any) -> tuple[str, str]:
+    if _is_absolute_request_timeout_error(error):
+        return "请求执行超过最大绝对超时，已强制中断", "absolute_request_timeout"
+    return f"执行错误: {error}", "tool_calling_failed"
 
 
 async def _run_tracked_tool_calling_worker(
@@ -79,51 +83,16 @@ async def _run_tracked_tool_calling_worker(
     worker_state: Dict[str, Any],
     label: str,
 ) -> Any:
-    loop = asyncio.get_running_loop()
-    result_future: "asyncio.Future[Any]" = loop.create_future()
-
-    def worker() -> None:
-        try:
-            result = worker_fn()
-        except Exception as exc:
-            loop.call_soon_threadsafe(
-                lambda exc=exc: _set_worker_future_result(
-                    result_future,
-                    error=exc,
-                )
-            )
-        else:
-            loop.call_soon_threadsafe(
-                lambda result=result: _set_worker_future_result(
-                    result_future,
-                    result=result,
-                )
-            )
-
-    worker_thread = threading.Thread(
-        target=worker,
-        daemon=True,
-        name=f"tool-calling-{label}",
-    )
-    worker_state["thread"] = worker_thread
-    worker_state["label"] = label
-    worker_thread.start()
-
     try:
-        while True:
-            if ctx.should_stop():
-                raise _ToolCallingExecutionCancelled(_get_tool_calling_cancel_reason(ctx))
-            try:
-                return await asyncio.wait_for(
-                    asyncio.shield(result_future),
-                    timeout=STREAM_QUEUE_POLL_TIMEOUT,
-                )
-            except asyncio.TimeoutError:
-                continue
-    finally:
-        if result_future.done() and worker_state.get("thread") is worker_thread:
-            worker_state["thread"] = None
-            worker_state["label"] = None
+        return await run_tracked_blocking_call(
+            worker_fn,
+            ctx=ctx,
+            worker_state=worker_state,
+            label=label,
+            poll_timeout=STREAM_QUEUE_POLL_TIMEOUT,
+        )
+    except TrackedWorkerExecutionCancelled as e:
+        raise _ToolCallingExecutionCancelled(str(e) or _get_tool_calling_cancel_reason(ctx))
 
 
 def _put_worker_queue_item(
@@ -133,22 +102,13 @@ def _put_worker_queue_item(
     *,
     final: bool = False,
 ) -> bool:
-    """Put worker output with bounded backpressure and cancellation awareness."""
-    deadline = time.monotonic() + 5.0 if final else None
-
-    while final or not ctx.should_stop():
-        try:
-            chunk_queue.put(item, timeout=STREAM_QUEUE_POLL_TIMEOUT)
-            return True
-        except queue.Full:
-            if final:
-                if ctx.should_stop() or (deadline is not None and time.monotonic() >= deadline):
-                    return False
-                continue
-            if ctx.should_stop():
-                return False
-
-    return False
+    return put_worker_queue_item(
+        chunk_queue,
+        ctx,
+        item,
+        final=final,
+        poll_timeout=STREAM_QUEUE_POLL_TIMEOUT,
+    )
 
 
 def _extract_stream_error_message(chunk: Any) -> str:
@@ -168,83 +128,7 @@ def _extract_stream_error_message(chunk: Any) -> str:
 
 
 def _retire_bound_tab_after_worker_leak(ctx: RequestContext, reason: str) -> None:
-    tab_id = str(ctx.tab_id or "").strip()
-    if not tab_id:
-        return
-    try:
-        browser = get_browser(auto_connect=False)
-        pool = getattr(browser, "_tab_pool", None)
-        session = getattr(pool, "_tabs", {}).get(tab_id) if pool is not None else None
-        if session is None:
-            return
-
-        current_task = str(getattr(session, "current_task_id", "") or "").strip()
-        bound_request_id = str(getattr(session, "_bound_request_id", "") or "").strip()
-        if current_task and current_task != ctx.request_id:
-            logger.warning(
-                f"[{tab_id}] 工作线程残留但标签页已被其他任务接管，跳过隔离 "
-                f"(request={ctx.request_id}, current_task={current_task})"
-            )
-            return
-        if bound_request_id and bound_request_id != ctx.request_id:
-            logger.warning(
-                f"[{tab_id}] 工作线程残留但绑定请求已变化，跳过隔离 "
-                f"(request={ctx.request_id}, bound={bound_request_id})"
-            )
-            return
-
-        if hasattr(session, "mark_error"):
-            session.mark_error(reason)
-        raw_tab_id = ""
-        if pool is not None:
-            try:
-                persistent_index = int(getattr(session, "persistent_index", 0) or 0)
-                for candidate_raw_id, candidate_index in getattr(pool, "_raw_id_to_persistent", {}).items():
-                    if int(candidate_index or 0) == persistent_index:
-                        raw_tab_id = str(candidate_raw_id or "").strip()
-                        break
-            except Exception:
-                raw_tab_id = ""
-        if not raw_tab_id:
-            try:
-                raw_tab_id = str(getattr(getattr(session, "tab", None), "tab_id", "") or "").strip()
-            except Exception:
-                raw_tab_id = ""
-
-        closed_raw_tab = False
-        if pool is not None:
-            try:
-                monitor = getattr(pool, "_global_network_monitor", None)
-                if monitor is not None and hasattr(monitor, "request_stop_for_session"):
-                    monitor.request_stop_for_session(tab_id, reason=reason, detach=True)
-            except Exception as e:
-                logger.debug(f"[{tab_id}] 停止残留标签页全局监听失败（忽略）: {e}")
-
-            if raw_tab_id and hasattr(pool, "_close_raw_tab"):
-                try:
-                    closed_raw_tab = bool(pool._close_raw_tab(raw_tab_id))
-                except Exception as e:
-                    logger.debug(f"[{tab_id}] 关闭残留底层标签页失败（忽略）: raw={raw_tab_id}, err={e}")
-
-            context_id = str(getattr(session, "browser_context_id", "") or "").strip()
-            if closed_raw_tab and context_id and hasattr(pool, "_dispose_browser_context"):
-                try:
-                    pool._dispose_browser_context(context_id)
-                except Exception as e:
-                    logger.debug(f"[{tab_id}] 释放残留浏览器上下文失败（忽略）: {e}")
-        if pool is not None and hasattr(pool, "_condition"):
-            try:
-                with pool._condition:
-                    pool._condition.notify_all()
-            except Exception:
-                pass
-        logger.warning(
-            f"[{tab_id}] 工作线程未能及时退出，已标记标签页为 ERROR 并尝试断开底层标签页 "
-            f"(request={ctx.request_id}, reason={reason}, raw={raw_tab_id or '-'}, "
-            f"closed={closed_raw_tab})"
-        )
-    except Exception as e:
-        logger.debug(f"标记残留工作线程标签页失败（忽略）: {e}")
+    _shared_retire_bound_tab_after_worker_leak(ctx, reason)
 
 
 def _extract_chunk_media_items(data: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -1364,10 +1248,23 @@ async def _stream_with_lifecycle(
         worker_thread.start()
 
         last_sse_emit_at = time.monotonic()
+        request_started_at = time.monotonic()
+        max_execute_time_sec = get_max_request_execute_time_sec()
         done_emitted = False
         client_disconnected = False
 
         while True:
+            if mark_request_hard_timeout(
+                ctx,
+                request_started_at,
+                max_execute_time_sec,
+                label="chat_stream",
+            ):
+                request_manager.capture_error(ctx, "请求执行超过最大绝对超时", code="absolute_request_timeout")
+                ctx.mark_failed("absolute_request_timeout")
+                yield _pack_error("请求执行超过最大绝对超时，已强制中断", "absolute_request_timeout")
+                break
+
             if await request.is_disconnected():
                 logger.debug("客户端断开")
                 ctx.request_cancel("client_disconnected")
@@ -1621,8 +1518,13 @@ async def _complete_tool_calling_with_lifecycle(
         return response
 
     except _ToolCallingExecutionCancelled:
+        cancel_reason = _get_tool_calling_cancel_reason(ctx)
+        if cancel_reason == "absolute_request_timeout":
+            request_manager.capture_error(ctx, "请求执行超过最大绝对超时", code="absolute_request_timeout")
+            ctx.mark_failed("absolute_request_timeout")
+            raise RuntimeError("absolute_request_timeout")
         if not ctx.should_stop():
-            ctx.request_cancel("tool_calling_cancelled")
+            ctx.request_cancel(cancel_reason or "tool_calling_cancelled")
         raise asyncio.CancelledError()
     except RuntimeError as e:
         if str(e) == "tool_calling_cancelled" and ctx.should_stop():
@@ -1666,13 +1568,14 @@ async def _non_stream_tool_calling_with_lifecycle(
         response = await _complete_tool_calling_with_lifecycle(request, body, ctx)
         return JSONResponse(content=response)
     except Exception as e:
-        request_manager.capture_error(ctx, e, code="tool_calling_failed")
+        message, code = _format_tool_calling_error(e)
+        request_manager.capture_error(ctx, message, code=code)
         return JSONResponse(
             content={
                 "error": {
-                    "message": f"执行错误: {e}",
+                    "message": message,
                     "type": "execution_error",
-                    "code": "tool_calling_failed",
+                    "code": code,
                 }
             },
             status_code=500,
@@ -1698,7 +1601,8 @@ async def _stream_tool_calling_with_lifecycle(
             yield chunk
             await asyncio.sleep(0)
     except Exception as e:
-        yield _pack_error(f"执行错误: {str(e)}", "tool_calling_failed")
+        message, code = _format_tool_calling_error(e)
+        yield _pack_error(message, code)
         yield _pack_done()
 
 

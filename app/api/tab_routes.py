@@ -31,6 +31,14 @@ from app.services.request_manager import (
     RequestStatus,
     watch_client_disconnect
 )
+from app.services.request_lifecycle import (
+    TrackedWorkerExecutionCancelled,
+    get_max_request_execute_time_sec,
+    mark_request_hard_timeout,
+    put_worker_queue_item,
+    retire_bound_tab_after_worker_leak,
+    run_tracked_blocking_call,
+)
 from app.services.tool_calling import (
     build_tool_completion_response,
     complete_tool_calling_roundtrip_async,
@@ -108,6 +116,69 @@ DEFAULT_TAB_ROUTE_METHODS = {"domain", "fixed_tab", "exact_url", "exact_url_pres
 TAB_SELECTOR_OPTIONS = {"first_idle", "round_robin", "random"}
 _route_round_robin_cursor: Dict[str, int] = {}
 _route_round_robin_lock = threading.Lock()
+
+
+def _schedule_route_worker_delayed_retire(
+    worker_thread: threading.Thread,
+    ctx: RequestContext,
+    reason: str,
+    *,
+    delay_sec: float = 5.0,
+) -> None:
+    def _wait_and_retire() -> None:
+        worker_thread.join(timeout=max(0.1, float(delay_sec or 0.1)))
+        if worker_thread.is_alive():
+            retire_bound_tab_after_worker_leak(ctx, reason)
+
+    threading.Thread(
+        target=_wait_and_retire,
+        daemon=True,
+        name=f"route-worker-retire-{ctx.request_id[:8]}",
+    ).start()
+
+
+def _cleanup_route_worker_thread(
+    worker_thread: Optional[threading.Thread],
+    ctx: RequestContext,
+    *,
+    fast_returned_on_audio: bool = False,
+) -> bool:
+    if not isinstance(worker_thread, threading.Thread) or not worker_thread.is_alive():
+        return False
+
+    if fast_returned_on_audio:
+        ctx.request_cancel("audio_media_fast_return")
+        join_timeout = 0.2
+        retire_reason = "worker_audio_fast_return_timeout"
+    else:
+        ctx.request_cancel("cleanup")
+        join_timeout = 5.0
+        retire_reason = "worker_cleanup_timeout"
+
+    worker_thread.join(timeout=join_timeout)
+    if worker_thread.is_alive():
+        if fast_returned_on_audio:
+            _schedule_route_worker_delayed_retire(worker_thread, ctx, retire_reason)
+            return True
+        retire_bound_tab_after_worker_leak(ctx, retire_reason)
+        return True
+    return False
+
+
+def _put_route_worker_queue_item(
+    chunk_queue: queue.Queue,
+    ctx: RequestContext,
+    item: Any,
+    *,
+    final: bool = False,
+) -> bool:
+    return put_worker_queue_item(
+        chunk_queue,
+        ctx,
+        item,
+        final=final,
+        poll_timeout=STREAM_QUEUE_POLL_TIMEOUT,
+    )
 
 
 def _read_browser_config() -> Dict[str, Any]:
@@ -1256,25 +1327,40 @@ async def _stream_with_tab_index(
                         else:
                             logger.info(f"工作线程检测到取消: {cancel_reason}")
                         break
-                    chunk_queue.put(chunk)
+                    if not _put_route_worker_queue_item(chunk_queue, ctx, chunk):
+                        logger.debug("工作线程停止入队，结束流式生产(tab_index)")
+                        break
 
             except Exception as e:
                 logger.error(f"工作线程异常: {e}")
-                chunk_queue.put(("ERROR", str(e)))
+                _put_route_worker_queue_item(chunk_queue, ctx, ("ERROR", str(e)), final=True)
             finally:
                 if gen is not None:
                     try:
                         gen.close()
                     except Exception as e:
                         logger.debug(f"关闭工作流生成器失败（忽略）: {e}")
-                chunk_queue.put(None)
+                _put_route_worker_queue_item(chunk_queue, ctx, None, final=True)
 
         worker_thread = threading.Thread(target=worker, daemon=True)
         worker_thread.start()
 
         last_sse_emit_at = time.monotonic()
+        request_started_at = time.monotonic()
+        max_execute_time_sec = get_max_request_execute_time_sec()
 
         while True:
+            if mark_request_hard_timeout(
+                ctx,
+                request_started_at,
+                max_execute_time_sec,
+                label=f"tab_index={tab_index}",
+            ):
+                request_manager.capture_error(ctx, "请求执行超过最大绝对超时", code="absolute_request_timeout")
+                ctx.mark_failed("absolute_request_timeout")
+                yield _pack_error("请求执行超过最大绝对超时，已强制中断", "absolute_request_timeout")
+                break
+
             if await request.is_disconnected():
                 ctx.request_cancel("client_disconnected")
                 break
@@ -1330,13 +1416,11 @@ async def _stream_with_tab_index(
         yield _pack_error(f"执行错误: {str(e)}", "internal_error")
 
     finally:
-        if worker_thread and worker_thread.is_alive():
-            if fast_returned_on_audio:
-                ctx.request_cancel("audio_media_fast_return")
-                worker_thread.join(timeout=0.2)
-            elif not ctx.is_terminal():
-                ctx.request_cancel("cleanup")
-                worker_thread.join(timeout=2.0)
+        _cleanup_route_worker_thread(
+            worker_thread,
+            ctx,
+            fast_returned_on_audio=fast_returned_on_audio,
+        )
 
         if chunk_queue is not None:
             try:
@@ -1454,25 +1538,40 @@ async def _stream_with_route_domain(
                         else:
                             logger.info(f"工作线程检测到取消: {cancel_reason}")
                         break
-                    chunk_queue.put(chunk)
+                    if not _put_route_worker_queue_item(chunk_queue, ctx, chunk):
+                        logger.debug("工作线程停止入队，结束流式生产(route_domain)")
+                        break
 
             except Exception as e:
                 logger.error(f"工作线程异常: {e}")
-                chunk_queue.put(("ERROR", str(e)))
+                _put_route_worker_queue_item(chunk_queue, ctx, ("ERROR", str(e)), final=True)
             finally:
                 if gen is not None:
                     try:
                         gen.close()
                     except Exception as e:
                         logger.debug(f"关闭工作流生成器失败（忽略）: {e}")
-                chunk_queue.put(None)
+                _put_route_worker_queue_item(chunk_queue, ctx, None, final=True)
 
         worker_thread = threading.Thread(target=worker, daemon=True)
         worker_thread.start()
 
         last_sse_emit_at = time.monotonic()
+        request_started_at = time.monotonic()
+        max_execute_time_sec = get_max_request_execute_time_sec()
 
         while True:
+            if mark_request_hard_timeout(
+                ctx,
+                request_started_at,
+                max_execute_time_sec,
+                label=f"route_domain={route_domain}",
+            ):
+                request_manager.capture_error(ctx, "请求执行超过最大绝对超时", code="absolute_request_timeout")
+                ctx.mark_failed("absolute_request_timeout")
+                yield _pack_error("请求执行超过最大绝对超时，已强制中断", "absolute_request_timeout")
+                break
+
             if await request.is_disconnected():
                 ctx.request_cancel("client_disconnected")
                 break
@@ -1528,13 +1627,11 @@ async def _stream_with_route_domain(
         yield _pack_error(f"执行错误: {str(e)}", "internal_error")
 
     finally:
-        if worker_thread and worker_thread.is_alive():
-            if fast_returned_on_audio:
-                ctx.request_cancel("audio_media_fast_return")
-                worker_thread.join(timeout=0.2)
-            elif not ctx.is_terminal():
-                ctx.request_cancel("cleanup")
-                worker_thread.join(timeout=2.0)
+        _cleanup_route_worker_thread(
+            worker_thread,
+            ctx,
+            fast_returned_on_audio=fast_returned_on_audio,
+        )
 
         if chunk_queue is not None:
             try:
@@ -1650,25 +1747,40 @@ async def _stream_with_exact_url(
                         else:
                             logger.info(f"工作线程检测到取消: {cancel_reason}")
                         break
-                    chunk_queue.put(chunk)
+                    if not _put_route_worker_queue_item(chunk_queue, ctx, chunk):
+                        logger.debug("工作线程停止入队，结束流式生产(exact_url)")
+                        break
 
             except Exception as e:
                 logger.error(f"工作线程异常: {e}")
-                chunk_queue.put(("ERROR", str(e)))
+                _put_route_worker_queue_item(chunk_queue, ctx, ("ERROR", str(e)), final=True)
             finally:
                 if gen is not None:
                     try:
                         gen.close()
                     except Exception as e:
                         logger.debug(f"关闭工作流生成器失败（忽略）: {e}")
-                chunk_queue.put(None)
+                _put_route_worker_queue_item(chunk_queue, ctx, None, final=True)
 
         worker_thread = threading.Thread(target=worker, daemon=True)
         worker_thread.start()
 
         last_sse_emit_at = time.monotonic()
+        request_started_at = time.monotonic()
+        max_execute_time_sec = get_max_request_execute_time_sec()
 
         while True:
+            if mark_request_hard_timeout(
+                ctx,
+                request_started_at,
+                max_execute_time_sec,
+                label=f"exact_url={exact_url}",
+            ):
+                request_manager.capture_error(ctx, "请求执行超过最大绝对超时", code="absolute_request_timeout")
+                ctx.mark_failed("absolute_request_timeout")
+                yield _pack_error("请求执行超过最大绝对超时，已强制中断", "absolute_request_timeout")
+                break
+
             if await request.is_disconnected():
                 ctx.request_cancel("client_disconnected")
                 break
@@ -1724,13 +1836,11 @@ async def _stream_with_exact_url(
         yield _pack_error(f"执行错误: {str(e)}", "internal_error")
 
     finally:
-        if worker_thread and worker_thread.is_alive():
-            if fast_returned_on_audio:
-                ctx.request_cancel("audio_media_fast_return")
-                worker_thread.join(timeout=0.2)
-            elif not ctx.is_terminal():
-                ctx.request_cancel("cleanup")
-                worker_thread.join(timeout=2.0)
+        _cleanup_route_worker_thread(
+            worker_thread,
+            ctx,
+            fast_returned_on_audio=fast_returned_on_audio,
+        )
 
         if chunk_queue is not None:
             try:
@@ -1900,12 +2010,53 @@ def _extract_assistant_content(response: Dict[str, Any]) -> str:
         return ""
 
 
+class _RouteToolCallingExecutionCancelled(Exception):
+    """Raised when a route-bound tool-calling worker is still running after cancellation."""
+
+
+def _get_route_tool_calling_cancel_reason(ctx: RequestContext) -> str:
+    reason = str(ctx.cancel_reason or "").strip()
+    return reason or "tool_calling_cancelled"
+
+
+def _is_absolute_request_timeout_error(error: Any) -> bool:
+    return str(error or "").strip() == "absolute_request_timeout"
+
+
+def _format_route_tool_calling_error(error: Any) -> tuple[str, str]:
+    if _is_absolute_request_timeout_error(error):
+        return "请求执行超过最大绝对超时，已强制中断", "absolute_request_timeout"
+    return f"执行错误: {error}", "tool_calling_failed"
+
+
+async def _run_tracked_route_tool_calling_worker(
+    worker_fn,
+    *,
+    ctx: RequestContext,
+    worker_state: Dict[str, Any],
+    label: str,
+) -> Any:
+    try:
+        return await run_tracked_blocking_call(
+            worker_fn,
+            ctx=ctx,
+            worker_state=worker_state,
+            label=label,
+            poll_timeout=STREAM_QUEUE_POLL_TIMEOUT,
+        )
+    except TrackedWorkerExecutionCancelled as e:
+        raise _RouteToolCallingExecutionCancelled(
+            str(e) or _get_route_tool_calling_cancel_reason(ctx)
+        )
+
+
 async def _run_tool_calling_async_for_tab(
     browser,
     tab_index: int,
     body: ChatRequest,
     request_id: str,
     stop_checker=None,
+    worker_state: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     tools, tool_choice = normalize_tool_request(
         tools=body.tools,
@@ -1922,19 +2073,27 @@ async def _run_tool_calling_async_for_tab(
     except Exception as e:
         logger.debug(f"[tab] 请求消息摘要生成失败: {e}")
 
+    tracked_worker_state = worker_state if isinstance(worker_state, dict) else {}
+
     async def _round_executor(browser_messages: List[Dict[str, str]]) -> str:
-        return await asyncio.to_thread(
-            lambda: _extract_assistant_content(
-                _execute_browser_non_stream_for_tab(
-                    browser=browser,
-                    tab_index=tab_index,
-                    messages=browser_messages,
-                    request_id=request_id,
-                    preset_name=body.preset_name,
-                    stop_checker=stop_checker,
-                )
+        worker_fn = lambda: _extract_assistant_content(
+            _execute_browser_non_stream_for_tab(
+                browser=browser,
+                tab_index=tab_index,
+                messages=browser_messages,
+                request_id=request_id,
+                preset_name=body.preset_name,
+                stop_checker=stop_checker,
             )
         )
+        if isinstance(tracked_worker_state.get("ctx"), RequestContext):
+            return await _run_tracked_route_tool_calling_worker(
+                worker_fn,
+                ctx=tracked_worker_state["ctx"],
+                worker_state=tracked_worker_state,
+                label=f"{request_id[:8]}-tab-round",
+            )
+        return await asyncio.to_thread(worker_fn)
 
     parsed = await complete_tool_calling_roundtrip_async(
         messages=body.messages,
@@ -1953,6 +2112,7 @@ async def _run_tool_calling_async_for_route_domain(
     body: ChatRequest,
     request_id: str,
     stop_checker=None,
+    worker_state: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     tools, tool_choice = normalize_tool_request(
         tools=body.tools,
@@ -1969,19 +2129,27 @@ async def _run_tool_calling_async_for_route_domain(
     except Exception as e:
         logger.debug(f"[route] 请求消息摘要生成失败: {e}")
 
+    tracked_worker_state = worker_state if isinstance(worker_state, dict) else {}
+
     async def _round_executor(browser_messages: List[Dict[str, str]]) -> str:
-        return await asyncio.to_thread(
-            lambda: _extract_assistant_content(
-                _execute_browser_non_stream_for_route_domain(
-                    browser=browser,
-                    route_domain=route_domain,
-                    messages=browser_messages,
-                    request_id=request_id,
-                    preset_name=body.preset_name,
-                    stop_checker=stop_checker,
-                )
+        worker_fn = lambda: _extract_assistant_content(
+            _execute_browser_non_stream_for_route_domain(
+                browser=browser,
+                route_domain=route_domain,
+                messages=browser_messages,
+                request_id=request_id,
+                preset_name=body.preset_name,
+                stop_checker=stop_checker,
             )
         )
+        if isinstance(tracked_worker_state.get("ctx"), RequestContext):
+            return await _run_tracked_route_tool_calling_worker(
+                worker_fn,
+                ctx=tracked_worker_state["ctx"],
+                worker_state=tracked_worker_state,
+                label=f"{request_id[:8]}-route-round",
+            )
+        return await asyncio.to_thread(worker_fn)
 
     parsed = await complete_tool_calling_roundtrip_async(
         messages=body.messages,
@@ -2000,6 +2168,7 @@ async def _run_tool_calling_async_for_exact_url(
     body: ChatRequest,
     request_id: str,
     stop_checker=None,
+    worker_state: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     tools, tool_choice = normalize_tool_request(
         tools=body.tools,
@@ -2016,19 +2185,27 @@ async def _run_tool_calling_async_for_exact_url(
     except Exception as e:
         logger.debug(f"[exact_url] 请求消息摘要生成失败: {e}")
 
+    tracked_worker_state = worker_state if isinstance(worker_state, dict) else {}
+
     async def _round_executor(browser_messages: List[Dict[str, str]]) -> str:
-        return await asyncio.to_thread(
-            lambda: _extract_assistant_content(
-                _execute_browser_non_stream_for_exact_url(
-                    browser=browser,
-                    exact_url=exact_url,
-                    messages=browser_messages,
-                    request_id=request_id,
-                    preset_name=body.preset_name,
-                    stop_checker=stop_checker,
-                )
+        worker_fn = lambda: _extract_assistant_content(
+            _execute_browser_non_stream_for_exact_url(
+                browser=browser,
+                exact_url=exact_url,
+                messages=browser_messages,
+                request_id=request_id,
+                preset_name=body.preset_name,
+                stop_checker=stop_checker,
             )
         )
+        if isinstance(tracked_worker_state.get("ctx"), RequestContext):
+            return await _run_tracked_route_tool_calling_worker(
+                worker_fn,
+                ctx=tracked_worker_state["ctx"],
+                worker_state=tracked_worker_state,
+                label=f"{request_id[:8]}-url-round",
+            )
+        return await asyncio.to_thread(worker_fn)
 
     parsed = await complete_tool_calling_roundtrip_async(
         messages=body.messages,
@@ -2048,6 +2225,7 @@ async def _complete_tool_calling_with_tab_index(
     tab_index: int,
 ) -> Dict[str, Any]:
     disconnect_task = None
+    worker_state: Dict[str, Any] = {"thread": None, "label": None, "ctx": ctx}
     try:
         disconnect_task = asyncio.create_task(
             watch_client_disconnect(request, ctx, check_interval=0.3)
@@ -2062,6 +2240,7 @@ async def _complete_tool_calling_with_tab_index(
             body,
             ctx.request_id,
             ctx.should_stop,
+            worker_state=worker_state,
         )
         request_manager.capture_response_payload(ctx, response)
 
@@ -2070,6 +2249,15 @@ async def _complete_tool_calling_with_tab_index(
 
         return response
 
+    except _RouteToolCallingExecutionCancelled:
+        cancel_reason = _get_route_tool_calling_cancel_reason(ctx)
+        if cancel_reason == "absolute_request_timeout":
+            request_manager.capture_error(ctx, "请求执行超过最大绝对超时", code="absolute_request_timeout")
+            ctx.mark_failed("absolute_request_timeout")
+            raise RuntimeError("absolute_request_timeout")
+        if not ctx.should_stop():
+            ctx.request_cancel(cancel_reason or "tool_calling_cancelled")
+        raise asyncio.CancelledError()
     except asyncio.CancelledError:
         ctx.request_cancel("coroutine_cancelled")
         raise
@@ -2085,6 +2273,10 @@ async def _complete_tool_calling_with_tab_index(
                 await disconnect_task
             except asyncio.CancelledError:
                 pass
+        worker_thread = worker_state.get("thread")
+        _cleanup_route_worker_thread(worker_thread, ctx)
+        worker_state["thread"] = None
+        worker_state["label"] = None
         request_manager.finish_request(ctx, success=(ctx.status == RequestStatus.COMPLETED))
 
 
@@ -2095,6 +2287,7 @@ async def _complete_tool_calling_with_route_domain(
     route_domain: str,
 ) -> Dict[str, Any]:
     disconnect_task = None
+    worker_state: Dict[str, Any] = {"thread": None, "label": None, "ctx": ctx}
     try:
         disconnect_task = asyncio.create_task(
             watch_client_disconnect(request, ctx, check_interval=0.3)
@@ -2109,6 +2302,7 @@ async def _complete_tool_calling_with_route_domain(
             body,
             ctx.request_id,
             ctx.should_stop,
+            worker_state=worker_state,
         )
         request_manager.capture_response_payload(ctx, response)
 
@@ -2117,6 +2311,15 @@ async def _complete_tool_calling_with_route_domain(
 
         return response
 
+    except _RouteToolCallingExecutionCancelled:
+        cancel_reason = _get_route_tool_calling_cancel_reason(ctx)
+        if cancel_reason == "absolute_request_timeout":
+            request_manager.capture_error(ctx, "请求执行超过最大绝对超时", code="absolute_request_timeout")
+            ctx.mark_failed("absolute_request_timeout")
+            raise RuntimeError("absolute_request_timeout")
+        if not ctx.should_stop():
+            ctx.request_cancel(cancel_reason or "tool_calling_cancelled")
+        raise asyncio.CancelledError()
     except asyncio.CancelledError:
         ctx.request_cancel("coroutine_cancelled")
         raise
@@ -2132,6 +2335,10 @@ async def _complete_tool_calling_with_route_domain(
                 await disconnect_task
             except asyncio.CancelledError:
                 pass
+        worker_thread = worker_state.get("thread")
+        _cleanup_route_worker_thread(worker_thread, ctx)
+        worker_state["thread"] = None
+        worker_state["label"] = None
         request_manager.finish_request(ctx, success=(ctx.status == RequestStatus.COMPLETED))
 
 
@@ -2142,6 +2349,7 @@ async def _complete_tool_calling_with_exact_url(
     exact_url: str,
 ) -> Dict[str, Any]:
     disconnect_task = None
+    worker_state: Dict[str, Any] = {"thread": None, "label": None, "ctx": ctx}
     try:
         disconnect_task = asyncio.create_task(
             watch_client_disconnect(request, ctx, check_interval=0.3)
@@ -2156,6 +2364,7 @@ async def _complete_tool_calling_with_exact_url(
             body,
             ctx.request_id,
             ctx.should_stop,
+            worker_state=worker_state,
         )
         request_manager.capture_response_payload(ctx, response)
 
@@ -2164,6 +2373,15 @@ async def _complete_tool_calling_with_exact_url(
 
         return response
 
+    except _RouteToolCallingExecutionCancelled:
+        cancel_reason = _get_route_tool_calling_cancel_reason(ctx)
+        if cancel_reason == "absolute_request_timeout":
+            request_manager.capture_error(ctx, "请求执行超过最大绝对超时", code="absolute_request_timeout")
+            ctx.mark_failed("absolute_request_timeout")
+            raise RuntimeError("absolute_request_timeout")
+        if not ctx.should_stop():
+            ctx.request_cancel(cancel_reason or "tool_calling_cancelled")
+        raise asyncio.CancelledError()
     except asyncio.CancelledError:
         ctx.request_cancel("coroutine_cancelled")
         raise
@@ -2179,6 +2397,10 @@ async def _complete_tool_calling_with_exact_url(
                 await disconnect_task
             except asyncio.CancelledError:
                 pass
+        worker_thread = worker_state.get("thread")
+        _cleanup_route_worker_thread(worker_thread, ctx)
+        worker_state["thread"] = None
+        worker_state["label"] = None
         request_manager.finish_request(ctx, success=(ctx.status == RequestStatus.COMPLETED))
 
 
@@ -2192,13 +2414,14 @@ async def _non_stream_tool_calling_with_tab_index(
         response = await _complete_tool_calling_with_tab_index(request, body, ctx, tab_index)
         return JSONResponse(content=response)
     except Exception as e:
-        request_manager.capture_error(ctx, e, code="tool_calling_failed")
+        message, code = _format_route_tool_calling_error(e)
+        request_manager.capture_error(ctx, message, code=code)
         return JSONResponse(
             content={
                 "error": {
-                    "message": f"执行错误: {e}",
+                    "message": message,
                     "type": "execution_error",
-                    "code": "tool_calling_failed",
+                    "code": code,
                 }
             },
             status_code=500,
@@ -2215,13 +2438,14 @@ async def _non_stream_tool_calling_with_route_domain(
         response = await _complete_tool_calling_with_route_domain(request, body, ctx, route_domain)
         return JSONResponse(content=response)
     except Exception as e:
-        request_manager.capture_error(ctx, e, code="tool_calling_failed")
+        message, code = _format_route_tool_calling_error(e)
+        request_manager.capture_error(ctx, message, code=code)
         return JSONResponse(
             content={
                 "error": {
-                    "message": f"执行错误: {e}",
+                    "message": message,
                     "type": "execution_error",
-                    "code": "tool_calling_failed",
+                    "code": code,
                 }
             },
             status_code=500,
@@ -2238,13 +2462,14 @@ async def _non_stream_tool_calling_with_exact_url(
         response = await _complete_tool_calling_with_exact_url(request, body, ctx, exact_url)
         return JSONResponse(content=response)
     except Exception as e:
-        request_manager.capture_error(ctx, e, code="tool_calling_failed")
+        message, code = _format_route_tool_calling_error(e)
+        request_manager.capture_error(ctx, message, code=code)
         return JSONResponse(
             content={
                 "error": {
-                    "message": f"执行错误: {e}",
+                    "message": message,
                     "type": "execution_error",
-                    "code": "tool_calling_failed",
+                    "code": code,
                 }
             },
             status_code=500,
@@ -2271,7 +2496,8 @@ async def _stream_tool_calling_with_tab_index(
             yield chunk
             await asyncio.sleep(0)
     except Exception as e:
-        yield _pack_error(f"执行错误: {str(e)}", "tool_calling_failed")
+        message, code = _format_route_tool_calling_error(e)
+        yield _pack_error(message, code)
 
 
 async def _stream_tool_calling_with_route_domain(
@@ -2294,7 +2520,8 @@ async def _stream_tool_calling_with_route_domain(
             yield chunk
             await asyncio.sleep(0)
     except Exception as e:
-        yield _pack_error(f"执行错误: {str(e)}", "tool_calling_failed")
+        message, code = _format_route_tool_calling_error(e)
+        yield _pack_error(message, code)
 
 
 async def _stream_tool_calling_with_exact_url(
@@ -2317,7 +2544,8 @@ async def _stream_tool_calling_with_exact_url(
             yield chunk
             await asyncio.sleep(0)
     except Exception as e:
-        yield _pack_error(f"执行错误: {str(e)}", "tool_calling_failed")
+        message, code = _format_route_tool_calling_error(e)
+        yield _pack_error(message, code)
 
 
 # ================= 预设管理 API =================

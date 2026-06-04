@@ -320,11 +320,11 @@
     {
       "id": "cmd_cf_pagecheck_arena_verify",
       "name": "自动过cf盾",
-      "enabled": false,
+      "enabled": true,
       "mode": "simple",
       "trigger": {
         "type": "page_check",
-        "value": "protected by cloudflare || verify you are human || checking your browser || 确认您是真人 || cloudflare",
+        "value": "protected by cloudflare || verify you are human || checking your browser || 确认您是真人 || Security Verification",
         "command_id": "",
         "action_ref": "",
         "match_rule": "equals",
@@ -786,8 +786,8 @@
       "group_name": "gemini",
       "script": "",
       "script_lang": "javascript",
-      "last_triggered": 1779995273.9857564,
-      "trigger_count": 2,
+      "last_triggered": 1780549994.275459,
+      "trigger_count": 6,
       "stop_on_error": false,
       "log_enabled": true,
       "log_level": "GLOBAL"
@@ -984,8 +984,8 @@
       "script": "",
       "script_lang": "javascript",
       "id": "cmd_0020e346",
-      "last_triggered": 1779793157.0354216,
-      "trigger_count": 12,
+      "last_triggered": 1780558119.8876357,
+      "trigger_count": 6,
       "log_enabled": true,
       "log_level": "GLOBAL",
       "stop_on_error": false
@@ -1033,8 +1033,8 @@
       "group_name": "gemini",
       "script": "",
       "script_lang": "javascript",
-      "last_triggered": 1780072433.6104295,
-      "trigger_count": 6,
+      "last_triggered": 1780563984.550632,
+      "trigger_count": 4029,
       "log_enabled": false,
       "log_level": "GLOBAL",
       "stop_on_error": false
