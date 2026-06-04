@@ -578,6 +578,13 @@ class NetworkMonitor:
             if self._should_stop():
                 return False
 
+            try:
+                if hasattr(self.tab, "states") and not self.tab.states.is_alive:
+                    logger.warning("[NetworkMonitor] 检测到标签页已被关闭，强行退出网络监听")
+                    return False
+            except Exception:
+                pass
+
             step_timeout = min(remaining, self.CANCEL_CHECK_SLICE)
             if not self._listen_is_active():
                 self._ensure_listening("wait_inactive")

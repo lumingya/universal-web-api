@@ -228,12 +228,13 @@ def _download_image(url: str) -> Optional[str]:
         
         # 尝试从 URL 或 Content-Type 推断格式
         ext = _guess_extension(url, content_type)
-        
+
         # 验证图片格式
         try:
-            img = Image.open(io.BytesIO(image_bytes))
-            img.verify()
-            ext = f".{img.format.lower()}" if img.format else ext
+            with io.BytesIO(image_bytes) as image_buffer:
+                with Image.open(image_buffer) as img:
+                    img.verify()
+                    ext = f".{img.format.lower()}" if img.format else ext
         except Exception:
             logger.warning("[IMAGE] 图片格式验证失败")
         

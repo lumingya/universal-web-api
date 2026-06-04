@@ -701,6 +701,8 @@ class _GlobalNetworkInterceptionManager:
     """
 
     LISTENER_STOP_TIMEOUT_SEC = 2.0
+    LISTENER_CLEAR_INTERVAL_SEC = 60.0
+    LISTENER_CLEAR_EVENT_INTERVAL = 200
 
     def __init__(
         self,
@@ -869,6 +871,24 @@ class _GlobalNetworkInterceptionManager:
 
         return True
 
+    @staticmethod
+    def _safe_clear_listener(tab: Any, session_id: str, reason: str) -> bool:
+        listener = getattr(tab, "listen", None)
+        if listener is None:
+            return True
+
+        try:
+            clear = getattr(listener, "clear", None)
+            if callable(clear):
+                clear()
+                logger.debug(f"[GlobalNet] 清理监听残留: {session_id} ({reason})")
+                return True
+        except Exception as e:
+            logger.debug(f"[GlobalNet] 清理监听残留失败: {session_id}, reason={reason}, err={e}")
+            return False
+
+        return False
+
     def _should_cleanup_worker_listener(
         self,
         session_id: str,
@@ -986,6 +1006,8 @@ class _GlobalNetworkInterceptionManager:
     def _worker_loop(self, session_id: str, stop_event: threading.Event):
         tab = None
         listening = False
+        last_listener_clear_at = time.monotonic()
+        events_since_listener_clear = 0
 
         try:
             while not stop_event.is_set():
@@ -1004,10 +1026,18 @@ class _GlobalNetworkInterceptionManager:
                         tab.listen._reuse_driver = True
                         tab.listen.start(self._listen_pattern)
                         listening = True
+                        last_listener_clear_at = time.monotonic()
+                        events_since_listener_clear = 0
                     except Exception as e:
                         logger.debug(f"[GlobalNet] 启动监听失败: {session_id}, err={e}")
                         stop_event.wait(self._retry_delay)
                         continue
+
+                now = time.monotonic()
+                if listening and now - last_listener_clear_at >= self.LISTENER_CLEAR_INTERVAL_SEC:
+                    if self._safe_clear_listener(tab, session_id, "interval"):
+                        last_listener_clear_at = now
+                        events_since_listener_clear = 0
 
                 try:
                     response = tab.listen.wait(timeout=self._wait_timeout)
@@ -1032,6 +1062,11 @@ class _GlobalNetworkInterceptionManager:
 
                 event = self._extract_event(response)
                 self._dispatch_event(session, event)
+                events_since_listener_clear += 1
+                if events_since_listener_clear >= self.LISTENER_CLEAR_EVENT_INTERVAL:
+                    if self._safe_clear_listener(tab, session_id, "event_budget"):
+                        last_listener_clear_at = time.monotonic()
+                        events_since_listener_clear = 0
 
         finally:
             if tab is not None and self._should_cleanup_worker_listener(session_id, stop_event, tab):
@@ -3668,6 +3703,7 @@ class TabPoolManager:
         monitor = None
         context_ids = set()
         maintenance_executor = None
+        shared_raw_tab_ids: List[str] = []
         with self._lock:
             self._shutdown = True
             monitor = self._global_network_monitor
@@ -3675,15 +3711,30 @@ class TabPoolManager:
             self._global_network_monitor = None
             maintenance_executor = self._maintenance_executor
             self._maintenance_executor = None
+            raw_id_to_persistent = dict(self._raw_id_to_persistent)
+            persistent_to_session_id = dict(self._persistent_to_session_id)
+            sessions_by_id = dict(self._tabs)
+            for raw_id, persistent_idx in raw_id_to_persistent.items():
+                session_id = persistent_to_session_id.get(persistent_idx)
+                session = sessions_by_id.get(session_id) if session_id else None
+                if session is None or session.is_isolated_context:
+                    continue
+                normalized_raw_id = str(raw_id or "").strip()
+                if normalized_raw_id:
+                    shared_raw_tab_ids.append(normalized_raw_id)
 
         if monitor:
             monitor.shutdown()
         if maintenance_executor:
             maintenance_executor.shutdown(wait=False, cancel_futures=True)
 
+        for raw_tab_id in shared_raw_tab_ids:
+            self._close_raw_tab(raw_tab_id)
+
+        for context_id in context_ids:
+            self._dispose_browser_context(context_id)
+
         with self._lock:
-            for context_id in context_ids:
-                self._dispose_browser_context(context_id)
             self._tabs.clear()
             self._known_tab_ids.clear()
             self._active_session_id = None  # 🆕 重置活动标签页记录

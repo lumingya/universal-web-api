@@ -765,7 +765,7 @@ def _build_rejected_assistant_message(
         return {
             "role": "assistant",
             "content": content if content not in ("", None) else None,
-            "tool_calls": copy.deepcopy(tool_calls),
+            "tool_calls": [_truncate_rejected_tool_call_payload(item) for item in tool_calls if isinstance(item, dict)],
         }
 
     preview = str(raw_text or "").strip()
@@ -1044,16 +1044,45 @@ def _trim_retry_text(text: str, limit: int) -> str:
     return value[:head] + "\n...\n" + value[-tail:]
 
 
+def _get_rejected_tool_argument_preview_limit() -> int:
+    raw_value = str(os.getenv("TOOL_CALLING_REJECTED_ARGUMENT_PREVIEW_CHARS", "500") or "500").strip()
+    try:
+        value = int(raw_value)
+    except Exception:
+        value = 500
+    return max(0, min(5000, value))
+
+
+def _truncate_rejected_tool_call_payload(tool_call: Dict[str, Any]) -> Dict[str, Any]:
+    cloned = copy.deepcopy(tool_call)
+    function_data = cloned.get("function")
+    if not isinstance(function_data, dict):
+        return cloned
+
+    arguments = function_data.get("arguments")
+    if arguments is None:
+        return cloned
+
+    limit = _get_rejected_tool_argument_preview_limit()
+    if limit <= 0:
+        function_data["arguments"] = ""
+        return cloned
+
+    function_data["arguments"] = _trim_retry_text(str(arguments), limit)
+    return cloned
+
+
 def _summarize_tool_calls_for_feedback(parsed: Dict[str, Any]) -> List[Dict[str, Any]]:
     summary: List[Dict[str, Any]] = []
     for item in parsed.get("tool_calls") or []:
         if not isinstance(item, dict):
             continue
-        function_data = item.get("function") if isinstance(item.get("function"), dict) else {}
-        arguments = _decode_tool_arguments(item)
+        compact_item = _truncate_rejected_tool_call_payload(item)
+        function_data = compact_item.get("function") if isinstance(compact_item.get("function"), dict) else {}
+        arguments = _decode_tool_arguments(compact_item)
         summary.append(
             {
-                "id": str(item.get("id", "") or ""),
+                "id": str(compact_item.get("id", "") or ""),
                 "name": str(function_data.get("name", "") or ""),
                 "arguments": arguments if arguments is not None else function_data.get("arguments"),
             }

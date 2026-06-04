@@ -667,7 +667,7 @@ return (function() {
 
     def _run_periodic_checks(self):
         try:
-            commands = self._load_commands()
+            commands = self._load_commands_for_checks()
         except Exception:
             return
         if not commands:
@@ -1143,6 +1143,15 @@ return (function() {
             snapshot = self._commands_cache
         return self._merge_runtime_stats_into_commands(copy.deepcopy(snapshot))
 
+    def _load_commands_for_checks(self) -> List[Dict]:
+        """Load a lightweight command snapshot for read-mostly trigger checks."""
+        with self._commands_lock:
+            self._get_config_engine()
+            self._refresh_commands_if_changed()
+            snapshot = self._commands_cache
+            commands = [dict(cmd) for cmd in snapshot if isinstance(cmd, dict)]
+        return self._merge_runtime_stats_into_commands(commands)
+
     def list_commands(self) -> List[Dict]:
         """获取所有命令"""
         return self._load_commands()
@@ -1558,7 +1567,7 @@ return (function() {
         """
         self.ensure_scheduler_running()
         try:
-            commands = self._load_commands()
+            commands = self._load_commands_for_checks()
         except Exception as e:
             logger.debug(f"命令加载失败，跳过触发检查: {e}")
             return
@@ -1611,7 +1620,7 @@ return (function() {
                 del bucket[:-50]
 
         try:
-            commands = self._load_commands()
+            commands = self._load_commands_for_checks()
         except Exception as e:
             logger.debug(f"命令加载失败，跳过网络事件触发: {e}")
             return False
@@ -1644,7 +1653,7 @@ return (function() {
     def has_network_interception_for_session(self, session: 'TabSession') -> bool:
         """当前会话是否存在可生效的网络异常拦截触发器。"""
         try:
-            commands = self._load_commands()
+            commands = self._load_commands_for_checks()
         except Exception:
             return False
 
@@ -1664,7 +1673,7 @@ return (function() {
         仅用于事件监听，不要求完全精准。
         """
         try:
-            commands = self._load_commands()
+            commands = self._load_commands_for_checks()
         except Exception:
             return "http"
 

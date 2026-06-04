@@ -117,6 +117,7 @@ class CommandEngineActionsMixin:
         interrupt_context: Optional[Dict[str, Any]] = None,
         trigger_rollback: Optional[Dict[str, Any]] = None,
     ) -> bool:
+        command = copy.deepcopy(command)
         exec_key = (command["id"], session.id)
         priority = self._get_command_priority(command)
         baseline = self._get_request_priority_baseline()

@@ -15,7 +15,7 @@ import asyncio
 import queue
 import threading
 import uuid
-from typing import Optional, Any, Dict, List
+from typing import Optional, Any, Dict, List, Callable
 
 from fastapi import APIRouter, Request, HTTPException, Header, Depends
 from fastapi.responses import StreamingResponse, JSONResponse
@@ -47,6 +47,83 @@ logger = get_logger("API.CHAT")
 router = APIRouter()
 STREAM_QUEUE_POLL_TIMEOUT = 0.5
 SSE_HEARTBEAT_INTERVAL = 15.0
+
+
+class _ToolCallingExecutionCancelled(Exception):
+    """Raised when a non-stream tool-calling worker is still running after cancellation."""
+
+
+def _set_worker_future_result(
+    future: "asyncio.Future[Any]",
+    *,
+    result: Any = None,
+    error: Optional[BaseException] = None,
+) -> None:
+    if future.done():
+        return
+    if error is not None:
+        future.set_exception(error)
+        return
+    future.set_result(result)
+
+
+def _get_tool_calling_cancel_reason(ctx: RequestContext) -> str:
+    reason = str(ctx.cancel_reason or "").strip()
+    return reason or "tool_calling_cancelled"
+
+
+async def _run_tracked_tool_calling_worker(
+    worker_fn: Callable[[], Any],
+    *,
+    ctx: RequestContext,
+    worker_state: Dict[str, Any],
+    label: str,
+) -> Any:
+    loop = asyncio.get_running_loop()
+    result_future: "asyncio.Future[Any]" = loop.create_future()
+
+    def worker() -> None:
+        try:
+            result = worker_fn()
+        except Exception as exc:
+            loop.call_soon_threadsafe(
+                lambda exc=exc: _set_worker_future_result(
+                    result_future,
+                    error=exc,
+                )
+            )
+        else:
+            loop.call_soon_threadsafe(
+                lambda result=result: _set_worker_future_result(
+                    result_future,
+                    result=result,
+                )
+            )
+
+    worker_thread = threading.Thread(
+        target=worker,
+        daemon=True,
+        name=f"tool-calling-{label}",
+    )
+    worker_state["thread"] = worker_thread
+    worker_state["label"] = label
+    worker_thread.start()
+
+    try:
+        while True:
+            if ctx.should_stop():
+                raise _ToolCallingExecutionCancelled(_get_tool_calling_cancel_reason(ctx))
+            try:
+                return await asyncio.wait_for(
+                    asyncio.shield(result_future),
+                    timeout=STREAM_QUEUE_POLL_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                continue
+    finally:
+        if result_future.done() and worker_state.get("thread") is worker_thread:
+            worker_state["thread"] = None
+            worker_state["label"] = None
 
 
 def _put_worker_queue_item(
@@ -118,6 +195,43 @@ def _retire_bound_tab_after_worker_leak(ctx: RequestContext, reason: str) -> Non
 
         if hasattr(session, "mark_error"):
             session.mark_error(reason)
+        raw_tab_id = ""
+        if pool is not None:
+            try:
+                persistent_index = int(getattr(session, "persistent_index", 0) or 0)
+                for candidate_raw_id, candidate_index in getattr(pool, "_raw_id_to_persistent", {}).items():
+                    if int(candidate_index or 0) == persistent_index:
+                        raw_tab_id = str(candidate_raw_id or "").strip()
+                        break
+            except Exception:
+                raw_tab_id = ""
+        if not raw_tab_id:
+            try:
+                raw_tab_id = str(getattr(getattr(session, "tab", None), "tab_id", "") or "").strip()
+            except Exception:
+                raw_tab_id = ""
+
+        closed_raw_tab = False
+        if pool is not None:
+            try:
+                monitor = getattr(pool, "_global_network_monitor", None)
+                if monitor is not None and hasattr(monitor, "request_stop_for_session"):
+                    monitor.request_stop_for_session(tab_id, reason=reason, detach=True)
+            except Exception as e:
+                logger.debug(f"[{tab_id}] 停止残留标签页全局监听失败（忽略）: {e}")
+
+            if raw_tab_id and hasattr(pool, "_close_raw_tab"):
+                try:
+                    closed_raw_tab = bool(pool._close_raw_tab(raw_tab_id))
+                except Exception as e:
+                    logger.debug(f"[{tab_id}] 关闭残留底层标签页失败（忽略）: raw={raw_tab_id}, err={e}")
+
+            context_id = str(getattr(session, "browser_context_id", "") or "").strip()
+            if closed_raw_tab and context_id and hasattr(pool, "_dispose_browser_context"):
+                try:
+                    pool._dispose_browser_context(context_id)
+                except Exception as e:
+                    logger.debug(f"[{tab_id}] 释放残留浏览器上下文失败（忽略）: {e}")
         if pool is not None and hasattr(pool, "_condition"):
             try:
                 with pool._condition:
@@ -125,8 +239,9 @@ def _retire_bound_tab_after_worker_leak(ctx: RequestContext, reason: str) -> Non
             except Exception:
                 pass
         logger.warning(
-            f"[{tab_id}] 工作线程未能及时退出，已标记标签页为 ERROR 等待池清理 "
-            f"(request={ctx.request_id}, reason={reason})"
+            f"[{tab_id}] 工作线程未能及时退出，已标记标签页为 ERROR 并尝试断开底层标签页 "
+            f"(request={ctx.request_id}, reason={reason}, raw={raw_tab_id or '-'}, "
+            f"closed={closed_raw_tab})"
         )
     except Exception as e:
         logger.debug(f"标记残留工作线程标签页失败（忽略）: {e}")
@@ -1321,7 +1436,7 @@ async def _stream_with_lifecycle(
     finally:
         if worker_thread and worker_thread.is_alive():
             ctx.request_cancel("cleanup")
-            worker_thread.join(timeout=2.0)
+            worker_thread.join(timeout=5.0)
             if worker_thread.is_alive():
                 _retire_bound_tab_after_worker_leak(ctx, "worker_cleanup_timeout")
 
@@ -1437,6 +1552,7 @@ async def _run_tool_calling_async(
     body: ChatRequest,
     request_id: str,
     stop_checker=None,
+    worker_state: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     tools, tool_choice = normalize_tool_request(
         tools=body.tools,
@@ -1444,18 +1560,25 @@ async def _run_tool_calling_async(
         functions=body.functions,
         function_call=body.function_call,
     )
+    tracked_worker_state = worker_state if isinstance(worker_state, dict) else {}
 
     async def _round_executor(browser_messages: List[Dict[str, str]]) -> str:
-        return await asyncio.to_thread(
-            lambda: _extract_assistant_content(
-                _execute_browser_non_stream_messages(
-                    browser=browser,
-                    messages=browser_messages,
-                    request_id=request_id,
-                    stop_checker=stop_checker,
-                )
+        worker_fn = lambda: _extract_assistant_content(
+            _execute_browser_non_stream_messages(
+                browser=browser,
+                messages=browser_messages,
+                request_id=request_id,
+                stop_checker=stop_checker,
             )
         )
+        if isinstance(tracked_worker_state.get("ctx"), RequestContext):
+            return await _run_tracked_tool_calling_worker(
+                worker_fn,
+                ctx=tracked_worker_state["ctx"],
+                worker_state=tracked_worker_state,
+                label=f"{request_id[:8]}-round",
+            )
+        return await asyncio.to_thread(worker_fn)
 
     parsed = await complete_tool_calling_roundtrip_async(
         messages=body.messages,
@@ -1474,6 +1597,7 @@ async def _complete_tool_calling_with_lifecycle(
     ctx: RequestContext,
 ) -> Dict[str, Any]:
     disconnect_task = None
+    worker_state: Dict[str, Any] = {"thread": None, "label": None, "ctx": ctx}
     try:
         disconnect_task = asyncio.create_task(
             watch_client_disconnect(request, ctx, check_interval=0.3)
@@ -1487,6 +1611,7 @@ async def _complete_tool_calling_with_lifecycle(
             body,
             ctx.request_id,
             ctx.should_stop,
+            worker_state=worker_state,
         )
         request_manager.capture_response_payload(ctx, response)
 
@@ -1495,9 +1620,20 @@ async def _complete_tool_calling_with_lifecycle(
 
         return response
 
+    except _ToolCallingExecutionCancelled:
+        if not ctx.should_stop():
+            ctx.request_cancel("tool_calling_cancelled")
+        raise asyncio.CancelledError()
+    except RuntimeError as e:
+        if str(e) == "tool_calling_cancelled" and ctx.should_stop():
+            raise asyncio.CancelledError()
+        logger.error(f"tool_calling_failed: {e}")
+        request_manager.capture_error(ctx, e, code="tool_calling_failed")
+        ctx.mark_failed(str(e))
+        raise
     except asyncio.CancelledError:
         ctx.request_cancel("coroutine_cancelled")
-        raise
+        raise asyncio.CancelledError()
     except Exception as e:
         logger.error(f"tool_calling_failed: {e}")
         request_manager.capture_error(ctx, e, code="tool_calling_failed")
@@ -1510,6 +1646,14 @@ async def _complete_tool_calling_with_lifecycle(
                 await disconnect_task
             except asyncio.CancelledError:
                 pass
+        worker_thread = worker_state.get("thread")
+        if isinstance(worker_thread, threading.Thread) and worker_thread.is_alive():
+            ctx.request_cancel("cleanup")
+            worker_thread.join(timeout=5.0)
+            if worker_thread.is_alive():
+                _retire_bound_tab_after_worker_leak(ctx, "worker_cleanup_timeout")
+        worker_state["thread"] = None
+        worker_state["label"] = None
         request_manager.finish_request(ctx, success=(ctx.status == RequestStatus.COMPLETED))
 
 

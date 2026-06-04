@@ -26,6 +26,7 @@ logger = get_logger("FPASTE")
 # 项目根目录下的 temp 文件夹
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 TEMP_DIR = _PROJECT_ROOT / "temp"
+TRANSCODED_CACHE_DIR = _PROJECT_ROOT / "download_images" / "_transcoded"
 
 
 def _temp_log_label(filepath: str) -> str:
@@ -48,22 +49,26 @@ def cleanup_temp_dir():
     - 程序启动时
     - 程序退出时
     """
-    if not TEMP_DIR.exists():
-        return
-    
     try:
         count = 0
-        for item in TEMP_DIR.iterdir():
-            try:
-                if item.is_file():
-                    item.unlink()
-                    count += 1
-                elif item.is_dir():
-                    shutil.rmtree(item)
-                    count += 1
-            except Exception as e:
-                logger.debug(f"清理临时文件失败: {_temp_log_label(str(item))} - {e}")
-        
+        for target_dir, label_prefix in (
+            (TEMP_DIR, "temp"),
+            (TRANSCODED_CACHE_DIR, "download_images/_transcoded"),
+        ):
+            if not target_dir.exists():
+                continue
+            for item in target_dir.iterdir():
+                try:
+                    if item.is_file():
+                        item.unlink()
+                        count += 1
+                    elif item.is_dir():
+                        shutil.rmtree(item)
+                        count += 1
+                except Exception as e:
+                    short_name = item.name or "<unknown>"
+                    logger.debug(f"清理临时文件失败: {label_prefix}/{short_name} - {e}")
+
         if count > 0:
             logger.info(f"已清理 {count} 个临时文件")
     except Exception as e:

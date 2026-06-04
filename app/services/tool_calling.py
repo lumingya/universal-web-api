@@ -10,7 +10,6 @@ responses by:
 
 from __future__ import annotations
 
-import copy
 from typing import Any, Dict, List, Optional
 
 from app.services.tool_calling_common import (
@@ -48,6 +47,11 @@ from app.services.tool_calling_validation_retry import (
     _summarize_tool_response_errors,
 )
 
+
+def _copy_message_list_shallow(messages: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+    return [dict(msg) if isinstance(msg, dict) else msg for msg in (messages or [])]
+
+
 def complete_tool_calling_roundtrip(
     messages: List[Dict[str, Any]],
     tools: List[Dict[str, Any]],
@@ -56,7 +60,7 @@ def complete_tool_calling_roundtrip(
     round_executor: ToolRoundExecutor,
     stop_checker=None,
 ) -> Dict[str, Any]:
-    conversation = copy.deepcopy(messages or [])
+    conversation = _copy_message_list_shallow(messages)
     retry_limit = _get_tool_validation_retry_limit()
     retry_strategy = _get_tool_retry_strategy()
     total_attempts = retry_limit + 1
@@ -162,7 +166,7 @@ async def complete_tool_calling_roundtrip_async(
     round_executor: AsyncToolRoundExecutor,
     stop_checker=None,
 ) -> Dict[str, Any]:
-    conversation = copy.deepcopy(messages or [])
+    conversation = _copy_message_list_shallow(messages)
     retry_limit = _get_tool_validation_retry_limit()
     retry_strategy = _get_tool_retry_strategy()
     total_attempts = retry_limit + 1

@@ -464,10 +464,22 @@ async def lifespan(app: FastAPI):
         logger.debug(f"关闭命令引擎: {e}")
 
     try:
+        from app.core.background_image_downloader import background_image_downloader
+        background_image_downloader.shutdown()
+    except Exception as e:
+        logger.debug(f"关闭后台图片下载器: {e}")
+
+    try:
         browser = get_browser(auto_connect=False)
         browser.close()
     except Exception as e:
         logger.debug(f"关闭浏览器: {e}")
+
+    try:
+        from app.utils.file_paste import cleanup_temp_dir
+        cleanup_temp_dir()
+    except Exception as e:
+        logger.debug(f"关闭时清理临时目录: {e}")
 
     logger.info("👋 服务已停止")
 

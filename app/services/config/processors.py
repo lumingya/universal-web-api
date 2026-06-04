@@ -8,6 +8,7 @@ app/services/config/processors.py - 配置处理器
 """
 
 import json
+import importlib.util
 import os
 import re
 import time
@@ -24,6 +25,9 @@ from .managers import GlobalConfigManager
 
 
 logger = get_logger("CFG_PRC")
+
+
+_BS4_PARSER = "lxml" if importlib.util.find_spec("lxml") is not None else "html.parser"
 
 
 # ================= 常量 =================
@@ -86,41 +90,43 @@ class HTMLCleaner:
         """深度清理 HTML"""
         logger.debug("开始 HTML 清理...")
         original_length = len(html)
-        
-        soup = BeautifulSoup(html, 'html.parser')
-        
-        interactive_elements = self._extract_interactive_elements(soup)
-        
-        for tag in soup(self.TAGS_TO_REMOVE):
-            tag.decompose()
-        
-        for element in soup(text=lambda t: isinstance(t, bs4.element.Comment)):
-            element.extract()
-        
-        for tag in soup.find_all(True):
-            if tag.string and len(tag.string) > self.text_truncate:
-                tag.string = tag.string[:self.text_truncate] + "..."
-            
-            attrs = dict(tag.attrs)
-            for attr in attrs:
-                if attr not in self.ALLOWED_ATTRS:
-                    del tag.attrs[attr]
-            
-            if 'class' in tag.attrs and isinstance(tag.attrs['class'], list):
-                tag.attrs['class'] = " ".join(tag.attrs['class'])
-        
-        clean_html = str(soup.body) if soup.body else str(soup)
-        clean_html = re.sub(r'\s+', ' ', clean_html).strip()
-        
-        if len(clean_html) > self.max_chars:
-            logger.warning(f"HTML 过长 ({len(clean_html)})，执行智能截断...")
-            clean_html = self._smart_truncate(clean_html, interactive_elements)
-        
-        final_length = len(clean_html)
-        reduction = 100 - (final_length / original_length * 100) if original_length > 0 else 0
-        logger.info(f"HTML 清理完成: {original_length} → {final_length} 字符 (减少 {reduction:.1f}%)")
-        
-        return clean_html
+
+        soup = BeautifulSoup(html, _BS4_PARSER)
+        try:
+            interactive_elements = self._extract_interactive_elements(soup)
+
+            for tag in soup(self.TAGS_TO_REMOVE):
+                tag.decompose()
+
+            for element in soup(text=lambda t: isinstance(t, bs4.element.Comment)):
+                element.extract()
+
+            for tag in soup.find_all(True):
+                if tag.string and len(tag.string) > self.text_truncate:
+                    tag.string = tag.string[:self.text_truncate] + "..."
+
+                attrs = dict(tag.attrs)
+                for attr in attrs:
+                    if attr not in self.ALLOWED_ATTRS:
+                        del tag.attrs[attr]
+
+                if 'class' in tag.attrs and isinstance(tag.attrs['class'], list):
+                    tag.attrs['class'] = " ".join(tag.attrs['class'])
+
+            clean_html = str(soup.body) if soup.body else str(soup)
+            clean_html = re.sub(r'\s+', ' ', clean_html).strip()
+
+            if len(clean_html) > self.max_chars:
+                logger.warning(f"HTML 过长 ({len(clean_html)})，执行智能截断...")
+                clean_html = self._smart_truncate(clean_html, interactive_elements)
+
+            final_length = len(clean_html)
+            reduction = 100 - (final_length / original_length * 100) if original_length > 0 else 0
+            logger.info(f"HTML 清理完成: {original_length} → {final_length} 字符 (减少 {reduction:.1f}%)")
+
+            return clean_html
+        finally:
+            soup.decompose()
     
     def _extract_interactive_elements(self, soup: BeautifulSoup) -> str:
         elements = []
@@ -187,9 +193,10 @@ class HTMLCleaner:
         return result
     
     def _extract_core_area(self, html: str) -> Optional[str]:
+        soup = None
         try:
-            soup = BeautifulSoup(html, 'html.parser')
-            
+            soup = BeautifulSoup(html, _BS4_PARSER)
+
             for selector in self.CORE_AREA_SELECTORS:
                 try:
                     element = soup.select_one(selector)
@@ -204,6 +211,9 @@ class HTMLCleaner:
         except Exception as e:
             logger.debug(f"提取核心区域失败: {e}")
             return None
+        finally:
+            if soup is not None:
+                soup.decompose()
     
     def _truncate_at_tag_boundary(self, html: str, max_len: int, from_end: bool = False) -> str:
         if len(html) <= max_len:

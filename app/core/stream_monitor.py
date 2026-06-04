@@ -733,6 +733,13 @@ class StreamMonitor:
                 logger.info("输出阶段被取消")
                 break
 
+            try:
+                if hasattr(self.tab, "states") and not self.tab.states.is_alive:
+                    logger.warning("[StreamMonitor] 检测到标签页已被关闭，强行退出 DOM 轮询")
+                    return
+            except Exception:
+                pass
+
             snap = self._get_snapshot_prefer_anchor(selector, ctx.output_target_anchor)
 
             current_count = snap['groups_count']

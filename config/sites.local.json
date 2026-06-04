@@ -1,3 +1,5 @@
 {
-  "default_presets": {}
+  "default_presets": {
+    "arena.ai": "主预设-图片模式"
+  }
 }

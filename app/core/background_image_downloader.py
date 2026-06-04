@@ -88,6 +88,7 @@ class BackgroundImageDownloader:
         max_workers: int = 4,
         min_bytes: int = 1000,
         max_entries: int = 1000,
+        max_pending: int = 100,
     ):
         self._save_dir = Path(save_dir)
         self._executor = ThreadPoolExecutor(
@@ -98,6 +99,8 @@ class BackgroundImageDownloader:
         self._entries: OrderedDict[str, Dict[str, Any]] = OrderedDict()
         self._min_bytes = max(1, int(min_bytes or 1))
         self._max_entries = max(1, int(max_entries or 1))
+        self._max_pending = max(1, int(max_pending or 1))
+        self._shutdown = False
 
     def start_download(
         self,
@@ -111,6 +114,9 @@ class BackgroundImageDownloader:
             return {}
 
         with self._lock:
+            if self._shutdown:
+                return {}
+
             entry = self._entries.get(normalized)
             if entry is not None:
                 self._entries.move_to_end(normalized)
@@ -123,6 +129,17 @@ class BackgroundImageDownloader:
 
             if entry and str(entry.get("status") or "") in {"queued", "downloading"}:
                 return self._snapshot_entry(entry)
+
+            pending = sum(
+                1
+                for item in self._entries.values()
+                if str((item or {}).get("status") or "") in {"queued", "downloading"}
+            )
+            if pending >= self._max_pending:
+                logger.warning(
+                    f"后台图片下载队列已达上限，跳过预取: pending={pending}, limit={self._max_pending}"
+                )
+                return {}
 
             entry = {
                 "url": normalized,
@@ -139,12 +156,20 @@ class BackgroundImageDownloader:
             self._entries[normalized] = entry
             self._entries.move_to_end(normalized)
             self._prune_entries_locked()
-            entry["_future"] = self._executor.submit(
-                self._download_worker,
-                normalized,
-                dict(cookies or {}),
-                dict(headers or {}),
-            )
+            try:
+                entry["_future"] = self._executor.submit(
+                    self._download_worker,
+                    normalized,
+                    dict(cookies or {}),
+                    dict(headers or {}),
+                )
+            except RuntimeError:
+                entry["status"] = "failed"
+                entry["error"] = "downloader_shutdown"
+                event = entry.get("_event")
+                if isinstance(event, threading.Event):
+                    event.set()
+                return {}
             return self._snapshot_entry(entry)
 
     def get_download_result(
@@ -348,6 +373,24 @@ class BackgroundImageDownloader:
                 continue
             self._entries.pop(key, None)
             overflow -= 1
+
+    def shutdown(self) -> None:
+        with self._lock:
+            if self._shutdown:
+                return
+            self._shutdown = True
+            for entry in self._entries.values():
+                status = str((entry or {}).get("status") or "")
+                if status not in {"queued", "downloading"}:
+                    continue
+                entry["status"] = "failed"
+                entry["error"] = "downloader_shutdown"
+                entry["updated_at"] = time.time()
+                event = entry.get("_event")
+                if isinstance(event, threading.Event):
+                    event.set()
+
+        self._executor.shutdown(wait=False, cancel_futures=True)
 
     def _snapshot_entry(self, entry: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(entry, dict):

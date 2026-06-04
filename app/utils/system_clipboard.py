@@ -80,13 +80,17 @@ def copy_image_to_native_clipboard(image_path: str) -> None:
 
     from PIL import Image
 
-    image = Image.open(image_path)
-    if image.mode != "RGB":
-        image = image.convert("RGB")
-
-    output = io.BytesIO()
-    image.save(output, "BMP")
-    data = output.getvalue()[14:]
+    with Image.open(image_path) as image:
+        with io.BytesIO() as output:
+            if image.mode != "RGB":
+                converted = image.convert("RGB")
+                try:
+                    converted.save(output, "BMP")
+                finally:
+                    converted.close()
+            else:
+                image.save(output, "BMP")
+            data = output.getvalue()[14:]
 
     win32clipboard.OpenClipboard()
     try:
