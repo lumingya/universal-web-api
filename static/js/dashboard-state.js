@@ -55,6 +55,7 @@ function saveStoredSitesCache(sites, currentDomain) {
             hasLoadedSettings: false,
             isSaving: false,
             isLoading: false,
+            configLoadSeq: 0,
             showJsonPreview: false,
             showTokenDialog: false,
             showStepTemplates: false,
@@ -102,12 +103,21 @@ function saveStoredSitesCache(sites, currentDomain) {
                 total_output_tokens: 0,
                 cpu_percent: 0,
                 project_cpu: 0,
-                memory_percent: 0
+                memory_percent: 0,
+                project_memory_percent: 0
             },
 
             // 认证
             authEnabled: false,
             tempToken: '',
+            hasTokenPresent: (() => {
+                try {
+                    return !!localStorage.getItem('api_token')
+                } catch (e) {
+                    return false
+                }
+            })(),
+            tokenStorageHandler: null,
 
             // 选择器测试
             currentTestingSelectorKey: '',
@@ -123,17 +133,27 @@ function saveStoredSitesCache(sites, currentDomain) {
             pauseLogs: false,
             lastLogTimestamp: 0,
             lastLogSeq: 0,
+            lastBackgroundLogPollAt: 0,
+            logGeneration: 0,
             logPollingTimer: null,
+            logVisibilityHandler: null,
+            isPollingLogs: false,
+            logPollPending: false,
             systemStatsTimer: null,
+            systemStatsVisibilityHandler: null,
             isFetchingSystemStats: false,
+            systemStatsRequestPromise: null,
 
             // 请求监控
             requestHistory: [],
             requestHistoryLoading: false,
             requestHistoryError: '',
             requestHistoryTimer: null,
+            requestHistoryVisibilityHandler: null,
             requestHistoryRevision: '',
             requestHistoryFetchedAt: 0,
+            requestHistoryRequestSeq: 0,
+            requestHistoryPendingRefresh: null,
             requestHistoryDetailLoading: {},
 
             // ========== 导入功能 ==========
@@ -200,8 +220,10 @@ function saveStoredSitesCache(sites, currentDomain) {
                 error: ''
             },
             updateCheckTimer: null,
-            switchingTag: null,           // 正在切换ηγ tag
+            switchingTag: null,           // 正在切换的 tag
             switchStatusPolling: null,    // 轮询定时器
+            switchStatusPollingActive: false,
+            switchStatusPollingInFlight: false,
             showChangelogModal: false,
             changelogContent: '',
             changelogTag: '',
@@ -223,7 +245,7 @@ function saveStoredSitesCache(sites, currentDomain) {
         },
 
         hasToken() {
-            return !!localStorage.getItem('api_token')
+            return !!this.hasTokenPresent
         },
 
         // 过滤后的日志
@@ -309,6 +331,8 @@ function saveStoredSitesCache(sites, currentDomain) {
         this.initCollapsedStates()
         this.markTabAsVisited(this.activeTab)
         this.restoreSitesCache()
+        this.syncTokenPresence()
+        this.ensureTokenStorageHandler()
 
         this.initializeDashboard()
 
@@ -324,14 +348,13 @@ function saveStoredSitesCache(sites, currentDomain) {
     beforeUnmount() {
         this.stopLogPolling()
         this.stopRequestHistoryPolling()
-        if (this.systemStatsTimer) {
-            clearInterval(this.systemStatsTimer)
-            this.systemStatsTimer = null
-        }
+        this.stopSystemStatsPolling()
         if (this.updateCheckTimer) {
             clearTimeout(this.updateCheckTimer)
             this.updateCheckTimer = null
         }
+        this.stopSwitchStatusPolling()
+        this.stopTokenStorageHandler()
     },
     }
 

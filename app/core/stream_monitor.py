@@ -21,7 +21,7 @@ from app.core.background_image_downloader import (
 from app.core.elements import ElementFinder
 from app.core.extractors.base import BaseExtractor
 from app.core.extractors.deep_mode import DeepBrowserExtractor
-from app.models.schemas import is_modality_enabled
+from app.models.schemas import get_modality_run_policy, is_modality_enabled
 
 _GEMINI_IMAGE_PLACEHOLDER_RE = re.compile(
     r"^\s*https?://(?:[\w.-]+\.)?googleusercontent\.com/image_generation_content/\d+\s*$",
@@ -86,6 +86,21 @@ def _looks_like_image_generation_request(text: str) -> bool:
     return any(action in lowered for action in chinese_actions) and any(
         obj in lowered for obj in chinese_objects
     )
+
+
+def _normalize_snapshot_image_urls(raw_urls: Any) -> List[str]:
+    urls: List[str] = []
+    seen = set()
+    if not isinstance(raw_urls, list):
+        return urls
+
+    for raw_url in raw_urls:
+        normalized = normalize_remote_image_url(raw_url)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        urls.append(normalized)
+    return urls
 
 
 class StreamContext:
@@ -335,6 +350,21 @@ class StreamMonitor:
         self._last_visual_reply_log_info = None
         self._pending_send_baseline: Optional[Dict[str, Any]] = None
 
+    def _looks_like_expected_image_output(self, user_input: str = "") -> bool:
+        modalities = self._image_config.get("modalities") or {}
+        if not is_modality_enabled(modalities, "image"):
+            return False
+        image_run_policy = get_modality_run_policy(modalities, "image")
+        if image_run_policy == "always_probe":
+            return bool(self._image_extraction_enabled)
+        return bool(
+            self._image_extraction_enabled
+            and _looks_like_image_generation_request(user_input)
+        )
+
+    def _should_probe_dom_images(self) -> bool:
+        return bool(self._expect_image_output)
+
     def _sanitize_stream_text(self, text: str) -> str:
         if not text:
             return ""
@@ -411,13 +441,16 @@ class StreamMonitor:
         target = best[6]
         return target, self.extractor.get_anchor(target)
 
-    def capture_send_baseline(self, selector: str) -> Dict[str, Any]:
+    def capture_send_baseline(self, selector: str, user_input: str = "") -> Dict[str, Any]:
         """Capture the DOM reply baseline immediately after a submit action."""
+        expect_image_output = self._looks_like_expected_image_output(user_input)
         if isinstance(self._pending_send_baseline, dict):
             captured_at = float(self._pending_send_baseline.get("_captured_at") or 0.0)
             if (
                 self._pending_send_baseline.get("_captured_after_send")
                 and time.time() - captured_at < 30.0
+                and bool(self._pending_send_baseline.get("_expected_image_output", False))
+                == expect_image_output
             ):
                 logger.debug(
                     "[DOM_BASELINE] 保留已捕获的发送基线，避免重试动作覆盖 "
@@ -426,10 +459,14 @@ class StreamMonitor:
                 return dict(self._pending_send_baseline)
 
         self._last_visual_reply_log_info = None
+        previous_expect_image_output = bool(self._expect_image_output)
+        self._expect_image_output = expect_image_output
         baseline = self._get_latest_message_snapshot(selector)
+        self._expect_image_output = previous_expect_image_output
         self._pending_send_baseline = dict(baseline or {})
         self._pending_send_baseline["_captured_after_send"] = True
         self._pending_send_baseline["_captured_at"] = time.time()
+        self._pending_send_baseline["_expected_image_output"] = expect_image_output
         logger.debug(
             "[DOM_BASELINE] 已捕获发送后 DOM 基线: "
             f"count={int(baseline.get('groups_count', 0) or 0)}, "
@@ -468,11 +505,7 @@ class StreamMonitor:
         self._final_image_urls = []
         self._generating_checker = GeneratingStatusCache(self.tab)
         self._prefetched_image_urls = set()
-        self._expect_image_output = (
-            self._image_extraction_enabled
-            and is_modality_enabled(self._image_config.get("modalities") or {}, "image")
-            and _looks_like_image_generation_request(user_input)
-        )
+        self._expect_image_output = self._looks_like_expected_image_output(user_input)
         logger.debug(
             f"[MONITOR] expect_image_output={self._expect_image_output}, "
             f"user_input_len={len(str(user_input or ''))}"
@@ -661,14 +694,14 @@ class StreamMonitor:
             result['text_len'] = len(result['text'])
             result['anchor'] = last_anchor
 
-            # 🆕 图片检测（轻量级，只计数）
-            try:
-                image_info = self._extract_image_info(last_ele)
-                result['image_count'] = int(image_info.get('count', 0) or 0)
-                result['has_images'] = bool(result['image_count'] > 0)
-                result['image_urls'] = list(image_info.get('urls') or [])
-            except Exception as e:
-                logger.debug(f"图片计数失败: {e}")
+            if self._should_probe_dom_images():
+                try:
+                    image_info = self._extract_image_info(last_ele)
+                    result['image_count'] = int(image_info.get('count', 0) or 0)
+                    result['has_images'] = bool(result['image_count'] > 0)
+                    result['image_urls'] = list(image_info.get('urls') or [])
+                except Exception as e:
+                    logger.debug(f"图片计数失败: {e}")
 
             if self._generating_checker is None:
                 self._generating_checker = GeneratingStatusCache(self.tab)
@@ -712,14 +745,14 @@ class StreamMonitor:
             result['text'] = text
             result['text_len'] = len(text)
 
-            # 🆕 图片检测
-            try:
-                image_info = self._extract_image_info(target)
-                result['image_count'] = int(image_info.get('count', 0) or 0)
-                result['has_images'] = bool(result['image_count'] > 0)
-                result['image_urls'] = list(image_info.get('urls') or [])
-            except Exception:
-                pass
+            if self._should_probe_dom_images():
+                try:
+                    image_info = self._extract_image_info(target)
+                    result['image_count'] = int(image_info.get('count', 0) or 0)
+                    result['has_images'] = bool(result['image_count'] > 0)
+                    result['image_urls'] = list(image_info.get('urls') or [])
+                except Exception:
+                    pass
 
             if self._generating_checker is None:
                 self._generating_checker = GeneratingStatusCache(self.tab)
@@ -744,27 +777,21 @@ class StreamMonitor:
                 urls.push(src);
             } catch {}
         }
-        return { count: nodes.length, urls };
+        return { count: urls.length, urls };
         """
         info = element.run_js(script) or {}
+        urls = _normalize_snapshot_image_urls(info.get("urls") or [])
         return {
-            "count": int(info.get("count", 0) or 0),
-            "urls": [
-                normalize_remote_image_url(url)
-                for url in (info.get("urls") or [])
-                if normalize_remote_image_url(url)
-            ],
+            "count": len(urls),
+            "urls": urls,
         }
 
     def _prefetch_snapshot_image_urls(self, snap: Dict[str, Any]) -> int:
-        urls = []
-        seen = set()
-        for raw_url in snap.get("image_urls") or []:
-            normalized = normalize_remote_image_url(raw_url)
-            if not normalized or normalized in seen or normalized in self._prefetched_image_urls:
-                continue
-            seen.add(normalized)
-            urls.append(normalized)
+        urls = [
+            url
+            for url in _normalize_snapshot_image_urls(snap.get("image_urls") or [])
+            if url not in self._prefetched_image_urls
+        ]
 
         if not urls:
             return 0
@@ -1160,11 +1187,7 @@ class StreamMonitor:
 
         final_snap = self._get_snapshot_prefer_anchor(selector, ctx.output_target_anchor)
         final_text = final_snap.get('text', "") or ""
-        final_image_urls = [
-            normalize_remote_image_url(url)
-            for url in (final_snap.get('image_urls') or [])
-            if normalize_remote_image_url(url)
-        ]
+        final_image_urls = _normalize_snapshot_image_urls(final_snap.get('image_urls') or [])
         if final_snap.get('has_images'):
             ctx.images_detected = True
             self._prefetch_snapshot_image_urls(final_snap)

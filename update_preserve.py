@@ -1,11 +1,64 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
+import time
 from pathlib import Path
 from typing import Any, Dict, List
 
 
 UPDATE_SETTINGS_FILE = Path("config") / "update_settings.json"
+
+
+def _replace_file_with_retry(source: str | Path, dest: str | Path) -> None:
+    source_path = Path(source)
+    dest_path = Path(dest)
+    attempts = 3 if os.name == "nt" else 1
+    delay = 0.02
+    for attempt in range(attempts):
+        try:
+            os.replace(source_path, dest_path)
+            return
+        except PermissionError:
+            if attempt >= attempts - 1:
+                raise
+            time.sleep(delay)
+            delay *= 2
+
+
+def _atomic_write_json(path: Path, payload: Any) -> None:
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd = None
+    tmp_path: Path | None = None
+
+    try:
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f".{target.name}.",
+            suffix=".tmp",
+            dir=str(target.parent),
+        )
+        tmp_path = Path(tmp_name)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            fd = None
+            json.dump(payload, handle, indent=2, ensure_ascii=False)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        _replace_file_with_retry(tmp_path, target)
+    except Exception:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except Exception:
+                pass
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+        raise
 
 
 def _option(
@@ -156,9 +209,7 @@ def save_update_preserve_settings(
         "selected_patterns": normalized,
     }
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2, ensure_ascii=False)
+    _atomic_write_json(path, payload)
 
     return {
         "selected_patterns": normalized,

@@ -4,6 +4,7 @@ import json
 import time
 import contextlib
 import random
+import re
 from typing import Optional, List, Dict, Any, Generator, Callable, TYPE_CHECKING
 
 from app.core.config import (
@@ -13,7 +14,7 @@ from app.core.config import (
     WorkflowError,
     MessageValidator,
 )
-from app.utils.site_url import extract_remote_site_domain
+from app.utils.site_url import extract_remote_site_domain, tab_url_matches
 from app.utils.image_handler import extract_images_from_messages
 from app.core.workflow import WorkflowExecutor
 from app.core.tab_pool import TabSession
@@ -631,6 +632,7 @@ class BrowserWorkflowMixin:
         stop_checker: Optional[Callable[[], bool]] = None,
         workflow_priority: Optional[int] = None,
         allow_media_postprocess: bool = True,
+        resolved_tab_index: Optional[int] = None,
     ) -> Generator[str, None, None]:
         """使用标签页完整 URL 严格匹配的唯一标签页执行工作流。"""
         is_valid, error_msg, sanitized_messages = MessageValidator.validate(messages)
@@ -658,7 +660,34 @@ class BrowserWorkflowMixin:
 
         session = None
         try:
-            session = self.tab_pool.acquire_by_exact_url(normalized_exact_url, task_id, timeout=60)
+            if resolved_tab_index is not None:
+                try:
+                    resolved_index = int(resolved_tab_index)
+                except Exception:
+                    resolved_index = 0
+                if resolved_index <= 0:
+                    yield self.formatter.pack_error(
+                        "URL 路由解析的标签页编号无效",
+                        error_type="invalid_request_error",
+                        code="resolved_tab_index_invalid",
+                    )
+                    yield self.formatter.pack_finish()
+                    return
+                session = self.tab_pool.acquire_by_index(resolved_index, task_id, timeout=60)
+                if session is not None:
+                    cached_url, _cached_domain = session.get_cached_route_snapshot()
+                    if not tab_url_matches(normalized_exact_url, cached_url):
+                        self.tab_pool.release(session.id, check_triggers=False, rollback_request_count=True)
+                        session = None
+                        yield self.formatter.pack_error(
+                            f"URL 路由 '{normalized_exact_url}' 已不匹配标签页 #{resolved_index}",
+                            error_type="not_found_error",
+                            code="exact_url_resolved_tab_mismatch",
+                        )
+                        yield self.formatter.pack_finish()
+                        return
+            else:
+                session = self.tab_pool.acquire_by_exact_url(normalized_exact_url, task_id, timeout=60)
 
             if session is None:
                 yield self.formatter.pack_error(
@@ -746,6 +775,7 @@ class BrowserWorkflowMixin:
     ) -> Generator[str, None, None]:
         max_terminal_retries = 1
         attempt = 0
+        retry_origin_chunk = None
 
         while True:
             stream = self._execute_workflow_stream_once(
@@ -761,14 +791,16 @@ class BrowserWorkflowMixin:
 
             try:
                 for chunk in stream:
-                    is_terminal_error = self._is_retriable_stream_terminal_error_chunk(chunk)
+                    is_terminal_error = self._is_stream_terminal_error_chunk(chunk)
                     if (
                         not saw_content
                         and attempt < max_terminal_retries
                         and is_terminal_error
+                        and self._is_retriable_stream_terminal_error_chunk(chunk)
                         and not (stop_checker or self._should_stop_checker)()
                     ):
                         retry_requested = True
+                        retry_origin_chunk = chunk
                         logger.warning(
                             self._build_stream_terminal_alert_message(
                                 session.id,
@@ -784,6 +816,11 @@ class BrowserWorkflowMixin:
                         saw_content = True
 
                     if is_terminal_error:
+                        if retry_origin_chunk and attempt > 0 and not saw_content:
+                            chunk = self._build_retry_failure_error_chunk(
+                                retry_origin_chunk,
+                                chunk,
+                            )
                         logger.error(
                             self._build_stream_terminal_alert_message(
                                 session.id,
@@ -826,12 +863,41 @@ class BrowserWorkflowMixin:
         return error if isinstance(error, dict) else None
 
     @classmethod
-    def _is_retriable_stream_terminal_error_chunk(cls, chunk: str) -> bool:
+    def _is_stream_terminal_error_chunk(cls, chunk: str) -> bool:
         error = cls._extract_stream_error_payload(chunk)
         if not error:
             return False
         message = str(error.get("message") or "").strip().lower()
         return "stream_terminal_error:" in message
+
+    @classmethod
+    def _extract_stream_terminal_http_status(cls, detail: str) -> int:
+        match = re.search(r"\bhttp\s+(\d{3})\b", str(detail or ""), re.IGNORECASE)
+        if not match:
+            return 0
+        try:
+            return int(match.group(1))
+        except Exception:
+            return 0
+
+    @classmethod
+    def _is_retriable_stream_terminal_error_chunk(cls, chunk: str) -> bool:
+        if not cls._is_stream_terminal_error_chunk(chunk):
+            return False
+
+        detail = cls._get_stream_terminal_error_detail(chunk).strip()
+        if not detail:
+            return False
+
+        detail_lower = detail.lower()
+        if detail_lower in {"send_unconfirmed", "new_chat_transition_timeout"}:
+            return True
+
+        status_code = cls._extract_stream_terminal_http_status(detail)
+        if status_code:
+            return status_code == 429 or status_code >= 500
+
+        return "too many requests" in detail_lower or "rate limit" in detail_lower
 
     @classmethod
     def _get_stream_terminal_error_detail(cls, chunk: str) -> str:
@@ -851,6 +917,24 @@ class BrowserWorkflowMixin:
             return detail or message
 
         return message
+
+    def _build_retry_failure_error_chunk(self, first_chunk: str, final_chunk: str) -> str:
+        first_detail = self._get_stream_terminal_error_detail(first_chunk)
+        final_detail = self._get_stream_terminal_error_detail(final_chunk)
+        if not first_detail or not final_detail or first_detail == final_detail:
+            return final_chunk
+
+        first_error = self._extract_stream_error_payload(first_chunk) or {}
+        final_error = self._extract_stream_error_payload(final_chunk) or {}
+        code = str(
+            first_error.get("code")
+            or final_error.get("code")
+            or "workflow_failed"
+        ).strip() or "workflow_failed"
+        return self.formatter.pack_error(
+            f"stream_terminal_error:{first_detail}; retry_failed:{final_detail}",
+            code=code,
+        )
 
     @classmethod
     def _summarize_stream_terminal_alert(
@@ -1380,7 +1464,7 @@ class BrowserWorkflowMixin:
                             workflow_abort_message = str(
                                 interrupt_result.get("message") or "工作流已被命令打断"
                             )
-                            logger.warning(
+                            logger.error(
                                 f"[{session.id}] 工作流被命令打断: "
                                 f"{interrupt_result.get('abort_by') or 'unknown'}"
                             )
@@ -1513,6 +1597,9 @@ class BrowserWorkflowMixin:
 
                         if effective_stop_checker():
                             logger.info(f"[{session.id}] 步骤完成后检测到取消，提前结束工作流")
+                            if command_engine is not None and command_engine.workflow_interrupt_requested(session):
+                                setattr(session, "_workflow_stop_reason", "command_interrupt")
+                                continue
                             break
 
                         page_fetch_sent = False
@@ -1585,7 +1672,7 @@ class BrowserWorkflowMixin:
                     workflow_abort_message = str(
                         interrupt_result.get("message") or "工作流已被命令打断"
                     )
-                    logger.warning(
+                    logger.error(
                         f"[{session.id}] 流程结束时工作流被命令打断: "
                         f"{interrupt_result.get('abort_by') or 'unknown'}"
                     )

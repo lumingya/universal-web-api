@@ -12,8 +12,10 @@ app/api/system.py - 系统功能 API
 import json
 import os
 import re
+import tempfile
 import time
 import asyncio
+import threading as _threading
 from pathlib import Path
 from typing import Optional, Any, Dict
 
@@ -21,8 +23,15 @@ from app import __version__ as APP_VERSION
 from fastapi import APIRouter, Request, HTTPException, Header, Depends
 from fastapi.responses import JSONResponse
 
-from app.core.config import AppConfig, get_logger, log_collector
+from app.core.config import (
+    AppConfig,
+    _replace_file_with_retry,
+    atomic_write_json,
+    get_logger,
+    log_collector,
+)
 from app.core import get_browser, BrowserConnectionError
+from app.api.deps import extract_authorization_token
 from app.services.config_engine import config_engine, ConfigConstants
 from app.services.command_engine import command_engine
 from app.services.request_manager import request_manager
@@ -31,6 +40,19 @@ from update_preserve import load_update_preserve_settings, save_update_preserve_
 logger = get_logger("API.SYSTEM")
 
 router = APIRouter()
+
+
+async def _read_json_object_or_400(request: Request) -> Dict[str, Any]:
+    """读取 JSON 请求体，并要求顶层必须是对象。"""
+    try:
+        data = await request.json()
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="请求体必须是有效 JSON")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="请求体必须是有效 JSON")
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="请求体必须是 JSON 对象")
+    return data
 
 
 # ================= 认证依赖 =================
@@ -50,7 +72,7 @@ async def verify_auth(authorization: Optional[str] = Header(None)) -> bool:
             headers={"WWW-Authenticate": "Bearer"}
         )
 
-    token = authorization.replace("Bearer ", "").strip()
+    token = extract_authorization_token(authorization)
 
     if token != AppConfig.get_auth_token():
         raise HTTPException(
@@ -105,6 +127,39 @@ def _serialize_env_value(value: Any) -> str:
     return str(value)
 
 
+def _write_text_file_atomic(path: Path, lines: list[str]) -> None:
+    """原子写入文本文件，避免写入中断时截断原文件。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = None
+    tmp_path: Optional[Path] = None
+
+    try:
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            dir=str(path.parent),
+        )
+        tmp_path = Path(tmp_name)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+            fd = None
+            f.writelines(lines)
+            f.flush()
+            os.fsync(f.fileno())
+        _replace_file_with_retry(tmp_path, path)
+    except Exception:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except Exception:
+                pass
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+        raise
+
+
 def _write_env_config_file(new_config: Dict[str, Any]) -> None:
     """写入 .env 文件，尽量保留注释和现有顺序。"""
     env_path = Path(".env")
@@ -156,8 +211,7 @@ def _write_env_config_file(new_config: Dict[str, Any]) -> None:
         for key, value in missing_items:
             new_lines.append(f"{key}={value}\n")
 
-    with open(env_path, "w", encoding="utf-8") as f:
-        f.writelines(new_lines)
+    _write_text_file_atomic(env_path, new_lines)
 
 
 def _read_json_file(path: Path, default: Any) -> Any:
@@ -168,12 +222,57 @@ def _read_json_file(path: Path, default: Any) -> Any:
 
 
 def _write_json_file(path: Path, payload: Any) -> None:
-    tmp_path = Path(str(path) + ".tmp")
+    atomic_write_json(path, payload)
+
+
+def _snapshot_file(path: Path) -> Optional[bytes]:
+    if not path.exists():
+        return None
+    return path.read_bytes()
+
+
+def _restore_file_snapshot(path: Path, snapshot: Optional[bytes]) -> None:
+    if snapshot is None:
+        try:
+            path.unlink(missing_ok=True)
+        except FileNotFoundError:
+            pass
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2, ensure_ascii=False)
-        f.flush()
-    tmp_path.replace(path)
+    fd = None
+    tmp_path: Optional[Path] = None
+    try:
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f".{path.name}.rollback.",
+            suffix=".tmp",
+            dir=str(path.parent),
+        )
+        tmp_path = Path(tmp_name)
+        with os.fdopen(fd, "wb") as handle:
+            fd = None
+            handle.write(snapshot)
+            handle.flush()
+            os.fsync(handle.fileno())
+        _replace_file_with_retry(tmp_path, path)
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except Exception:
+                pass
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+
+def _restore_file_snapshots(snapshots: Dict[Path, Optional[bytes]]) -> None:
+    for path, snapshot in reversed(list(snapshots.items())):
+        try:
+            _restore_file_snapshot(path, snapshot)
+        except Exception as rollback_error:
+            logger.error(f"回滚配置文件失败: {path}: {rollback_error}")
 
 
 def _schedule_service_restart(delay_seconds: float = 1.0) -> None:
@@ -210,6 +309,57 @@ def _build_settings_backup_bundle() -> Dict[str, Any]:
             "env": _load_env_config_from_file(),
         },
     }
+
+
+def _validate_settings_backup_files(files: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate all import sections before any target file is modified."""
+    validated: Dict[str, Any] = {}
+
+    if "sites" in files:
+        if not isinstance(files["sites"], dict):
+            raise HTTPException(status_code=400, detail="sites 配置格式无效")
+        validated["sites"] = files["sites"]
+
+    if "sites_local" in files:
+        if not isinstance(files["sites_local"], dict):
+            raise HTTPException(status_code=400, detail="sites_local 配置格式无效")
+        validated["sites_local"] = files["sites_local"]
+
+    if "commands" in files:
+        commands_payload = files["commands"]
+        if not isinstance(commands_payload, (dict, list)):
+            raise HTTPException(status_code=400, detail="commands 配置格式无效")
+        validated["commands"] = commands_payload
+
+    if "commands_local" in files:
+        commands_local_payload = files["commands_local"]
+        if not isinstance(commands_local_payload, dict):
+            raise HTTPException(status_code=400, detail="commands_local 配置格式无效")
+        validated["commands_local"] = commands_local_payload
+
+    if "browser_constants" in files:
+        if not isinstance(files["browser_constants"], dict):
+            raise HTTPException(status_code=400, detail="browser_constants 配置格式无效")
+        validated["browser_constants"] = files["browser_constants"]
+
+    if "update_preserve" in files:
+        preserve_payload = files["update_preserve"]
+        if isinstance(preserve_payload, dict):
+            selected_patterns = preserve_payload.get("selected_patterns", [])
+        else:
+            selected_patterns = preserve_payload
+        if selected_patterns is None:
+            selected_patterns = []
+        if not isinstance(selected_patterns, list):
+            raise HTTPException(status_code=400, detail="update_preserve 配置格式无效")
+        validated["update_preserve"] = selected_patterns
+
+    if "env" in files:
+        if not isinstance(files["env"], dict):
+            raise HTTPException(status_code=400, detail="env 配置格式无效")
+        validated["env"] = files["env"]
+
+    return validated
 
 
 DEFAULT_BROWSER_CONSTANTS: Dict[str, Any] = {
@@ -623,8 +773,8 @@ async def get_logs(
     authenticated: bool = Depends(verify_auth),
 ):
     """获取日志"""
-    logs, next_seq = log_collector.get_recent(since=since, after_seq=after_seq)
-    return {"logs": logs, "timestamp": time.time(), "next_seq": next_seq}
+    logs, next_seq, cleared = log_collector.get_recent(since=since, after_seq=after_seq)
+    return {"logs": logs, "timestamp": time.time(), "next_seq": next_seq, "cleared": cleared}
 
 
 @router.delete("/api/logs")
@@ -653,8 +803,10 @@ async def save_env_config(
 ):
     """保存 .env 配置"""
     try:
-        data = await request.json()
+        data = await _read_json_object_or_400(request)
         new_config = data.get("config", {})
+        if not isinstance(new_config, dict):
+            raise HTTPException(status_code=400, detail="环境配置必须是 JSON 对象")
         _write_env_config_file(new_config)
 
         logger.info(f"环境配置已保存: {len(new_config)} 项，准备触发重启...")
@@ -667,6 +819,8 @@ async def save_env_config(
             "will_restart": True
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"保存环境配置失败: {e}")
         raise HTTPException(status_code=500, detail=f"保存失败: {str(e)}")
@@ -689,7 +843,7 @@ async def import_settings_backup(
 ):
     """导入完整配置备份。"""
     try:
-        data = await request.json()
+        data = await _read_json_object_or_400(request)
         allowed_sections = {
             "sites",
             "sites_local",
@@ -711,68 +865,82 @@ async def import_settings_backup(
         if not files:
             raise HTTPException(status_code=400, detail="备份文件格式无效")
 
+        files = _validate_settings_backup_files(files)
         imported_sections = []
         restart_required = False
+        file_snapshots: Dict[Path, Optional[bytes]] = {}
 
-        if "sites" in files:
-            if not isinstance(files["sites"], dict):
-                raise HTTPException(status_code=400, detail="sites 配置格式无效")
-            _write_json_file(Path(config_engine.config_file), files["sites"])
-            imported_sections.append("sites")
+        def remember_file(path: Path) -> Path:
+            target = Path(path)
+            if target not in file_snapshots:
+                file_snapshots[target] = _snapshot_file(target)
+            return target
 
-        if "sites_local" in files:
-            if not isinstance(files["sites_local"], dict):
-                raise HTTPException(status_code=400, detail="sites_local 配置格式无效")
-            _write_json_file(Path(config_engine.local_sites_file), files["sites_local"])
-            imported_sections.append("sites_local")
+        def write_import_json(path: Path, payload: Any) -> None:
+            _write_json_file(remember_file(path), payload)
 
-        if "commands" in files:
-            commands_payload = files["commands"]
-            if not isinstance(commands_payload, (dict, list)):
-                raise HTTPException(status_code=400, detail="commands 配置格式无效")
-            _write_json_file(Path(ConfigConstants.COMMANDS_FILE), commands_payload)
-            imported_sections.append("commands")
+        def write_import_env(payload: Dict[str, Any]) -> None:
+            remember_file(Path(".env"))
+            _write_env_config_file(payload)
 
-        if "commands_local" in files:
-            commands_local_payload = files["commands_local"]
-            if not isinstance(commands_local_payload, dict):
-                raise HTTPException(status_code=400, detail="commands_local 配置格式无效")
-            _write_json_file(Path(ConfigConstants.COMMANDS_LOCAL_FILE), commands_local_payload)
-            imported_sections.append("commands_local")
+        def reload_imported_runtime() -> None:
+            if "sites" in files or "sites_local" in files:
+                config_engine.reload_config()
 
-        if "browser_constants" in files:
-            if not isinstance(files["browser_constants"], dict):
-                raise HTTPException(status_code=400, detail="browser_constants 配置格式无效")
-            _write_json_file(Path("config/browser_config.json"), files["browser_constants"])
-            imported_sections.append("browser_constants")
+            if "commands" in files or "commands_local" in files:
+                command_engine._refresh_commands_if_changed(force=True)
+
+            if "browser_constants" in files:
+                try:
+                    from app.core.config import BrowserConstants
+                    if hasattr(BrowserConstants, "reload"):
+                        BrowserConstants.reload()
+                except Exception as reload_error:
+                    logger.warning(f"导入后热重载浏览器常量失败: {reload_error}")
+
+        try:
+            if "sites" in files:
+                write_import_json(Path(config_engine.config_file), files["sites"])
+                imported_sections.append("sites")
+
+            if "sites_local" in files:
+                write_import_json(Path(config_engine.local_sites_file), files["sites_local"])
+                imported_sections.append("sites_local")
+
+            if "commands" in files:
+                write_import_json(Path(ConfigConstants.COMMANDS_FILE), files["commands"])
+                imported_sections.append("commands")
+
+            if "commands_local" in files:
+                write_import_json(Path(ConfigConstants.COMMANDS_LOCAL_FILE), files["commands_local"])
+                imported_sections.append("commands_local")
+
+            if "browser_constants" in files:
+                write_import_json(Path("config/browser_config.json"), files["browser_constants"])
+                imported_sections.append("browser_constants")
+
+            if "update_preserve" in files:
+                remember_file(Path("config") / "update_settings.json")
+                save_update_preserve_settings(files["update_preserve"])
+                imported_sections.append("update_preserve")
+
+            if "env" in files:
+                write_import_env(files["env"])
+                imported_sections.append("env")
+                restart_required = True
+        except Exception:
+            _restore_file_snapshots(file_snapshots)
+            raise
+
+        try:
+            reload_imported_runtime()
+        except Exception:
+            _restore_file_snapshots(file_snapshots)
             try:
-                from app.core.config import BrowserConstants
-                if hasattr(BrowserConstants, "reload"):
-                    BrowserConstants.reload()
-            except Exception as reload_error:
-                logger.warning(f"导入后热重载浏览器常量失败: {reload_error}")
-
-        if "update_preserve" in files:
-            preserve_payload = files["update_preserve"]
-            if isinstance(preserve_payload, dict):
-                selected_patterns = preserve_payload.get("selected_patterns", [])
-            else:
-                selected_patterns = preserve_payload
-            save_update_preserve_settings(selected_patterns or [])
-            imported_sections.append("update_preserve")
-
-        if "env" in files:
-            if not isinstance(files["env"], dict):
-                raise HTTPException(status_code=400, detail="env 配置格式无效")
-            _write_env_config_file(files["env"])
-            imported_sections.append("env")
-            restart_required = True
-
-        if "sites" in files or "sites_local" in files:
-            config_engine.reload_config()
-
-        if "commands" in files or "commands_local" in files:
-            command_engine._refresh_commands_if_changed(force=True)
+                reload_imported_runtime()
+            except Exception as rollback_reload_error:
+                logger.warning(f"导入失败回滚后热重载运行时状态失败: {rollback_reload_error}")
+            raise
 
         logger.info(f"完整配置备份已导入: {', '.join(imported_sections)}")
 
@@ -812,8 +980,10 @@ async def save_browser_constants(
 ):
     """保存浏览器常量配置"""
     try:
-        data = await request.json()
+        data = await _read_json_object_or_400(request)
         config = data.get("config", {})
+        if not isinstance(config, dict):
+            raise HTTPException(status_code=400, detail="浏览器常量配置必须是 JSON 对象")
         _write_json_file(Path("config/browser_config.json"), config)
 
         try:
@@ -857,6 +1027,8 @@ async def save_browser_constants(
             "tab_pool_synced": tab_pool_synced,
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"保存浏览器常量失败: {e}")
         raise HTTPException(status_code=500, detail=f"保存失败: {str(e)}")
@@ -883,8 +1055,10 @@ async def save_update_preserve(
 ):
     """保存更新白名单配置。"""
     try:
-        data = await request.json()
+        data = await _read_json_object_or_400(request)
         selected_patterns = data.get("selected_patterns", [])
+        if not isinstance(selected_patterns, list):
+            raise HTTPException(status_code=400, detail="更新白名单必须是数组")
         result = save_update_preserve_settings(selected_patterns)
         logger.info(f"更新白名单已保存: {len(result.get('selected_patterns', []))} 项")
         return {
@@ -892,6 +1066,8 @@ async def save_update_preserve(
             "message": "更新白名单已保存，下次更新时生效",
             "selected_patterns": result.get("selected_patterns", []),
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"保存更新白名单失败: {e}")
         raise HTTPException(status_code=500, detail=f"保存失败: {str(e)}")
@@ -1048,7 +1224,7 @@ async def test_selector(
     if not AppConfig.is_debug():
         raise HTTPException(status_code=403, detail="调试功能未启用")
 
-    data = await request.json()
+    data = await _read_json_object_or_400(request)
     selector = data.get("selector", "")
     timeout = data.get("timeout", 2)
     highlight = data.get("highlight", False)
@@ -1231,6 +1407,17 @@ def _is_chromium_family_process(process_name: str) -> bool:
     )
 
 
+def _cmdline_matches_browser_profile(cmdline: list[str], profile_root_norm: str) -> bool:
+    if not profile_root_norm:
+        return False
+
+    user_data_dir = _extract_process_flag_value(cmdline, "--user-data-dir")
+    if not user_data_dir:
+        return False
+
+    return _normalize_path_for_compare(user_data_dir) == profile_root_norm
+
+
 def _find_project_browser_root_processes(
     main_proc: _psutil.Process,
     *,
@@ -1271,6 +1458,9 @@ def _find_project_browser_root_processes(
             ):
                 continue
 
+            if not _cmdline_matches_browser_profile(cmdline, profile_root_norm):
+                continue
+
             matched_processes.append(proc)
         except (_psutil.NoSuchProcess, _psutil.AccessDenied, ValueError, TypeError):
             continue
@@ -1278,28 +1468,96 @@ def _find_project_browser_root_processes(
     return matched_processes
 
 
-def _get_project_memory_mb() -> float:
-    """估算本项目相关进程的私有内存，尽量避免浏览器多进程重复计数。"""
+def _collect_project_process_snapshot() -> Dict[str, Any]:
+    """收集一次项目进程快照，供 CPU/内存统计共用。"""
     try:
         project_dir = Path(__file__).resolve().parents[2]
-        main_proc = _psutil.Process(_os.getpid())
-        python_descendants = main_proc.children(recursive=True)
+        main_pid = _os.getpid()
+        main_proc = _psutil.Process(main_pid)
+        try:
+            python_descendants = main_proc.children(recursive=True)
+        except Exception:
+            python_descendants = []
         python_descendant_pids = {
             int(child.pid)
             for child in python_descendants
             if getattr(child, "pid", None) is not None
         }
-
-        seen_pids: set[int] = set()
-        total_bytes = _collect_process_tree_memory_bytes(main_proc, seen_pids)
-
         browser_roots = _find_project_browser_root_processes(
             main_proc,
             project_dir=project_dir,
             python_descendant_pids=python_descendant_pids,
         )
+        tracked_processes = [main_proc]
+        tracked_processes.extend(python_descendants)
+        tracked_pids = {main_pid}
+        tracked_pids.update(python_descendant_pids)
         for browser_proc in browser_roots:
-            total_bytes += _collect_process_tree_memory_bytes(browser_proc, seen_pids)
+            try:
+                browser_pid = int(browser_proc.pid)
+            except Exception:
+                browser_pid = None
+            if browser_pid is not None:
+                tracked_processes.append(browser_proc)
+                tracked_pids.add(browser_pid)
+            try:
+                browser_descendants = browser_proc.children(recursive=True)
+            except Exception:
+                browser_descendants = []
+            for child in browser_descendants:
+                try:
+                    child_pid = int(child.pid)
+                except Exception:
+                    continue
+                tracked_processes.append(child)
+                tracked_pids.add(child_pid)
+        return {
+            "project_dir": project_dir,
+            "main_pid": main_pid,
+            "main_proc": main_proc,
+            "python_descendants": python_descendants,
+            "python_descendant_pids": python_descendant_pids,
+            "browser_roots": browser_roots,
+            "tracked_processes": tracked_processes,
+            "tracked_pids": tracked_pids,
+        }
+    except Exception:
+        return {
+            "project_dir": Path(__file__).resolve().parents[2],
+            "main_pid": _os.getpid(),
+            "main_proc": None,
+            "python_descendants": [],
+            "python_descendant_pids": set(),
+            "browser_roots": [],
+            "tracked_processes": [],
+            "tracked_pids": set(),
+        }
+
+
+def _get_project_memory_mb(process_snapshot: Optional[Dict[str, Any]] = None) -> float:
+    """估算本项目相关进程的私有内存，尽量避免浏览器多进程重复计数。"""
+    try:
+        snapshot = process_snapshot or _get_project_process_snapshot_cached()
+        main_proc = snapshot.get("main_proc")
+        if main_proc is None:
+            return 0.0
+
+        seen_pids: set[int] = set()
+        total_bytes = 0
+        if "tracked_processes" in snapshot:
+            for proc in snapshot.get("tracked_processes") or []:
+                try:
+                    pid = int(proc.pid)
+                except Exception:
+                    continue
+                if pid in seen_pids:
+                    continue
+                seen_pids.add(pid)
+                total_bytes += _get_process_private_memory_bytes(proc)
+        else:
+            total_bytes = _collect_process_tree_memory_bytes(main_proc, seen_pids)
+            for browser_proc in snapshot.get("browser_roots") or []:
+                total_bytes += _collect_process_tree_memory_bytes(browser_proc, seen_pids)
 
         return round(total_bytes / (1024 * 1024), 1)
     except Exception:
@@ -1307,66 +1565,128 @@ def _get_project_memory_mb() -> float:
 
 
 _PROJECT_PROCESS_CACHE: Dict[int, _psutil.Process] = {}
-_PROJECT_PROCESS_CACHE_LOCK: Optional[Any] = None
+_PROJECT_PROCESS_CACHE_LOCK = _threading.Lock()
+_PROJECT_PROCESS_SNAPSHOT_TTL_SECONDS = 5.0
+_PROJECT_PROCESS_SNAPSHOT_CACHE = {
+    "expires_at": 0.0,
+    "snapshot": None,
+}
+_PROJECT_PROCESS_SNAPSHOT_CACHE_LOCK = _threading.Lock()
+_PROJECT_MEMORY_CACHE_TTL_SECONDS = 10.0
+_PROJECT_MEMORY_CACHE = {
+    "expires_at": 0.0,
+    "memory_mb": 0.0,
+}
+_PROJECT_MEMORY_CACHE_LOCK = _threading.Lock()
 
 
-def _get_project_cpu_percent() -> float:
+def _get_project_process_snapshot_cached(ttl_seconds: float = _PROJECT_PROCESS_SNAPSHOT_TTL_SECONDS) -> Dict[str, Any]:
+    """复用项目进程树快照，避免频繁枚举系统进程。"""
+    now = time.monotonic()
+    cached_snapshot = _PROJECT_PROCESS_SNAPSHOT_CACHE.get("snapshot")
+    if cached_snapshot is not None and now < float(_PROJECT_PROCESS_SNAPSHOT_CACHE.get("expires_at", 0.0) or 0.0):
+        return cached_snapshot
+
+    with _PROJECT_PROCESS_SNAPSHOT_CACHE_LOCK:
+        now = time.monotonic()
+        cached_snapshot = _PROJECT_PROCESS_SNAPSHOT_CACHE.get("snapshot")
+        if cached_snapshot is not None and now < float(_PROJECT_PROCESS_SNAPSHOT_CACHE.get("expires_at", 0.0) or 0.0):
+            return cached_snapshot
+
+        snapshot = _collect_project_process_snapshot()
+        ttl = max(2.0, float(ttl_seconds or _PROJECT_PROCESS_SNAPSHOT_TTL_SECONDS))
+        _PROJECT_PROCESS_SNAPSHOT_CACHE["snapshot"] = snapshot
+        _PROJECT_PROCESS_SNAPSHOT_CACHE["expires_at"] = time.monotonic() + ttl
+        return snapshot
+
+
+def _get_project_memory_mb_cached(
+    process_snapshot: Optional[Dict[str, Any]] = None,
+    ttl_seconds: float = _PROJECT_MEMORY_CACHE_TTL_SECONDS,
+) -> float:
+    """缓存项目内存采样，减少对多进程浏览器的频繁内存查询。"""
+    now = time.monotonic()
+    if now < float(_PROJECT_MEMORY_CACHE.get("expires_at", 0.0) or 0.0):
+        return float(_PROJECT_MEMORY_CACHE.get("memory_mb", 0.0) or 0.0)
+
+    with _PROJECT_MEMORY_CACHE_LOCK:
+        now = time.monotonic()
+        if now < float(_PROJECT_MEMORY_CACHE.get("expires_at", 0.0) or 0.0):
+            return float(_PROJECT_MEMORY_CACHE.get("memory_mb", 0.0) or 0.0)
+
+        snapshot = process_snapshot or _get_project_process_snapshot_cached()
+        memory_mb = float(_get_project_memory_mb(snapshot) or 0.0)
+        ttl = max(2.0, float(ttl_seconds or _PROJECT_MEMORY_CACHE_TTL_SECONDS))
+        _PROJECT_MEMORY_CACHE["memory_mb"] = memory_mb
+        _PROJECT_MEMORY_CACHE["expires_at"] = time.monotonic() + ttl
+        return memory_mb
+
+
+def _get_project_cpu_percent(process_snapshot: Optional[Dict[str, Any]] = None) -> float:
     """估算本项目（包含主 Python 进程及其下所有 Chrome 调试浏览器进程）的总 CPU 占比，除以核心数折算为 0-100% 格式。"""
-    global _PROJECT_PROCESS_CACHE, _PROJECT_PROCESS_CACHE_LOCK
-
-    if _PROJECT_PROCESS_CACHE_LOCK is None:
-        import threading
-        _PROJECT_PROCESS_CACHE_LOCK = threading.Lock()
+    global _PROJECT_PROCESS_CACHE
 
     try:
-        project_dir = Path(__file__).resolve().parents[2]
-        main_pid = _os.getpid()
+        snapshot = process_snapshot or _collect_project_process_snapshot()
+        main_pid = int(snapshot.get("main_pid") or _os.getpid())
+        main_proc = snapshot.get("main_proc")
+        if main_proc is None:
+            return 0.0
 
         with _PROJECT_PROCESS_CACHE_LOCK:
             if main_pid not in _PROJECT_PROCESS_CACHE:
+                _PROJECT_PROCESS_CACHE[main_pid] = main_proc
+
+            tracked_by_pid = {}
+
+            def remember_snapshot_process(proc: Any) -> Optional[int]:
                 try:
-                    _PROJECT_PROCESS_CACHE[main_pid] = _psutil.Process(main_pid)
+                    pid = int(proc.pid)
                 except Exception:
-                    pass
+                    return None
+                tracked_by_pid[pid] = proc
+                return pid
 
-            main_proc = _PROJECT_PROCESS_CACHE.get(main_pid)
-            if not main_proc:
-                return 0.0
+            remember_snapshot_process(main_proc)
+            for proc in snapshot.get("tracked_processes") or []:
+                remember_snapshot_process(proc)
 
-            try:
-                python_descendants = main_proc.children(recursive=True)
-            except Exception:
-                python_descendants = []
-
-            python_descendant_pids = {
-                int(child.pid)
-                for child in python_descendants
-                if getattr(child, "pid", None) is not None
-            }
-
-            browser_roots = _find_project_browser_root_processes(
-                main_proc,
-                project_dir=project_dir,
-                python_descendant_pids=python_descendant_pids,
-            )
-
-            # 收集所有相关的当前活跃 PID
-            target_pids = {main_pid}
-            target_pids.update(python_descendant_pids)
-
-            for b_proc in browser_roots:
-                try:
-                    target_pids.add(int(b_proc.pid))
-                    for child in b_proc.children(recursive=True):
-                        if getattr(child, "pid", None) is not None:
-                            target_pids.add(int(child.pid))
-                except Exception:
-                    pass
+            # 收集所有相关的当前活跃 PID。新快照阶段已遍历浏览器子进程，避免 CPU/内存路径重复 children()。
+            if "tracked_pids" in snapshot:
+                target_pids = set(snapshot.get("tracked_pids") or set())
+                target_pids.add(main_pid)
+                target_pids.update(tracked_by_pid.keys())
+            else:
+                target_pids = set()
+                remembered_pid = remember_snapshot_process(main_proc)
+                if remembered_pid is not None:
+                    target_pids.add(remembered_pid)
+                for proc in snapshot.get("python_descendants") or []:
+                    remembered_pid = remember_snapshot_process(proc)
+                    if remembered_pid is not None:
+                        target_pids.add(remembered_pid)
+                target_pids.update(snapshot.get("python_descendant_pids") or set())
+                for b_proc in snapshot.get("browser_roots") or []:
+                    try:
+                        remembered_pid = remember_snapshot_process(b_proc)
+                        if remembered_pid is not None:
+                            target_pids.add(remembered_pid)
+                        for child in b_proc.children(recursive=True):
+                            if getattr(child, "pid", None) is not None:
+                                remembered_pid = remember_snapshot_process(child)
+                                if remembered_pid is not None:
+                                    target_pids.add(remembered_pid)
+                    except Exception:
+                        pass
+                if not target_pids:
+                    target_pids = {main_pid}
 
             # 更新/清理 Process 缓存，只保留活跃的进程以防止内存泄露
             new_cache = {}
             for pid in target_pids:
-                if pid in _PROJECT_PROCESS_CACHE:
+                if pid in tracked_by_pid:
+                    new_cache[pid] = tracked_by_pid[pid]
+                elif pid in _PROJECT_PROCESS_CACHE:
                     new_cache[pid] = _PROJECT_PROCESS_CACHE[pid]
                 else:
                     try:
@@ -1487,12 +1807,53 @@ _SYSTEM_STATS_CACHE = {
         "cpu_percent": 0.0,
         "project_cpu": 0.0,
         "memory_percent": 0.0,
+        "project_memory_percent": 0.0,
     },
 }
+_SYSTEM_STATS_CACHE_LOCK = _threading.Lock()
 _DISK_USAGE_CACHE = {
     "expires_at": 0.0,
     "value": 0.0,
+    "last_success_value": 0.0,
 }
+_DISK_USAGE_REFRESH_LOCK = _threading.Lock()
+_DISK_USAGE_REFRESH_WORKER: Optional[_threading.Thread] = None
+
+
+def _reset_system_stats_cache_for_tests() -> None:
+    """清理系统统计缓存，供回归测试隔离并避免后台刷新状态串扰。"""
+    global _PROJECT_PROCESS_CACHE, _DISK_USAGE_REFRESH_WORKER
+    with _SYSTEM_STATS_CACHE_LOCK:
+        _SYSTEM_STATS_CACHE["expires_at"] = 0.0
+        _SYSTEM_STATS_CACHE["payload"] = {
+            "memory_mb": 0.0,
+            "disk_status": "0 MB",
+            "total_requests": 0,
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+            "cpu_percent": 0.0,
+            "project_cpu": 0.0,
+            "memory_percent": 0.0,
+            "project_memory_percent": 0.0,
+        }
+
+    with _PROJECT_PROCESS_CACHE_LOCK:
+        _PROJECT_PROCESS_CACHE = {}
+
+    with _PROJECT_PROCESS_SNAPSHOT_CACHE_LOCK:
+        _PROJECT_PROCESS_SNAPSHOT_CACHE["expires_at"] = 0.0
+        _PROJECT_PROCESS_SNAPSHOT_CACHE["snapshot"] = None
+
+    with _PROJECT_MEMORY_CACHE_LOCK:
+        _PROJECT_MEMORY_CACHE["expires_at"] = 0.0
+        _PROJECT_MEMORY_CACHE["memory_mb"] = 0.0
+
+    _DISK_USAGE_CACHE["expires_at"] = 0.0
+    _DISK_USAGE_CACHE["value"] = 0.0
+    _DISK_USAGE_CACHE["last_success_value"] = 0.0
+
+    with _DISK_USAGE_REFRESH_LOCK:
+        _DISK_USAGE_REFRESH_WORKER = None
 
 
 def _format_disk_usage(disk_mb: float) -> str:
@@ -1501,58 +1862,160 @@ def _format_disk_usage(disk_mb: float) -> str:
     return f"{disk_mb} MB"
 
 
+def _set_disk_usage_cache_result(disk_mb: float, ttl_seconds: float) -> float:
+    now = time.monotonic()
+    ttl = max(1.0, float(ttl_seconds or 60.0))
+    if disk_mb > 0:
+        _DISK_USAGE_CACHE["value"] = disk_mb
+        _DISK_USAGE_CACHE["last_success_value"] = disk_mb
+        _DISK_USAGE_CACHE["expires_at"] = now + ttl
+        return disk_mb
+
+    fallback_value = float(
+        _DISK_USAGE_CACHE.get("last_success_value")
+        or _DISK_USAGE_CACHE.get("value", 0.0)
+        or 0.0
+    )
+    if fallback_value > 0:
+        _DISK_USAGE_CACHE["value"] = fallback_value
+        _DISK_USAGE_CACHE["expires_at"] = now + min(ttl, 5.0)
+        return fallback_value
+
+    _DISK_USAGE_CACHE["value"] = 0.0
+    _DISK_USAGE_CACHE["expires_at"] = now + min(ttl, 5.0)
+    return 0.0
+
+
+def _refresh_project_disk_usage_cache(ttl_seconds: float = 60.0) -> float:
+    try:
+        disk_mb = float(_get_project_disk_usage_mb() or 0.0)
+    except Exception:
+        disk_mb = 0.0
+    return _set_disk_usage_cache_result(disk_mb, ttl_seconds)
+
+
+def _run_disk_usage_refresh_worker(ttl_seconds: float) -> None:
+    global _DISK_USAGE_REFRESH_WORKER
+    current_worker = _threading.current_thread()
+    try:
+        try:
+            _refresh_project_disk_usage_cache(ttl_seconds)
+        except Exception as exc:
+            try:
+                logger.warning(f"磁盘用量后台刷新失败: {exc}")
+            except Exception:
+                pass
+    finally:
+        with _DISK_USAGE_REFRESH_LOCK:
+            if _DISK_USAGE_REFRESH_WORKER is current_worker:
+                _DISK_USAGE_REFRESH_WORKER = None
+
+
+def _schedule_disk_usage_refresh(ttl_seconds: float = 60.0) -> None:
+    global _DISK_USAGE_REFRESH_WORKER
+    with _DISK_USAGE_REFRESH_LOCK:
+        if _DISK_USAGE_REFRESH_WORKER and _DISK_USAGE_REFRESH_WORKER.is_alive():
+            return
+        worker = _threading.Thread(
+            target=_run_disk_usage_refresh_worker,
+            args=(ttl_seconds,),
+            daemon=True,
+            name="disk-usage-refresh",
+        )
+        _DISK_USAGE_REFRESH_WORKER = worker
+    worker.start()
+
+
 def _get_project_disk_usage_mb_cached(ttl_seconds: float = 60.0) -> float:
     now = time.monotonic()
     cached_value = float(_DISK_USAGE_CACHE.get("value", 0.0) or 0.0)
     if now < float(_DISK_USAGE_CACHE.get("expires_at", 0.0) or 0.0):
         return cached_value
 
-    disk_mb = _get_project_disk_usage_mb()
-    _DISK_USAGE_CACHE["value"] = disk_mb
-    _DISK_USAGE_CACHE["expires_at"] = now + max(1.0, float(ttl_seconds or 60.0))
-    return disk_mb
+    ttl = max(1.0, float(ttl_seconds or 60.0))
+    fallback_value = float(
+        _DISK_USAGE_CACHE.get("last_success_value")
+        or cached_value
+        or 0.0
+    )
+    if fallback_value > 0:
+        _DISK_USAGE_CACHE["value"] = fallback_value
+        _DISK_USAGE_CACHE["expires_at"] = now + min(ttl, 5.0)
+        _schedule_disk_usage_refresh(ttl)
+        return fallback_value
+
+    return _refresh_project_disk_usage_cache(ttl)
 
 
-def _get_system_stats_payload_cached(ttl_seconds: float = 2.0) -> Dict[str, Any]:
+def _get_fresh_system_stats_payload() -> Optional[Dict[str, Any]]:
     now = time.monotonic()
     cached_payload = _SYSTEM_STATS_CACHE.get("payload") or {}
     if now < float(_SYSTEM_STATS_CACHE.get("expires_at", 0.0) or 0.0):
         return dict(cached_payload)
+    return None
 
-    cpu_percent = 0.0
-    project_cpu = 0.0
-    memory_percent = 0.0
-    try:
-        cpu_percent = float(_psutil.cpu_percent(interval=None) or 0.0)
-        memory_percent = float(_psutil.virtual_memory().percent or 0.0)
-        project_cpu = float(_get_project_cpu_percent() or 0.0)
-    except Exception:
-        pass
 
-    payload = {
-        "memory_mb": _get_project_memory_mb(),
-        "disk_status": _format_disk_usage(_get_project_disk_usage_mb_cached()),
-        "total_requests": int(getattr(request_manager, "total_requests", 0) or 0),
-        "total_input_tokens": int(getattr(request_manager, "total_input_tokens", 0) or 0),
-        "total_output_tokens": int(getattr(request_manager, "total_output_tokens", 0) or 0),
-        "cpu_percent": cpu_percent,
-        "project_cpu": project_cpu,
-        "memory_percent": memory_percent,
-    }
-    _SYSTEM_STATS_CACHE["payload"] = payload
-    _SYSTEM_STATS_CACHE["expires_at"] = now + max(0.5, float(ttl_seconds or 2.0))
-    return dict(payload)
+def _get_system_stats_payload_cached(ttl_seconds: float = 2.0) -> Dict[str, Any]:
+    fresh_payload = _get_fresh_system_stats_payload()
+    if fresh_payload is not None:
+        return fresh_payload
+
+    with _SYSTEM_STATS_CACHE_LOCK:
+        now = time.monotonic()
+        cached_payload = _SYSTEM_STATS_CACHE.get("payload") or {}
+        if now < float(_SYSTEM_STATS_CACHE.get("expires_at", 0.0) or 0.0):
+            return dict(cached_payload)
+
+        cpu_percent = 0.0
+        project_cpu = 0.0
+        memory_percent = 0.0
+        project_memory_percent = 0.0
+        process_snapshot = _get_project_process_snapshot_cached()
+        try:
+            cpu_percent = float(_psutil.cpu_percent(interval=None) or 0.0)
+            virtual_memory = _psutil.virtual_memory()
+            memory_percent = float(virtual_memory.percent or 0.0)
+            project_cpu = float(_get_project_cpu_percent(process_snapshot) or 0.0)
+        except Exception:
+            virtual_memory = None
+
+        project_memory_mb = _get_project_memory_mb_cached(process_snapshot)
+        try:
+            total_memory_bytes = int(getattr(virtual_memory, "total", 0) or 0)
+            if total_memory_bytes > 0:
+                project_memory_percent = round((project_memory_mb * 1024 * 1024 / total_memory_bytes) * 100, 1)
+        except Exception:
+            project_memory_percent = 0.0
+
+        payload = {
+            "memory_mb": project_memory_mb,
+            "disk_status": _format_disk_usage(_get_project_disk_usage_mb_cached()),
+            "total_requests": int(getattr(request_manager, "total_requests", 0) or 0),
+            "total_input_tokens": int(getattr(request_manager, "total_input_tokens", 0) or 0),
+            "total_output_tokens": int(getattr(request_manager, "total_output_tokens", 0) or 0),
+            "cpu_percent": cpu_percent,
+            "project_cpu": project_cpu,
+            "memory_percent": memory_percent,
+            "project_memory_percent": project_memory_percent,
+        }
+        _SYSTEM_STATS_CACHE["payload"] = payload
+        _SYSTEM_STATS_CACHE["expires_at"] = now + max(0.8, float(ttl_seconds or 2.0))
+        return dict(payload)
 
 
 @router.get("/api/system/stats")
 async def get_system_stats(authenticated: bool = Depends(verify_auth)):
-    return await asyncio.to_thread(_get_system_stats_payload_cached)
+    cached_payload = _get_fresh_system_stats_payload()
+    if cached_payload is not None:
+        return cached_payload
+    return await asyncio.to_thread(_get_system_stats_payload_cached, 1.0)
 
 
 @router.get("/api/system/request-history")
 async def get_request_history(
     limit: int = 200,
     detail: bool = False,
+    if_revision: Optional[str] = None,
     authenticated: bool = Depends(verify_auth),
 ):
     safe_limit = max(1, min(200, int(limit or 200)))
@@ -1560,6 +2023,7 @@ async def get_request_history(
         request_manager.get_request_history_payload,
         safe_limit,
         bool(detail),
+        if_revision,
     )
 
 
@@ -1575,8 +2039,6 @@ async def get_request_history_detail(
 
 
 # ================= 版本管理 API =================
-
-import threading as _threading
 
 _version_switch_lock = _threading.Lock()
 _version_switch_state: dict = {
@@ -1758,7 +2220,7 @@ async def switch_version(
         if _version_switch_state.get("running"):
             raise HTTPException(status_code=409, detail="已有版本切换任务正在运行，请稍候")
 
-    data = await request.json()
+    data = await _read_json_object_or_400(request)
     tag = str(data.get("tag") or "").strip()
     if not tag:
         raise HTTPException(status_code=400, detail="缺少 tag 参数")

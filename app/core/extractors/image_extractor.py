@@ -13,7 +13,7 @@ Phase A 实现：
 """
 
 from typing import List, Optional, Any, Dict
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.core.config import get_logger
 from app.models.schemas import normalize_modalities_config
@@ -559,7 +559,7 @@ class ImageExtractor:
         """
         seen_keys = set()
         result = []
-        now = datetime.utcnow().isoformat() + "Z"
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         
         for i, img in enumerate(raw_images):
             src = img.get("src", "")

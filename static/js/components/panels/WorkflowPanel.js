@@ -34,6 +34,7 @@ window.WorkflowPanel = {
             editorBridgePolling: false,
             editorBridgeInFlight: false,
             editorBridgeTimer: null,
+            editorBridgeIdleDelay: 250,
             keyPresets: WORKFLOW_KEY_PRESETS,
             expandedJsEditors: {},
             customKeyModes: {},
@@ -97,37 +98,52 @@ window.WorkflowPanel = {
         startEditorBridgePolling() {
             if (this.editorBridgePolling || this.editorBridgeTimer) return;
             this.editorBridgePolling = true;
+            this.editorBridgeIdleDelay = 250;
             console.debug('[WorkflowPanel] start editor bridge polling');
-            this.consumeEditorBridgeActions();
-            this.editorBridgeTimer = window.setInterval(() => {
-                this.consumeEditorBridgeActions();
-            }, 250);
+            this.scheduleEditorBridgePolling(0);
         },
 
         stopEditorBridgePolling() {
             this.editorBridgePolling = false;
             if (this.editorBridgeTimer) {
-                window.clearInterval(this.editorBridgeTimer);
+                window.clearTimeout(this.editorBridgeTimer);
                 this.editorBridgeTimer = null;
             }
             console.debug('[WorkflowPanel] stop editor bridge polling');
         },
 
+        scheduleEditorBridgePolling(delay = this.editorBridgeIdleDelay) {
+            if (!this.editorBridgePolling || this.editorBridgeTimer) return;
+            this.editorBridgeTimer = window.setTimeout(async () => {
+                this.editorBridgeTimer = null;
+                await this.consumeEditorBridgeActions();
+            }, Math.max(0, Number(delay) || 0));
+        },
+
         async consumeEditorBridgeActions() {
-            if (this.editorBridgeInFlight) return;
+            if (this.editorBridgeInFlight) {
+                this.scheduleEditorBridgePolling(this.editorBridgeIdleDelay);
+                return;
+            }
             this.editorBridgeInFlight = true;
             try {
                 const result = await this.authJsonRequest('/api/workflow-editor/consume-actions', {
                     method: 'POST',
                     body: '{}'
                 });
-                if (result && Number(result.executed_count || 0) > 0) {
+                const executedCount = Number(result && result.executed_count || 0);
+                if (executedCount > 0) {
+                    this.editorBridgeIdleDelay = 250;
                     console.debug('[WorkflowPanel] consumed editor bridge actions:', result);
+                } else {
+                    this.editorBridgeIdleDelay = Math.min(2000, Math.max(250, this.editorBridgeIdleDelay * 2));
                 }
             } catch (e) {
+                this.editorBridgeIdleDelay = Math.min(2000, Math.max(500, this.editorBridgeIdleDelay * 2));
                 console.debug('[WorkflowPanel] consume editor bridge actions failed:', e);
             } finally {
                 this.editorBridgeInFlight = false;
+                this.scheduleEditorBridgePolling(this.editorBridgeIdleDelay);
             }
         },
 

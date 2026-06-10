@@ -468,6 +468,62 @@ class WorkflowExecutorSendMixin:
             "retry_key_combo": retry_key_combo,
         }
 
+    @staticmethod
+    def _is_send_post_click_confirmed(state: Optional[Dict[str, Any]]) -> bool:
+        if not isinstance(state, dict):
+            return False
+        return bool(state.get("generating") or state.get("sendLooksLikeStop"))
+
+    def _get_recent_fill_expected_text_length(self, max_age: float = 12.0) -> int:
+        try:
+            completed_at = float(getattr(self, "_last_fill_completed_at", 0.0) or 0.0)
+        except Exception:
+            completed_at = 0.0
+        if completed_at <= 0:
+            return 0
+
+        fill_age = time.time() - completed_at
+        if fill_age < 0 or fill_age > max(0.0, float(max_age or 0.0)):
+            return 0
+
+        try:
+            return max(0, int(getattr(self, "_last_fill_text_length", 0) or 0))
+        except Exception:
+            return 0
+
+    def _read_stable_send_input_len(
+        self,
+        target_key: str,
+        *,
+        settle_attempts: int = 2,
+        settle_interval: float = 0.05,
+        use_recent_fill_hint: bool = False,
+    ) -> int:
+        length = self._safe_get_input_len_by_key(target_key)
+        if length > 0:
+            return length
+
+        attempts = max(1, int(settle_attempts))
+        interval = max(0.0, float(settle_interval or 0.0))
+        expected_len = (
+            self._get_recent_fill_expected_text_length()
+            if use_recent_fill_hint and (target_key or "") == "input_box"
+            else 0
+        )
+        if expected_len > 0:
+            attempts = max(attempts, 5 if expected_len < 20000 else 8)
+            interval = max(interval, 0.08)
+
+        for _ in range(attempts - 1):
+            if self._check_cancelled():
+                return length
+            if interval > 0:
+                time.sleep(interval)
+            length = self._safe_get_input_len_by_key(target_key)
+            if length > 0:
+                return length
+        return length
+
     def _format_send_retry_action(self, retry_action_config: Optional[Dict[str, str]] = None) -> str:
         config = retry_action_config or self._get_send_retry_action_config()
         retry_action = str(config.get("retry_action") or "click_send_btn").strip().lower()
@@ -748,12 +804,12 @@ class WorkflowExecutorSendMixin:
                 )
                 return True
 
-            current_len = self._safe_get_input_len_by_key("input_box")
+            current_len = self._read_stable_send_input_len("input_box")
             if self._is_send_success(before_len, current_len) or self._is_send_success(last_len, current_len):
                 return True
 
             state = self._probe_send_post_click_state(send_selector)
-            if trust_generating_indicator and state.get("generating"):
+            if trust_generating_indicator and self._is_send_post_click_confirmed(state):
                 return True
 
             if (
@@ -1089,8 +1145,15 @@ class WorkflowExecutorSendMixin:
         )
         retry_action_config = self._get_send_retry_action_config()
         retry_action_desc = self._format_send_retry_action(retry_action_config)
+        trust_generating_indicator = self._get_send_confirmation_flag(
+            "trust_generating_indicator",
+            True,
+        )
 
-        before_len = self._safe_get_input_len_by_key("input_box")
+        before_len = self._read_stable_send_input_len(
+            "input_box",
+            use_recent_fill_hint=True,
+        )
         baseline_attachment_state = self._probe_attachment_readiness(selector) if avoid_repeat_click else {}
         if self._network_monitor is not None:
             self._network_monitor.mark_send_attempt()
@@ -1098,10 +1161,14 @@ class WorkflowExecutorSendMixin:
         last_send_action_at = time.time()
 
         time.sleep(0.25)
-        after_len = self._safe_get_input_len_by_key("input_box")
+        after_len = self._read_stable_send_input_len("input_box")
 
         if self._is_send_success(before_len, after_len):
             logger.info("发送成功")
+            return
+        post_click_state = self._probe_send_post_click_state(selector)
+        if trust_generating_indicator and self._is_send_post_click_confirmed(post_click_state):
+            logger.info("发送成功（按钮态已进入生成/停止态）")
             return
 
         if avoid_repeat_click:
@@ -1212,7 +1279,7 @@ class WorkflowExecutorSendMixin:
                         )
                         last_send_action_at = time.time()
                         time.sleep(0.25)
-                        retry_after_len = self._safe_get_input_len_by_key("input_box")
+                        retry_after_len = self._read_stable_send_input_len("input_box")
                         retry_network_probe = {"matched": False}
                         if attachment_trust_network_activity and self._network_monitor is not None:
                             try:
@@ -1331,7 +1398,7 @@ class WorkflowExecutorSendMixin:
 
             if time.time() < deadline:
                 time.sleep(min(0.25, max(0.0, deadline - time.time())))
-            new_len = self._safe_get_input_len_by_key("input_box")
+            new_len = self._read_stable_send_input_len("input_box")
 
             if self._is_send_success(after_len, new_len) or self._is_send_success(before_len, new_len):
                 elapsed = max_wait - max(0.0, deadline - time.time())
@@ -1366,12 +1433,45 @@ class WorkflowExecutorSendMixin:
         has_images = False
         if hasattr(self, '_context') and self._context:
             has_images = bool(self._context.get('images'))
-        
+        trust_generating_indicator = self._get_send_confirmation_flag(
+            "trust_generating_indicator",
+            True,
+            raw_only=True,
+        )
+
         if not has_images:
+            before_len = self._read_stable_send_input_len(
+                "input_box",
+                use_recent_fill_hint=True,
+            )
+            if self._network_monitor is not None:
+                self._network_monitor.mark_send_attempt()
             self._execute_click(selector, target_key, optional)
-            logger.info("[STEALTH] 发送完成（无图片）")
-            return
-        
+            time.sleep(0.25)
+            after_len = self._read_stable_send_input_len("input_box")
+            post_state = self._probe_send_post_click_state(selector)
+            if self._is_send_success(before_len, after_len):
+                logger.info("[STEALTH] 发送完成（无图片，输入框已缩短）")
+                return
+            if trust_generating_indicator and self._is_send_post_click_confirmed(post_state):
+                logger.info("[STEALTH] 发送完成（无图片，按钮态已进入生成/停止态）")
+                return
+            if self._observe_send_without_retry(
+                selector,
+                before_len,
+                max_wait=self._get_send_confirmation_window(
+                    "post_click_observe_window",
+                    getattr(BrowserConstants, "SEND_POST_CLICK_OBSERVE_WINDOW", 1.8),
+                    min_value=0.0,
+                    max_value=15.0,
+                    raw_only=True,
+                ),
+            ):
+                logger.info("[STEALTH] 发送完成（无图片，首击后信号确认）")
+                return
+            logger.warning("[STEALTH] 无图片发送未拿到确认信号，触发工作流重试")
+            raise WorkflowError("send_unconfirmed")
+
         default_wait = float(BrowserConstants.get('STEALTH_SEND_IMAGE_WAIT') or 8.0)
         observe_window = self._get_send_confirmation_window(
             "attachment_observe_window",
@@ -1430,7 +1530,10 @@ class WorkflowExecutorSendMixin:
             True,
             raw_only=True,
         )
-        before_len = self._safe_get_input_len_by_key("input_box")
+        before_len = self._read_stable_send_input_len(
+            "input_box",
+            use_recent_fill_hint=True,
+        )
         if self._network_monitor is not None:
             self._network_monitor.mark_send_attempt()
 
@@ -1442,7 +1545,7 @@ class WorkflowExecutorSendMixin:
         self._execute_click(selector, target_key, optional)
         last_send_action_at = time.time()
         time.sleep(0.25)
-        after_len = self._safe_get_input_len_by_key("input_box")
+        after_len = self._read_stable_send_input_len("input_box")
         if self._is_send_success(before_len, after_len):
             logger.info("[STEALTH] 发送成功（输入框已缩短）")
             return
@@ -1494,9 +1597,13 @@ class WorkflowExecutorSendMixin:
                 logger.debug(f"[STEALTH] 发送重试 #{retry_count} 执行失败，继续观察")
 
             time.sleep(0.25)
-            retry_after_len = self._safe_get_input_len_by_key("input_box")
+            retry_after_len = self._read_stable_send_input_len("input_box")
             if self._is_send_success(before_len, retry_after_len):
                 logger.info(f"[STEALTH] 发送成功（第 {retry_count} 次重试后输入框缩短）")
+                return
+            retry_post_state = self._probe_send_post_click_state(selector)
+            if trust_generating_indicator and self._is_send_post_click_confirmed(retry_post_state):
+                logger.info(f"[STEALTH] 发送成功（第 {retry_count} 次重试后按钮态进入生成/停止态）")
                 return
 
             if self._observe_send_without_retry(

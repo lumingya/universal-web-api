@@ -130,7 +130,18 @@ class CommandEngine(CommandEngineRuntimeMixin, CommandEngineResultsMixin, Comman
         self._observer_keywords_by_session: Dict[str, set] = {}
 
         logger.debug("命令引擎已初始化")
-        self._start_periodic_scheduler()
+        if self._should_auto_start_scheduler():
+            self._start_periodic_scheduler()
+
+    @staticmethod
+    def _should_auto_start_scheduler() -> bool:
+        return str(os.getenv("CMD_ENGINE_AUTO_START", "true")).strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "y",
+            "on",
+        }
 
     def evict_session(self, session_id: str):
         """Evict runtime caches and pending state associated with a removed tab session."""
@@ -572,7 +583,12 @@ return (function() {
         with self._lock:
             installed = self._observer_keywords_by_session.get(sid)
         if installed == keywords:
-            # Quick liveness check (outside lock — run_js is I/O)
+            # Quick liveness check with throttling (outside lock — run_js is I/O).
+            now = time.time()
+            last_check = float(getattr(session, "_last_pc_observer_check_at", 0.0) or 0.0)
+            if now - last_check < 5.0:
+                return
+            setattr(session, "_last_pc_observer_check_at", now)
             try:
                 alive = session.tab.run_js("return !!window.__pcObserver")
                 if alive:
@@ -858,7 +874,7 @@ return (function() {
 
         return self._apply_local_command_state(commands)
 
-    def _load_command_state_entries(self) -> List[Dict[str, Any]]:
+    def _load_command_state_entries(self) -> Optional[List[Dict[str, Any]]]:
         local_file = self._get_commands_local_file()
         if not os.path.exists(local_file):
             self._commands_local_mtime = 0.0
@@ -869,19 +885,40 @@ return (function() {
                 data = json.load(f)
 
             self._commands_local_mtime = os.path.getmtime(local_file)
-            entries = data.get("commands", []) if isinstance(data, dict) else []
+            if not isinstance(data, dict):
+                logger.error(f"本地命令状态文件格式无效: {local_file}")
+                return None
+            entries = data.get("commands", [])
             if not isinstance(entries, list):
-                return []
+                logger.error(f"本地命令状态 commands 字段格式无效: {local_file}")
+                return None
             return [entry for entry in entries if isinstance(entry, dict)]
         except json.JSONDecodeError as e:
             logger.error(f"本地命令状态文件格式错误: {e}")
-            return []
+            return None
         except Exception as e:
             logger.error(f"加载本地命令状态失败: {e}")
-            return []
+            return None
+
+    def _fallback_local_command_state_entries(self) -> List[Dict[str, Any]]:
+        entries: List[Dict[str, Any]] = []
+        for cmd in self._commands_cache or []:
+            if not isinstance(cmd, dict):
+                continue
+            entries.append({
+                "id": str(cmd.get("id", "")).strip(),
+                "name": str(cmd.get("name", "")).strip(),
+                "enabled": bool(cmd.get("enabled", True)),
+                "group_name": self._normalize_group_name(cmd.get("group_name")),
+            })
+        if entries:
+            logger.warning("本地命令状态读取失败，沿用内存中的上一轮状态覆盖")
+        return entries
 
     def _apply_local_command_state(self, commands: List[Dict]) -> List[Dict]:
         entries = self._load_command_state_entries()
+        if entries is None:
+            entries = self._fallback_local_command_state_entries()
         if not entries or not commands:
             return commands
 
@@ -936,7 +973,10 @@ return (function() {
                 os.fsync(f.fileno())
 
             os.replace(tmp_file, local_file)
-            self._commands_local_mtime = os.path.getmtime(local_file) if os.path.exists(local_file) else 0.0
+            try:
+                self._commands_local_mtime = os.path.getmtime(local_file) if os.path.exists(local_file) else 0.0
+            except Exception as mtime_error:
+                logger.warning(f"本地命令状态已保存但更新时间戳失败: {mtime_error}")
             return True
         except Exception as e:
             logger.error(f"保存本地命令状态失败: {e}")
@@ -946,6 +986,46 @@ return (function() {
             except Exception:
                 pass
             return False
+
+    def _snapshot_local_command_state(self) -> Optional[tuple[bool, bytes]]:
+        local_file = self._get_commands_local_file()
+        try:
+            if not os.path.exists(local_file):
+                return (False, b"")
+            with open(local_file, "rb") as f:
+                return (True, f.read())
+        except Exception as e:
+            logger.error(f"读取本地命令状态快照失败: {e}")
+            return None
+
+    def _restore_local_command_state(self, snapshot: Optional[tuple[bool, bytes]]) -> None:
+        if snapshot is None:
+            return
+
+        local_file = self._get_commands_local_file()
+        tmp_file = local_file + ".restore.tmp"
+        existed, payload = snapshot
+        try:
+            if existed:
+                os.makedirs(os.path.dirname(local_file), exist_ok=True)
+                with open(tmp_file, "wb") as f:
+                    f.write(payload)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp_file, local_file)
+            elif os.path.exists(local_file):
+                os.remove(local_file)
+            try:
+                self._commands_local_mtime = os.path.getmtime(local_file) if os.path.exists(local_file) else 0.0
+            except Exception as mtime_error:
+                logger.warning(f"本地命令状态已恢复但更新时间戳失败: {mtime_error}")
+        except Exception as e:
+            logger.error(f"恢复本地命令状态失败: {e}")
+            try:
+                if os.path.exists(tmp_file):
+                    os.remove(tmp_file)
+            except Exception:
+                pass
 
     def _refresh_commands_if_changed(self, force: bool = False):
         with self._commands_lock:
@@ -967,20 +1047,30 @@ return (function() {
     def _save_commands(self, commands: List[Dict]) -> bool:
         commands_file = self._get_commands_file()
         tmp_file = commands_file + ".tmp"
+        local_snapshot: Optional[tuple[bool, bytes]] = None
+        local_state_written = False
 
         try:
             with self._commands_lock:
                 commands_snapshot = copy.deepcopy(commands)
                 os.makedirs(os.path.dirname(commands_file), exist_ok=True)
+                local_snapshot = self._snapshot_local_command_state()
+                if local_snapshot is None:
+                    return False
+                if not self._save_local_command_state(commands_snapshot):
+                    self._restore_local_command_state(local_snapshot)
+                    return False
+                local_state_written = True
                 with open(tmp_file, "w", encoding="utf-8") as f:
                     json.dump({"commands": commands_snapshot}, f, indent=2, ensure_ascii=False)
                     f.flush()
                     os.fsync(f.fileno())
 
                 os.replace(tmp_file, commands_file)
-                if not self._save_local_command_state(commands_snapshot):
-                    return False
-                self._commands_mtime = os.path.getmtime(commands_file) if os.path.exists(commands_file) else 0.0
+                try:
+                    self._commands_mtime = os.path.getmtime(commands_file) if os.path.exists(commands_file) else 0.0
+                except Exception as mtime_error:
+                    logger.warning(f"命令配置已保存但更新时间戳失败: {mtime_error}")
                 self._commands_loaded = True
                 self._commands_cache = commands_snapshot
                 return True
@@ -991,13 +1081,29 @@ return (function() {
                     os.remove(tmp_file)
             except Exception:
                 pass
+            if local_state_written:
+                self._restore_local_command_state(local_snapshot)
             return False
+
+    def _runtime_stats_for_command_ids(self, command_ids: set[str]) -> Dict[str, Dict[str, Any]]:
+        if not command_ids:
+            return {}
+        with self._lock:
+            return {
+                command_id: copy.deepcopy(stats)
+                for command_id, stats in self._command_runtime_stats.items()
+                if command_id in command_ids and isinstance(stats, dict)
+            }
 
     def _merge_runtime_stats_into_commands(self, commands: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if not commands:
             return commands
-        with self._lock:
-            runtime_stats = copy.deepcopy(self._command_runtime_stats)
+        command_ids = {
+            str(cmd.get("id", "")).strip()
+            for cmd in commands
+            if isinstance(cmd, dict) and str(cmd.get("id", "")).strip()
+        }
+        runtime_stats = self._runtime_stats_for_command_ids(command_ids)
         if not runtime_stats:
             return commands
         for cmd in commands:
@@ -1009,6 +1115,16 @@ return (function() {
                 continue
             cmd.update(stats)
         return commands
+
+    def _merge_runtime_stats_into_command(self, command: Dict[str, Any]) -> Dict[str, Any]:
+        command_id = str((command or {}).get("id", "")).strip()
+        if not command_id:
+            return command
+        runtime_stats = self._runtime_stats_for_command_ids({command_id})
+        stats = runtime_stats.get(command_id)
+        if stats:
+            command.update(stats)
+        return command
 
     def _normalize_group_name(self, group_name: Any) -> str:
         return str(group_name or "").strip()
@@ -1136,12 +1252,12 @@ return (function() {
     # ================= CRUD =================
 
     def _load_commands(self) -> List[Dict]:
-        """从配置引擎加载命令列表快照，避免共享可变引用。"""
+        """从配置引擎加载命令列表原始快照，避免共享可变引用。"""
         with self._commands_lock:
             self._get_config_engine()
             self._refresh_commands_if_changed()
             snapshot = self._commands_cache
-        return self._merge_runtime_stats_into_commands(copy.deepcopy(snapshot))
+        return copy.deepcopy(snapshot)
 
     def _load_commands_for_checks(self) -> List[Dict]:
         """Load a lightweight command snapshot for read-mostly trigger checks."""
@@ -1150,19 +1266,46 @@ return (function() {
             self._refresh_commands_if_changed()
             snapshot = self._commands_cache
             commands = [dict(cmd) for cmd in snapshot if isinstance(cmd, dict)]
-        return self._merge_runtime_stats_into_commands(commands)
+        return commands
 
     def list_commands(self) -> List[Dict]:
         """获取所有命令"""
-        return self._load_commands()
+        return self._merge_runtime_stats_into_commands(self._load_commands())
 
     def get_command(self, command_id: str) -> Optional[Dict]:
-        for cmd in self.list_commands():
-            if cmd.get("id") == command_id:
-                return cmd
+        command_key = str(command_id or "").strip()
+        if not command_key:
+            return None
+        command = None
+        with self._commands_lock:
+            self._get_config_engine()
+            self._refresh_commands_if_changed()
+            for cmd in self._commands_cache:
+                if not isinstance(cmd, dict):
+                    continue
+                if str(cmd.get("id", "")).strip() == command_key:
+                    command = copy.deepcopy(cmd)
+                    break
+        if command is None:
+            return None
+        return self._merge_runtime_stats_into_command(command)
+
+    def get_command_config(self, command_id: str) -> Optional[Dict]:
+        """获取单条命令原始配置，不合并展示用运行态统计。"""
+        command_key = str(command_id or "").strip()
+        if not command_key:
+            return None
+        with self._commands_lock:
+            self._get_config_engine()
+            self._refresh_commands_if_changed()
+            for cmd in self._commands_cache:
+                if not isinstance(cmd, dict):
+                    continue
+                if str(cmd.get("id", "")).strip() == command_key:
+                    return copy.deepcopy(cmd)
         return None
 
-    def add_command(self, command: Dict = None) -> Dict:
+    def add_command(self, command: Dict = None) -> Optional[Dict]:
         if command is None:
             command = get_default_command()
         else:
@@ -1175,12 +1318,14 @@ return (function() {
             command["group_name"] = self._normalize_group_name(command.get("group_name"))
             self._normalize_command_logging(command)
             commands.append(command)
-            self._save_commands(commands)
+            if not self._save_commands(commands):
+                return None
 
         logger.info(f"[OK] 命令已添加: {command.get('name')} ({command['id']})")
         return copy.deepcopy(command)
 
     def update_command(self, command_id: str, updates: Dict) -> Optional[Dict]:
+        updates = dict(updates or {})
         with self._commands_lock:
             commands = self._load_commands()
 
@@ -1198,7 +1343,8 @@ return (function() {
                     cmd.update(updates)
                     self._normalize_command_logging(cmd)
                     commands[i] = cmd
-                    self._save_commands(commands)
+                    if not self._save_commands(commands):
+                        return None
                     logger.debug(f"[OK] 命令已更新: {cmd.get('name')} ({command_id})")
                     return copy.deepcopy(cmd)
 
@@ -1212,7 +1358,8 @@ return (function() {
             if len(new_commands) == len(commands):
                 return False
 
-            self._save_commands(new_commands)
+            if not self._save_commands(new_commands):
+                return False
 
             # 清理触发状态
             with self._lock:
@@ -1240,7 +1387,12 @@ return (function() {
             for remaining in cmd_map.values():
                 new_commands.append(remaining)
 
-            self._save_commands(new_commands)
+            if len(new_commands) == len(commands) and all(
+                current is updated for current, updated in zip(commands, new_commands)
+            ):
+                return True
+
+            return self._save_commands(new_commands)
         return True
 
     def set_commands_group(self, command_ids: List[str], group_name: str) -> int:
@@ -1261,8 +1413,8 @@ return (function() {
                     continue
                 cmd["group_name"] = normalized_group
                 updated += 1
-            if updated > 0:
-                self._save_commands(commands)
+            if updated > 0 and not self._save_commands(commands):
+                return -1
 
         return updated
 
@@ -1281,12 +1433,12 @@ return (function() {
                     continue
                 cmd["group_name"] = target_name
                 updated += 1
-            if updated > 0:
-                self._save_commands(commands)
+            if updated > 0 and not self._save_commands(commands):
+                return -1
         return updated
 
     def set_commands_enabled(self, command_ids: List[str], enabled: bool) -> int:
-        """鎵归噺鏇存柊鍛戒护鍚敤鐘舵€併€?"""
+        """批量更新命令启用状态。"""
         target_ids = {str(cid).strip() for cid in (command_ids or []) if str(cid).strip()}
         if not target_ids:
             return 0
@@ -1304,8 +1456,8 @@ return (function() {
                     continue
                 cmd["enabled"] = desired_enabled
                 updated += 1
-            if updated > 0:
-                self._save_commands(commands)
+            if updated > 0 and not self._save_commands(commands):
+                return -1
 
         return updated
 
@@ -1323,12 +1475,12 @@ return (function() {
                     continue
                 cmd["group_name"] = ""
                 updated += 1
-            if updated > 0:
-                self._save_commands(commands)
+            if updated > 0 and not self._save_commands(commands):
+                return -1
         return updated
 
     def set_group_enabled(self, group_name: str, enabled: bool) -> int:
-        """鐩存帴鏇存柊鏁翠釜鍛戒护缁勭殑鍚敤鐘舵€併€?"""
+        """直接更新整个命令组的启用状态。"""
         normalized_group = self._normalize_group_name(group_name)
         if not normalized_group:
             return 0
@@ -1345,13 +1497,13 @@ return (function() {
                     continue
                 cmd["enabled"] = desired_enabled
                 updated += 1
-            if updated > 0:
-                self._save_commands(commands)
+            if updated > 0 and not self._save_commands(commands):
+                return -1
         return updated
 
     def list_command_groups(self) -> List[Dict[str, Any]]:
         groups: Dict[str, Dict[str, Any]] = {}
-        for cmd in self.list_commands():
+        for cmd in self._load_commands_for_checks():
             group_name = self._normalize_group_name(cmd.get("group_name"))
             if not group_name:
                 continue
@@ -1375,6 +1527,7 @@ return (function() {
         source_command_id: Optional[str] = None,
         ancestry_chain: Optional[List[str]] = None,
         acquire_policy: Optional[str] = None,
+        prepared_plan: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """在当前会话中顺序执行命令组内的命令。"""
         normalized_group = self._normalize_group_name(group_name)
@@ -1382,13 +1535,15 @@ return (function() {
             return {"ok": False, "error": "empty_group_name"}
         effective_policy = self._normalize_group_acquire_policy(acquire_policy)
 
-        plan = self.preview_command_group(
-            group_name=normalized_group,
-            session=session,
-            include_disabled=include_disabled,
-            source_command_id=source_command_id,
-            ancestry_chain=ancestry_chain,
-        )
+        plan = dict(prepared_plan or {}) if isinstance(prepared_plan, dict) else {}
+        if not plan:
+            plan = self.preview_command_group(
+                group_name=normalized_group,
+                session=session,
+                include_disabled=include_disabled,
+                source_command_id=source_command_id,
+                ancestry_chain=ancestry_chain,
+            )
         candidates: List[Dict[str, Any]] = list(plan.pop("_candidate_commands", []))
         results: List[Dict[str, Any]] = []
         initial_scope_skipped = int(plan.get("scope_skipped", 0) or 0)
@@ -1596,13 +1751,17 @@ return (function() {
                 except Exception as e:
                     logger.error(f"trigger check failed [{cmd.get('name')}]: {e}")
 
+    def submit_background_task(self, fn, *args, **kwargs):
+        """Submit non-trigger command work to the bounded command executor."""
+        return self._command_executor.submit(fn, *args, **kwargs)
+
     def handle_network_event(self, session: 'TabSession', event: Dict[str, Any]) -> bool:
         """
         处理实时网络事件。
 
         返回值：
-        - True: 命中了“网络请求异常拦截”且应立即中断当前等待
-        - False: 不需要中断
+        - True: 命中了网络拦截，当前监听应暂停并交回工作流处理
+        - False: 不需要暂停当前监听
         """
         self.ensure_scheduler_running()
         if not event:
@@ -1614,10 +1773,7 @@ return (function() {
         event_copy.setdefault("timestamp", time.time())
 
         with self._lock:
-            bucket = self._network_events.setdefault(session.id, [])
-            bucket.append(event_copy)
-            if len(bucket) > 50:
-                del bucket[:-50]
+            self._append_bounded_event(self._network_events, session.id, event_copy)
 
         try:
             commands = self._load_commands_for_checks()
@@ -1625,7 +1781,7 @@ return (function() {
             logger.debug(f"命令加载失败，跳过网络事件触发: {e}")
             return False
 
-        should_abort = False
+        should_interrupt_listener = False
 
         for cmd in commands:
             if not cmd.get("enabled", True):
@@ -1639,16 +1795,36 @@ return (function() {
                 dispatch = self._prepare_network_trigger_dispatch(cmd, session, event_copy)
                 if not dispatch:
                     continue
-                scheduled = self._execute_command_async(
-                    cmd,
-                    session,
-                    interrupt_context=dispatch.get("interrupt_context"),
-                    trigger_rollback=dispatch.get("rollback"),
-                )
+                if self._has_active_workflow(session):
+                    scheduled = self._schedule_command_for_active_workflow(
+                        cmd,
+                        session,
+                        interrupt_context=dispatch.get("interrupt_context"),
+                        trigger_rollback=dispatch.get("rollback"),
+                    )
+                    if scheduled:
+                        should_interrupt_listener = (
+                            should_interrupt_listener
+                            or self.workflow_interrupt_requested(session)
+                        )
+                else:
+                    scheduled = self._execute_command_async(
+                        cmd,
+                        session,
+                        interrupt_context=dispatch.get("interrupt_context"),
+                        trigger_rollback=dispatch.get("rollback"),
+                    )
+                    if scheduled:
+                        should_interrupt_listener = (
+                            should_interrupt_listener
+                            or bool(trigger.get("abort_on_match", True))
+                        )
                 if scheduled:
-                    should_abort = should_abort or bool(trigger.get("abort_on_match", True))
+                    continue
+                if dispatch.get("rollback"):
+                    self._rollback_trigger_consumption(cmd, session, dispatch.get("rollback"))
 
-        return should_abort
+        return should_interrupt_listener
 
     def has_network_interception_for_session(self, session: 'TabSession') -> bool:
         """当前会话是否存在可生效的网络异常拦截触发器。"""
@@ -2160,8 +2336,13 @@ return (function() {
             return ""
         return re.sub(r"\s+", " ", text)
 
-    def _text_contains_needle(self, haystack: str, needle: str) -> bool:
-        hay = self._normalize_match_text(haystack)
+    def _text_contains_needle(
+        self,
+        haystack: str,
+        needle: str,
+        pre_normalized_haystack: Optional[str] = None,
+    ) -> bool:
+        hay = pre_normalized_haystack if pre_normalized_haystack is not None else self._normalize_match_text(haystack)
         ned = self._normalize_match_text(needle)
         if not hay or not ned:
             return False
@@ -2181,26 +2362,43 @@ return (function() {
         return ned in hay
 
     def _get_page_check_snapshot_text(self, session: 'TabSession') -> str:
+        now = time.time()
+        cached = getattr(session, "_pc_snapshot_cached", None)
+        if isinstance(cached, tuple) and len(cached) == 2:
+            cached_ts, cached_text = cached
+            try:
+                cached_ts = float(cached_ts or 0.0)
+            except Exception:
+                cached_ts = 0.0
+            if cached_ts > 0.0 and now - cached_ts < 0.5:
+                return str(cached_text or "")
+
         self._try_wake_tab(session, reason="page_check")
 
         try:
-            observer_ok = session.tab.run_js("return !!window.__pcObserver")
-            if observer_ok:
-                snapshot = str(session.tab.run_js("return String(window.__pcSnapshot || '')") or "")
-                if snapshot.strip():
-                    return snapshot
+            snapshot = session.tab.run_js(
+                "return window.__pcObserver ? String(window.__pcSnapshot || '') : null"
+            )
+            if snapshot is not None:
+                snapshot_text = str(snapshot or "")
+                if snapshot_text.strip():
+                    setattr(session, "_pc_snapshot_cached", (now, snapshot_text))
+                    return snapshot_text
         except Exception:
             pass
 
         try:
             page_text = str(session.tab.run_js(self._PAGE_CHECK_SNAPSHOT_JS) or "")
             if page_text.strip():
+                setattr(session, "_pc_snapshot_cached", (now, page_text))
                 return page_text
         except Exception:
             pass
 
         try:
-            return str(session.tab.run_js("return document.title || '';") or "")
+            title_text = str(session.tab.run_js("return document.title || '';") or "")
+            setattr(session, "_pc_snapshot_cached", (now, title_text))
+            return title_text
         except Exception:
             return ""
 
@@ -2245,9 +2443,14 @@ return (function() {
                 "snapshot_preview": "",
             }
 
+        normalized_snapshot = self._normalize_match_text(snapshot)
         matched_keywords = [
             keyword for keyword in keywords
-            if self._text_contains_needle(snapshot, keyword)
+            if self._text_contains_needle(
+                snapshot,
+                keyword,
+                pre_normalized_haystack=normalized_snapshot,
+            )
         ]
         if op == "or":
             hit = bool(matched_keywords)

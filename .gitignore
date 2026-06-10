@@ -12,6 +12,7 @@ venv/
 ENV/
 .venv/
 temp/
+
 # 浏览器配置（含用户登录态，绝对不能提交！）
 chrome_profile/
 
@@ -53,6 +54,11 @@ Thumbs.db
 
 # Node.js
 node_modules/
+
+# 排除打包输出和打包脚本
+dist/
+build_release.py
+
 # Git 提交脚本（不需要提交）
 git提交.py
 
@@ -62,3 +68,7 @@ image/
 # Agent 协作与网桥配置文件
 agent_collaboration_rules.md
 .agent_bridge.json
+
+# 内网穿透脚本与批处理文件
+开启公网访问(8199端口).bat
+start_ngrok.py

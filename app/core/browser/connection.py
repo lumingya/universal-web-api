@@ -71,13 +71,72 @@ def _load_tab_pool_config() -> Dict:
 class BrowserConnectionMixin:
     """浏览器连接管理、生命周期、Watchdog 及 Tab 巡检混入类"""
 
+    @staticmethod
+    def _to_bool_env(name: str, default: bool = False) -> bool:
+        value = os.getenv(name)
+        if value is None:
+            return default
+        return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+    def _shutdown_tab_pool_for_reconnect(self, reason: str = "reconnect") -> None:
+        pool = getattr(self, "_tab_pool", None)
+        if pool is None:
+            return
+        self._tab_pool = None
+        try:
+            pool.shutdown(close_browser_tabs=False)
+            logger.info(f"[BrowserCore] 已重置旧 TabPool ({reason})")
+        except Exception as e:
+            logger.warning(f"[BrowserCore] 重置旧 TabPool 失败 ({reason}): {e}")
+
+    def _dispose_previous_browser_handle(self, browser_handle: Any, reason: str = "reconnect") -> None:
+        if browser_handle is None:
+            return
+
+        if self._to_bool_env("BROWSER_RECONNECT_QUIT_OLD_HANDLE", False):
+            try:
+                browser_handle.quit(timeout=1, force=False, del_data=False)
+                logger.info(f"[BrowserCore] 已关闭旧浏览器句柄 ({reason})")
+                return
+            except Exception as e:
+                logger.debug(f"[BrowserCore] 关闭旧浏览器句柄失败 ({reason}): {e}")
+
+        stopped = 0
+        for driver in [getattr(browser_handle, "_driver", None)]:
+            stop = getattr(driver, "stop", None)
+            if callable(stop):
+                try:
+                    stop()
+                    stopped += 1
+                except Exception:
+                    pass
+        try:
+            all_drivers = getattr(browser_handle, "_all_drivers", {}) or {}
+            for driver_group in list(all_drivers.values()):
+                for driver in list(driver_group or []):
+                    stop = getattr(driver, "stop", None)
+                    if callable(stop):
+                        try:
+                            stop()
+                            stopped += 1
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+        if stopped:
+            logger.debug(f"[BrowserCore] 已释放旧 CDP driver 引用 ({reason}, count={stopped})")
+
     def _connect(self) -> bool:
+        previous_handle = getattr(self, "browser_handle", None)
+        self._shutdown_tab_pool_for_reconnect("connect")
         try:
             logger.debug(f"连接浏览器 127.0.0.1:{self.port}")
             opts = ChromiumOptions()
             opts.set_address(f"127.0.0.1:{self.port}")
             opts.existing_only()
             self.browser_handle = Chromium(addr_or_opts=opts)
+            if previous_handle is not None and previous_handle is not self.browser_handle:
+                self._dispose_previous_browser_handle(previous_handle, "connect")
             try:
                 self.page = self.browser_handle.latest_tab
             except Exception:
@@ -213,7 +272,10 @@ class BrowserConnectionMixin:
         try:
             if not self._tab_pool:
                 return "tab_pool=uninitialized"
-            status = self._tab_pool.get_status()
+            if hasattr(self._tab_pool, "get_watchdog_summary"):
+                status = self._tab_pool.get_watchdog_summary(limit=4)
+            else:
+                status = self._tab_pool.get_status()
             total = int(status.get("total", 0) or 0)
             idle = int(status.get("idle", 0) or 0)
             busy = int(status.get("busy", 0) or 0)
@@ -273,7 +335,7 @@ class BrowserConnectionMixin:
     def _get_connection_watchdog_interval(self) -> float:
         active_interval = self._get_watchdog_float_env(
             "BROWSER_WATCHDOG_ACTIVE_INTERVAL",
-            1.0,
+            3.0,
             minimum=0.5,
         )
         idle_interval = self._get_watchdog_float_env(
@@ -363,9 +425,11 @@ class BrowserConnectionMixin:
                     result["error"] = "无法连接到浏览器"
                     return result
             elif not self._probe_browser_connection():
+                previous_handle = self.browser_handle
                 self._connected = False
                 self.browser_handle = None
                 self.page = None
+                self._dispose_previous_browser_handle(previous_handle, "health_check")
                 if not self._connect():
                     result["error"] = "无法连接到浏览器"
                     return result
@@ -386,9 +450,11 @@ class BrowserConnectionMixin:
         if self._connected:
             if self._probe_browser_connection():
                 return True
+            previous_handle = self.browser_handle
             self._connected = False
             self.browser_handle = None
             self.page = None
+            self._dispose_previous_browser_handle(previous_handle, "ensure_connection")
         
         return self._connect()
     

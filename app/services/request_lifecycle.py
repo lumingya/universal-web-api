@@ -20,6 +20,7 @@ MIN_MAX_REQUEST_EXECUTE_TIME_SEC = 5.0
 WORKER_QUEUE_FINAL_GRACE_SEC = 5.0
 WORKER_QUEUE_MAX_PUT_BLOCK_SEC = 0.1
 WORKER_QUEUE_CANCEL_PUT_BLOCK_SEC = 0.01
+WORKER_QUEUE_WAIT_BACKOFF_FACTOR = 1.8
 
 
 class TrackedWorkerExecutionCancelled(Exception):
@@ -132,6 +133,72 @@ def _coerce_worker_queue_put_timeout(raw_timeout: Any, *, cancelled: bool = Fals
     )
 
 
+async def wait_worker_queue_item(
+    chunk_queue: queue.Queue,
+    *,
+    timeout: float = 0.5,
+    poll_interval: float = 0.01,
+    max_poll_interval: float = 0.05,
+) -> Any:
+    """Wait for a worker queue item without occupying the default executor."""
+    try:
+        timeout_value = float(timeout)
+    except Exception:
+        timeout_value = 0.5
+    timeout_value = max(0.0, timeout_value)
+
+    try:
+        interval = float(poll_interval)
+    except Exception:
+        interval = 0.01
+    interval = max(0.001, min(interval, 0.05))
+
+    try:
+        max_interval = float(max_poll_interval)
+    except Exception:
+        max_interval = 0.05
+    max_interval = max(interval, min(max_interval, 0.05))
+
+    deadline = time.monotonic() + timeout_value
+    current_interval = min(interval, timeout_value) if timeout_value > 0 else interval
+    while True:
+        try:
+            return chunk_queue.get_nowait()
+        except queue.Empty:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise
+            sleep_for = min(current_interval, remaining)
+            await asyncio.sleep(sleep_for)
+            current_interval = _next_worker_queue_wait_interval(
+                current_interval,
+                max_interval,
+                remaining,
+            )
+
+
+def _next_worker_queue_wait_interval(current: float, max_interval: float, remaining: float) -> float:
+    try:
+        current_value = float(current)
+    except Exception:
+        current_value = 0.001
+    try:
+        max_value = float(max_interval)
+    except Exception:
+        max_value = 0.05
+    try:
+        remaining_value = float(remaining)
+    except Exception:
+        remaining_value = max_value
+
+    max_value = max(0.001, min(max_value, 0.05))
+    current_value = max(0.001, current_value)
+    remaining_value = max(0.0, remaining_value)
+
+    next_value = current_value * WORKER_QUEUE_WAIT_BACKOFF_FACTOR
+    return max(0.001, min(next_value, max_value, remaining_value or max_value))
+
+
 def _set_worker_future_result(
     future: "asyncio.Future[Any]",
     *,
@@ -190,6 +257,13 @@ async def run_tracked_blocking_call(
     )
     worker_state["thread"] = worker_thread
     worker_state["label"] = label
+
+    def _clear_finished_worker_state() -> None:
+        if worker_state.get("thread") is worker_thread:
+            worker_state["thread"] = None
+            worker_state["label"] = None
+
+    result_future.add_done_callback(lambda _future: _clear_finished_worker_state())
     worker_thread.start()
 
     try:
@@ -211,9 +285,8 @@ async def run_tracked_blocking_call(
             except asyncio.TimeoutError:
                 continue
     finally:
-        if result_future.done() and worker_state.get("thread") is worker_thread:
-            worker_state["thread"] = None
-            worker_state["label"] = None
+        if result_future.done():
+            _clear_finished_worker_state()
 
 
 def _resolve_raw_tab_id(pool: Any, session: Any) -> str:

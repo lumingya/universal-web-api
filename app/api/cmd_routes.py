@@ -8,13 +8,13 @@ app/api/cmd_routes.py - 命令系统 API 路由
 """
 
 import json
-import threading
 from typing import Optional, List
 
 from fastapi import APIRouter, HTTPException, Depends, Header
 from pydantic import BaseModel, Field
 
 from app.core.config import AppConfig, get_logger
+from app.api.deps import extract_authorization_token
 from app.services.command_engine import command_engine
 from app.services.request_manager import request_manager, RequestStatus
 
@@ -24,17 +24,58 @@ router = APIRouter(tags=["commands"])
 
 
 SECRET_PLACEHOLDER = "__SECRET_REDACTED__"
-SENSITIVE_KEYS = {
+SENSITIVE_KEY_HINTS = {
     "access_token",
     "authorization",
     "auth_token",
     "api_key",
+    "apikey",
+    "client_credentials",
+    "credential",
+    "credentials",
+    "credentials_json",
+    "csrf",
+    "github_token",
+    "password",
+    "passwd",
+    "private_key",
+    "private_pem",
+    "refresh_token",
+    "secret",
+    "service_account",
+    "service_account_json",
+    "session",
+    "token",
     "x_api_key",
+    "x_github_token",
 }
+SENSITIVE_KEY_SUFFIXES = (
+    "_access_token",
+    "_auth_token",
+    "_token",
+    "_api_key",
+    "_apikey",
+    "_credential",
+    "_credentials",
+    "_credentials_json",
+    "_github_token",
+    "_password",
+    "_passwd",
+    "_private_key",
+    "_private_pem",
+    "_secret",
+    "_service_account",
+    "_service_account_json",
+)
 
 
 def _normalize_secret_key(key: object) -> str:
     return str(key or "").strip().lower().replace("-", "_")
+
+
+def _is_command_secret_key(key: object) -> bool:
+    normalized = _normalize_secret_key(key)
+    return normalized in SENSITIVE_KEY_HINTS or normalized.endswith(SENSITIVE_KEY_SUFFIXES)
 
 
 def _try_parse_json_text(value: object):
@@ -49,12 +90,21 @@ def _try_parse_json_text(value: object):
         return None
 
 
+def _restore_list_item_key(item: object) -> str:
+    if not isinstance(item, dict):
+        return ""
+    for key in ("id", "action_id", "command_id", "name"):
+        value = str(item.get(key) or "").strip()
+        if value:
+            return f"{key}:{value}"
+    return ""
+
+
 def _redact_command_secrets(data):
     if isinstance(data, dict):
         result = {}
         for key, value in data.items():
-            normalized = _normalize_secret_key(key)
-            if normalized in SENSITIVE_KEYS and value not in (None, ""):
+            if _is_command_secret_key(key) and value not in (None, ""):
                 result[key] = SECRET_PLACEHOLDER
             else:
                 result[key] = _redact_command_secrets(value)
@@ -72,17 +122,28 @@ def _restore_secret_placeholders(updates, existing):
     if isinstance(updates, dict) and isinstance(existing, dict):
         result = {}
         for key, value in updates.items():
-            normalized = _normalize_secret_key(key)
             existing_value = existing.get(key)
-            if normalized in SENSITIVE_KEYS and value == SECRET_PLACEHOLDER:
+            if _is_command_secret_key(key) and value == SECRET_PLACEHOLDER:
                 result[key] = existing_value
             else:
                 result[key] = _restore_secret_placeholders(value, existing_value)
         return result
     if isinstance(updates, list) and isinstance(existing, list):
         result = []
+        existing_by_key = {
+            key: value
+            for value in existing
+            for key in [_restore_list_item_key(value)]
+            if key
+        }
         for idx, value in enumerate(updates):
-            existing_value = existing[idx] if idx < len(existing) else None
+            item_key = _restore_list_item_key(value)
+            if item_key and item_key in existing_by_key:
+                existing_value = existing_by_key[item_key]
+            elif item_key:
+                existing_value = None
+            else:
+                existing_value = existing[idx] if idx < len(existing) else None
             result.append(_restore_secret_placeholders(value, existing_value))
         return result
     parsed_updates = _try_parse_json_text(updates)
@@ -91,6 +152,105 @@ def _restore_secret_placeholders(updates, existing):
         restored = _restore_secret_placeholders(parsed_updates, parsed_existing)
         return json.dumps(restored, ensure_ascii=False, indent=2)
     return updates
+
+
+def _find_unresolved_secret_placeholders(data, path: str = "") -> List[str]:
+    found: List[str] = []
+    if isinstance(data, dict):
+        for key, value in data.items():
+            key_path = str(key or "")
+            next_path = f"{path}.{key_path}" if path else key_path
+            if _is_command_secret_key(key) and value == SECRET_PLACEHOLDER:
+                found.append(next_path)
+                continue
+            found.extend(_find_unresolved_secret_placeholders(value, next_path))
+        return found
+    if isinstance(data, list):
+        for index, value in enumerate(data):
+            next_path = f"{path}[{index}]" if path else f"[{index}]"
+            found.extend(_find_unresolved_secret_placeholders(value, next_path))
+        return found
+
+    parsed = _try_parse_json_text(data)
+    if isinstance(parsed, (dict, list)):
+        json_path = f"{path}<json>" if path else "<json>"
+        found.extend(_find_unresolved_secret_placeholders(parsed, json_path))
+    return found
+
+
+def _reject_unresolved_secret_placeholders(data) -> None:
+    unresolved = _find_unresolved_secret_placeholders(data)
+    if not unresolved:
+        return
+    preview = ", ".join(unresolved[:5])
+    if len(unresolved) > 5:
+        preview = f"{preview}, ... (+{len(unresolved) - 5})"
+    raise HTTPException(
+        status_code=400,
+        detail=f"unresolved_secret_placeholder: {preview}",
+    )
+
+
+def _raise_command_save_failed() -> None:
+    raise HTTPException(status_code=500, detail="命令保存失败")
+
+
+def _finish_manual_command_request(ctx, success: bool) -> None:
+    try:
+        request_manager.finish_request(ctx, success=success)
+    except Exception as exc:
+        logger.debug(f"manual command request finish failed: {exc}")
+
+
+def _release_manual_command_session(pool, session, *, rollback_request_count: bool = False) -> None:
+    try:
+        kwargs = {"check_triggers": False}
+        if rollback_request_count:
+            kwargs["rollback_request_count"] = True
+        pool.release(session.id, **kwargs)
+    except Exception as release_error:
+        logger.debug(f"manual command release failed: {release_error}")
+
+
+def _coerce_tab_index(value) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _idle_tabs_for_manual_command(pool) -> List[dict]:
+    items: List[dict] = []
+    snapshot_failed = False
+    if hasattr(pool, "get_sessions_snapshot"):
+        try:
+            sessions = pool.get_sessions_snapshot()
+        except Exception:
+            sessions = []
+            snapshot_failed = True
+        for session in sessions or []:
+            if getattr(getattr(session, "status", None), "value", "") != "idle":
+                continue
+            tab_index = _coerce_tab_index(getattr(session, "persistent_index", None))
+            if tab_index is None:
+                continue
+            items.append({"tab_index": tab_index, "session": session})
+    if not hasattr(pool, "get_sessions_snapshot") or snapshot_failed:
+        status = pool.get_status()
+        for item in status.get("tabs", []) if isinstance(status, dict) else []:
+            if item.get("status") != "idle":
+                continue
+            tab_index = _coerce_tab_index(item.get("persistent_index"))
+            if tab_index is None:
+                continue
+            items.append({"tab_index": tab_index, "session": None})
+
+    items.sort(key=lambda item: item["tab_index"])
+    return items
+
+
+def _manual_command_matches_scope(cmd, session) -> bool:
+    return command_engine._matches_scope(cmd, session)
 
 
 # ================= 认证依赖 =================
@@ -102,7 +262,7 @@ async def verify_auth(authorization: Optional[str] = Header(None)) -> bool:
         raise HTTPException(status_code=500, detail="服务配置错误")
     if not authorization:
         raise HTTPException(status_code=401, detail="未提供认证令牌")
-    token = authorization.replace("Bearer ", "").strip()
+    token = extract_authorization_token(authorization)
     if token != AppConfig.get_auth_token():
         raise HTTPException(status_code=401, detail="认证令牌无效")
     return True
@@ -216,7 +376,10 @@ async def create_command(
     authenticated: bool = Depends(verify_auth)
 ):
     cmd_data = body.model_dump()
+    _reject_unresolved_secret_placeholders(cmd_data)
     cmd = command_engine.add_command(cmd_data)
+    if not cmd:
+        _raise_command_save_failed()
     return {"success": True, "command": _redact_command_secrets(cmd)}
 
 
@@ -226,6 +389,8 @@ async def reorder_commands(
     authenticated: bool = Depends(verify_auth)
 ):
     success = command_engine.reorder_commands(body.command_ids)
+    if not success:
+        _raise_command_save_failed()
     return {"success": success}
 
 
@@ -241,6 +406,8 @@ async def assign_command_group(
     authenticated: bool = Depends(verify_auth)
 ):
     updated = command_engine.set_commands_group(body.command_ids, body.group_name)
+    if updated < 0:
+        _raise_command_save_failed()
     return {"success": True, "updated": updated, "group_name": (body.group_name or "").strip()}
 
 
@@ -250,6 +417,8 @@ async def update_commands_enabled(
     authenticated: bool = Depends(verify_auth)
 ):
     updated = command_engine.set_commands_enabled(body.command_ids, body.enabled)
+    if updated < 0:
+        _raise_command_save_failed()
     return {"success": True, "updated": updated, "enabled": body.enabled}
 
 
@@ -261,6 +430,8 @@ async def update_command_group_enabled(
 ):
     normalized_name = (group_name or "").strip()
     updated = command_engine.set_group_enabled(normalized_name, body.enabled)
+    if updated < 0:
+        _raise_command_save_failed()
     return {
         "success": True,
         "updated": updated,
@@ -287,6 +458,8 @@ async def rename_command_group(
         raise HTTPException(status_code=400, detail=f"命令组已存在：{target_name}")
 
     updated = command_engine.rename_group(source_name, target_name)
+    if updated < 0:
+        _raise_command_save_failed()
     return {
         "success": True,
         "updated": updated,
@@ -301,6 +474,8 @@ async def disband_command_group(
     authenticated: bool = Depends(verify_auth)
 ):
     updated = command_engine.disband_group(group_name)
+    if updated < 0:
+        _raise_command_save_failed()
     return {"success": True, "updated": updated, "group_name": group_name}
 
 
@@ -311,21 +486,25 @@ async def update_command(
     authenticated: bool = Depends(verify_auth)
 ):
     updates = body.model_dump(exclude_none=True)
-    existing = command_engine.get_command(command_id)
+    existing = command_engine.get_command_config(command_id)
     if not existing:
         raise HTTPException(status_code=404, detail="命令不存在")
     updates = _restore_secret_placeholders(updates, existing)
+    _reject_unresolved_secret_placeholders(updates)
     cmd = command_engine.update_command(command_id, updates)
     if not cmd:
-        raise HTTPException(status_code=404, detail="命令不存在")
+        _raise_command_save_failed()
     return {"success": True, "command": _redact_command_secrets(cmd)}
 
 
 @router.delete("/api/commands/{command_id}")
 async def delete_command(command_id: str, authenticated: bool = Depends(verify_auth)):
+    existing = command_engine.get_command_config(command_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="命令不存在")
     success = command_engine.delete_command(command_id)
     if not success:
-        raise HTTPException(status_code=404, detail="命令不存在")
+        _raise_command_save_failed()
     return {"success": True}
 
 
@@ -342,16 +521,9 @@ async def test_command(command_id: str, authenticated: bool = Depends(verify_aut
         browser = get_browser(auto_connect=False)
         pool = browser.tab_pool
 
-        sessions = []
-        if hasattr(pool, "get_sessions_snapshot"):
-            sessions = pool.get_sessions_snapshot()
-        idle_sessions = [
-            session for session in sessions
-            if getattr(getattr(session, "status", None), "value", "") == "idle"
-        ]
-        idle_sessions.sort(key=lambda item: getattr(item, "persistent_index", 0))
+        idle_tabs = _idle_tabs_for_manual_command(pool)
 
-        if not idle_sessions:
+        if not idle_tabs:
             raise HTTPException(status_code=409, detail="no_idle_tabs")
 
         scheduled_tabs: List[int] = []
@@ -370,23 +542,23 @@ async def test_command(command_id: str, authenticated: bool = Depends(verify_aut
                 logger.error(f"manual command test worker failed(tab={getattr(target_session, 'persistent_index', '?')}): {e}")
                 target_ctx.mark_failed(str(e))
             finally:
-                request_manager.finish_request(target_ctx, success=(target_ctx.status == RequestStatus.COMPLETED))
-                setattr(target_session, "_command_request_id", None)
                 try:
-                    pool.release(target_session.id, check_triggers=False)
-                except Exception as release_error:
-                    logger.debug(f"manual command test release failed: {release_error}")
+                    _finish_manual_command_request(
+                        target_ctx,
+                        success=(target_ctx.status == RequestStatus.COMPLETED),
+                    )
+                finally:
+                    setattr(target_session, "_command_request_id", None)
+                    _release_manual_command_session(pool, target_session)
 
-        for candidate in idle_sessions:
-            tab_index = getattr(candidate, "persistent_index", None)
-            if tab_index is None:
-                continue
-
+        for tab_info in idle_tabs:
+            tab_index = tab_info["tab_index"]
+            candidate_session = tab_info.get("session")
             ctx = None
             session = None
             try:
                 # Respect command scope even in manual test mode.
-                if not command_engine._matches_scope(cmd, candidate):
+                if candidate_session is not None and not _manual_command_matches_scope(cmd, candidate_session):
                     skipped_tabs.append(tab_index)
                     continue
 
@@ -394,27 +566,24 @@ async def test_command(command_id: str, authenticated: bool = Depends(verify_aut
                 session = pool.acquire_by_index(tab_index, ctx.request_id, timeout=3)
                 if not session:
                     ctx.mark_failed("acquire_failed")
-                    request_manager.finish_request(ctx, success=False)
+                    _finish_manual_command_request(ctx, success=False)
                     failed_tabs.append({"tab_index": tab_index, "error": "acquire_failed"})
                     continue
 
-                worker = threading.Thread(
-                    target=_run_command_in_background,
-                    args=(session, ctx),
-                    daemon=True,
-                    name=f"cmd-test-{command_id[:8]}-{tab_index}",
-                )
-                worker.start()
+                if not _manual_command_matches_scope(cmd, session):
+                    skipped_tabs.append(tab_index)
+                    _release_manual_command_session(pool, session, rollback_request_count=True)
+                    _finish_manual_command_request(ctx, success=False)
+                    continue
+
+                command_engine.submit_background_task(_run_command_in_background, session, ctx)
                 scheduled_tabs.append(tab_index)
             except Exception as e:
                 if ctx is not None and not ctx.is_terminal():
                     ctx.mark_failed(str(e))
-                    request_manager.finish_request(ctx, success=False)
+                    _finish_manual_command_request(ctx, success=False)
                 if session is not None and getattr(getattr(session, "status", None), "value", "") == "busy":
-                    try:
-                        pool.release(session.id, check_triggers=False, rollback_request_count=True)
-                    except Exception as release_error:
-                        logger.debug(f"manual command test rollback release failed: {release_error}")
+                    _release_manual_command_session(pool, session, rollback_request_count=True)
                 failed_tabs.append({"tab_index": tab_index, "error": str(e)})
 
         if not scheduled_tabs:
@@ -462,9 +631,7 @@ async def execute_command_group(
         browser = get_browser(auto_connect=False)
         pool = browser.tab_pool
 
-        status = pool.get_status()
-        idle_tabs = [t for t in status.get("tabs", []) if t["status"] == "idle"]
-        idle_tabs.sort(key=lambda t: t.get("persistent_index", 0))
+        idle_tabs = _idle_tabs_for_manual_command(pool)
 
         if not idle_tabs:
             raise HTTPException(status_code=409, detail="没有空闲标签页可用于执行命令组")
@@ -473,7 +640,7 @@ async def execute_command_group(
         acquire_failures: List[int] = []
 
         for tab_info in idle_tabs:
-            tab_index = tab_info["persistent_index"]
+            tab_index = tab_info["tab_index"]
             session = pool.acquire_by_index(tab_index, f"group_test_{normalized_name}_{tab_index}", timeout=5)
             if not session:
                 acquire_failures.append(tab_index)
@@ -501,6 +668,7 @@ async def execute_command_group(
                     session=session,
                     include_disabled=include_disabled,
                     acquire_policy=effective_acquire_policy,
+                    prepared_plan=plan,
                 )
                 if not result.get("ok") and not result.get("partial_ok"):
                     raise HTTPException(status_code=400, detail=result.get("error", "命令组执行失败"))
@@ -515,7 +683,7 @@ async def execute_command_group(
                     **result,
                 }
             finally:
-                pool.release(session.id, check_triggers=False)
+                _release_manual_command_session(pool, session)
 
         detail = {
             "error": "no_idle_tabs_match_group_scope",

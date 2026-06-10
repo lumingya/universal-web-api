@@ -16,6 +16,9 @@ logger = get_logger("CMD_ENG")
 
 
 class CommandEngineResultsMixin:
+    MAX_EVENT_QUEUE_ITEMS = 50
+    MAX_COMMAND_RESULT_EVENTS = 50
+
     @staticmethod
     def _normalize_domain_host(value: Any) -> str:
         text = str(value or "").strip().lower()
@@ -272,9 +275,7 @@ class CommandEngineResultsMixin:
         event = self._build_command_result_event(command, execution_result, entry, session)
         with self._lock:
             self._command_results[(command["id"], session.id)] = entry
-            queue = list(self._command_result_events.get(session.id) or [])
-            queue.append(event)
-            self._command_result_events[session.id] = queue[-50:]
+            self._append_bounded_event(self._command_result_events, session.id, event)
 
     def _build_command_result_event(
         self,
@@ -344,6 +345,21 @@ class CommandEngineResultsMixin:
                 return None
             return copy.deepcopy(items[-1])
 
+    def _append_bounded_event(
+        self,
+        bucket: Dict[str, List[Dict[str, Any]]],
+        tab_id: str,
+        event: Dict[str, Any],
+        *,
+        max_events: Optional[int] = None,
+    ) -> None:
+        queue = bucket.setdefault(tab_id, [])
+        queue.append(event)
+        limit = max(1, int(max_events or self.MAX_EVENT_QUEUE_ITEMS))
+        overflow = len(queue) - limit
+        if overflow > 0:
+            del queue[:overflow]
+
     def _get_command_result_events(self, tab_id: str) -> List[Dict[str, Any]]:
         with self._lock:
             return copy.deepcopy(list(self._command_result_events.get(tab_id) or []))
@@ -384,9 +400,11 @@ class CommandEngineResultsMixin:
         }
 
         with self._lock:
-            queue = list(self._command_result_events.get(session.id) or [])
-            queue.append(copy.deepcopy(event))
-            self._command_result_events[session.id] = queue[-50:]
+            self._append_bounded_event(
+                self._command_result_events,
+                session.id,
+                copy.deepcopy(event),
+            )
 
         logger.info(
             f"[CMD] 外部结果事件已记录: {normalized_name} "
@@ -481,16 +499,22 @@ class CommandEngineResultsMixin:
         token = str(token or "").strip()
         if not token:
             return
-        history = [item for item in self._get_consumed_history(state, field) if item != token]
+        history = self._get_consumed_history(state, field)
+        if token in history:
+            history.remove(token)
         history.append(token)
         state[field] = token
-        state[f"{field}s"] = history[-50:]
+        overflow = len(history) - 50
+        if overflow > 0:
+            del history[:overflow]
+        state[f"{field}s"] = history
 
     def _get_next_command_result_event(
         self,
         command: Dict[str, Any],
         session: 'TabSession',
         consume: bool = False,
+        copy_event: bool = True,
     ) -> Optional[Dict[str, Any]]:
         trigger = command.get("trigger", {}) or {}
         state, _ = self._ensure_trigger_state(command["id"], session)
@@ -509,12 +533,11 @@ class CommandEngineResultsMixin:
                     if consume:
                         self._remember_consumed_token(state, "result_event_token", token)
                     continue
-                event_copy = copy.deepcopy(event)
                 if consume:
                     self._remember_consumed_token(state, "result_event_token", token)
                     if signature:
                         state["result_event_latch_sig"] = signature
-                return event_copy
+                return copy.deepcopy(event) if copy_event else event
         return None
 
     def _match_command_result_event_trigger(
@@ -523,7 +546,12 @@ class CommandEngineResultsMixin:
         session: 'TabSession',
         consume: bool = False,
     ) -> bool:
-        return self._get_next_command_result_event(command, session, consume=consume) is not None
+        return self._get_next_command_result_event(
+            command,
+            session,
+            consume=consume,
+            copy_event=False,
+        ) is not None
 
     def _prepare_command_result_event_dispatch(
         self,
@@ -537,7 +565,7 @@ class CommandEngineResultsMixin:
 
         return {
             "rollback": {"kind": "result_event_token", "token": token},
-            "interrupt_context": {"command_result_event": copy.deepcopy(event)},
+            "interrupt_context": {"command_result_event": event},
         }
 
     def _normalize_status_codes(self, raw_codes: Any) -> set[int]:
@@ -633,7 +661,7 @@ class CommandEngineResultsMixin:
     ) -> Optional[Dict[str, Any]]:
         trigger = command.get("trigger", {}) or {}
         if event is None:
-            for candidate in self._get_network_events(session.id):
+            for candidate in self._snapshot_network_events(session.id):
                 if not self._matches_network_trigger(trigger, candidate):
                     continue
                 signature = self._build_network_signature(candidate)
@@ -662,6 +690,10 @@ class CommandEngineResultsMixin:
             if not items:
                 return None
             return copy.deepcopy(items[-1])
+
+    def _snapshot_network_events(self, tab_id: str) -> List[Dict[str, Any]]:
+        with self._lock:
+            return list(self._network_events.get(tab_id) or [])
 
     def _get_network_events(self, tab_id: str) -> List[Dict[str, Any]]:
         with self._lock:

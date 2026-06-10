@@ -131,7 +131,10 @@ window.CommandsTabComponent = {
                 append_newline: true,
                 create_dirs: true,
                 encoding: 'utf-8'
-            }
+            },
+            fetchCommandsSeq: 0,
+            commandsResponseSignature: '',
+            presetOptionsRequestSeq: 0
         };
     },
     computed: window.CommandsTabComputed,

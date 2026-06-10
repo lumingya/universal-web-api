@@ -150,6 +150,38 @@ class BrowserMediaMixin:
             new_item["byte_size"] = byte_size
         return new_item
 
+    @staticmethod
+    def _read_response_bytes_with_limit(response, max_bytes: int) -> bytes:
+        max_bytes = max(1, int(max_bytes or 1))
+        content_length = str(response.headers.get("Content-Length") or "").strip()
+        if content_length:
+            try:
+                declared_size = int(content_length)
+                if declared_size > max_bytes:
+                    raise ValueError(f"image_too_large:{declared_size}")
+            except ValueError as exc:
+                if str(exc).startswith("image_too_large:"):
+                    raise
+
+        chunks = []
+        total = 0
+        for chunk in response.iter_content(chunk_size=1024 * 64):
+            if not chunk:
+                continue
+            total += len(chunk)
+            if total > max_bytes:
+                raise ValueError(f"image_too_large:{total}")
+            chunks.append(chunk)
+        return b"".join(chunks)
+
+    @staticmethod
+    def _estimate_base64_decoded_size(base64_data: str) -> int:
+        compact_base64 = "".join(str(base64_data or "").split())
+        if not compact_base64:
+            return 0
+        padding = compact_base64.count("=")
+        return max(0, (len(compact_base64) * 3) // 4 - padding)
+
     def _localize_image_item_from_background_result(
         self,
         original_item: Dict[str, Any],
@@ -1137,7 +1169,10 @@ class BrowserMediaMixin:
                 logger.warning(f"截图落盘失败（已忽略）: {e}")
 
             try:
-                media_items = self._persist_data_uri_media_to_local(media_items)
+                media_items = self._persist_data_uri_media_to_local(
+                    media_items,
+                    max_size_mb=image_config.get("max_size_mb", 10),
+                )
             except Exception as e:
                 logger.warning(f"data uri 落盘失败（已忽略）: {e}")
 
@@ -1666,6 +1701,10 @@ class BrowserMediaMixin:
             or image_config.get("download_wait_seconds")
             or 1.0
         )
+        try:
+            max_image_bytes = max(1, int(image_config.get("max_size_mb") or 10)) * 1024 * 1024
+        except (TypeError, ValueError):
+            max_image_bytes = 10 * 1024 * 1024
 
         new_images = self._localize_images_with_background_cache(
             images,
@@ -1769,31 +1808,35 @@ class BrowserMediaMixin:
                     cookies=cookies_dict,
                     headers=headers,
                     timeout=15,
-                    allow_redirects=True
+                    allow_redirects=True,
+                    stream=True,
                 )
 
                 if response.status_code == 200:
-                    content = response.content
                     content_type = str(response.headers.get('Content-Type') or '').split(";", 1)[0].strip().lower()
-
-                    if len(content) > 1000 and 'image' in content_type:
-                        ext = ext_map.get(content_type, ext)
-                        filename = f"{base_name}{ext}"
-                        out_path = out_dir / filename
-                        out_path.write_bytes(content)
-                        saved = True
-                        saved_mime = content_type or None
-                        background_image_downloader.register_downloaded_file(
-                            target_url,
-                            local_path=out_path,
-                            accessible_url=f"/download_images/{filename}",
-                            mime=content_type or None,
-                            byte_size=len(content),
-                            source="inline_download",
-                        )
-                        logger.debug(f"✅ 下载成功: {filename} ({len(content)} bytes)")
+                    if 'image' not in content_type:
+                        logger.debug(f"下载内容无效: type: {content_type or 'unknown'}")
                     else:
-                        logger.debug(f"下载内容无效: {len(content)} bytes, type: {content_type}")
+                        content = self._read_response_bytes_with_limit(response, max_image_bytes)
+
+                        if len(content) > 1000:
+                            ext = ext_map.get(content_type, ext)
+                            filename = f"{base_name}{ext}"
+                            out_path = out_dir / filename
+                            out_path.write_bytes(content)
+                            saved = True
+                            saved_mime = content_type or None
+                            background_image_downloader.register_downloaded_file(
+                                target_url,
+                                local_path=out_path,
+                                accessible_url=f"/download_images/{filename}",
+                                mime=content_type or None,
+                                byte_size=len(content),
+                                source="inline_download",
+                            )
+                            logger.debug(f"✅ 下载成功: {filename} ({len(content)} bytes)")
+                        else:
+                            logger.debug(f"下载内容无效: {len(content)} bytes, type: {content_type}")
                 else:
                     logger.debug(f"下载失败: HTTP {response.status_code}")
             except Exception as e:
@@ -1843,13 +1886,22 @@ class BrowserMediaMixin:
 
         return new_images
 
-    def _persist_data_uri_media_to_local(self, media_items: List[Dict]) -> List[Dict]:
+    def _persist_data_uri_media_to_local(
+        self,
+        media_items: List[Dict],
+        *,
+        max_size_mb: int = 10,
+    ) -> List[Dict]:
         """Persist extracted data-uri media so downstream Markdown can reuse the existing URL flow."""
         if not media_items:
             return media_items
 
         save_dir = Path("download_images")
         save_dir.mkdir(exist_ok=True)
+        try:
+            max_bytes = max(1, int(max_size_mb or 10)) * 1024 * 1024
+        except (TypeError, ValueError):
+            max_bytes = 10 * 1024 * 1024
 
         ext_map = {
             "image/jpeg": ".jpg",
@@ -1888,7 +1940,14 @@ class BrowserMediaMixin:
                 header, b64_data = data_uri.split(",", 1)
                 mime = header.split(";", 1)[0].split(":", 1)[1].lower()
                 ext = ext_map.get(mime, ".png")
-                media_bytes = base64.b64decode(b64_data)
+                compact_b64 = "".join(str(b64_data or "").split())
+                padding = compact_b64.count("=")
+                estimated_size = max(0, (len(compact_b64) * 3) // 4 - padding)
+                if estimated_size > max_bytes:
+                    raise ValueError(f"data_uri_too_large:{estimated_size}")
+                media_bytes = base64.b64decode(compact_b64)
+                if len(media_bytes) > max_bytes:
+                    raise ValueError(f"data_uri_too_large:{len(media_bytes)}")
             except (ValueError, IndexError, binascii.Error) as e:
                 logger.warning(f"data uri 解析失败，保留原媒体数据: {e}")
                 result.append(item)
@@ -2027,6 +2086,7 @@ class BrowserMediaMixin:
         save_dir = Path("download_images")
         save_dir.mkdir(exist_ok=True)
         canvas_image_max_size = AppConfig.get_canvas_image_max_size()
+        max_canvas_image_bytes = max(1, canvas_image_max_size * canvas_image_max_size * 4)
 
         for img in images:
             if img.get('kind') != 'url':
@@ -2180,7 +2240,13 @@ class BrowserMediaMixin:
                             ext = '.jpg'
                         
                         # 解码并保存
-                        image_bytes = base64.b64decode(b64_data)
+                        compact_b64 = "".join(str(b64_data or "").split())
+                        estimated_size = self._estimate_base64_decoded_size(compact_b64)
+                        if estimated_size > max_canvas_image_bytes:
+                            raise ValueError(f"canvas_image_too_large:{estimated_size}")
+                        image_bytes = base64.b64decode(compact_b64)
+                        if len(image_bytes) > max_canvas_image_bytes:
+                            raise ValueError(f"canvas_image_too_large:{len(image_bytes)}")
                         
                         # 生成唯一文件名
                         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')

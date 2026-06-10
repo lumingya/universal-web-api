@@ -802,7 +802,24 @@ class WorkflowExecutorActionMixin:
                                 f"[SEND_CLICK_ERROR] 发送前检测到输入框为空，但预期输入长度为 {expected_len}。"
                                 "这通常是由于超长文本粘贴时 React 状态未同步完成，失焦/点击触发了值覆写置空。"
                             )
-                            raise WorkflowError("send_input_empty_before_click")
+                            settle_wait = min(
+                                max(0.08, float(self._get_send_confirmation_check_timeout() or 0.0) * 0.25),
+                                0.35,
+                            )
+                            deadline = time.time() + settle_wait
+                            while time.time() < deadline and before_len <= 0:
+                                time.sleep(0.05)
+                                before_len = self._safe_get_input_len_by_key("input_box")
+                            if before_len > 0:
+                                logger.debug(
+                                    f"[SEND_CLICK_RECOVER] 发送前输入框长度已恢复: "
+                                    f"before_len={before_len}, expected_len={expected_len}"
+                                )
+                            else:
+                                logger.warning(
+                                    "[SEND_CLICK_SKIP] 发送前输入框仍为空，跳过硬失败并继续发送观察: "
+                                    f"expected_len={expected_len}, settle_wait={settle_wait:.2f}s"
+                                )
 
                     if self.stealth_mode:
                         if self._should_use_background_safe_dom_click(target_key):
@@ -840,12 +857,19 @@ class WorkflowExecutorActionMixin:
                     if pre_click_url:
                         self._last_new_chat_clicked_url = pre_click_url
                         self._last_new_chat_clicked_at = time.time()
+                        self._last_new_chat_clicked_snapshot = {
+                            "url": pre_click_url,
+                            "session_id": str(getattr(self.session, "id", "") or ""),
+                            "tab_id": str(getattr(self.tab, "tab_id", "") or ""),
+                            "tab_ref_id": id(self.tab),
+                            "clicked_at": self._last_new_chat_clicked_at,
+                        }
                 if target_key == "send_btn":
                     self._confirm_send_click_response_or_raise(before_len)
                 return
 
             except Exception as click_err:
-                if isinstance(click_err, WorkflowError) and str(click_err) in {"send_unconfirmed", "send_input_empty_before_click"}:
+                if isinstance(click_err, WorkflowError) and str(click_err) in {"send_unconfirmed"}:
                     raise
                 last_error = click_err
                 logger.warning(
@@ -1367,10 +1391,12 @@ class WorkflowExecutorActionMixin:
     def _is_send_success(self, before_len: int, after_len: int) -> bool:
         """判断是否发送成功"""
         try:
-            if after_len == 0 and before_len > 0:
-                return True
+            before_len = int(before_len)
+            after_len = int(after_len)
             if before_len <= 0:
-                return after_len == 0
+                return False
+            if after_len == 0:
+                return True
             if after_len <= int(before_len * 0.4):
                 return True
             return False
@@ -1413,6 +1439,22 @@ class WorkflowExecutorActionMixin:
                 pass
             return
 
+        if int(before_len or 0) <= 0:
+            try:
+                time.sleep(0.12)
+                latest_len = self._safe_get_input_len_by_key("input_box")
+                logger.debug(
+                    f"[SEND_CLICK_END] 发送按钮点击完成. 发送前长度: {before_len}, "
+                    f"发送后长度: {latest_len}, 判定成功=False, 当前 URL: {self.tab.url}"
+                )
+            except Exception:
+                pass
+            logger.warning(
+                "[SEND_CONFIRM_SKIP] 发送前输入框为空，长度无法作为硬确认信号，交由后续发送观察: "
+                f"before_len={before_len}, timeout={timeout:.1f}s"
+            )
+            return
+
         deadline = time.time() + timeout
         while time.time() < deadline:
             if self._check_cancelled():
@@ -1438,7 +1480,7 @@ class WorkflowExecutorActionMixin:
         except Exception:
             current_url = ""
         logger.warning(
-            "[SEND_CONFIRM_TIMEOUT] 发送确认超时，输入框仍未清空，触发工作流重试: "
+            "[SEND_CONFIRM_TIMEOUT] 发送确认超时，输入框仍未满足确认条件，触发工作流重试: "
             f"before_len={before_len}, after_len={latest_len}, "
             f"timeout={timeout:.1f}s, url={self._compact_log_value(current_url, 140)}"
         )
@@ -1580,8 +1622,43 @@ class WorkflowExecutorActionMixin:
         ):
             return current_url
 
-        previous_url = str(getattr(self, "_last_new_chat_clicked_url", "") or "")
+        snapshot = getattr(self, "_last_new_chat_clicked_snapshot", None)
+        if not isinstance(snapshot, dict):
+            snapshot = {}
+
+        previous_url = str(snapshot.get("url") or getattr(self, "_last_new_chat_clicked_url", "") or "")
         if not previous_url:
+            return current_url
+
+        expected_session_id = str(snapshot.get("session_id") or "")
+        current_session_id = str(getattr(self.session, "id", "") or "")
+        if expected_session_id and current_session_id and expected_session_id != current_session_id:
+            logger.warning(
+                "[TRANSITION_SKIP] 新建对话 URL 快照不属于当前标签页会话，跳过等待: "
+                f"snapshot_session={expected_session_id}, current_session={current_session_id}, "
+                f"before={self._compact_log_value(previous_url, 140)}, "
+                f"current={self._compact_log_value(current_url, 140)}"
+            )
+            return current_url
+
+        expected_tab_id = str(snapshot.get("tab_id") or "")
+        current_tab_id = str(getattr(self.tab, "tab_id", "") or "")
+        if expected_tab_id and current_tab_id and expected_tab_id != current_tab_id:
+            logger.warning(
+                "[TRANSITION_SKIP] 新建对话 URL 快照不属于当前底层标签页，跳过等待: "
+                f"snapshot_tab={expected_tab_id}, current_tab={current_tab_id}, "
+                f"before={self._compact_log_value(previous_url, 140)}, "
+                f"current={self._compact_log_value(current_url, 140)}"
+            )
+            return current_url
+
+        expected_tab_ref_id = snapshot.get("tab_ref_id")
+        if expected_tab_ref_id and expected_tab_ref_id != id(self.tab):
+            logger.warning(
+                "[TRANSITION_SKIP] 新建对话 URL 快照不属于当前 tab 对象，跳过等待: "
+                f"before={self._compact_log_value(previous_url, 140)}, "
+                f"current={self._compact_log_value(current_url, 140)}"
+            )
             return current_url
 
         if not self._is_likely_chat_session_url(
@@ -1614,12 +1691,23 @@ class WorkflowExecutorActionMixin:
                 raise WorkflowError("new_chat_transition_url_unavailable") from exc
 
             if latest_url and latest_url != previous_url:
-                logger.info(
-                    "[TRANSITION_OK] 新建对话后 URL 成功切换: "
-                    f"before={self._compact_log_value(previous_url, 140)}, "
-                    f"current={self._compact_log_value(latest_url, 140)}, "
-                    f"elapsed={time.perf_counter() - started_at:.2f}s"
-                )
+                if self._is_likely_chat_session_url(
+                    latest_url,
+                    self._get_new_chat_url_transition_patterns(),
+                ):
+                    logger.info(
+                        "[TRANSITION_OK] 新建对话后 URL 成功切换: "
+                        f"before={self._compact_log_value(previous_url, 140)}, "
+                        f"current={self._compact_log_value(latest_url, 140)}, "
+                        f"elapsed={time.perf_counter() - started_at:.2f}s"
+                    )
+                else:
+                    logger.info(
+                        "[TRANSITION_EMPTY] 新建对话后已离开旧会话 URL，当前是空白/入口路由: "
+                        f"before={self._compact_log_value(previous_url, 140)}, "
+                        f"current={self._compact_log_value(latest_url, 140)}, "
+                        f"elapsed={time.perf_counter() - started_at:.2f}s"
+                    )
                 return latest_url
 
             time.sleep(interval)

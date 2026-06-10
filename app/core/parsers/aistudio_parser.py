@@ -29,12 +29,17 @@ class AIStudioParser(ResponseParser):
     _VISIBLE_TEXT_BLOCK_RE = re.compile(
         r'null,"((?:\\.|[^"\\])*)"\]\],"model"'
     )
+    _VISIBLE_TEXT_BLOCK_PREFIX = 'null,"'
     _OBFUSCATED_PAYLOAD_RE = re.compile(r"^[A-Za-z0-9+/=_-]+$")
     _CJK_RE = re.compile(r"[\u3400-\u9fff]")
     
     def __init__(self):
         self._accumulated_content = ""
         self._is_done = False
+        self._last_raw_length = 0
+        self._pending_raw = ""
+        self._visible_text_scan_pending = ""
+        self._visible_text_fallback_content = ""
     
     def parse_chunk(self, raw_response: str) -> Dict[str, Any]:
         """
@@ -46,9 +51,18 @@ class AIStudioParser(ResponseParser):
             "done": False,
             "error": None
         }
-        
+
         try:
-            payloads = self._decode_payloads(raw_response)
+            if isinstance(raw_response, bytes):
+                raw_response = raw_response.decode("utf-8", errors="ignore")
+            elif not isinstance(raw_response, str):
+                raw_response = str(raw_response)
+
+            new_data = self._prepare_incremental_raw_response(raw_response)
+            if not new_data:
+                return result
+
+            payloads = self._decode_payloads(new_data, incremental=True)
             content = ""
             is_done = False
 
@@ -60,12 +74,17 @@ class AIStudioParser(ResponseParser):
                     is_done = True
 
             if not content:
-                content = self._extract_visible_text_from_raw_body(raw_response)
+                content = self._extract_visible_text_from_increment(new_data)
 
-            if content and len(content) > len(self._accumulated_content):
-                delta = content[len(self._accumulated_content):]
-                result["content"] = delta
-                self._accumulated_content = content
+            if content:
+                if content.startswith(self._accumulated_content):
+                    delta = content[len(self._accumulated_content):]
+                    self._accumulated_content = content
+                else:
+                    delta = content
+                    self._accumulated_content += content
+                if delta:
+                    result["content"] = delta
 
             result["done"] = is_done
 
@@ -82,6 +101,11 @@ class AIStudioParser(ResponseParser):
         """重置状态"""
         self._accumulated_content = ""
         self._is_done = False
+        self._last_raw_length = 0
+        self._last_raw_response = ""
+        self._pending_raw = ""
+        self._visible_text_scan_pending = ""
+        self._visible_text_fallback_content = ""
 
     @staticmethod
     def _normalize_raw_text(raw_response: Any) -> str:
@@ -96,7 +120,7 @@ class AIStudioParser(ResponseParser):
             stripped = stripped[4:].lstrip("\r\n")
         return stripped
 
-    def _decode_payloads(self, raw_response: Any) -> List[Any]:
+    def _decode_payloads(self, raw_response: Any, incremental: bool = False) -> List[Any]:
         if isinstance(raw_response, (list, dict)):
             return [raw_response]
 
@@ -104,10 +128,18 @@ class AIStudioParser(ResponseParser):
         if not normalized:
             return []
 
+        if incremental:
+            normalized = f"{self._pending_raw}{normalized}"
+
         try:
-            return [json.loads(normalized)]
+            payload = json.loads(normalized)
+            if incremental:
+                self._pending_raw = ""
+            return [payload]
         except json.JSONDecodeError as exc:
-            payloads = self._decode_json_prefix_values(normalized)
+            payloads, remainder = self._decode_json_prefix_values(normalized)
+            if incremental:
+                self._pending_raw = remainder
             if payloads:
                 return payloads
             logger.debug_throttled(
@@ -124,13 +156,48 @@ class AIStudioParser(ResponseParser):
         if not raw_text:
             return ""
 
+        pieces, _last_match_end = cls._scan_visible_text_matches(raw_text)
+        return "".join(pieces)
+
+    @classmethod
+    def _scan_visible_text_matches(cls, raw_text: str) -> Tuple[List[str], int]:
         pieces: List[str] = []
+        last_match_end = 0
         for match in cls._VISIBLE_TEXT_BLOCK_RE.finditer(raw_text):
+            last_match_end = match.end()
             piece = cls._decode_json_fragment(match.group(1))
             if piece and cls._looks_like_visible_text(piece):
                 pieces.append(piece)
 
-        return "".join(pieces)
+        return pieces, last_match_end
+
+    @classmethod
+    def _build_visible_text_scan_pending(cls, scan_text: str, last_match_end: int) -> str:
+        remainder = scan_text[last_match_end:] if last_match_end > 0 else scan_text
+        marker_index = remainder.rfind(cls._VISIBLE_TEXT_BLOCK_PREFIX)
+        if marker_index >= 0:
+            return remainder[marker_index:]
+
+        keep_chars = max(0, len(cls._VISIBLE_TEXT_BLOCK_PREFIX) - 1)
+        return remainder[-keep_chars:] if keep_chars else ""
+
+    def _extract_visible_text_from_increment(self, new_data: str) -> str:
+        if not new_data and not self._visible_text_scan_pending:
+            return self._visible_text_fallback_content
+
+        normalized_new_data = self._normalize_raw_text(new_data)
+        scan_text = f"{self._visible_text_scan_pending}{normalized_new_data}"
+        if not scan_text:
+            return self._visible_text_fallback_content
+
+        pieces, last_match_end = self._scan_visible_text_matches(scan_text)
+        if pieces:
+            self._visible_text_fallback_content += "".join(pieces)
+        self._visible_text_scan_pending = self._build_visible_text_scan_pending(
+            scan_text,
+            last_match_end,
+        )
+        return self._visible_text_fallback_content
 
     @classmethod
     def _looks_like_obfuscated_payload(cls, value: Any) -> bool:
@@ -205,7 +272,7 @@ class AIStudioParser(ResponseParser):
             )
 
     @staticmethod
-    def _decode_json_prefix_values(raw_text: str) -> List[Any]:
+    def _decode_json_prefix_values(raw_text: str) -> Tuple[List[Any], str]:
         decoder = json.JSONDecoder()
         values: List[Any] = []
         index = 0
@@ -220,12 +287,12 @@ class AIStudioParser(ResponseParser):
             try:
                 value, next_index = decoder.raw_decode(raw_text, index)
             except json.JSONDecodeError:
-                break
+                return values, raw_text[index:]
 
             values.append(value)
             index = next_index
 
-        return values
+        return values, ""
 
     @staticmethod
     def _normalize_outer_blocks(data: Any) -> List[Any]:

@@ -8,6 +8,7 @@ app/api/chat.py - 核心聊天 API
 """
 
 import json
+import codecs
 import os
 import re
 import time
@@ -15,7 +16,7 @@ import asyncio
 import queue
 import threading
 import uuid
-from typing import Optional, Any, Dict, List, Callable
+from typing import Optional, Any, Dict, List, Callable, AsyncIterator
 
 from fastapi import APIRouter, Request, HTTPException, Header, Depends
 from fastapi.responses import StreamingResponse, JSONResponse
@@ -36,6 +37,7 @@ from app.services.request_lifecycle import (
     put_worker_queue_item,
     retire_bound_tab_after_worker_leak as _shared_retire_bound_tab_after_worker_leak,
     run_tracked_blocking_call,
+    wait_worker_queue_item,
 )
 from app.services.tool_calling import (
     build_tool_completion_response,
@@ -48,11 +50,23 @@ from app.services.tool_calling import (
     normalize_tool_request,
     summarize_messages_for_debug,
 )
+from app.api.openai_stop import (
+    apply_stop_sequences_to_text,
+    build_stop_sequence_stream_state,
+    extract_openai_sse_error_message,
+    filter_openai_stop_sse_chunk,
+    flush_openai_stop_state,
+    iter_openai_sse_payloads,
+    sse_chunk_has_done,
+    sse_frame_data_text,
+)
+from app.api.deps import extract_authorization_token
 from app.utils.model_routing import collect_route_domain_models, inspect_model_route
 
 logger = get_logger("API.CHAT")
 
 router = APIRouter()
+MODEL_LIST_CREATED = int(time.time())
 STREAM_QUEUE_POLL_TIMEOUT = 0.5
 SSE_HEARTBEAT_INTERVAL = 15.0
 
@@ -112,19 +126,7 @@ def _put_worker_queue_item(
 
 
 def _extract_stream_error_message(chunk: Any) -> str:
-    if not isinstance(chunk, str) or not chunk.startswith("data: "):
-        return ""
-    try:
-        data_str = chunk[6:].strip()
-        if not data_str or data_str == "[DONE]":
-            return ""
-        data = json.loads(data_str)
-        error = data.get("error")
-        if not isinstance(error, dict):
-            return ""
-        return str(error.get("message") or "").strip()
-    except Exception:
-        return ""
+    return extract_openai_sse_error_message(chunk)
 
 
 def _retire_bound_tab_after_worker_leak(ctx: RequestContext, reason: str) -> None:
@@ -145,8 +147,92 @@ def _extract_chunk_media_items(data: Dict[str, Any]) -> List[Dict[str, Any]]:
             delta_media = delta.get("media")
             if isinstance(delta_media, list):
                 media_items.extend(item for item in delta_media if isinstance(item, dict))
+            media_items.extend(_extract_content_part_media_items(delta.get("content")))
 
     return media_items
+
+
+def _extract_media_part_ref(value: Any) -> str:
+    if isinstance(value, dict):
+        return str(value.get("url") or value.get("data_uri") or "").strip()
+    return str(value or "").strip()
+
+
+def _extract_content_part_media_items(content: Any) -> List[Dict[str, Any]]:
+    if isinstance(content, dict):
+        content = [content]
+    if not isinstance(content, list):
+        return []
+
+    media_items: List[Dict[str, Any]] = []
+    for part in content:
+        if not isinstance(part, dict):
+            continue
+
+        part_type = str(part.get("type") or "").strip().lower()
+        ref = ""
+        media_type = ""
+        if part_type in {"image_url", "input_image", "output_image"}:
+            ref = _extract_media_part_ref(
+                part.get("image_url") or part.get("url") or part.get("data_uri")
+            )
+            media_type = "image"
+        elif part_type in {"audio_url", "input_audio", "output_audio"}:
+            ref = _extract_media_part_ref(
+                part.get("audio_url") or part.get("input_audio") or part.get("url")
+            )
+            media_type = "audio"
+        elif part_type in {"video_url", "input_video", "output_video"}:
+            ref = _extract_media_part_ref(
+                part.get("video_url") or part.get("input_video") or part.get("url")
+            )
+            media_type = "video"
+
+        if not ref:
+            continue
+
+        media_item: Dict[str, Any] = {"media_type": media_type}
+        if ref.startswith("data:"):
+            media_item["data_uri"] = ref
+        else:
+            media_item["url"] = ref
+
+        detail = str(part.get("detail") or "").strip()
+        if detail:
+            media_item["detail"] = detail
+        mime = str(part.get("mime_type") or part.get("mime") or "").strip()
+        if mime:
+            media_item["mime"] = mime
+        label = str(part.get("label") or "").strip()
+        if label:
+            media_item["label"] = label
+        media_items.append(media_item)
+
+    return media_items
+
+
+def _extract_delta_content_text(content: Any) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: List[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+                continue
+            if not isinstance(item, dict):
+                continue
+            item_type = str(item.get("type") or "").strip().lower()
+            if item_type in {"text", "input_text", "output_text"}:
+                parts.append(str(item.get("text") or ""))
+        return "".join(parts)
+    if isinstance(content, dict):
+        item_type = str(content.get("type") or "").strip().lower()
+        if item_type in {"text", "input_text", "output_text"}:
+            return str(content.get("text") or "")
+    return ""
 
 
 def _dedupe_media_items(media_items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -225,13 +311,16 @@ class ChatRequest(BaseModel):
     stream: Optional[bool] = Field(default=False)
     temperature: Optional[float] = Field(default=0.7, ge=0, le=2)
     max_tokens: Optional[int] = Field(default=None, ge=1)
+    n: Optional[int] = Field(default=1, ge=1)
     response_format: Optional[dict] = Field(default=None)
+    stop: Optional[Any] = Field(default=None)
     tools: Optional[list] = Field(default=None)
     tool_choice: Optional[Any] = Field(default=None)
     parallel_tool_calls: Optional[bool] = Field(default=None)
     functions: Optional[list] = Field(default=None)
     function_call: Optional[Any] = Field(default=None)
     preset_name: Optional[str] = Field(default=None)
+    stream_options: Optional[dict] = Field(default=None)
 
 
 class ResponsesRequest(BaseModel):
@@ -240,7 +329,7 @@ class ResponsesRequest(BaseModel):
     input: Optional[Any] = Field(default="")
     instructions: Optional[str] = Field(default=None)
     stream: Optional[bool] = Field(default=False)
-    temperature: Optional[float] = Field(default=0.7, ge=0, le=2)
+    temperature: Optional[float] = Field(default=1.0, ge=0, le=2)
     max_output_tokens: Optional[int] = Field(default=None, ge=1)
     tools: Optional[list] = Field(default=None)
     tool_choice: Optional[Any] = Field(default=None)
@@ -249,10 +338,23 @@ class ResponsesRequest(BaseModel):
     metadata: Optional[dict] = Field(default=None)
     prompt: Optional[Any] = Field(default=None)
     previous_response_id: Optional[str] = Field(default=None)
+    reasoning: Optional[dict] = Field(default=None)
+    store: Optional[bool] = Field(default=None)
+    top_p: Optional[float] = Field(default=None, ge=0, le=1)
+    truncation: Optional[str] = Field(default=None)
+    user: Optional[str] = Field(default=None)
+    stop: Optional[Any] = Field(default=None)
 
     model_config = {
         "extra": "allow",
     }
+
+
+def _is_single_choice_request(body: ChatRequest) -> bool:
+    try:
+        return int(getattr(body, "n", 1) or 1) <= 1
+    except (TypeError, ValueError):
+        return True
 
 
 def _new_response_id() -> str:
@@ -405,7 +507,7 @@ def _normalize_response_message_content(content: Any) -> Any:
                 leading_text_parts.append(text)
             continue
 
-        if part_type in {"input_image", "image_url"}:
+        if part_type in {"input_image", "image_url", "output_image"}:
             image_value = part.get("image_url")
             if isinstance(image_value, dict):
                 image_url = str(image_value.get("url") or "").strip()
@@ -429,7 +531,35 @@ def _normalize_response_message_content(content: Any) -> Any:
             )
             continue
 
-        text_fallback = str(part.get("text") or part.get("output") or "").strip()
+        if part_type in {"input_audio", "audio_url", "output_audio", "input_video", "video_url", "output_video"}:
+            if part_type in {"input_audio", "audio_url", "output_audio"}:
+                media_value = part.get("audio_url") or part.get("input_audio") or part.get("url") or ""
+                media_label = "audio"
+            else:
+                media_value = part.get("video_url") or part.get("url") or ""
+                media_label = "video"
+            media_url = str(
+                media_value.get("url") if isinstance(media_value, dict) else media_value
+            ).strip()
+            if media_url:
+                media_text = f"[{media_label}]({media_url})"
+                if normalized_parts:
+                    normalized_parts.append({"type": "text", "text": media_text})
+                else:
+                    leading_text_parts.append(media_text)
+            continue
+
+        text_fallback_value = part.get("text")
+        if text_fallback_value is None:
+            text_fallback_value = part.get("output")
+        if text_fallback_value is None:
+            text_fallback_value = part.get("content")
+        if text_fallback_value is None:
+            text_fallback = json.dumps(part, ensure_ascii=False)
+        elif isinstance(text_fallback_value, (dict, list)):
+            text_fallback = json.dumps(text_fallback_value, ensure_ascii=False)
+        else:
+            text_fallback = str(text_fallback_value).strip()
         if text_fallback:
             if normalized_parts:
                 normalized_parts.append({"type": "text", "text": text_fallback})
@@ -452,11 +582,67 @@ def _normalize_response_message_content(content: Any) -> Any:
     return normalized_parts
 
 
+def _normalize_response_input_role(role: Any) -> str:
+    normalized_role = str(role or "user").strip().lower()
+    if normalized_role == "developer":
+        return "system"
+    if normalized_role in {"system", "user", "assistant", "tool"}:
+        return normalized_role
+    return "user"
+
+
 def _normalize_response_tool_output_content(content: Any) -> Any:
     normalized = _normalize_response_message_content(content)
     if normalized in ("", None):
         return ""
     return normalized
+
+
+def _responses_tool_output_can_follow_openai(
+    messages: List[Dict[str, Any]],
+    tool_call_id: str,
+) -> bool:
+    if not tool_call_id:
+        return False
+
+    for message in reversed(messages):
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "").strip().lower()
+        if role == "tool":
+            continue
+        if role != "assistant":
+            return False
+        tool_calls = message.get("tool_calls")
+        if not isinstance(tool_calls, list) or not tool_calls:
+            return False
+        return any(
+            isinstance(item, dict)
+            and str(item.get("id") or "").strip() == tool_call_id
+            for item in tool_calls
+        )
+
+    return False
+
+
+def _responses_tool_output_fallback_content(
+    item: Dict[str, Any],
+    output: Any,
+) -> Any:
+    call_id = str(item.get("call_id") or item.get("tool_call_id") or item.get("id") or "").strip()
+    name = str(item.get("name") or "").strip()
+    header = "[Function Call Output"
+    if name:
+        header += f": {name}"
+    if call_id:
+        header += f" ({call_id})"
+    header += "]"
+
+    if isinstance(output, list):
+        return [{"type": "text", "text": f"{header}\n"}] + output
+    if isinstance(output, dict):
+        output = json.dumps(output, ensure_ascii=False)
+    return f"{header}\n{str(output or '')}".strip()
 
 
 def _response_function_call_to_tool_call(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -471,6 +657,32 @@ def _response_function_call_to_tool_call(item: Dict[str, Any]) -> Dict[str, Any]
             "arguments": arguments,
         },
     }
+
+
+def _normalize_chat_style_tool_calls(tool_calls: Any) -> Optional[List[Any]]:
+    if not isinstance(tool_calls, list):
+        return None
+
+    normalized: List[Any] = []
+    for item in tool_calls:
+        if not isinstance(item, dict):
+            normalized.append(item)
+            continue
+
+        next_item = dict(item)
+        function_data = next_item.get("function")
+        if isinstance(function_data, dict):
+            next_function = dict(function_data)
+            arguments = next_function.get("arguments")
+            if not isinstance(arguments, str):
+                next_function["arguments"] = json.dumps(
+                    arguments if arguments is not None else {},
+                    ensure_ascii=False,
+                )
+            next_item["function"] = next_function
+        normalized.append(next_item)
+
+    return normalized
 
 
 def _append_response_input_item(messages: List[Dict[str, Any]], item: Any) -> None:
@@ -492,16 +704,27 @@ def _append_response_input_item(messages: List[Dict[str, Any]], item: Any) -> No
     item_type = str(item.get("type") or "").strip().lower()
 
     if role or item_type == "message":
-        normalized_role = role or "user"
+        normalized_role = _normalize_response_input_role(role)
         content = item.get("content")
         if content is None and "text" in item:
             content = item.get("text")
         message_payload: Dict[str, Any] = {
-            "role": normalized_role if normalized_role in {"system", "user", "assistant", "tool"} else "user",
+            "role": normalized_role,
             "content": _normalize_response_message_content(content),
         }
-        if normalized_role == "assistant" and isinstance(item.get("tool_calls"), list):
-            message_payload["tool_calls"] = item.get("tool_calls")
+        if normalized_role == "assistant":
+            tool_calls = _normalize_chat_style_tool_calls(item.get("tool_calls"))
+            if tool_calls is not None:
+                message_payload["tool_calls"] = tool_calls
+        if normalized_role == "tool":
+            tool_call_id = str(
+                item.get("tool_call_id") or item.get("call_id") or item.get("id") or ""
+            ).strip()
+            if tool_call_id:
+                message_payload["tool_call_id"] = tool_call_id
+            name = str(item.get("name") or "").strip()
+            if name:
+                message_payload["name"] = name
         messages.append(message_payload)
         return
 
@@ -516,15 +739,30 @@ def _append_response_input_item(messages: List[Dict[str, Any]], item: Any) -> No
         return
 
     if item_type in {"function_call_output", "tool_result"}:
-        output = _normalize_response_tool_output_content(item.get("output"))
-        messages.append(
-            {
+        output_source = item.get("output")
+        if output_source is None and "content" in item:
+            output_source = item.get("content")
+        output = _normalize_response_tool_output_content(output_source)
+        tool_call_id = str(
+            item.get("call_id") or item.get("tool_call_id") or item.get("id") or ""
+        ).strip()
+        if _responses_tool_output_can_follow_openai(messages, tool_call_id):
+            tool_message: Dict[str, Any] = {
                 "role": "tool",
-                "tool_call_id": str(item.get("call_id") or item.get("id") or "").strip(),
-                "name": str(item.get("name") or "").strip() or None,
+                "tool_call_id": tool_call_id,
                 "content": output,
             }
-        )
+            name = str(item.get("name") or "").strip()
+            if name:
+                tool_message["name"] = name
+            messages.append(tool_message)
+        else:
+            messages.append(
+                {
+                    "role": "user",
+                    "content": _responses_tool_output_fallback_content(item, output),
+                }
+            )
         return
 
     content = item.get("content")
@@ -589,6 +827,7 @@ def _responses_request_to_chat_request(body: ResponsesRequest, *, stream: bool) 
         tools=_normalize_responses_tools(body.tools),
         tool_choice=_normalize_response_tool_choice(body.tool_choice),
         parallel_tool_calls=body.parallel_tool_calls,
+        stop=body.stop,
     )
 
 
@@ -605,6 +844,70 @@ def _response_message_item_from_text(text: str) -> Dict[str, Any]:
                 "annotations": [],
             }
         ],
+    }
+
+
+def _response_content_part_from_media_item(item: Any, index: int) -> Optional[Dict[str, Any]]:
+    if not isinstance(item, dict):
+        return None
+
+    media_type = str(item.get("media_type") or item.get("type") or "image").strip().lower()
+    ref = str(item.get("url") or item.get("data_uri") or "").strip()
+    if not ref:
+        return None
+
+    if media_type == "audio":
+        payload: Dict[str, Any] = {"type": "output_audio", "audio_url": ref}
+    elif media_type == "video":
+        payload = {"type": "output_video", "video_url": ref}
+    else:
+        payload = {"type": "output_image", "image_url": ref}
+
+    payload["annotations"] = []
+    payload["index"] = index
+    mime = str(item.get("mime") or "").strip()
+    if mime:
+        payload["mime_type"] = mime
+    label = str(item.get("label") or "").strip()
+    if label:
+        payload["label"] = label
+    return payload
+
+
+def _response_message_item_from_content(
+    text: str,
+    media_items: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    content: List[Dict[str, Any]] = []
+    if text:
+        content.append(
+            {
+                "type": "output_text",
+                "text": str(text or ""),
+                "annotations": [],
+            }
+        )
+
+    for item in media_items or []:
+        media_part = _response_content_part_from_media_item(item, len(content))
+        if media_part is not None:
+            content.append(media_part)
+
+    if not content:
+        content.append(
+            {
+                "type": "output_text",
+                "text": "",
+                "annotations": [],
+            }
+        )
+
+    return {
+        "id": _new_response_item_id("msg"),
+        "type": "message",
+        "status": "completed",
+        "role": "assistant",
+        "content": content,
     }
 
 
@@ -644,8 +947,11 @@ def _chat_payload_to_responses_output(chat_payload: Dict[str, Any]) -> List[Dict
         output.append(_response_function_call_item_from_tool_call(tool_call))
 
     content = message.get("content")
-    if content not in ("", None):
-        output.append(_response_message_item_from_text(str(content)))
+    media_items = message.get("media")
+    if not isinstance(media_items, list):
+        media_items = chat_payload.get("media") if isinstance(chat_payload.get("media"), list) else []
+    if content not in ("", None) or media_items:
+        output.append(_response_message_item_from_content(str(content or ""), media_items))
 
     return output
 
@@ -685,9 +991,53 @@ def _build_responses_usage(chat_payload: Dict[str, Any]) -> Dict[str, int]:
 
 def _build_responses_text_payload(body: ResponsesRequest) -> Dict[str, Any]:
     format_payload = _normalize_responses_text_format(body.text)
-    if isinstance(format_payload, dict):
-        return {"format": format_payload}
-    return {"format": {"type": "text"}}
+    text_payload = {
+        "format": format_payload if isinstance(format_payload, dict) else {"type": "text"},
+        "verbosity": "medium",
+    }
+    if isinstance(body.text, dict) and body.text.get("verbosity") is not None:
+        text_payload["verbosity"] = body.text.get("verbosity")
+    return text_payload
+
+
+def _responses_parallel_tool_calls(body: ResponsesRequest) -> bool:
+    if body.parallel_tool_calls is None:
+        return True
+    return bool(body.parallel_tool_calls)
+
+
+def _responses_tool_choice(body: ResponsesRequest) -> Any:
+    if body.tool_choice is None:
+        return "auto"
+    return body.tool_choice
+
+
+def _responses_metadata(body: ResponsesRequest) -> Dict[str, Any]:
+    if isinstance(body.metadata, dict):
+        return body.metadata
+    return {}
+
+
+def _responses_reasoning_payload(body: ResponsesRequest) -> Dict[str, Any]:
+    if isinstance(body.reasoning, dict):
+        return body.reasoning
+    return {"effort": None, "summary": None}
+
+
+def _responses_request_settings(body: ResponsesRequest) -> Dict[str, Any]:
+    return {
+        "max_output_tokens": body.max_output_tokens,
+        "parallel_tool_calls": _responses_parallel_tool_calls(body),
+        "previous_response_id": body.previous_response_id,
+        "reasoning": _responses_reasoning_payload(body),
+        "store": True if body.store is None else bool(body.store),
+        "temperature": body.temperature if body.temperature is not None else 1.0,
+        "tool_choice": _responses_tool_choice(body),
+        "top_p": body.top_p if body.top_p is not None else 1.0,
+        "truncation": body.truncation if body.truncation is not None else "disabled",
+        "user": body.user,
+        "metadata": _responses_metadata(body),
+    }
 
 
 def _build_responses_object(
@@ -695,37 +1045,66 @@ def _build_responses_object(
     chat_payload: Dict[str, Any],
     *,
     response_id: Optional[str] = None,
+    created_at: Optional[int] = None,
     status: str = "completed",
     error: Optional[Dict[str, Any]] = None,
+    incomplete_details: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     response_obj: Dict[str, Any] = {
         "id": response_id or _new_response_id(),
         "object": "response",
-        "created_at": int(time.time()),
+        "created_at": int(created_at if created_at is not None else time.time()),
         "status": status,
         "error": error,
-        "incomplete_details": None,
+        "incomplete_details": incomplete_details,
+        "instructions": body.instructions,
         "model": body.model,
         "output": _chat_payload_to_responses_output(chat_payload),
-        "parallel_tool_calls": bool(body.parallel_tool_calls) if body.parallel_tool_calls is not None else bool(body.tools),
-        "tool_choice": body.tool_choice if body.tool_choice is not None else ("auto" if body.tools else "none"),
         "tools": body.tools or [],
         "text": _build_responses_text_payload(body),
         "usage": _build_responses_usage(chat_payload),
     }
+    response_obj.update(_responses_request_settings(body))
 
-    if body.instructions is not None:
-        response_obj["instructions"] = body.instructions
-    if body.max_output_tokens is not None:
-        response_obj["max_output_tokens"] = body.max_output_tokens
-    if body.temperature is not None:
-        response_obj["temperature"] = body.temperature
-    if isinstance(body.metadata, dict):
-        response_obj["metadata"] = body.metadata
-    if body.previous_response_id:
-        response_obj["previous_response_id"] = body.previous_response_id
+    if status == "completed":
+        response_obj["completed_at"] = int(time.time())
 
     return response_obj
+
+
+def _responses_completion_status_from_chat_payload(chat_payload: Dict[str, Any]) -> tuple[str, Optional[Dict[str, Any]], str]:
+    choices = chat_payload.get("choices") if isinstance(chat_payload.get("choices"), list) else []
+    for choice in choices:
+        if not isinstance(choice, dict):
+            continue
+        finish_reason = str(choice.get("finish_reason") or "").strip().lower()
+        if finish_reason == "length":
+            return "incomplete", {"reason": "max_output_tokens"}, "response.incomplete"
+        if finish_reason == "content_filter":
+            return "incomplete", {"reason": "content_filter"}, "response.incomplete"
+    return "completed", None, "response.completed"
+
+
+def _responses_error_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    error = payload.get("error") if isinstance(payload, dict) else None
+    if isinstance(error, dict):
+        error_payload = dict(error)
+        error_payload["message"] = str(error_payload.get("message") or "responses_backing_request_failed")
+        error_payload["type"] = str(error_payload.get("type") or "execution_error")
+        if error_payload.get("code") is None:
+            error_payload["code"] = "responses_backing_request_failed"
+        return error_payload
+    if isinstance(error, str) and error.strip():
+        return {
+            "message": error.strip(),
+            "type": "execution_error",
+            "code": "responses_backing_request_failed",
+        }
+    return {
+        "message": "responses_backing_request_failed",
+        "type": "execution_error",
+        "code": "responses_backing_request_failed",
+    }
 
 
 def _decode_json_response(response: JSONResponse) -> Dict[str, Any]:
@@ -763,8 +1142,475 @@ async def _stream_responses_compat(
 ):
     response_id = _new_response_id()
     created_at = int(time.time())
+    sequence_number = 0
+    next_output_index = 0
+    message_item_id = ""
+    message_output_index: Optional[int] = None
+    text_part_started = False
+    message_item_done = False
+    collected_text_parts: List[str] = []
+    collected_media: List[Dict[str, Any]] = []
+    tool_call_states: Dict[int, Dict[str, Any]] = {}
+    finish_reason: Optional[str] = None
+    usage_payload: Dict[str, Any] = {}
+    sse_buffer = ""
+    utf8_decoder = codecs.getincrementaldecoder("utf-8")("ignore")
 
-    yield _pack_responses_sse(
+    def _pack_response_event(event: str, data: Dict[str, Any]) -> str:
+        nonlocal sequence_number
+        sequence_number += 1
+
+        payload = dict(data)
+        if event in {"response.created", "response.completed", "response.failed", "response.incomplete"}:
+            payload = {"response": payload}
+        payload.setdefault("type", event)
+        payload["sequence_number"] = sequence_number
+        return _pack_responses_sse(event, payload)
+
+    def _next_output_index() -> int:
+        nonlocal next_output_index
+        value = next_output_index
+        next_output_index += 1
+        return value
+
+    def _decode_stream_chunk(chunk: Any, *, final: bool = False) -> str:
+        if isinstance(chunk, bytes):
+            return utf8_decoder.decode(chunk, final=final)
+        if final:
+            return utf8_decoder.decode(b"", final=True)
+        return str(chunk or "")
+
+    def _iter_buffered_openai_sse_payloads(chunk: str) -> List[Dict[str, Any]]:
+        nonlocal sse_buffer
+        if not chunk:
+            return []
+
+        sse_buffer += chunk.replace("\r\n", "\n").replace("\r", "\n")
+        payloads: List[Dict[str, Any]] = []
+        while "\n\n" in sse_buffer:
+            frame, sse_buffer = sse_buffer.split("\n\n", 1)
+            if not frame.strip():
+                continue
+            payloads.extend(iter_openai_sse_payloads(frame + "\n\n"))
+        return payloads
+
+    def _flush_buffered_openai_sse_payloads() -> List[Dict[str, Any]]:
+        nonlocal sse_buffer
+        tail = sse_buffer
+        sse_buffer = ""
+        if not tail.strip():
+            return []
+        return iter_openai_sse_payloads(tail + "\n\n")
+
+    def _first_choice(payload: Dict[str, Any]) -> Dict[str, Any]:
+        choices = payload.get("choices") if isinstance(payload.get("choices"), list) else []
+        if not choices or not isinstance(choices[0], dict):
+            return {}
+        return choices[0]
+
+    def _ensure_message_item() -> List[str]:
+        nonlocal message_item_id, message_output_index
+        if message_output_index is not None:
+            return []
+        message_item_id = _new_response_item_id("msg")
+        message_output_index = _next_output_index()
+        return [
+            _pack_response_event(
+                "response.output_item.added",
+                {
+                    "type": "response.output_item.added",
+                    "response_id": response_id,
+                    "output_index": message_output_index,
+                    "item": {
+                        "id": message_item_id,
+                        "type": "message",
+                        "status": "in_progress",
+                        "role": "assistant",
+                        "content": [],
+                    },
+                },
+            )
+        ]
+
+    def _ensure_text_part() -> List[str]:
+        nonlocal text_part_started
+        events = _ensure_message_item()
+        if text_part_started:
+            return events
+        text_part_started = True
+        events.append(
+            _pack_response_event(
+                "response.content_part.added",
+                {
+                    "type": "response.content_part.added",
+                    "response_id": response_id,
+                    "item_id": message_item_id,
+                    "output_index": message_output_index,
+                    "content_index": 0,
+                    "part": {
+                        "type": "output_text",
+                        "text": "",
+                        "annotations": [],
+                    },
+                },
+            )
+        )
+        return events
+
+    def _final_message_item() -> Dict[str, Any]:
+        content: List[Dict[str, Any]] = []
+        text = "".join(collected_text_parts)
+        if text_part_started or text:
+            content.append(
+                {
+                    "type": "output_text",
+                    "text": text,
+                    "annotations": [],
+                }
+            )
+        for media_item in _dedupe_media_items(collected_media):
+            media_part = _response_content_part_from_media_item(media_item, len(content))
+            if media_part is not None:
+                content.append(media_part)
+        if not content:
+            content.append(
+                {
+                    "type": "output_text",
+                    "text": "",
+                    "annotations": [],
+                }
+            )
+        return {
+            "id": message_item_id,
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "content": content,
+        }
+
+    def _final_tool_item(state: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "id": state["item_id"],
+            "type": "function_call",
+            "status": "completed",
+            "call_id": state["call_id"],
+            "name": state["name"],
+            "arguments": state["arguments"],
+        }
+
+    def _ensure_tool_state(index: int, tool_delta: Dict[str, Any]) -> tuple[Dict[str, Any], List[str]]:
+        function_delta = tool_delta.get("function") if isinstance(tool_delta.get("function"), dict) else {}
+        state = tool_call_states.get(index)
+        if state is not None:
+            if tool_delta.get("id"):
+                state["call_id"] = str(tool_delta.get("id") or state["call_id"])
+            if function_delta.get("name"):
+                state["name"] = str(function_delta.get("name") or state["name"])
+            return state, []
+
+        call_id = str(tool_delta.get("id") or _new_response_item_id("call")).strip()
+        name = str(function_delta.get("name") or "").strip()
+        item_id = _response_function_call_item_from_tool_call(
+            {"id": call_id, "function": {"name": name, "arguments": ""}}
+        )["id"]
+        state = {
+            "output_index": _next_output_index(),
+            "item_id": item_id,
+            "call_id": call_id,
+            "name": name,
+            "arguments": "",
+            "done": False,
+        }
+        tool_call_states[index] = state
+        return state, [
+            _pack_response_event(
+                "response.output_item.added",
+                {
+                    "type": "response.output_item.added",
+                    "response_id": response_id,
+                    "output_index": state["output_index"],
+                    "item": {
+                        "id": state["item_id"],
+                        "type": "function_call",
+                        "status": "in_progress",
+                        "call_id": state["call_id"],
+                        "name": state["name"],
+                        "arguments": "",
+                    },
+                },
+            )
+        ]
+
+    def _completed_output() -> List[Dict[str, Any]]:
+        output: List[Optional[Dict[str, Any]]] = [None] * max(next_output_index, 0)
+        for state in tool_call_states.values():
+            output[int(state["output_index"])] = _final_tool_item(state)
+        if message_output_index is not None:
+            output[int(message_output_index)] = _final_message_item()
+        return [item for item in output if isinstance(item, dict)]
+
+    def _completed_chat_payload() -> Dict[str, Any]:
+        message: Dict[str, Any] = {
+            "role": "assistant",
+            "content": "".join(collected_text_parts),
+        }
+        if collected_media:
+            message["media"] = _dedupe_media_items(collected_media)
+        if tool_call_states:
+            message["tool_calls"] = [
+                {
+                    "id": state["call_id"],
+                    "type": "function",
+                    "function": {
+                        "name": state["name"],
+                        "arguments": state["arguments"],
+                    },
+                }
+                for _index, state in sorted(tool_call_states.items())
+            ]
+        return {
+            "model": body.model,
+            "choices": [
+                {
+                    "message": message,
+                    "finish_reason": finish_reason or "stop",
+                }
+            ],
+            "usage": usage_payload,
+            "media": _dedupe_media_items(collected_media),
+        }
+
+    def _failed_response(payload: Dict[str, Any], error: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        return _build_responses_object(
+            body,
+            payload if isinstance(payload, dict) else {"choices": [], "usage": {}},
+            response_id=response_id,
+            created_at=created_at,
+            status="failed",
+            error=error or _responses_error_payload(payload),
+        )
+
+    def _complete_tool_events(state: Dict[str, Any]) -> List[str]:
+        if state.get("done"):
+            return []
+        state["done"] = True
+        return [
+            _pack_response_event(
+                "response.function_call_arguments.done",
+                {
+                    "type": "response.function_call_arguments.done",
+                    "response_id": response_id,
+                    "item_id": state["item_id"],
+                    "output_index": state["output_index"],
+                    "arguments": state["arguments"],
+                    "name": state["name"],
+                    "call_id": state["call_id"],
+                },
+            ),
+            _pack_response_event(
+                "response.output_item.done",
+                {
+                    "type": "response.output_item.done",
+                    "response_id": response_id,
+                    "output_index": state["output_index"],
+                    "item": _final_tool_item(state),
+                },
+            ),
+        ]
+
+    def _complete_message_events() -> List[str]:
+        nonlocal message_item_done
+        if message_output_index is None or message_item_done:
+            return []
+        message_item_done = True
+        text = "".join(collected_text_parts)
+        events: List[str] = []
+        if text_part_started:
+            events.extend(
+                [
+                    _pack_response_event(
+                        "response.output_text.done",
+                        {
+                            "type": "response.output_text.done",
+                            "response_id": response_id,
+                            "item_id": message_item_id,
+                            "output_index": message_output_index,
+                            "content_index": 0,
+                            "text": text,
+                        },
+                    ),
+                    _pack_response_event(
+                        "response.content_part.done",
+                        {
+                            "type": "response.content_part.done",
+                            "response_id": response_id,
+                            "item_id": message_item_id,
+                            "output_index": message_output_index,
+                            "content_index": 0,
+                            "part": {
+                                "type": "output_text",
+                                "text": text,
+                                "annotations": [],
+                            },
+                        },
+                    ),
+                ]
+            )
+
+        content_index = 1 if text_part_started else 0
+        for media_item in _dedupe_media_items(collected_media):
+            media_part = _response_content_part_from_media_item(media_item, content_index)
+            if media_part is None:
+                continue
+            events.append(
+                _pack_response_event(
+                    "response.content_part.added",
+                    {
+                        "type": "response.content_part.added",
+                        "response_id": response_id,
+                        "item_id": message_item_id,
+                        "output_index": message_output_index,
+                        "content_index": content_index,
+                        "part": media_part,
+                    },
+                )
+            )
+            events.append(
+                _pack_response_event(
+                    "response.content_part.done",
+                    {
+                        "type": "response.content_part.done",
+                        "response_id": response_id,
+                        "item_id": message_item_id,
+                        "output_index": message_output_index,
+                        "content_index": content_index,
+                        "part": media_part,
+                    },
+                )
+            )
+            content_index += 1
+
+        events.append(
+            _pack_response_event(
+                "response.output_item.done",
+                {
+                    "type": "response.output_item.done",
+                    "response_id": response_id,
+                    "output_index": message_output_index,
+                    "item": _final_message_item(),
+                },
+            )
+        )
+        return events
+
+    async def _iter_backing_chunks(streaming_response: StreamingResponse):
+        iterator = streaming_response.body_iterator.__aiter__()
+        next_task = asyncio.create_task(iterator.__anext__())
+        try:
+            while True:
+                done, _pending = await asyncio.wait(
+                    {next_task},
+                    timeout=SSE_HEARTBEAT_INTERVAL,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if not done:
+                    if await request.is_disconnected():
+                        next_task.cancel()
+                        try:
+                            await next_task
+                        except asyncio.CancelledError:
+                            pass
+                        return
+                    yield ": keepalive\n\n"
+                    continue
+                try:
+                    chunk = next_task.result()
+                except StopAsyncIteration:
+                    break
+                yield chunk
+                next_task = asyncio.create_task(iterator.__anext__())
+        finally:
+            if not next_task.done():
+                next_task.cancel()
+                try:
+                    await next_task
+                except asyncio.CancelledError:
+                    pass
+            close = getattr(iterator, "aclose", None)
+            if callable(close):
+                try:
+                    await close()
+                except Exception:
+                    pass
+
+    async def _emit_openai_payload_events(payloads: List[Dict[str, Any]]) -> AsyncIterator[str]:
+        nonlocal finish_reason, usage_payload
+        for payload in payloads:
+            if "error" in payload:
+                yield _pack_response_event("response.failed", _failed_response(payload))
+                return
+
+            if isinstance(payload.get("usage"), dict):
+                usage_payload = dict(payload.get("usage") or {})
+
+            choice = _first_choice(payload)
+            if not choice:
+                continue
+            if choice.get("finish_reason") is not None:
+                finish_reason = str(choice.get("finish_reason") or "")
+
+            delta = choice.get("delta") if isinstance(choice.get("delta"), dict) else {}
+            collected_media.extend(_extract_chunk_media_items(payload))
+
+            content_text = _extract_delta_content_text(delta.get("content"))
+            if content_text:
+                collected_text_parts.append(content_text)
+                for event_chunk in _ensure_text_part():
+                    yield event_chunk
+                yield _pack_response_event(
+                    "response.output_text.delta",
+                    {
+                        "type": "response.output_text.delta",
+                        "response_id": response_id,
+                        "item_id": message_item_id,
+                        "output_index": message_output_index,
+                        "content_index": 0,
+                        "delta": content_text,
+                    },
+                )
+
+            tool_call_deltas = delta.get("tool_calls")
+            if not isinstance(tool_call_deltas, list):
+                continue
+            for fallback_index, tool_delta in enumerate(tool_call_deltas):
+                if not isinstance(tool_delta, dict):
+                    continue
+                try:
+                    tool_index = int(tool_delta.get("index", fallback_index) or fallback_index)
+                except Exception:
+                    tool_index = fallback_index
+                state, added_events = _ensure_tool_state(tool_index, tool_delta)
+                for event_chunk in added_events:
+                    yield event_chunk
+                function_delta = tool_delta.get("function") if isinstance(tool_delta.get("function"), dict) else {}
+                if function_delta.get("name"):
+                    state["name"] = str(function_delta.get("name") or state["name"])
+                arguments_delta = function_delta.get("arguments")
+                if arguments_delta:
+                    text_delta = str(arguments_delta)
+                    state["arguments"] = str(state.get("arguments") or "") + text_delta
+                    yield _pack_response_event(
+                        "response.function_call_arguments.delta",
+                        {
+                            "type": "response.function_call_arguments.delta",
+                            "response_id": response_id,
+                            "item_id": state["item_id"],
+                            "output_index": state["output_index"],
+                            "delta": text_delta,
+                        },
+                    )
+
+    yield _pack_response_event(
         "response.created",
         {
             "id": response_id,
@@ -773,173 +1619,93 @@ async def _stream_responses_compat(
             "status": "in_progress",
             "error": None,
             "incomplete_details": None,
+            "instructions": body.instructions,
             "model": body.model,
             "output": [],
             "tools": body.tools or [],
-            "tool_choice": body.tool_choice if body.tool_choice is not None else ("auto" if body.tools else "none"),
-            "parallel_tool_calls": bool(body.parallel_tool_calls) if body.parallel_tool_calls is not None else bool(body.tools),
             "text": _build_responses_text_payload(body),
+            **_responses_request_settings(body),
         },
     )
 
-    chat_body = _responses_request_to_chat_request(body, stream=False)
-
     try:
-        status_code, payload = await _run_chat_completion_final(
+        chat_response = await chat_completions(
             request=request,
-            body=chat_body,
+            body=_responses_request_to_chat_request(body, stream=True),
             authenticated=authenticated,
         )
-    except Exception as e:
-        failed = _build_responses_object(
-            body,
-            {"choices": [], "usage": {}},
-            response_id=response_id,
-            status="failed",
-            error={
-                "message": str(e),
-                "type": "execution_error",
-                "code": "responses_backing_request_failed",
-            },
-        )
-        yield _pack_responses_sse("response.failed", failed)
-        return
 
-    if status_code >= 400 or "error" in payload:
-        error_payload = payload.get("error") if isinstance(payload.get("error"), dict) else {
-            "message": "responses_backing_request_failed",
-            "type": "execution_error",
-            "code": "responses_backing_request_failed",
-        }
-        failed = _build_responses_object(
-            body,
-            payload,
-            response_id=response_id,
-            status="failed",
-            error=error_payload,
-        )
-        yield _pack_responses_sse("response.failed", failed)
-        return
-
-    completed = _build_responses_object(
-        body,
-        payload,
-        response_id=response_id,
-        status="completed",
-        error=None,
-    )
-
-    for output_index, item in enumerate(completed.get("output") or []):
-        if not isinstance(item, dict):
-            continue
-        item_id = str(item.get("id") or "").strip()
-        yield _pack_responses_sse(
-            "response.output_item.added",
-            {
-                "type": "response.output_item.added",
-                "response_id": response_id,
-                "output_index": output_index,
-                "item": _build_in_progress_response_item(item),
-            },
-        )
-
-        item_type = str(item.get("type") or "").strip().lower()
-        if item_type == "message":
-            content_items = item.get("content") if isinstance(item.get("content"), list) else []
-            for content_index, part in enumerate(content_items):
-                if not isinstance(part, dict):
-                    continue
-                part_type = str(part.get("type") or "").strip().lower()
-                if part_type != "output_text":
-                    continue
-                yield _pack_responses_sse(
-                    "response.content_part.added",
-                    {
-                        "type": "response.content_part.added",
-                        "response_id": response_id,
-                        "item_id": item_id,
-                        "output_index": output_index,
-                        "content_index": content_index,
-                        "part": {
-                            "type": "output_text",
-                            "text": "",
-                            "annotations": [],
-                        },
-                    },
-                )
-                text = str(part.get("text") or "")
-                if text:
-                    yield _pack_responses_sse(
-                        "response.output_text.delta",
-                        {
-                            "type": "response.output_text.delta",
-                            "response_id": response_id,
-                            "item_id": item_id,
-                            "output_index": output_index,
-                            "content_index": content_index,
-                            "delta": text,
-                        },
-                    )
-                yield _pack_responses_sse(
-                    "response.output_text.done",
-                    {
-                        "type": "response.output_text.done",
-                        "response_id": response_id,
-                        "item_id": item_id,
-                        "output_index": output_index,
-                        "content_index": content_index,
-                        "text": text,
-                    },
-                )
-                yield _pack_responses_sse(
-                    "response.content_part.done",
-                    {
-                        "type": "response.content_part.done",
-                        "response_id": response_id,
-                        "item_id": item_id,
-                        "output_index": output_index,
-                        "content_index": content_index,
-                        "part": part,
-                    },
-                )
-        elif item_type == "function_call":
-            arguments = str(item.get("arguments") or "")
-            if arguments:
-                yield _pack_responses_sse(
-                    "response.function_call_arguments.delta",
-                    {
-                        "type": "response.function_call_arguments.delta",
-                        "response_id": response_id,
-                        "item_id": item_id,
-                        "output_index": output_index,
-                        "delta": arguments,
-                    },
-                )
-            yield _pack_responses_sse(
-                "response.function_call_arguments.done",
-                {
-                    "type": "response.function_call_arguments.done",
-                    "response_id": response_id,
-                    "item_id": item_id,
-                    "output_index": output_index,
-                    "arguments": arguments,
-                    "name": str(item.get("name") or ""),
-                    "call_id": str(item.get("call_id") or ""),
-                },
+        if isinstance(chat_response, JSONResponse):
+            yield _pack_response_event(
+                "response.failed",
+                _failed_response(_decode_json_response(chat_response)),
             )
+            return
+        if not isinstance(chat_response, StreamingResponse):
+            raise RuntimeError("responses_backing_request_unexpected_response_type")
 
-        yield _pack_responses_sse(
-            "response.output_item.done",
-            {
-                "type": "response.output_item.done",
-                "response_id": response_id,
-                "output_index": output_index,
-                "item": item,
-            },
+        async for raw_chunk in _iter_backing_chunks(chat_response):
+            if await request.is_disconnected():
+                return
+
+            chunk = _decode_stream_chunk(raw_chunk)
+            if not chunk:
+                continue
+            if chunk.lstrip().startswith(":") and "data:" not in chunk:
+                yield chunk
+                continue
+
+            async for event_chunk in _emit_openai_payload_events(_iter_buffered_openai_sse_payloads(chunk)):
+                yield event_chunk
+                if event_chunk.startswith("event: response.failed"):
+                    return
+
+        decoder_tail = _decode_stream_chunk(b"", final=True)
+        if decoder_tail:
+            async for event_chunk in _emit_openai_payload_events(_iter_buffered_openai_sse_payloads(decoder_tail)):
+                yield event_chunk
+                if event_chunk.startswith("event: response.failed"):
+                    return
+
+        async for event_chunk in _emit_openai_payload_events(_flush_buffered_openai_sse_payloads()):
+            yield event_chunk
+            if event_chunk.startswith("event: response.failed"):
+                return
+
+        if collected_media and message_output_index is None:
+            for event_chunk in _ensure_message_item():
+                yield event_chunk
+        for _index, state in sorted(tool_call_states.items()):
+            for event_chunk in _complete_tool_events(state):
+                yield event_chunk
+        for event_chunk in _complete_message_events():
+            yield event_chunk
+
+        chat_payload = _completed_chat_payload()
+        response_status, incomplete_details, terminal_event = _responses_completion_status_from_chat_payload(chat_payload)
+        completed = _build_responses_object(
+            body,
+            chat_payload,
+            response_id=response_id,
+            created_at=created_at,
+            status=response_status,
+            error=None,
+            incomplete_details=incomplete_details,
         )
-
-    yield _pack_responses_sse("response.completed", completed)
-
+        completed["output"] = _completed_output()
+        yield _pack_response_event(terminal_event, completed)
+    except Exception as e:
+        yield _pack_response_event(
+            "response.failed",
+            _failed_response(
+                {"choices": [], "usage": {}},
+                error={
+                    "message": str(e),
+                    "type": "execution_error",
+                    "code": "responses_backing_request_failed",
+                },
+            ),
+        )
 
 # ================= response_format 转化 =================
 
@@ -952,6 +1718,7 @@ DEFAULT_RESPONSE_FORMAT_HINTS = {
 
 def _get_response_format_hint(format_type: str) -> str:
     """获取指定格式类型的提示词模板"""
+    format_type = str(format_type or "text").strip().lower() or "text"
     try:
         from app.services.config_engine import config_engine
         hints = config_engine.global_config.get("response_format_hints")
@@ -964,20 +1731,24 @@ def _get_response_format_hint(format_type: str) -> str:
 
 def _apply_response_format(messages: list, response_format: dict) -> list:
     """将 response_format 转化为提示词并追加到最后一条用户消息"""
-    if not response_format:
+    if not isinstance(response_format, dict) or not response_format:
         return messages
-    
-    format_type = response_format.get("type", "text")
+
+    format_type = str(response_format.get("type") or "text").strip().lower() or "text"
     hint_template = _get_response_format_hint(format_type)
-    
+
     if not hint_template:
         return messages
-    
+
     hint = hint_template
-    
+
     if format_type == "json_schema":
         json_schema = response_format.get("json_schema", {})
-        schema_content = json_schema.get("schema", json_schema)
+        schema_content = (
+            json_schema.get("schema", json_schema)
+            if isinstance(json_schema, dict)
+            else json_schema
+        )
         try:
             schema_str = json.dumps(schema_content, ensure_ascii=False, indent=2)
             hint = hint_template.replace("{schema}", schema_str)
@@ -1008,6 +1779,65 @@ def _apply_response_format(messages: list, response_format: dict) -> list:
     return new_messages
 
 
+def _should_include_stream_usage(body: ChatRequest) -> bool:
+    stream_options = body.stream_options
+    return isinstance(stream_options, dict) and bool(stream_options.get("include_usage"))
+
+
+def _pack_stream_usage_chunk(model: str) -> str:
+    data = {
+        "id": f"chatcmpl-usage-{int(time.time() * 1000)}",
+        "object": "chat.completion.chunk",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [],
+        "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        },
+    }
+    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _maybe_pack_stream_usage_chunk(body: ChatRequest) -> Optional[str]:
+    if not _should_include_stream_usage(body):
+        return None
+    return _pack_stream_usage_chunk(body.model)
+
+
+def _split_sse_done_frame(chunk: Any) -> tuple[str, bool]:
+    if not isinstance(chunk, str) or not sse_chunk_has_done(chunk):
+        return str(chunk or ""), False
+
+    frames = chunk.replace("\r\n", "\n").replace("\r", "\n").split("\n\n")
+    kept_frames = []
+    had_done = False
+    for frame in frames:
+        if not frame:
+            continue
+        if sse_frame_data_text(frame).strip() == "[DONE]":
+            had_done = True
+            continue
+        kept_frames.append(f"{frame}\n\n")
+    return "".join(kept_frames), had_done
+
+
+def _iter_stream_chunks_with_optional_usage(body: ChatRequest, chunks):
+    usage_emitted = False
+    for chunk in chunks:
+        emit_chunk, chunk_had_done = _split_sse_done_frame(chunk)
+        if emit_chunk:
+            yield emit_chunk
+        if chunk_had_done:
+            if not usage_emitted:
+                usage_chunk = _maybe_pack_stream_usage_chunk(body)
+                if usage_chunk:
+                    usage_emitted = True
+                    yield usage_chunk
+            yield _pack_done()
+
+
 # ================= 认证依赖 =================
 
 
@@ -1026,7 +1856,7 @@ async def verify_auth(authorization: Optional[str] = Header(None)) -> bool:
             headers={"WWW-Authenticate": "Bearer"}
         )
 
-    token = authorization.replace("Bearer ", "").strip()
+    token = extract_authorization_token(authorization)
 
     if token != AppConfig.get_auth_token():
         raise HTTPException(
@@ -1051,11 +1881,12 @@ async def chat_completions(
     """
     _validate_image_inputs(body.messages)
 
-    if body.response_format:
-        format_type = body.response_format.get("type", "text")
+    if isinstance(body.response_format, dict) and body.response_format:
+        format_type = str(body.response_format.get("type") or "text").strip().lower() or "text"
         if format_type != "text":
             logger.debug(f"检测到 response_format.type={format_type}，转化为提示词")
             body.messages = _apply_response_format(body.messages, body.response_format)
+            setattr(body, "_response_format_applied", True)
 
     try:
         browser = get_browser(auto_connect=False)
@@ -1083,6 +1914,8 @@ async def chat_completions(
         from app.api import tab_routes as tab_routes_api
 
         route_body = tab_routes_api.ChatRequest(**body.model_dump())
+        if bool(getattr(body, "_response_format_applied", False)):
+            setattr(route_body, "_response_format_applied", True)
         return await tab_routes_api.chat_with_route_domain(
             route_domain=route_domain,
             request=request,
@@ -1179,16 +2012,42 @@ async def create_response(
             },
         )
 
-    status_code, payload = await _run_chat_completion_final(
-        request=request,
-        body=chat_body,
-        authenticated=authenticated,
-    )
+    try:
+        status_code, payload = await _run_chat_completion_final(
+            request=request,
+            body=chat_body,
+            authenticated=authenticated,
+        )
+    except Exception as e:
+        failed = _build_responses_object(
+            body,
+            {"choices": [], "usage": {}},
+            status="failed",
+            error={
+                "message": str(e),
+                "type": "execution_error",
+                "code": "responses_backing_request_failed",
+            },
+        )
+        return JSONResponse(content=failed, status_code=500)
 
     if status_code >= 400 or "error" in payload:
-        return JSONResponse(content=payload, status_code=status_code)
+        failed = _build_responses_object(
+            body,
+            payload,
+            status="failed",
+            error=_responses_error_payload(payload),
+        )
+        return JSONResponse(content=failed, status_code=status_code)
 
-    response_obj = _build_responses_object(body, payload, status="completed", error=None)
+    response_status, incomplete_details, _terminal_event = _responses_completion_status_from_chat_payload(payload)
+    response_obj = _build_responses_object(
+        body,
+        payload,
+        status=response_status,
+        error=None,
+        incomplete_details=incomplete_details,
+    )
     return JSONResponse(content=response_obj)
 
 
@@ -1258,6 +2117,11 @@ async def _stream_with_lifecycle(
         max_execute_time_sec = get_max_request_execute_time_sec()
         done_emitted = False
         client_disconnected = False
+        stop_state = build_stop_sequence_stream_state(
+            body.stop,
+            single_choice=_is_single_choice_request(body),
+            upstream_single_choice=True,
+        )
 
         while True:
             if mark_request_hard_timeout(
@@ -1268,7 +2132,8 @@ async def _stream_with_lifecycle(
             ):
                 request_manager.capture_error(ctx, "请求执行超过最大绝对超时", code="absolute_request_timeout")
                 ctx.mark_failed("absolute_request_timeout")
-                yield _pack_error("请求执行超过最大绝对超时，已强制中断", "absolute_request_timeout")
+                yield _pack_error_done("请求执行超过最大绝对超时，已强制中断", "absolute_request_timeout")
+                done_emitted = True
                 break
 
             if await request.is_disconnected():
@@ -1278,8 +2143,8 @@ async def _stream_with_lifecycle(
                 break
 
             try:
-                chunk = await asyncio.to_thread(
-                    chunk_queue.get,
+                chunk = await wait_worker_queue_item(
+                    chunk_queue,
                     timeout=STREAM_QUEUE_POLL_TIMEOUT,
                 )
             except queue.Empty:
@@ -1296,7 +2161,7 @@ async def _stream_with_lifecycle(
                 logger.error(f"错误: {chunk[1]}")
                 request_manager.capture_error(ctx, chunk[1], code="worker_error")
                 ctx.mark_failed(chunk[1])
-                yield _pack_error(f"执行错误: {chunk[1]}", "internal_error")
+                yield _pack_error_done(f"执行错误: {chunk[1]}", "internal_error")
                 break
 
             # 🔍 探针：记录发送给客户端的 chunk
@@ -1304,20 +2169,57 @@ async def _stream_with_lifecycle(
             if has_images:
                 logger.info(f"[SEND] 发送包含图片的 chunk 给客户端")
             
-            request_manager.capture_response_chunk(ctx, chunk)
-            yield chunk
-            last_sse_emit_at = time.monotonic()
-            if isinstance(chunk, str) and chunk.startswith("data: [DONE]"):
+            outgoing_chunks = filter_openai_stop_sse_chunk(chunk, stop_state, body.model)
+            for outgoing_chunk in outgoing_chunks:
+                emit_chunk, chunk_had_done = _split_sse_done_frame(outgoing_chunk)
+                if emit_chunk:
+                    request_manager.capture_response_chunk(ctx, emit_chunk)
+                    yield emit_chunk
+                last_sse_emit_at = time.monotonic()
+                error_message = _extract_stream_error_message(emit_chunk or outgoing_chunk)
+                if error_message:
+                    logger.error(f"流式响应返回错误事件: {error_message}")
+                    request_manager.capture_error(ctx, error_message, code="stream_error")
+                    ctx.mark_failed(error_message)
+                    done_chunk = _pack_done()
+                    request_manager.capture_response_chunk(ctx, done_chunk)
+                    yield done_chunk
+                    done_emitted = True
+                    break
+                if chunk_had_done:
+                    usage_chunk = _maybe_pack_stream_usage_chunk(body)
+                    if usage_chunk:
+                        request_manager.capture_response_chunk(ctx, usage_chunk)
+                        yield usage_chunk
+                    done_chunk = _pack_done()
+                    request_manager.capture_response_chunk(ctx, done_chunk)
+                    yield done_chunk
+                    done_emitted = True
+                    ctx.request_cancel("stream_done")
+                    ctx.mark_completed()
+            if done_emitted:
+                break
+            if stop_state.stopped:
                 done_emitted = True
-            error_message = _extract_stream_error_message(chunk)
-            if error_message:
-                logger.warning(f"流式响应返回错误事件: {error_message}")
-                request_manager.capture_error(ctx, error_message, code="stream_error")
-                ctx.mark_failed(error_message)
+                ctx.request_cancel("stop_sequence")
+                ctx.mark_completed()
+                break
+            if ctx.status == RequestStatus.FAILED:
                 break
             await asyncio.sleep(0)
 
-        if not client_disconnected and not done_emitted:
+        if (
+            not client_disconnected
+            and not done_emitted
+            and ctx.status != RequestStatus.FAILED
+        ):
+            for tail_chunk in flush_openai_stop_state(stop_state, body.model):
+                request_manager.capture_response_chunk(ctx, tail_chunk)
+                yield tail_chunk
+            usage_chunk = _maybe_pack_stream_usage_chunk(body)
+            if usage_chunk:
+                request_manager.capture_response_chunk(ctx, usage_chunk)
+                yield usage_chunk
             done_chunk = _pack_done()
             request_manager.capture_response_chunk(ctx, done_chunk)
             yield done_chunk
@@ -1335,11 +2237,13 @@ async def _stream_with_lifecycle(
         request_manager.capture_error(ctx, e, code="internal_error")
         ctx.mark_failed(str(e))
         yield _pack_error(f"执行错误: {str(e)}", "internal_error")
+        yield _pack_done()
 
     finally:
         if worker_thread and worker_thread.is_alive():
             ctx.request_cancel("cleanup")
-            await asyncio.to_thread(worker_thread.join, timeout=5.0)
+            cleanup_timeout = 0.2 if done_emitted else 5.0
+            await asyncio.to_thread(worker_thread.join, timeout=cleanup_timeout)
             if worker_thread.is_alive():
                 _retire_bound_tab_after_worker_leak(ctx, "worker_cleanup_timeout")
 
@@ -1369,32 +2273,58 @@ async def _non_stream_with_lifecycle(
     collected_content = []
     collected_media = []
     error_data = None
+    sse_buffer = ""
+
+    def _iter_buffered_stream_payloads(chunk: str) -> List[Dict[str, Any]]:
+        nonlocal sse_buffer
+        if not chunk:
+            return []
+
+        sse_buffer += chunk.replace("\r\n", "\n").replace("\r", "\n")
+        payloads: List[Dict[str, Any]] = []
+        while "\n\n" in sse_buffer:
+            frame, sse_buffer = sse_buffer.split("\n\n", 1)
+            if not frame.strip():
+                continue
+            payloads.extend(iter_openai_sse_payloads(frame + "\n\n"))
+        return payloads
+
+    def _flush_buffered_stream_payloads() -> List[Dict[str, Any]]:
+        nonlocal sse_buffer
+        tail = sse_buffer
+        sse_buffer = ""
+        if not tail.strip():
+            return []
+        return iter_openai_sse_payloads(tail + "\n\n")
+
+    def _consume_stream_payload(data: Dict[str, Any]) -> bool:
+        nonlocal error_data
+        if "error" in data:
+            error_data = data
+            return False
+
+        collected_media.extend(_extract_chunk_media_items(data))
+
+        if "choices" in data and data["choices"]:
+            delta = data["choices"][0].get("delta", {})
+            content = delta.get("content", "")
+            content_text = _extract_delta_content_text(content)
+            if content_text:
+                collected_content.append(content_text)
+        return True
 
     async for chunk in _stream_with_lifecycle(request, body, ctx):
         if isinstance(chunk, str):
-            if chunk.startswith("data: [DONE]"):
-                continue
+            for data in _iter_buffered_stream_payloads(chunk):
+                if not _consume_stream_payload(data):
+                    break
+            if error_data:
+                break
 
-            if chunk.startswith("data: "):
-                try:
-                    data_str = chunk[6:].strip()
-                    if not data_str:
-                        continue
-                    data = json.loads(data_str)
-
-                    if "error" in data:
-                        error_data = data
-                        break
-
-                    collected_media.extend(_extract_chunk_media_items(data))
-
-                    if "choices" in data and data["choices"]:
-                        delta = data["choices"][0].get("delta", {})
-                        content = delta.get("content", "")
-                        if content:
-                            collected_content.append(content)
-                except json.JSONDecodeError:
-                    continue
+    if not error_data:
+        for data in _flush_buffered_stream_payloads():
+            if not _consume_stream_payload(data):
+                break
 
     if error_data:
         return JSONResponse(content=error_data, status_code=500)
@@ -1406,6 +2336,7 @@ async def _non_stream_with_lifecycle(
     )
     full_content = placeholder_pattern.sub("", full_content)
     full_content = re.sub(r"\n{3,}", "\n\n", full_content).strip()
+    full_content = apply_stop_sequences_to_text(full_content, body.stop)
 
     response = SSEFormatter.pack_non_stream(
         full_content,
@@ -1491,6 +2422,12 @@ async def _run_tool_calling_async(
         round_executor=_round_executor,
         stop_checker=stop_checker,
     )
+    if not parsed.get("tool_calls"):
+        parsed = dict(parsed)
+        parsed["content"] = apply_stop_sequences_to_text(
+            str(parsed.get("content") or ""),
+            body.stop,
+        )
     return build_tool_completion_response(body.model, parsed)
 
 
@@ -1575,7 +2512,9 @@ async def _non_stream_tool_calling_with_lifecycle(
         return JSONResponse(content=response)
     except Exception as e:
         message, code = _format_tool_calling_error(e)
+        ctx.mark_failed(message)
         request_manager.capture_error(ctx, message, code=code)
+        request_manager.finish_request(ctx, success=False)
         return JSONResponse(
             content={
                 "error": {
@@ -1600,7 +2539,10 @@ async def _stream_tool_calling_with_lifecycle(
             "content": message.get("content"),
             "tool_calls": message.get("tool_calls") or [],
         }
-        for chunk in iter_tool_stream_chunks(body.model, parsed):
+        for chunk in _iter_stream_chunks_with_optional_usage(
+            body,
+            iter_tool_stream_chunks(body.model, parsed),
+        ):
             if await request.is_disconnected():
                 ctx.request_cancel("client_disconnected")
                 break
@@ -1608,6 +2550,9 @@ async def _stream_tool_calling_with_lifecycle(
             await asyncio.sleep(0)
     except Exception as e:
         message, code = _format_tool_calling_error(e)
+        ctx.mark_failed(message)
+        request_manager.capture_error(ctx, message, code=code)
+        request_manager.finish_request(ctx, success=False)
         yield _pack_error(message, code)
         yield _pack_done()
 
@@ -1638,12 +2583,16 @@ def _pack_done() -> str:
     return "data: [DONE]\n\n"
 
 
+def _pack_error_done(message: str, code: str = "error") -> str:
+    return f"{_pack_error(message, code)}{_pack_done()}"
+
+
 def _collect_model_entries() -> List[Dict[str, Any]]:
     entries = [
         {
             "id": "web-browser",
             "object": "model",
-            "created": int(time.time()),
+            "created": MODEL_LIST_CREATED,
             "owned_by": "universal-web-api",
             "display_name": "web-browser",
         }
@@ -1660,7 +2609,7 @@ def _collect_model_entries() -> List[Dict[str, Any]]:
                 {
                     "id": model_id,
                     "object": "model",
-                    "created": int(time.time()),
+                    "created": MODEL_LIST_CREATED,
                     "owned_by": str(item.get("route_domain") or "universal-web-api"),
                     "display_name": model_id,
                 }

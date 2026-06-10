@@ -40,6 +40,10 @@ window.ConfigTab = {
             filePasteCollapsed: true,
             promptPaddingCollapsed: true,
             advancedConfigCollapsed: true,
+            presetSectionDrafts: {
+                file_paste: [],
+                prompt_padding: []
+            },
 
             advancedConfigSaving: false,
             isolatedTabCreating: false,
@@ -55,6 +59,7 @@ window.ConfigTab = {
             compareMainOriginalText: '',
             compareMainDraft: '',
             compareSavingLocal: false,
+            advancedConfigSaveSeq: 0,
 
             // 默认配置
             defaultImageConfig: {
@@ -185,18 +190,10 @@ window.ConfigTab = {
             };
         },
         filePasteConfigRef() {
-            if (!this.presetConfig) return {};
-            if (!this.presetConfig.file_paste || typeof this.presetConfig.file_paste !== 'object') {
-                this.presetConfig.file_paste = {};
-            }
-            return this.presetConfig.file_paste;
+            return this.getPresetMutableSection('file_paste');
         },
         promptPaddingConfigRef() {
-            if (!this.presetConfig) return {};
-            if (!this.presetConfig.prompt_padding || typeof this.presetConfig.prompt_padding !== 'object') {
-                this.presetConfig.prompt_padding = {};
-            }
-            return this.presetConfig.prompt_padding;
+            return this.getPresetMutableSection('prompt_padding');
         },
         siteAdvancedConfig() {
             if (!this.currentConfig) {
@@ -207,6 +204,7 @@ window.ConfigTab = {
                     input_box_stability_wait_after_new_chat_only: true,
                     input_box_stability_wait_timeout: 1.5,
                     url_transition_wait_on_new_chat: false,
+                    url_transition_wait_patterns: [],
                     send_confirmation_check_enabled: false,
                     send_confirmation_check_timeout: 1.5
                 };
@@ -222,6 +220,7 @@ window.ConfigTab = {
                 input_box_stability_wait_after_new_chat_only: true,
                 input_box_stability_wait_timeout: 1.5,
                 url_transition_wait_on_new_chat: false,
+                url_transition_wait_patterns: [],
                 send_confirmation_check_enabled: false,
                 send_confirmation_check_timeout: 1.5,
                 ...siteAdvanced,
@@ -236,6 +235,9 @@ window.ConfigTab = {
                     timingAdvanced.input_box_stability_wait_timeout
                 ),
                 url_transition_wait_on_new_chat: !!timingAdvanced.url_transition_wait_on_new_chat,
+                url_transition_wait_patterns: this.sanitizeUrlTransitionWaitPatterns(
+                    timingAdvanced.url_transition_wait_patterns
+                ),
                 send_confirmation_check_enabled: !!timingAdvanced.send_confirmation_check_enabled,
                 send_confirmation_check_timeout: this.sanitizeSendConfirmationCheckTimeout(
                     timingAdvanced.send_confirmation_check_timeout
@@ -284,6 +286,155 @@ window.ConfigTab = {
                 headers['Authorization'] = 'Bearer ' + token;
             }
             return headers;
+        },
+
+        async fetchJson(url, options = {}, requestOptions = {}) {
+            const timeoutMs = Number(requestOptions.timeoutMs || 10000);
+            const fetchOptions = { ...options };
+            let timeoutId = null;
+            let controller = null;
+
+            if (timeoutMs > 0 && typeof AbortController !== 'undefined') {
+                controller = new AbortController();
+                fetchOptions.signal = controller.signal;
+                timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+            }
+
+            try {
+                const response = await fetch(url, fetchOptions);
+                const data = await response.json().catch(() => ({}));
+                if (!response.ok) {
+                    throw new Error(data.detail || ('HTTP ' + response.status));
+                }
+                return data;
+            } catch (error) {
+                if (error && error.name === 'AbortError') {
+                    throw new Error('请求超时，请稍后重试');
+                }
+                throw error;
+            } finally {
+                if (timeoutId) {
+                    clearTimeout(timeoutId);
+                }
+            }
+        },
+
+        isPlainConfigObject(value) {
+            return !!value && typeof value === 'object' && !Array.isArray(value);
+        },
+
+        canAssignObjectProperty(target, key) {
+            if (!this.isPlainConfigObject(target)) return false;
+            try {
+                const descriptor = Object.getOwnPropertyDescriptor(target, key);
+                if (!descriptor) {
+                    return Object.isExtensible(target);
+                }
+                if (Object.prototype.hasOwnProperty.call(descriptor, 'writable')) {
+                    return !!descriptor.writable;
+                }
+                return typeof descriptor.set === 'function';
+            } catch (_) {
+                return false;
+            }
+        },
+
+        cloneConfigSection(value) {
+            if (Array.isArray(value)) {
+                return value.map(item => this.cloneConfigSection(item));
+            }
+            if (this.isPlainConfigObject(value)) {
+                return Object.keys(value).reduce((result, key) => {
+                    result[key] = this.cloneConfigSection(value[key]);
+                    return result;
+                }, {});
+            }
+            return value;
+        },
+
+        getPresetSectionDraftSlots(sectionKey) {
+            let slots = this.presetSectionDrafts[sectionKey];
+            if (!Array.isArray(slots)) {
+                slots = slots && typeof slots === 'object' ? [slots] : [];
+                this.presetSectionDrafts[sectionKey] = slots;
+            }
+            return slots;
+        },
+
+        getPresetSectionDraft(sectionKey, preset, source) {
+            const slots = this.getPresetSectionDraftSlots(sectionKey);
+            let slot = slots.find(item => item && item.preset === preset);
+            if (!slot) {
+                slot = { preset, source: null, value: {} };
+                slots.push(slot);
+            }
+            if (slot.source !== source) {
+                slot.preset = preset;
+                slot.source = source;
+                slot.value = this.isPlainConfigObject(source) ? this.cloneConfigSection(source) : {};
+            }
+            return slot.value;
+        },
+
+        getPresetMutableSection(sectionKey) {
+            const pc = this.presetConfig;
+            if (!this.isPlainConfigObject(pc)) {
+                return this.getPresetSectionDraft(sectionKey, null, null);
+            }
+
+            return this.getPresetSectionDraft(sectionKey, pc, pc[sectionKey]);
+        },
+
+        ensurePresetMutableSections() {
+            this.getPresetMutableSection('file_paste');
+            this.getPresetMutableSection('prompt_padding');
+        },
+
+        isPresetSectionDraftDirty(source, draft) {
+            if (!this.isPlainConfigObject(source)) {
+                return this.isPlainConfigObject(draft) && Object.keys(draft).length > 0;
+            }
+            try {
+                return JSON.stringify(source) !== JSON.stringify(draft);
+            } catch (_) {
+                return true;
+            }
+        },
+
+        shouldFlushPresetSectionDraft(sectionKey, preset, source, draft) {
+            if (!this.isPlainConfigObject(preset) || !this.isPlainConfigObject(draft)) {
+                return false;
+            }
+            if (!Object.prototype.hasOwnProperty.call(preset, sectionKey)) {
+                return Object.keys(draft).length > 0;
+            }
+            return this.isPresetSectionDraftDirty(source, draft);
+        },
+
+        flushPresetSectionDraft(sectionKey, slot) {
+            const preset = slot && slot.preset;
+            if (!slot || !this.shouldFlushPresetSectionDraft(sectionKey, preset, slot.source, slot.value)) {
+                return false;
+            }
+            if (!this.canAssignObjectProperty(preset, sectionKey)) {
+                return false;
+            }
+
+            const nextValue = this.cloneConfigSection(slot.value);
+            preset[sectionKey] = nextValue;
+            slot.source = nextValue;
+            slot.value = this.cloneConfigSection(nextValue);
+            return true;
+        },
+
+        flushMutableSectionDrafts() {
+            let changed = false;
+            ['file_paste', 'prompt_padding'].forEach(sectionKey => {
+                this.getPresetSectionDraftSlots(sectionKey).forEach(slot => {
+                    changed = this.flushPresetSectionDraft(sectionKey, slot) || changed;
+                });
+            });
+            return changed;
         },
 
         notifyCompare(message, type = 'info') {
@@ -581,23 +732,19 @@ window.ConfigTab = {
         async loadMainBranchCompareConfig() {
             if (!this.currentDomain) return;
 
+            const domain = this.currentDomain;
+            const preset = this.selectedPreset || '';
             this.compareMainLoading = true;
             this.compareMainError = '';
             try {
-                const queryPreset = encodeURIComponent(this.selectedPreset || '');
-                const response = await fetch(
-                    '/api/sites/' + encodeURIComponent(this.currentDomain) + '/main-branch-config?preset_name=' + queryPreset,
-                    {
-                        headers: this.buildAuthHeaders()
-                    }
+                const queryPreset = encodeURIComponent(preset);
+                const data = await this.fetchJson(
+                    '/api/sites/' + encodeURIComponent(domain) + '/main-branch-config?preset_name=' + queryPreset,
+                    { headers: this.buildAuthHeaders() },
+                    { timeoutMs: 10000 }
                 );
 
-                if (!response.ok) {
-                    const err = await response.json().catch(() => ({}));
-                    throw new Error(err.detail || ('HTTP ' + response.status));
-                }
-
-                const data = await response.json();
+                if (domain !== this.currentDomain || preset !== (this.selectedPreset || '')) return;
                 const formatted = this.formatConfigCompareJson(data.config || {});
                 this.compareMainPresetName = String(data.preset_name || '').trim() || '主预设';
                 this.compareMainMatchMode = String(data.match_mode || '').trim();
@@ -605,6 +752,7 @@ window.ConfigTab = {
                 this.compareMainOriginalText = formatted;
                 this.compareMainDraft = formatted;
             } catch (error) {
+                if (domain !== this.currentDomain || preset !== (this.selectedPreset || '')) return;
                 console.error('加载 main 分支配置失败:', error);
                 this.compareMainError = error && error.message ? error.message : '加载失败';
                 this.compareMainPresetName = '';
@@ -613,7 +761,9 @@ window.ConfigTab = {
                 this.compareMainOriginalText = '';
                 this.compareMainDraft = '';
             } finally {
-                this.compareMainLoading = false;
+                if (domain === this.currentDomain && preset === (this.selectedPreset || '')) {
+                    this.compareMainLoading = false;
+                }
             }
         },
 
@@ -636,28 +786,27 @@ window.ConfigTab = {
                 return;
             }
 
+            const domain = this.currentDomain;
+            const preset = this.selectedPreset;
+            const parsedValue = this.compareLocalParsed.value;
             this.compareSavingLocal = true;
             try {
-                const response = await fetch(
-                    '/api/sites/' + encodeURIComponent(this.currentDomain) + '/preset-config',
+                const data = await this.fetchJson(
+                    '/api/sites/' + encodeURIComponent(domain) + '/preset-config',
                     {
                         method: 'PUT',
                         headers: this.buildAuthHeaders({ 'Content-Type': 'application/json' }),
                         body: JSON.stringify({
-                            preset_name: this.selectedPreset,
-                            config: this.compareLocalParsed.value
+                            preset_name: preset,
+                            config: parsedValue
                         })
-                    }
+                    },
+                    { timeoutMs: 12000 }
                 );
 
-                if (!response.ok) {
-                    const err = await response.json().catch(() => ({}));
-                    throw new Error(err.detail || ('HTTP ' + response.status));
-                }
-
-                const data = await response.json();
-                const resolvedPreset = String(data.preset_name || this.selectedPreset).trim() || this.selectedPreset;
-                const savedConfig = data.config || this.compareLocalParsed.value;
+                if (domain !== this.currentDomain || preset !== this.selectedPreset) return;
+                const resolvedPreset = String(data.preset_name || preset).trim() || preset;
+                const savedConfig = data.config || parsedValue;
                 const cloned = JSON.parse(JSON.stringify(savedConfig));
 
                 if (this.currentConfig) {
@@ -676,10 +825,13 @@ window.ConfigTab = {
                 this.compareLocalDraft = this.compareLocalOriginalText;
                 this.notifyCompare('当前预设已保存', 'success');
             } catch (error) {
+                if (domain !== this.currentDomain || preset !== this.selectedPreset) return;
                 console.error('保存当前预设失败:', error);
                 this.notifyCompare('保存失败: ' + error.message, 'error');
             } finally {
-                this.compareSavingLocal = false;
+                if (domain === this.currentDomain && preset === this.selectedPreset) {
+                    this.compareSavingLocal = false;
+                }
             }
         },
 
@@ -711,22 +863,25 @@ window.ConfigTab = {
         // 流式配置保存
         async saveStreamConfig(config) {
             if (!this.currentDomain) return;
+            const domain = this.currentDomain;
+            const preset = this.selectedPreset;
             try {
-                const payload = { ...config, preset_name: this.selectedPreset };
-                const response = await fetch('/api/sites/' + encodeURIComponent(this.currentDomain) + '/stream-config', {
-                    method: 'PUT',
-                    headers: this.buildAuthHeaders({ 'Content-Type': 'application/json' }),
-                    body: JSON.stringify(payload)
-                });
+                const payload = { ...config, preset_name: preset };
+                await this.fetchJson(
+                    '/api/sites/' + encodeURIComponent(domain) + '/stream-config',
+                    {
+                        method: 'PUT',
+                        headers: this.buildAuthHeaders({ 'Content-Type': 'application/json' }),
+                        body: JSON.stringify(payload)
+                    },
+                    { timeoutMs: 12000 }
+                );
 
-                if (!response.ok) {
-                    const err = await response.json().catch(() => ({}));
-                    throw new Error(err.detail || ('HTTP ' + response.status));
-                }
-
+                if (domain !== this.currentDomain || preset !== this.selectedPreset) return;
                 const pc = this.presetConfig;
                 if (pc) pc.stream_config = config;
             } catch (e) {
+                if (domain !== this.currentDomain || preset !== this.selectedPreset) return;
                 console.error('保存流式配置失败:', e);
                 alert('保存失败: ' + e.message);
             }
@@ -748,36 +903,43 @@ window.ConfigTab = {
             return Math.min(10, Math.max(0.1, parsed));
         },
 
+        sanitizeUrlTransitionWaitPatterns(value) {
+            const seen = new Set();
+            const items = Array.isArray(value)
+                ? value
+                : (typeof value === 'string'
+                    ? value.replace(/\r\n/g, '\n').replace(/;/g, '\n').split('\n')
+                    : []);
+            const result = [];
+
+            items.forEach(item => {
+                const text = String(item || '').trim();
+                if (!text || seen.has(text)) return;
+                seen.add(text);
+                result.push(text);
+            });
+
+            return result;
+        },
+
+        formatUrlTransitionWaitPatterns(value) {
+            return this.sanitizeUrlTransitionWaitPatterns(value).join('\n');
+        },
+
         buildSiteAdvancedPayload(overrides = {}) {
             const siteAdvanced = {
                 independent_cookies: false,
                 independent_cookies_auto_takeover: false,
-                input_box_stability_wait_enabled: false,
-                input_box_stability_wait_after_new_chat_only: true,
-                input_box_stability_wait_timeout: 1.5,
-                url_transition_wait_on_new_chat: false,
-                send_confirmation_check_enabled: false,
-                send_confirmation_check_timeout: 1.5,
                 ...((this.currentConfig && this.currentConfig.advanced) || {}),
                 ...overrides
             };
             return {
                 independent_cookies: !!siteAdvanced.independent_cookies,
                 independent_cookies_auto_takeover: !!siteAdvanced.independent_cookies_auto_takeover,
-                input_box_stability_wait_enabled: !!siteAdvanced.input_box_stability_wait_enabled,
-                input_box_stability_wait_after_new_chat_only: !!siteAdvanced.input_box_stability_wait_after_new_chat_only,
-                input_box_stability_wait_timeout: this.sanitizeInputStabilityWaitTimeout(
-                    siteAdvanced.input_box_stability_wait_timeout
-                ),
-                url_transition_wait_on_new_chat: !!siteAdvanced.url_transition_wait_on_new_chat,
-                send_confirmation_check_enabled: !!siteAdvanced.send_confirmation_check_enabled,
-                send_confirmation_check_timeout: this.sanitizeSendConfirmationCheckTimeout(
-                    siteAdvanced.send_confirmation_check_timeout
-                )
             };
         },
 
-        buildPresetAdvancedPayload(overrides = {}) {
+        buildPresetAdvancedPayload(overrides = {}, options = {}) {
             const nextAdvanced = {
                 input_box_stability_wait_enabled: !!this.siteAdvancedConfig.input_box_stability_wait_enabled,
                 input_box_stability_wait_after_new_chat_only: !!this.siteAdvancedConfig.input_box_stability_wait_after_new_chat_only,
@@ -791,10 +953,8 @@ window.ConfigTab = {
                 ),
                 ...overrides
             };
-            return {
+            const payload = {
                 preset_name: this.selectedPreset,
-                independent_cookies: !!this.siteAdvancedConfig.independent_cookies,
-                independent_cookies_auto_takeover: !!this.siteAdvancedConfig.independent_cookies_auto_takeover,
                 input_box_stability_wait_enabled: !!nextAdvanced.input_box_stability_wait_enabled,
                 input_box_stability_wait_after_new_chat_only: !!nextAdvanced.input_box_stability_wait_after_new_chat_only,
                 input_box_stability_wait_timeout: this.sanitizeInputStabilityWaitTimeout(
@@ -806,6 +966,16 @@ window.ConfigTab = {
                     nextAdvanced.send_confirmation_check_timeout
                 )
             };
+            const shouldSendPatterns = (
+                options.includeUrlTransitionWaitPatterns
+                || Object.prototype.hasOwnProperty.call(overrides, 'url_transition_wait_patterns')
+            );
+            if (shouldSendPatterns) {
+                payload.url_transition_wait_patterns = this.sanitizeUrlTransitionWaitPatterns(
+                    nextAdvanced.url_transition_wait_patterns
+                );
+            }
+            return payload;
         },
 
         filterPresetAdvancedFields(config = {}) {
@@ -814,6 +984,7 @@ window.ConfigTab = {
                 'input_box_stability_wait_after_new_chat_only',
                 'input_box_stability_wait_timeout',
                 'url_transition_wait_on_new_chat',
+                'url_transition_wait_patterns',
                 'send_confirmation_check_enabled',
                 'send_confirmation_check_timeout'
             ];
@@ -824,6 +995,8 @@ window.ConfigTab = {
                         result[key] = this.sanitizeInputStabilityWaitTimeout(config[key]);
                     } else if (key === 'send_confirmation_check_timeout') {
                         result[key] = this.sanitizeSendConfirmationCheckTimeout(config[key]);
+                    } else if (key === 'url_transition_wait_patterns') {
+                        result[key] = this.sanitizeUrlTransitionWaitPatterns(config[key]);
                     } else {
                         result[key] = !!config[key];
                     }
@@ -832,42 +1005,101 @@ window.ConfigTab = {
             return result;
         },
 
+        filterSiteAdvancedFields(config = {}) {
+            const keys = [
+                'independent_cookies',
+                'independent_cookies_auto_takeover'
+            ];
+            const result = {};
+            keys.forEach(key => {
+                if (Object.prototype.hasOwnProperty.call(config, key)) {
+                    result[key] = !!config[key];
+                }
+            });
+            return result;
+        },
+
+        assignConfigSection(target, key, value) {
+            if (!this.canAssignObjectProperty(target, key)) {
+                return false;
+            }
+            target[key] = this.cloneConfigSection(value);
+            return true;
+        },
+
+        assignCurrentConfigAdvanced(value) {
+            if (!this.currentConfig) {
+                return false;
+            }
+            return this.assignConfigSection(this.currentConfig, 'advanced', value);
+        },
+
+        assignPresetAdvanced(value) {
+            if (!this.presetConfig) {
+                return false;
+            }
+            return this.assignConfigSection(this.presetConfig, 'advanced', value);
+        },
+
+        startAdvancedConfigSave() {
+            const saveSeq = Number(this.advancedConfigSaveSeq || 0) + 1;
+            this.advancedConfigSaveSeq = saveSeq;
+            this.advancedConfigSaving = true;
+            return saveSeq;
+        },
+
+        finishAdvancedConfigSave(saveSeq) {
+            if (saveSeq === this.advancedConfigSaveSeq) {
+                this.advancedConfigSaving = false;
+            }
+        },
+
         async persistSiteAdvancedConfig(nextAdvanced, previousAdvanced, options = {}) {
-            const token = localStorage.getItem('api_token');
-            const headers = { 'Content-Type': 'application/json' };
-            if (token) headers['Authorization'] = 'Bearer ' + token;
             const presetScoped = !!options.presetScoped;
             const previousTarget = previousAdvanced || {};
+            const domain = this.currentDomain;
+            const preset = this.selectedPreset;
 
-            const response = await fetch('/api/sites/' + encodeURIComponent(this.currentDomain) + '/advanced-config', {
-                method: 'PUT',
-                headers,
-                body: JSON.stringify(nextAdvanced)
-            });
-
-            if (!response.ok) {
-                const err = await response.json().catch(() => ({}));
-                if (presetScoped && this.presetConfig) {
-                    this.presetConfig.advanced = previousTarget;
-                } else {
-                    this.currentConfig.advanced = previousTarget;
+            try {
+                const data = await this.fetchJson(
+                    '/api/sites/' + encodeURIComponent(domain) + '/advanced-config',
+                    {
+                        method: 'PUT',
+                        headers: this.buildAuthHeaders({ 'Content-Type': 'application/json' }),
+                        body: JSON.stringify(nextAdvanced)
+                    },
+                    { timeoutMs: 12000 }
+                );
+                if (
+                    domain !== this.currentDomain
+                    || (presetScoped && preset !== this.selectedPreset)
+                ) {
+                    return false;
                 }
-                throw new Error(err.detail || ('HTTP ' + response.status));
+                if (presetScoped && this.presetConfig) {
+                    this.assignPresetAdvanced(this.filterPresetAdvancedFields(data.advanced || nextAdvanced));
+                } else {
+                    this.assignCurrentConfigAdvanced({
+                        ...previousTarget,
+                        ...this.filterSiteAdvancedFields(data.advanced || nextAdvanced)
+                    });
+                }
+                this.$emit('reload-config');
+                return true;
+            } catch (error) {
+                if (
+                    domain !== this.currentDomain
+                    || (presetScoped && preset !== this.selectedPreset)
+                ) {
+                    return false;
+                }
+                if (presetScoped && this.presetConfig) {
+                    this.assignPresetAdvanced(previousTarget);
+                } else if (this.currentConfig) {
+                    this.assignCurrentConfigAdvanced(previousTarget);
+                }
+                throw error;
             }
-
-            const data = await response.json().catch(() => ({}));
-            if (presetScoped && this.presetConfig) {
-                this.presetConfig.advanced = {
-                    ...previousTarget,
-                    ...this.filterPresetAdvancedFields(data.advanced || nextAdvanced)
-                };
-            } else {
-                this.currentConfig.advanced = {
-                    ...previousTarget,
-                    ...(data.advanced || nextAdvanced)
-                };
-            }
-            this.$emit('reload-config');
         },
 
         async updateIndependentCookies(enabled, event) {
@@ -892,16 +1124,16 @@ window.ConfigTab = {
                 }
             }
 
-            this.advancedConfigSaving = true;
+            const saveSeq = this.startAdvancedConfigSave();
             const previousAdvanced = { ...(this.currentConfig.advanced || {}) };
             const nextAdvanced = this.buildSiteAdvancedPayload({
                 independent_cookies: nextEnabled,
                 independent_cookies_auto_takeover: !!previousAdvanced.independent_cookies_auto_takeover
             });
-            this.currentConfig.advanced = {
+            this.assignCurrentConfigAdvanced({
                 ...previousAdvanced,
-                ...nextAdvanced
-            };
+                ...this.filterSiteAdvancedFields(nextAdvanced)
+            });
 
             try {
                 await this.persistSiteAdvancedConfig(nextAdvanced, previousAdvanced);
@@ -909,22 +1141,22 @@ window.ConfigTab = {
                 console.error('保存站点高级配置失败:', e);
                 alert('保存失败: ' + e.message);
             } finally {
-                this.advancedConfigSaving = false;
+                this.finishAdvancedConfigSave(saveSeq);
             }
         },
 
         async updateIndependentCookiesAutoTakeover(enabled) {
             if (!this.currentDomain || !this.currentConfig) return;
 
-            this.advancedConfigSaving = true;
+            const saveSeq = this.startAdvancedConfigSave();
             const previousAdvanced = { ...(this.currentConfig.advanced || {}) };
             const nextAdvanced = this.buildSiteAdvancedPayload({
                 independent_cookies_auto_takeover: !!enabled
             });
-            this.currentConfig.advanced = {
+            this.assignCurrentConfigAdvanced({
                 ...previousAdvanced,
-                ...nextAdvanced
-            };
+                ...this.filterSiteAdvancedFields(nextAdvanced)
+            });
 
             try {
                 await this.persistSiteAdvancedConfig(nextAdvanced, previousAdvanced);
@@ -932,22 +1164,19 @@ window.ConfigTab = {
                 console.error('保存站点高级配置失败:', e);
                 alert('保存失败: ' + e.message);
             } finally {
-                this.advancedConfigSaving = false;
+                this.finishAdvancedConfigSave(saveSeq);
             }
         },
 
         async updateInputStabilityWaitEnabled(enabled) {
             if (!this.currentDomain || !this.currentConfig || !this.presetConfig) return;
 
-            this.advancedConfigSaving = true;
+            const saveSeq = this.startAdvancedConfigSave();
             const previousAdvanced = { ...(this.presetConfig.advanced || {}) };
             const nextAdvanced = this.buildPresetAdvancedPayload({
                 input_box_stability_wait_enabled: !!enabled
             });
-            this.presetConfig.advanced = {
-                ...previousAdvanced,
-                ...this.filterPresetAdvancedFields(nextAdvanced)
-            };
+            this.assignPresetAdvanced(this.filterPresetAdvancedFields(nextAdvanced));
 
             try {
                 await this.persistSiteAdvancedConfig(nextAdvanced, previousAdvanced, { presetScoped: true });
@@ -955,22 +1184,19 @@ window.ConfigTab = {
                 console.error('保存预设高级配置失败:', e);
                 alert('保存失败: ' + e.message);
             } finally {
-                this.advancedConfigSaving = false;
+                this.finishAdvancedConfigSave(saveSeq);
             }
         },
 
         async updateInputStabilityWaitAfterNewChatOnly(enabled) {
             if (!this.currentDomain || !this.currentConfig || !this.presetConfig) return;
 
-            this.advancedConfigSaving = true;
+            const saveSeq = this.startAdvancedConfigSave();
             const previousAdvanced = { ...(this.presetConfig.advanced || {}) };
             const nextAdvanced = this.buildPresetAdvancedPayload({
                 input_box_stability_wait_after_new_chat_only: !!enabled
             });
-            this.presetConfig.advanced = {
-                ...previousAdvanced,
-                ...this.filterPresetAdvancedFields(nextAdvanced)
-            };
+            this.assignPresetAdvanced(this.filterPresetAdvancedFields(nextAdvanced));
 
             try {
                 await this.persistSiteAdvancedConfig(nextAdvanced, previousAdvanced, { presetScoped: true });
@@ -978,22 +1204,19 @@ window.ConfigTab = {
                 console.error('保存预设高级配置失败:', e);
                 alert('保存失败: ' + e.message);
             } finally {
-                this.advancedConfigSaving = false;
+                this.finishAdvancedConfigSave(saveSeq);
             }
         },
 
         async updateInputStabilityWaitTimeout(value) {
             if (!this.currentDomain || !this.currentConfig || !this.presetConfig) return;
 
-            this.advancedConfigSaving = true;
+            const saveSeq = this.startAdvancedConfigSave();
             const previousAdvanced = { ...(this.presetConfig.advanced || {}) };
             const nextAdvanced = this.buildPresetAdvancedPayload({
                 input_box_stability_wait_timeout: this.sanitizeInputStabilityWaitTimeout(value)
             });
-            this.presetConfig.advanced = {
-                ...previousAdvanced,
-                ...this.filterPresetAdvancedFields(nextAdvanced)
-            };
+            this.assignPresetAdvanced(this.filterPresetAdvancedFields(nextAdvanced));
 
             try {
                 await this.persistSiteAdvancedConfig(nextAdvanced, previousAdvanced, { presetScoped: true });
@@ -1001,22 +1224,19 @@ window.ConfigTab = {
                 console.error('保存预设高级配置失败:', e);
                 alert('保存失败: ' + e.message);
             } finally {
-                this.advancedConfigSaving = false;
+                this.finishAdvancedConfigSave(saveSeq);
             }
         },
 
         async updateUrlTransitionWaitOnNewChat(enabled) {
             if (!this.currentDomain || !this.currentConfig || !this.presetConfig) return;
 
-            this.advancedConfigSaving = true;
+            const saveSeq = this.startAdvancedConfigSave();
             const previousAdvanced = { ...(this.presetConfig.advanced || {}) };
             const nextAdvanced = this.buildPresetAdvancedPayload({
                 url_transition_wait_on_new_chat: !!enabled
             });
-            this.presetConfig.advanced = {
-                ...previousAdvanced,
-                ...this.filterPresetAdvancedFields(nextAdvanced)
-            };
+            this.assignPresetAdvanced(this.filterPresetAdvancedFields(nextAdvanced));
 
             try {
                 await this.persistSiteAdvancedConfig(nextAdvanced, previousAdvanced, { presetScoped: true });
@@ -1024,22 +1244,39 @@ window.ConfigTab = {
                 console.error('保存预设高级配置失败:', e);
                 alert('保存失败: ' + e.message);
             } finally {
-                this.advancedConfigSaving = false;
+                this.finishAdvancedConfigSave(saveSeq);
+            }
+        },
+
+        async updateUrlTransitionWaitPatterns(value) {
+            if (!this.currentDomain || !this.currentConfig || !this.presetConfig) return;
+
+            const saveSeq = this.startAdvancedConfigSave();
+            const previousAdvanced = { ...(this.presetConfig.advanced || {}) };
+            const nextAdvanced = this.buildPresetAdvancedPayload({
+                url_transition_wait_patterns: this.sanitizeUrlTransitionWaitPatterns(value)
+            }, { includeUrlTransitionWaitPatterns: true });
+            this.assignPresetAdvanced(this.filterPresetAdvancedFields(nextAdvanced));
+
+            try {
+                await this.persistSiteAdvancedConfig(nextAdvanced, previousAdvanced, { presetScoped: true });
+            } catch (e) {
+                console.error('保存预设高级配置失败:', e);
+                alert('保存失败: ' + e.message);
+            } finally {
+                this.finishAdvancedConfigSave(saveSeq);
             }
         },
 
         async updateSendConfirmationCheckEnabled(enabled) {
             if (!this.currentDomain || !this.currentConfig || !this.presetConfig) return;
 
-            this.advancedConfigSaving = true;
+            const saveSeq = this.startAdvancedConfigSave();
             const previousAdvanced = { ...(this.presetConfig.advanced || {}) };
             const nextAdvanced = this.buildPresetAdvancedPayload({
                 send_confirmation_check_enabled: !!enabled
             });
-            this.presetConfig.advanced = {
-                ...previousAdvanced,
-                ...this.filterPresetAdvancedFields(nextAdvanced)
-            };
+            this.assignPresetAdvanced(this.filterPresetAdvancedFields(nextAdvanced));
 
             try {
                 await this.persistSiteAdvancedConfig(nextAdvanced, previousAdvanced, { presetScoped: true });
@@ -1047,22 +1284,19 @@ window.ConfigTab = {
                 console.error('保存预设高级配置失败:', e);
                 alert('保存失败: ' + e.message);
             } finally {
-                this.advancedConfigSaving = false;
+                this.finishAdvancedConfigSave(saveSeq);
             }
         },
 
         async updateSendConfirmationCheckTimeout(value) {
             if (!this.currentDomain || !this.currentConfig || !this.presetConfig) return;
 
-            this.advancedConfigSaving = true;
+            const saveSeq = this.startAdvancedConfigSave();
             const previousAdvanced = { ...(this.presetConfig.advanced || {}) };
             const nextAdvanced = this.buildPresetAdvancedPayload({
                 send_confirmation_check_timeout: this.sanitizeSendConfirmationCheckTimeout(value)
             });
-            this.presetConfig.advanced = {
-                ...previousAdvanced,
-                ...this.filterPresetAdvancedFields(nextAdvanced)
-            };
+            this.assignPresetAdvanced(this.filterPresetAdvancedFields(nextAdvanced));
 
             try {
                 await this.persistSiteAdvancedConfig(nextAdvanced, previousAdvanced, { presetScoped: true });
@@ -1070,65 +1304,61 @@ window.ConfigTab = {
                 console.error('保存预设高级配置失败:', e);
                 alert('保存失败: ' + e.message);
             } finally {
-                this.advancedConfigSaving = false;
+                this.finishAdvancedConfigSave(saveSeq);
             }
         },
 
         async createIsolatedCookieTab() {
             if (!this.currentDomain) return;
 
+            const domain = this.currentDomain;
             this.isolatedTabCreating = true;
             try {
-                const token = localStorage.getItem('api_token');
-                const headers = { 'Content-Type': 'application/json' };
-                if (token) headers['Authorization'] = 'Bearer ' + token;
-
-                const response = await fetch('/api/sites/' + encodeURIComponent(this.currentDomain) + '/isolated-tab', {
-                    method: 'POST',
-                    headers
-                });
-
-                if (!response.ok) {
-                    const err = await response.json().catch(() => ({}));
-                    throw new Error(err.detail || ('HTTP ' + response.status));
-                }
-
-                const result = await response.json();
-                alert(result.message || ('已为 ' + this.currentDomain + ' 新建独立 Cookie 标签页'));
+                const result = await this.fetchJson(
+                    '/api/sites/' + encodeURIComponent(domain) + '/isolated-tab',
+                    {
+                        method: 'POST',
+                        headers: this.buildAuthHeaders({ 'Content-Type': 'application/json' })
+                    },
+                    { timeoutMs: 12000 }
+                );
+                if (domain !== this.currentDomain) return;
+                alert(result.message || ('已为 ' + domain + ' 新建独立 Cookie 标签页'));
             } catch (e) {
+                if (domain !== this.currentDomain) return;
                 console.error('新建独立 Cookie 标签页失败:', e);
                 alert('新建失败: ' + e.message);
             } finally {
-                this.isolatedTabCreating = false;
+                if (domain === this.currentDomain) {
+                    this.isolatedTabCreating = false;
+                }
             }
         },
 
         async createSharedCookieTab() {
             if (!this.currentDomain) return;
 
+            const domain = this.currentDomain;
             this.sharedTabCreating = true;
             try {
-                const token = localStorage.getItem('api_token');
-                const headers = { 'Content-Type': 'application/json' };
-                if (token) headers['Authorization'] = 'Bearer ' + token;
-
-                const response = await fetch('/api/sites/' + encodeURIComponent(this.currentDomain) + '/shared-tab', {
-                    method: 'POST',
-                    headers
-                });
-
-                if (!response.ok) {
-                    const err = await response.json().catch(() => ({}));
-                    throw new Error(err.detail || ('HTTP ' + response.status));
-                }
-
-                const result = await response.json();
-                alert(result.message || ('已为 ' + this.currentDomain + ' 打开共享 Cookie 受控窗口'));
+                const result = await this.fetchJson(
+                    '/api/sites/' + encodeURIComponent(domain) + '/shared-tab',
+                    {
+                        method: 'POST',
+                        headers: this.buildAuthHeaders({ 'Content-Type': 'application/json' })
+                    },
+                    { timeoutMs: 12000 }
+                );
+                if (domain !== this.currentDomain) return;
+                alert(result.message || ('已为 ' + domain + ' 打开共享 Cookie 受控窗口'));
             } catch (e) {
+                if (domain !== this.currentDomain) return;
                 console.error('打开共享 Cookie 受控窗口失败:', e);
                 alert('打开失败: ' + e.message);
             } finally {
-                this.sharedTabCreating = false;
+                if (domain === this.currentDomain) {
+                    this.sharedTabCreating = false;
+                }
             }
         },
 
@@ -1136,17 +1366,15 @@ window.ConfigTab = {
 
         async loadPresets() {
             if (!this.currentDomain) return;
+            const domain = this.currentDomain;
             this.presetLoading = true;
             try {
-                const response = await fetch('/api/presets/' + encodeURIComponent(this.currentDomain), {
-                    headers: this.buildAuthHeaders()
-                });
-                if (!response.ok) {
-                    const err = await response.json().catch(() => ({}));
-                    throw new Error(err.detail || ('HTTP ' + response.status));
-                }
-
-                const data = await response.json();
+                const data = await this.fetchJson(
+                    '/api/presets/' + encodeURIComponent(domain),
+                    { headers: this.buildAuthHeaders() },
+                    { timeoutMs: 10000 }
+                );
+                if (domain !== this.currentDomain) return;
                 this.availablePresets = data.presets || ['主预设'];
                 const apiDefault = data.default_preset;
                 if (apiDefault && this.availablePresets.includes(apiDefault)) {
@@ -1162,6 +1390,7 @@ window.ConfigTab = {
                     this.selectedPreset = this.defaultPreset || this.availablePresets[0] || '主预设';
                 }
             } catch (e) {
+                if (domain !== this.currentDomain) return;
                 console.error('加载预设列表失败:', e);
                 if (!this.availablePresets.length) {
                     this.availablePresets = ['主预设'];
@@ -1169,7 +1398,9 @@ window.ConfigTab = {
                     this.selectedPreset = '主预设';
                 }
             } finally {
-                this.presetLoading = false;
+                if (domain === this.currentDomain) {
+                    this.presetLoading = false;
+                }
             }
         },
 
@@ -1181,25 +1412,25 @@ window.ConfigTab = {
 
         async setDefaultPreset() {
             if (!this.currentDomain || !this.selectedPreset) return;
+            const domain = this.currentDomain;
+            const preset = this.selectedPreset;
             try {
-                const response = await fetch('/api/presets/' + encodeURIComponent(this.currentDomain) + '/default', {
-                    method: 'PUT',
-                    headers: this.buildAuthHeaders({ 'Content-Type': 'application/json' }),
-                    body: JSON.stringify({
-                        preset_name: this.selectedPreset
-                    })
-                });
-
-                if (response.ok) {
-                    this.defaultPreset = this.selectedPreset;
-                    this.$emit('reload-config');
-                    alert('✅ 默认预设已设置为 "' + this.selectedPreset + '"（仅本地覆盖）');
-                } else {
-                    const err = await response.json();
-                    alert('❌ 设置默认预设失败: ' + (err.detail || '未知错误'));
-                }
+                await this.fetchJson(
+                    '/api/presets/' + encodeURIComponent(domain) + '/default',
+                    {
+                        method: 'PUT',
+                        headers: this.buildAuthHeaders({ 'Content-Type': 'application/json' }),
+                        body: JSON.stringify({ preset_name: preset })
+                    },
+                    { timeoutMs: 10000 }
+                );
+                if (domain !== this.currentDomain || preset !== this.selectedPreset) return;
+                this.defaultPreset = preset;
+                this.$emit('reload-config');
+                alert('✅ 默认预设已设置为 "' + preset + '"（仅本地覆盖）');
             } catch (e) {
-                alert('❌ 网络错误: ' + e.message);
+                if (domain !== this.currentDomain || preset !== this.selectedPreset) return;
+                alert('❌ 设置默认预设失败: ' + e.message);
             }
         },
 
@@ -1207,31 +1438,33 @@ window.ConfigTab = {
             const name = this.newPresetName.trim();
             if (!name) return;
             if (!this.currentDomain) return;
+            const domain = this.currentDomain;
             const sourcePreset = this.selectedPreset;
 
             try {
-                const response = await fetch('/api/presets/' + encodeURIComponent(this.currentDomain), {
-                    method: 'POST',
-                    headers: this.buildAuthHeaders({ 'Content-Type': 'application/json' }),
-                    body: JSON.stringify({
-                        new_name: name,
-                        source_name: sourcePreset
-                    })
-                });
-
-                if (response.ok) {
-                    this.newPresetName = '';
-                    this.showNewPresetInput = false;
-                    await this.loadPresets();
-                    this.selectedPreset = name;
-                    this.$emit('reload-config');
-                    alert('✅ 预设 "' + name + '" 已创建（克隆自 "' + sourcePreset + '"）');
-                } else {
-                    const err = await response.json();
-                    alert('❌ 创建失败: ' + (err.detail || '未知错误'));
-                }
+                await this.fetchJson(
+                    '/api/presets/' + encodeURIComponent(domain),
+                    {
+                        method: 'POST',
+                        headers: this.buildAuthHeaders({ 'Content-Type': 'application/json' }),
+                        body: JSON.stringify({
+                            new_name: name,
+                            source_name: sourcePreset
+                        })
+                    },
+                    { timeoutMs: 12000 }
+                );
+                if (domain !== this.currentDomain) return;
+                this.newPresetName = '';
+                this.showNewPresetInput = false;
+                await this.loadPresets();
+                if (domain !== this.currentDomain) return;
+                this.selectedPreset = name;
+                this.$emit('reload-config');
+                alert('✅ 预设 "' + name + '" 已创建（克隆自 "' + sourcePreset + '"）');
             } catch (e) {
-                alert('❌ 网络错误: ' + e.message);
+                if (domain !== this.currentDomain) return;
+                alert('❌ 创建失败: ' + e.message);
             }
         },
 
@@ -1246,29 +1479,32 @@ window.ConfigTab = {
                 return;
             }
 
+            const domain = this.currentDomain;
+            const oldName = this.selectedPreset;
             try {
-                const response = await fetch('/api/presets/' + encodeURIComponent(this.currentDomain) + '/rename', {
-                    method: 'PUT',
-                    headers: this.buildAuthHeaders({ 'Content-Type': 'application/json' }),
-                    body: JSON.stringify({
-                        old_name: this.selectedPreset,
-                        new_name: newName
-                    })
-                });
-
-                if (response.ok) {
-                    this.showRenamePresetInput = false;
-                    this.renamePresetName = '';
-                    await this.loadPresets();
-                    this.selectedPreset = newName;
-                    this.$emit('reload-config');
-                    alert('✅ 预设已重命名为 "' + newName + '"');
-                } else {
-                    const err = await response.json();
-                    alert('❌ 重命名失败: ' + (err.detail || '未知错误'));
-                }
+                await this.fetchJson(
+                    '/api/presets/' + encodeURIComponent(domain) + '/rename',
+                    {
+                        method: 'PUT',
+                        headers: this.buildAuthHeaders({ 'Content-Type': 'application/json' }),
+                        body: JSON.stringify({
+                            old_name: oldName,
+                            new_name: newName
+                        })
+                    },
+                    { timeoutMs: 12000 }
+                );
+                if (domain !== this.currentDomain || oldName !== this.selectedPreset) return;
+                this.showRenamePresetInput = false;
+                this.renamePresetName = '';
+                await this.loadPresets();
+                if (domain !== this.currentDomain) return;
+                this.selectedPreset = newName;
+                this.$emit('reload-config');
+                alert('✅ 预设已重命名为 "' + newName + '"');
             } catch (e) {
-                alert('❌ 网络错误: ' + e.message);
+                if (domain !== this.currentDomain || oldName !== this.selectedPreset) return;
+                alert('❌ 重命名失败: ' + e.message);
             }
         },
 
@@ -1281,26 +1517,27 @@ window.ConfigTab = {
                 return;
             }
 
+            const domain = this.currentDomain;
+            const preset = this.selectedPreset;
             try {
-                const response = await fetch(
-                    '/api/presets/' + encodeURIComponent(this.currentDomain) + '/' + encodeURIComponent(this.selectedPreset),
+                await this.fetchJson(
+                    '/api/presets/' + encodeURIComponent(domain) + '/' + encodeURIComponent(preset),
                     {
                         method: 'DELETE',
                         headers: this.buildAuthHeaders()
-                    }
+                    },
+                    { timeoutMs: 12000 }
                 );
 
-                if (response.ok) {
-                    await this.loadPresets();
-                    this.selectedPreset = this.defaultPreset || this.availablePresets[0] || '主预设';
-                    this.$emit('reload-config');
-                    alert('✅ 预设已删除');
-                } else {
-                    const err = await response.json();
-                    alert('❌ 删除失败: ' + (err.detail || '未知错误'));
-                }
+                if (domain !== this.currentDomain || preset !== this.selectedPreset) return;
+                await this.loadPresets();
+                if (domain !== this.currentDomain) return;
+                this.selectedPreset = this.defaultPreset || this.availablePresets[0] || '主预设';
+                this.$emit('reload-config');
+                alert('✅ 预设已删除');
             } catch (e) {
-                alert('❌ 网络错误: ' + e.message);
+                if (domain !== this.currentDomain || preset !== this.selectedPreset) return;
+                alert('❌ 删除失败: ' + e.message);
             }
         }
     },
@@ -1330,16 +1567,19 @@ window.ConfigTab = {
             immediate: true
         },
         selectedPreset(newValue, oldValue) {
+            this.ensurePresetMutableSections();
             if (newValue === oldValue || !this.showConfigCompareDialog) return;
             this.syncConfigCompareLocalDraft(true);
             this.loadMainBranchCompareConfig();
         },
         currentConfig: {
             handler() {
+                this.ensurePresetMutableSections();
                 if (!this.showConfigCompareDialog) return;
                 this.syncConfigCompareLocalDraft(false);
             },
-            deep: true
+            deep: true,
+            immediate: true
         }
     },
     template: `
@@ -1621,6 +1861,21 @@ window.ConfigTab = {
                                 >
                                 <span>秒</span>
                             </label>
+
+                            <label class="flex items-start gap-3 text-xs text-gray-500 dark:text-gray-400">
+                                <span class="pt-1">URL 匹配</span>
+                                <textarea
+                                    rows="3"
+                                    class="flex-1 min-w-0 rounded border dark:border-gray-600 px-2 py-1 bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-xs leading-5"
+                                    :value="formatUrlTransitionWaitPatterns(siteAdvancedConfig.url_transition_wait_patterns)"
+                                    :disabled="advancedConfigSaving"
+                                    placeholder="每行一个正则或关键字"
+                                    @change="updateUrlTransitionWaitPatterns($event.target.value)"
+                                ></textarea>
+                            </label>
+                            <p class="text-[11px] text-gray-400 dark:text-gray-500">
+                                这里的规则会作为旧会话 URL 的兜底匹配；留空则只用启发式判断。
+                            </p>
                         </div>
 
                         <div class="border-t dark:border-gray-700 pt-4 space-y-3">

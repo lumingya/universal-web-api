@@ -9,6 +9,14 @@ from fastapi import Header, HTTPException
 from app.core.config import AppConfig
 
 
+def extract_authorization_token(authorization: Optional[str]) -> str:
+    """Extract a token from Authorization, accepting raw tokens and Bearer schemes."""
+    raw = str(authorization or "").strip()
+    if raw.lower().startswith("bearer "):
+        return raw[7:].strip()
+    return raw
+
+
 async def verify_auth(authorization: Optional[str] = Header(None)) -> bool:
     """验证 Bearer Token。"""
     if not AppConfig.is_auth_enabled():
@@ -25,7 +33,7 @@ async def verify_auth(authorization: Optional[str] = Header(None)) -> bool:
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    token = authorization.replace("Bearer ", "", 1).strip()
+    token = extract_authorization_token(authorization)
     if token != token_value:
         raise HTTPException(
             status_code=401,

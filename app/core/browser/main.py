@@ -90,6 +90,14 @@ class BrowserCore(
         """关闭浏览器连接"""
         logger.info("关闭浏览器连接")
         self._watchdog_stop.set()
+        watchdog_thread = self._watchdog_thread
+        if (
+            watchdog_thread
+            and watchdog_thread.is_alive()
+            and watchdog_thread is not threading.current_thread()
+        ):
+            watchdog_thread.join(timeout=1.0)
+        self._watchdog_thread = None
         
         if self._tab_pool:
             self._tab_pool.shutdown()

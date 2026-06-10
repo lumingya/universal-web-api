@@ -1,6 +1,7 @@
 import ast
 import copy
 import json
+import math
 import os
 import random
 import re
@@ -22,6 +23,7 @@ from app.core.request_transport import (
     get_default_request_transport_config,
 )
 from app.services.command_defs import ACTION_TYPES, TRIGGER_TYPES, CommandFlowAbort
+from app.services.sse_utils import iter_sse_payloads
 from app.utils.site_url import extract_remote_site_domain
 
 if TYPE_CHECKING:
@@ -29,6 +31,8 @@ if TYPE_CHECKING:
 
 
 logger = get_logger("CMD_ENG")
+
+MAX_COMMAND_WORKFLOW_SSE_BUFFER_CHARS = 262144
 
 
 class CommandEngineActionsMixin:
@@ -81,8 +85,8 @@ class CommandEngineActionsMixin:
         return f"return {normalized};"
 
     @staticmethod
-    def _wait_for_command_retry(condition: Any, timeout: float = 0.05):
-        wait_timeout = max(0.01, float(timeout or 0.05))
+    def _wait_for_command_retry(condition: Any, timeout: float = 0.5):
+        wait_timeout = max(0.05, float(timeout or 0.5))
         if condition is not None:
             try:
                 with condition:
@@ -91,6 +95,21 @@ class CommandEngineActionsMixin:
             except Exception:
                 pass
         time.sleep(wait_timeout)
+
+    @staticmethod
+    def _coerce_action_bool(value: Any, default: bool = False) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        text = str(value).strip().lower()
+        if text in {"1", "true", "yes", "y", "on"}:
+            return True
+        if text in {"0", "false", "no", "n", "off"}:
+            return False
+        return default
 
     def _run_command_js(self, tab: Any, code: Any) -> Any:
         result = tab.run_js(code)
@@ -447,11 +466,22 @@ return (() => {
     if (rect.right < 0 || rect.bottom < 0 || rect.left > vw || rect.top > vh) {
       return null;
     }
+    const left = Math.max(0, rect.left);
+    const top = Math.max(0, rect.top);
+    const right = Math.min(vw, rect.right);
+    const bottom = Math.min(vh, rect.bottom);
+    const width = right - left;
+    const height = bottom - top;
+    if (width < 4 || height < 4) {
+      return null;
+    }
     return {
-      left: Math.max(0, rect.left),
-      top: Math.max(0, rect.top),
-      width: Math.min(rect.width, Math.max(0, vw - Math.max(0, rect.left))),
-      height: Math.min(rect.height, Math.max(0, vh - Math.max(0, rect.top))),
+      left,
+      top,
+      right,
+      bottom,
+      width,
+      height,
       rawWidth: rect.width,
       rawHeight: rect.height
     };
@@ -480,6 +510,10 @@ return (() => {
     if (checkboxLike || rect.width >= 120) {
       clickX = rect.left + Math.min(Math.max(rect.width * 0.16, 24), 46);
     }
+    const insetX = Math.min(4, Math.max(0, (rect.width - 1) / 2));
+    const insetY = Math.min(4, Math.max(0, (rect.height - 1) / 2));
+    clickX = Math.max(rect.left + insetX, Math.min(rect.left + rect.width - 1 - insetX, clickX));
+    clickY = Math.max(rect.top + insetY, Math.min(rect.top + rect.height - 1 - insetY, clickY));
     candidates.push({
       kind,
       score: score + (checkboxLike ? 20 : 0) + Math.min(rect.width, 320) / 100,
@@ -547,6 +581,25 @@ return (() => {
                 if random_radius > 0:
                     click_x += random.randint(-random_radius, random_radius)
                     click_y += random.randint(-max(1, random_radius // 2), max(1, random_radius // 2))
+                rect = probe.get("rect") if isinstance(probe.get("rect"), dict) else {}
+                try:
+                    rect_left = float(rect.get("left") or 0.0)
+                    rect_top = float(rect.get("top") or 0.0)
+                    rect_width = float(rect.get("width") or 0.0)
+                    rect_height = float(rect.get("height") or 0.0)
+                except Exception:
+                    rect_width = 0.0
+                    rect_height = 0.0
+                if rect_width > 0 and rect_height > 0:
+                    inset = min(4.0, max(0.0, min(rect_width, rect_height) / 4.0))
+                    min_x = int(math.ceil(rect_left + inset))
+                    max_x = int(math.floor(rect_left + rect_width - 1.0 - inset))
+                    min_y = int(math.ceil(rect_top + inset))
+                    max_y = int(math.floor(rect_top + rect_height - 1.0 - inset))
+                    if min_x <= max_x:
+                        click_x = max(min_x, min(max_x, click_x))
+                    if min_y <= max_y:
+                        click_y = max(min_y, min(max_y, click_y))
                 viewport = probe.get("viewport") if isinstance(probe.get("viewport"), dict) else {}
                 viewport_width = max(1, int(viewport.get("width") or 1))
                 viewport_height = max(1, int(viewport.get("height") or 1))
@@ -913,7 +966,7 @@ return (() => {
 
         else:
             logger.warning(f"[CMD] 未知动作类型: {action_type}")
-            return ""
+            return {"ok": False, "error": f"unknown_action_type:{action_type or '(empty)'}"}
 
     def _execute_preset_action(self, action: Dict, session: 'TabSession') -> Dict[str, Any]:
         """执行预设动作，兼容旧版 switch_preset。"""
@@ -952,6 +1005,75 @@ return (() => {
 
     def _execute_workflow_action(self, action: Dict, session: 'TabSession') -> Dict[str, Any]:
         """在当前标签页上立即执行目标预设的工作流。"""
+        sse_buffer = ""
+
+        def _iter_workflow_chunk_payloads(chunk: Any) -> List[Dict[str, Any]]:
+            nonlocal sse_buffer
+            if isinstance(chunk, bytes):
+                chunk_text = chunk.decode("utf-8", errors="ignore")
+            elif isinstance(chunk, str):
+                chunk_text = chunk
+            else:
+                chunk_text = ""
+
+            if chunk_text:
+                normalized = chunk_text.replace("\r\n", "\n").replace("\r", "\n")
+                normalized_start = normalized.lstrip()
+                looks_like_sse = (
+                    bool(sse_buffer)
+                    or normalized_start.startswith(("data:", "event:", ":"))
+                    or "\ndata:" in normalized
+                )
+                if looks_like_sse:
+                    combined = f"{sse_buffer}{normalized}"
+                    if "\n\n" not in combined:
+                        sse_buffer = combined[-MAX_COMMAND_WORKFLOW_SSE_BUFFER_CHARS:]
+                        return []
+
+                    frames = combined.split("\n\n")
+                    sse_buffer = (
+                        frames[-1][-MAX_COMMAND_WORKFLOW_SSE_BUFFER_CHARS:]
+                        if frames[-1]
+                        else ""
+                    )
+                    complete = "\n\n".join(frames[:-1])
+                    payloads = iter_sse_payloads(f"{complete}\n\n") if complete else []
+                    if payloads:
+                        return payloads
+                    return []
+
+            payloads = iter_sse_payloads(chunk)
+            if payloads:
+                return payloads
+
+            payload = chunk[6:].strip() if isinstance(chunk, str) and chunk.startswith("data: ") else chunk
+            if not payload:
+                return []
+            try:
+                data = json.loads(payload)
+            except Exception:
+                return []
+            return [data] if isinstance(data, dict) else []
+
+        def _workflow_error_from_chunk(chunk: Any) -> Any:
+            for data in _iter_workflow_chunk_payloads(chunk):
+                error = data.get("error")
+                if error:
+                    return error
+            return None
+
+        def _workflow_error_from_pending_buffer() -> Any:
+            nonlocal sse_buffer
+            if not sse_buffer:
+                return None
+            tail = sse_buffer
+            sse_buffer = ""
+            for data in iter_sse_payloads(f"{tail}\n\n"):
+                error = data.get("error")
+                if error:
+                    return error
+            return None
+
         try:
             browser = self._get_browser()
             raw_preset_name = action.get("preset_name", "")
@@ -1010,16 +1132,14 @@ return (() => {
                         stop_checker=_action_stop_checker,
                         workflow_priority=inherited_workflow_priority,
                     ):
-                        payload = chunk[6:].strip() if chunk.startswith("data: ") else chunk
-                        if not payload:
-                            continue
-                        try:
-                            data = json.loads(payload)
-                        except Exception:
-                            continue
-                        if isinstance(data, dict) and data.get("error"):
-                            logger.warning(f"[CMD] 工作流返回错误: {data['error']}")
-                            return {"ok": False, "error": data["error"]}
+                        workflow_error = _workflow_error_from_chunk(chunk)
+                        if workflow_error:
+                            logger.warning(f"[CMD] 工作流返回错误: {workflow_error}")
+                            return {"ok": False, "error": workflow_error}
+                    workflow_error = _workflow_error_from_pending_buffer()
+                    if workflow_error:
+                        logger.warning(f"[CMD] 工作流返回错误: {workflow_error}")
+                        return {"ok": False, "error": workflow_error}
                     if timed_out:
                         logger.warning(
                             f"[CMD] 工作流执行超时: 标签页=#{session.persistent_index}, "
@@ -1050,16 +1170,14 @@ return (() => {
                     stop_checker=_action_stop_checker,
                     workflow_priority=inherited_workflow_priority,
                 ):
-                    payload = chunk[6:].strip() if chunk.startswith("data: ") else chunk
-                    if not payload:
-                        continue
-                    try:
-                        data = json.loads(payload)
-                    except Exception:
-                        continue
-                    if isinstance(data, dict) and data.get("error"):
-                        logger.warning(f"[CMD] 工作流返回错误: {data['error']}")
-                        return {"ok": False, "error": data["error"]}
+                    workflow_error = _workflow_error_from_chunk(chunk)
+                    if workflow_error:
+                        logger.warning(f"[CMD] 工作流返回错误: {workflow_error}")
+                        return {"ok": False, "error": workflow_error}
+                workflow_error = _workflow_error_from_pending_buffer()
+                if workflow_error:
+                    logger.warning(f"[CMD] 工作流返回错误: {workflow_error}")
+                    return {"ok": False, "error": workflow_error}
                 if timed_out:
                     logger.warning(
                         f"[CMD] 工作流执行超时: 标签页=#{session.persistent_index}, "
@@ -1517,6 +1635,7 @@ return (() => {
             return {"ok": False, "error": "empty_prompt"}
 
         response_mode = str(action.get("response_mode", "text") or "text").strip().lower()
+        consume_response = self._coerce_action_bool(action.get("consume_response"), False)
         transport_defaults = get_default_request_transport_config()
         transport_options = {
             **(transport_defaults.get("options") or {}),
@@ -1541,7 +1660,7 @@ return (() => {
             session.tab,
             transport_config,
             prompt=prompt,
-            consume_response=True,
+            consume_response=consume_response,
         )
 
         if not isinstance(result, dict):
@@ -1605,7 +1724,7 @@ return (() => {
         )
 
         logger.info(
-            "[CMD] DeepSeek 页面直发完成: "
+            f"[CMD] DeepSeek 页面直发{'完成' if consume_response else '已触发'}: "
             f"status={response_payload['status']}, session_id={response_payload['session_id'] or '-'}, "
             f"save_as={saved_as or '-'}, preview={self._preview_text(parsed_content)!r}"
         )

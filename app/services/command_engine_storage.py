@@ -205,6 +205,11 @@ class CommandEngineStorageMixin:
             for remaining in cmd_map.values():
                 new_commands.append(remaining)
 
+            if len(new_commands) == len(commands) and all(
+                current is updated for current, updated in zip(commands, new_commands)
+            ):
+                return True
+
             self._save_commands(new_commands)
         return True
 

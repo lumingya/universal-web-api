@@ -1,3 +1,5 @@
+var REQUEST_MONITOR_RECORD_VIEW_CACHE_LIMIT = 260
+
 window.RequestMonitorTab = {
     name: 'RequestMonitorTab',
     props: {
@@ -13,7 +15,8 @@ window.RequestMonitorTab = {
                 total_output_tokens: 0,
                 cpu_percent: 0,
                 project_cpu: 0,
-                memory_percent: 0
+                memory_percent: 0,
+                project_memory_percent: 0
             })
         },
         loading: { type: Boolean, default: false },
@@ -28,23 +31,27 @@ window.RequestMonitorTab = {
             expandedTextBlocks: {}
         }
     },
+    created() {
+        this.recordViewCacheStore = new Map()
+        this.recordViewCacheKeyOrder = []
+    },
     computed: {
         recordSummary() {
             const items = Array.isArray(this.records)
-                ? this.records.map((record, index) => this.toRecordView(record, index))
+                ? this.records.map((record, index) => this.toCachedRecordView(record, index))
                 : []
-            const sorted = items.sort((a, b) => {
-                const delta = this.recordSortTimestamp(b) - this.recordSortTimestamp(a)
-                if (delta !== 0) return delta
-                return String(b.__historyKey || '').localeCompare(String(a.__historyKey || ''))
-            })
+            const sorted = this.recordsAreNewestFirst(items)
+                ? items
+                : items.slice().sort((a, b) => this.compareRecordsNewestFirst(a, b))
             const domains = new Map()
             let success = 0
+            let successDurationTotal = 0
             sorted.forEach(item => {
                 if (item && item.success) {
                     success += 1
+                    successDurationTotal += Number(item.duration_ms || 0)
                 }
-                const domain = String(item && item.__domain || item && item.target_domain || item && item.route_domain || '未知域名').trim() || '未知域名'
+                const domain = this.recordDomain(item)
                 const current = domains.get(domain) || { domain, total: 0, success: 0, failed: 0, rate: 0 }
                 current.total += 1
                 if (item && item.success) {
@@ -67,6 +74,7 @@ window.RequestMonitorTab = {
                 success,
                 failure: sorted.length - success,
                 successRate: sorted.length ? Math.round((success / sorted.length) * 100) : 0,
+                avgDuration: success ? Math.round(successDurationTotal / success) : 0,
                 domainStats
             }
         },
@@ -104,16 +112,7 @@ window.RequestMonitorTab = {
             return total ? (100 - this.inputRatio) : 50
         },
         avgDuration() {
-            const items = this.sortedRecords || []
-            let total = 0
-            let count = 0
-            items.forEach(item => {
-                if (item && item.success) {
-                    count += 1
-                    total += Number(item.duration_ms || 0)
-                }
-            })
-            return count ? Math.round(total / count) : 0
+            return this.recordSummary.avgDuration
         }
     },
     watch: {
@@ -123,11 +122,7 @@ window.RequestMonitorTab = {
             }
             if (this.selectedRecord && this.selectedRecord.id) {
                 const selectedKey = String(this.selectedRecord.__historyKey || this.selectedRecord.history_key || '').trim()
-                const current = this.sortedRecords.find(item => {
-                    const itemKey = String(item.__historyKey || item.history_key || '').trim()
-                    if (selectedKey && itemKey) return itemKey === selectedKey
-                    return item.id === this.selectedRecord.id
-                })
+                const current = this.resolveRecordForDetail(selectedKey, this.selectedRecord)
                 if (current) {
                     this.selectedRecord = current
                 }
@@ -135,17 +130,144 @@ window.RequestMonitorTab = {
         }
     },
     methods: {
+        toCachedRecordView(record, index) {
+            const source = record && typeof record === 'object' ? record : {}
+            const cache = this.ensureRecordViewCache()
+            const historyKey = this.recordKey(source, index)
+            const signature = this.recordViewSignature(source, historyKey)
+            const cached = cache.get(historyKey)
+            if (cached && cached.signature === signature) {
+                this.touchRecordViewCacheKey(historyKey)
+                return cached.view
+            }
+
+            const view = this.toRecordView(record, index)
+            cache.set(historyKey, { signature, view })
+            this.touchRecordViewCacheKey(historyKey)
+            this.pruneRecordViewCache()
+            return view
+        },
+        ensureRecordViewCache() {
+            if (!(this.recordViewCacheStore instanceof Map)) {
+                this.recordViewCacheStore = new Map()
+            }
+            if (!Array.isArray(this.recordViewCacheKeyOrder)) {
+                this.recordViewCacheKeyOrder = []
+            }
+            return this.recordViewCacheStore
+        },
+        touchRecordViewCacheKey(key) {
+            const cacheKeys = Array.isArray(this.recordViewCacheKeyOrder)
+                ? this.recordViewCacheKeyOrder
+                : []
+            if (cacheKeys !== this.recordViewCacheKeyOrder) {
+                this.recordViewCacheKeyOrder = cacheKeys
+            }
+            const existingIndex = cacheKeys.indexOf(key)
+            if (existingIndex >= 0) {
+                cacheKeys.splice(existingIndex, 1)
+            }
+            cacheKeys.push(key)
+        },
+        pruneRecordViewCache() {
+            const cache = this.ensureRecordViewCache()
+            while (this.recordViewCacheKeyOrder.length > REQUEST_MONITOR_RECORD_VIEW_CACHE_LIMIT) {
+                const staleKey = this.recordViewCacheKeyOrder.shift()
+                cache.delete(staleKey)
+            }
+        },
+        recordViewSignature(record, historyKey) {
+            const source = record && typeof record === 'object' ? record : {}
+            const estimate = source.token_estimate && typeof source.token_estimate === 'object'
+                ? source.token_estimate
+                : {}
+            const detailLengths = source.detail_text_lengths && typeof source.detail_text_lengths === 'object'
+                ? source.detail_text_lengths
+                : {}
+            return [
+                historyKey,
+                source.id,
+                source.status,
+                source.success ? 1 : 0,
+                source.target_domain,
+                source.route_domain,
+                source.preset_name,
+                source.tab_index,
+                source.tab_id,
+                source.model,
+                source.endpoint,
+                source.request_type,
+                source.is_stream ? 1 : 0,
+                source.is_multimodal ? 1 : 0,
+                source.created_at,
+                source.started_at,
+                source.finished_at,
+                source.duration_ms,
+                source.queue_ms,
+                source.generation_ms,
+                source.summary,
+                source.prompt_preview,
+                source.response_preview,
+                source.error_message,
+                source.error_code,
+                source.cancel_reason,
+                source.media_count,
+                source.has_detail ? 1 : 0,
+                source.detail_loaded ? 1 : 0,
+                detailLengths.prompt,
+                detailLengths.response,
+                detailLengths.error_stack,
+                estimate.prompt,
+                estimate.response,
+                estimate.total,
+                estimate.chars,
+                this.recordViewTextSignature(source.prompt),
+                this.recordViewTextSignature(source.response),
+                this.recordViewTextSignature(source.error_stack)
+            ].map(value => String(value ?? '')).join('\u001f')
+        },
+        recordViewTextSignature(value) {
+            if (value === undefined || value === null || value === '') return ''
+            let text = ''
+            if (typeof value === 'string') {
+                text = value
+            } else {
+                try {
+                    text = JSON.stringify(value)
+                } catch (error) {
+                    text = String(value)
+                }
+            }
+            if (text.length <= 160) return text
+            return text.length + ':' + this.recordViewTextHash(text)
+        },
+        recordViewTextHash(text) {
+            let hash = 2166136261
+            for (let index = 0; index < text.length; index += 1) {
+                hash ^= text.charCodeAt(index)
+                hash = Math.imul(hash, 16777619)
+            }
+            return (hash >>> 0).toString(36)
+        },
         toRecordView(record, index) {
             const source = record && typeof record === 'object' ? record : {}
-            const domain = String(source.target_domain || source.route_domain || '未知域名').trim() || '未知域名'
+            const domain = this.recordDomain(source)
             const toolCallingErrorInfo = this.toolCallingErrorInfo(source)
             const summarySource = toolCallingErrorInfo
                 ? toolCallingErrorInfo.summary
                 : (source.summary || source.response_preview || source.response || source.error_message)
             const success = !!source.success
             const historyKey = this.recordKey(source, index)
+            const {
+                payload,
+                response_payload,
+                prompt,
+                response,
+                error_stack,
+                ...viewSource
+            } = source
             return {
-                ...source,
+                ...viewSource,
                 id: source.id || historyKey,
                 __historyKey: historyKey,
                 __domain: domain,
@@ -161,6 +283,10 @@ window.RequestMonitorTab = {
                 __tabLabel: this.tabLabel(source),
                 __toolCallingErrorInfo: toolCallingErrorInfo
             }
+        },
+        recordDomain(record) {
+            const source = record && typeof record === 'object' ? record : {}
+            return String(source.route_domain || source.__domain || source.target_domain || '未知域名').trim() || '未知域名'
         },
         recordKey(record, index) {
             const source = record && typeof record === 'object' ? record : {}
@@ -193,6 +319,20 @@ window.RequestMonitorTab = {
                 || this.normalizeTimestamp(record.started_at)
                 || this.normalizeTimestamp(record.created_at)
         },
+        compareRecordsNewestFirst(left, right) {
+            const delta = this.recordSortTimestamp(right) - this.recordSortTimestamp(left)
+            if (delta !== 0) return delta
+            return String(right && right.__historyKey || '').localeCompare(String(left && left.__historyKey || ''))
+        },
+        recordsAreNewestFirst(items) {
+            if (!Array.isArray(items) || items.length < 2) return true
+            for (let index = 1; index < items.length; index += 1) {
+                if (this.compareRecordsNewestFirst(items[index - 1], items[index]) > 0) {
+                    return false
+                }
+            }
+            return true
+        },
         isRecordDetailLoading(record) {
             const keys = [
                 record && record.__historyKey,
@@ -201,6 +341,43 @@ window.RequestMonitorTab = {
             ].map(value => String(value || '').trim()).filter(Boolean)
             return keys.some(key => !!this.detailLoading[key])
         },
+        detailKey(record) {
+            return String(
+                record && (record.__historyKey || record.history_key || record.id) || ''
+            ).trim()
+        },
+        resolveRecordForDetail(recordOrKey, fallback = null) {
+            const records = Array.isArray(this.records) ? this.records : []
+            const requestedKey = typeof recordOrKey === 'string'
+                ? String(recordOrKey || '').trim()
+                : this.detailKey(recordOrKey)
+            if (requestedKey) {
+                const current = records.find(item => {
+                    const itemKey = String(item && (item.__historyKey || item.history_key || '')).trim()
+                    if (itemKey && itemKey === requestedKey) return true
+                    const itemId = String(item && item.id || '').trim()
+                    return itemId && itemId === requestedKey
+                })
+                if (current) {
+                    return current
+                }
+            }
+
+            const fallbackKey = this.detailKey(fallback)
+            if (fallbackKey) {
+                const current = records.find(item => {
+                    const itemKey = String(item && (item.__historyKey || item.history_key || '')).trim()
+                    if (itemKey && itemKey === fallbackKey) return true
+                    const itemId = String(item && item.id || '').trim()
+                    return itemId && itemId === fallbackKey
+                })
+                if (current) {
+                    return current
+                }
+            }
+
+            return fallback
+        },
         refresh() {
             this.$emit('refresh')
         },
@@ -208,11 +385,12 @@ window.RequestMonitorTab = {
             this.visibleCount = Math.min(this.visibleCount + 20, this.sortedRecords.length)
         },
         openRecord(record) {
-            this.selectedRecord = record
+            this.selectedRecord = this.resolveRecordForDetail(record, record)
             this.showErrorStack = false
             this.expandedTextBlocks = {}
-            if (record && record.id && record.has_detail && !record.detail_loaded) {
-                this.$emit('load-detail', record.history_key || record.id || record.__historyKey)
+            const key = this.detailKey(this.selectedRecord || record)
+            if (record && key && record.has_detail && !record.detail_loaded) {
+                this.$emit('load-detail', key)
             }
         },
         closeRecord() {
@@ -252,6 +430,14 @@ window.RequestMonitorTab = {
         },
         formatNumber(value) {
             return (Number(value) || 0).toLocaleString('zh-CN')
+        },
+        formatPercent(value) {
+            const num = Number(value) || 0
+            return num.toFixed(1).replace(/\.0$/, '')
+        },
+        meterWidth(value) {
+            const num = Number(value) || 0
+            return Math.max(0, Math.min(100, num)) + '%'
         },
         formatTokenNumber(value) {
             const num = Number(value) || 0
@@ -405,28 +591,37 @@ window.RequestMonitorTab = {
                             <div>
                                 <div class="flex items-center justify-between text-[11px] mb-0.5">
                                     <span class="text-slate-400 dark:text-slate-500">系统 CPU 占用</span>
-                                    <span class="font-medium text-slate-700 dark:text-slate-200">{{ systemStats.cpu_percent }}%</span>
+                                    <span class="font-medium text-slate-700 dark:text-slate-200">{{ formatPercent(systemStats.cpu_percent) }}%</span>
                                 </div>
                                 <div class="w-full bg-slate-100 dark:bg-slate-800 h-1 rounded-full overflow-hidden">
-                                    <div class="bg-blue-500 h-full rounded-full transition-all duration-300" :style="{ width: systemStats.cpu_percent + '%' }"></div>
+                                    <div class="bg-blue-500 h-full rounded-full transition-all duration-300" :style="{ width: meterWidth(systemStats.cpu_percent) }"></div>
                                 </div>
                             </div>
                             <div>
                                 <div class="flex items-center justify-between text-[11px] mb-0.5">
                                     <span class="text-slate-400 dark:text-slate-500">反代进程 CPU</span>
-                                    <span class="font-medium text-slate-700 dark:text-slate-200">{{ systemStats.project_cpu }}%</span>
+                                    <span class="font-medium text-slate-700 dark:text-slate-200">{{ formatPercent(systemStats.project_cpu) }}%</span>
                                 </div>
                                 <div class="w-full bg-slate-100 dark:bg-slate-800 h-1 rounded-full overflow-hidden">
-                                    <div class="bg-indigo-500 h-full rounded-full transition-all duration-300" :style="{ width: systemStats.project_cpu + '%' }"></div>
+                                    <div class="bg-indigo-500 h-full rounded-full transition-all duration-300" :style="{ width: meterWidth(systemStats.project_cpu) }"></div>
                                 </div>
                             </div>
                             <div>
                                 <div class="flex items-center justify-between text-[11px] mb-0.5">
-                                    <span class="text-slate-400 dark:text-slate-500">反代内存 / 系统占比</span>
-                                    <span class="font-medium text-slate-700 dark:text-slate-200">{{ formatNumber(systemStats.memory_mb) }} MB ({{ systemStats.memory_percent }}%)</span>
+                                    <span class="text-slate-400 dark:text-slate-500">系统内存占用</span>
+                                    <span class="font-medium text-slate-700 dark:text-slate-200">{{ formatPercent(systemStats.memory_percent) }}%</span>
                                 </div>
                                 <div class="w-full bg-slate-100 dark:bg-slate-800 h-1 rounded-full overflow-hidden">
-                                    <div class="bg-purple-500 h-full rounded-full transition-all duration-300" :style="{ width: systemStats.memory_percent + '%' }"></div>
+                                    <div class="bg-purple-500 h-full rounded-full transition-all duration-300" :style="{ width: meterWidth(systemStats.memory_percent) }"></div>
+                                </div>
+                            </div>
+                            <div>
+                                <div class="flex items-center justify-between text-[11px] mb-0.5">
+                                    <span class="text-slate-400 dark:text-slate-500">反代进程内存</span>
+                                    <span class="font-medium text-slate-700 dark:text-slate-200">{{ formatNumber(systemStats.memory_mb) }} MB ({{ formatPercent(systemStats.project_memory_percent) }}%)</span>
+                                </div>
+                                <div class="w-full bg-slate-100 dark:bg-slate-800 h-1 rounded-full overflow-hidden">
+                                    <div class="bg-fuchsia-500 h-full rounded-full transition-all duration-300" :style="{ width: meterWidth(systemStats.project_memory_percent) }"></div>
                                 </div>
                             </div>
                         </div>

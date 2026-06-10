@@ -278,20 +278,21 @@ class CommandEngineRuntimeMixin:
         if not queue_key:
             return False
 
-        pending_ids = runtime.setdefault("pending_interrupt_ids", set())
-        if queue_key in pending_ids:
-            return False
+        with self._lock:
+            pending_ids = runtime.setdefault("pending_interrupt_ids", set())
+            if queue_key in pending_ids:
+                return False
 
-        runtime.setdefault("pending_interrupts", []).append({
-            "command": copy.deepcopy(command),
-            "chain": list(chain or []),
-            "interrupt_context": copy.deepcopy(interrupt_context or {}),
-            "trigger_rollback": copy.deepcopy(trigger_rollback or {}),
-            "queue_key": queue_key,
-            "requested_at": time.time(),
-            "priority": self._get_command_priority(command),
-        })
-        pending_ids.add(queue_key)
+            runtime.setdefault("pending_interrupts", []).append({
+                "command": copy.deepcopy(command),
+                "chain": list(chain or []),
+                "interrupt_context": copy.deepcopy(interrupt_context or {}),
+                "trigger_rollback": copy.deepcopy(trigger_rollback or {}),
+                "queue_key": queue_key,
+                "requested_at": time.time(),
+                "priority": self._get_command_priority(command),
+            })
+            pending_ids.add(queue_key)
         setattr(session, "_workflow_stop_reason", "command_interrupt")
         logger.info(
             f"[CMD] 请求暂停工作流: {command.get('name')} "
@@ -339,7 +340,8 @@ class CommandEngineRuntimeMixin:
         runtime = self._get_active_workflow_runtime(session)
         if not runtime:
             return False
-        return bool(runtime.get("pending_interrupts"))
+        with self._lock:
+            return bool(runtime.get("pending_interrupts"))
 
     def _defer_command_until_workflow_resume(
         self,
@@ -352,18 +354,19 @@ class CommandEngineRuntimeMixin:
         queue_key = self._workflow_queue_key(command, trigger_rollback)
         if not queue_key:
             return
-        deferred_ids = runtime.setdefault("deferred_command_ids", set())
-        if queue_key in deferred_ids:
-            return
-        runtime.setdefault("deferred_commands", []).append({
-            "command": copy.deepcopy(command),
-            "chain": list(chain or []),
-            "interrupt_context": copy.deepcopy(interrupt_context or {}),
-            "trigger_rollback": copy.deepcopy(trigger_rollback or {}),
-            "queue_key": queue_key,
-            "queued_at": time.time(),
-        })
-        deferred_ids.add(queue_key)
+        with self._lock:
+            deferred_ids = runtime.setdefault("deferred_command_ids", set())
+            if queue_key in deferred_ids:
+                return
+            runtime.setdefault("deferred_commands", []).append({
+                "command": copy.deepcopy(command),
+                "chain": list(chain or []),
+                "interrupt_context": copy.deepcopy(interrupt_context or {}),
+                "trigger_rollback": copy.deepcopy(trigger_rollback or {}),
+                "queue_key": queue_key,
+                "queued_at": time.time(),
+            })
+            deferred_ids.add(queue_key)
 
     def _mark_interrupt_abort(
         self,
@@ -418,16 +421,77 @@ class CommandEngineRuntimeMixin:
             interrupt_context=interrupt_context,
         )
 
+    @staticmethod
+    def _interrupt_item_sort_key(item: Dict[str, Any]) -> tuple[int, float]:
+        try:
+            priority = int(item.get("priority", 0) or 0)
+        except (TypeError, ValueError):
+            priority = 0
+        try:
+            requested_at = float(item.get("requested_at", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            requested_at = 0.0
+        return -priority, requested_at
+
+    def _take_next_pending_interrupt(
+        self,
+        runtime: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        with self._lock:
+            raw_pending = runtime.get("pending_interrupts") or []
+            pending = raw_pending if isinstance(raw_pending, list) else list(raw_pending)
+            pending = [item for item in pending if isinstance(item, dict)]
+            if not pending:
+                runtime["pending_interrupts"] = []
+                runtime["pending_interrupt_ids"] = set()
+                return None
+
+            best_index = 0
+            best_key = self._interrupt_item_sort_key(pending[0])
+            for index in range(1, len(pending)):
+                key = self._interrupt_item_sort_key(pending[index])
+                if key < best_key:
+                    best_index = index
+                    best_key = key
+
+            item = pending.pop(best_index)
+            runtime["pending_interrupts"] = pending
+            return item
+
+    def _drop_pending_interrupts_by_key(
+        self,
+        runtime: Dict[str, Any],
+        queue_key: str,
+    ) -> None:
+        if not queue_key:
+            return
+        with self._lock:
+            runtime["pending_interrupts"] = [
+                existing for existing in runtime.get("pending_interrupts", [])
+                if isinstance(existing, dict)
+                and (
+                    str(existing.get("queue_key", "") or "").strip()
+                    or self._workflow_queue_key(
+                        (existing.get("command") or {}),
+                        existing.get("trigger_rollback") if isinstance(existing.get("trigger_rollback"), dict) else None,
+                    )
+                ) != queue_key
+            ]
+
     def handle_pending_workflow_interrupts(self, session: 'TabSession') -> Dict[str, Any]:
         runtime = self._get_active_workflow_runtime(session)
         if not runtime or runtime.get("interrupting"):
             return {"handled": False, "abort": False, "message": ""}
 
-        pending = runtime.get("pending_interrupts") or []
+        with self._lock:
+            pending = list(runtime.get("pending_interrupts") or [])
         if not pending:
             return {"handled": False, "abort": False, "message": ""}
 
-        runtime["interrupting"] = True
+        with self._lock:
+            if runtime.get("interrupting"):
+                return {"handled": False, "abort": False, "message": ""}
+            runtime["interrupting"] = True
         interrupt_context = {
             "workflow_priority": runtime.get("priority", self._get_request_priority_baseline()),
             "runtime": runtime,
@@ -437,10 +501,10 @@ class CommandEngineRuntimeMixin:
         }
 
         try:
-            while runtime.get("pending_interrupts"):
-                queue = list(runtime.get("pending_interrupts") or [])
-                queue.sort(key=lambda item: (-int(item.get("priority", 0) or 0), float(item.get("requested_at", 0.0) or 0.0)))
-                item = queue.pop(0)
+            while True:
+                item = self._take_next_pending_interrupt(runtime)
+                if not item:
+                    break
                 cmd = copy.deepcopy(item.get("command") or {})
                 chain = list(item.get("chain") or [])
                 queue_key = str(item.get("queue_key", "") or "").strip() or self._workflow_queue_key(
@@ -449,17 +513,9 @@ class CommandEngineRuntimeMixin:
                 )
                 interrupt_payload = copy.deepcopy(item.get("interrupt_context") or {})
 
-                runtime["pending_interrupts"] = [
-                    existing for existing in runtime.get("pending_interrupts", [])
-                    if (
-                        str(existing.get("queue_key", "") or "").strip()
-                        or self._workflow_queue_key(
-                            (existing.get("command") or {}),
-                            existing.get("trigger_rollback") if isinstance(existing.get("trigger_rollback"), dict) else None,
-                        )
-                    ) != queue_key
-                ]
-                runtime.setdefault("pending_interrupt_ids", set()).discard(queue_key)
+                self._drop_pending_interrupts_by_key(runtime, queue_key)
+                with self._lock:
+                    runtime.setdefault("pending_interrupt_ids", set()).discard(queue_key)
 
                 if not cmd or not cmd.get("enabled", True):
                     continue
@@ -474,11 +530,13 @@ class CommandEngineRuntimeMixin:
                 self._execute_command(cmd, session, chain=chain, interrupt_context=merged_context)
                 self._mark_interrupt_abort(cmd, interrupt_context)
                 if interrupt_context.get("abort"):
-                    runtime["pending_interrupts"] = []
-                    runtime["pending_interrupt_ids"] = set()
+                    with self._lock:
+                        runtime["pending_interrupts"] = []
+                        runtime["pending_interrupt_ids"] = set()
                     break
         finally:
-            runtime["interrupting"] = False
+            with self._lock:
+                runtime["interrupting"] = False
 
         if interrupt_context.get("abort"):
             setattr(session, "_workflow_stop_reason", "command_interrupt_abort")

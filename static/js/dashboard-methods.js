@@ -16,34 +16,59 @@
             this.startRequestHistoryPolling()
             this.ensureTabDataLoaded(this.activeTab)
 
-            // 每 2 秒刷新系统状态
-            this.fetchSystemStats({ timeoutMs: 5000 }).catch(() => {})
-            if (this.systemStatsTimer) {
-                clearInterval(this.systemStatsTimer)
-            }
-            this.systemStatsTimer = setInterval(() => {
-                this.fetchSystemStats({ timeoutMs: 5000 }).catch(() => {})
-            }, 15000)
+            this.startSystemStatsPolling()
         },
 
         startLogPolling() {
-            if (this.logPollingTimer) {
+            this.ensureLogPollingVisibilityHandler()
+            if (this.logPollingTimer || this.isDocumentHidden()) {
                 return
             }
 
             this.pollLogs()
             this.logPollingTimer = setInterval(() => {
-                this.pollLogs()
+                this.pollLogs({ background: this.activeTab !== 'logs' })
             }, 1000)
         },
 
         stopLogPolling() {
+            this.stopLogPollingTimer()
+            if (
+                this.logVisibilityHandler
+                && typeof document !== 'undefined'
+                && typeof document.removeEventListener === 'function'
+            ) {
+                document.removeEventListener('visibilitychange', this.logVisibilityHandler)
+            }
+            this.logVisibilityHandler = null
+        },
+
+        stopLogPollingTimer() {
             if (!this.logPollingTimer) {
                 return
             }
 
             clearInterval(this.logPollingTimer)
             this.logPollingTimer = null
+        },
+
+        ensureLogPollingVisibilityHandler() {
+            if (
+                this.logVisibilityHandler
+                || typeof document === 'undefined'
+                || typeof document.addEventListener !== 'function'
+            ) {
+                return
+            }
+
+            this.logVisibilityHandler = () => {
+                if (this.isDocumentHidden()) {
+                    this.stopLogPollingTimer()
+                    return
+                }
+                this.startLogPolling()
+            }
+            document.addEventListener('visibilitychange', this.logVisibilityHandler)
         },
 
         markTabAsVisited(tab) {
@@ -61,9 +86,46 @@
             return this.activeTab === tab || !!this.mountedTabs[tab]
         },
 
+        syncTokenPresence() {
+            try {
+                this.hasTokenPresent = !!localStorage.getItem('api_token')
+            } catch (e) {
+                this.hasTokenPresent = false
+            }
+        },
+
+        ensureTokenStorageHandler() {
+            if (
+                this.tokenStorageHandler
+                || typeof window === 'undefined'
+                || typeof window.addEventListener !== 'function'
+            ) {
+                return
+            }
+
+            this.tokenStorageHandler = (event) => {
+                if (!event || event.key === 'api_token') {
+                    this.hasTokenPresent = !!(event && event.newValue)
+                }
+            }
+            window.addEventListener('storage', this.tokenStorageHandler)
+        },
+
+        stopTokenStorageHandler() {
+            if (
+                this.tokenStorageHandler
+                && typeof window !== 'undefined'
+                && typeof window.removeEventListener === 'function'
+            ) {
+                window.removeEventListener('storage', this.tokenStorageHandler)
+            }
+            this.tokenStorageHandler = null
+        },
+
         startRequestHistoryPolling() {
-            if (this.requestHistoryTimer) {
-                clearInterval(this.requestHistoryTimer)
+            this.ensureRequestHistoryVisibilityHandler()
+            if (this.requestHistoryTimer || this.isDocumentHidden()) {
+                return
             }
             this.requestHistoryTimer = setInterval(() => {
                 if (this.activeTab === 'monitor' && document.visibilityState !== 'hidden') {
@@ -73,11 +135,101 @@
         },
 
         stopRequestHistoryPolling() {
+            this.stopRequestHistoryPollingTimer()
+            if (
+                this.requestHistoryVisibilityHandler
+                && typeof document !== 'undefined'
+                && typeof document.removeEventListener === 'function'
+            ) {
+                document.removeEventListener('visibilitychange', this.requestHistoryVisibilityHandler)
+            }
+            this.requestHistoryVisibilityHandler = null
+        },
+
+        stopRequestHistoryPollingTimer() {
             if (!this.requestHistoryTimer) {
                 return
             }
             clearInterval(this.requestHistoryTimer)
             this.requestHistoryTimer = null
+        },
+
+        ensureRequestHistoryVisibilityHandler() {
+            if (
+                this.requestHistoryVisibilityHandler
+                || typeof document === 'undefined'
+                || typeof document.addEventListener !== 'function'
+            ) {
+                return
+            }
+
+            this.requestHistoryVisibilityHandler = () => {
+                if (this.isDocumentHidden()) {
+                    this.stopRequestHistoryPollingTimer()
+                    return
+                }
+                this.startRequestHistoryPolling()
+                if (this.activeTab === 'monitor') {
+                    this.fetchRequestHistory({ silent: true, ifChanged: true }).catch(() => {})
+                }
+            }
+            document.addEventListener('visibilitychange', this.requestHistoryVisibilityHandler)
+        },
+
+        isDocumentHidden() {
+            return typeof document !== 'undefined' && document.visibilityState === 'hidden'
+        },
+
+        startSystemStatsPolling() {
+            this.ensureSystemStatsVisibilityHandler()
+            if (this.systemStatsTimer || this.isDocumentHidden()) {
+                return
+            }
+
+            this.fetchSystemStats({ timeoutMs: 2500 }).catch(() => {})
+
+            this.systemStatsTimer = setInterval(() => {
+                this.fetchSystemStats({ timeoutMs: 2500 }).catch(() => {})
+            }, 3000)
+        },
+
+        stopSystemStatsPollingTimer() {
+            if (!this.systemStatsTimer) {
+                return
+            }
+
+            clearInterval(this.systemStatsTimer)
+            this.systemStatsTimer = null
+        },
+
+        ensureSystemStatsVisibilityHandler() {
+            if (
+                this.systemStatsVisibilityHandler
+                || typeof document === 'undefined'
+                || typeof document.addEventListener !== 'function'
+            ) {
+                return
+            }
+            this.systemStatsVisibilityHandler = () => {
+                if (this.isDocumentHidden()) {
+                    this.stopSystemStatsPollingTimer()
+                    return
+                }
+                this.startSystemStatsPolling()
+            }
+            document.addEventListener('visibilitychange', this.systemStatsVisibilityHandler)
+        },
+
+        stopSystemStatsPolling() {
+            this.stopSystemStatsPollingTimer()
+            if (
+                this.systemStatsVisibilityHandler
+                && typeof document !== 'undefined'
+                && typeof document.removeEventListener === 'function'
+            ) {
+                document.removeEventListener('visibilitychange', this.systemStatsVisibilityHandler)
+            }
+            this.systemStatsVisibilityHandler = null
         },
         // ========== 初始化 ==========
 
@@ -196,11 +348,16 @@
                 silent = false
             }
 
+            const requestSeq = Number(this.configLoadSeq || 0) + 1
+            this.configLoadSeq = requestSeq
             this.isLoading = true
             try {
                 const data = await this.apiRequest('/api/config', { timeoutMs: 5000 })
-                this.sites = this.normalizeConfig(data)
+                if (requestSeq !== this.configLoadSeq) {
+                    return false
+                }
 
+                this.sites = this.normalizeConfig(data)
                 if (!this.currentDomain && Object.keys(this.sites).length > 0) {
                     this.currentDomain = Object.keys(this.sites)[0]
                 }
@@ -211,13 +368,18 @@
                 }
                 return true
             } catch (error) {
+                if (requestSeq !== this.configLoadSeq) {
+                    return false
+                }
                 this.notify('加载配置失败: ' + error.message, 'error')
                 if (Object.keys(this.sites || {}).length === 0) {
                     this.sites = {}
                 }
                 return false
             } finally {
-                this.isLoading = false
+                if (requestSeq === this.configLoadSeq) {
+                    this.isLoading = false
+                }
             }
         },
 
@@ -228,6 +390,9 @@
 
             this.isSaving = true
             try {
+                if (this.$refs && this.$refs.configTab && typeof this.$refs.configTab.flushMutableSectionDrafts === 'function') {
+                    this.$refs.configTab.flushMutableSectionDrafts()
+                }
                 await this.apiRequest('/api/config', {
                     method: 'POST',
                     body: JSON.stringify({ config: this.sites })
@@ -514,11 +679,33 @@
         },
         // ========== 日志相关 ==========
 
-        async pollLogs() {
+        async pollLogs(options = {}) {
             if (this.pauseLogs || document.visibilityState === 'hidden') return;
+            if (this.isPollingLogs) {
+                this.logPollPending = true;
+                return;
+            }
+            if (options && options.background) {
+                const now = Date.now();
+                if (this.lastBackgroundLogPollAt && now - this.lastBackgroundLogPollAt < 5000) {
+                    return;
+                }
+                this.lastBackgroundLogPollAt = now;
+            }
 
+            this.isPollingLogs = true;
+            const generation = Number(this.logGeneration || 0);
             try {
                 const result = await this.apiRequest('/api/logs?after_seq=' + this.lastLogSeq);
+                if (generation !== Number(this.logGeneration || 0)) {
+                    return;
+                }
+
+                if (result.cleared) {
+                    this.logs = [];
+                    this.lastLogSeq = 0;
+                    this.lastLogTimestamp = 0;
+                }
 
                 if (result.logs && result.logs.length > 0) {
                     const nextLogs = result.logs.map(log => {
@@ -546,7 +733,17 @@
                 this.lastLogSeq = Number(result.next_seq || this.lastLogSeq || 0);
                 this.lastLogTimestamp = Number(result.timestamp || this.lastLogTimestamp || 0);
             } catch (error) {
-                console.debug('日志轮询失败:', error.message);
+                if (generation === Number(this.logGeneration || 0)) {
+                    console.debug('日志轮询失败:', error.message);
+                }
+            } finally {
+                if (generation === Number(this.logGeneration || 0)) {
+                    this.isPollingLogs = false;
+                    if (this.logPollPending && !this.pauseLogs && document.visibilityState !== 'hidden') {
+                        this.logPollPending = false;
+                        this.pollLogs({ ...(options || {}), background: false }).catch(() => {});
+                    }
+                }
             }
         },
 
@@ -598,7 +795,12 @@
 
         clearLogs() {
             if (confirm('确定清除所有日志吗？')) {
+                this.logGeneration = Number(this.logGeneration || 0) + 1;
                 this.logs = [];
+                this.lastLogSeq = 0;
+                this.lastLogTimestamp = 0;
+                this.isPollingLogs = false;
+                this.logPollPending = false;
 
                 this.apiRequest('/api/logs', { method: 'DELETE' })
                     .catch(() => { });
@@ -967,6 +1169,7 @@
                     }
                 } catch (e) { }
                 this.tempToken = token;
+                this.syncTokenPresence();
             }
         },
 
@@ -1468,10 +1671,17 @@
 
         startSwitchStatusPolling() {
             this.stopSwitchStatusPolling();
-            this.switchStatusPolling = setInterval(async () => {
+            this.switchStatusPollingActive = true;
+            const pollStatus = async () => {
+                if (!this.switchStatusPollingActive || this.switchStatusPollingInFlight) {
+                    return;
+                }
+                this.switchStatusPollingInFlight = true;
+                let shouldContinue = true;
                 try {
                     const status = await this.apiRequest('/api/update/status');
                     if (!status.running) {
+                        shouldContinue = false;
                         this.stopSwitchStatusPolling();
                         if (status.success === true) {
                             this.notify('版本 ' + status.tag + ' 切换成功，服务正在重启，请稍后刷新页面', 'success');
@@ -1483,15 +1693,26 @@
                     }
                 } catch (e) {
                     // 服务重启中，连接可能断开
+                } finally {
+                    this.switchStatusPollingInFlight = false;
+                    if (shouldContinue && this.switchStatusPollingActive) {
+                        this.switchStatusPolling = setTimeout(() => {
+                            this.switchStatusPolling = null;
+                            pollStatus();
+                        }, 2000);
+                    }
                 }
-            }, 2000);
+            };
+            pollStatus();
         },
 
         stopSwitchStatusPolling() {
+            this.switchStatusPollingActive = false;
             if (this.switchStatusPolling) {
-                clearInterval(this.switchStatusPolling);
+                clearTimeout(this.switchStatusPolling);
                 this.switchStatusPolling = null;
             }
+            this.switchStatusPollingInFlight = false;
         },
 
         showChangelog(tag, body) {
@@ -1670,7 +1891,7 @@
                 const stale = now - Number(this.requestHistoryFetchedAt || 0) > 2000
                 await Promise.all([
                     this.fetchRequestHistory({ silent: true, ifChanged: !stale }),
-                    this.fetchSystemStats({ timeoutMs: 5000 })
+                    this.fetchSystemStats({ timeoutMs: 2500 })
                 ]);
                 return;
             }
@@ -1689,6 +1910,15 @@
 
         async fetchRequestHistory({ silent = false, ifChanged = false, force = false } = {}) {
             if (this.requestHistoryLoading) {
+                this.requestHistoryPendingRefresh = {
+                    silent: this.requestHistoryPendingRefresh
+                        ? (this.requestHistoryPendingRefresh.silent && silent)
+                        : silent,
+                    ifChanged: this.requestHistoryPendingRefresh
+                        ? (this.requestHistoryPendingRefresh.ifChanged && ifChanged)
+                        : ifChanged,
+                    force: Boolean(force || (this.requestHistoryPendingRefresh && this.requestHistoryPendingRefresh.force))
+                };
                 return this.requestHistory;
             }
             const now = Date.now();
@@ -1699,21 +1929,43 @@
             if (!silent) {
                 this.requestHistoryError = '';
             }
+            const requestSeq = Number(this.requestHistoryRequestSeq || 0) + 1;
+            this.requestHistoryRequestSeq = requestSeq;
             try {
-                const data = await this.apiRequest('/api/system/request-history?limit=200', {
+                const params = new URLSearchParams({ limit: '200' });
+                if (ifChanged && !force && this.requestHistoryRevision) {
+                    params.set('if_revision', String(this.requestHistoryRevision));
+                }
+                const data = await this.apiRequest('/api/system/request-history?' + params.toString(), {
                     timeoutMs: 5000
                 });
+                if (requestSeq !== this.requestHistoryRequestSeq) {
+                    return this.requestHistory;
+                }
                 const revision = String(data.revision || '');
+                if (data.not_modified && revision && revision === this.requestHistoryRevision) {
+                    this.requestHistoryFetchedAt = Date.now();
+                    this.requestHistoryError = '';
+                    return this.requestHistory;
+                }
                 if (!ifChanged || force || !this.requestHistoryRevision || revision !== this.requestHistoryRevision) {
                     const detailCache = new Map(
                         this.requestHistory
                             .filter(item => item && item.detail_loaded && item.id)
-                            .map(item => [String(item.history_key || item.id), item])
+                            .map(item => [String(item.history_key || item.id), {
+                                prompt: item.prompt,
+                                response: item.response,
+                                error_stack: item.error_stack,
+                                payload: item.payload,
+                                response_payload: item.response_payload,
+                                detail_loaded: true,
+                                has_detail: true
+                            }])
                     );
                     const records = Array.isArray(data.records) ? data.records : [];
                     this.requestHistory = records.map(item => {
                         const cached = detailCache.get(String(item && (item.history_key || item.id) || ''));
-                        return cached ? { ...item, ...cached } : item;
+                        return cached ? { ...item, ...cached, detail_loaded: true, has_detail: true } : item;
                     });
                     this.requestHistoryRevision = revision;
                 }
@@ -1721,10 +1973,19 @@
                 this.requestHistoryError = '';
                 return this.requestHistory;
             } catch (error) {
-                this.requestHistoryError = error.message || '请求历史加载失败';
+                if (!silent) {
+                    this.requestHistoryError = error.message || '请求历史加载失败';
+                }
                 return this.requestHistory;
             } finally {
-                this.requestHistoryLoading = false;
+                if (requestSeq === this.requestHistoryRequestSeq) {
+                    this.requestHistoryLoading = false;
+                    const pending = this.requestHistoryPendingRefresh;
+                    this.requestHistoryPendingRefresh = null;
+                    if (pending) {
+                        this.fetchRequestHistory(pending).catch(() => {});
+                    }
+                }
             }
         },
 
@@ -1765,9 +2026,17 @@
                         || String(item.id || '').trim() === id;
                 });
                 if (index >= 0) {
+                    const current = this.requestHistory[index];
+                    const detailPayload = detail && typeof detail === 'object' ? detail : {};
                     const updated = {
-                        ...this.requestHistory[index],
-                        ...(detail || {}),
+                        ...current,
+                        prompt: detailPayload.prompt ?? current.prompt,
+                        response: detailPayload.response ?? current.response,
+                        error_stack: detailPayload.error_stack ?? current.error_stack,
+                        payload: detailPayload.payload ?? current.payload,
+                        response_payload: detailPayload.response_payload ?? current.response_payload,
+                        token_estimate: detailPayload.token_estimate ?? current.token_estimate,
+                        detail_text_lengths: detailPayload.detail_text_lengths ?? current.detail_text_lengths,
                         detail_loaded: true,
                         has_detail: true
                     };
@@ -2325,13 +2594,15 @@
         },
 
         saveToken() {
-            if (this.tempToken.trim()) {
-                localStorage.setItem('api_token', this.tempToken.trim())
+            const token = this.tempToken.trim()
+            if (token) {
+                localStorage.setItem('api_token', token)
                 this.notify('Token 已保存', 'success')
             } else {
                 localStorage.removeItem('api_token')
                 this.notify('Token 已清除', 'info')
             }
+            this.syncTokenPresence()
 
             this.showTokenDialog = false
             this.tempToken = ''
@@ -2362,7 +2633,7 @@
             const [configOk, healthOk] = await Promise.all([
                 this.loadConfig(true),
                 this.loadHealthStatus({ timeoutMs: 2500 }),
-                this.fetchSystemStats({ timeoutMs: 5000 })
+                this.fetchSystemStats({ timeoutMs: 2500 })
             ])
 
             if (configOk || healthOk) {
@@ -2374,19 +2645,25 @@
 
         async fetchSystemStats({ timeoutMs = 0 } = {}) {
             if (this.isFetchingSystemStats) {
-                return this.systemStats
+                return this.systemStatsRequestPromise || this.systemStats
             }
             this.isFetchingSystemStats = true
-            try {
-                this.systemStats = await this.apiRequest('/api/system/stats', {
-                    timeoutMs: timeoutMs || 5000
+            const requestPromise = this.apiRequest('/api/system/stats', {
+                timeoutMs: timeoutMs || 2500
+            })
+                .then((stats) => {
+                    this.systemStats = stats
+                    return this.systemStats
                 })
-                return this.systemStats
-            } catch (error) {
-                return this.systemStats
-            } finally {
-                this.isFetchingSystemStats = false
-            }
+                .catch(() => this.systemStats)
+                .finally(() => {
+                    if (this.systemStatsRequestPromise === requestPromise) {
+                        this.systemStatsRequestPromise = null
+                        this.isFetchingSystemStats = false
+                    }
+                })
+            this.systemStatsRequestPromise = requestPromise
+            return requestPromise
         },
 
         async loadHealthStatus({ silent = false, timeoutMs = 0 } = {}) {

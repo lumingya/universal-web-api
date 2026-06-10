@@ -12,8 +12,10 @@ Responsibilities:
 import copy
 import asyncio
 import json
+import math
 import time
 from typing import Optional, Dict, Any
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Request, HTTPException, Depends
 from fastapi.responses import JSONResponse
@@ -27,6 +29,9 @@ from app.api.config_route_models import (
     ConfigUpdateRequest,
     SiteAdvancedConfigRequest,
     PresetConfigUpdateRequest,
+    _extract_site_advanced_update_payload,
+    _get_model_fields_set,
+    _merge_preset_config_payload,
     _normalize_preset_config_payload,
 )
 from app.api.config_workflow_support import (
@@ -38,6 +43,7 @@ from app.api.config_workflow_support import (
 from app.api.deps import verify_auth
 from app.core import get_browser, BrowserConnectionError
 from app.core.config import get_logger
+from app.models.schemas import PRESET_ADVANCED_FIELDS, SITE_ADVANCED_FIELDS
 from app.services.config_engine import config_engine
 from app.services.extractor_manager import extractor_manager
 from app.utils.site_url import extract_remote_site_domain
@@ -47,18 +53,80 @@ logger = get_logger('API.CONFIG')
 
 router = APIRouter()
 
+
+LOCAL_SITE_HOSTS = {"127.0.0.1", "localhost", "0.0.0.0", "::1", "[::1]"}
+
+
+def _site_config_domain_host(domain: str) -> str:
+    value = str(domain or "").strip()
+    if not value:
+        return ""
+
+    parsed = urlparse(value if "://" in value else f"//{value}")
+    host = parsed.hostname or value.split("/")[0].split(":")[0]
+    return str(host or "").strip().lower().strip("[]")
+
+
+def _is_local_site_domain(domain: str) -> bool:
+    host = _site_config_domain_host(domain)
+    return host in {"127.0.0.1", "localhost", "0.0.0.0", "::1"}
+
+
+def _resolve_requested_preset_or_404(domain: str, preset_name: Optional[str]) -> Optional[str]:
+    """解析显式预设名；未命中时直接返回 404。"""
+    config_engine.refresh_if_changed()
+
+    if domain not in config_engine.sites:
+        raise HTTPException(status_code=404, detail=f"配置不存在: {domain}")
+
+    requested_preset = "" if preset_name is None else str(preset_name).strip()
+    if not requested_preset:
+        return None
+
+    site = config_engine.sites.get(domain) or {}
+    presets = site.get("presets", {}) if isinstance(site, dict) else {}
+    resolved_preset = config_engine._resolve_preset_alias_key(requested_preset, presets)
+    if not isinstance(presets, dict) or resolved_preset not in presets:
+        raise HTTPException(status_code=404, detail=f"预设不存在: {requested_preset}")
+
+    return resolved_preset
+
+
+def _unwrap_config_payload(data: Dict[str, Any], wrapper_key: str) -> Dict[str, Any]:
+    """兼容 GET 返回的包裹形状，同时保留旧版扁平更新 payload。"""
+    payload = copy.deepcopy(data)
+    nested = payload.pop(wrapper_key, None)
+    if nested is None:
+        return payload
+    if not isinstance(nested, dict) or isinstance(nested, list):
+        raise HTTPException(status_code=400, detail=f"{wrapper_key} 必须是对象")
+
+    nested_payload = copy.deepcopy(nested)
+    return _merge_preset_config_payload(nested_payload, payload)
+
+
+async def _read_json_object_or_400(request: Request) -> Dict[str, Any]:
+    """读取 JSON 请求体，并要求顶层必须是对象。"""
+    try:
+        data = await request.json()
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="请求体必须是有效 JSON")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="请求体必须是有效 JSON")
+    if not isinstance(data, dict) or isinstance(data, list):
+        raise HTTPException(status_code=400, detail="请求体必须是 JSON 对象")
+    return data
+
 @router.get("/api/config")
 async def get_config(authenticated: bool = Depends(verify_auth)):
     """获取站点配置（安全版：过滤内部键和本地地址）"""
     try:
         all_sites = config_engine.list_sites()
         
-        local_patterns = ["127.0.0.1", "localhost", "0.0.0.0", "::1"]
-        
         filtered_sites = {
-            domain: config 
+            domain: config
             for domain, config in all_sites.items()
-            if not any(pattern in domain for pattern in local_patterns)
+            if not _is_local_site_domain(domain)
         }
         
         logger.debug(
@@ -79,20 +147,66 @@ async def save_config(
     authenticated: bool = Depends(verify_auth)
 ):
     """保存站点配置"""
+    rollback_state = None
     try:
-        # 过滤掉前端可能误传的内部键
-        new_sites = {
-            k: v for k, v in request.config.items()
-            if not k.startswith('_')
-        }
-        config_engine.sites = new_sites
-        config_engine._apply_local_site_overrides()
-        
-        # 通过引擎保存（自动包含 _global）
-        success = config_engine.save_config()
-        
-        if not success:
-            raise HTTPException(status_code=500, detail="配置文件写入失败")
+        with config_engine._io_lock:
+            try:
+                config_engine.refresh_if_changed()
+                rollback_state = (
+                    copy.deepcopy(getattr(config_engine, "sites", {})),
+                    copy.deepcopy(getattr(config_engine, "_global_default_presets", {})),
+                    copy.deepcopy(getattr(config_engine, "_local_default_presets", {})),
+                    copy.deepcopy(getattr(config_engine, "_local_sites_payload", {})),
+                )
+
+                # 过滤掉前端可能误传的内部键
+                new_sites = {
+                    k: v for k, v in request.config.items()
+                    if not k.startswith('_')
+                }
+
+                existing_local_sites = {
+                    domain: copy.deepcopy(site)
+                    for domain, site in config_engine.sites.items()
+                    if (
+                        isinstance(domain, str)
+                        and not domain.startswith('_')
+                        and _is_local_site_domain(domain)
+                        and domain not in new_sites
+                    )
+                }
+                if existing_local_sites:
+                    new_sites = {
+                        **new_sites,
+                        **existing_local_sites,
+                    }
+
+                config_engine.sites = new_sites
+                config_engine._refresh_global_default_presets_from_sites()
+                config_engine._apply_local_site_overrides()
+
+                # 通过引擎保存（自动包含 _global）
+                success = config_engine.save_config()
+
+                if not success:
+                    (
+                        config_engine.sites,
+                        config_engine._global_default_presets,
+                        config_engine._local_default_presets,
+                        config_engine._local_sites_payload,
+                    ) = rollback_state
+                    raise HTTPException(status_code=500, detail="配置文件写入失败")
+            except HTTPException:
+                raise
+            except Exception as e:
+                if rollback_state is not None:
+                    (
+                        config_engine.sites,
+                        config_engine._global_default_presets,
+                        config_engine._local_default_presets,
+                        config_engine._local_sites_payload,
+                    ) = rollback_state
+                raise HTTPException(status_code=500, detail=str(e))
 
         return {
             "status": "success",
@@ -101,8 +215,6 @@ async def save_config(
         }
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.delete("/api/config/{domain}")
@@ -111,12 +223,16 @@ async def delete_site_config(
     authenticated: bool = Depends(verify_auth)
 ):
     """删除站点配置"""
+    config_engine.refresh_if_changed()
+    if domain not in config_engine.sites:
+        raise HTTPException(status_code=404, detail=f"配置不存在: {domain}")
+
     success = config_engine.delete_site_config(domain)
 
     if success:
         return {"status": "success", "message": f"已删除: {domain}"}
     else:
-        raise HTTPException(status_code=404, detail=f"配置不存在: {domain}")
+        raise HTTPException(status_code=500, detail="删除配置保存失败")
 
 
 @router.get("/api/config/compare-main-summary")
@@ -142,14 +258,13 @@ async def get_site_config(
     - 不传 preset_name: 返回 { "presets": { "主预设": {...}, ... } }
     - 传 preset_name: 返回该预设的扁平配置 { "selectors": {...}, "workflow": [...], ... }
     """
-    if domain not in config_engine.sites:
-        raise HTTPException(status_code=404, detail=f"配置不存在: {domain}")
-    
-    if preset_name:
+    resolved_preset = _resolve_requested_preset_or_404(domain, preset_name)
+
+    if resolved_preset:
         # 返回指定预设的扁平配置
-        data = config_engine._get_site_data_readonly(domain, preset_name)
+        data = config_engine._get_site_data_readonly(domain, resolved_preset)
         if data is None:
-            raise HTTPException(status_code=404, detail=f"预设不存在: {preset_name}")
+            raise HTTPException(status_code=404, detail=f"预设不存在: {resolved_preset}")
         return data
     else:
         # 返回整个站点结构（含所有预设）
@@ -163,32 +278,49 @@ async def set_site_preset_config(
     authenticated: bool = Depends(verify_auth)
 ):
     """保存单个站点预设的完整配置。"""
-    config_engine.refresh_if_changed()
+    with config_engine._io_lock:
+        config_engine.refresh_if_changed()
 
-    if domain not in config_engine.sites:
-        raise HTTPException(status_code=404, detail=f"配置不存在: {domain}")
+        if domain not in config_engine.sites:
+            raise HTTPException(status_code=404, detail=f"配置不存在: {domain}")
 
-    site = config_engine.sites.get(domain) or {}
-    presets = site.get("presets", {})
-    if not isinstance(presets, dict) or not presets:
-        raise HTTPException(status_code=404, detail=f"站点 {domain} 没有可用预设")
+        site = config_engine.sites.get(domain) or {}
+        presets = site.get("presets", {})
+        if not isinstance(presets, dict) or not presets:
+            raise HTTPException(status_code=404, detail=f"站点 {domain} 没有可用预设")
 
-    requested_preset = str(
-        body.preset_name
-        or config_engine.get_default_preset(domain)
-        or "主预设"
-    ).strip()
-    resolved_preset = config_engine._resolve_preset_alias_key(requested_preset, presets)
-    if resolved_preset not in presets:
-        raise HTTPException(status_code=404, detail=f"预设不存在: {requested_preset}")
+        requested_preset = str(
+            body.preset_name
+            or config_engine.get_default_preset(domain)
+            or "主预设"
+        ).strip()
+        resolved_preset = config_engine._resolve_preset_alias_key(requested_preset, presets)
+        if resolved_preset not in presets:
+            raise HTTPException(status_code=404, detail=f"预设不存在: {requested_preset}")
 
-    normalized = _normalize_preset_config_payload(body.config)
-    presets[resolved_preset] = normalized
-    site["presets"] = presets
+        if bool(body.replace):
+            normalized = _normalize_preset_config_payload(body.config)
+        else:
+            existing_preset = presets.get(resolved_preset)
+            merged = _merge_preset_config_payload(
+                existing_preset if isinstance(existing_preset, dict) else {},
+                body.config,
+            )
+            normalized = _normalize_preset_config_payload(merged)
+        previous_preset = copy.deepcopy(presets[resolved_preset])
+        presets[resolved_preset] = normalized
+        site["presets"] = presets
 
-    success = config_engine.save_config()
-    if not success:
-        raise HTTPException(status_code=500, detail="保存预设配置失败")
+        try:
+            success = config_engine.save_config()
+        except Exception:
+            presets[resolved_preset] = previous_preset
+            site["presets"] = presets
+            raise
+        if not success:
+            presets[resolved_preset] = previous_preset
+            site["presets"] = presets
+            raise HTTPException(status_code=500, detail="保存预设配置失败")
 
     logger.info(f"站点 {domain} [{resolved_preset}] 整体配置已更新")
     return {
@@ -213,12 +345,20 @@ async def get_site_main_branch_config(
     if domain not in sites:
         raise HTTPException(status_code=404, detail=f"main 分支中不存在站点配置: {domain}")
 
-    resolved = _resolve_branch_preset_config(sites[domain], preset_name)
+    requested_preset = "" if preset_name is None else str(preset_name).strip()
+    resolved_requested_preset = None
+    if requested_preset:
+        presets = sites[domain].get("presets", {}) if isinstance(sites[domain], dict) else {}
+        resolved_requested_preset = config_engine._resolve_preset_alias_key(requested_preset, presets)
+        if not isinstance(presets, dict) or resolved_requested_preset not in presets:
+            raise HTTPException(status_code=404, detail=f"预设不存在: {requested_preset}")
+
+    resolved = _resolve_branch_preset_config(sites[domain], resolved_requested_preset)
     return {
         "branch": "main",
         "path": branch_payload["path"],
         "domain": domain,
-        "requested_preset_name": str(preset_name or "").strip(),
+        "requested_preset_name": requested_preset,
         "preset_name": resolved["preset_name"],
         "match_mode": resolved["match_mode"],
         "config": resolved["config"],
@@ -232,14 +372,13 @@ async def get_site_advanced_config(
     authenticated: bool = Depends(verify_auth)
 ):
     """获取站点/预设合并后的高级配置。"""
-    if domain not in config_engine.sites:
-        raise HTTPException(status_code=404, detail=f"配置不存在: {domain}")
+    resolved_preset = _resolve_requested_preset_or_404(domain, preset_name)
 
     try:
-        config = config_engine.get_site_advanced_config(domain, preset_name=preset_name)
+        config = config_engine.get_site_advanced_config(domain, preset_name=resolved_preset)
         return {
             "domain": domain,
-            "preset_name": preset_name,
+            "preset_name": resolved_preset,
             "advanced": config,
         }
     except Exception as e:
@@ -251,45 +390,65 @@ async def get_site_advanced_config(
 async def set_site_advanced_config(
     domain: str,
     body: SiteAdvancedConfigRequest,
+    preset_name: Optional[str] = None,
     authenticated: bool = Depends(verify_auth)
 ):
     """更新站点级高级配置。"""
-    if domain not in config_engine.sites:
-        raise HTTPException(status_code=404, detail=f"配置不存在: {domain}")
-
-    provided_fields = getattr(body, "model_fields_set", None)
-    if provided_fields is None:
-        provided_fields = getattr(body, "__fields_set__", set())
-    preset_name = str(body.preset_name or "").strip()
-
-    all_payload = {
-        "independent_cookies": bool(body.independent_cookies),
-        "independent_cookies_auto_takeover": bool(body.independent_cookies_auto_takeover),
-        "input_box_stability_wait_enabled": bool(body.input_box_stability_wait_enabled),
-        "input_box_stability_wait_after_new_chat_only": bool(body.input_box_stability_wait_after_new_chat_only),
-        "input_box_stability_wait_timeout": float(body.input_box_stability_wait_timeout),
-        "url_transition_wait_on_new_chat": bool(body.url_transition_wait_on_new_chat),
-        "send_confirmation_check_enabled": bool(body.send_confirmation_check_enabled),
-        "send_confirmation_check_timeout": float(body.send_confirmation_check_timeout),
-    }
-    if "url_transition_wait_patterns" in provided_fields:
-        all_payload["url_transition_wait_patterns"] = [
-            str(pattern or "").strip()
-            for pattern in (body.url_transition_wait_patterns or [])
-            if str(pattern or "").strip()
-        ]
-    payload = {
-        key: value
-        for key, value in all_payload.items()
-        if key in provided_fields
-    }
-
+    body_preset = "" if body.preset_name is None else str(body.preset_name).strip()
+    query_preset = "" if preset_name is None else str(preset_name).strip()
+    if body_preset and query_preset:
+        resolved_body_preset = _resolve_requested_preset_or_404(domain, body_preset)
+        resolved_query_preset = _resolve_requested_preset_or_404(domain, query_preset)
+        if resolved_body_preset != resolved_query_preset:
+            raise HTTPException(
+                status_code=400,
+                detail="preset_name 查询参数与请求体不一致",
+            )
+        resolved_preset = resolved_query_preset
+    else:
+        requested_preset = query_preset or body_preset or None
+        resolved_preset = _resolve_requested_preset_or_404(domain, requested_preset)
     try:
-        if preset_name:
+        provided_fields = _get_model_fields_set(body)
+        nested_advanced = body.advanced if isinstance(body.advanced, dict) else None
+        prune_inherited_fields = set()
+        allow_inherited_site_fields = False
+        if resolved_preset and nested_advanced is not None:
+            nested_site_fields = {
+                key
+                for key in nested_advanced.keys()
+                if key in SITE_ADVANCED_FIELDS
+            }
+            if nested_site_fields:
+                site_advanced = config_engine.get_site_advanced_config(domain)
+                mismatched_site_fields = {
+                    key
+                    for key in nested_site_fields
+                    if nested_advanced.get(key) != site_advanced.get(key)
+                }
+                if mismatched_site_fields:
+                    joined = ", ".join(sorted(mismatched_site_fields))
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"预设级高级配置不能包含站点级字段: {joined}",
+                    )
+                allow_inherited_site_fields = True
+                prune_inherited_fields = {
+                    key
+                    for key in nested_advanced.keys()
+                    if key in PRESET_ADVANCED_FIELDS and key not in provided_fields
+                }
+        payload = _extract_site_advanced_update_payload(
+            body,
+            preset_scope=bool(resolved_preset),
+            allow_inherited_site_fields=allow_inherited_site_fields,
+        )
+        if resolved_preset:
             success = config_engine.set_preset_advanced_config(
                 domain,
                 payload,
-                preset_name=preset_name,
+                preset_name=resolved_preset,
+                prune_inherited_fields=prune_inherited_fields,
             )
         else:
             success = config_engine.set_site_advanced_config(domain, payload)
@@ -300,10 +459,10 @@ async def set_site_advanced_config(
             "status": "success",
             "message": f"站点 {domain} 高级配置已更新",
             "domain": domain,
-            "preset_name": preset_name or None,
+            "preset_name": resolved_preset,
             "advanced": config_engine.get_site_advanced_config(
                 domain,
-                preset_name=preset_name or None,
+                preset_name=resolved_preset,
             ),
         }
     except HTTPException:
@@ -370,8 +529,9 @@ async def get_site_image_config(
     authenticated: bool = Depends(verify_auth)
 ):
     """获取站点的多模态提取配置"""
+    resolved_preset = _resolve_requested_preset_or_404(domain, preset_name)
     try:
-        config = config_engine.get_site_image_config(domain, preset_name=preset_name)
+        config = config_engine.get_site_image_config(domain, preset_name=resolved_preset)
         return {
             "domain": domain,
             "image_extraction": config,
@@ -390,10 +550,11 @@ async def set_site_image_config(
 ):
     """设置站点的多模态提取配置"""
     try:
-        data = await request.json()
-        preset_name = data.pop("preset_name", None)
-        
-        success = config_engine.set_site_image_config(domain, data, preset_name=preset_name)
+        data = await _read_json_object_or_400(request)
+        resolved_preset = _resolve_requested_preset_or_404(domain, data.pop("preset_name", None))
+        payload = _unwrap_config_payload(data, "image_extraction")
+
+        success = config_engine.set_site_image_config(domain, payload, preset_name=resolved_preset)
         
         if success:
             return {
@@ -406,7 +567,6 @@ async def set_site_image_config(
                 status_code=400,
                 detail=f"设置失败：站点或预设不存在"
             )
-    
     except HTTPException:
         raise
     except Exception as e:
@@ -422,15 +582,15 @@ async def toggle_site_image_extraction(
 ):
     """快速开关站点的多模态提取功能"""
     try:
-        data = await request.json()
+        data = await _read_json_object_or_400(request)
         enabled = data.get("enabled", False)
-        preset_name = data.get("preset_name")
-        
-        current_config = config_engine.get_site_image_config(domain, preset_name=preset_name)
+        resolved_preset = _resolve_requested_preset_or_404(domain, data.get("preset_name"))
+
+        current_config = config_engine.get_site_image_config(domain, preset_name=resolved_preset)
         current_config["enabled"] = enabled
-        
-        success = config_engine.set_site_image_config(domain, current_config, preset_name=preset_name)
-        
+
+        success = config_engine.set_site_image_config(domain, current_config, preset_name=resolved_preset)
+
         if success:
             status = "已启用" if enabled else "已禁用"
             return {
@@ -440,7 +600,6 @@ async def toggle_site_image_extraction(
             }
         else:
             raise HTTPException(status_code=400, detail=f"站点 {domain} 不存在")
-    
     except HTTPException:
         raise
     except Exception as e:
@@ -506,9 +665,11 @@ async def apply_image_preset(
 ):
     """应用图片预设到站点"""
     try:
-        data = await request.json()
-        preset_domain = data.get("preset_domain")
-        
+        data = await _read_json_object_or_400(request)
+        preset_domain = str(data.get("preset_domain") or "").strip()
+        if not preset_domain:
+            raise HTTPException(status_code=400, detail="缺少 preset_domain")
+
         success = config_engine.apply_image_preset(domain, preset_domain)
         
         if success:
@@ -516,7 +677,7 @@ async def apply_image_preset(
                 "status": "success",
                 "message": f"已应用图片预设到 {domain}",
                 "domain": domain,
-                "preset_domain": preset_domain or "auto"
+                "preset_domain": preset_domain
             }
         else:
             raise HTTPException(
@@ -526,6 +687,8 @@ async def apply_image_preset(
     
     except HTTPException:
         raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"应用图片预设失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -610,6 +773,10 @@ async def inject_workflow_editor(request: Request):
             )
         
         config_domain = target_domain or actual_domain
+        requested_preset = "" if preset_name is None else str(preset_name).strip()
+        if requested_preset:
+            preset_name = _resolve_requested_preset_or_404(config_domain, requested_preset)
+
         site_config = None
         try:
             site_config = config_engine.get_site_config(
@@ -631,7 +798,9 @@ async def inject_workflow_editor(request: Request):
             return JSONResponse(content=result)
         else:
             return JSONResponse(status_code=500, content=result)
-            
+
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"注入编辑器失败: {e}")
         return JSONResponse(
@@ -649,8 +818,14 @@ async def test_workflow_editor_steps(
     from app.core.browser import get_browser
 
     try:
-        data = await request.json()
+        data = await _read_json_object_or_400(request)
         logger.debug(f"[WFE_TEST] direct api request keys={sorted(list(data.keys()))}")
+        domain = str(data.get("domain") or "").strip()
+        requested_preset = "" if data.get("preset_name") is None else str(data.get("preset_name")).strip()
+        if domain and requested_preset:
+            data = dict(data)
+            data["preset_name"] = _resolve_requested_preset_or_404(domain, requested_preset)
+
         browser_instance = get_browser(auto_connect=True)
         result = await asyncio.to_thread(
             _execute_workflow_editor_test_payload,
@@ -739,6 +914,11 @@ async def consume_workflow_editor_actions(
 
             try:
                 payload = dict(payload)
+                domain_for_preset = str(payload.get("domain") or "").strip()
+                requested_preset = "" if payload.get("preset_name") is None else str(payload.get("preset_name")).strip()
+                if domain_for_preset and requested_preset:
+                    payload["preset_name"] = _resolve_requested_preset_or_404(domain_for_preset, requested_preset)
+
                 action_started_at = time.time()
                 queue_wait_ms = max(
                     0,
@@ -832,7 +1012,12 @@ async def update_site_workflow(
 ):
     """更新站点的工作流配置（可视化编辑器保存）"""
     try:
-        data = await request.json()
+        data = await _read_json_object_or_400(request)
+        requested_preset = "" if data.get("preset_name") is None else str(data.get("preset_name")).strip()
+        if requested_preset:
+            data = dict(data)
+            data["preset_name"] = _resolve_requested_preset_or_404(domain, requested_preset)
+
         return _save_site_workflow_payload(domain, data)
         
     except HTTPException:
@@ -876,12 +1061,13 @@ async def set_default_extractor(
 ):
     """设置默认提取器"""
     try:
-        data = await request.json()
+        data = await _read_json_object_or_400(request)
         extractor_id = data.get("extractor_id")
         
         if not extractor_id:
             raise HTTPException(status_code=400, detail="缺少 extractor_id")
         
+        extractor_exists = extractor_manager.has_extractor(extractor_id)
         success = extractor_manager.set_default(extractor_id)
         
         if success:
@@ -890,8 +1076,10 @@ async def set_default_extractor(
                 "message": f"默认提取器已设置为: {extractor_id}",
                 "default": extractor_id
             }
-        else:
-            raise HTTPException(status_code=400, detail=f"提取器不存在: {extractor_id}")
+
+        if extractor_exists:
+            raise HTTPException(status_code=500, detail="默认提取器保存失败")
+        raise HTTPException(status_code=400, detail=f"提取器不存在: {extractor_id}")
     
     except HTTPException:
         raise
@@ -923,8 +1111,8 @@ async def import_extractors(
 ):
     """导入提取器配置"""
     try:
-        config = await request.json()
-        
+        config = await _read_json_object_or_400(request)
+
         if "extractors" not in config:
             raise HTTPException(status_code=400, detail="无效的配置格式：缺少 extractors 字段")
         
@@ -955,11 +1143,9 @@ async def get_site_extractor(
     authenticated: bool = Depends(verify_auth)
 ):
     """获取站点当前使用的提取器"""
+    resolved_preset = _resolve_requested_preset_or_404(domain, preset_name)
     try:
-        if domain not in config_engine.sites:
-            raise HTTPException(status_code=404, detail=f"站点不存在: {domain}")
-        
-        preset_data = config_engine._get_site_data_readonly(domain, preset_name)
+        preset_data = config_engine._get_site_data_readonly(domain, resolved_preset)
         if preset_data is None:
             raise HTTPException(status_code=404, detail=f"预设不存在")
         
@@ -994,15 +1180,15 @@ async def set_site_extractor(
 ):
     """为站点分配提取器"""
     try:
-        data = await request.json()
+        data = await _read_json_object_or_400(request)
         extractor_id = data.get("extractor_id")
-        preset_name = data.get("preset_name")
-        
+        resolved_preset = _resolve_requested_preset_or_404(domain, data.get("preset_name"))
+
         if not extractor_id:
             raise HTTPException(status_code=400, detail="缺少 extractor_id")
-        
-        success = config_engine.set_site_extractor(domain, extractor_id, preset_name=preset_name)
-        
+
+        success = config_engine.set_site_extractor(domain, extractor_id, preset_name=resolved_preset)
+
         if success:
             return {
                 "status": "success",
@@ -1012,10 +1198,9 @@ async def set_site_extractor(
             }
         else:
             raise HTTPException(
-                status_code=400, 
+                status_code=400,
                 detail=f"设置失败：站点或预设不存在，或提取器无效"
             )
-    
     except HTTPException:
         raise
     except Exception as e:
@@ -1030,12 +1215,21 @@ async def verify_extractor_result(
 ):
     """验证提取结果的准确性"""
     try:
-        data = await request.json()
-        
+        data = await _read_json_object_or_400(request)
+
         extracted_text = data.get("extracted_text", "")
         expected_text = data.get("expected_text", "")
-        threshold = float(data.get("threshold", 0.95))
-        
+        if not isinstance(extracted_text, str) or not isinstance(expected_text, str):
+            raise HTTPException(status_code=400, detail="提取文本和预期文本必须是字符串")
+        try:
+            threshold = float(data.get("threshold", 0.95))
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="threshold 必须是有限数字")
+        if not math.isfinite(threshold):
+            raise HTTPException(status_code=400, detail="threshold 必须是有限数字")
+        if threshold < 0 or threshold > 1:
+            raise HTTPException(status_code=400, detail="threshold 必须在 0 到 1 之间")
+
         if not extracted_text and not expected_text:
             raise HTTPException(status_code=400, detail="提取文本和预期文本不能同时为空")
         
@@ -1071,12 +1265,12 @@ async def mark_site_extractor_verified(
 ):
     """标记站点提取器验证状态"""
     try:
-        data = await request.json()
+        data = await _read_json_object_or_400(request)
         verified = data.get("verified", True)
-        preset_name = data.get("preset_name")
-        
-        success = config_engine.set_site_extractor_verified(domain, verified, preset_name=preset_name)
-        
+        resolved_preset = _resolve_requested_preset_or_404(domain, data.get("preset_name"))
+
+        success = config_engine.set_site_extractor_verified(domain, verified, preset_name=resolved_preset)
+
         if success:
             return {
                 "status": "success",
@@ -1086,7 +1280,6 @@ async def mark_site_extractor_verified(
             }
         else:
             raise HTTPException(status_code=404, detail=f"站点不存在: {domain}")
-    
     except HTTPException:
         raise
     except Exception as e:
@@ -1114,7 +1307,7 @@ async def save_selector_definitions(
 ):
     """保存元素定义列表"""
     try:
-        data = await request.json()
+        data = await _read_json_object_or_400(request)
         definitions = data.get("definitions", [])
 
         for d in definitions:
@@ -1123,7 +1316,8 @@ async def save_selector_definitions(
             if "key" not in d or "description" not in d:
                 raise HTTPException(status_code=400, detail="缺少必需字段 key 或 description")
 
-        config_engine.set_selector_definitions(definitions)
+        if not config_engine.set_selector_definitions(definitions):
+            raise HTTPException(status_code=500, detail="元素定义保存失败")
 
         return {
             "status": "success",
@@ -1144,13 +1338,16 @@ async def reset_selector_definitions(authenticated: bool = Depends(verify_auth))
         from app.models.schemas import get_default_selector_definitions
 
         defaults = get_default_selector_definitions()
-        config_engine.set_selector_definitions(defaults)
+        if not config_engine.set_selector_definitions(defaults):
+            raise HTTPException(status_code=500, detail="元素定义保存失败")
 
         return {
             "status": "success",
             "message": "已重置为默认值",
             "definitions": defaults
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"重置元素定义失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1177,8 +1374,9 @@ async def get_site_file_paste_config(
     authenticated: bool = Depends(verify_auth)
 ):
     """获取站点的文件粘贴配置"""
+    resolved_preset = _resolve_requested_preset_or_404(domain, preset_name)
     try:
-        config = config_engine.get_site_file_paste_config(domain, preset_name=preset_name)
+        config = config_engine.get_site_file_paste_config(domain, preset_name=resolved_preset)
         return {
             "domain": domain,
             "file_paste": config
@@ -1196,10 +1394,11 @@ async def set_site_file_paste_config(
 ):
     """设置站点的文件粘贴配置"""
     try:
-        data = await request.json()
-        preset_name = data.pop("preset_name", None)
-        
-        success = config_engine.set_site_file_paste_config(domain, data, preset_name=preset_name)
+        data = await _read_json_object_or_400(request)
+        resolved_preset = _resolve_requested_preset_or_404(domain, data.pop("preset_name", None))
+        payload = _unwrap_config_payload(data, "file_paste")
+
+        success = config_engine.set_site_file_paste_config(domain, payload, preset_name=resolved_preset)
         
         if success:
             return {
@@ -1212,7 +1411,6 @@ async def set_site_file_paste_config(
                 status_code=400,
                 detail=f"设置失败：站点或预设不存在"
             )
-    
     except HTTPException:
         raise
     except Exception as e:
@@ -1227,17 +1425,35 @@ async def batch_update_file_paste_configs(
 ):
     """批量更新多个站点的文件粘贴配置"""
     try:
-        data = await request.json()
-        configs = data.get("configs", {})
-        
+        data = await _read_json_object_or_400(request)
+        if "configs" not in data:
+            raise HTTPException(status_code=400, detail="缺少 configs 字段")
+        configs = data.get("configs")
+        if not isinstance(configs, dict):
+            raise HTTPException(status_code=400, detail="configs 必须是对象")
         if not configs:
             raise HTTPException(status_code=400, detail="缺少 configs 字段")
-        
+
         updated = []
         failed = []
-        
+
         for domain, config in configs.items():
-            success = config_engine.set_site_file_paste_config(domain, config)
+            if not isinstance(config, dict):
+                failed.append(domain)
+                continue
+
+            config_payload = copy.deepcopy(config)
+            try:
+                requested_preset = config_payload.pop("preset_name", None)
+                resolved_preset = _resolve_requested_preset_or_404(domain, requested_preset)
+                config_payload = _unwrap_config_payload(config_payload, "file_paste")
+                success = config_engine.set_site_file_paste_config(
+                    domain,
+                    config_payload,
+                    preset_name=resolved_preset,
+                )
+            except HTTPException:
+                success = False
             if success:
                 updated.append(domain)
             else:
@@ -1265,8 +1481,9 @@ async def get_site_stream_config(
     authenticated: bool = Depends(verify_auth)
 ):
     """获取站点的流式配置"""
+    resolved_preset = _resolve_requested_preset_or_404(domain, preset_name)
     try:
-        config = config_engine.get_site_stream_config(domain, preset_name=preset_name)
+        config = config_engine.get_site_stream_config(domain, preset_name=resolved_preset)
         return {
             "domain": domain,
             "stream_config": config,
@@ -1286,24 +1503,24 @@ async def set_site_stream_config(
 ):
     """设置站点的流式配置"""
     try:
-        data = await request.json()
-        preset_name = data.pop("preset_name", None)
-        
-        success = config_engine.set_site_stream_config(domain, data, preset_name=preset_name)
+        data = await _read_json_object_or_400(request)
+        resolved_preset = _resolve_requested_preset_or_404(domain, data.pop("preset_name", None))
+        payload = _unwrap_config_payload(data, "stream_config")
+
+        success = config_engine.set_site_stream_config(domain, payload, preset_name=resolved_preset)
         
         if success:
             return {
                 "status": "success",
                 "message": f"站点 {domain} 流式配置已更新",
                 "domain": domain,
-                "mode": data.get("mode", "dom")
+                "mode": payload.get("mode", "dom")
             }
         else:
             raise HTTPException(
                 status_code=400,
                 detail=f"设置失败：站点或预设不存在"
             )
-    
     except HTTPException:
         raise
     except Exception as e:

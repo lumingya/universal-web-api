@@ -11,6 +11,8 @@ import time
 import xml.etree.ElementTree as ET
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from app.services.sse_utils import sse_frame_data_text
+
 try:
     from defusedxml import ElementTree as SafeET
     from defusedxml.common import DefusedXmlException
@@ -273,7 +275,13 @@ def decode_browser_non_stream_payload(payload: Any) -> Dict[str, Any]:
     if not text:
         raise RuntimeError("empty_browser_response")
 
-    candidates = _extract_sse_json_payloads(text) if text.startswith("data:") else [text]
+    normalized = text.lstrip()
+    looks_like_sse = (
+        normalized.startswith(("data:", "event:", ":"))
+        or "\ndata:" in normalized
+        or "\r\ndata:" in normalized
+    )
+    candidates = _extract_sse_json_payloads(text) if looks_like_sse else [text]
     last_error: Optional[Exception] = None
     for candidate in candidates:
         try:
@@ -297,16 +305,9 @@ def _extract_sse_json_payloads(text: str) -> List[str]:
     payloads: List[str] = []
     blocks = re.split(r"\r?\n\r?\n", text.strip())
     for block in blocks:
-        data_lines: List[str] = []
-        for line in block.splitlines():
-            if not line.startswith("data:"):
-                continue
-            value = line[5:].strip()
-            if not value or value == "[DONE]":
-                continue
-            data_lines.append(value)
-        if data_lines:
-            payloads.append("\n".join(data_lines))
+        payload_text = sse_frame_data_text(block)
+        if payload_text and payload_text.strip() != "[DONE]":
+            payloads.append(payload_text)
     return payloads
 
 
@@ -362,39 +363,35 @@ def _extract_json_candidates(text: str) -> List[str]:
 
 def _extract_balanced_json_object_candidates(text: str) -> List[str]:
     value = str(text or "")
-    candidates: List[str] = []
-    for start, ch in enumerate(value):
-        if ch != "{":
+    spans: List[List[int]] = []
+    stack: List[int] = []
+    in_string = False
+    escape = False
+
+    for index, current in enumerate(value):
+        if in_string:
+            if escape:
+                escape = False
+            elif current == "\\":
+                escape = True
+            elif current == '"':
+                in_string = False
             continue
 
-        depth = 0
-        in_string = False
-        escape = False
-        for index in range(start, len(value)):
-            current = value[index]
-            if in_string:
-                if escape:
-                    escape = False
-                elif current == "\\":
-                    escape = True
-                elif current == '"':
-                    in_string = False
+        if current == '"':
+            in_string = True
+            continue
+        if current == "{":
+            stack.append(len(spans))
+            spans.append([index, -1])
+            continue
+        if current == "}":
+            if not stack:
                 continue
+            span_index = stack.pop()
+            spans[span_index][1] = index + 1
 
-            if current == '"':
-                in_string = True
-                continue
-            if current == "{":
-                depth += 1
-                continue
-            if current == "}":
-                depth -= 1
-                if depth == 0:
-                    candidates.append(value[start : index + 1])
-                    break
-                if depth < 0:
-                    break
-    return candidates
+    return [value[start:end] for start, end in spans if end >= start]
 
 
 def _normalize_parsed_payload(
@@ -461,6 +458,8 @@ def _normalize_openai_like_payload(
                 "content": content,
                 "tool_calls": tool_calls,
             }
+        if raw_tool_calls:
+            return None
 
     if "content" in message:
         return {
@@ -488,14 +487,15 @@ def _normalize_tool_calls(
             or function_data.get("name")
             or ""
         )
-        name = _resolve_tool_name(str(raw_name or "").strip(), allowed_tools)
-        if not name:
-            continue
+        raw_name_text = str(raw_name or "").strip()
+        name = _resolve_tool_name(raw_name_text, allowed_tools) or raw_name_text
 
         args = item.get("arguments", function_data.get("arguments"))
         args_obj = _coerce_arguments_object(args)
         if args_obj is None:
-            continue
+            arguments_payload = args if isinstance(args, str) else json.dumps(args, ensure_ascii=False)
+        else:
+            arguments_payload = json.dumps(args_obj, ensure_ascii=False)
 
         result.append(
             {
@@ -503,7 +503,7 @@ def _normalize_tool_calls(
                 "type": "function",
                 "function": {
                     "name": name,
-                    "arguments": json.dumps(args_obj, ensure_ascii=False),
+                    "arguments": arguments_payload,
                 },
             }
         )
@@ -675,12 +675,14 @@ def _close_unmatched_json_delimiters(text: str) -> str:
         return trimmed
 
     closing_stack: List[str] = []
+    repaired_chars: List[str] = []
     in_string = False
     escape = False
     mismatch_found = False
 
     for ch in trimmed:
         if in_string:
+            repaired_chars.append(ch)
             if escape:
                 escape = False
             elif ch == "\\":
@@ -690,25 +692,41 @@ def _close_unmatched_json_delimiters(text: str) -> str:
             continue
 
         if ch == '"':
+            repaired_chars.append(ch)
             in_string = True
             continue
         if ch == "{":
+            repaired_chars.append(ch)
             closing_stack.append("}")
             continue
         if ch == "[":
+            repaired_chars.append(ch)
             closing_stack.append("]")
             continue
         if ch in {"}", "]"}:
             if closing_stack and closing_stack[-1] == ch:
                 closing_stack.pop()
+                repaired_chars.append(ch)
+            elif ch in closing_stack:
+                while closing_stack and closing_stack[-1] != ch:
+                    repaired_chars.append(closing_stack.pop())
+                if closing_stack and closing_stack[-1] == ch:
+                    closing_stack.pop()
+                    repaired_chars.append(ch)
+                else:
+                    mismatch_found = True
+                    break
             else:
                 mismatch_found = True
                 break
+            continue
+
+        repaired_chars.append(ch)
 
     if mismatch_found:
         return value
 
-    repaired = trimmed
+    repaired = "".join(repaired_chars)
     if in_string:
         if escape:
             repaired += "\\"
@@ -806,14 +824,20 @@ def _remove_truncated_json_members_before_closers(text: str) -> str:
         return value
 
     boundary_char = prefix[boundary]
-    if boundary_char not in "{,":
+    if boundary_char not in "{,[":
         return value
 
     candidate = prefix[boundary + 1 :]
-    if not _looks_like_truncated_json_object_member(candidate):
+    if not (
+        _looks_like_truncated_json_object_member(candidate)
+        or (
+            boundary_char in {",", "["}
+            and _looks_like_truncated_json_array_item(candidate)
+        )
+    ):
         return value
 
-    if boundary_char == "{":
+    if boundary_char in {"{", "["}:
         return prefix[: boundary + 1] + suffix + tail
     return prefix[:boundary] + suffix + tail
 
@@ -835,7 +859,7 @@ def _find_last_json_member_boundary(text: str) -> int:
         if ch == '"':
             in_string = True
             continue
-        if ch in "{,":
+        if ch in "{[,":
             boundary = index
     return boundary
 
@@ -860,6 +884,11 @@ def _looks_like_truncated_json_object_member(fragment: str) -> bool:
         return True
 
     return value_tail in _TRUNCATED_JSON_LITERALS
+
+
+def _looks_like_truncated_json_array_item(fragment: str) -> bool:
+    value = str(fragment or "").strip()
+    return value in _TRUNCATED_JSON_LITERALS
 
 
 def _escape_control_chars_in_json_strings(text: str) -> str:
@@ -1126,11 +1155,11 @@ _TOOL_XML_WRAPPER_CLOSE_RE = re.compile(
     flags=re.IGNORECASE,
 )
 _TOOL_XML_INVOKE_OPEN_RE = re.compile(
-    r"<\s*(?:call|invoke)\b[^>]*>",
+    r"<\s*(?:call|invoke|tool_call)\b[^>]*>",
     flags=re.IGNORECASE,
 )
 _TOOL_XML_INVOKE_CLOSE_RE = re.compile(
-    r"<\s*/\s*(?:call|invoke)\s*>",
+    r"<\s*/\s*(?:call|invoke|tool_call)\s*>",
     flags=re.IGNORECASE,
 )
 _TOOL_XML_STRING_PARAM_NAMES = {
@@ -1464,7 +1493,7 @@ def _parse_xml_invoke_arguments(
     parameters_schema = _tool_parameters_schema(tool_def)
     for child in children:
         child_tag = _xml_local_name(child.tag)
-        is_named_arg = child_tag in {_PREFERRED_XML_ARG_TAG, _LEGACY_XML_ARG_TAG}
+        is_named_arg = child_tag in {_PREFERRED_XML_ARG_TAG, _LEGACY_XML_ARG_TAG, "argument"}
         if is_named_arg:
             param_name = str(child.attrib.get("name", "") or "").strip()
         else:
@@ -1502,7 +1531,7 @@ def _parse_wrapped_xml_tool_calls(
 
     tool_calls: List[Dict[str, Any]] = []
     for child in list(root):
-        if _xml_local_name(child.tag) not in {_PREFERRED_XML_CALL_TAG, _LEGACY_XML_CALL_TAG}:
+        if _xml_local_name(child.tag) not in {_PREFERRED_XML_CALL_TAG, _LEGACY_XML_CALL_TAG, "tool_call"}:
             continue
         raw_name = str(child.attrib.get("name", "") or "").strip()
         name = _resolve_tool_name(raw_name, allowed_tools)
@@ -1572,7 +1601,12 @@ def _try_parse_xml_tool_calls(
 
 def _parse_xml_attrs(raw_attrs: str) -> Dict[str, Any]:
     attrs: Dict[str, Any] = {}
-    attr_pattern = re.compile(r'([A-Za-z_][A-Za-z0-9_]*)\s*=\s*"([^"]*)"')
-    for key, value in attr_pattern.findall(raw_attrs or ""):
-        attrs[key] = value
+    attr_pattern = re.compile(
+        r"""([A-Za-z_][A-Za-z0-9_.:-]*)\s*=\s*(['"])(.*?)\2""",
+        flags=re.DOTALL,
+    )
+    for match in attr_pattern.finditer(raw_attrs or ""):
+        key = match.group(1)
+        value = match.group(3)
+        attrs[key] = html.unescape(value)
     return attrs

@@ -12,6 +12,7 @@ import time
 import logging
 import json
 import re
+from collections import deque
 from typing import Generator, Optional, Dict, Callable, Any
 from pathlib import Path
 
@@ -103,6 +104,9 @@ class NetworkMonitor:
     DEFAULT_FIRST_CONTENT_TIMEOUT = 15.0   # 命中目标流后，等待首个有效正文的宽限
     DEFAULT_INITIAL_TARGET_BODY_WAIT = 4.0  # 首个目标响应空 body 时的补等宽限
     MAX_LISTEN_RESTARTS = 3                # 监听状态异常后的最大重建次数
+    MAX_PREFETCHED_RESPONSES = 64          # 发送后预取响应缓存上限，避免噪声网络无限堆积
+    MAX_STREAM_CHUNK_MERGE_CACHE = 8       # 活跃流 chunks 合并缓存上限，避免长流重复全量 join
+    MAX_RAW_BODY_SIGNATURE_EDGE = 512      # 媒体状态缓存只保留首尾签名片段，避免挂住完整 body
     CANCEL_CHECK_SLICE = 1.0              # 长等待期间的取消检查切片（秒）
     ACTIVE_STREAM_RESPONSE_POLL_TIMEOUT = 0.01  # 锁定 SSE 后仅快速扫队列，不阻塞吐出
     LISTEN_RESTART_BACKOFF = 0.1          # 异常重建后的最小退避，避免忙循环
@@ -206,15 +210,18 @@ class NetworkMonitor:
         self._cdp_session_listening = False
         self._total_chunks = 0
         self._total_content_chars = 0
-        self._prefetched_responses = []
+        self._reset_prefetched_responses()
+        self._reset_stream_chunk_merge_cache()
         self._debug_capture_counter = 0
         self._debug_capture_session_key = f"{int(time.time() * 1000)}_{id(self):x}"
         self._debug_capture_written_stages = set()
         self._debug_capture_has_content_snapshot = False
         self._last_stream_event: Dict[str, Any] = {}
         self._last_stream_raw_body: str = ""
+        self._last_stream_raw_body_len: int = 0
+        self._last_stream_raw_body_signature = None
         self._last_stream_parse_result: Dict[str, Any] = {}
-        self._last_media_generation_state: Dict[str, Any] = {}
+        self._reset_media_generation_state_cache()
         self._last_stream_media_items: list[Dict[str, Any]] = []
         self._prefetched_image_urls: set[str] = set()
         self._send_attempt_baseline_targets = 0
@@ -262,6 +269,13 @@ class NetworkMonitor:
             return bool(self.parser.should_fallback_to_dom_when_no_visible_content())
         except Exception:
             return False
+
+    @staticmethod
+    def _parse_result_has_unclosed_render_output(parse_result: Dict[str, Any]) -> bool:
+        return bool(
+            isinstance(parse_result, dict)
+            and parse_result.get("unclosed_render_output")
+        )
 
     @staticmethod
     def _extract_http_status(event: Dict[str, Any]) -> int:
@@ -392,11 +406,115 @@ class NetworkMonitor:
         delay = min(0.5, self.LISTEN_RESTART_BACKOFF * max(1, int(attempts or 1)))
         time.sleep(delay)
 
+    def _reset_prefetched_responses(self) -> None:
+        self._prefetched_responses = deque(maxlen=self.MAX_PREFETCHED_RESPONSES)
+
+    def _reset_stream_chunk_merge_cache(self) -> None:
+        self._stream_chunk_merge_cache: Dict[int, Dict[str, Any]] = {}
+
+    def _reset_media_generation_state_cache(self) -> None:
+        self._last_media_generation_state: Dict[str, Any] = {}
+        self._last_media_generation_state_body_signature = None
+        self._last_media_generation_state_raw_body = ""
+        self._last_media_generation_state_parse_result: Dict[str, Any] = {}
+        self._last_media_generation_state_cached: bool = False
+
+    def _reset_parser_state(self) -> None:
+        reset = getattr(self.parser, "reset", None)
+        if not callable(reset):
+            return
+        try:
+            reset()
+        except Exception as e:
+            logger.debug(f"[NetworkMonitor] 重置解析器状态失败（忽略）: {e}")
+
+    def _raw_body_cache_signature(self, raw_body: Any):
+        text = str(raw_body or "")
+        length = len(text)
+        edge = max(1, int(self.MAX_RAW_BODY_SIGNATURE_EDGE))
+        if length <= edge * 2:
+            return (length, text)
+        return (length, hash(text), text[:edge], text[-edge:])
+
+    def _get_media_generation_state_cached(
+        self,
+        raw_body: Any,
+        parse_result: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        body_signature = self._raw_body_cache_signature(raw_body)
+        if (
+            self._last_media_generation_state_cached
+            and body_signature == getattr(self, "_last_media_generation_state_body_signature", None)
+            and parse_result == self._last_media_generation_state_parse_result
+        ):
+            return dict(self._last_media_generation_state)
+
+        media_state = self.parser.get_media_generation_state(
+            raw_response=raw_body,
+            parse_result=parse_result,
+        )
+        normalized = dict(media_state) if isinstance(media_state, dict) else {}
+        self._last_media_generation_state = normalized
+        self._last_media_generation_state_body_signature = body_signature
+        self._last_media_generation_state_raw_body = ""
+        self._last_media_generation_state_parse_result = dict(parse_result or {})
+        self._last_media_generation_state_cached = True
+        return dict(normalized)
+
+    def _raw_body_preview(self, raw_body: Any) -> str:
+        text = str(raw_body or "")
+        edge = max(1, int(self.MAX_RAW_BODY_SIGNATURE_EDGE))
+        if len(text) <= edge * 2:
+            return text
+        return f"{text[:edge]}...{text[-edge:]}"
+
+    def _remember_last_stream_result(
+        self,
+        event: Dict[str, Any],
+        raw_body: Any,
+        parse_result: Dict[str, Any],
+    ) -> None:
+        self._last_stream_event = dict(event or {})
+        text = str(raw_body or "")
+        self._last_stream_raw_body = self._raw_body_preview(text)
+        self._last_stream_raw_body_len = len(text)
+        self._last_stream_raw_body_signature = self._raw_body_cache_signature(text)
+        self._last_stream_parse_result = dict(parse_result or {})
+
+    def _remember_prefetched_response(self, response: Any) -> None:
+        if response is None or response is False:
+            return
+
+        self._prefetched_responses.append(response)
+
+    def _raise_for_http_error_status(
+        self,
+        event: Dict[str, Any],
+        raw_body: str,
+    ) -> None:
+        status_code = self._extract_http_status(event)
+        if status_code < 400:
+            return
+
+        error_text = self._build_http_status_error_text(event, raw_body)
+        logger.warning(
+            "[NetworkMonitor] 目标流返回异常状态码，终止工作流 "
+            f"(status={status_code}, url={event.get('url', '')[:120]}, "
+            f"body_len={len(raw_body or '')})"
+        )
+        raise NetworkMonitorTerminalError(error_text or f"HTTP {status_code}")
+
+    def _pop_prefetched_response(self) -> Optional[Any]:
+        if not self._prefetched_responses:
+            return None
+        return self._prefetched_responses.popleft()
+
     def _start_listen(self):
         if not self._listen_pattern:
             raise NetworkMonitorError("listen_pattern 未配置")
 
-        self._prefetched_responses = []
+        self._reset_prefetched_responses()
+        self._reset_stream_chunk_merge_cache()
         self.tab.listen._reuse_driver = True
         self.tab.listen.start(self._listen_pattern)
         if not self._listen_is_active():
@@ -532,11 +650,11 @@ class NetworkMonitor:
                     self._sleep_after_listen_restart(listen_restart_attempts)
                     continue
                 return {"seen": saw_any_response, "matched": False, "error": err_text, **counters}
-            if response in (None, False):
+            if response is None or response is False:
                 continue
 
             saw_any_response = True
-            self._prefetched_responses.append(response)
+            self._remember_prefetched_response(response)
             event = self._extract_event(response)
             last_event = event
             matched = False
@@ -686,7 +804,7 @@ class NetworkMonitor:
             if source_value in (None, "", [], ()):
                 continue
             if source_name.endswith(".chunks"):
-                merged = self._merge_stream_chunks(source_value)
+                merged = self._merge_stream_chunks_cached(source_value)
                 if merged:
                     return merged, source_name
                 continue
@@ -705,7 +823,7 @@ class NetworkMonitor:
                     if source_value in (None, "", [], ()):
                         continue
                     if source_name.endswith(".chunks"):
-                        merged = self._merge_stream_chunks(source_value)
+                        merged = self._merge_stream_chunks_cached(source_value)
                         if merged:
                             return merged, source_name
                         continue
@@ -725,6 +843,17 @@ class NetworkMonitor:
 
         return None, "empty"
 
+    @classmethod
+    def _normalize_stream_chunk_data(cls, chunk: Any) -> str:
+        data = cls._nested_get(chunk, "data")
+        if data in (None, ""):
+            return ""
+        if isinstance(data, (bytes, bytearray)):
+            return data.decode("utf-8", errors="ignore")
+        if not isinstance(data, str):
+            return str(data)
+        return data
+
     @staticmethod
     def _merge_stream_chunks(chunks: Any) -> str:
         if not isinstance(chunks, list):
@@ -732,15 +861,88 @@ class NetworkMonitor:
 
         parts = []
         for chunk in chunks:
-            data = NetworkMonitor._nested_get(chunk, "data")
-            if data in (None, ""):
+            data = NetworkMonitor._normalize_stream_chunk_data(chunk)
+            if not data:
                 continue
-            if isinstance(data, (bytes, bytearray)):
-                data = data.decode("utf-8", errors="ignore")
-            elif not isinstance(data, str):
-                data = str(data)
             parts.append(data)
         return "".join(parts)
+
+    def _merge_stream_chunks_cached(self, chunks: Any) -> str:
+        if not isinstance(chunks, list):
+            return ""
+        if not chunks:
+            return ""
+
+        cache = getattr(self, "_stream_chunk_merge_cache", None)
+        if not isinstance(cache, dict):
+            self._reset_stream_chunk_merge_cache()
+            cache = self._stream_chunk_merge_cache
+
+        chunk_key = id(chunks)
+        chunk_len = len(chunks)
+        entry = cache.get(chunk_key)
+
+        if (
+            entry
+            and entry.get("chunks") is chunks
+            and entry.get("chunk_len", 0) <= chunk_len
+            and self._cached_stream_chunks_prefix_is_valid(entry, chunks)
+        ):
+            cached_len = int(entry.get("chunk_len", 0) or 0)
+            if cached_len == chunk_len:
+                return str(entry.get("body", "") or "")
+
+            parts = [str(entry.get("body", "") or "")]
+            for chunk in chunks[cached_len:]:
+                parts.append(self._normalize_stream_chunk_data(chunk))
+            body = "".join(parts)
+        else:
+            body = self._merge_stream_chunks(chunks)
+
+        cache[chunk_key] = {
+            "chunks": chunks,
+            "chunk_len": chunk_len,
+            "tail_marker": self._stream_chunk_tail_marker(chunks),
+            "body": body,
+        }
+        self._trim_stream_chunk_merge_cache(cache)
+        return body
+
+    @classmethod
+    def _stream_chunk_tail_marker(cls, chunks: list[Any]) -> tuple[int, int, int, str]:
+        if not chunks:
+            return (0, 0, 0, "")
+        tail = chunks[-1]
+        return cls._stream_chunk_marker(tail)
+
+    @classmethod
+    def _stream_chunk_marker(cls, chunk: Any) -> tuple[int, int, int, str]:
+        data = cls._nested_get(chunk, "data")
+        try:
+            data_len = len(data) if data is not None else 0
+        except Exception:
+            data_len = 0
+        return (id(chunk), id(data), data_len, type(data).__name__)
+
+    def _cached_stream_chunks_prefix_is_valid(
+        self,
+        entry: Dict[str, Any],
+        chunks: list[Any],
+    ) -> bool:
+        cached_len = int(entry.get("chunk_len", 0) or 0)
+        if cached_len <= 0:
+            return True
+        if len(chunks) < cached_len:
+            return False
+        return entry.get("tail_marker") == self._stream_chunk_marker(chunks[cached_len - 1])
+
+    def _trim_stream_chunk_merge_cache(self, cache: Dict[int, Dict[str, Any]]) -> None:
+        max_entries = max(1, int(self.MAX_STREAM_CHUNK_MERGE_CACHE or 1))
+        overflow = len(cache) - max_entries
+        if overflow <= 0:
+            return
+        for key in list(cache.keys())[:overflow]:
+            cache.pop(key, None)
 
     @staticmethod
     def _normalize_raw_body(raw_body: Any) -> str:
@@ -1182,13 +1384,15 @@ class NetworkMonitor:
             completion_id = SSEFormatter._generate_id()
         
         # 重置解析器状态
-        self.parser.reset()
+        self._reset_parser_state()
         self._total_chunks = 0
         self._total_content_chars = 0
         self._last_stream_event = {}
         self._last_stream_raw_body = ""
+        self._last_stream_raw_body_len = 0
+        self._last_stream_raw_body_signature = None
         self._last_stream_parse_result = {}
-        self._last_media_generation_state = {}
+        self._reset_media_generation_state_cache()
         self._last_stream_media_items = []
         self._prefetched_image_urls = set()
         
@@ -1212,6 +1416,11 @@ class NetworkMonitor:
         流式输出阶段
         """
         phase_start = time.time()
+        try:
+            hard_timeout = max(0.01, float(self._hard_timeout or self.DEFAULT_HARD_TIMEOUT))
+        except Exception:
+            hard_timeout = float(self.DEFAULT_HARD_TIMEOUT)
+        hard_timeout_message = f"网络监听超过最大时间（{hard_timeout:.1f}s）"
         has_received_response = False
         has_seen_stream_target = False
         last_activity_time = time.time()
@@ -1225,16 +1434,21 @@ class NetworkMonitor:
         active_stream_body = ""
         active_stream_body_source = ""
         completed_by_done = False
+        completion_reason = "unknown"
 
         while True:
             # 检查全局超时
-            if time.time() - phase_start > self._hard_timeout:
-                logger.error(f"[NetworkMonitor] 超过最大监听时间 {self._hard_timeout}s，强制退出")
-                break
+            now = time.time()
+            elapsed = now - phase_start
+            remaining_hard_timeout = hard_timeout - elapsed
+            if remaining_hard_timeout <= 0:
+                logger.error(f"[NetworkMonitor] 超过最大监听时间 {hard_timeout:.1f}s，触发回退")
+                raise NetworkMonitorTimeout(hard_timeout_message)
 
             # 检查取消信号
             if self._should_stop():
                 logger.debug("[NetworkMonitor] 监听被取消")
+                completion_reason = "cancelled"
                 break
 
             # 设置超时时间
@@ -1242,11 +1456,16 @@ class NetworkMonitor:
                 timeout = self.ACTIVE_STREAM_RESPONSE_POLL_TIMEOUT
             else:
                 timeout = self._first_response_timeout if not has_seen_stream_target else self._response_interval
+            try:
+                timeout = float(timeout)
+            except Exception:
+                timeout = self.DEFAULT_RESPONSE_INTERVAL
+            timeout = min(max(0.01, timeout), max(0.01, remaining_hard_timeout))
 
             # 等待响应
             try:
                 if self._prefetched_responses:
-                    response = self._prefetched_responses.pop(0)
+                    response = self._pop_prefetched_response()
                 else:
                     response = self._wait_for_response(timeout)
             except Exception as e:
@@ -1269,6 +1488,9 @@ class NetworkMonitor:
             # 检查是否为无效响应
             if response is None or response is False:
                 elapsed = time.time() - phase_start
+                if elapsed >= hard_timeout:
+                    logger.error(f"[NetworkMonitor] 超过最大监听时间 {hard_timeout:.1f}s，触发回退")
+                    raise NetworkMonitorTimeout(hard_timeout_message)
 
                 if not has_seen_stream_target:
                     logger.warning(f"[NetworkMonitor] 目标流响应超时 ({elapsed:.1f}s)，触发回退")
@@ -1312,20 +1534,19 @@ class NetworkMonitor:
                         if parse_result.get("error"):
                             continue
 
-                        self._last_stream_event = dict(active_stream_event or {})
-                        self._last_stream_raw_body = str(active_stream_body or "")
-                        self._last_stream_parse_result = dict(parse_result or {})
+                        self._remember_last_stream_result(
+                            active_stream_event,
+                            active_stream_body,
+                            parse_result,
+                        )
                         try:
                             self._record_parse_result_media(parse_result)
                         except Exception as media_exc:
                             logger.debug(f"[NetworkMonitor] 媒体结果记录失败（忽略）: {media_exc}")
                         try:
-                            media_state = self.parser.get_media_generation_state(
-                                raw_response=active_stream_body,
-                                parse_result=parse_result,
-                            )
-                            self._last_media_generation_state = (
-                                dict(media_state) if isinstance(media_state, dict) else {}
+                            media_state = self._get_media_generation_state_cached(
+                                active_stream_body,
+                                parse_result,
                             )
                         except Exception as parser_exc:
                             logger.debug(f"[NetworkMonitor] 媒体状态提取失败（忽略）: {parser_exc}")
@@ -1338,6 +1559,7 @@ class NetworkMonitor:
 
                         if done:
                             completed_by_done = True
+                            completion_reason = "done"
                             logger._logger.log(logging.DEBUG - 5, "[NetworkMonitor] 检测到结束标志，完成监听")
                             break
 
@@ -1361,6 +1583,7 @@ class NetworkMonitor:
                                 f"body_len={len(active_stream_body or '')})"
                             )
                             raise NetworkMonitorTimeout("目标流未收到完成标志")
+                        completion_reason = "capture_complete"
                         logger.debug("[NetworkMonitor] 活跃流响应已完成，结束监听")
                         break
 
@@ -1385,6 +1608,24 @@ class NetworkMonitor:
 
                 if silence_duration > effective_silence_threshold:
                     if (
+                        self._total_chunks > 0
+                        and self._parse_result_has_unclosed_render_output(
+                            self._last_stream_parse_result
+                        )
+                        and self._should_fallback_to_dom_on_empty_stream()
+                    ):
+                        body_len = len(active_stream_body or "") or int(
+                            self._last_stream_raw_body_len or 0
+                        )
+                        logger.warning(
+                            "[NetworkMonitor] 流式响应静默但前端 render 输出包装未闭合，回退到 DOM 补齐 "
+                            f"(idle={silence_duration:.1f}s, chunks={self._total_chunks}, "
+                            f"body_len={body_len})"
+                        )
+                        raise NetworkMonitorTimeout(
+                            f"目标流 render 输出包装未完整结束（{silence_duration:.1f}s）"
+                        )
+                    if (
                         active_stream_response is not None
                         and self._total_chunks == 0
                         and self._should_fallback_to_dom_on_empty_stream()
@@ -1400,17 +1641,18 @@ class NetworkMonitor:
                     if (
                         active_stream_response is not None
                         and self._total_chunks > 0
-                        and not completed_by_done
                         and self._should_fallback_to_dom_on_empty_stream()
                     ):
-                        logger.warning(
-                            "[NetworkMonitor] 流式响应静默但未收到完成标志，回退到 DOM 补齐 "
-                            f"(idle={silence_duration:.1f}s, chunks={self._total_chunks}, "
-                            f"body_len={len(active_stream_body or '')})"
-                        )
-                        raise NetworkMonitorTimeout(
-                            f"目标流未完整结束（{silence_duration:.1f}s）"
-                        )
+                        if active_stream_response is not None and not completed_by_done:
+                            logger.warning(
+                                "[NetworkMonitor] 流式响应静默但未收到完成标志，回退到 DOM 补齐 "
+                                f"(idle={silence_duration:.1f}s, chunks={self._total_chunks}, "
+                                f"body_len={len(active_stream_body or '')})"
+                            )
+                            raise NetworkMonitorTimeout(
+                                f"目标流未完整结束（{silence_duration:.1f}s）"
+                            )
+                    completion_reason = "silence"
                     logger.debug(f"[NetworkMonitor] 静默超时 ({silence_duration:.1f}s)，结束监听")
                     break
                 continue
@@ -1476,18 +1718,7 @@ class NetworkMonitor:
             # 读取响应体，流式协议优先使用 _stream.fullText
             raw_body, raw_body_source = self._extract_raw_body(response)
             raw_body = self._normalize_raw_body(raw_body)
-            status_code = self._extract_http_status(event)
-            if (
-                status_code >= 400
-                and getattr(response_obj, "_response", None) is None
-                and not raw_body
-            ):
-                error_text = self._build_http_status_error_text(event, raw_body)
-                logger.warning(
-                    "[NetworkMonitor] 目标流返回异常状态码且缺少响应体，终止工作流 "
-                    f"(status={status_code}, url={event.get('url', '')[:120]})"
-                )
-                raise NetworkMonitorTerminalError(error_text or f"HTTP {status_code}")
+            self._raise_for_http_error_status(event, raw_body)
 
             if getattr(response_obj, "_response", None) is None and not raw_body:
                 logger.warning(
@@ -1530,14 +1761,7 @@ class NetworkMonitor:
                 if raw_body and not is_event_stream and self._looks_like_sse_payload(raw_body):
                     is_event_stream = True
 
-            if status_code >= 400:
-                error_text = self._build_http_status_error_text(event, raw_body)
-                logger.warning(
-                    "[NetworkMonitor] 目标流返回异常状态码，终止工作流 "
-                    f"(status={status_code}, url={event.get('url', '')[:120]}, "
-                    f"body_len={len(raw_body)})"
-                )
-                raise NetworkMonitorTerminalError(error_text or f"HTTP {status_code}")
+            self._raise_for_http_error_status(event, raw_body)
 
             if not raw_body:
                 empty_body_skips += 1
@@ -1619,20 +1843,15 @@ class NetworkMonitor:
             parse_result = self._handle_parse_result(parse_result)
             if parse_result.get("error"):
                 continue
-            self._last_stream_event = dict(event or {})
-            self._last_stream_raw_body = str(raw_body or "")
-            self._last_stream_parse_result = dict(parse_result or {})
+            self._remember_last_stream_result(event, raw_body, parse_result)
             try:
                 self._record_parse_result_media(parse_result)
             except Exception as media_exc:
                 logger.debug(f"[NetworkMonitor] 媒体结果记录失败（忽略）: {media_exc}")
             try:
-                media_state = self.parser.get_media_generation_state(
-                    raw_response=raw_body,
-                    parse_result=parse_result,
-                )
-                self._last_media_generation_state = (
-                    dict(media_state) if isinstance(media_state, dict) else {}
+                media_state = self._get_media_generation_state_cached(
+                    raw_body,
+                    parse_result,
                 )
             except Exception as parser_exc:
                 logger.debug(f"[NetworkMonitor] 媒体状态提取失败（忽略）: {parser_exc}")
@@ -1654,12 +1873,20 @@ class NetworkMonitor:
 
             if done:
                 completed_by_done = True
+                completion_reason = "done"
                 logger._logger.log(logging.DEBUG - 5, "[NetworkMonitor] 检测到结束标志，完成监听")
                 break
 
+        reason_text = {
+            "done": "检测到结束标志",
+            "capture_complete": "流响应捕获完成",
+            "silence": "静默超时",
+            "cancelled": "监听被取消",
+            "unknown": "循环结束",
+        }.get(completion_reason, completion_reason)
         logger.info(
-            "[NetworkMonitor] 网络流监听正常完成 "
-            f"(检测到结束标志, 历时={time.time() - phase_start:.1f}s, "
+            "[NetworkMonitor] 网络流监听完成 "
+            f"(reason={reason_text}, 历时={time.time() - phase_start:.1f}s, "
             f"捕获响应={total_responses}, 产出文本块={self._total_chunks}, "
             f"提取字符数={self._total_content_chars})"
         )
@@ -1751,13 +1978,15 @@ class NetworkMonitor:
                 self._prefetch_image_url(normalized.get("url"))
 
     def _clear_cached_results(self, *, include_media: bool = False) -> None:
-        self._prefetched_responses = []
+        self._reset_prefetched_responses()
         self._last_stream_event = {}
         self._last_stream_raw_body = ""
+        self._last_stream_raw_body_len = 0
+        self._last_stream_raw_body_signature = None
         self._last_stream_parse_result = {}
         self._prefetched_image_urls = set()
         if include_media:
-            self._last_media_generation_state = {}
+            self._reset_media_generation_state_cache()
             self._last_stream_media_items = []
 
     def cleanup(self) -> None:
@@ -1805,6 +2034,7 @@ class NetworkMonitor:
                 pass
 
         self._clear_cached_results(include_media=include_media)
+        self._reset_parser_state()
 
 
 # ================= 工厂函数 =================

@@ -1,5 +1,6 @@
 """Workflow-editor helpers for config routes."""
 
+import copy
 import time
 from typing import Optional, Dict, Any, Callable
 
@@ -334,12 +335,34 @@ def _save_site_workflow_payload(domain: str, data: Dict[str, Any]) -> Dict[str, 
     if preset_data is None:
         raise HTTPException(status_code=404, detail="站点或预设不存在")
 
+    workflow_existed = "workflow" in preset_data
+    previous_workflow = copy.deepcopy(preset_data.get("workflow"))
+    selectors_existed = "selectors" in preset_data
+    previous_selectors = copy.deepcopy(preset_data.get("selectors"))
+
     preset_data["workflow"] = new_workflow
     if new_selectors is not None:
         preset_data["selectors"] = new_selectors
 
-    success = config_engine.save_config()
+    def rollback_workflow_memory() -> None:
+        if workflow_existed:
+            preset_data["workflow"] = previous_workflow
+        else:
+            preset_data.pop("workflow", None)
+        if new_selectors is not None:
+            if selectors_existed:
+                preset_data["selectors"] = previous_selectors
+            else:
+                preset_data.pop("selectors", None)
+
+    try:
+        success = config_engine.save_config()
+    except Exception as exc:
+        rollback_workflow_memory()
+        raise HTTPException(status_code=500, detail=f"保存配置文件失败: {exc}") from exc
+
     if not success:
+        rollback_workflow_memory()
         raise HTTPException(status_code=500, detail="保存配置文件失败")
 
     used_preset = (

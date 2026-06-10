@@ -948,9 +948,10 @@
       return action;
     }
 
+    let timeoutId = null;
     try {
       const controller = typeof AbortController === 'function' ? new AbortController() : null;
-      const timeoutId = controller
+      timeoutId = controller
         ? window.setTimeout(() => controller.abort(), TEST_DIRECT_FETCH_TIMEOUT_MS)
         : null;
       const response = await fetch(`${getApiBase()}/api/workflow-editor/test`, {
@@ -959,9 +960,6 @@
         body: JSON.stringify(requestPayload),
         signal: controller?.signal
       });
-      if (timeoutId) {
-        window.clearTimeout(timeoutId);
-      }
 
       const result = await response.json().catch(() => ({}));
       if (!response.ok || !result.success) {
@@ -989,6 +987,10 @@
       console.debug('[WorkflowEditor] switched to bridge mode', { actionId: action.id, message, isDirectTimeout });
       showToast('测试请求已提交，等待本地控制台执行。', 'info', 2200);
       return action;
+    } finally {
+      if (timeoutId) {
+        window.clearTimeout(timeoutId);
+      }
     }
   }
 
@@ -1359,7 +1361,7 @@
   }
   
   // ========== 全局拖拽 ==========
-  document.addEventListener('mousemove', (e) => {
+  const handleDocumentDragMove = (e) => {
     const ball = state.steps.find(b => b.dragAnchor);
     if (!ball) return;
     if (ball.dragAnchor === 'end') {
@@ -1367,15 +1369,19 @@
     } else {
       ball.move(e.clientX - ball.offset.x, e.clientY - ball.offset.y);
     }
-  }, true);
+  };
+  document.addEventListener('mousemove', handleDocumentDragMove, true);
+  registerCleanup(() => document.removeEventListener('mousemove', handleDocumentDragMove, true));
   
-  document.addEventListener('mouseup', () => {
+  const handleDocumentDragEnd = () => {
     state.steps.forEach(b => {
       if (b.dragAnchor) {
         b.stopDrag();
       }
     });
-  }, true);
+  };
+  document.addEventListener('mouseup', handleDocumentDragEnd, true);
+  registerCleanup(() => document.removeEventListener('mouseup', handleDocumentDragEnd, true));
   
   // ========== 右键菜单 ==========
   let currentMenu = null;
@@ -1669,11 +1675,13 @@
     currentMenu = null;
   }
   
-  document.addEventListener('click', (e) => {
+  const handleDocumentMenuClick = (e) => {
     if (currentMenu && !currentMenu.contains(e.target) && !e.target.closest('.wfe-ball')) {
       hideMenu();
     }
-  }, true);
+  };
+  document.addEventListener('click', handleDocumentMenuClick, true);
+  registerCleanup(() => document.removeEventListener('click', handleDocumentMenuClick, true));
   
   // ========== 元素拾取 ==========
   let pickOverlay, pickTip, highlighted;

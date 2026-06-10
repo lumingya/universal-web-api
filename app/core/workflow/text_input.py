@@ -650,26 +650,11 @@ class TextInputHandler:
             if not self.ensure_input_focus(ele):
                 logger.warning("[FILE_PASTE] 追加引导文本前重新聚焦失败，尝试直接回退追加")
             else:
-                clipboard_lock = get_clipboard_lock()
-                with clipboard_lock:
-                    original_cb = ""
-                    try:
-                        original_cb = pyperclip.paste()
-                    except Exception:
-                        pass
-
-                    try:
-                        pyperclip.copy(hint_text)
-                        time.sleep(random.uniform(0.06, 0.12))
-
-                        self._press_primary_combo('V')
-
-                        time.sleep(random.uniform(0.2, 0.4))
-                    finally:
-                        try:
-                            pyperclip.copy(original_cb)
-                        except Exception:
-                            pass
+                self._paste_text_via_clipboard(
+                    hint_text,
+                    copy_delay_range=(0.06, 0.12),
+                    settle_delay_range=(0.2, 0.4),
+                )
 
                 self._smart_delay(0.15, 0.3)
                 if self._input_contains_text_loose(ele, hint_text):
@@ -1209,6 +1194,38 @@ class TextInputHandler:
             return
 
         self.tab.actions.key_down(self._primary_modifier).key_down(key).key_up(key).key_up(self._primary_modifier)
+
+    def _paste_text_via_clipboard(
+        self,
+        text: str,
+        *,
+        humanized: bool = False,
+        copy_delay_range=(0.02, 0.06),
+        settle_delay_range=(0.12, 0.25),
+    ) -> None:
+        """Copy/paste text while keeping only the clipboard mutation window locked."""
+        clipboard_lock = get_clipboard_lock()
+        copy_min, copy_max = copy_delay_range
+        settle_min, settle_max = settle_delay_range
+
+        with clipboard_lock:
+            original_clipboard = ""
+            try:
+                original_clipboard = pyperclip.paste()
+            except Exception:
+                pass
+
+            try:
+                pyperclip.copy(text)
+                time.sleep(random.uniform(copy_min, copy_max))
+                self._press_primary_combo('V', humanized=humanized)
+            finally:
+                try:
+                    pyperclip.copy(original_clipboard)
+                except Exception:
+                    pass
+
+        time.sleep(random.uniform(settle_min, settle_max))
 
     def _stealth_verify_paste_light(self, ele, expected_text: str):
         """
@@ -2145,8 +2162,6 @@ class TextInputHandler:
                 return
             logger.warning("[FILE_PASTE] 文件粘贴失败，降级到剪贴板文本粘贴")
         
-        clipboard_lock = get_clipboard_lock()
-        
         settle_min = float(BrowserConstants.get('STEALTH_PASTE_SETTLE_MIN') or 0.12)
         settle_max = float(BrowserConstants.get('STEALTH_PASTE_SETTLE_MAX') or 0.25)
         skip_verify = bool(BrowserConstants.get('STEALTH_SKIP_PASTE_VERIFY'))
@@ -2168,28 +2183,11 @@ class TextInputHandler:
             if self._check_cancelled():
                 return
             
-            # 剪贴板操作（加锁）
-            with clipboard_lock:
-                original_clipboard = ""
-                try:
-                    original_clipboard = pyperclip.paste()
-                except Exception:
-                    pass
-                
-                pyperclip.copy(text)
-                time.sleep(random.uniform(0.02, 0.06))
-                
-                # 主修饰键 + V 粘贴
-                self._press_primary_combo('V', humanized=True)
-                
-                # 等待粘贴完成
-                time.sleep(random.uniform(settle_min, settle_max))
-                
-                # 恢复剪贴板
-                try:
-                    pyperclip.copy(original_clipboard)
-                except Exception:
-                    pass
+            self._paste_text_via_clipboard(
+                text,
+                humanized=True,
+                settle_delay_range=(settle_min, settle_max),
+            )
             
             # 额外等待框架响应
             self._smart_delay(0.06, 0.14)
@@ -2233,8 +2231,6 @@ class TextInputHandler:
                 return
             logger.warning("[FILE_PASTE] 文件粘贴失败，降级到剪贴板文本粘贴")
         
-        clipboard_lock = get_clipboard_lock()
-        
         settle_min = float(BrowserConstants.get('STEALTH_PASTE_SETTLE_MIN') or 0.12)
         settle_max = float(BrowserConstants.get('STEALTH_PASTE_SETTLE_MAX') or 0.25)
         skip_verify = bool(BrowserConstants.get('STEALTH_SKIP_PASTE_VERIFY'))
@@ -2260,28 +2256,11 @@ class TextInputHandler:
             if self._check_cancelled():
                 return
         
-            # 3. 剪贴板操作（加锁）
-            with clipboard_lock:
-                original_clipboard = ""
-                try:
-                    original_clipboard = pyperclip.paste()
-                except Exception:
-                    pass
-            
-                pyperclip.copy(text)
-                time.sleep(random.uniform(0.02, 0.06))
-            
-                # 主修饰键+V 粘贴（人类化时序）
-                self._press_primary_combo('V', humanized=True)
-            
-                # 等待粘贴完成 + DOM 更新
-                time.sleep(random.uniform(settle_min, settle_max))
-            
-                # 恢复剪贴板
-                try:
-                    pyperclip.copy(original_clipboard)
-                except Exception:
-                    pass
+            self._paste_text_via_clipboard(
+                text,
+                humanized=True,
+                settle_delay_range=(settle_min, settle_max),
+            )
         
             # 4. 额外等待框架响应
             self._smart_delay(0.06, 0.14)
@@ -2339,8 +2318,6 @@ class TextInputHandler:
         try:
 
         
-            clipboard_lock = get_clipboard_lock()
-        
             # 清空
             ele.click()
             time.sleep(0.05)
@@ -2349,26 +2326,11 @@ class TextInputHandler:
             self.tab.actions.key_down('Delete').key_up('Delete')
             time.sleep(0.1)
         
-            # 重试粘贴（完整的 copy→paste→restore 原子操作，加锁保护）
-            with clipboard_lock:
-                # 备份当前剪贴板
-                backup_clipboard = ""
-                try:
-                    backup_clipboard = pyperclip.paste()
-                except Exception:
-                    pass
-            
-                # 粘贴操作
-                pyperclip.copy(expected_text)
-                time.sleep(0.05)
-                self._press_primary_combo('V')
-                time.sleep(0.5)
-            
-                # 恢复剪贴板
-                try:
-                    pyperclip.copy(backup_clipboard)
-                except Exception:
-                    pass
+            self._paste_text_via_clipboard(
+                expected_text,
+                copy_delay_range=(0.05, 0.05),
+                settle_delay_range=(0.5, 0.5),
+            )
         
             # 最终验证
             actual = self.read_input_full_text(ele)

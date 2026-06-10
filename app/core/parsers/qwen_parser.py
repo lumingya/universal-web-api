@@ -38,12 +38,9 @@ class QwenParser(ResponseParser):
             elif not isinstance(raw_response, str):
                 raw_response = str(raw_response)
 
-            current_len = len(raw_response)
-            if current_len <= self._last_raw_length:
+            new_data = self._prepare_incremental_raw_response(raw_response)
+            if not new_data:
                 return result
-
-            new_data = raw_response[self._last_raw_length :]
-            self._last_raw_length = current_len
 
             delta_content, done = self._consume_new_data(new_data)
             if delta_content:
@@ -58,6 +55,7 @@ class QwenParser(ResponseParser):
 
     def reset(self) -> None:
         self._last_raw_length = 0
+        self._last_raw_response = ""
         self._pending = ""
 
     def _consume_new_data(self, new_data: str) -> Tuple[str, bool]:

@@ -21,6 +21,7 @@ from contextlib import asynccontextmanager
 from app import __version__ as APP_VERSION
 from app.core import get_browser
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, FileResponse
@@ -700,6 +701,47 @@ logger.info(f"📁 图片下载目录: {download_images_dir.absolute()}")
 
 
 # ================= 异常处理 =================
+
+def _sanitize_validation_errors(errors: Any) -> list:
+    safe_errors = []
+    for item in errors if isinstance(errors, list) else []:
+        if not isinstance(item, dict):
+            continue
+        safe_item = {
+            "type": item.get("type"),
+            "loc": item.get("loc"),
+            "msg": item.get("msg"),
+        }
+        if item.get("url"):
+            safe_item["url"] = item.get("url")
+        safe_errors.append(safe_item)
+    return safe_errors
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request, exc):
+    details = _sanitize_validation_errors(exc.errors())
+    message = "请求参数校验失败"
+    if details:
+        first = details[0]
+        loc = ".".join(str(part) for part in first.get("loc", []) if part != "body")
+        msg = str(first.get("msg") or "").strip()
+        if loc and msg:
+            message = f"{loc}: {msg}"
+        elif msg:
+            message = msg
+    return JSONResponse(
+        status_code=422,
+        content={
+            "error": {
+                "message": message,
+                "type": "invalid_request_error",
+                "code": "validation_error",
+                "details": details,
+            }
+        },
+    )
+
 
 @app.exception_handler(404)
 async def not_found_handler(request, exc):

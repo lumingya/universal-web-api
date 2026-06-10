@@ -10,7 +10,7 @@ import html
 import json
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit, quote
@@ -18,7 +18,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from app import __version__ as APP_VERSION
-from app.core.config import AppConfig, get_logger
+from app.core.config import AppConfig, atomic_write_json, get_logger
 from app.services.config_engine import config_engine
 
 logger = get_logger("SERVICE.MARKETPLACE")
@@ -39,6 +39,9 @@ class MarketplaceService:
     def __init__(self):
         self._cached_manifest: Optional[Dict[str, Any]] = None
         self._cached_at = 0.0
+
+    def _atomic_write_json(self, path: Path, payload: Dict[str, Any]) -> None:
+        atomic_write_json(path, payload)
 
     def list_catalog(self, force_refresh: bool = False, app_version: str = "") -> Dict[str, Any]:
         manifest = self._load_manifest(force_refresh=force_refresh)
@@ -164,10 +167,7 @@ class MarketplaceService:
         manifest.setdefault("upload_url", AppConfig.get_marketplace_upload_url())
 
         path = Path(AppConfig.get_marketplace_file())
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("w", encoding="utf-8", newline="\n") as handle:
-            json.dump(manifest, handle, ensure_ascii=False, indent=2)
-            handle.write("\n")
+        self._atomic_write_json(path, manifest)
 
         self._cached_manifest = None
         self._cached_at = 0.0
@@ -183,18 +183,38 @@ class MarketplaceService:
         if not force_refresh and self._cached_manifest and (now_ts - self._cached_at) < self.CACHE_TTL_SECONDS:
             return copy.deepcopy(self._cached_manifest)
 
-        local_manifest = self._load_local_manifest()
         remote_url = AppConfig.get_marketplace_index_url()
         repo_url = AppConfig.get_marketplace_repo_url()
         upload_url = AppConfig.get_marketplace_upload_url()
         submit_mode = AppConfig.get_marketplace_submit_mode()
         local_overlay_enabled = AppConfig.is_marketplace_local_overlay_enabled()
+        warning_messages: List[str] = []
+
+        try:
+            local_manifest = self._load_local_manifest()
+        except Exception as exc:
+            logger.warning(f"[marketplace] 本地市场读取失败: {exc}")
+            if not remote_url and self._cached_manifest:
+                manifest = copy.deepcopy(self._cached_manifest)
+                manifest["warning"] = "；".join(
+                    part
+                    for part in [
+                        str(manifest.get("warning") or ""),
+                        f"本地市场读取失败，已使用上一份缓存: {exc}",
+                    ]
+                    if part
+                )
+                self._cached_manifest = copy.deepcopy(manifest)
+                self._cached_at = now_ts
+                return copy.deepcopy(manifest)
+            warning_messages.append(f"本地市场读取失败，已使用空本地市场: {exc}")
+            local_manifest = self._default_local_manifest()
+
         try:
             remote_cache_manifest = self._load_remote_cache_manifest() if remote_url else None
         except Exception as exc:
             remote_cache_manifest = None
             logger.warning(f"[marketplace] 本地公共缓存读取失败: {exc}")
-        warning_messages: List[str] = []
         pending_items: List[Dict[str, Any]] = []
 
         if remote_url:
@@ -303,11 +323,10 @@ class MarketplaceService:
             "source_url": manifest.get("source_url") or AppConfig.get_marketplace_index_url(),
             "repo_url": manifest.get("repo_url") or AppConfig.get_marketplace_repo_url(),
             "upload_url": manifest.get("upload_url") or AppConfig.get_marketplace_upload_url(),
-            "cached_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+            "cached_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
             "items": copy.deepcopy(manifest.get("items", [])),
         }
-        with path.open("w", encoding="utf-8") as handle:
-            json.dump(payload, handle, ensure_ascii=False, indent=2)
+        self._atomic_write_json(path, payload)
 
     def _extract_cached_pending_items(self, manifest: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if not isinstance(manifest, dict):
@@ -322,13 +341,7 @@ class MarketplaceService:
     def _load_local_manifest(self) -> Dict[str, Any]:
         path = Path(AppConfig.get_marketplace_file())
         if not path.exists():
-            return self._normalize_manifest({
-                "source_name": "本地配置市场",
-                "source_url": "",
-                "repo_url": AppConfig.get_marketplace_repo_url(),
-                "upload_url": AppConfig.get_marketplace_upload_url(),
-                "items": [],
-            })
+            return self._default_local_manifest()
 
         with path.open("r", encoding="utf-8") as handle:
             data = json.load(handle)
@@ -338,6 +351,15 @@ class MarketplaceService:
         manifest.setdefault("repo_url", AppConfig.get_marketplace_repo_url())
         manifest.setdefault("upload_url", AppConfig.get_marketplace_upload_url())
         return manifest
+
+    def _default_local_manifest(self) -> Dict[str, Any]:
+        return self._normalize_manifest({
+            "source_name": "本地配置市场",
+            "source_url": "",
+            "repo_url": AppConfig.get_marketplace_repo_url(),
+            "upload_url": AppConfig.get_marketplace_upload_url(),
+            "items": [],
+        })
 
     def _merge_manifests(self, remote_manifest: Dict[str, Any], local_manifest: Dict[str, Any]) -> Dict[str, Any]:
         return {
@@ -354,6 +376,8 @@ class MarketplaceService:
         seen_ids = set()
         for source in sources:
             for item in source or []:
+                if not isinstance(item, dict):
+                    continue
                 item_id = str(item.get("id") or "").strip()
                 if not item_id or item_id in seen_ids:
                     continue
@@ -503,8 +527,12 @@ class MarketplaceService:
         if not isinstance(payload, dict):
             raise ValueError("市场清单必须是对象")
 
+        raw_items = payload.get("items")
+        if not isinstance(raw_items, list):
+            raw_items = []
+
         items = []
-        for raw_item in payload.get("items", []):
+        for raw_item in raw_items:
             normalized = self._normalize_item(raw_item)
             if normalized:
                 items.append(normalized)
@@ -566,7 +594,12 @@ class MarketplaceService:
             github_token,
             message=f"Approve marketplace submission from issue #{issue_number}",
         )
-        self._close_github_issue_with_fallback(issue_number, github_token)
+        close_warning = ""
+        try:
+            self._close_github_issue_with_fallback(issue_number, github_token)
+        except Exception as exc:
+            close_warning = f"投稿已收录，但关闭 GitHub issue 失败: {exc}"
+            logger.warning(f"[marketplace] {close_warning}")
 
         self._cached_manifest = None
         self._cached_at = 0.0
@@ -580,7 +613,12 @@ class MarketplaceService:
             "action": "approve",
             "issue_number": int(issue_number),
             "item": self._to_list_item(approved_item),
-            "message": f"已通过并收录投稿 #{issue_number}",
+            "warning": close_warning,
+            "message": (
+                f"已通过并收录投稿 #{issue_number}"
+                if not close_warning
+                else f"已通过并收录投稿 #{issue_number}；{close_warning}"
+            ),
         }
 
     def reject_pending_issue(self, issue_number: int, github_token: str) -> Dict[str, Any]:
@@ -1217,14 +1255,14 @@ class MarketplaceService:
 
     def _extract_issue_json_payload(self, body: str) -> Optional[Dict[str, Any]]:
         text = str(body or "")
-        match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.IGNORECASE | re.DOTALL)
+        match = re.search(r"```json\s*(.*?)\s*```", text, re.IGNORECASE | re.DOTALL)
         if not match:
-            match = re.search(r"```\s*(\{.*?\})\s*```", text, re.DOTALL)
+            match = re.search(r"```\s*(.*?)\s*```", text, re.DOTALL)
         if not match:
             return None
 
         try:
-            payload = json.loads(match.group(1))
+            payload = json.loads(match.group(1).strip())
         except Exception as exc:
             logger.warning(f"[marketplace] 待审核投稿 JSON 解析失败: {exc}")
             return None

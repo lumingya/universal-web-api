@@ -52,6 +52,40 @@ class ResponseParser(ABC):
         用于新一轮对话开始时清空累积状态
         """
         pass
+
+    def _prepare_incremental_raw_response(self, raw_response: str) -> str:
+        """
+        Return the append-only delta for a full raw response snapshot.
+
+        Network listeners usually pass a growing full body to parsers. When the
+        browser replaces that snapshot with another response of the same or
+        greater length, slicing by length alone loses content. This helper
+        preserves the fast append path and resets parser state when the new
+        snapshot is not a prefix extension of the previous one.
+        """
+        if not isinstance(raw_response, str):
+            raw_response = str(raw_response)
+
+        previous = getattr(self, "_last_raw_response", "")
+        try:
+            previous_len = int(getattr(self, "_last_raw_length", 0) or 0)
+        except Exception:
+            previous_len = 0
+
+        if previous_len > 0 and previous:
+            if raw_response == previous:
+                return ""
+            if raw_response.startswith(previous):
+                new_data = raw_response[len(previous):]
+            else:
+                self.reset()
+                new_data = raw_response
+        else:
+            new_data = raw_response
+
+        self._last_raw_length = len(raw_response)
+        self._last_raw_response = raw_response
+        return new_data
     
     # ============ 可选覆盖方法 ============
     

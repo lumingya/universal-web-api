@@ -20,11 +20,12 @@ import logging
 from logging.handlers import RotatingFileHandler
 import re
 import sys
+import tempfile
 import threading
 import uuid
 import ctypes
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from functools import lru_cache
 from collections import deque
 
@@ -38,6 +39,58 @@ _logger_registry: Dict[str, "SecureLogger"] = {}
 # ================= 环境变量加载 =================
 
 
+def atomic_write_json(path: str | Path, payload: Any) -> None:
+    """Atomically write JSON to disk using a same-directory temporary file."""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd = None
+    tmp_path: Optional[Path] = None
+
+    try:
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f".{target.name}.",
+            suffix=".tmp",
+            dir=str(target.parent),
+        )
+        tmp_path = Path(tmp_name)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+            fd = None
+            json.dump(payload, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        _replace_file_with_retry(tmp_path, target)
+    except Exception:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except Exception:
+                pass
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+        raise
+
+
+def _replace_file_with_retry(source: str | Path, dest: str | Path) -> None:
+    """Replace a file, retrying transient Windows sharing violations."""
+    source_path = Path(source)
+    dest_path = Path(dest)
+    attempts = 3 if os.name == "nt" else 1
+    delay = 0.02
+    for attempt in range(attempts):
+        try:
+            os.replace(source_path, dest_path)
+            return
+        except PermissionError:
+            if attempt >= attempts - 1:
+                raise
+            time.sleep(delay)
+            delay *= 2
+
+
 class classproperty:
     """Allow config access via both `AppConfig.X` and `app_config.X`."""
 
@@ -48,7 +101,7 @@ class classproperty:
         return self.fget(owner)
 
 
-def load_dotenv(env_file: str = ".env", override: bool = True):
+def load_dotenv(env_file: str = ".env", override: bool = False):
     """
     手动加载 .env 文件（不依赖 python-dotenv）
     """
@@ -168,6 +221,80 @@ class AppConfig:
     @staticmethod
     def get_sites_config_file() -> str:
         return os.getenv("SITES_CONFIG_FILE", "config/sites.json")
+
+    # ===== 配置市场 =====
+    @staticmethod
+    def get_marketplace_file() -> str:
+        return os.getenv("MARKETPLACE_FILE", "config/marketplace.json")
+
+    @staticmethod
+    def get_marketplace_cache_file() -> str:
+        return os.getenv("MARKETPLACE_CACHE_FILE", "config/marketplace_cache.json")
+
+    @staticmethod
+    def get_marketplace_index_url() -> str:
+        return os.getenv("MARKETPLACE_INDEX_URL", "").strip()
+
+    @staticmethod
+    def get_marketplace_repo_url() -> str:
+        return os.getenv("MARKETPLACE_REPO_URL", "").strip()
+
+    @staticmethod
+    def get_marketplace_upload_url() -> str:
+        return os.getenv("MARKETPLACE_UPLOAD_URL", "").strip()
+
+    @staticmethod
+    def get_marketplace_submit_mode() -> str:
+        mode = os.getenv("MARKETPLACE_SUBMIT_MODE", "local").strip().lower()
+        return mode or "local"
+
+    @staticmethod
+    def is_marketplace_local_overlay_enabled() -> bool:
+        return os.getenv("MARKETPLACE_LOCAL_OVERLAY", "true").lower() in ("true", "1", "yes")
+
+    @staticmethod
+    def is_marketplace_pending_enabled() -> bool:
+        return os.getenv("MARKETPLACE_PENDING_ENABLED", "false").lower() in ("true", "1", "yes")
+
+    @staticmethod
+    def get_marketplace_repo() -> str:
+        return os.getenv("MARKETPLACE_REPO", "").strip()
+
+    @staticmethod
+    def get_marketplace_branch() -> str:
+        return os.getenv("MARKETPLACE_BRANCH", "main").strip() or "main"
+
+    @staticmethod
+    def get_marketplace_index_path() -> str:
+        return os.getenv("MARKETPLACE_INDEX_PATH", "marketplace.json").strip() or "marketplace.json"
+
+    @staticmethod
+    def get_marketplace_github_token() -> str:
+        return os.getenv("MARKETPLACE_GITHUB_TOKEN", "").strip()
+
+    @staticmethod
+    def get_marketplace_timeout() -> float:
+        try:
+            value = float(os.getenv("MARKETPLACE_TIMEOUT", "10"))
+        except Exception:
+            value = 10.0
+        return max(1.0, value)
+
+    @staticmethod
+    def get_marketplace_issues_api_url() -> str:
+        explicit = os.getenv("MARKETPLACE_ISSUES_API_URL", "").strip()
+        if explicit:
+            return explicit
+        repo = AppConfig.get_marketplace_repo()
+        return f"https://api.github.com/repos/{repo}/issues" if repo else ""
+
+    @staticmethod
+    def get_marketplace_issues_web_url() -> str:
+        explicit = os.getenv("MARKETPLACE_ISSUES_WEB_URL", "").strip()
+        if explicit:
+            return explicit
+        repo_url = AppConfig.get_marketplace_repo_url().rstrip("/")
+        return f"{repo_url}/issues" if repo_url else ""
     
     # ===== 便捷属性（支持类/实例两种访问方式）=====
     @classproperty
@@ -429,6 +556,7 @@ class LogCollector:
         self.logs: deque = deque(maxlen=max_logs)
         self.lock = threading.Lock()
         self._next_seq = 1
+        self._last_clear_seq = 0
 
     def add(self, entry: Dict[str, Any]):
         with self.lock:
@@ -447,18 +575,34 @@ class LogCollector:
             self.logs.append(payload)
             self._next_seq += 1
 
-    def get_recent(self, since: float = 0, after_seq: int = 0) -> tuple:
+    def get_recent(self, since: float = 0, after_seq: int = 0) -> Tuple[List[Dict[str, Any]], int, bool]:
         with self.lock:
             cursor = max(0, int(after_seq or 0))
+            cleared = bool(cursor and self._last_clear_seq and cursor <= self._last_clear_seq)
             if cursor > 0:
-                logs = [log for log in self.logs if int(log.get("seq", 0) or 0) > cursor]
+                latest_seq = self._next_seq - 1
+                if cursor == latest_seq:
+                    return [], latest_seq, cleared
+                if cursor > latest_seq:
+                    return list(self.logs), latest_seq, True
+
+                oldest_seq = int(self.logs[0].get("seq", 0) or 0) if self.logs else latest_seq
+                if self.logs and cursor < oldest_seq:
+                    return list(self.logs), latest_seq, True
+
+                logs = [
+                    log for log in self.logs
+                    if int(log.get("seq", 0) or 0) > cursor
+                ]
             else:
                 logs = [log for log in self.logs if float(log.get("timestamp", 0) or 0) > since]
-            return logs, self._next_seq - 1
+            return logs, self._next_seq - 1, cleared
 
     def clear(self):
         with self.lock:
             self.logs.clear()
+            self._last_clear_seq = self._next_seq - 1
+            self._next_seq += 1
 
 
 # 全局日志收集器实例
@@ -476,6 +620,7 @@ _SENSITIVE_KEY_HINTS = (
     "api_key",
     "apikey",
     "access_key",
+    "client_secret",
     "refresh_token",
     "session",
     "csrf",
@@ -497,7 +642,11 @@ def _redact_long_base64_for_log(match: re.Match) -> str:
 _BASE64_LOG_CHARS = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=_-")
 _SENSITIVE_TEXT_SCAN_HINT_RE = re.compile(
     r"(?i)data:(?:image|audio|video)/|bearer\s+|authorization|set-cookie|cookie|"
-    r"access_token|refresh_token|id_token|api_key|apikey|secret|password|token"
+    r"x[-_]api[-_]key|x[-_]github[-_]token|github[-_]token|"
+    r"access_token|refresh_token|id_token|api_key|apikey|access_key|client_secret|"
+    r"secret|password|passwd|token|session|csrf|sk-[A-Za-z0-9_-]{8,}|"
+    r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|"
+    r"https?://[^/\s:@]+:[^/\s@]+@"
 )
 _SENSITIVE_TEXT_PRECHECK_MIN_CHARS = 4096
 _SENSITIVE_TEXT_LARGE_OMIT_THRESHOLD = 512 * 1024
@@ -591,19 +740,46 @@ _SENSITIVE_TEXT_PATTERNS = (
         r"\1 ******",
     ),
     (
-        re.compile(r"(?i)\b(Authorization|Cookie|Set-Cookie)\s*:\s*[^\r\n;]+(?:;[^\r\n]*)?"),
+        re.compile(
+            r"(?<![A-Za-z0-9_-])"
+            r"(sk-(?:proj-)?[A-Za-z0-9_-]{16,})"
+            r"(?![A-Za-z0-9_-])"
+        ),
+        "sk-******",
+    ),
+    (
+        re.compile(
+            r"(?<![A-Za-z0-9_-])"
+            r"(eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{6,})"
+            r"(?![A-Za-z0-9_-])"
+        ),
+        "[jwt omitted]",
+    ),
+    (
+        re.compile(r"(?i)(https?://[^/\s:@]+):([^/\s@]+)(@)"),
+        r"\1:******\3",
+    ),
+    (
+        re.compile(
+            r"(?i)\b(Authorization|Cookie|Set-Cookie|X[-_]Api[-_]Key|"
+            r"X[-_]GitHub[-_]Token|GitHub[-_]Token)\s*:\s*[^\r\n;]+(?:;[^\r\n]*)?"
+        ),
         lambda match: f"{match.group(1)}: ******",
     ),
     (
         re.compile(
-            r"(?i)([?&](?:access_token|refresh_token|id_token|token|api_key|apikey|key|secret|password)=)"
+            r"(?i)([?&](?:access_token|refresh_token|id_token|token|api_key|apikey|"
+            r"access_key|client_secret|session|csrf|"
+            r"x[-_]api[-_]key|x[-_]github[-_]token|github[-_]token|key|secret|password|passwd)=)"
             r"[^&\s]+"
         ),
         r"\1******",
     ),
     (
         re.compile(
-            r"(?i)(\b(?:access_token|refresh_token|id_token|token|api_key|apikey|secret|password)"
+            r"(?i)(\b(?:access_token|refresh_token|id_token|token|api_key|apikey|"
+            r"access_key|client_secret|session|csrf|"
+            r"x[-_]api[-_]key|x[-_]github[-_]token|github[-_]token|secret|password|passwd)"
             r"\s*=\s*)[^\s,&;]+"
         ),
         r"\1******",
@@ -611,18 +787,53 @@ _SENSITIVE_TEXT_PATTERNS = (
     (
         re.compile(
             r'(?i)("(?:authorization|cookie|set-cookie|password|passwd|secret|token|api_key|apikey|'
-            r'access_token|refresh_token|session|csrf)"\s*:\s*)"[^"]*"'
+            r'access_token|refresh_token|access_key|client_secret|session|csrf|'
+            r'x[-_]api[-_]key|x[-_]github[-_]token|'
+            r'github[-_]token)"\s*:\s*)"[^"]*"'
         ),
         r'\1"******"',
     ),
     (
         re.compile(
             r'(?i)("(?:authorization|cookie|set-cookie|password|passwd|secret|token|api_key|apikey|'
-            r'access_token|refresh_token|session|csrf)"\s*:\s*")[^"\r\n]*$'
+            r'access_token|refresh_token|access_key|client_secret|session|csrf|'
+            r'x[-_]api[-_]key|x[-_]github[-_]token|'
+            r'github[-_]token)"\s*:\s*")[^"\r\n]*$'
         ),
         r'\1******',
     ),
+    (
+        re.compile(
+            r"(?i)('(?:authorization|cookie|set-cookie|password|passwd|secret|token|api_key|apikey|"
+            r"access_token|refresh_token|access_key|client_secret|session|csrf|"
+            r"x[-_]api[-_]key|x[-_]github[-_]token|"
+            r"github[-_]token)'\s*:\s*)'[^']*'"
+        ),
+        r"\1'******'",
+    ),
+    (
+        re.compile(
+            r"(?i)('(?:authorization|cookie|set-cookie|password|passwd|secret|token|api_key|apikey|"
+            r"access_token|refresh_token|access_key|client_secret|session|csrf|"
+            r"x[-_]api[-_]key|x[-_]github[-_]token|"
+            r"github[-_]token)'\s*:\s*)'[^'\r\n]*$"
+        ),
+        r"\1'******",
+    ),
 )
+_SENSITIVE_BEARER_PATTERN = _SENSITIVE_TEXT_PATTERNS[3]
+_SENSITIVE_STANDALONE_TOKEN_PATTERNS = _SENSITIVE_TEXT_PATTERNS[4:7]
+_SENSITIVE_HEADER_PATTERN = _SENSITIVE_TEXT_PATTERNS[7]
+_SENSITIVE_PARAM_PATTERNS = _SENSITIVE_TEXT_PATTERNS[8:]
+
+
+def _sanitize_standalone_sensitive_tokens(text: str) -> str:
+    if "sk-" not in text and "eyJ" not in text and "://" not in text:
+        return text
+    sanitized = text
+    for pattern, replacement in _SENSITIVE_STANDALONE_TOKEN_PATTERNS:
+        sanitized = pattern.sub(replacement, sanitized)
+    return sanitized
 
 
 def _is_sensitive_key(key: Any) -> bool:
@@ -649,6 +860,8 @@ def _sanitize_sensitive_text(text: str) -> str:
             )
         return f"{safe_head}... [omitted {omitted} chars from oversized log payload]"
 
+    sanitized = _sanitize_standalone_sensitive_tokens(sanitized)
+
     if not _should_scan_sensitive_text(sanitized):
         return sanitized
 
@@ -666,15 +879,15 @@ def _sanitize_sensitive_text(text: str) -> str:
 
     # 2. 仅在包含 bearer 时替换 Bearer token
     if "bearer" in lower_text:
-        sanitized = _SENSITIVE_TEXT_PATTERNS[3][0].sub(_SENSITIVE_TEXT_PATTERNS[3][1], sanitized)
+        sanitized = _SENSITIVE_BEARER_PATTERN[0].sub(_SENSITIVE_BEARER_PATTERN[1], sanitized)
 
     # 3. 仅在包含相关 header 名时替换 Auth, Cookie 等头部
-    if any(k in lower_text for k in ("authorization", "cookie", "set-cookie")):
-        sanitized = _SENSITIVE_TEXT_PATTERNS[4][0].sub(_SENSITIVE_TEXT_PATTERNS[4][1], sanitized)
+    if any(k in lower_text for k in ("authorization", "cookie", "set-cookie", "x-api-key", "x_api_key", "x-github-token", "x_github_token", "github-token", "github_token")):
+        sanitized = _SENSITIVE_HEADER_PATTERN[0].sub(_SENSITIVE_HEADER_PATTERN[1], sanitized)
 
     # 4. 仅在包含敏感关键字时执行 query/json param 相关的敏感信息提取正则
-    if any(k in lower_text for k in ("access_token", "refresh_token", "id_token", "token", "api_key", "apikey", "key", "secret", "password", "passwd", "session", "csrf")):
-        for pattern, replacement in _SENSITIVE_TEXT_PATTERNS[5:]:
+    if any(k in lower_text for k in ("access_token", "refresh_token", "id_token", "token", "api_key", "apikey", "access_key", "client_secret", "key", "secret", "password", "passwd", "session", "csrf", "x-api-key", "x_api_key", "x-github-token", "x_github_token", "github-token", "github_token")):
+        for pattern, replacement in _SENSITIVE_PARAM_PATTERNS:
             sanitized = pattern.sub(replacement, sanitized)
 
     return sanitized
@@ -1119,6 +1332,58 @@ class _DisplayLogFormatter(logging.Formatter):
         return formatted
 
 
+def _is_windows_file_lock_error(exc: BaseException) -> bool:
+    """Return True for transient Windows sharing violations during file rotation."""
+    if os.name != "nt" or not isinstance(exc, OSError):
+        return False
+    winerror = getattr(exc, "winerror", None)
+    if winerror in {32, 33}:
+        return True
+    return getattr(exc, "errno", None) in {32, 33}
+
+
+class _SafeRotatingFileHandler(RotatingFileHandler):
+    """Windows 上轮转目标被短暂占用时，降级为继续写当前日志。"""
+
+    _ROLLOVER_RETRY_DELAY_SECONDS = 5.0
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._rollover_retry_after = 0.0
+
+    def shouldRollover(self, record: logging.LogRecord) -> bool:
+        if self._rollover_retry_after and time.monotonic() < self._rollover_retry_after:
+            return False
+        return super().shouldRollover(record)
+
+    def doRollover(self) -> None:
+        try:
+            super().doRollover()
+            self._rollover_retry_after = 0.0
+        except OSError as exc:
+            if not _is_windows_file_lock_error(exc):
+                raise
+            self._defer_rollover()
+            if self.stream is None and not self.delay:
+                self.stream = self._open()
+
+    def handleError(self, record: logging.LogRecord) -> None:
+        exc = sys.exc_info()[1]
+        if _is_windows_file_lock_error(exc):
+            self._defer_rollover()
+            try:
+                if self.stream is None and not self.delay:
+                    self.stream = self._open()
+                logging.FileHandler.emit(self, record)
+            except Exception:
+                pass
+            return
+        super().handleError(record)
+
+    def _defer_rollover(self) -> None:
+        self._rollover_retry_after = time.monotonic() + self._ROLLOVER_RETRY_DELAY_SECONDS
+
+
 # 创建全局 Web 日志处理器
 _web_log_handler = _WebLogHandler()
 _web_log_handler.setLevel(logging.DEBUG)
@@ -1168,7 +1433,7 @@ def get_shared_file_log_handler() -> Optional[logging.Handler]:
             log_file = get_log_file_path()
             log_file.parent.mkdir(parents=True, exist_ok=True)
 
-            handler = RotatingFileHandler(
+            handler = _SafeRotatingFileHandler(
                 log_file,
                 maxBytes=_get_positive_int_env("LOG_MAX_BYTES", 5 * 1024 * 1024),
                 backupCount=_get_positive_int_env("LOG_BACKUP_COUNT", 5),
@@ -2490,6 +2755,9 @@ class MessageValidator:
     """消息验证器"""
     
     VALID_ROLES = {'user', 'assistant', 'system'}
+    ROLE_ALIASES = {
+        'developer': 'system',
+    }
     _IMAGE_PLACEHOLDER = "[图片]"
 
     @classmethod
@@ -2585,7 +2853,8 @@ class MessageValidator:
             if not isinstance(msg, dict):
                 return False, f"messages[{i}] 不是字典类型", None
             
-            role = msg.get('role', 'user')
+            role = str(msg.get('role', 'user') or 'user').strip().lower()
+            role = cls.ROLE_ALIASES.get(role, role)
             if role not in cls.VALID_ROLES:
                 role = 'user'
             
@@ -2660,6 +2929,8 @@ __all__ = [
     'ConfigurationError',
     
     # 工具
+    'atomic_write_json',
+    '_replace_file_with_retry',
     'SSEFormatter',
     'MessageValidator',
 ]

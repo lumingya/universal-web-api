@@ -155,6 +155,12 @@
       "name": "ARENA_EVERY4_ROTATE_IP",
       "enabled": false,
       "group_name": "arena"
+    },
+    {
+      "id": "cmd_19f7ae6f",
+      "name": "报错中断工作流",
+      "enabled": false,
+      "group_name": "arena"
     }
   ]
 }

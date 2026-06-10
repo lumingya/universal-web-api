@@ -308,6 +308,23 @@ MODALITY_RUN_POLICY_VALUES = {
 }
 
 
+def _coerce_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "y", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "n", "off"}:
+            return False
+        return default
+    if isinstance(value, (int, float)):
+        return value != 0
+    return bool(value)
+
+
 def get_default_modality_policy(media_type: str, enabled: bool = False) -> ModalityPolicyConfig:
     """获取单模态默认运行策略。"""
     media_type = str(media_type or "").strip().lower()
@@ -338,7 +355,7 @@ def get_default_modality_policy(media_type: str, enabled: bool = False) -> Modal
 def normalize_modality_policy(media_type: str, raw_value: Any) -> ModalityPolicyConfig:
     """把旧 bool 或新对象配置规范化成策略对象。"""
     if isinstance(raw_value, dict):
-        enabled = bool(raw_value.get("enabled", False))
+        enabled = _coerce_bool(raw_value.get("enabled"), False)
         result = get_default_modality_policy(media_type, enabled=enabled)
         run_policy = str(raw_value.get("run_policy") or result.get("run_policy") or "").strip().lower()
         if run_policy not in MODALITY_RUN_POLICY_VALUES:
@@ -376,7 +393,7 @@ def normalize_modality_policy(media_type: str, raw_value: Any) -> ModalityPolicy
             result["container_selector"] = container_selector or None
         return result
 
-    return get_default_modality_policy(media_type, enabled=bool(raw_value))
+    return get_default_modality_policy(media_type, enabled=_coerce_bool(raw_value, False))
 
 
 def normalize_modalities_config(raw_modalities: Any) -> ExtractionModalitiesConfig:
@@ -527,6 +544,24 @@ class SiteAdvancedConfig(TypedDict, total=False):
     url_transition_wait_patterns: List[str]
     send_confirmation_check_enabled: bool
     send_confirmation_check_timeout: float
+
+
+SITE_ADVANCED_FIELDS = {
+    "independent_cookies",
+    "independent_cookies_auto_takeover",
+}
+
+PRESET_ADVANCED_FIELDS = {
+    "input_box_stability_wait_enabled",
+    "input_box_stability_wait_after_new_chat_only",
+    "input_box_stability_wait_timeout",
+    "url_transition_wait_on_new_chat",
+    "url_transition_wait_patterns",
+    "send_confirmation_check_enabled",
+    "send_confirmation_check_timeout",
+}
+
+ADVANCED_FIELDS = SITE_ADVANCED_FIELDS | PRESET_ADVANCED_FIELDS
 
 
 def get_default_site_advanced_config() -> 'SiteAdvancedConfig':
@@ -1340,6 +1375,9 @@ __all__ = [
     'OPTIONAL_SELECTOR_KEYS',
     'ALL_SELECTOR_KEYS',
     'DEFAULT_SELECTOR_DEFINITIONS',
+    'SITE_ADVANCED_FIELDS',
+    'PRESET_ADVANCED_FIELDS',
+    'ADVANCED_FIELDS',
 
     # 工具函数
     'get_default_selector_definitions',

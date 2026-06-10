@@ -37,17 +37,34 @@ def _get_temp_cleanup_min_age_seconds() -> float:
         return 3600.0
 
 
-TEMP_CLEANUP_MIN_AGE_SECONDS = _get_temp_cleanup_min_age_seconds()
-
-
-def _is_path_old_enough_for_cleanup(path: Path, now: float) -> bool:
+def _get_paste_temp_cleanup_min_age_seconds() -> float:
     try:
-        if now - path.stat().st_mtime < TEMP_CLEANUP_MIN_AGE_SECONDS:
+        return max(0.0, float(os.getenv("PASTE_TEMP_CLEANUP_MIN_AGE_SECONDS", "900")))
+    except Exception:
+        return 900.0
+
+
+TEMP_CLEANUP_MIN_AGE_SECONDS = _get_temp_cleanup_min_age_seconds()
+PASTE_TEMP_CLEANUP_MIN_AGE_SECONDS = _get_paste_temp_cleanup_min_age_seconds()
+
+
+def _get_cleanup_min_age_seconds(path: Path) -> float:
+    try:
+        if path.is_file() and path.name.startswith("paste_") and path.suffix.lower() == ".txt":
+            return PASTE_TEMP_CLEANUP_MIN_AGE_SECONDS
+    except Exception:
+        pass
+    return TEMP_CLEANUP_MIN_AGE_SECONDS
+
+
+def _is_path_old_enough_for_cleanup(path: Path, now: float, min_age_seconds: float) -> bool:
+    try:
+        if now - path.stat().st_mtime < min_age_seconds:
             return False
         if path.is_dir():
             for child in path.rglob("*"):
                 try:
-                    if now - child.stat().st_mtime < TEMP_CLEANUP_MIN_AGE_SECONDS:
+                    if now - child.stat().st_mtime < min_age_seconds:
                         return False
                 except Exception:
                     return False
@@ -87,7 +104,8 @@ def cleanup_temp_dir():
                 continue
             for item in target_dir.iterdir():
                 try:
-                    if not _is_path_old_enough_for_cleanup(item, now):
+                    min_age_seconds = _get_cleanup_min_age_seconds(item)
+                    if not _is_path_old_enough_for_cleanup(item, now, min_age_seconds):
                         continue
                     if item.is_file():
                         item.unlink()
@@ -118,6 +136,8 @@ def create_temp_txt(text: str, prefix: str = "paste_") -> Optional[str]:
     Returns:
         文件的绝对路径，失败返回 None
     """
+    fd: Optional[int] = None
+    filepath: Optional[str] = None
     try:
         ensure_temp_dir()
         
@@ -130,12 +150,24 @@ def create_temp_txt(text: str, prefix: str = "paste_") -> Optional[str]:
         
         # 写入内容（UTF-8 编码）
         with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            fd = None
             f.write(text)
         
         logger.debug(f"临时文件已创建: {_temp_log_label(filepath)} ({len(text)} 字符)")
         return filepath
     
     except Exception as e:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except Exception:
+                pass
+        if filepath:
+            try:
+                os.unlink(filepath)
+                logger.debug(f"已清理创建失败的临时文件: {_temp_log_label(filepath)}")
+            except Exception:
+                pass
         logger.error(f"创建临时文件失败: {e}")
         return None
 

@@ -9,11 +9,8 @@ app/core/workflow/executor.py - 工作流执行器
 """
 
 import copy
-import json
 import time
 import random
-import threading
-import uuid
 from typing import Generator, Dict, Any, Callable, Optional
 
 from app.core.config import (
@@ -23,11 +20,8 @@ from app.core.config import (
     WorkflowError,
 )
 from app.core.elements import ElementFinder
-from app.core.parsers import ParserRegistry
+from app.core.page_capture import create_page_fetch_capture
 from app.core.request_transport import (
-    REQUEST_TRANSPORT_MODE_PAGE_FETCH,
-    execute_request_transport,
-    get_default_request_transport_config,
     normalize_request_transport_config,
 )
 from app.core.stream_monitor import StreamMonitor
@@ -55,110 +49,6 @@ class WorkflowExecutor(
     WorkflowExecutorActionMixin,
 ):
     """工作流执行器"""
-
-    _KIMI_CAPTURE_BOOTSTRAP_JS = r"""
-(() => {
-  const W = window;
-  const KEY = "__KIMI_CAPTURE__";
-  const TARGET = "/apiv2/kimi.gateway.chat.v1.ChatService/Chat";
-
-  const toEscapedBytes = (chunk) => {
-    let out = "";
-    for (let i = 0; i < chunk.length; i += 1) {
-      out += "\\u00" + chunk[i].toString(16).padStart(2, "0");
-    }
-    return out;
-  };
-
-  const cap = W[KEY] = W[KEY] || {
-    installed: false,
-    seq: 0,
-    requests: [],
-    currentToken: null,
-    maxRequests: 12
-  };
-
-  if (cap.installed) {
-    return { installed: true, patched: false, requests: cap.requests.length };
-  }
-
-  if (typeof W.fetch !== "function") {
-    return { installed: false, reason: "fetch_missing" };
-  }
-
-  const originalFetch = W.fetch.bind(W);
-  cap.installed = true;
-  cap.installedAt = Date.now();
-
-  W.fetch = async function(input, init) {
-    const response = await originalFetch(input, init);
-
-    try {
-      const url = input && typeof input === "object" && "url" in input
-        ? String(input.url || "")
-        : String(input || "");
-
-      if (!url.includes(TARGET)) {
-        return response;
-      }
-
-      const request = {
-        id: "kimi_" + (++cap.seq),
-        url,
-        token: cap.currentToken || null,
-        startedAt: Date.now(),
-        lastChunkAt: 0,
-        chunkCount: 0,
-        escapedFullText: "",
-        complete: false,
-        error: null,
-        contentType: response.headers ? (response.headers.get("content-type") || "") : ""
-      };
-
-      cap.requests.push(request);
-      while (cap.requests.length > (cap.maxRequests || 12)) {
-        cap.requests.shift();
-      }
-
-      const cloned = response.clone();
-      if (cloned.body && typeof cloned.body.getReader === "function") {
-        const reader = cloned.body.getReader();
-        (async () => {
-          try {
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) {
-                request.complete = true;
-                request.endedAt = Date.now();
-                break;
-              }
-              if (!value) {
-                continue;
-              }
-              request.chunkCount += 1;
-              request.lastChunkAt = Date.now();
-              request.escapedFullText += toEscapedBytes(value);
-            }
-          } catch (error) {
-            request.error = String(error && error.message ? error.message : error);
-            request.complete = true;
-            request.endedAt = Date.now();
-          }
-        })();
-      } else {
-        request.complete = true;
-        request.endedAt = Date.now();
-      }
-    } catch (error) {
-      cap.lastHookError = String(error && error.message ? error.message : error);
-    }
-
-    return response;
-  };
-
-  return { installed: true, patched: true, requests: cap.requests.length };
-})();
-"""
     
     def __init__(self, tab, stealth_mode: bool = False, 
                  should_stop_checker: Callable[[], bool] = None,
@@ -198,6 +88,7 @@ class WorkflowExecutor(
         self._last_request_transport_sent = False
         self._last_send_attempt_state: Dict[str, Any] = {}
         self._input_stability_wait_pending = False
+        self._last_new_chat_clicked_snapshot: Dict[str, Any] = {}
         self._last_fill_completed_at = 0.0
         self._last_fill_text_length = 0
         self._last_fill_after_new_chat = False
@@ -210,16 +101,13 @@ class WorkflowExecutor(
         network_config = stream_config.get("network", {}) if stream_config else {}
         self._network_config = network_config
         self._intercept_only_mode = False
-        self._use_kimi_page_capture = (
-            self._stream_mode == "network"
-            and str(network_config.get("parser", "") or "").strip().lower() == "kimi"
+        self._page_fetch_capture = create_page_fetch_capture(
+            tab=tab,
+            formatter=self.formatter,
+            stream_config=self._stream_config,
+            stop_checker=should_stop_checker,
+            interaction_slot=self._page_interaction_slot,
         )
-        self._kimi_capture_token: Optional[str] = None
-        self._kimi_capture_init_js_id: Optional[str] = None
-        self._kimi_page_parser = ParserRegistry.get("kimi") if self._use_kimi_page_capture else None
-        self._kimi_page_sent_content_length = 0
-        if self._use_kimi_page_capture:
-            self._ensure_kimi_page_capture_init_js()
 
         interception_enabled = False
         interception_pattern = ""
@@ -461,6 +349,9 @@ class WorkflowExecutor(
             from app.services.command_engine import command_engine
             matched = bool(command_engine.handle_network_event(self.session, event))
             if matched:
+                if command_engine.workflow_interrupt_requested(self.session):
+                    setattr(self.session, "_workflow_stop_reason", "command_interrupt")
+                    return True
                 # 让 DOM/STREAM 流程也能立即停下来（与 stream_mode 无关）
                 try:
                     from app.services.request_manager import request_manager
@@ -485,7 +376,9 @@ class WorkflowExecutor(
         if not selector:
             return
         try:
-            self._stream_monitor.capture_send_baseline(selector)
+            context = getattr(self, "_context", None) or {}
+            user_input = context.get("prompt", "") if isinstance(context, dict) else ""
+            self._stream_monitor.capture_send_baseline(selector, user_input=user_input)
             logger.debug(f"[Executor] 已预捕获 DOM 发送基线 ({reason or 'send'})")
         except Exception as e:
             logger.debug(f"[Executor] 预捕获 DOM 发送基线失败（忽略）: {e}")
@@ -509,14 +402,17 @@ class WorkflowExecutor(
             logger.debug(f"[Executor] 读取网络已发送长度失败（忽略）: {e}")
 
         try:
-            kimi_sent_chars = max(0, int(getattr(self, "_kimi_page_sent_content_length", 0) or 0))
-            if kimi_sent_chars > 0:
+            if self._page_fetch_capture is not None:
+                page_capture_sent_chars = self._page_fetch_capture.get_sent_content_length()
+            else:
+                page_capture_sent_chars = 0
+            if page_capture_sent_chars > 0:
                 kwargs["sent_content_length"] = max(
                     int(kwargs.get("sent_content_length") or 0),
-                    kimi_sent_chars,
+                    page_capture_sent_chars,
                 )
         except Exception as e:
-            logger.debug(f"[Executor] 读取 Kimi 页面抓流已发送长度失败（忽略）: {e}")
+            logger.debug(f"[Executor] 读取页面抓流已发送长度失败（忽略）: {e}")
 
         if kwargs:
             baseline = kwargs.get("baseline_snapshot") or {}
@@ -576,178 +472,10 @@ class WorkflowExecutor(
             return second
         return "http"
 
-    def _prepare_kimi_page_capture(self) -> None:
-        if not self._use_kimi_page_capture:
+    def _prepare_page_fetch_capture(self) -> None:
+        if self._page_fetch_capture is None:
             return
-
-        self._ensure_kimi_page_capture_init_js()
-        token = f"kimi_{uuid.uuid4().hex[:12]}"
-        with self._page_interaction_slot("JS_EXEC", "kimi_capture_prepare") as acquired:
-            if not acquired or self._check_cancelled():
-                return
-            install_result = self.tab.run_js(
-                f"return {self._KIMI_CAPTURE_BOOTSTRAP_JS.strip()}"
-            )
-            reset_result = self.tab.run_js(
-                """
-                return (function(token) {
-                  const cap = window.__KIMI_CAPTURE__ = window.__KIMI_CAPTURE__ || {};
-                  cap.currentToken = token;
-                  cap.requests = [];
-                  cap.lastResetAt = Date.now();
-                  return { ok: true, token: cap.currentToken };
-                })(arguments[0]);
-                """,
-                token,
-            )
-        self._kimi_capture_token = token
-        self._kimi_page_sent_content_length = 0
-        if install_result is not None:
-            logger.debug(f"[Executor] Kimi 页面抓流已准备: {install_result}")
-
-    def _ensure_kimi_page_capture_init_js(self) -> None:
-        if not self._use_kimi_page_capture or self._kimi_capture_init_js_id:
-            return
-
-        try:
-            self._kimi_capture_init_js_id = self.tab.add_init_js(
-                self._KIMI_CAPTURE_BOOTSTRAP_JS.strip()
-            )
-            logger.debug(
-                f"[Executor] Kimi 页面抓流已注册 document-start 注入: {self._kimi_capture_init_js_id}"
-            )
-        except Exception as e:
-            logger.debug(f"[Executor] Kimi document-start 注入失败: {e}")
-
-    def _get_kimi_page_capture_state(self) -> Dict[str, Any]:
-        state = self.tab.run_js(
-            """
-            return (function(token) {
-              const cap = window.__KIMI_CAPTURE__;
-              if (!cap) {
-                return { installed: false, found: false };
-              }
-
-              const requests = Array.isArray(cap.requests) ? cap.requests : [];
-              let target = null;
-
-              for (let i = requests.length - 1; i >= 0; i -= 1) {
-                const item = requests[i];
-                if (!token || item.token === token) {
-                  target = item;
-                  break;
-                }
-              }
-
-              return {
-                installed: true,
-                currentToken: cap.currentToken || null,
-                found: !!target,
-                requestId: target ? (target.id || "") : "",
-                escapedFullText: target ? (target.escapedFullText || "") : "",
-                complete: !!(target && target.complete),
-                error: target ? (target.error || null) : null,
-                chunkCount: target ? (target.chunkCount || 0) : 0,
-                startedAt: target ? (target.startedAt || 0) : 0,
-                lastChunkAt: target ? (target.lastChunkAt || 0) : 0
-              };
-            })(arguments[0]);
-            """,
-            self._kimi_capture_token or "",
-        )
-        return state if isinstance(state, dict) else {}
-
-    def _monitor_kimi_page_capture(
-        self,
-        completion_id: str,
-    ) -> Generator[str, None, None]:
-        if not self._use_kimi_page_capture or self._kimi_page_parser is None:
-            raise NetworkMonitorError("kimi_page_capture_disabled")
-
-        parser = self._kimi_page_parser
-        parser.reset()
-
-        hard_timeout = float(
-            self._stream_config.get("hard_timeout", 300) or 300
-        )
-        first_response_timeout = float(
-            self._network_config.get("first_response_timeout", hard_timeout) or hard_timeout
-        )
-        response_interval = float(
-            self._network_config.get("response_interval", 0.3) or 0.3
-        )
-        silence_threshold = float(
-            self._network_config.get("silence_threshold", 3) or 3
-        )
-
-        phase_start = time.time()
-        last_activity = phase_start
-        last_raw_len = 0
-        seen_request = False
-
-        while True:
-            if self._check_cancelled():
-                logger.debug("[Executor] Kimi 页面抓流被取消")
-                break
-
-            now = time.time()
-            if now - phase_start > hard_timeout:
-                raise NetworkMonitorError(f"kimi_page_capture_hard_timeout:{hard_timeout:.1f}s")
-
-            state = self._get_kimi_page_capture_state()
-            if not state.get("installed"):
-                raise NetworkMonitorError("kimi_page_capture_not_installed")
-
-            if state.get("error"):
-                raise NetworkMonitorError(f"kimi_page_capture_error:{state.get('error')}")
-
-            raw_response = str(state.get("escapedFullText", "") or "")
-            if state.get("found"):
-                if not seen_request:
-                    logger.debug(
-                        "[Executor] Kimi 页面抓流已命中请求 "
-                        f"(request_id={state.get('requestId')}, token={self._kimi_capture_token})"
-                    )
-                seen_request = True
-
-            if len(raw_response) > last_raw_len:
-                last_activity = now
-                last_raw_len = len(raw_response)
-
-            if raw_response:
-                parse_result = parser.parse_chunk(raw_response)
-                if parse_result.get("error"):
-                    raise NetworkMonitorError(f"kimi_page_capture_parse_error:{parse_result['error']}")
-
-                content = parse_result.get("content", "")
-                done = bool(parse_result.get("done")) or bool(state.get("complete"))
-
-                if content:
-                    logger.debug(f"[Executor] Kimi 页面抓流产出: {repr(content)[:240]}")
-                    self._kimi_page_sent_content_length += len(content)
-                    yield self.formatter.pack_chunk(content, completion_id=completion_id)
-
-                if done:
-                    logger.debug("[Executor] Kimi 页面抓流完成")
-                    break
-
-            elif seen_request and state.get("complete"):
-                logger.debug("[Executor] Kimi 页面抓流请求已结束但无有效内容")
-                break
-
-            if not seen_request and (now - phase_start) > first_response_timeout:
-                raise NetworkMonitorTimeout(f"kimi_page_capture_first_response_timeout:{first_response_timeout:.1f}s")
-
-            if seen_request and (now - last_activity) > silence_threshold:
-                logger.warning(
-                    "[Executor] Kimi 页面抓流静默超时 "
-                    f"({now - last_activity:.1f}s)"
-                )
-                raise NetworkMonitorTimeout(
-                    f"kimi_page_capture_silence_timeout:{silence_threshold:.1f}s"
-                )
-
-            time.sleep(max(0.05, response_interval))
+        self._page_fetch_capture.prepare()
     
     # ================= 控制方法 =================
     
@@ -784,7 +512,7 @@ class WorkflowExecutor(
                 # 包含 Enter 的按键（Enter、Ctrl+Enter 等）可能触发提交
                 if self._combo_contains_submit_key(key):
                     if self._network_monitor is not None:
-                        self._prepare_kimi_page_capture()
+                        self._prepare_page_fetch_capture()
                         self._network_monitor.pre_start()
                     if self._attempt_request_transport_send():
                         return
@@ -794,7 +522,7 @@ class WorkflowExecutor(
                         self._selectors.get("send_btn", "")
                     )
                     if self._network_monitor is not None:
-                        self._prepare_kimi_page_capture()
+                        self._prepare_page_fetch_capture()
                         self._network_monitor.pre_start()
                         self._network_monitor.mark_send_attempt()
                 self._execute_keypress_combo(key)
@@ -809,7 +537,7 @@ class WorkflowExecutor(
             elif action == "PAGE_FETCH":
                 self._last_request_transport_sent = False
                 if self._network_monitor is not None:
-                    self._prepare_kimi_page_capture()
+                    self._prepare_page_fetch_capture()
                     self._network_monitor.pre_start()
                 if not self._has_pending_request_transport_prompt():
                     self._stage_request_transport_from_context(
@@ -836,7 +564,7 @@ class WorkflowExecutor(
                 if target_key == "send_btn":
                     # 🆕 发送前启动网络监听（如果已配置）
                     if self._network_monitor is not None:
-                        self._prepare_kimi_page_capture()
+                        self._prepare_page_fetch_capture()
                         self._network_monitor.pre_start()
                     if self._attempt_request_transport_send():
                         return
@@ -844,7 +572,7 @@ class WorkflowExecutor(
                         self._ensure_cached_prompt_filled()
                     self._wait_for_attachments_ready_before_send(selector)
                     if self._network_monitor is not None:
-                        self._prepare_kimi_page_capture()
+                        self._prepare_page_fetch_capture()
                         self._network_monitor.pre_start()
 
                     self._execute_click_send_reliably(
@@ -893,14 +621,16 @@ class WorkflowExecutor(
 
                 if use_network_stream:
                     try:
-                        if self._use_kimi_page_capture:
-                            logger.debug("[Executor] 尝试 Kimi 页面抓流模式")
-                            yield from self._monitor_kimi_page_capture(
+                        if self._page_fetch_capture is not None:
+                            logger.debug(
+                                f"[Executor] 尝试{self._page_fetch_capture.get_mode_name()}模式"
+                            )
+                            yield from self._page_fetch_capture.monitor(
                                 completion_id=self._completion_id
                             )
                             if self._stream_monitor is not None:
                                 self._stream_monitor.clear_send_baseline()
-                            monitor_used = "kimi_page"
+                            monitor_used = self._page_fetch_capture.get_monitor_id()
                         else:
                             logger.debug("[Executor] 尝试网络监听模式")
                             yield from self._network_monitor.monitor(
@@ -924,6 +654,13 @@ class WorkflowExecutor(
 
                     except NetworkInterceptionTriggered as e:
                         logger.warning(f"[Executor] 网络拦截已触发: {e}")
+                        try:
+                            from app.services.command_engine import command_engine
+                            if self.session is not None and command_engine.workflow_interrupt_requested(self.session):
+                                setattr(self.session, "_workflow_stop_reason", "command_interrupt")
+                                return
+                        except Exception:
+                            pass
                         raise WorkflowError("network_intercepted")
 
                     except NetworkMonitorTerminalError as e:

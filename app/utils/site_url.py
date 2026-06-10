@@ -9,7 +9,7 @@ import hashlib
 from typing import Optional, List
 from urllib.parse import urlparse, urlunparse
 
-from app.utils.site_rules import build_route_alias_groups
+from app.utils.site_rules import build_route_alias_groups, load_site_rules
 
 
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
@@ -137,6 +137,35 @@ def get_preferred_route_domain(value: str) -> str:
     return normalized
 
 
+def get_canonical_route_domain(value: str) -> str:
+    """Return the configured site domain for aliases used in routing."""
+    normalized = normalize_route_domain(value)
+    if not normalized:
+        return ""
+
+    rules = load_site_rules()
+    if normalized in rules:
+        return normalized
+
+    if normalized.startswith("www.") and normalized[4:] in rules:
+        return normalized[4:]
+
+    for site_domain, rule in rules.items():
+        aliases = list(rule.get("route_aliases", []) or [])
+        for alias in aliases:
+            normalized_alias = normalize_route_domain(alias)
+            if not normalized_alias:
+                continue
+            if normalized == normalized_alias:
+                return site_domain
+            if normalized.startswith("www.") and normalized[4:] == normalized_alias:
+                return site_domain
+
+    if normalized.startswith("www."):
+        return normalized[4:]
+    return normalized
+
+
 def route_domain_matches(target_domain: str, actual_domain: str) -> bool:
     """Whether the route-domain target can represent the actual page domain."""
     target_aliases = build_route_domain_aliases(target_domain)
@@ -213,6 +242,7 @@ __all__ = [
     "decode_tab_url_route_token",
     "encode_tab_url_route_token",
     "extract_remote_site_domain",
+    "get_canonical_route_domain",
     "get_preferred_route_domain",
     "is_remote_site_url",
     "normalize_route_domain",

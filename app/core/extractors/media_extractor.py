@@ -9,7 +9,7 @@ app/core/extractors/media_extractor.py - 多模态内容提取器
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 import base64
 import json
 import time
@@ -2608,6 +2608,13 @@ class MediaExtractor:
         if extractor is None:
             logger.debug(f"未知网络音频提取器（已忽略）: {extractor_name}")
             return []
+        try:
+            max_payload_bytes = max(
+                1,
+                int(network_config.get("max_payload_bytes") or final_config.get("max_size_mb", 10) * 1024 * 1024),
+            )
+        except (TypeError, ValueError):
+            max_payload_bytes = 10 * 1024 * 1024
 
         save_dir = Path("download_images")
         save_dir.mkdir(exist_ok=True)
@@ -2626,7 +2633,7 @@ class MediaExtractor:
                 if not isinstance(logs, list) or not logs:
                     continue
 
-                event = extractor(logs, url_patterns)
+                event = extractor(logs, url_patterns, max_payload_bytes=max_payload_bytes)
                 if not event:
                     continue
 
@@ -2803,14 +2810,37 @@ class MediaExtractor:
         }
         return registry.get(str(name or "").strip())
 
+    @staticmethod
+    def _estimate_base64_decoded_size(base64_data: str) -> int:
+        compact_base64 = "".join(str(base64_data or "").split())
+        if not compact_base64:
+            return 0
+        padding = compact_base64.count("=")
+        return max(0, (len(compact_base64) * 3) // 4 - padding)
+
+    @staticmethod
+    def _decode_base64_frame_with_limit(base64_data: str, max_payload_bytes: int) -> bytes:
+        compact_base64 = "".join(str(base64_data or "").split())
+        if not compact_base64:
+            return b""
+        max_payload_bytes = max(1, int(max_payload_bytes or 1))
+        if MediaExtractor._estimate_base64_decoded_size(compact_base64) > max_payload_bytes:
+            raise ValueError("network_audio_frame_too_large")
+        frame_bytes = base64.b64decode(compact_base64)
+        if len(frame_bytes) > max_payload_bytes:
+            raise ValueError("network_audio_frame_too_large")
+        return frame_bytes
+
     def _extract_voicegenie_binary_stream_from_probe_logs(
         self,
         logs: List[Dict[str, Any]],
         url_patterns: List[str],
+        max_payload_bytes: int = 10 * 1024 * 1024,
     ) -> Dict[str, Any]:
         best_url = ""
         payload_parts: List[bytes] = []
         payload_size = 0
+        max_payload_bytes = max(1, int(max_payload_bytes or (10 * 1024 * 1024)))
         seen_stop_marker = False
         stop_markers = (b"TTSSentenceEnd", b"TTSEnded", b"SessionCanceled")
         first_audio_mime = ""
@@ -2835,7 +2865,7 @@ class MediaExtractor:
                 continue
 
             try:
-                frame_bytes = base64.b64decode(base64_data)
+                frame_bytes = self._decode_base64_frame_with_limit(base64_data, max_payload_bytes)
             except Exception:
                 continue
 
@@ -2848,7 +2878,11 @@ class MediaExtractor:
 
             # 优先复用旧 OGG 页识别能力：如果帧里本来就带 OggS，就交给旧逻辑。
             if b"OggS" in frame_bytes:
-                return self._extract_voicegenie_ogg_pages_from_probe_logs(logs, url_patterns)
+                return self._extract_voicegenie_ogg_pages_from_probe_logs(
+                    logs,
+                    url_patterns,
+                    max_payload_bytes=max_payload_bytes,
+                )
 
             # 跳过看起来像控制帧/极小 ACK 的二进制消息。
             if len(frame_bytes) < 256:
@@ -2872,6 +2906,9 @@ class MediaExtractor:
 
             payload_parts.append(frame_bytes)
             payload_size += len(frame_bytes)
+            if payload_size > max_payload_bytes:
+                logger.warning(f"网络音频捕获超过大小限制，放弃直抓结果: {payload_size} bytes")
+                return {}
             best_url = url
 
         if not payload_parts or payload_size < 2048:
@@ -2892,11 +2929,14 @@ class MediaExtractor:
         self,
         logs: List[Dict[str, Any]],
         url_patterns: List[str],
+        max_payload_bytes: int = 10 * 1024 * 1024,
     ) -> Dict[str, Any]:
         best_url = ""
         pages_by_key: Dict[tuple[int, int], bytes] = {}
         serial_sequences: Dict[int, set[int]] = {}
         serial_total_bytes: Dict[int, int] = {}
+        total_page_bytes = 0
+        max_payload_bytes = max(1, int(max_payload_bytes or (10 * 1024 * 1024)))
         largest_segment = b""
         seen_stop_marker = False
         stop_markers = (b"TTSSentenceEnd", b"TTSEnded", b"SessionCanceled")
@@ -2921,7 +2961,7 @@ class MediaExtractor:
                 continue
 
             try:
-                frame_bytes = base64.b64decode(base64_data)
+                frame_bytes = self._decode_base64_frame_with_limit(base64_data, max_payload_bytes)
             except Exception:
                 continue
 
@@ -2945,9 +2985,16 @@ class MediaExtractor:
                 full_page = page[:page_size]
                 key = (serial_no, seq_no)
                 if key not in pages_by_key:
+                    if total_page_bytes + len(full_page) > max_payload_bytes:
+                        logger.warning(
+                            f"网络 OGG 音频捕获超过大小限制，放弃直抓结果: "
+                            f"{total_page_bytes + len(full_page)} bytes"
+                        )
+                        return {}
                     pages_by_key[key] = full_page
                     serial_sequences.setdefault(serial_no, set()).add(seq_no)
                     serial_total_bytes[serial_no] = int(serial_total_bytes.get(serial_no, 0)) + len(full_page)
+                    total_page_bytes += len(full_page)
                 if len(full_page) > len(largest_segment):
                     largest_segment = full_page
                 best_url = url
@@ -3102,7 +3149,7 @@ class MediaExtractor:
             "width": None,
             "height": None,
             "index": 0,
-            "detected_at": datetime.utcnow().isoformat() + "Z",
+            "detected_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "source": "network_probe",
             "local_path": str(filepath),
         }
@@ -3143,7 +3190,7 @@ class MediaExtractor:
         return self._normalize_media_items(media_type, result.get("items", []))
 
     def _normalize_media_items(self, media_type: str, raw_items: List[Dict]) -> List[Dict]:
-        now = datetime.utcnow().isoformat() + "Z"
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         result: List[Dict] = []
         seen_keys = set()
 

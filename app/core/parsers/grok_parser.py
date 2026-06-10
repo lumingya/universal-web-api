@@ -38,6 +38,7 @@ class GrokParser(ResponseParser):
         self._pending = ""
         self._rendered_content = ""
         self._seen_image_refs: set[str] = set()
+        self._media_generation_state: Dict[str, Any] = {}
 
     def parse_chunk(self, raw_response: str) -> Dict[str, Any]:
         result: Dict[str, Any] = {
@@ -53,12 +54,9 @@ class GrokParser(ResponseParser):
             elif not isinstance(raw_response, str):
                 raw_response = str(raw_response)
 
-            current_len = len(raw_response)
-            if current_len <= self._last_raw_length:
+            new_data = self._prepare_incremental_raw_response(raw_response)
+            if not new_data:
                 return result
-
-            new_data = raw_response[self._last_raw_length :]
-            self._last_raw_length = current_len
 
             delta_content, images, done = self._consume_new_data(new_data)
             if delta_content:
@@ -75,73 +73,18 @@ class GrokParser(ResponseParser):
 
     def reset(self) -> None:
         self._last_raw_length = 0
+        self._last_raw_response = ""
         self._pending = ""
         self._rendered_content = ""
         self._seen_image_refs.clear()
+        self._media_generation_state = {}
 
     def get_media_generation_state(
         self,
         raw_response: str = "",
         parse_result: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
-        pending = False
-        hint_parts: List[str] = []
-        wait_timeout_seconds = None
-
-        try:
-            for payload in self._iter_payloads(str(raw_response or "")):
-                result = payload.get("result")
-                if not isinstance(result, dict):
-                    continue
-
-                event_payload = self._unwrap_result_payload(result)
-                if not isinstance(event_payload, dict):
-                    continue
-
-                if self._collect_image_urls(event_payload):
-                    return {}
-
-                model_response = event_payload.get("modelResponse")
-                if isinstance(model_response, dict) and self._collect_image_urls(model_response):
-                    return {}
-
-                progress = event_payload.get("progressReport")
-                if not isinstance(progress, dict):
-                    continue
-
-                category = str(progress.get("category") or "").strip().upper()
-                state = str(progress.get("state") or "").strip().upper()
-                message = str(progress.get("message") or "").strip()
-
-                if "IMAGE" not in category:
-                    continue
-
-                if any(token in state for token in ("PENDING", "STARTED", "RUNNING", "IN_PROGRESS")):
-                    pending = True
-                    wait_timeout_seconds = max(float(wait_timeout_seconds or 0), 120.0)
-                    if message:
-                        hint_parts.append(message)
-
-        except Exception as e:
-            logger.debug(f"[GrokParser] media state exception: {e}")
-
-        if not pending:
-            return {}
-
-        deduped_hints: List[str] = []
-        seen = set()
-        for item in hint_parts:
-            if item in seen:
-                continue
-            seen.add(item)
-            deduped_hints.append(item)
-
-        return {
-            "pending": True,
-            "media_type": "image",
-            "hint_text": "\n\n".join(deduped_hints[:3]),
-            "wait_timeout_seconds": wait_timeout_seconds,
-        }
+        return dict(self._media_generation_state or {})
 
     def _consume_new_data(self, new_data: str) -> Tuple[str, List[Dict[str, Any]], bool]:
         previous_content = self._rendered_content
@@ -220,7 +163,45 @@ class GrokParser(ResponseParser):
             images.extend(self._extract_image_items(model_response))
             done = not bool(model_response.get("partial", False))
 
-        return self._dedupe_images(images), done
+        images = self._dedupe_images(images)
+        if images:
+            self._media_generation_state = {}
+        else:
+            self._update_media_generation_state(event_payload)
+
+        return images, done
+
+    def _update_media_generation_state(self, event_payload: Dict[str, Any]) -> None:
+        progress = event_payload.get("progressReport")
+        if not isinstance(progress, dict):
+            return
+
+        category = str(progress.get("category") or "").strip().upper()
+        state = str(progress.get("state") or "").strip().upper()
+        message = str(progress.get("message") or "").strip()
+
+        if "IMAGE" not in category:
+            return
+
+        if any(token in state for token in ("COMPLETED", "COMPLETE", "SUCCEEDED", "SUCCESS", "FAILED", "ERROR", "CANCELED", "CANCELLED")):
+            self._media_generation_state = {}
+            return
+
+        if not any(token in state for token in ("PENDING", "STARTED", "RUNNING", "IN_PROGRESS")):
+            return
+
+        hint_text = str(self._media_generation_state.get("hint_text") or "")
+        hint_parts = [item for item in hint_text.split("\n\n") if item]
+        if message and message not in hint_parts:
+            hint_parts.append(message)
+
+        wait_timeout_seconds = self._media_generation_state.get("wait_timeout_seconds")
+        self._media_generation_state = {
+            "pending": True,
+            "media_type": "image",
+            "hint_text": "\n\n".join(hint_parts[:3]),
+            "wait_timeout_seconds": max(float(wait_timeout_seconds or 0), 120.0),
+        }
 
     def _consume_token_event(self, result: Dict[str, Any]) -> None:
         token = result.get("token")

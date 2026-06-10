@@ -29,7 +29,12 @@ window.TabPoolTabComponent = {
             ],
             enabledRouteMethods: ['domain', 'fixed_tab', 'exact_url', 'exact_url_preset'],
             routeMethodUpdating: false,
-            showRouteSettings: false
+            showRouteSettings: false,
+            fetchInFlight: false,
+            fetchRequestSeq: 0,
+            fetchAbortController: null,
+            visibilityChangeHandler: null,
+            tabsResponseSignature: ''
         };
     },
     computed: {
@@ -57,6 +62,18 @@ window.TabPoolTabComponent = {
             return new Set(this.enabledRouteMethods || []);
         }
     },
+    watch: {
+        autoRefresh(enabled) {
+            if (enabled) {
+                this.startAutoRefresh();
+                if (!this.isDocumentHidden()) {
+                    this.fetchTabs({ silent: true });
+                }
+            } else {
+                this.stopAutoRefreshTimer();
+            }
+        }
+    },
     methods: {
         handleDocumentClick(event) {
             if (!this.showRouteSettings) return;
@@ -69,27 +86,80 @@ window.TabPoolTabComponent = {
             this.showRouteSettings = false;
         },
 
-        async fetchTabs() {
-            this.loading = true;
+        makeTabsResponseSignature(data) {
+            try {
+                return JSON.stringify({
+                    tabs: Array.isArray(data && data.tabs) ? data.tabs : [],
+                    allocation_mode: data && data.allocation_mode || '',
+                    allocation_mode_options: data && data.allocation_mode_options || [],
+                    enabled_route_methods: data && data.enabled_route_methods || [],
+                    route_method_options: data && data.route_method_options || []
+                });
+            } catch (e) {
+                return '';
+            }
+        },
+
+        async fetchTabs(options = {}) {
+            const force = !!(options && options.force);
+            const silent = !!(options && options.silent);
+            const shouldShowLoading = !silent;
+            if (this.fetchInFlight) {
+                if (!force) return;
+                if (this.fetchAbortController) {
+                    this.fetchAbortController.abort();
+                }
+            }
+
+            const requestSeq = this.fetchRequestSeq + 1;
+            this.fetchRequestSeq = requestSeq;
+            const controller = window.AbortController ? new AbortController() : null;
+            this.fetchAbortController = controller;
+            this.fetchInFlight = true;
+            if (shouldShowLoading) {
+                this.loading = true;
+            }
+            let timeoutId = null;
             try {
                 const token = localStorage.getItem('api_token');
                 const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
-                
-                const response = await fetch('/api/tab-pool/tabs', { headers });
+                const fetchOptions = { headers };
+                if (controller) {
+                    fetchOptions.signal = controller.signal;
+                    timeoutId = setTimeout(() => controller.abort(), 8000);
+                }
+
+                const response = await fetch('/api/tab-pool/tabs', fetchOptions);
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
                 
                 const data = await response.json();
-                this.tabs = data.tabs || [];
-                this.allocationMode = data.allocation_mode || 'first_idle';
-                this.allocationModeOptions = data.allocation_mode_options || this.allocationModeOptions;
-                this.enabledRouteMethods = data.enabled_route_methods || this.enabledRouteMethods;
-                this.routeMethodOptions = data.route_method_options || this.routeMethodOptions;
-                this.lastUpdate = new Date().toLocaleTimeString();
-                this.error = null;
+                if (requestSeq !== this.fetchRequestSeq) return;
+                const signature = this.makeTabsResponseSignature(data);
+                const shouldApplyResponse = force || !signature || signature !== this.tabsResponseSignature;
+                if (shouldApplyResponse) {
+                    this.tabs = data.tabs || [];
+                    this.allocationMode = data.allocation_mode || 'first_idle';
+                    this.allocationModeOptions = data.allocation_mode_options || this.allocationModeOptions;
+                    this.enabledRouteMethods = data.enabled_route_methods || this.enabledRouteMethods;
+                    this.routeMethodOptions = data.route_method_options || this.routeMethodOptions;
+                    this.tabsResponseSignature = signature;
+                    this.lastUpdate = new Date().toLocaleTimeString();
+                }
+                if (this.error) {
+                    this.error = null;
+                }
             } catch (e) {
-                this.error = e.message;
+                if (requestSeq !== this.fetchRequestSeq) return;
+                this.error = e && e.name === 'AbortError' ? '请求超时，请稍后重试' : e.message;
             } finally {
-                this.loading = false;
+                if (timeoutId) clearTimeout(timeoutId);
+                if (requestSeq === this.fetchRequestSeq) {
+                    if (shouldShowLoading) {
+                        this.loading = false;
+                    }
+                    this.fetchInFlight = false;
+                    this.fetchAbortController = null;
+                }
             }
         },
 
@@ -117,7 +187,7 @@ window.TabPoolTabComponent = {
                 this.allocationMode = data.allocation_mode || nextMode;
                 this.allocationModeOptions = data.allocation_mode_options || this.allocationModeOptions;
                 this.$emit('notify', { type: 'success', message: '标签页池分配模式已切换' });
-                await this.fetchTabs();
+                await this.fetchTabs({ force: true });
             } catch (e) {
                 this.$emit('notify', { type: 'error', message: '切换分配模式失败: ' + e.message });
             } finally {
@@ -178,23 +248,57 @@ window.TabPoolTabComponent = {
                 .filter(item => next.has(item));
             await this.saveRouteMethodSettings();
         },
-        
+
+        isDocumentHidden() {
+            return typeof document !== 'undefined' && document.visibilityState === 'hidden';
+        },
+
         startAutoRefresh() {
-            if (this.refreshInterval) return;
+            this.ensureVisibilityChangeHandler();
+            if (this.refreshInterval || !this.autoRefresh || this.isDocumentHidden()) return;
             this.refreshInterval = setInterval(() => {
-                if (this.autoRefresh) {
-                    this.fetchTabs();
+                if (this.autoRefresh && !this.isDocumentHidden()) {
+                    this.fetchTabs({ silent: true });
                 }
             }, 1000);
         },
-        
+
         stopAutoRefresh() {
-            if (this.refreshInterval) {
-                clearInterval(this.refreshInterval);
-                this.refreshInterval = null;
+            this.stopAutoRefreshTimer();
+            if (typeof document !== 'undefined' && this.visibilityChangeHandler) {
+                document.removeEventListener('visibilitychange', this.visibilityChangeHandler);
+                this.visibilityChangeHandler = null;
             }
         },
-        
+
+        stopAutoRefreshTimer() {
+            if (!this.refreshInterval) return;
+            clearInterval(this.refreshInterval);
+            this.refreshInterval = null;
+        },
+
+        ensureVisibilityChangeHandler() {
+            if (
+                this.visibilityChangeHandler
+                || typeof document === 'undefined'
+                || typeof document.addEventListener !== 'function'
+            ) {
+                return;
+            }
+
+            this.visibilityChangeHandler = () => {
+                if (this.isDocumentHidden()) {
+                    this.stopAutoRefreshTimer();
+                    return;
+                }
+                if (this.autoRefresh) {
+                    this.startAutoRefresh();
+                    this.fetchTabs({ silent: true });
+                }
+            };
+            document.addEventListener('visibilitychange', this.visibilityChangeHandler);
+        },
+
         copyEndpoint(routePrefix, successMessage = '已复制端点地址') {
             const endpoint = `${this.baseUrl}${routePrefix}/v1/chat/completions`;
             navigator.clipboard.writeText(endpoint).then(() => {
@@ -203,14 +307,24 @@ window.TabPoolTabComponent = {
         },
         
         copyPresetEndpoint(routePrefix, presetName, successMessage = '已复制端点地址') {
-            const endpoint = `${this.baseUrl}${routePrefix}/${presetName}/v1/chat/completions`;
+            const endpoint = `${this.baseUrl}${this.buildPresetEndpointPath(routePrefix, presetName, { encoded: true })}`;
             navigator.clipboard.writeText(endpoint).then(() => {
                 this.$emit('notify', { type: 'success', message: successMessage });
             });
         },
 
+        buildPresetEndpointPath(routePrefix, presetName, options = {}) {
+            const rawPreset = String(presetName || '');
+            const displayPreset = options.encoded ? encodeURIComponent(rawPreset) : rawPreset;
+            return `${routePrefix}/${displayPreset}/v1/chat/completions`;
+        },
+
         getDomainRoutePrefix(tab) {
             return tab.domain_route_prefix || '';
+        },
+
+        getPresetDomainRoutePrefix(tab) {
+            return tab.preset_domain_route_prefix || this.getDomainRoutePrefix(tab);
         },
 
         getFixedTabRoutePrefix(tab) {
@@ -271,7 +385,7 @@ window.TabPoolTabComponent = {
                     ? this.getDefaultPresetLabel(tab)
                     : newPresetName;
                 this.$emit('notify', { type: 'success', message: '预设已切换: ' + presetLabel });
-                await this.fetchTabs();
+                await this.fetchTabs({ force: true });
             } catch (e) {
                 this.$emit('notify', { type: 'error', message: '切换预设失败: ' + e.message });
             } finally {
@@ -306,7 +420,7 @@ window.TabPoolTabComponent = {
                     ? `标签页 #${tabIndex} 已终止并解除占用`
                     : `标签页 #${tabIndex} 已解除占用（无可取消请求）`;
                 this.$emit('notify', { type: 'success', message: msg });
-                await this.fetchTabs();
+                await this.fetchTabs({ force: true });
             } catch (e) {
                 this.$emit('notify', { type: 'error', message: '终止任务失败: ' + e.message });
             }
@@ -326,6 +440,11 @@ window.TabPoolTabComponent = {
     },
     beforeUnmount() {
         this.stopAutoRefresh();
+        this.fetchRequestSeq += 1;
+        if (this.fetchAbortController) {
+            this.fetchAbortController.abort();
+            this.fetchAbortController = null;
+        }
         document.removeEventListener('click', this.handleDocumentClick);
     },
     template: `
@@ -519,12 +638,12 @@ window.TabPoolTabComponent = {
                                 
                                 <!-- 预设专属路由 -->
                                 <template v-if="tab.available_presets && tab.available_presets.length > 0">
-                                    <div v-if="isRouteMethodEnabled('domain') && getDomainRoutePrefix(tab)" class="flex flex-wrap items-center gap-2">
+                                    <div v-if="isRouteMethodEnabled('domain') && getPresetDomainRoutePrefix(tab)" class="flex flex-wrap items-center gap-2">
                                         <span class="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">预设域名路由</span>
                                         <code class="text-xs bg-gray-100 dark:bg-gray-700 px-2 py-1 rounded text-gray-700 dark:text-gray-300">
-                                            {{ getDomainRoutePrefix(tab) }}/{{ getDisplayedPreset(tab) }}/v1/chat/completions
+                                            {{ buildPresetEndpointPath(getPresetDomainRoutePrefix(tab), getDisplayedPreset(tab)) }}
                                         </code>
-                                        <button @click="copyPresetEndpoint(getDomainRoutePrefix(tab), getDisplayedPreset(tab), '已复制预设域名路由')"
+                                        <button @click="copyPresetEndpoint(getPresetDomainRoutePrefix(tab), getDisplayedPreset(tab), '已复制预设域名路由')"
                                                 class="text-xs text-blue-500 hover:text-blue-700 dark:text-blue-400">
                                             📋 复制
                                         </button>
@@ -532,7 +651,7 @@ window.TabPoolTabComponent = {
                                     <div v-if="isRouteMethodEnabled('exact_url_preset') && getExactUrlRoutePrefix(tab)" class="flex flex-wrap items-center gap-2">
                                         <span class="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">URL 绑定预设路由</span>
                                         <code class="text-xs bg-gray-100 dark:bg-gray-700 px-2 py-1 rounded text-gray-700 dark:text-gray-300">
-                                            {{ getExactUrlRoutePrefix(tab) }}/{{ getDisplayedPreset(tab) }}/v1/chat/completions
+                                            {{ buildPresetEndpointPath(getExactUrlRoutePrefix(tab), getDisplayedPreset(tab)) }}
                                         </code>
                                         <button @click="copyPresetEndpoint(getExactUrlRoutePrefix(tab), getDisplayedPreset(tab), '已复制 URL 绑定预设路由')"
                                                 class="text-xs text-blue-500 hover:text-blue-700 dark:text-blue-400">

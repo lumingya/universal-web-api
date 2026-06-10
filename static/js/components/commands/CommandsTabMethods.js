@@ -23,26 +23,59 @@ window.CommandsTabMethods = {
             return response.json();
         },
 
+        makeCommandsResponseSignature(data) {
+            try {
+                return JSON.stringify(Array.isArray(data && data.commands) ? data.commands : []);
+            } catch (e) {
+                return '';
+            }
+        },
+
         async fetchCommands() {
+            const requestSeq = Number(this.fetchCommandsSeq || 0) + 1;
+            this.fetchCommandsSeq = requestSeq;
             this.loading = true;
             try {
                 const data = await this.apiRequest('/api/commands');
-                this.commands = (data.commands || []).map(cmd => this.normalizeCommand(cmd));
-                const validIds = new Set(this.commands.map(cmd => cmd.id));
-                this.selectedCommandIds = (this.selectedCommandIds || []).filter(id => validIds.has(id));
-                this.syncGroupCollapseState();
-                this.syncSourceCommandPickerState();
-                const hasExistingSelection = (this.commandGroups || []).some(group => group.name === this.selectedExistingGroupName);
-                if (!hasExistingSelection) {
-                    this.selectedExistingGroupName = this.commandGroups[0]?.name || '';
+                if (requestSeq !== this.fetchCommandsSeq) {
+                    return this.commands;
                 }
-                this.clearGroupDragState();
-                this.ensureValidPage();
+                const signature = this.makeCommandsResponseSignature(data);
+                const signatureChanged = !signature || signature !== this.commandsResponseSignature;
+                if (signatureChanged) {
+                    this.commands = (data.commands || []).map(cmd => this.normalizeCommand(cmd));
+                    this.commandsResponseSignature = signature;
+                    const validIds = new Set(this.commands.map(cmd => cmd.id));
+                    const nextSelectedCommandIds = (this.selectedCommandIds || []).filter(id => validIds.has(id));
+                    if (
+                        nextSelectedCommandIds.length !== (this.selectedCommandIds || []).length
+                        || nextSelectedCommandIds.some((id, index) => id !== this.selectedCommandIds[index])
+                    ) {
+                        this.selectedCommandIds = nextSelectedCommandIds;
+                    }
+                    this.syncGroupCollapseState();
+                    this.syncSourceCommandPickerState();
+                    const hasExistingSelection = (this.commandGroups || []).some(group => group.name === this.selectedExistingGroupName);
+                    if (!hasExistingSelection) {
+                        this.selectedExistingGroupName = this.commandGroups[0]?.name || '';
+                    }
+                    this.clearGroupDragState();
+                    this.ensureValidPage();
+                }
+                if (this.error) {
+                    this.error = null;
+                }
             } catch (e) {
+                if (requestSeq !== this.fetchCommandsSeq) {
+                    return this.commands;
+                }
                 this.$emit('notify', { type: 'error', message: '加载命令失败: ' + e.message });
             } finally {
-                this.loading = false;
+                if (requestSeq === this.fetchCommandsSeq) {
+                    this.loading = false;
+                }
             }
+            return this.commands;
         },
 
         normalizeAction(action, index = 0) {
@@ -522,17 +555,27 @@ window.CommandsTabMethods = {
 
         async loadPresetOptions() {
             const domain = this.resolvedPresetDomain;
+            const commandRef = this.editingCommand;
+            const requestSeq = (this.presetOptionsRequestSeq || 0) + 1;
+            this.presetOptionsRequestSeq = requestSeq;
             this.availablePresets = [];
 
-            if (!domain || !this.editingCommand) return;
-            if (!this.editingCommand.actions?.some(action => ['execute_preset', 'execute_workflow'].includes(action.type))) return;
+            if (!domain || !commandRef) return;
+            if (!commandRef.actions?.some(action => ['execute_preset', 'execute_workflow'].includes(action.type))) return;
 
             this.presetLoading = true;
             try {
                 const data = await this.apiRequest('/api/presets/' + encodeURIComponent(domain));
+                if (
+                    requestSeq !== this.presetOptionsRequestSeq
+                    || this.editingCommand !== commandRef
+                    || this.resolvedPresetDomain !== domain
+                ) {
+                    return;
+                }
                 this.availablePresets = data.presets || [];
 
-                for (const action of this.editingCommand.actions) {
+                for (const action of commandRef.actions) {
                     if (!['execute_preset', 'execute_workflow'].includes(action.type)) continue;
                     action.preset_name = this.normalizePresetActionValue(action.preset_name);
                     if (
@@ -543,15 +586,24 @@ window.CommandsTabMethods = {
                     }
                 }
             } catch (e) {
+                if (
+                    requestSeq !== this.presetOptionsRequestSeq
+                    || this.editingCommand !== commandRef
+                    || this.resolvedPresetDomain !== domain
+                ) {
+                    return;
+                }
                 console.error('加载预设列表失败:', e);
                 this.availablePresets = [];
-                for (const action of this.editingCommand.actions || []) {
+                for (const action of commandRef.actions || []) {
                     if (['execute_preset', 'execute_workflow'].includes(action.type)) {
                         action.preset_name = this.getFollowDefaultPresetValue();
                     }
                 }
             } finally {
-                this.presetLoading = false;
+                if (requestSeq === this.presetOptionsRequestSeq && this.editingCommand === commandRef) {
+                    this.presetLoading = false;
+                }
             }
         },
 

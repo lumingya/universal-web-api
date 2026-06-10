@@ -14,13 +14,16 @@ import copy
 import re
 import threading
 from app.core.config import get_logger
-from typing import Dict, Optional, List, Any
+from typing import Dict, Optional, List, Any, Set
 from urllib.parse import urljoin
 from app.core.parsers import ParserRegistry
 from app.models.schemas import (
     SiteConfig,
     WorkflowStep,
     SelectorDefinition,
+    ADVANCED_FIELDS,
+    PRESET_ADVANCED_FIELDS,
+    SITE_ADVANCED_FIELDS,
     get_default_image_extraction_config,
     get_default_file_paste_config,
     get_default_prompt_padding_config,
@@ -57,14 +60,36 @@ class ConfigConstants:
     COMMANDS_FILE = os.getenv("COMMANDS_CONFIG_FILE", os.path.join(_PROJECT_ROOT, "config", "commands.json"))
     COMMANDS_LOCAL_FILE = os.getenv("COMMANDS_LOCAL_FILE", os.path.join(_PROJECT_ROOT, "config", "commands.local.json"))
     IMAGE_PRESETS_FILE = os.path.join(_PROJECT_ROOT, "config", "image_presets.json")
-    
+
     MAX_HTML_CHARS = int(os.getenv("MAX_HTML_CHARS", "120000"))
     TEXT_TRUNCATE_LENGTH = 80
-    
+
     AI_MAX_RETRIES = 3
     AI_RETRY_BASE_DELAY = 1.0
     AI_RETRY_MAX_DELAY = 10.0
     AI_REQUEST_TIMEOUT = 120
+
+
+_MISSING = object()
+
+
+def _coerce_bool(value: Any, default: bool = False) -> bool:
+    """Parse bool-like config values without treating every non-empty string as true."""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "y", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "n", "off"}:
+            return False
+        return default
+    if isinstance(value, (int, float)):
+        return value != 0
+    return bool(value)
+
 
 # ================= 预设常量 =================
 
@@ -76,16 +101,6 @@ PRESET_FIELDS = [
     "image_extraction", "file_paste", "prompt_padding", "stealth",
     "extractor_id", "extractor_verified"
 ]
-
-PRESET_ADVANCED_FIELDS = {
-    "input_box_stability_wait_enabled",
-    "input_box_stability_wait_after_new_chat_only",
-    "input_box_stability_wait_timeout",
-    "url_transition_wait_on_new_chat",
-    "url_transition_wait_patterns",
-    "send_confirmation_check_enabled",
-    "send_confirmation_check_timeout",
-}
 
 # 默认工作流
 DEFAULT_WORKFLOW: List[WorkflowStep] = [
@@ -105,7 +120,7 @@ def get_default_stream_config() -> Dict[str, Any]:
         "hard_timeout": 300,        # 全局硬超时（秒）
         "send_confirmation": get_default_send_confirmation_config(),
         "attachment_monitor": get_default_attachment_monitor_config(),
-        
+
         # 网络监听配置（可选）
         "network": None
     }
@@ -123,6 +138,21 @@ def get_default_network_config() -> Dict[str, Any]:
     }
 
 
+def _merge_config_patch(base: Any, patch: Any) -> Any:
+    """Deep-merge object patches while letting scalars/lists replace existing values."""
+    if not isinstance(base, dict) or not isinstance(patch, dict):
+        return copy.deepcopy(patch)
+
+    merged = dict(base)
+    for key, value in patch.items():
+        existing = base.get(key)
+        if isinstance(value, dict) and isinstance(existing, dict):
+            merged[key] = _merge_config_patch(existing, value)
+        else:
+            merged[key] = copy.deepcopy(value)
+    return merged
+
+
 _SITE_STARTUP_JS_PATTERNS = (
     re.compile(r"""location\.(?:assign|replace)\(\s*['"]([^'"]+)['"]\s*\)""", re.IGNORECASE),
     re.compile(r"""location\.href\s*=\s*['"]([^'"]+)['"]""", re.IGNORECASE),
@@ -132,7 +162,7 @@ _SITE_STARTUP_JS_PATTERNS = (
 
 class ConfigEngine:
     """配置引擎主类"""
-    
+
     def __init__(self):
         self.config_file = ConfigConstants.CONFIG_FILE
         self.local_sites_file = ConfigConstants.SITES_LOCAL_FILE
@@ -143,30 +173,28 @@ class ConfigEngine:
         self._global_default_presets: Dict[str, str] = {}
         self._local_default_presets: Dict[str, str] = {}
         self._local_sites_payload: Dict[str, Any] = {}
-        
+
         # 子管理器
         self.global_config = GlobalConfigManager()
         self.image_presets = ImagePresetsManager(ConfigConstants.IMAGE_PRESETS_FILE)
-        
+
         # 加载配置
         self._load_config()
         self._migrate_global_commands()
-        
+
         # 处理器
         self.html_cleaner = HTMLCleaner()
         self.validator = SelectorValidator(self.global_config.get_fallback_selectors())
         self.ai_analyzer = AIAnalyzer(self.global_config)
-        
+
         # 迁移旧配置（顺序重要：先转预设格式，再补缺失字段，最后清理残留）
-        self._migrate_to_presets()
-        self.migrate_site_configs()
-        self._cleanup_preset_residuals()
+        self._migrate_loaded_config()
         self._apply_local_site_overrides()
-        
+
         logger.debug(f"配置引擎已初始化，已加载 {len(self.sites)} 个站点配置")
-    
+
     # ================= 配置加载与保存 =================
-    
+
     def _load_config(self):
         with self._io_lock:
             return self._load_config_locked()
@@ -177,35 +205,35 @@ class ConfigEngine:
             logger.info(f"配置文件 {self.config_file} 不存在，将创建新文件")
             self._apply_local_site_overrides()
             return
-        
+
         try:
             self.last_mtime = os.path.getmtime(self.config_file)
-            
+
             with open(self.config_file, "r", encoding="utf-8") as f:
                 content = f.read().strip()
                 if not content:
                     return
-                
+
                 data = json.loads(content)
-                
-                # 提取并加载 _global
-                if "_global" in data:
-                    self.global_config.load(data.pop("_global"))
-            
+
+                # 提取并加载 _global；缺失时重置为默认全局配置。
+                global_section = data.pop("_global", {})
+                self.global_config.load(global_section if isinstance(global_section, dict) else {})
+
                 # 过滤内部键
                 self.sites = {
-                    k: v for k, v in data.items() 
+                    k: v for k, v in data.items()
                     if not k.startswith('_')
                 }
                 self._refresh_global_default_presets_from_sites()
                 self._apply_local_site_overrides()
                 logger.debug(f"已加载配置文件: {self.config_file} (mtime: {self.last_mtime})")
-        
+
         except json.JSONDecodeError as e:
             logger.error(f"配置文件格式错误: {e}")
         except Exception as e:
             logger.error(f"加载配置失败: {e}")
-    
+
     def refresh_if_changed(self):
         """检查文件是否变化，如果变化则重载"""
         if not os.path.exists(self.config_file) and not os.path.exists(self.local_sites_file):
@@ -232,38 +260,39 @@ class ConfigEngine:
 
         try:
             mtime = os.path.getmtime(self.config_file)
-            
+
             with open(self.config_file, "r", encoding="utf-8") as f:
                 content = f.read().strip()
                 if not content:
                     data = {}
                 else:
                     data = json.loads(content)
-            
-            # 提取并加载 _global
-            if "_global" in data:
-                self.global_config.load(data.pop("_global"))
-                self.validator.fallback_selectors = self.global_config.get_fallback_selectors()
-        
+
+            # 提取并加载 _global；缺失时重置为默认全局配置。
+            global_section = data.pop("_global", {})
+            self.global_config.load(global_section if isinstance(global_section, dict) else {})
+            self.validator.fallback_selectors = self.global_config.get_fallback_selectors()
+
             # 过滤内部键
             self.sites = {
-                k: v for k, v in data.items() 
+                k: v for k, v in data.items()
                 if not k.startswith('_')
             }
             self.last_mtime = mtime
             self._refresh_global_default_presets_from_sites()
+            self._migrate_loaded_config()
             self._apply_local_site_overrides()
             logger.debug(f"✅ 配置已热重载 (Sites: {len(self.sites)})")
-            
+
         except json.JSONDecodeError as e:
             logger.error(f"❌ 重载配置失败（JSON格式错误），保留旧配置: {e}")
         except Exception as e:
             logger.error(f"❌ 重载配置失败: {e}")
-    
+
     def save_config(self):
         """公开的保存方法（供 API 调用）"""
         return self._save_config()
-    
+
     def _save_config(self) -> bool:
         with self._io_lock:
             return self._save_config_locked()
@@ -271,7 +300,13 @@ class ConfigEngine:
     def _save_config_locked(self) -> bool:
         """保存配置文件（原子写入版）"""
         tmp_file = self.config_file + ".tmp"
-        
+        local_snapshot: Optional[tuple[bool, bytes, Dict[str, Any], Dict[str, str]]] = None
+        local_overrides_written = False
+        default_maps_snapshot = (
+            copy.deepcopy(self._global_default_presets),
+            copy.deepcopy(self._local_default_presets),
+        )
+
         try:
             self._prune_default_preset_maps()
             persisted_sites = {}
@@ -292,26 +327,36 @@ class ConfigEngine:
                 "_global": self.global_config.to_dict(),
                 **persisted_sites
             }
-            
+
+            local_snapshot = self._snapshot_local_site_overrides_locked()
+            if local_snapshot is None:
+                self._global_default_presets, self._local_default_presets = default_maps_snapshot
+                return False
+            if not self._save_local_site_overrides():
+                self._restore_local_site_overrides_locked(local_snapshot)
+                self._global_default_presets, self._local_default_presets = default_maps_snapshot
+                return False
+            local_overrides_written = True
+
             # 步骤 1：写入临时文件
-            with open(tmp_file, "w", encoding="utf-8") as f:
+            with open(tmp_file, "w", encoding="utf-8", newline="\n") as f:
                 json.dump(full_config, f, indent=2, ensure_ascii=False)
                 f.flush()
                 os.fsync(f.fileno())
-            
+
             # 步骤 2：原子替换
             os.replace(tmp_file, self.config_file)
-            
-            # 更新时间戳
-            if os.path.exists(self.config_file):
-                self.last_mtime = os.path.getmtime(self.config_file)
 
-            if not self._save_local_site_overrides():
-                return False
-            
+            # 更新时间戳
+            try:
+                if os.path.exists(self.config_file):
+                    self.last_mtime = os.path.getmtime(self.config_file)
+            except Exception as e:
+                logger.warning(f"配置已保存但更新时间戳失败: {e}")
+
             logger.info(f"配置已保存: {self.config_file}")
             return True
-        
+
         except Exception as e:
             logger.error(f"保存配置失败: {e}")
             try:
@@ -319,7 +364,17 @@ class ConfigEngine:
                     os.remove(tmp_file)
             except Exception:
                 pass
+            if local_overrides_written:
+                self._restore_local_site_overrides_locked(local_snapshot)
+            self._global_default_presets, self._local_default_presets = default_maps_snapshot
             return False
+
+    def _migrate_loaded_config(self):
+        """Run migrations that apply to freshly loaded site config data."""
+        self._migrate_to_presets()
+        self.migrate_site_configs()
+        self._migrate_site_advanced_to_presets()
+        self._cleanup_preset_residuals()
 
     def _load_local_site_overrides(self) -> Dict[str, str]:
         with self._io_lock:
@@ -349,12 +404,10 @@ class ConfigEngine:
             }
         except json.JSONDecodeError as e:
             logger.error(f"本地站点覆盖配置格式错误: {e}")
-            self._local_sites_payload = {}
-            return {}
+            return copy.deepcopy(self._local_default_presets or {})
         except Exception as e:
             logger.error(f"加载本地站点覆盖配置失败: {e}")
-            self._local_sites_payload = {}
-            return {}
+            return copy.deepcopy(self._local_default_presets or {})
 
     def _prune_default_preset_maps(self) -> None:
         active_domains = {
@@ -481,13 +534,16 @@ class ConfigEngine:
 
         try:
             os.makedirs(os.path.dirname(self.local_sites_file), exist_ok=True)
-            with open(tmp_file, "w", encoding="utf-8") as f:
+            with open(tmp_file, "w", encoding="utf-8", newline="\n") as f:
                 json.dump(payload, f, indent=2, ensure_ascii=False)
                 f.flush()
                 os.fsync(f.fileno())
 
             os.replace(tmp_file, self.local_sites_file)
-            self.last_local_mtime = os.path.getmtime(self.local_sites_file)
+            try:
+                self.last_local_mtime = os.path.getmtime(self.local_sites_file)
+            except Exception as e:
+                logger.warning(f"本地站点覆盖已保存但更新时间戳失败: {e}")
             self._local_sites_payload = payload
             return True
         except Exception as e:
@@ -498,6 +554,48 @@ class ConfigEngine:
             except Exception:
                 pass
             return False
+
+    def _snapshot_local_site_overrides_locked(self) -> Optional[tuple[bool, bytes, Dict[str, Any], Dict[str, str]]]:
+        try:
+            payload_snapshot = copy.deepcopy(self._local_sites_payload or {})
+            defaults_snapshot = copy.deepcopy(self._local_default_presets or {})
+            if not os.path.exists(self.local_sites_file):
+                return (False, b"", payload_snapshot, defaults_snapshot)
+            with open(self.local_sites_file, "rb") as f:
+                return (True, f.read(), payload_snapshot, defaults_snapshot)
+        except Exception as e:
+            logger.error(f"读取本地站点覆盖快照失败: {e}")
+            return None
+
+    def _restore_local_site_overrides_locked(self, snapshot: Optional[tuple[bool, bytes, Dict[str, Any], Dict[str, str]]]) -> None:
+        if snapshot is None:
+            return
+
+        tmp_file = self.local_sites_file + ".restore.tmp"
+        existed, payload, payload_snapshot, defaults_snapshot = snapshot
+        try:
+            if existed:
+                os.makedirs(os.path.dirname(self.local_sites_file), exist_ok=True)
+                with open(tmp_file, "wb") as f:
+                    f.write(payload)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp_file, self.local_sites_file)
+            elif os.path.exists(self.local_sites_file):
+                os.remove(self.local_sites_file)
+            try:
+                self.last_local_mtime = os.path.getmtime(self.local_sites_file) if os.path.exists(self.local_sites_file) else 0.0
+            except Exception as e:
+                logger.warning(f"本地站点覆盖已恢复但更新时间戳失败: {e}")
+            self._local_sites_payload = copy.deepcopy(payload_snapshot)
+            self._local_default_presets = copy.deepcopy(defaults_snapshot)
+        except Exception as e:
+            logger.error(f"恢复本地站点覆盖失败: {e}")
+            try:
+                if os.path.exists(tmp_file):
+                    os.remove(tmp_file)
+            except Exception:
+                pass
 
     def _load_commands_file(self) -> List[Dict[str, Any]]:
         """加载独立命令配置文件"""
@@ -533,7 +631,7 @@ class ConfigEngine:
             os.makedirs(os.path.dirname(commands_file), exist_ok=True)
             payload = {"commands": commands}
 
-            with open(tmp_file, "w", encoding="utf-8") as f:
+            with open(tmp_file, "w", encoding="utf-8", newline="\n") as f:
                 json.dump(payload, f, indent=2, ensure_ascii=False)
                 f.flush()
                 os.fsync(f.fileno())
@@ -601,73 +699,76 @@ class ConfigEngine:
         if self.global_config.remove("commands"):
             self._save_config()
     # ================= 预设系统核心方法 =================
-    
+
     def _migrate_to_presets(self):
         """
         将旧格式（扁平）站点配置迁移为预设格式
-        
+
         旧格式: { "selectors": {...}, "workflow": [...], ... }
         新格式: { "presets": { "主预设": { "selectors": {...}, ... } } }
         """
         migrated_count = 0
-        
+
         for domain in list(self.sites.keys()):
             if domain.startswith('_'):
                 continue
-            
+
             site_config = self.sites[domain]
-            
+
             # 已经是预设格式，跳过
             if "presets" in site_config:
                 continue
-            
+
             # 将所有已知配置字段提取到主预设中
             preset_data = {}
             remaining = {}
-            
+
             for key, value in site_config.items():
                 if key in PRESET_FIELDS:
                     preset_data[key] = value
+                elif key == "advanced":
+                    remaining[key] = value
                 else:
                     # 未知字段也放入预设（保留用户自定义数据）
                     preset_data[key] = value
-            
+
             # 构建新格式
             self.sites[domain] = {
                 "default_preset": DEFAULT_PRESET_NAME,
                 "presets": {
                     DEFAULT_PRESET_NAME: preset_data
-                }
+                },
+                **remaining,
             }
-            
+
             migrated_count += 1
             logger.debug(f"迁移站点配置: {domain} → 预设格式")
-        
+
         if migrated_count > 0:
             self._save_config()
             logger.info(f"✅ 已迁移 {migrated_count} 个站点配置为预设格式")
-    
-    
+
+
     def _cleanup_preset_residuals(self):
         """
         清理站点配置中预设外的残留字段
-        
+
         当站点已有 presets 结构时，顶层不应再有 selectors/workflow/file_paste 等字段。
         这些残留通常由旧版 bug 或手动编辑产生。
         """
         cleaned_count = 0
         default_fixed_count = 0
-        
+
         for domain in list(self.sites.keys()):
             if domain.startswith('_'):
                 continue
-            
+
             site_config = self.sites[domain]
-            
+
             # 只处理已有 presets 结构的站点
             if "presets" not in site_config:
                 continue
-            
+
             # 找出预设外的残留字段
             residual_keys = []
             for key in list(site_config.keys()):
@@ -675,7 +776,7 @@ class ConfigEngine:
                     continue
                 if key in PRESET_FIELDS:
                     residual_keys.append(key)
-            
+
             # 删除残留
             for key in residual_keys:
                 del site_config[key]
@@ -691,6 +792,64 @@ class ConfigEngine:
             logger.info(
                 f"✅ 已清理 {cleaned_count} 个预设外残留字段，"
                 f"修正 {default_fixed_count} 个站点默认预设"
+            )
+
+    def _migrate_site_advanced_to_presets(self):
+        """
+        规范化已有预设级 advanced，避免启动时改写站点级 advanced 语义。
+
+        站点根级 advanced 仍作为所有预设的共享基线；预设级 advanced 只保存
+        覆盖项。因此这里不再把站点级时序字段复制到所有预设，也不从站点级
+        删除这些字段，只清理明显放错位置的 Cookie 字段并规范化已有覆盖项。
+        """
+        cleaned_count = 0
+        changed = False
+
+        for domain, site_config in self.sites.items():
+            if domain.startswith("_") or not isinstance(site_config, dict):
+                continue
+
+            presets = site_config.get("presets", {})
+            if not isinstance(presets, dict) or not presets:
+                continue
+
+            for preset_name, preset_data in presets.items():
+                if not isinstance(preset_data, dict):
+                    continue
+
+                preset_advanced = preset_data.get("advanced")
+                if not isinstance(preset_advanced, dict):
+                    continue
+
+                for key in list(SITE_ADVANCED_FIELDS):
+                    if key in preset_advanced:
+                        del preset_advanced[key]
+                        cleaned_count += 1
+                        changed = True
+
+                normalized_preset_advanced = self._normalize_site_advanced_config(
+                    preset_advanced
+                )
+                for key in list(preset_advanced.keys()):
+                    if key in PRESET_ADVANCED_FIELDS:
+                        value = normalized_preset_advanced[key]
+                        if preset_advanced.get(key) != value:
+                            preset_advanced[key] = value
+                            cleaned_count += 1
+                            changed = True
+
+                if preset_advanced != preset_data.get("advanced"):
+                    logger.debug(f"规范化预设高级配置: {domain}/{preset_name}")
+
+                if not preset_advanced:
+                    del preset_data["advanced"]
+                    cleaned_count += 1
+                    changed = True
+
+        if changed:
+            self._save_config()
+            logger.info(
+                f"✅ 已规范化预设高级配置，清理 {cleaned_count} 个残留项"
             )
 
     def _resolve_default_preset_name(self, site: Dict[str, Any]) -> Optional[str]:
@@ -721,54 +880,47 @@ class ConfigEngine:
             是否发生修改
         """
         return self._sync_site_default_preset_state(domain, site)
-    
+
     def _get_site_data(self, domain: str, preset_name: str = None) -> Optional[Dict]:
         """
         获取指定站点的预设配置数据（可变引用）
-        
+
         查找顺序:
-        1. 指定的 preset_name
-        2. 默认预设 "主预设"
-        3. 第一个可用预设
-        
+        - preset_name 显式提供时：只匹配该预设（含别名）
+        - preset_name 为空时：按站点默认预设 / 主预设 / 第一个可用预设回退
+
         Args:
             domain: 站点域名
             preset_name: 预设名称，None 则使用默认
-            
+
         Returns:
             预设配置字典的引用（可直接修改），或 None
         """
         if domain not in self.sites:
             return None
-        
+
         site = self.sites[domain]
         presets = site.get("presets", {})
-        
+
         if not presets:
             return None
-        
+
+        requested_preset = str(preset_name or "").strip()
+        if requested_preset:
+            resolved_target = self._resolve_preset_alias_key(requested_preset, presets)
+            if resolved_target != requested_preset:
+                logger.debug(f"预设别名命中: '{requested_preset}' -> '{resolved_target}'")
+            if resolved_target in presets:
+                return presets[resolved_target]
+            return None
+
         resolved_default = self._resolve_default_preset_name(site)
-        target = preset_name or resolved_default
-        resolved_target = self._resolve_preset_alias_key(target, presets)
-        if resolved_target != target:
-            logger.debug(f"预设别名命中: '{target}' -> '{resolved_target}'")
-            target = resolved_target
-
-        # 1. 尝试精确匹配
-        if target and target in presets:
-            return presets[target]
-
-        # 2. 回退到站点默认预设
         if resolved_default and resolved_default in presets:
-            logger.debug(f"预设 '{target}' 不存在，回退到站点默认预设 '{resolved_default}'")
             return presets[resolved_default]
 
-        # 3. 回退到主预设
         if DEFAULT_PRESET_NAME in presets:
-            logger.debug(f"预设 '{target}' 不存在，回退到 '{DEFAULT_PRESET_NAME}'")
             return presets[DEFAULT_PRESET_NAME]
 
-        # 4. 使用第一个可用预设
         first_key = next(iter(presets))
         logger.warning(f"默认预设不存在，使用第一个预设: '{first_key}'")
         return presets[first_key]
@@ -796,21 +948,42 @@ class ConfigEngine:
                 return candidate
 
         return normalized
-    
+
     def _get_site_data_readonly(self, domain: str, preset_name: str = None) -> Optional[Dict]:
         """获取预设配置的深拷贝（只读用途）"""
         data = self._get_site_data(domain, preset_name)
         if data is None:
             return None
         return copy.deepcopy(data)
-    
+
+    def _get_preset_data_exact(self, domain: str, preset_name: str = None) -> Optional[Dict]:
+        """获取预设配置引用；显式预设不存在时不回退到默认预设。"""
+        site = self.sites.get(domain)
+        if not isinstance(site, dict):
+            return None
+
+        presets = site.get("presets", {})
+        if not isinstance(presets, dict) or not presets:
+            return None
+
+        if preset_name is None or not str(preset_name).strip():
+            target = self._resolve_default_preset_name(site)
+        else:
+            target = str(preset_name).strip()
+
+        resolved_target = self._resolve_preset_alias_key(target, presets)
+        if resolved_target and resolved_target in presets:
+            return presets[resolved_target]
+
+        return None
+
     def list_presets(self, domain: str) -> List[str]:
         """获取指定站点的所有预设名称"""
         self.refresh_if_changed()
-        
+
         if domain not in self.sites:
             return []
-        
+
         site = self.sites[domain]
         presets = site.get("presets", {})
         return list(presets.keys())
@@ -924,23 +1097,23 @@ class ConfigEngine:
         if isinstance(raw_config, dict):
             normalized.update(copy.deepcopy(raw_config))
 
-        normalized["independent_cookies"] = bool(normalized.get("independent_cookies", False))
-        normalized["independent_cookies_auto_takeover"] = bool(
-            normalized.get("independent_cookies_auto_takeover", False)
+        normalized["independent_cookies"] = _coerce_bool(normalized.get("independent_cookies"), False)
+        normalized["independent_cookies_auto_takeover"] = _coerce_bool(
+            normalized.get("independent_cookies_auto_takeover"), False
         )
-        normalized["input_box_stability_wait_enabled"] = bool(
-            normalized.get("input_box_stability_wait_enabled", False)
+        normalized["input_box_stability_wait_enabled"] = _coerce_bool(
+            normalized.get("input_box_stability_wait_enabled"), False
         )
-        normalized["input_box_stability_wait_after_new_chat_only"] = bool(
-            normalized.get("input_box_stability_wait_after_new_chat_only", True)
+        normalized["input_box_stability_wait_after_new_chat_only"] = _coerce_bool(
+            normalized.get("input_box_stability_wait_after_new_chat_only"), True
         )
         try:
             timeout_value = float(normalized.get("input_box_stability_wait_timeout", 1.5))
         except Exception:
             timeout_value = 1.5
         normalized["input_box_stability_wait_timeout"] = max(0.1, min(timeout_value, 10.0))
-        normalized["url_transition_wait_on_new_chat"] = bool(
-            normalized.get("url_transition_wait_on_new_chat", False)
+        normalized["url_transition_wait_on_new_chat"] = _coerce_bool(
+            normalized.get("url_transition_wait_on_new_chat"), False
         )
         raw_patterns = normalized.get("url_transition_wait_patterns") or []
         if isinstance(raw_patterns, str):
@@ -952,8 +1125,8 @@ class ConfigEngine:
             for pattern in raw_patterns
             if str(pattern or "").strip()
         ]
-        normalized["send_confirmation_check_enabled"] = bool(
-            normalized.get("send_confirmation_check_enabled", False)
+        normalized["send_confirmation_check_enabled"] = _coerce_bool(
+            normalized.get("send_confirmation_check_enabled"), False
         )
         try:
             send_timeout_value = float(normalized.get("send_confirmation_check_timeout", 1.5))
@@ -975,8 +1148,12 @@ class ConfigEngine:
             raw_config if isinstance(raw_config, dict) else {}
         )
 
-        if preset_name is not None:
-            preset_data = self._get_site_data_readonly(domain, preset_name)
+        requested_preset = str(preset_name or "").strip()
+        if requested_preset:
+            preset_data = self._get_preset_data_exact(domain, requested_preset)
+            if preset_data is None:
+                logger.warning(f"站点高级配置预设不存在: {domain}/{requested_preset}")
+                return normalized
             preset_advanced = (
                 preset_data.get("advanced")
                 if isinstance(preset_data, dict)
@@ -1005,47 +1182,140 @@ class ConfigEngine:
                 logger.warning(f"站点不存在: {domain}")
                 return False
 
+            previous_advanced = site.get("advanced", _MISSING)
+            if previous_advanced is not _MISSING:
+                previous_advanced = copy.deepcopy(previous_advanced)
+
             existing = site.get("advanced") if isinstance(site.get("advanced"), dict) else {}
+            stored = copy.deepcopy(existing)
             normalized = self._normalize_site_advanced_config(config or {}, base_config=existing)
 
-            site["advanced"] = normalized
-            return self._save_config_locked()
+            provided_keys = {
+                key
+                for key in ((config or {}).keys() if isinstance(config, dict) else set())
+                if key in ADVANCED_FIELDS
+            }
+            if not provided_keys and previous_advanced is _MISSING:
+                return True
+            for key in ADVANCED_FIELDS:
+                if key in provided_keys:
+                    stored[key] = normalized[key]
+
+            site["advanced"] = stored
+            if self._save_config_locked():
+                return True
+            if previous_advanced is _MISSING:
+                site.pop("advanced", None)
+            else:
+                site["advanced"] = previous_advanced
+            return False
 
     def set_preset_advanced_config(
         self,
         domain: str,
         config: Dict[str, Any],
         preset_name: str = None,
+        *,
+        prune_inherited_fields: Optional[Set[str]] = None,
     ) -> bool:
-        """设置当前预设的工作流时序类高级配置。"""
+        """设置当前预设的高级配置；拒绝混入站点级字段。"""
         with self._io_lock:
             self.refresh_if_changed()
 
-            data = self._get_site_data(domain, preset_name)
-            if data is None:
-                logger.warning(f"站点或预设不存在: {domain}/{preset_name}")
+            site = self.sites.get(domain)
+            if not isinstance(site, dict):
+                logger.warning(f"站点不存在: {domain}")
                 return False
+
+            requested_preset = str(preset_name or "").strip()
+            if not requested_preset:
+                logger.warning(f"预设级高级配置缺少 preset_name: {domain}")
+                return False
+
+            data = self._get_preset_data_exact(domain, requested_preset)
+            if data is None:
+                logger.warning(f"站点或预设不存在: {domain}/{requested_preset}")
+                return False
+
+            raw_config = config if isinstance(config, dict) else {}
+
+            invalid_site_keys = {
+                key
+                for key in raw_config.keys()
+                if key in SITE_ADVANCED_FIELDS
+            }
+            if invalid_site_keys:
+                joined = ", ".join(sorted(invalid_site_keys))
+                logger.warning(f"预设级高级配置不能包含站点级字段: {domain}/{requested_preset} ({joined})")
+                return False
+
+            previous_advanced = data.get("advanced", _MISSING)
+            if previous_advanced is not _MISSING:
+                previous_advanced = copy.deepcopy(previous_advanced)
 
             stored = copy.deepcopy(data.get("advanced") or {})
             if not isinstance(stored, dict):
                 stored = {}
 
+            for key in list(SITE_ADVANCED_FIELDS):
+                stored.pop(key, None)
+
+            site_advanced = site.get("advanced") if isinstance(site.get("advanced"), dict) else {}
+            inherited = self._normalize_site_advanced_config(site_advanced)
+
             normalized = self._normalize_site_advanced_config(
-                config or {},
+                raw_config,
                 base_config=stored,
             )
 
             provided_keys = {
                 key
-                for key in ((config or {}).keys() if isinstance(config, dict) else set())
+                for key in raw_config.keys()
                 if key in PRESET_ADVANCED_FIELDS
             }
+            if not provided_keys and previous_advanced is _MISSING:
+                return True
+            prune_inherited_keys = set(prune_inherited_fields or set())
             for key in PRESET_ADVANCED_FIELDS:
                 if key in provided_keys:
-                    stored[key] = normalized[key]
+                    if (
+                        key in prune_inherited_keys
+                        and key not in stored
+                        and normalized[key] == inherited.get(key)
+                    ):
+                        stored.pop(key, None)
+                    else:
+                        stored[key] = normalized[key]
+
+            if not stored and previous_advanced is _MISSING:
+                return True
 
             data["advanced"] = stored
-            return self._save_config_locked()
+            if self._save_config_locked():
+                return True
+            if previous_advanced is _MISSING:
+                data.pop("advanced", None)
+            else:
+                data["advanced"] = previous_advanced
+            return False
+
+    def _assign_preset_field_and_save(
+        self,
+        preset_data: Dict[str, Any],
+        field_name: str,
+        value: Any,
+    ) -> bool:
+        previous_value = preset_data.get(field_name, _MISSING)
+        if previous_value is not _MISSING:
+            previous_value = copy.deepcopy(previous_value)
+        preset_data[field_name] = value
+        if self._save_config():
+            return True
+        if previous_value is _MISSING:
+            preset_data.pop(field_name, None)
+        else:
+            preset_data[field_name] = previous_value
+        return False
 
     def set_default_preset(self, domain: str, preset_name: str) -> bool:
         """设置指定站点的默认预设"""
@@ -1060,6 +1330,13 @@ class ConfigEngine:
             logger.warning(f"默认预设设置失败，预设不存在: {domain}/{preset_name}")
             return False
 
+        previous_default = site.get("default_preset", _MISSING)
+        if previous_default is not _MISSING:
+            previous_default = copy.deepcopy(previous_default)
+        previous_default_maps = (
+            copy.deepcopy(getattr(self, "_global_default_presets", {})),
+            copy.deepcopy(getattr(self, "_local_default_presets", {})),
+        )
         persisted_default = self._get_persisted_default_preset(domain, site)
         if persisted_default == preset_name:
             self._local_default_presets.pop(domain, None)
@@ -1067,54 +1344,81 @@ class ConfigEngine:
             self._local_default_presets[domain] = preset_name
         site["default_preset"] = preset_name
         if not self._save_local_site_overrides():
+            if previous_default is _MISSING:
+                site.pop("default_preset", None)
+            else:
+                site["default_preset"] = previous_default
+            self._global_default_presets, self._local_default_presets = previous_default_maps
             return False
         logger.info(f"✅ 站点 {domain} 默认预设已设置为: '{preset_name}'（仅本地覆盖）")
         return True
-    
-    def create_preset(self, domain: str, new_name: str, 
+
+    def create_preset(self, domain: str, new_name: str,
                       source_name: str = None) -> bool:
         """
         创建新预设（克隆自现有预设）
-        
+
         Args:
             domain: 站点域名
             new_name: 新预设名称
             source_name: 要克隆的源预设名称，None 则克隆主预设
-        
+
         Returns:
             是否成功
         """
         self.refresh_if_changed()
-        
+
         if domain not in self.sites:
             logger.warning(f"站点不存在: {domain}")
             return False
-        
+
         site = self.sites[domain]
         presets = site.get("presets", {})
-        
+
         if new_name in presets:
             logger.warning(f"预设已存在: {new_name}")
             return False
-        
+
         # 获取源预设
-        source = source_name or DEFAULT_PRESET_NAME
-        source_data = presets.get(source)
-        
-        if not source_data:
-            # 尝试第一个可用预设
-            if presets:
-                source = next(iter(presets))
-                source_data = presets[source]
-            else:
-                logger.warning(f"没有可克隆的源预设")
+        if source_name is not None and str(source_name or "").strip():
+            requested_source = str(source_name or "").strip()
+            source = self._resolve_preset_alias_key(requested_source, presets)
+            source_data = presets.get(source)
+            if not source_data:
+                logger.warning(f"源预设不存在: {requested_source}")
                 return False
-        
+        else:
+            source = DEFAULT_PRESET_NAME
+            source_data = presets.get(source)
+            if not source_data:
+                # 未显式指定源时才尝试第一个可用预设
+                if presets:
+                    source = next(iter(presets))
+                    source_data = presets[source]
+                else:
+                    logger.warning(f"没有可克隆的源预设")
+                    return False
+
+        previous_default = site.get("default_preset", _MISSING)
+        if previous_default is not _MISSING:
+            previous_default = copy.deepcopy(previous_default)
+        previous_presets = copy.deepcopy(presets)
+        previous_global_default = copy.deepcopy(self._global_default_presets)
+        previous_local_default = copy.deepcopy(self._local_default_presets)
+
         # 深拷贝创建新预设
         presets[new_name] = copy.deepcopy(source_data)
         self._normalize_site_default_preset(domain, site)
-        self._save_config()
-        
+        if not self._save_config():
+            site["presets"] = previous_presets
+            if previous_default is _MISSING:
+                site.pop("default_preset", None)
+            else:
+                site["default_preset"] = previous_default
+            self._global_default_presets = previous_global_default
+            self._local_default_presets = previous_local_default
+            return False
+
         logger.info(f"✅ 站点 {domain} 创建预设: '{new_name}' (克隆自 '{source}')")
         return True
 
@@ -1241,61 +1545,83 @@ class ConfigEngine:
         except Exception as e:
             logger.debug(f"同步活动标签页预设引用失败（忽略）: {e}")
             return 0
-    
+
     def delete_preset(self, domain: str, preset_name: str) -> bool:
         """
         删除预设（不允许删除最后一个预设）
-        
+
         Args:
             domain: 站点域名
             preset_name: 要删除的预设名称
-        
+
         Returns:
             是否成功
         """
         self.refresh_if_changed()
-        
+
         if domain not in self.sites:
             return False
-        
+
         site = self.sites[domain]
         presets = site.get("presets", {})
-        
-        if preset_name not in presets:
+
+        resolved_preset_name = self._resolve_preset_alias_key(preset_name, presets)
+        if resolved_preset_name not in presets:
             logger.warning(f"预设不存在: {preset_name}")
             return False
-        
+
         if len(presets) <= 1:
             logger.warning(f"不能删除最后一个预设")
             return False
-        
-        del presets[preset_name]
+
+        previous_default = site.get("default_preset", _MISSING)
+        if previous_default is not _MISSING:
+            previous_default = copy.deepcopy(previous_default)
+        removed_preset = copy.deepcopy(presets[resolved_preset_name])
+        previous_global_default = copy.deepcopy(self._global_default_presets)
+        previous_local_default = copy.deepcopy(self._local_default_presets)
+
+        del presets[resolved_preset_name]
         self._normalize_site_default_preset(domain, site)
-        self._save_config()
-        
-        logger.info(f"✅ 站点 {domain} 删除预设: '{preset_name}'")
+        if not self._save_config():
+            presets[resolved_preset_name] = removed_preset
+            if previous_default is _MISSING:
+                site.pop("default_preset", None)
+            else:
+                site["default_preset"] = previous_default
+            self._global_default_presets = previous_global_default
+            self._local_default_presets = previous_local_default
+            return False
+
+        logger.info(f"✅ 站点 {domain} 删除预设: '{resolved_preset_name}'")
         return True
-    
+
     def rename_preset(self, domain: str, old_name: str, new_name: str) -> bool:
         """重命名预设"""
         self.refresh_if_changed()
-        
+
         if domain not in self.sites:
             return False
-        
+
         site = self.sites[domain]
         presets = site.get("presets", {})
 
         resolved_old_name = self._resolve_preset_alias_key(old_name, presets)
         if resolved_old_name not in presets:
             return False
-        
+
         if new_name in presets:
             logger.warning(f"预设名已存在: {new_name}")
             return False
 
         rename_map = self._build_preset_rename_map(resolved_old_name, new_name)
         default_preset = site.get("default_preset")
+        previous_default = site.get("default_preset", _MISSING)
+        if previous_default is not _MISSING:
+            previous_default = copy.deepcopy(previous_default)
+        previous_presets = copy.deepcopy(presets)
+        previous_global_default = copy.deepcopy(self._global_default_presets)
+        previous_local_default = copy.deepcopy(self._local_default_presets)
         local_default = str(self._local_default_presets.get(domain, "") or "").strip()
 
         # 保持顺序：创建有序副本
@@ -1315,11 +1641,18 @@ class ConfigEngine:
                 self._local_default_presets[domain] = local_replacement
         self._normalize_site_default_preset(domain, site)
         if not self._save_config():
+            site["presets"] = previous_presets
+            if previous_default is _MISSING:
+                site.pop("default_preset", None)
+            else:
+                site["default_preset"] = previous_default
+            self._global_default_presets = previous_global_default
+            self._local_default_presets = previous_local_default
             return False
 
         updated_command_refs = self._rename_preset_references_in_commands(domain, rename_map)
         updated_tab_refs = self._rename_preset_references_in_active_tabs(domain, rename_map)
-        
+
         logger.info(
             f"站点 {domain} 重命名预设: '{resolved_old_name}' → '{new_name}' "
             f"(命令引用同步 {updated_command_refs} 处, 活动标签页同步 {updated_tab_refs} 处)"
@@ -1327,57 +1660,57 @@ class ConfigEngine:
         return True
 
     # ================= 预设级 Getter/Setter =================
-    
+
     def get_preset_selectors(self, domain: str, preset_name: str = None) -> Dict:
         """获取指定预设的选择器配置"""
         data = self._get_site_data_readonly(domain, preset_name)
         return data.get("selectors", {}) if data else {}
-    
-    def set_preset_selectors(self, domain: str, selectors: Dict, 
+
+    def set_preset_selectors(self, domain: str, selectors: Dict,
                              preset_name: str = None) -> bool:
         """设置指定预设的选择器配置"""
         self.refresh_if_changed()
         data = self._get_site_data(domain, preset_name)
         if data is None:
             return False
-        data["selectors"] = selectors
-        self._save_config()
+        if not self._assign_preset_field_and_save(data, "selectors", selectors):
+            return False
         logger.info(f"站点 {domain} [{preset_name or DEFAULT_PRESET_NAME}] 选择器已更新")
         return True
-    
+
     def get_preset_workflow(self, domain: str, preset_name: str = None) -> List:
         """获取指定预设的工作流配置"""
         data = self._get_site_data_readonly(domain, preset_name)
         return data.get("workflow", DEFAULT_WORKFLOW) if data else DEFAULT_WORKFLOW
-    
-    def set_preset_workflow(self, domain: str, workflow: List, 
+
+    def set_preset_workflow(self, domain: str, workflow: List,
                             preset_name: str = None) -> bool:
         """设置指定预设的工作流配置"""
         self.refresh_if_changed()
         data = self._get_site_data(domain, preset_name)
         if data is None:
             return False
-        data["workflow"] = workflow
-        self._save_config()
+        if not self._assign_preset_field_and_save(data, "workflow", workflow):
+            return False
         logger.info(f"站点 {domain} [{preset_name or DEFAULT_PRESET_NAME}] 工作流已更新")
-        return True    
+        return True
     # ================= 站点配置管理 =================
-    
+
     def list_sites(self) -> Dict[str, Any]:
         """获取所有站点配置（过滤内部键）"""
         self.refresh_if_changed()
-        
+
         return {
-            domain: config 
-            for domain, config in self.sites.items() 
+            domain: config
+            for domain, config in self.sites.items()
             if not domain.startswith('_')
         }
-    
-    def get_site_config(self, domain: str, html_content: str, 
+
+    def get_site_config(self, domain: str, html_content: str,
                         preset_name: str = None) -> Optional[SiteConfig]:
         """
         获取站点配置（缓存 + AI 分析）
-        
+
         Args:
             domain: 站点域名
             html_content: 页面 HTML（用于 AI 分析未知站点）
@@ -1386,23 +1719,33 @@ class ConfigEngine:
         self.refresh_if_changed()
 
         if domain in self.sites:
+            site = self.sites.get(domain, {})
             config = self._get_site_data(domain, preset_name)
-            
+
             if config is None:
                 logger.warning(f"站点 {domain} 无可用预设")
                 return None
-            
+
+            used_preset = preset_name or self._resolve_default_preset_name(site) or DEFAULT_PRESET_NAME
+            previous_config = None
+
             # 补充缺失字段
             changed = False
             if "workflow" not in config:
+                if previous_config is None:
+                    previous_config = copy.deepcopy(config)
                 config["workflow"] = DEFAULT_WORKFLOW
                 changed = True
-            
+
             if "image_extraction" not in config:
+                if previous_config is None:
+                    previous_config = copy.deepcopy(config)
                 config["image_extraction"] = get_default_image_extraction_config()
                 changed = True
-                            
+
             if "file_paste" not in config:
+                if previous_config is None:
+                    previous_config = copy.deepcopy(config)
                 config["file_paste"] = get_default_file_paste_config()
                 changed = True
             else:
@@ -1411,10 +1754,14 @@ class ConfigEngine:
                     legacy_stream_config=config.get("stream_config"),
                 )
                 if normalized_file_paste != config.get("file_paste"):
+                    if previous_config is None:
+                        previous_config = copy.deepcopy(config)
                     config["file_paste"] = normalized_file_paste
                     changed = True
 
             if "prompt_padding" not in config:
+                if previous_config is None:
+                    previous_config = copy.deepcopy(config)
                 config["prompt_padding"] = get_default_prompt_padding_config()
                 changed = True
             else:
@@ -1422,24 +1769,33 @@ class ConfigEngine:
                     config.get("prompt_padding", {})
                 )
                 if normalized_prompt_padding != config.get("prompt_padding"):
+                    if previous_config is None:
+                        previous_config = copy.deepcopy(config)
                     config["prompt_padding"] = normalized_prompt_padding
                     changed = True
-            
+
             if changed:
-                self._save_config()
-            
-            used_preset = preset_name or self.get_default_preset(domain) or DEFAULT_PRESET_NAME
+                completed_config = copy.deepcopy(config)
+                if not self._save_config():
+                    config.clear()
+                    config.update(previous_config)
+                    logger.warning(
+                        f"站点 {domain} [{used_preset}] 配置自动补全保存失败，"
+                        "已仅对当前请求返回补全配置"
+                    )
+                    return completed_config
+
             logger.debug(f"使用缓存配置: {domain} [预设: {used_preset}]")
             return copy.deepcopy(config)
-        
+
         logger.info(f"🔍 未知域名 {domain}，启动 AI 识别...")
-        
+
         clean_html = self.html_cleaner.clean(html_content)
         selectors = self.ai_analyzer.analyze(clean_html)
-        
+
         if selectors:
             selectors = self.validator.validate(selectors)
-            
+
             new_preset: SiteConfig = {
                 "selectors": selectors,
                 "workflow": DEFAULT_WORKFLOW,
@@ -1449,21 +1805,22 @@ class ConfigEngine:
                 "file_paste": get_default_file_paste_config(),
                 "prompt_padding": get_default_prompt_padding_config(),
             }
-            
+
             self.sites[domain] = {
                 "default_preset": DEFAULT_PRESET_NAME,
                 "presets": {
                     DEFAULT_PRESET_NAME: new_preset
                 }
             }
-            self._save_config()
-            
-            logger.info(f"✅ 配置已生成并保存: {domain}")
+            if self._save_config():
+                logger.info(f"✅ 配置已生成并保存: {domain}")
+            else:
+                logger.warning(f"⚠️ 配置已生成但保存失败，仅保留在当前运行内存: {domain}")
             return copy.deepcopy(new_preset)
-        
+
         logger.warning(f"⚠️  AI 分析失败，使用通用回退配置: {domain}")
         fallback_selectors = self.global_config.get_fallback_selectors()
-        
+
         fallback_preset: SiteConfig = {
             "selectors": fallback_selectors,
             "workflow": DEFAULT_WORKFLOW,
@@ -1473,28 +1830,36 @@ class ConfigEngine:
             "file_paste": get_default_file_paste_config(),
             "prompt_padding": get_default_prompt_padding_config(),
         }
-        
+
         self.sites[domain] = {
             "default_preset": DEFAULT_PRESET_NAME,
             "presets": {
                 DEFAULT_PRESET_NAME: fallback_preset
             }
         }
-        self._save_config()
-        
+        if not self._save_config():
+            logger.warning(f"⚠️ 回退配置保存失败，仅保留在当前运行内存: {domain}")
+
         return copy.deepcopy(fallback_preset)
-    
+
     def delete_site_config(self, domain: str) -> bool:
         """删除指定站点配置"""
         self.refresh_if_changed()
-        
+
         if domain in self.sites:
+            removed_site = copy.deepcopy(self.sites[domain])
+            previous_global_default = copy.deepcopy(self._global_default_presets)
+            previous_local_default = copy.deepcopy(self._local_default_presets)
             del self.sites[domain]
-            self._save_config()
+            if not self._save_config():
+                self.sites[domain] = removed_site
+                self._global_default_presets = previous_global_default
+                self._local_default_presets = previous_local_default
+                return False
             logger.info(f"已删除配置: {domain}")
             return True
         return False
-    
+
     def _guess_stealth(self, domain: str) -> bool:
         """Guess whether stealth mode should default to enabled."""
         rule = get_site_rule(domain)
@@ -1504,7 +1869,7 @@ class ConfigEngine:
                 logger.info(f"检测到默认启用低熵模式的域名: {domain}")
             return enabled
         return False
-    
+
     def migrate_site_configs(self):
         """迁移旧版站点配置，补充各预设中缺失的字段"""
         migrated_count = 0
@@ -1519,13 +1884,13 @@ class ConfigEngine:
             "content_shrink_tolerance",
         }
         obsolete_network_keys = {"first_response_timeout"}
-        
+
         for domain, site_config in self.sites.items():
             if domain.startswith("_"):
                 continue
-            
+
             presets = site_config.get("presets", {})
-            
+
             for preset_name, preset_data in presets.items():
                 if "image_extraction" not in preset_data:
                     preset_data["image_extraction"] = copy.deepcopy(default_image_config)
@@ -1537,12 +1902,12 @@ class ConfigEngine:
                         preset_data["image_extraction"] = normalized_image_config
                         migrated_count += 1
                         logger.debug(f"迁移: {domain}/{preset_name} (规范化 image_extraction)")
-                
+
                 if "file_paste" not in preset_data:
                     preset_data["file_paste"] = copy.deepcopy(default_file_paste)
                     migrated_count += 1
                     logger.debug(f"迁移: {domain}/{preset_name} (添加 file_paste)")
-                
+
                 if "prompt_padding" not in preset_data:
                     preset_data["prompt_padding"] = copy.deepcopy(default_prompt_padding)
                     migrated_count += 1
@@ -1594,62 +1959,64 @@ class ConfigEngine:
                     if removed_stream or removed_network or moved_attachment_rules:
                         migrated_count += 1
                         logger.debug(f"迁移: {domain}/{preset_name} (清理废弃的流式配置字段)")
-        
+
         if migrated_count > 0:
             self._save_config()
             logger.info(f"已迁移 {migrated_count} 个预设配置")
-        
+
         return migrated_count
-    
+
     # ================= 图片配置管理 =================
-    
-    
+
+
     def get_site_image_config(self, domain: str, preset_name: str = None) -> Dict:
         """获取站点的图片提取配置"""
         self.refresh_if_changed()
-        
+
         default_config = get_default_image_extraction_config()
-        
+
         data = self._get_site_data(domain, preset_name)
         if data is None:
             return copy.deepcopy(default_config)
-        
+
         image_config = data.get("image_extraction", {})
         return self._validate_image_config(image_config)
-    
-    def set_site_image_config(self, domain: str, config: Dict, 
+
+    def set_site_image_config(self, domain: str, config: Dict,
                               preset_name: str = None) -> bool:
         """设置站点的图片提取配置"""
         self.refresh_if_changed()
-        
+
         data = self._get_site_data(domain, preset_name)
         if data is None:
             logger.warning(f"站点或预设不存在: {domain}/{preset_name}")
             return False
-        
-        validated = self._validate_image_config(config)
-        
-        data["image_extraction"] = validated
-        self._save_config()
-        
+
+        current_config = self._validate_image_config(data.get("image_extraction", {}))
+        merged_config = _merge_config_patch(current_config, config if isinstance(config, dict) else {})
+        validated = self._validate_image_config(merged_config)
+
+        if not self._assign_preset_field_and_save(data, "image_extraction", validated):
+            return False
+
         logger.info(f"站点 {domain} [{preset_name or DEFAULT_PRESET_NAME}] 多模态提取配置已更新")
         return True
-    
+
     def _validate_image_config(self, config: Dict) -> Dict:
         """验证并规范化多模态提取配置"""
         default = get_default_image_extraction_config()
         result = copy.deepcopy(default)
-        
+
         if not config:
             return result
-        
+
         raw_modalities = config.get("modalities")
         if isinstance(raw_modalities, dict):
             result["modalities"] = normalize_modalities_config(raw_modalities)
 
         legacy_enabled = None
         if "enabled" in config:
-            legacy_enabled = bool(config["enabled"])
+            legacy_enabled = _coerce_bool(config.get("enabled"), False)
             result["enabled"] = legacy_enabled
 
         if (
@@ -1663,7 +2030,7 @@ class ConfigEngine:
                     result["modalities"][key] = normalize_modality_policy(key, False)
             elif not get_enabled_modalities(result.get("modalities")):
                 result["modalities"]["image"] = normalize_modality_policy("image", True)
-        
+
         if "selector" in config and config["selector"]:
             result["selector"] = str(config["selector"]).strip()
             if not result["selector"]:
@@ -1678,7 +2045,7 @@ class ConfigEngine:
             result["video_selector"] = str(config["video_selector"]).strip()
             if not result["video_selector"]:
                 result["video_selector"] = default["video_selector"]
-        
+
         if "container_selector" in config:
             val = config["container_selector"]
             result["container_selector"] = str(val).strip() if val else None
@@ -1694,10 +2061,10 @@ class ConfigEngine:
                 result["latest_visual_column"] = val
 
         if "allow_container_fallback" in config:
-            result["allow_container_fallback"] = bool(config["allow_container_fallback"])
+            result["allow_container_fallback"] = _coerce_bool(config.get("allow_container_fallback"), False)
 
         if "force_postprocess" in config:
-            result["force_postprocess"] = bool(config["force_postprocess"])
+            result["force_postprocess"] = _coerce_bool(config.get("force_postprocess"), False)
 
         if "direct_postprocess_modalities" in config:
             raw_direct_modalities = config.get("direct_postprocess_modalities")
@@ -1713,53 +2080,80 @@ class ConfigEngine:
                         allowed_direct_modalities.append(media_type)
                 if allowed_direct_modalities:
                     result["direct_postprocess_modalities"] = allowed_direct_modalities
-        
+
         if "debounce_seconds" in config:
             try:
                 val = float(config["debounce_seconds"])
                 result["debounce_seconds"] = max(0, min(val, 30))
             except (ValueError, TypeError):
                 pass
-        
+
         if "wait_for_load" in config:
-            result["wait_for_load"] = bool(config["wait_for_load"])
-        
+            result["wait_for_load"] = _coerce_bool(config.get("wait_for_load"), True)
+
         if "load_timeout_seconds" in config:
             try:
                 val = float(config["load_timeout_seconds"])
                 result["load_timeout_seconds"] = max(1, min(val, 60))
             except (ValueError, TypeError):
                 pass
-        
+
         if "download_blobs" in config:
-            result["download_blobs"] = bool(config["download_blobs"])
-        
+            result["download_blobs"] = _coerce_bool(config.get("download_blobs"), False)
+
         if "max_size_mb" in config:
             try:
                 val = int(config["max_size_mb"])
                 result["max_size_mb"] = max(1, min(val, 100))
             except (ValueError, TypeError):
                 pass
-        
+
+        if "canvas_export_mime" in config:
+            val = str(config["canvas_export_mime"] or "").strip().lower()
+            if val in {"image/jpeg", "image/webp", "image/png"}:
+                result["canvas_export_mime"] = val
+
+        if "canvas_export_quality" in config:
+            try:
+                val = float(config["canvas_export_quality"])
+                result["canvas_export_quality"] = max(0.1, min(val, 1.0))
+            except (ValueError, TypeError):
+                pass
+
+        if "src_allow_patterns" in config:
+            raw_patterns = config.get("src_allow_patterns")
+            if isinstance(raw_patterns, str):
+                raw_patterns = raw_patterns.replace("\r\n", "\n").replace(";", "\n").split("\n")
+            if isinstance(raw_patterns, (list, tuple, set)):
+                patterns = []
+                seen = set()
+                for item in raw_patterns:
+                    text = str(item or "").strip()
+                    if not text or text in seen:
+                        continue
+                    seen.add(text)
+                    patterns.append(text)
+                result["src_allow_patterns"] = patterns
+
         if "mode" in config:
             val = str(config["mode"]).lower()
             if val in ("all", "first", "last"):
                 result["mode"] = val
 
         if "audio_capture_enabled" in config:
-            result["audio_capture_enabled"] = bool(config["audio_capture_enabled"])
+            result["audio_capture_enabled"] = _coerce_bool(config.get("audio_capture_enabled"), False)
 
         if "audio_capture_mute_playback" in config:
-            result["audio_capture_mute_playback"] = bool(config["audio_capture_mute_playback"])
+            result["audio_capture_mute_playback"] = _coerce_bool(config.get("audio_capture_mute_playback"), False)
 
         if "audio_capture_preload_enabled" in config:
-            result["audio_capture_preload_enabled"] = bool(config["audio_capture_preload_enabled"])
+            result["audio_capture_preload_enabled"] = _coerce_bool(config.get("audio_capture_preload_enabled"), False)
 
         if "audio_capture_reload_before_workflow" in config:
-            result["audio_capture_reload_before_workflow"] = bool(config["audio_capture_reload_before_workflow"])
+            result["audio_capture_reload_before_workflow"] = _coerce_bool(config.get("audio_capture_reload_before_workflow"), False)
 
         if "audio_capture_preserve_graph" in config:
-            result["audio_capture_preserve_graph"] = bool(config["audio_capture_preserve_graph"])
+            result["audio_capture_preserve_graph"] = _coerce_bool(config.get("audio_capture_preserve_graph"), False)
 
         if "audio_capture_terminal_settle_seconds" in config:
             try:
@@ -1821,7 +2215,7 @@ class ConfigEngine:
         raw_network_capture = config.get("audio_network_capture")
         if isinstance(raw_network_capture, dict):
             if "enabled" in raw_network_capture:
-                network_capture["enabled"] = bool(raw_network_capture["enabled"])
+                network_capture["enabled"] = _coerce_bool(raw_network_capture.get("enabled"), False)
             if "timeout_seconds" in raw_network_capture:
                 try:
                     val = float(raw_network_capture["timeout_seconds"])
@@ -1855,7 +2249,7 @@ class ConfigEngine:
 
         # 兼容旧平铺字段，最终统一收口到新对象
         if "audio_network_capture_enabled" in config:
-            network_capture["enabled"] = bool(config["audio_network_capture_enabled"])
+            network_capture["enabled"] = _coerce_bool(config.get("audio_network_capture_enabled"), False)
 
         if "audio_network_capture_timeout_seconds" in config:
             try:
@@ -1881,7 +2275,7 @@ class ConfigEngine:
         raw_browser_tts_fallback = config.get("audio_browser_tts_fallback")
         if isinstance(raw_browser_tts_fallback, dict):
             if "enabled" in raw_browser_tts_fallback:
-                browser_tts_fallback["enabled"] = bool(raw_browser_tts_fallback["enabled"])
+                browser_tts_fallback["enabled"] = _coerce_bool(raw_browser_tts_fallback.get("enabled"), False)
             if "provider" in raw_browser_tts_fallback:
                 val = str(raw_browser_tts_fallback["provider"] or "").strip()
                 if val in {"doubao_samantha"}:
@@ -1960,16 +2354,16 @@ class ConfigEngine:
                 pass
 
         result["enabled"] = bool(get_enabled_modalities(result.get("modalities")))
-        
+
         return result
         # ================= 文件粘贴配置管理 =================
-    
+
     def get_site_file_paste_config(self, domain: str, preset_name: str = None) -> dict:
         """获取站点的文件粘贴配置"""
         self.refresh_if_changed()
-        
+
         default_config = get_default_file_paste_config()
-        
+
         data = self._get_site_data(domain, preset_name)
         if data is None:
             result = copy.deepcopy(default_config)
@@ -1982,47 +2376,52 @@ class ConfigEngine:
             legacy_stream_config=data.get("stream_config"),
             include_attachment_defaults=True,
         )
-    
-    def set_site_file_paste_config(self, domain: str, config: dict, 
+
+    def set_site_file_paste_config(self, domain: str, config: dict,
                                     preset_name: str = None) -> bool:
         """设置站点的文件粘贴配置"""
         self.refresh_if_changed()
-        
+
         data = self._get_site_data(domain, preset_name)
         if data is None:
             logger.warning(f"站点或预设不存在: {domain}/{preset_name}")
             return False
-        
-        validated = self._validate_file_paste_config(
-            config,
+
+        current_config = self._validate_file_paste_config(
+            data.get("file_paste", {}),
             legacy_stream_config=data.get("stream_config"),
         )
-        
-        data["file_paste"] = validated
-        self._save_config()
-        
+        merged_config = _merge_config_patch(current_config, config if isinstance(config, dict) else {})
+        validated = self._validate_file_paste_config(
+            merged_config,
+            legacy_stream_config=data.get("stream_config"),
+        )
+
+        if not self._assign_preset_field_and_save(data, "file_paste", validated):
+            return False
+
         logger.info(f"站点 {domain} [{preset_name or DEFAULT_PRESET_NAME}] 文件粘贴配置已更新")
         return True
-    
+
     def get_all_file_paste_configs(self) -> dict:
         """获取所有站点的文件粘贴配置（使用各站点当前默认预设）"""
         self.refresh_if_changed()
         result = {}
-        
+
         for domain in self.sites:
             if domain.startswith('_'):
                 continue
-            
+
             data = self._get_site_data(domain)
             if data is None:
                 continue
-            
+
             result[domain] = self._validate_file_paste_config(
                 data.get("file_paste", {}),
                 legacy_stream_config=data.get("stream_config"),
                 include_attachment_defaults=True,
             )
-        
+
         return result
 
     def get_site_prompt_padding_config(self, domain: str, preset_name: str = None) -> Dict[str, Any]:
@@ -2049,12 +2448,15 @@ class ConfigEngine:
             logger.warning(f"站点或预设不存在: {domain}/{preset_name}")
             return False
 
-        data["prompt_padding"] = self._validate_prompt_padding_config(config)
-        self._save_config()
+        current_config = self._validate_prompt_padding_config(data.get("prompt_padding", {}))
+        merged_config = _merge_config_patch(current_config, config if isinstance(config, dict) else {})
+        validated = self._validate_prompt_padding_config(merged_config)
+        if not self._assign_preset_field_and_save(data, "prompt_padding", validated):
+            return False
 
         logger.info(f"站点 {domain} [{preset_name or DEFAULT_PRESET_NAME}] 提示词首尾填充配置已更新")
         return True
-    
+
     def _validate_file_paste_config(
         self,
         config: dict,
@@ -2065,27 +2467,27 @@ class ConfigEngine:
         """验证并规范化文件粘贴配置"""
         default = get_default_file_paste_config()
         result = copy.deepcopy(default)
-        
+
         if not isinstance(config, dict):
             config = {}
-        
+
         if "enabled" in config:
-            result["enabled"] = bool(config["enabled"])
-        
+            result["enabled"] = _coerce_bool(config.get("enabled"), False)
+
         if "threshold" in config:
             try:
                 val = int(config["threshold"])
                 result["threshold"] = max(1000, min(val, 10000000))
             except (ValueError, TypeError):
                 pass
-        
+
         if "hint_text" in config:
             val = str(config["hint_text"]).strip()
             # 限制长度，避免过长的引导文本
             result["hint_text"] = val[:500] if val else ""
 
         if "reacquire_input_after_upload" in config:
-            result["reacquire_input_after_upload"] = bool(config["reacquire_input_after_upload"])
+            result["reacquire_input_after_upload"] = _coerce_bool(config.get("reacquire_input_after_upload"), False)
 
         if "post_upload_input_selector" in config:
             val = str(config["post_upload_input_selector"] or "").strip()
@@ -2117,7 +2519,7 @@ class ConfigEngine:
         state_probe = copy.deepcopy(default_state_probe)
         if isinstance(raw_state_probe, dict):
             if "enabled" in raw_state_probe:
-                state_probe["enabled"] = bool(raw_state_probe["enabled"])
+                state_probe["enabled"] = _coerce_bool(raw_state_probe.get("enabled"), False)
             if "code" in raw_state_probe:
                 code = str(raw_state_probe["code"] or "").strip()
                 state_probe["code"] = code[:20000] if code else ""
@@ -2141,7 +2543,7 @@ class ConfigEngine:
             legacy_attachment_monitor.update(raw_attachment_monitor)
         if legacy_attachment_monitor or include_attachment_defaults:
             result["attachment_monitor"] = self._validate_attachment_monitor_config(legacy_attachment_monitor)
-        
+
         return result
 
     def _validate_prompt_padding_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
@@ -2152,7 +2554,7 @@ class ConfigEngine:
             return result
 
         if "enabled" in config:
-            result["enabled"] = bool(config.get("enabled"))
+            result["enabled"] = _coerce_bool(config.get("enabled"), False)
 
         if "marker_text" in config:
             marker_text = str(config.get("marker_text") or "").strip()
@@ -2168,7 +2570,7 @@ class ConfigEngine:
         return result
 
     # ================= 图片预设管理 =================
-    
+
     def list_image_presets(self):
         """列出所有可用的图片配置预设"""
         return self.image_presets.list_presets()
@@ -2180,90 +2582,105 @@ class ConfigEngine:
     def apply_image_preset(self, domain: str, preset_domain: str):
         """将预设配置应用到站点"""
         preset_config = self.image_presets.get_preset(preset_domain)
-        
+
         if not preset_config:
             raise ValueError(f"找不到预设: {preset_domain}")
 
         return self.set_site_image_config(domain, preset_config)
-    
+
     def reload_presets(self):
         """重新加载图片预设"""
         self.image_presets.reload()
-    
+
     # ================= 提取器管理 =================
-    
+
     def get_site_extractor(self, domain: str, preset_name: str = None):
         """获取站点的提取器实例"""
         self.refresh_if_changed()
-        
+
         data = self._get_site_data(domain, preset_name)
         if data is not None:
             return extractor_manager.get_extractor_for_site(data)
-        
+
         return extractor_manager.get_extractor()
-    
-    def set_site_extractor(self, domain: str, extractor_id: str, 
+
+    def set_site_extractor(self, domain: str, extractor_id: str,
                            preset_name: str = None) -> bool:
         """为站点设置提取器"""
         self.refresh_if_changed()
-        
+
         data = self._get_site_data(domain, preset_name)
         if data is None:
             logger.warning(f"站点或预设不存在: {domain}/{preset_name}")
             return False
-        
+
         from app.core.extractors import ExtractorRegistry
         if not ExtractorRegistry.exists(extractor_id):
             logger.error(f"提取器不存在: {extractor_id}")
             return False
-        
+
+        previous_extractor_id = data.get("extractor_id", _MISSING)
+        if previous_extractor_id is not _MISSING:
+            previous_extractor_id = copy.deepcopy(previous_extractor_id)
+        previous_verified = data.get("extractor_verified", _MISSING)
+        if previous_verified is not _MISSING:
+            previous_verified = copy.deepcopy(previous_verified)
         data["extractor_id"] = extractor_id
         data["extractor_verified"] = False
-        self._save_config()
-        
+        if not self._save_config():
+            if previous_extractor_id is _MISSING:
+                data.pop("extractor_id", None)
+            else:
+                data["extractor_id"] = previous_extractor_id
+            if previous_verified is _MISSING:
+                data.pop("extractor_verified", None)
+            else:
+                data["extractor_verified"] = previous_verified
+            return False
+
         logger.info(f"站点 {domain} [{preset_name or DEFAULT_PRESET_NAME}] 已绑定提取器: {extractor_id}")
         return True
-    
-    def set_site_extractor_verified(self, domain: str, verified: bool = True, 
+
+    def set_site_extractor_verified(self, domain: str, verified: bool = True,
                                      preset_name: str = None) -> bool:
         """设置站点提取器验证状态"""
         self.refresh_if_changed()
-        
+
         data = self._get_site_data(domain, preset_name)
         if data is None:
             return False
-        
-        data["extractor_verified"] = verified
-        self._save_config()
-        
+
+        if not self._assign_preset_field_and_save(data, "extractor_verified", verified):
+            return False
+
         return True
-    
+
     # 🆕 ================= 流式配置管理 =================
-    
+
     def get_site_stream_config(self, domain: str, preset_name: str = None) -> Dict[str, Any]:
         """
         获取站点的流式配置
-        
+
         Args:
             domain: 站点域名
             preset_name: 预设名称
-        
+
         Returns:
             完整的流式配置（包含默认值）
         """
         self.refresh_if_changed()
-        
+
         default_config = get_default_stream_config()
-        
+
         data = self._get_site_data(domain, preset_name)
         if data is None:
             return copy.deepcopy(default_config)
-        
+
         stream_config = data.get("stream_config", {})
-        
+
         # 合并默认值
         result = copy.deepcopy(default_config)
-        
+
         # 更新顶层字段
         for key in ["mode", "hard_timeout"]:
             if key in stream_config:
@@ -2288,46 +2705,57 @@ class ConfigEngine:
                 result["send_confirmation"].update(file_paste_config["send_confirmation"])
             if isinstance(file_paste_config.get("attachment_monitor"), dict):
                 result["attachment_monitor"].update(file_paste_config["attachment_monitor"])
-        
+
         # 处理 network 配置
         if stream_config.get("network"):
             network_default = get_default_network_config()
             network_config = stream_config["network"]
-            
+
             result["network"] = network_default.copy()
             for key in [
                 "listen_pattern",
                 "stream_match_mode",
                 "stream_match_pattern",
                 "parser",
+                "hard_timeout",
+                "first_response_timeout",
+                "first_content_timeout",
+                "initial_target_body_wait",
                 "silence_threshold",
                 "response_interval",
             ]:
                 if key in network_config:
                     result["network"][key] = network_config[key]
-        
+
         return result
-    
-    def set_site_stream_config(self, domain: str, config: Dict[str, Any], 
+
+    def set_site_stream_config(self, domain: str, config: Dict[str, Any],
                                 preset_name: str = None) -> bool:
         """
         设置站点的流式配置
-        
+
         Args:
             domain: 站点域名
             config: 流式配置（部分或完整）
             preset_name: 预设名称
-        
+
         Returns:
             是否成功
         """
         self.refresh_if_changed()
-        
+
         data = self._get_site_data(domain, preset_name)
         if data is None:
             logger.warning(f"站点或预设不存在: {domain}/{preset_name}")
             return False
-        
+
+        previous_file_paste = data.get("file_paste", _MISSING)
+        if previous_file_paste is not _MISSING:
+            previous_file_paste = copy.deepcopy(previous_file_paste)
+        previous_stream = data.get("stream_config", _MISSING)
+        if previous_stream is not _MISSING:
+            previous_stream = copy.deepcopy(previous_stream)
+
         legacy_file_paste_updates: Dict[str, Any] = {}
         if isinstance(config.get("send_confirmation"), dict):
             legacy_file_paste_updates["send_confirmation"] = config.get("send_confirmation") or {}
@@ -2335,42 +2763,53 @@ class ConfigEngine:
             legacy_file_paste_updates["attachment_monitor"] = config.get("attachment_monitor") or {}
 
         # 验证并规范化配置
-        validated = self._validate_stream_config(config)
+        current_config = self.get_site_stream_config(domain, preset_name)
+        merged_config = _merge_config_patch(current_config, config if isinstance(config, dict) else {})
+        validated = self._validate_stream_config(merged_config)
         validated.pop("send_confirmation", None)
         validated.pop("attachment_monitor", None)
 
         if legacy_file_paste_updates:
-            existing_file_paste = data.get("file_paste", {})
-            merged_file_paste = {}
-            if isinstance(existing_file_paste, dict):
-                merged_file_paste.update(copy.deepcopy(existing_file_paste))
-            merged_file_paste.update(legacy_file_paste_updates)
+            existing_file_paste = self._validate_file_paste_config(
+                data.get("file_paste", {}),
+                legacy_stream_config=data.get("stream_config"),
+            )
+            merged_file_paste = _merge_config_patch(existing_file_paste, legacy_file_paste_updates)
             data["file_paste"] = self._validate_file_paste_config(
                 merged_file_paste,
                 legacy_stream_config=data.get("stream_config"),
             )
-        
+
         data["stream_config"] = validated
-        self._save_config()
-        
+        if not self._save_config():
+            if previous_stream is _MISSING:
+                data.pop("stream_config", None)
+            else:
+                data["stream_config"] = previous_stream
+            if previous_file_paste is _MISSING:
+                data.pop("file_paste", None)
+            else:
+                data["file_paste"] = previous_file_paste
+            return False
+
         logger.info(f"站点 {domain} [{preset_name or DEFAULT_PRESET_NAME}] 流式配置已更新 (mode={validated.get('mode')})")
         return True
-    
+
     def _validate_stream_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """
         验证并规范化流式配置
-        
+
         Args:
             config: 原始配置
-        
+
         Returns:
             规范化后的配置
         """
         result = get_default_stream_config()
-        
+
         if not config:
             return result
-        
+
         mode_explicitly_set = False
 
         # 验证 mode
@@ -2406,7 +2845,7 @@ class ConfigEngine:
             result["attachment_monitor"] = self._validate_attachment_monitor_config(
                 config["attachment_monitor"]
             )
-        
+
         # 验证 network 配置
         if config.get("network"):
             network_config = self._validate_network_config(config["network"])
@@ -2420,7 +2859,7 @@ class ConfigEngine:
                     and network_config.get("listen_pattern")
                 ):
                     result["mode"] = "network"
-        
+
         return result
 
     def _validate_send_confirmation_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
@@ -2478,17 +2917,7 @@ class ConfigEngine:
         for key in bool_fields:
             if key not in config:
                 continue
-            raw_value = config[key]
-            if isinstance(raw_value, str):
-                lowered = raw_value.strip().lower()
-                if lowered in ("1", "true", "yes", "on"):
-                    result[key] = True
-                    continue
-                if lowered in ("0", "false", "no", "off"):
-                    result[key] = False
-                    continue
-                continue
-            result[key] = bool(raw_value)
+            result[key] = _coerce_bool(config.get(key), bool(result.get(key, False)))
 
         sensitivity = str(config.get("attachment_sensitivity") or "").strip().lower()
         if sensitivity in {"low", "medium", "high"}:
@@ -2544,35 +2973,25 @@ class ConfigEngine:
         for key in bool_fields:
             if key not in config:
                 continue
-            raw_value = config[key]
-            if isinstance(raw_value, str):
-                lowered = raw_value.strip().lower()
-                if lowered in ("1", "true", "yes", "on"):
-                    result[key] = True
-                    continue
-                if lowered in ("0", "false", "no", "off"):
-                    result[key] = False
-                    continue
-                continue
-            result[key] = bool(raw_value)
+            result[key] = _coerce_bool(config.get(key), bool(result.get(key, False)))
 
         return result
-    
+
     def _validate_network_config(self, config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         验证网络监听配置
-        
+
         Args:
             config: 原始网络配置
-        
+
         Returns:
             规范化后的配置，无效则返回 None
         """
         if not config:
             return None
-        
+
         result = get_default_network_config()
-        
+
         # listen_pattern（必填）
         if "listen_pattern" in config:
             pattern = str(config["listen_pattern"]).strip()
@@ -2598,7 +3017,7 @@ class ConfigEngine:
                     logger.warning(f"解析器不存在: {parser_id}")
                     # 仍然保存，允许后续添加解析器
                     result["parser"] = parser_id
-        
+
         # 验证数值字段
         for key in ["silence_threshold", "response_interval"]:
             if key in config:
@@ -2610,17 +3029,17 @@ class ConfigEngine:
                         result[key] = max(0.1, min(val, 5))
                 except (ValueError, TypeError):
                     pass
-        
+
         # 检查是否有有效配置
         if not result["listen_pattern"] or not result["parser"]:
             return None
-        
+
         return result
-    
+
     def list_available_parsers(self) -> List[Dict[str, str]]:
         """
         列出所有可用的响应解析器
-        
+
         Returns:
             解析器信息列表
         """
@@ -2633,24 +3052,30 @@ class ConfigEngine:
     def get_parser_manager(self):
         """获取解析器管理器实例"""
         return parser_manager
-    
+
     # ================= 元素定义管理 =================
-    
+
     def get_selector_definitions(self) -> List[SelectorDefinition]:
         """获取元素定义列表"""
         return self.global_config.get_selector_definitions()
-    
-    def set_selector_definitions(self, definitions: List[SelectorDefinition]):
+
+    def set_selector_definitions(self, definitions: List[SelectorDefinition]) -> bool:
         """设置元素定义列表并保存"""
+        previous_definitions = self.global_config.get_selector_definitions()
+        previous_fallback_selectors = copy.deepcopy(self.validator.fallback_selectors)
         self.global_config.set_selector_definitions(definitions)
-        
+
         # 更新验证器的回退选择器
         self.validator.fallback_selectors = self.global_config.get_fallback_selectors()
-        
+
         # 保存配置
-        self._save_config()
-        
+        if not self._save_config():
+            self.global_config.set_selector_definitions(previous_definitions)
+            self.validator.fallback_selectors = previous_fallback_selectors
+            return False
+
         logger.info(f"元素定义已更新: {len(definitions)} 个")
+        return True
 
 
 __all__ = ['ConfigEngine', 'ConfigConstants', 'DEFAULT_WORKFLOW', 'DEFAULT_PRESET_NAME']

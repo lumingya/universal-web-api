@@ -9,6 +9,7 @@ import json
 import math
 import os
 import re
+from collections.abc import Sequence
 from typing import Any, Dict, List, Optional
 
 from app.services.tool_calling_common import (
@@ -391,13 +392,27 @@ def _detect_malformed_tool_payload(raw_text: str) -> str:
                 "into valid tool_calls."
             )
 
-    if stripped.startswith("<") and re.search(r"<[A-Za-z0-9_.:-]+\s+[^<>]*/>", stripped):
+    if _looks_like_tool_xml_payload(stripped):
         return (
             "The reply looked like an XML-style tool call, but it could not be parsed "
             "into a valid declared tool."
         )
 
     return ""
+
+
+_TOOL_XML_PAYLOAD_PATTERNS = (
+    re.compile(r"<\s*(?:adapter_calls|tool_calls)\b", re.IGNORECASE),
+    re.compile(r"<\s*(?:call|invoke|tool_call)\b[^>]*(?:\bname\s*=|>)", re.IGNORECASE),
+    re.compile(r"<[A-Za-z0-9_.:-]+\s+[^<>]*/>", re.IGNORECASE),
+)
+
+
+def _looks_like_tool_xml_payload(text: str) -> bool:
+    value = str(text or "").strip()
+    if not value.startswith("<"):
+        return False
+    return any(pattern.search(value) for pattern in _TOOL_XML_PAYLOAD_PATTERNS)
 
 
 def _decode_tool_arguments(tool_call: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -913,7 +928,7 @@ def _build_compact_tool_retry_context(
     max_messages: int = 3,
     max_chars: int = 2200,
 ) -> str:
-    items = list(messages or [])
+    items = messages if isinstance(messages, Sequence) else list(messages or [])
     selected: List[str] = []
     anchor_indexes = set()
 
@@ -942,7 +957,8 @@ def _build_compact_tool_retry_context(
         break
 
     recent: List[str] = []
-    for index, msg in reversed(list(enumerate(items))):
+    for index in range(len(items) - 1, -1, -1):
+        msg = items[index]
         if index in anchor_indexes:
             continue
         block = _format_message_for_retry_context(msg)

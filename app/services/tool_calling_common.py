@@ -24,6 +24,13 @@ _PREFERRED_XML_ARG_TAG = "arg"
 _LEGACY_XML_WRAPPER_TAG = "tool_calls"
 _LEGACY_XML_CALL_TAG = "invoke"
 _LEGACY_XML_ARG_TAG = "parameter"
+_BASE64_RUN_CHARS = r"A-Za-z0-9+/=_-"
+_FOLDED_BASE64_RUN_RE = re.compile(
+    rf"(?<![{_BASE64_RUN_CHARS}])"
+    rf"(?:[{_BASE64_RUN_CHARS}]{{32,}}[ \t]*[\r\n]+){{2,}}"
+    rf"[{_BASE64_RUN_CHARS}]{{32,}}(?:[ \t]*[\r\n]+)?"
+    rf"(?![{_BASE64_RUN_CHARS}])"
+)
 
 def _debug_preview(value: Any, limit: int = 240) -> str:
     text = repr(value)
@@ -188,14 +195,17 @@ def _sanitize_tool_result_content(content: str) -> str:
         "[base64 omitted]",
         text,
     )
-    text = re.sub(
-        r"(?<![A-Za-z0-9+/=_-])"
-        r"(?:[A-Za-z0-9+/=_-]{64,}[\r\n]+){7,}[A-Za-z0-9+/=_-]{64,}"
-        r"(?![A-Za-z0-9+/=_-])",
-        "[base64 omitted]",
-        text,
-    )
+    text = _FOLDED_BASE64_RUN_RE.sub(_redact_folded_base64_run, text)
     return text
+
+
+def _redact_folded_base64_run(match: re.Match[str]) -> str:
+    value = match.group(0)
+    compact = re.sub(r"\s+", "", value)
+    if len(compact) < 512:
+        return value
+    return "[base64 omitted]"
+
 
 def _serialize_content(content: Any) -> str:
     if content is None:
@@ -208,6 +218,19 @@ def _serialize_content(content: Any) -> str:
         except Exception:
             return str(content)
     return str(content)
+
+
+def normalize_chat_role(role: Any, *, allow_tool: bool = True) -> str:
+    normalized = str(role or "user").strip().lower() or "user"
+    if normalized == "developer":
+        return "system"
+    allowed = {"system", "user", "assistant"}
+    if allow_tool:
+        allowed.add("tool")
+    if normalized in allowed:
+        return normalized
+    return "user"
+
 
 def _format_tool_result_message(name: str, tool_call_id: str, content: str) -> str:
     return (

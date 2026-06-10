@@ -26,6 +26,7 @@ from app.services.tool_calling_common import (
     _serialize_content,
     get_tool_calling_allow_media_postprocess,
     get_tool_calling_sanitize_assistant_content_enabled,
+    normalize_chat_role,
     _decorate_prompt_lines,
     _get_tool_calling_prompt_padding_enabled,
     _get_tool_calling_prompt_padding_obfuscation_enabled,
@@ -144,7 +145,7 @@ def build_browser_messages_for_tools(
         if not isinstance(msg, dict):
             continue
 
-        role = str(msg.get("role", "user") or "user").strip().lower()
+        role = normalize_chat_role(msg.get("role", "user"))
         content = _serialize_content(msg.get("content", ""))
 
         if role == "tool":
@@ -186,7 +187,7 @@ def build_browser_messages_for_tools(
             browser_messages.append({"role": "assistant", "content": "\n\n".join(parts)})
             continue
 
-        safe_role = role if role in {"system", "user", "assistant"} else "user"
+        safe_role = normalize_chat_role(role, allow_tool=False)
         browser_messages.append({"role": safe_role, "content": content})
 
     browser_messages.append(
@@ -240,7 +241,7 @@ def summarize_messages_for_debug(
                 samples.append(f"#{idx}:invalid/{type(msg).__name__}")
             continue
 
-        role = str(msg.get("role", "user") or "user").strip().lower() or "user"
+        role = normalize_chat_role(msg.get("role", "user"))
         role_counts[role] = role_counts.get(role, 0) + 1
 
         tool_calls = msg.get("tool_calls") or []

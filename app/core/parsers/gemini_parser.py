@@ -94,13 +94,17 @@ _REASONING_META_HINTS = (
     "structure",
 )
 _GEMINI_GENERATED_MEDIA_URL_RE = re.compile(
-    r"https?://(?:[\w.-]+\.)?(?:googleusercontent\.com|lh3\.googleusercontent\.com)/[^\s\"'<>\\]+",
+    r"https?://(?:[\w.-]+\.)?(?:googleusercontent\.com|lh3\.googleusercontent\.com)/[^\s\"'<>\]\)\}\\]+",
     re.IGNORECASE,
 )
 _GEMINI_PLACEHOLDER_MEDIA_RE = re.compile(
     r"https?://(?:[\w.-]+\.)?googleusercontent\.com/(?:image_generation_content|generated_music_content)/\d+",
     re.IGNORECASE,
 )
+_RENDER_START_RE = re.compile(r"<\s*render\b", re.IGNORECASE)
+_RENDER_CLOSE_RE = re.compile(r"<\s*/\s*render\s*>", re.IGNORECASE)
+_MEDIA_SCAN_TAIL_CHARS = 4096
+_MEDIA_SCAN_DELIMITERS = (" ", "\n", "\r", "\t", '"', "'", "<", ">", "\\")
 
 
 def _clean_escaped(text: str) -> str:
@@ -135,7 +139,10 @@ class GeminiParser(ResponseParser):
     def __init__(self) -> None:
         self._last_len = 0      # 已发送给上层的字符数
         self._full_cache = ""   # 最新完整文本
+        self._last_raw_length = 0
+        self._pending_raw = ""
         self._seen_media_refs: set[str] = set()
+        self._media_scan_tail = ""
 
     # ---------- 对外接口 ---------- #
     def parse_chunk(self, raw: str | bytes) -> Dict[str, Any]:
@@ -144,10 +151,31 @@ class GeminiParser(ResponseParser):
         """
         if isinstance(raw, bytes):
             raw = raw.decode("utf-8", errors="ignore")
+        elif not isinstance(raw, str):
+            raw = str(raw)
 
         try:
-            full_txt, done = self._parse(raw)
-            images = self._extract_generated_images(raw)
+            previous_len = int(getattr(self, "_last_raw_length", 0) or 0)
+            previous_raw = getattr(self, "_last_raw_response", "")
+            will_reset = bool(previous_len and previous_raw and not raw.startswith(previous_raw))
+            is_stream_start = (previous_len == 0 and not self._pending_raw) or will_reset
+            new_data = self._prepare_incremental_raw_response(raw)
+            if not new_data:
+                return {
+                    "content": "",
+                    "images": [],
+                    "done": False,
+                    "error": None,
+                    "unclosed_render_output": self._has_unclosed_render_output(
+                        self._full_cache
+                    ),
+                }
+
+            full_txt, done = self._parse_incremental(
+                new_data,
+                is_stream_start=is_stream_start,
+            )
+            images = self._extract_generated_images_from_increment(new_data)
         except Exception as exc:  # pragma: no cover
             logger.debug(f"[GeminiParser] 解析异常: {exc}")
             return {"content": "", "images": [], "done": False, "error": str(exc)}
@@ -158,12 +186,24 @@ class GeminiParser(ResponseParser):
             self._last_len = len(full_txt)
             self._full_cache = full_txt
 
-        return {"content": delta, "images": images, "done": done, "error": None}
+        return {
+            "content": delta,
+            "images": images,
+            "done": done,
+            "error": None,
+            "unclosed_render_output": self._has_unclosed_render_output(
+                self._full_cache
+            ),
+        }
 
     def reset(self) -> None:
         self._last_len = 0
         self._full_cache = ""
+        self._last_raw_length = 0
+        self._last_raw_response = ""
+        self._pending_raw = ""
         self._seen_media_refs.clear()
+        self._media_scan_tail = ""
 
     @staticmethod
     def _list_get(value: Any, index: int) -> Any:
@@ -230,6 +270,25 @@ class GeminiParser(ResponseParser):
         except json.JSONDecodeError:
             content = _clean_escaped(content)
         return _clean_escaped(content)
+
+    @staticmethod
+    def _has_unclosed_render_output(text: str) -> bool:
+        text = str(text or "")
+        if not text:
+            return False
+
+        stripped = text.lstrip()
+        if not _RENDER_START_RE.match(stripped):
+            return False
+
+        render_starts = list(_RENDER_START_RE.finditer(text))
+        if not render_starts:
+            return False
+
+        render_closes = list(_RENDER_CLOSE_RE.finditer(text))
+        last_open_at = render_starts[-1].start()
+        last_close_at = render_closes[-1].start() if render_closes else -1
+        return last_open_at > last_close_at
 
     @staticmethod
     def _looks_like_reasoning(value: str) -> bool:
@@ -364,32 +423,50 @@ class GeminiParser(ResponseParser):
         return best_text
 
     # ---------- 内部逻辑 ---------- #
-    def _parse(self, raw_text: str) -> Tuple[Optional[str], bool]:
+    def _parse_incremental(
+        self,
+        raw_text: str,
+        *,
+        is_stream_start: bool = False,
+    ) -> Tuple[Optional[str], bool]:
         """
-        解析 Gemini 的 *整段* HTTP body，返回 (完整文本, 是否结束)
+        解析 Gemini 的 *增量* HTTP body 片段，返回 (完整文本, 是否结束)
         """
-        clean = raw_text.lstrip(")]}'\n")
-        lines = clean.split("\n")
+        combined = f"{self._pending_raw}{str(raw_text or '')}"
+        if not combined:
+            return None, False
 
+        # 仅在全新流的首个片段上清理安全前缀。
+        if is_stream_start:
+            combined = combined.lstrip(")]}'\n")
+
+        lines = combined.splitlines(keepends=True)
         full_content: Optional[str] = None
         done = False
+        pending_start = len(combined)
         i = 0
+        cursor = 0
         while i < len(lines):
-            meta = lines[i].strip()
+            line = lines[i]
+            line_start = cursor
+            line_end = line_start + len(line)
+            meta = line.strip()
             if not meta:               # 空行
+                cursor = line_end
                 i += 1
                 continue
 
             if meta.isdigit():         # 长度行
                 if i + 1 >= len(lines):
+                    pending_start = line_start
                     break
-                json_block = lines[i + 1]
+                json_block = lines[i + 1].rstrip("\r\n")
 
                 try:
                     outer = json.loads(json_block)
                 except json.JSONDecodeError:
-                    i += 2
-                    continue
+                    pending_start = line_start
+                    break
 
                 if self._is_end_signal(outer):
                     done = True
@@ -397,10 +474,13 @@ class GeminiParser(ResponseParser):
                     content = self._extract_content(outer)
                     if content:
                         full_content = content
+                cursor = line_end + len(lines[i + 1])
                 i += 2
             else:
+                cursor = line_end
                 i += 1
 
+        self._pending_raw = combined[pending_start:] if pending_start < len(combined) else ""
         return full_content, done
 
     @staticmethod
@@ -454,7 +534,8 @@ class GeminiParser(ResponseParser):
         if not raw_text:
             return {}
 
-        if self._extract_generated_images(raw_text):
+        parse_images = parse_result.get("images") if isinstance(parse_result, dict) else None
+        if parse_images or self._seen_media_refs or self._has_generated_image(raw_text):
             return {}
 
         hint_parts: List[str] = []
@@ -487,14 +568,29 @@ class GeminiParser(ResponseParser):
             "wait_timeout_seconds": wait_timeout_seconds,
         }
 
-    def _extract_generated_images(self, raw_response: str) -> List[Dict[str, Any]]:
+    @staticmethod
+    def _build_media_scan_tail(raw_text: str) -> str:
+        text = str(raw_text or "")
+        if not text:
+            return ""
+
+        last_delimiter = -1
+        for delimiter in _MEDIA_SCAN_DELIMITERS:
+            last_delimiter = max(last_delimiter, text.rfind(delimiter))
+
+        tail = text[last_delimiter + 1:] if last_delimiter >= 0 else text
+        if len(tail) > _MEDIA_SCAN_TAIL_CHARS:
+            tail = tail[-_MEDIA_SCAN_TAIL_CHARS:]
+        return tail
+
+    @classmethod
+    def _iter_generated_image_urls(cls, raw_response: str):
         raw_text = str(raw_response or "")
         if not raw_text:
-            return []
+            return
 
-        matches = []
         for match in _GEMINI_GENERATED_MEDIA_URL_RE.finditer(raw_text):
-            url = str(match.group(0) or "").strip()
+            url = str(match.group(0) or "").strip().rstrip(".,;:!?")
             if not url:
                 continue
             if _GEMINI_PLACEHOLDER_MEDIA_RE.fullmatch(url):
@@ -504,13 +600,30 @@ class GeminiParser(ResponseParser):
                 continue
             if not any(ext in lowered for ext in (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".avif")):
                 continue
-            matches.append(url)
+            yield url
+
+    @classmethod
+    def _has_generated_image(cls, raw_response: str) -> bool:
+        return any(cls._iter_generated_image_urls(raw_response))
+
+    def _extract_generated_images_from_increment(self, new_data: str) -> List[Dict[str, Any]]:
+        scan_text = f"{self._media_scan_tail}{str(new_data or '')}"
+        images = self._extract_generated_images(scan_text)
+        self._media_scan_tail = self._build_media_scan_tail(scan_text)
+        return images
+
+    def _extract_generated_images(self, raw_response: str, *, mark_seen: bool = True) -> List[Dict[str, Any]]:
+        local_seen: set[str] = set()
 
         images: List[Dict[str, Any]] = []
-        for url in matches:
-            if url in self._seen_media_refs:
+        for url in self._iter_generated_image_urls(raw_response):
+            if url in local_seen:
                 continue
-            self._seen_media_refs.add(url)
+            local_seen.add(url)
+            if mark_seen:
+                if url in self._seen_media_refs:
+                    continue
+                self._seen_media_refs.add(url)
             images.append(
                 {
                     "media_type": "image",

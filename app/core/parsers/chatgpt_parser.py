@@ -27,13 +27,20 @@ class ChatGPTParser(ResponseParser):
     def __init__(self):
         self._accumulated_content = ""
         self._last_raw_length = 0
+        self._last_raw_response = ""
         self._rendered_content = ""
         self._message_parts: Dict[int, str] = {}
+        self._message_parts_joined = ""
+        self._message_parts_dirty = False
         self._content_references: List[Dict[str, Any]] = []
+        self._content_references_sorted: List[Dict[str, Any]] = []
+        self._content_references_dirty = False
         self._active_part_index: Optional[int] = None
+        self._pending_sse_chunk = ""
         self._ref_start = "\ue200"
         self._ref_end = "\ue201"
         self._ref_sep = "\ue202"
+        self._media_generation_state: Dict[str, Any] = {}
         self._inline_ref_pattern = re.compile(
             rf"{re.escape(self._ref_start)}([^{re.escape(self._ref_sep)}{re.escape(self._ref_end)}]+)"
             rf"{re.escape(self._ref_sep)}(.*?){re.escape(self._ref_end)}",
@@ -63,23 +70,20 @@ class ChatGPTParser(ResponseParser):
             if not isinstance(raw_response, str):
                 raw_response = str(raw_response)
             
-            # 只处理新增部分
-            current_len = len(raw_response)
-            if current_len <= self._last_raw_length:
+            # 只处理新增部分；非前缀新快照会在 helper 内重置解析状态。
+            new_data = self._prepare_incremental_raw_response(raw_response)
+            if not new_data:
                 return result
-            
-            new_data = raw_response[self._last_raw_length:]
-            self._last_raw_length = current_len
-            
+
             # 解析新增的SSE事件
-            delta_content = self._parse_sse_chunk(new_data)
+            delta_content, done = self._parse_sse_chunk(new_data)
             
             if delta_content:
                 result["content"] = delta_content
                 self._accumulated_content += delta_content
             
             # 检测结束标志
-            if "data: [DONE]" in new_data:
+            if done:
                 result["done"] = True
             
         except Exception as e:
@@ -88,18 +92,51 @@ class ChatGPTParser(ResponseParser):
         
         return result
     
-    def _parse_sse_chunk(self, chunk: str) -> str:
+    def _parse_sse_chunk(self, chunk: str) -> tuple[str, bool]:
         """解析SSE数据块，提取文本增量"""
+        chunk = self._extract_complete_sse_chunk(chunk)
+        if not chunk:
+            return "", False
+
         previous_content = self._rendered_content
+        done = False
 
         for current_event, data in self._iter_sse_json_events(chunk):
             if not isinstance(data, dict):
                 continue
             self._consume_event(current_event, data)
 
+        for raw_line in str(chunk or "").split('\n'):
+            line = raw_line.strip()
+            if line.startswith("data:") and line[5:].strip() == "[DONE]":
+                done = True
+                break
+
         current_content = self._render_visible_text()
         self._rendered_content = current_content
-        return self._compute_delta(previous_content, current_content)
+        return self._compute_delta(previous_content, current_content), done
+
+    def _extract_complete_sse_chunk(self, chunk: str) -> str:
+        """Buffer partial SSE frames until a blank line terminates the event."""
+        combined = f"{self._pending_sse_chunk}{str(chunk or '')}"
+        if not combined:
+            return ""
+
+        normalized = combined.replace("\r\n", "\n").replace("\r", "\n")
+        parts = normalized.split("\n\n")
+        if normalized.endswith("\n\n"):
+            self._pending_sse_chunk = ""
+            complete_parts = parts[:-1]
+        elif normalized.rstrip("\n").endswith("data: [DONE]"):
+            self._pending_sse_chunk = ""
+            complete_parts = [normalized.rstrip("\n")]
+        else:
+            self._pending_sse_chunk = parts.pop() if parts else normalized
+            complete_parts = parts
+
+        if not complete_parts:
+            return ""
+        return "\n\n".join(complete_parts) + "\n\n"
 
     def _iter_sse_json_events(self, chunk: str):
         """遍历 SSE 中可解析为 JSON 的事件。"""
@@ -131,6 +168,7 @@ class ChatGPTParser(ResponseParser):
             yield current_event, payload
     
     def _consume_event(self, event_name: Optional[str], data: Dict[str, Any]) -> None:
+        self._update_media_generation_state(event_name, data)
         if event_name != "delta":
             return
 
@@ -149,9 +187,7 @@ class ChatGPTParser(ResponseParser):
 
         value = data.get("v")
         if isinstance(value, str) and self._active_part_index is not None:
-            self._message_parts[self._active_part_index] = (
-                self._message_parts.get(self._active_part_index, "") + value
-            )
+            self._append_message_part(self._active_part_index, value)
             return
 
         self._sync_message_snapshot_from_payload(data)
@@ -180,11 +216,7 @@ class ChatGPTParser(ResponseParser):
 
         parts = content.get("parts")
         if isinstance(parts, list):
-            self._message_parts = {
-                index: str(part)
-                for index, part in enumerate(parts)
-                if isinstance(part, str)
-            }
+            self._set_message_parts(parts)
             self._active_part_index = max(self._message_parts.keys(), default=0)
 
         metadata = message.get("metadata") or {}
@@ -193,6 +225,7 @@ class ChatGPTParser(ResponseParser):
             self._content_references = [
                 dict(item) for item in refs if isinstance(item, dict)
             ]
+            self._mark_content_references_dirty()
 
     def _apply_operation(self, operation: Dict[str, Any]) -> None:
         path = str(operation.get("p") or "")
@@ -211,20 +244,16 @@ class ChatGPTParser(ResponseParser):
 
         if path == "/message/content/parts":
             if action in {"add", "replace"} and isinstance(value, list):
-                self._message_parts = {
-                    index: str(part)
-                    for index, part in enumerate(value)
-                    if isinstance(part, str)
-                }
+                self._set_message_parts(value)
                 self._active_part_index = max(self._message_parts.keys(), default=0)
             elif action == "append" and isinstance(value, list):
                 start_index = max(self._message_parts.keys(), default=-1) + 1
                 for offset, part in enumerate(value):
                     if isinstance(part, str):
-                        self._message_parts[start_index + offset] = part
+                        self._set_message_part(start_index + offset, part)
                 self._active_part_index = max(self._message_parts.keys(), default=0)
             elif action == "remove":
-                self._message_parts = {}
+                self._clear_message_parts()
                 self._active_part_index = None
             return True
 
@@ -234,17 +263,17 @@ class ChatGPTParser(ResponseParser):
 
         index = int(match.group(1))
         if action == "append" and isinstance(value, str):
-            self._message_parts[index] = self._message_parts.get(index, "") + value
+            self._append_message_part(index, value)
             self._active_part_index = index
         elif action in {"add", "replace"}:
             if isinstance(value, str):
-                self._message_parts[index] = value
+                self._set_message_part(index, value)
                 self._active_part_index = index
             elif value is None:
-                self._message_parts[index] = ""
+                self._set_message_part(index, "")
                 self._active_part_index = index
         elif action == "remove":
-            self._message_parts.pop(index, None)
+            self._remove_message_part(index)
             if self._active_part_index == index:
                 self._active_part_index = max(self._message_parts.keys(), default=None)
         return True
@@ -263,35 +292,48 @@ class ChatGPTParser(ResponseParser):
                 self._content_references = [
                     dict(item) for item in value if isinstance(item, dict)
                 ]
+                self._mark_content_references_dirty()
             elif action == "append":
+                changed = False
                 items = value if isinstance(value, list) else [value]
                 for item in items:
                     if isinstance(item, dict):
                         self._content_references.append(dict(item))
+                        changed = True
+                if changed:
+                    self._mark_content_references_dirty()
             elif action == "remove":
-                self._content_references = []
+                self._clear_content_references()
             return True
 
         index = int(index_text)
-        self._ensure_reference_index(index)
+        if self._ensure_reference_index(index):
+            self._mark_content_references_dirty()
 
         if not subpath:
             if action == "remove":
                 if 0 <= index < len(self._content_references):
                     self._content_references.pop(index)
+                    self._mark_content_references_dirty()
             elif action in {"add", "replace"} and isinstance(value, dict):
                 self._content_references[index] = dict(value)
+                self._mark_content_references_dirty()
             elif action == "append" and isinstance(value, dict):
                 self._content_references[index].update(value)
+                self._mark_content_references_dirty()
             return True
 
         target = self._content_references[index]
         self._apply_nested_patch(target, subpath.split("/"), action, value)
+        self._mark_content_references_dirty()
         return True
 
-    def _ensure_reference_index(self, index: int) -> None:
+    def _ensure_reference_index(self, index: int) -> bool:
+        changed = False
         while len(self._content_references) <= index:
             self._content_references.append({})
+            changed = True
+        return changed
 
     def _apply_nested_patch(
         self,
@@ -332,23 +374,77 @@ class ChatGPTParser(ResponseParser):
         if not self._message_parts:
             return self._rendered_content
 
-        text = "".join(self._message_parts[index] for index in sorted(self._message_parts))
+        text = self._render_message_parts()
         text = self._replace_content_references(text)
         text = self._strip_private_markup(text)
         return text
 
+    def _set_message_parts(self, parts: List[Any]) -> None:
+        self._message_parts = {
+            index: str(part)
+            for index, part in enumerate(parts)
+            if isinstance(part, str)
+        }
+        self._mark_message_parts_dirty()
+
+    def _set_message_part(self, index: int, value: str) -> None:
+        self._message_parts[index] = str(value)
+        self._mark_message_parts_dirty()
+
+    def _append_message_part(self, index: int, value: str) -> None:
+        if not value:
+            return
+        self._message_parts[index] = self._message_parts.get(index, "") + str(value)
+        self._mark_message_parts_dirty()
+
+    def _remove_message_part(self, index: int) -> None:
+        if index in self._message_parts:
+            self._message_parts.pop(index, None)
+            self._mark_message_parts_dirty()
+
+    def _clear_message_parts(self) -> None:
+        if self._message_parts or self._message_parts_joined:
+            self._message_parts = {}
+            self._message_parts_joined = ""
+            self._message_parts_dirty = False
+
+    def _mark_message_parts_dirty(self) -> None:
+        self._message_parts_dirty = True
+
+    def _render_message_parts(self) -> str:
+        if self._message_parts_dirty:
+            self._message_parts_joined = "".join(
+                self._message_parts[index] for index in sorted(self._message_parts)
+            )
+            self._message_parts_dirty = False
+        return self._message_parts_joined
+
+    def _mark_content_references_dirty(self) -> None:
+        self._content_references_dirty = True
+
+    def _clear_content_references(self) -> None:
+        if self._content_references or self._content_references_sorted:
+            self._content_references = []
+            self._content_references_sorted = []
+            self._content_references_dirty = False
+
+    def _sorted_content_references(self) -> List[Dict[str, Any]]:
+        if self._content_references_dirty:
+            self._content_references_sorted = sorted(
+                (
+                    ref for ref in self._content_references
+                    if isinstance(ref, dict) and str(ref.get("matched_text") or "")
+                ),
+                key=lambda ref: len(str(ref.get("matched_text") or "")),
+                reverse=True,
+            )
+            self._content_references_dirty = False
+        return self._content_references_sorted
+
     def _replace_content_references(self, text: str) -> str:
         rendered = text
-        references = sorted(
-            (
-                ref for ref in self._content_references
-                if isinstance(ref, dict) and str(ref.get("matched_text") or "")
-            ),
-            key=lambda ref: len(str(ref.get("matched_text") or "")),
-            reverse=True,
-        )
 
-        for ref in references:
+        for ref in self._sorted_content_references():
             matched_text = str(ref.get("matched_text") or "")
             if not matched_text or matched_text not in rendered:
                 continue
@@ -430,6 +526,66 @@ class ChatGPTParser(ResponseParser):
         cleaned = cleaned.replace(self._ref_end, "")
         return cleaned
 
+    def _update_media_generation_state(self, event_name: Optional[str], payload: Dict[str, Any]) -> None:
+        pending = False
+        media_type = str(self._media_generation_state.get("media_type") or "")
+        hint_parts = [
+            item for item in str(self._media_generation_state.get("hint_text") or "").split("\n\n")
+            if item
+        ]
+        wait_timeout_seconds = self._media_generation_state.get("wait_timeout_seconds")
+
+        payload_type = str(payload.get("type") or "").strip().lower()
+        if payload_type == "server_ste_metadata":
+            metadata = payload.get("metadata") or {}
+            if str(metadata.get("turn_use_case") or "").strip().lower() == "image gen":
+                pending = True
+                media_type = media_type or "image"
+                wait_timeout_seconds = max(float(wait_timeout_seconds or 0), 90.0)
+
+        message = None
+        if event_name == "delta":
+            value = payload.get("v")
+            if isinstance(value, dict) and isinstance(value.get("message"), dict):
+                message = value.get("message") or {}
+        elif isinstance(payload.get("message"), dict):
+            message = payload.get("message") or {}
+
+        if isinstance(message, dict):
+            metadata = message.get("metadata") or {}
+            content = message.get("content") or {}
+
+            if str(metadata.get("image_gen_task_id") or "").strip():
+                pending = True
+                media_type = media_type or "image"
+                wait_timeout_seconds = max(float(wait_timeout_seconds or 0), 90.0)
+
+            if bool(metadata.get("image_gen_multi_stream")):
+                pending = True
+                media_type = media_type or "image"
+                wait_timeout_seconds = max(float(wait_timeout_seconds or 0), 90.0)
+
+            for field in ("ui_card_title", "ui_card_description"):
+                value = str(metadata.get(field) or "").strip()
+                if value and value not in hint_parts:
+                    hint_parts.append(value)
+
+            if isinstance(content, dict):
+                parts = content.get("parts")
+                if isinstance(parts, list):
+                    for item in parts:
+                        value = str(item or "").strip() if isinstance(item, str) else ""
+                        if value and value not in hint_parts:
+                            hint_parts.append(value)
+
+        if pending and media_type:
+            self._media_generation_state = {
+                "pending": True,
+                "media_type": media_type,
+                "hint_text": "\n\n".join(hint_parts[:3]),
+                "wait_timeout_seconds": wait_timeout_seconds,
+            }
+
     @staticmethod
     def _compute_delta(previous: str, current: str) -> str:
         if not current or current == previous:
@@ -450,90 +606,24 @@ class ChatGPTParser(ResponseParser):
         """重置状态"""
         self._accumulated_content = ""
         self._last_raw_length = 0
+        self._last_raw_response = ""
         self._rendered_content = ""
         self._message_parts = {}
+        self._message_parts_joined = ""
+        self._message_parts_dirty = False
         self._content_references = []
+        self._content_references_sorted = []
+        self._content_references_dirty = False
         self._active_part_index = None
+        self._pending_sse_chunk = ""
+        self._media_generation_state = {}
 
     def get_media_generation_state(
         self,
         raw_response: str = "",
         parse_result: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        pending = False
-        media_type = ""
-        hint_parts: List[str] = []
-        wait_timeout_seconds = None
-
-        try:
-            for event_name, payload in self._iter_sse_json_events(raw_response):
-                if not isinstance(payload, dict):
-                    continue
-
-                payload_type = str(payload.get("type") or "").strip().lower()
-                if payload_type == "server_ste_metadata":
-                    metadata = payload.get("metadata") or {}
-                    if str(metadata.get("turn_use_case") or "").strip().lower() == "image gen":
-                        pending = True
-                        media_type = media_type or "image"
-                        wait_timeout_seconds = max(float(wait_timeout_seconds or 0), 90.0)
-
-                message = None
-                if event_name == "delta":
-                    value = payload.get("v")
-                    if isinstance(value, dict) and isinstance(value.get("message"), dict):
-                        message = value.get("message") or {}
-                elif isinstance(payload.get("message"), dict):
-                    message = payload.get("message") or {}
-
-                if not isinstance(message, dict):
-                    continue
-
-                metadata = message.get("metadata") or {}
-                content = message.get("content") or {}
-
-                if str(metadata.get("image_gen_task_id") or "").strip():
-                    pending = True
-                    media_type = media_type or "image"
-                    wait_timeout_seconds = max(float(wait_timeout_seconds or 0), 90.0)
-
-                if bool(metadata.get("image_gen_multi_stream")):
-                    pending = True
-                    media_type = media_type or "image"
-                    wait_timeout_seconds = max(float(wait_timeout_seconds or 0), 90.0)
-
-                for field in ("ui_card_title", "ui_card_description"):
-                    value = str(metadata.get(field) or "").strip()
-                    if value:
-                        hint_parts.append(value)
-
-                if isinstance(content, dict):
-                    parts = content.get("parts")
-                    if isinstance(parts, list):
-                        for item in parts:
-                            if isinstance(item, str) and item.strip():
-                                hint_parts.append(item.strip())
-
-        except Exception as e:
-            logger.debug(f"[ChatGPTParser] 媒体状态解析异常: {e}")
-
-        if not pending or not media_type:
-            return {}
-
-        deduped_hint_parts = []
-        seen = set()
-        for item in hint_parts:
-            if item in seen:
-                continue
-            seen.add(item)
-            deduped_hint_parts.append(item)
-
-        return {
-            "pending": True,
-            "media_type": media_type,
-            "hint_text": "\n\n".join(deduped_hint_parts[:3]),
-            "wait_timeout_seconds": wait_timeout_seconds,
-        }
+        return dict(self._media_generation_state or {})
     
     @classmethod
     def get_id(cls) -> str:

@@ -12,7 +12,10 @@
       "stealth_default": true
     },
     "lmarena.ai": {
-      "stealth_default": true
+      "stealth_default": true,
+      "route_aliases": [
+        "arena.ai"
+      ]
     },
     "poe.com": {
       "stealth_default": true

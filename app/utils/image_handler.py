@@ -171,8 +171,15 @@ def _save_base64_image(data_uri: str) -> Optional[str]:
         if not base64_data or not base64_data.strip():
             logger.warning("[IMAGE] Base64 数据为空（仅有 data:image/...;base64, 前缀）")
             return None
+        compact_base64 = re.sub(r"\s+", "", base64_data)
+        padding = compact_base64.count("=")
+        estimated_size = max(0, (len(compact_base64) * 3) // 4 - padding)
+        max_bytes = int(MAX_IMAGE_SIZE_MB * 1024 * 1024)
+        if estimated_size > max_bytes:
+            logger.warning(f"[IMAGE] Base64 图片过大: {estimated_size / (1024 * 1024):.2f}MB")
+            return None
         # 解码
-        image_bytes = base64.b64decode(base64_data)
+        image_bytes = base64.b64decode(compact_base64)
         
         # 大小检查
         size_mb = len(image_bytes) / (1024 * 1024)
@@ -202,6 +209,7 @@ def _download_image(url: str) -> Optional[str]:
     """
     下载网络图片
     """
+    response = None
     try:
         logger.debug(f"[IMAGE] 开始下载: {url[:100]}")
         
@@ -216,9 +224,29 @@ def _download_image(url: str) -> Optional[str]:
         
         # 获取内容类型
         content_type = response.headers.get('Content-Type', '')
+
+        max_bytes = int(MAX_IMAGE_SIZE_MB * 1024 * 1024)
+        content_length = response.headers.get('Content-Length')
+        if content_length:
+            try:
+                if int(content_length) > max_bytes:
+                    logger.warning(f"[IMAGE] 下载图片过大: {int(content_length) / (1024 * 1024):.2f}MB")
+                    return None
+            except (TypeError, ValueError):
+                pass
         
-        # 读取内容
-        image_bytes = response.content
+        # 流式读取内容，避免超大响应在尺寸检查前完整进入内存
+        chunks = []
+        total_bytes = 0
+        for chunk in response.iter_content(chunk_size=64 * 1024):
+            if not chunk:
+                continue
+            total_bytes += len(chunk)
+            if total_bytes > max_bytes:
+                logger.warning(f"[IMAGE] 下载图片过大: {total_bytes / (1024 * 1024):.2f}MB")
+                return None
+            chunks.append(chunk)
+        image_bytes = b''.join(chunks)
         
         # 大小检查
         size_mb = len(image_bytes) / (1024 * 1024)
@@ -257,6 +285,12 @@ def _download_image(url: str) -> Optional[str]:
     except Exception as e:
         logger.error(f"[IMAGE] 保存失败: {e}")
         return None
+    finally:
+        if response is not None:
+            try:
+                response.close()
+            except Exception:
+                pass
 
 
 def _guess_extension(url: str, content_type: str) -> str:

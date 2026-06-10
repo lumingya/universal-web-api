@@ -12,11 +12,13 @@ import copy
 import json
 import os
 import re
-from datetime import datetime
+import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from app.core.config import get_logger
+from app.core.config import atomic_write_json
 from app.core.parsers import ParserRegistry
 
 logger = get_logger("PARSER_MGR")
@@ -44,10 +46,21 @@ class ParserConfigManager:
             return
 
         try:
-            self._last_mtime = self.CONFIG_FILE.stat().st_mtime
+            next_mtime = self.CONFIG_FILE.stat().st_mtime
             with self.CONFIG_FILE.open("r", encoding="utf-8") as handle:
-                self._config = json.load(handle)
-            self._parsers_config = self._config.get("parsers", {}) or {}
+                loaded_config = json.load(handle)
+            if not isinstance(loaded_config, dict):
+                logger.warning("Parsers config file must be an object; using defaults")
+                loaded_config = {"version": "1.0", "parsers": {}}
+            parsers_config = loaded_config.get("parsers", {})
+            if not isinstance(parsers_config, dict):
+                logger.warning("Parsers config field must be an object; ignoring invalid value")
+                parsers_config = {}
+            loaded_config["parsers"] = parsers_config
+            loaded_config.setdefault("version", "1.0")
+            self._config = loaded_config
+            self._parsers_config = parsers_config
+            self._last_mtime = next_mtime
             self._register_from_config()
         except json.JSONDecodeError as exc:
             logger.error(f"Failed to decode parsers config: {exc}")
@@ -65,6 +78,9 @@ class ParserConfigManager:
 
     def _register_from_config(self) -> None:
         for parser_id, config in self._parsers_config.items():
+            if not isinstance(config, dict):
+                logger.warning(f"Skip invalid parser config [{parser_id}]: entry must be an object")
+                continue
             if not config.get("enabled", True):
                 continue
             try:
@@ -73,11 +89,46 @@ class ParserConfigManager:
                 logger.warning(f"Failed to register parser [{parser_id}]: {exc}")
 
     def _save_config(self) -> None:
-        self.CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with self.CONFIG_FILE.open("w", encoding="utf-8", newline="\n") as handle:
-            json.dump(self._config, handle, indent=2, ensure_ascii=False)
-            handle.write("\n")
-        self._last_mtime = self.CONFIG_FILE.stat().st_mtime
+        atomic_write_json(self.CONFIG_FILE, self._config)
+        try:
+            self._last_mtime = self.CONFIG_FILE.stat().st_mtime
+        except Exception as exc:
+            logger.warning(f"Parsers config saved but failed to update mtime: {exc}")
+
+    @staticmethod
+    def _atomic_write_text(path: Path, content: str) -> None:
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        fd = None
+        tmp_path: Optional[Path] = None
+
+        try:
+            fd, tmp_name = tempfile.mkstemp(
+                prefix=f".{target.name}.",
+                suffix=".tmp",
+                dir=str(target.parent),
+            )
+            tmp_path = Path(tmp_name)
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+                fd = None
+                handle.write(content)
+                if not content.endswith("\n"):
+                    handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp_path, target)
+        except Exception:
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except Exception:
+                    pass
+            if tmp_path is not None:
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            raise
 
     def _load_parser_entry(self, parser_id: str, config: Dict[str, Any]) -> None:
         module_path = str(config.get("module") or "").strip()
@@ -91,6 +142,8 @@ class ParserConfigManager:
         for info in ParserRegistry.list_all():
             parser_id = str(info.get("id") or "").strip()
             config = self._parsers_config.get(parser_id, {})
+            if not isinstance(config, dict):
+                config = {}
             result.append({
                 **info,
                 "managed": bool(config),
@@ -111,13 +164,19 @@ class ParserConfigManager:
         parser_id = normalized["parser_id"]
         module_name = normalized["module_name"]
         target_path = self.PARSER_DIR / normalized["filename"]
-        existing_entry = copy.deepcopy(self._parsers_config.get(parser_id))
+        had_previous_entry = parser_id in self._parsers_config
+        previous_entry = copy.deepcopy(self._parsers_config.get(parser_id)) if had_previous_entry else None
+        existing_entry = previous_entry if isinstance(previous_entry, dict) else None
+        registry_snapshot = dict(getattr(ParserRegistry, "_parsers", {}))
 
         if ParserRegistry.exists(parser_id) and existing_entry is None:
             raise ValueError(f"解析器 ID 已被内置解析器占用: {parser_id}")
 
         for other_id, other_entry in self._parsers_config.items():
             if other_id == parser_id:
+                continue
+            if not isinstance(other_entry, dict):
+                logger.warning(f"Skip invalid parser config [{other_id}]: entry must be an object")
                 continue
             if str(other_entry.get("filename") or "") == normalized["filename"]:
                 raise ValueError(f"解析器模块名已被 {other_id} 占用: {module_name}")
@@ -154,15 +213,12 @@ class ParserConfigManager:
             "module_name": module_name,
             "filename": normalized["filename"],
             "enabled": True,
-            "installed_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+            "installed_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
             "supported_patterns": normalized["supported_patterns"],
         }
 
         try:
-            with target_path.open("w", encoding="utf-8", newline="\n") as handle:
-                handle.write(normalized["source_code"])
-                if not normalized["source_code"].endswith("\n"):
-                    handle.write("\n")
+            self._atomic_write_text(target_path, normalized["source_code"])
 
             self._parsers_config[parser_id] = entry
             self._config["parsers"] = self._parsers_config
@@ -173,8 +229,10 @@ class ParserConfigManager:
             self._rollback_install(
                 parser_id=parser_id,
                 target_path=target_path,
-                previous_entry=existing_entry,
+                previous_entry=previous_entry,
                 previous_source=previous_source,
+                registry_snapshot=registry_snapshot,
+                had_previous_entry=had_previous_entry,
             )
             raise
 
@@ -186,30 +244,33 @@ class ParserConfigManager:
             "module_name": module_name,
             "module": normalized["module_path"],
             "filename": normalized["filename"],
-            "supported_patterns": normalized["supported_patterns"],
+            "supported_patterns": copy.deepcopy(normalized["supported_patterns"]),
         }
 
     def _rollback_install(
         self,
         parser_id: str,
         target_path: Path,
-        previous_entry: Optional[Dict[str, Any]],
+        previous_entry: Optional[Any],
         previous_source: Optional[str],
+        registry_snapshot: Optional[Dict[str, Any]] = None,
+        had_previous_entry: bool = False,
     ) -> None:
         try:
+            if registry_snapshot is not None:
+                ParserRegistry._parsers = dict(registry_snapshot)
             if previous_source is None:
                 if target_path.exists():
                     target_path.unlink()
             else:
-                with target_path.open("w", encoding="utf-8", newline="\n") as handle:
-                    handle.write(previous_source)
-            if previous_entry is None:
+                self._atomic_write_text(target_path, previous_source)
+            if previous_entry is None and not had_previous_entry:
                 self._parsers_config.pop(parser_id, None)
             else:
                 self._parsers_config[parser_id] = previous_entry
             self._config["parsers"] = self._parsers_config
             self._save_config()
-            if previous_entry:
+            if isinstance(previous_entry, dict) and previous_entry:
                 self._load_parser_entry(parser_id, previous_entry)
         except Exception as rollback_exc:
             logger.error(f"Failed to rollback parser install [{parser_id}]: {rollback_exc}")
