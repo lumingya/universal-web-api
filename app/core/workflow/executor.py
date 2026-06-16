@@ -237,7 +237,15 @@ class WorkflowExecutor(
     @staticmethod
     def _is_rate_limit_terminal_error(error: Any) -> bool:
         detail = str(error or "").strip().lower()
-        return "429" in detail or "too many requests" in detail or "rate limit" in detail
+        return (
+            "429" in detail
+            or "403" in detail
+            or "503" in detail
+            or "too many requests" in detail
+            or "rate limit" in detail
+            or "forbidden" in detail
+            or "service unavailable" in detail
+        )
 
     def _page_has_security_verification(self) -> bool:
         script = r"""

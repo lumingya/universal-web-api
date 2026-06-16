@@ -1178,7 +1178,7 @@
     {
       "id": "cmd_arena_stop_fix_runtime",
       "name": "ARENA_STOP_FIX_RUNTIME",
-      "enabled": false,
+      "enabled": true,
       "log_enabled": true,
       "log_level": "INFO",
       "mode": "simple",
@@ -1222,6 +1222,59 @@
           "apply_now": true,
           "fail_on_falsy": false,
           "teardown_js": "(() => { try { if (window.__arenaHardStop && typeof window.__arenaHardStop.uninstall === 'function') { return window.__arenaHardStop.uninstall({ quiet: true }); } return false; } catch (e) { return String(e && e.message ? e.message : e); } })()"
+        }
+      ],
+      "group_name": "arena",
+      "script": "",
+      "script_lang": "javascript"
+    },
+    {
+      "id": "cmd_arena_context_model_lab",
+      "name": "ARENA_CONTEXT_MODEL_LAB",
+      "enabled": true,
+      "log_enabled": true,
+      "log_level": "INFO",
+      "mode": "simple",
+      "stop_on_error": false,
+      "trigger": {
+        "type": "page_check",
+        "value": "",
+        "command_id": "",
+        "command_ids": [],
+        "listen_all_commands": false,
+        "informative_only": true,
+        "action_ref": "",
+        "match_rule": "equals",
+        "expected_value": "",
+        "match_mode": "keyword",
+        "status_codes": "403,429,500,502,503,504",
+        "abort_on_match": true,
+        "scope": "domain",
+        "domain": "arena.ai",
+        "tab_index": null,
+        "priority": 2,
+        "fire_mode": "edge",
+        "cooldown_sec": 0,
+        "stable_for_sec": 0,
+        "check_while_busy_workflow": true,
+        "allow_during_workflow": true,
+        "interrupt_policy": "auto",
+        "interrupt_message": "",
+        "probe_js": "(() => { try { return location.hostname === 'arena.ai' && (!window.__arenaContextLab || window.__arenaContextLab.version !== '0.9.0'); } catch (_) { return false; } })()",
+        "periodic_enabled": true,
+        "periodic_interval_sec": 2,
+        "periodic_jitter_sec": 0.5
+      },
+      "actions": [
+        {
+          "type": "run_js_file",
+          "action_id": "step_1_inject",
+          "file_path": "js/arena-context-model-lab.user.js",
+          "encoding": "utf-8-sig",
+          "inject_on_new_document": true,
+          "apply_now": true,
+          "fail_on_falsy": false,
+          "teardown_js": "(() => { try { if (window.__arenaContextLab && typeof window.__arenaContextLab.uninstall === 'function') { return window.__arenaContextLab.uninstall({ quiet: true }); } return false; } catch (e) { return String(e && e.message ? e.message : e); } })()"
         }
       ],
       "group_name": "arena",

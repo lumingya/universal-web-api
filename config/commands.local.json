@@ -137,6 +137,12 @@
       "name": "ARENA_STOP_FIX_RUNTIME",
       "enabled": true,
       "group_name": "arena"
+    },
+    {
+      "id": "cmd_arena_context_model_lab",
+      "name": "ARENA_CONTEXT_MODEL_LAB",
+      "enabled": true,
+      "group_name": "arena"
     }
   ]
 }
