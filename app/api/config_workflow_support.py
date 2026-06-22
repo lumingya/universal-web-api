@@ -7,6 +7,7 @@ from typing import Optional, Dict, Any, Callable
 from fastapi import HTTPException
 
 from app.core.config import get_logger
+from app.core.page_lifecycle import BACKGROUND_WAKE_CDP_TIMEOUT, BACKGROUND_WAKE_JS_TIMEOUT
 from app.services.config_engine import config_engine
 from app.utils.site_url import extract_remote_site_domain
 
@@ -67,24 +68,36 @@ def _wake_workflow_editor_test_tab(session) -> None:
 
     focus_emulation_set = False
     try:
-        session.tab.run_cdp("Emulation.setFocusEmulationEnabled", enabled=True)
+        session.tab.run_cdp(
+            "Emulation.setFocusEmulationEnabled",
+            enabled=True,
+            _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
+        )
         focus_emulation_set = True
     except Exception:
         pass
 
     try:
-        session.tab.run_cdp("Page.setWebLifecycleState", state="active")
+        session.tab.run_cdp(
+            "Page.setWebLifecycleState",
+            state="active",
+            _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
+        )
     except Exception:
         pass
 
     try:
-        session.tab.run_js("return document.readyState || '';")
+        session.tab.run_js("return document.readyState || '';", timeout=BACKGROUND_WAKE_JS_TIMEOUT)
     except Exception:
         pass
     finally:
         if focus_emulation_set:
             try:
-                session.tab.run_cdp("Emulation.setFocusEmulationEnabled", enabled=False)
+                session.tab.run_cdp(
+                    "Emulation.setFocusEmulationEnabled",
+                    enabled=False,
+                    _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
+                )
             except Exception:
                 pass
 
@@ -165,9 +178,9 @@ def _execute_workflow_editor_test_payload(
             float(test_network_config.get("first_response_timeout", 12) or 12),
             12.0,
         )
-        test_network_config["silence_threshold"] = min(
-            float(test_network_config.get("silence_threshold", 3) or 3),
-            3.0,
+        test_network_config["silence_threshold"] = max(
+            0.5,
+            min(float(test_network_config.get("silence_threshold", 3) or 3), 30.0),
         )
         test_stream_config["network"] = test_network_config
 

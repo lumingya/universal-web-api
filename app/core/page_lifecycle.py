@@ -6,9 +6,23 @@ chance that background visibility checks pause site scripts.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from app.core.config import logger
+
+BACKGROUND_WAKE_CDP_TIMEOUT = 0.5
+BACKGROUND_WAKE_JS_TIMEOUT = 0.5
+_BACKGROUND_WAKE_TIMING_LOG_THRESHOLD = 0.25
+
+
+def _log_wake_timing(reason: str, phase: str, elapsed: float) -> None:
+    if elapsed < _BACKGROUND_WAKE_TIMING_LOG_THRESHOLD:
+        return
+    logger.debug(
+        "[PAGE_WAKE_TIMING] "
+        f"reason={reason or '-'}, phase={phase}, elapsed={elapsed:.2f}s"
+    )
 
 
 _VISIBILITY_EMULATION_SOURCE = r"""
@@ -91,7 +105,19 @@ def install_visibility_emulation(tab: Any, owner: Any = None, *, reason: str = "
 
     if getattr(state_owner, owner_attr, None) != source:
         try:
-            result = tab.run_cdp("Page.addScriptToEvaluateOnNewDocument", source=source)
+            phase_started = time.perf_counter()
+            try:
+                result = tab.run_cdp(
+                    "Page.addScriptToEvaluateOnNewDocument",
+                    source=source,
+                    _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
+                )
+            finally:
+                _log_wake_timing(
+                    reason,
+                    "visibility.add_script",
+                    time.perf_counter() - phase_started,
+                )
             setattr(state_owner, owner_attr, source)
             script_id = ""
             if isinstance(result, dict):
@@ -113,7 +139,15 @@ def install_visibility_emulation(tab: Any, owner: Any = None, *, reason: str = "
             )
 
     try:
-        tab.run_js(source)
+        phase_started = time.perf_counter()
+        try:
+            tab.run_js(source, timeout=BACKGROUND_WAKE_JS_TIMEOUT)
+        finally:
+            _log_wake_timing(
+                reason,
+                "visibility.apply_current_page",
+                time.perf_counter() - phase_started,
+            )
     except Exception as e:
         logger.debug_throttled(
             "page_wake.visibility.apply",
@@ -123,9 +157,18 @@ def install_visibility_emulation(tab: Any, owner: Any = None, *, reason: str = "
         return False
 
     try:
-        state = tab.run_js(
-            "return {hidden: !!document.hidden, visibilityState: document.visibilityState || '', hasFocus: !!(document.hasFocus && document.hasFocus()), wasDiscarded: !!document.wasDiscarded};"
-        )
+        phase_started = time.perf_counter()
+        try:
+            state = tab.run_js(
+                "return {hidden: !!document.hidden, visibilityState: document.visibilityState || '', hasFocus: !!(document.hasFocus && document.hasFocus()), wasDiscarded: !!document.wasDiscarded};",
+                timeout=BACKGROUND_WAKE_JS_TIMEOUT,
+            )
+        finally:
+            _log_wake_timing(
+                reason,
+                "visibility.state_probe",
+                time.perf_counter() - phase_started,
+            )
         if isinstance(state, dict):
             return (state.get("hidden") is False) and (str(state.get("visibilityState") or "").lower() == "visible")
         return False
@@ -175,10 +218,19 @@ def restore_visibility_emulation(tab: Any, owner: Any = None, *, reason: str = "
     for script_id in script_ids:
         if script_id:
             try:
-                tab.run_cdp(
-                    "Page.removeScriptToEvaluateOnNewDocument",
-                    identifier=script_id,
-                )
+                phase_started = time.perf_counter()
+                try:
+                    tab.run_cdp(
+                        "Page.removeScriptToEvaluateOnNewDocument",
+                        identifier=script_id,
+                        _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
+                    )
+                finally:
+                    _log_wake_timing(
+                        reason,
+                        "visibility.remove_script",
+                        time.perf_counter() - phase_started,
+                    )
             except Exception:
                 pass
 
@@ -187,7 +239,15 @@ def restore_visibility_emulation(tab: Any, owner: Any = None, *, reason: str = "
         _clear_visibility_emulation_attrs(owner)
 
     try:
-        tab.run_js(_VISIBILITY_EMULATION_RESTORE_SOURCE)
+        phase_started = time.perf_counter()
+        try:
+            tab.run_js(_VISIBILITY_EMULATION_RESTORE_SOURCE, timeout=BACKGROUND_WAKE_JS_TIMEOUT)
+        finally:
+            _log_wake_timing(
+                reason,
+                "visibility.restore_current_page",
+                time.perf_counter() - phase_started,
+            )
         return True
     except Exception as e:
         logger.debug_throttled(

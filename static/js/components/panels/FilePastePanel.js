@@ -28,7 +28,8 @@ window.FilePastePanel = {
             },
             tempFileTypeOptions: [
                 { value: 'txt', label: 'TXT' },
-                { value: 'pdf', label: 'PDF' }
+                { value: 'pdf', label: 'PDF' },
+                { value: 'error', label: 'ERROR' }
             ],
             defaultSendConfirmation: {
                 attachment_sensitivity: 'medium',
@@ -153,7 +154,7 @@ window.FilePastePanel = {
 
         updateTempFileType(value) {
             const normalized = String(value || '').trim().toLowerCase();
-            this.getMutableFilePaste().temp_file_type = ['txt', 'pdf'].includes(normalized) ? normalized : 'txt';
+            this.getMutableFilePaste().temp_file_type = ['txt', 'pdf', 'error'].includes(normalized) ? normalized : 'txt';
         },
 
         updateHintText(value) {
@@ -224,7 +225,7 @@ window.FilePastePanel = {
                         <div>
                             <div class="text-sm font-medium text-gray-800 dark:text-gray-100">文件粘贴模式</div>
                             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400 leading-5">
-                                当文本长度超过阈值时，将文本写入所选临时文件并走附件上传。下面这些上传后处理项只在文件粘贴模式生效。
+                                当文本长度超过阈值时，将文本写入所选临时文件并走附件上传；选择 ERROR 时会直接返回错误，并使用下方错误信息。
                             </p>
                         </div>
                         <label class="toggle-label scale-90 flex-shrink-0">
@@ -259,11 +260,13 @@ window.FilePastePanel = {
                             </select>
                         </div>
                         <div>
-                            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">引导文本</label>
+                            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                                {{ resolvedFilePaste.temp_file_type === 'error' ? '错误信息' : '引导文本' }}
+                            </label>
                             <input type="text"
                                    :value="resolvedFilePaste.hint_text"
                                    @input="updateHintText($event.target.value)"
-                                   placeholder="粘贴文件后追加的文字，留空则不追加"
+                                   :placeholder="resolvedFilePaste.temp_file_type === 'error' ? '超过阈值时返回给客户端的错误信息' : '粘贴文件后追加的文字，留空则不追加'"
                                    class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent">
                         </div>
                     </div>

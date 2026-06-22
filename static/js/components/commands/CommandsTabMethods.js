@@ -1,7 +1,7 @@
 // ==================== CommandsTab Methods ====================
 window.CommandsTabMethods = {
         async apiRequest(url, options) {
-            const token = localStorage.getItem('api_token');
+            const token = window.getDashboardAuthToken ? window.getDashboardAuthToken() : '';
             const headers = { 'Content-Type': 'application/json', ...(options || {}).headers };
             if (token) headers['Authorization'] = 'Bearer ' + token;
             const response = await fetch(url, { ...options, headers });

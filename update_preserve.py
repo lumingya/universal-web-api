@@ -127,6 +127,8 @@ UPDATE_PRESERVE_OPTIONS: List[Dict[str, Any]] = [
     _option("assets_dir", "assets", "assets/", "项目资源目录", "前端资源"),
     _option("gitignore", ".gitignore", ".gitignore", "Git 忽略规则", "脚本与文档"),
     _option("readme", "README.md", "README.md", "项目说明文档", "脚本与文档"),
+    _option("readme_zh", "README.zh-CN.md", "README.zh-CN.md", "中文项目说明文档", "脚本与文档"),
+    _option("readme_en", "README.en.md", "README.en.md", "英文项目说明文档", "脚本与文档"),
     _option("changelog", "CHANGELOG.md", "CHANGELOG.md", "更新日志", "脚本与文档"),
     _option("version_file", "VERSION", "VERSION", "版本号文件", "脚本与文档"),
     _option("license", "LICENSE", "LICENSE", "许可证文件", "脚本与文档"),

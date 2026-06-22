@@ -15,7 +15,11 @@ from typing import Any, Optional
 from urllib.parse import unquote, urlparse
 
 from app.core.config import BrowserConstants, ElementNotFoundError, WorkflowError, logger
+from app.core.page_lifecycle import BACKGROUND_WAKE_CDP_TIMEOUT
 from app.utils.human_mouse import cdp_precise_click, human_scroll_path, idle_drift, smooth_move_mouse
+
+
+_URL_SNAPSHOT_TIMING_LOG_THRESHOLD = 0.25
 
 
 class WorkflowExecutorActionMixin:
@@ -161,6 +165,7 @@ class WorkflowExecutorActionMixin:
         selector: str = "",
         *,
         log_label: str = "STEALTH_CLICK",
+        timeout: Optional[float] = None,
     ) -> bool:
         """
         Background-safe low-entropy click path.
@@ -289,7 +294,8 @@ class WorkflowExecutorActionMixin:
                         reason: String(error && error.message ? error.message : error || '')
                     };
                 }
-                """
+                """,
+                timeout=timeout,
             )
         except Exception as e:
             logger.warning(
@@ -317,6 +323,66 @@ class WorkflowExecutorActionMixin:
         logger.warning(
             f"[{log_label}] 后台安全 DOM 点击失败: "
             f"target={target_label}, selector={selector_label}, result={self._compact_log_value(result, 180)}"
+        )
+        return False
+
+    def _background_cdp_click_element(
+        self,
+        ele,
+        target_key: str = "",
+        selector: str = "",
+        *,
+        log_label: str = "INTERACT_CLICK",
+    ) -> bool:
+        """
+        Fast background click path for normal workflows.
+
+        Page-side dispatchEvent() is synchronous: if the target site runs a
+        slow click handler while the tab is background-throttled, Runtime.evaluate
+        waits for that handler. CDP input events are fire-and-forget in this
+        project, so they avoid holding the workflow on page JavaScript.
+        """
+        if self._check_cancelled():
+            return False
+
+        started_at = time.perf_counter()
+        target_label = target_key or "-"
+        selector_label = self._compact_log_value(selector, 100)
+        element_label = self._describe_element_for_log(ele)
+
+        target = self._get_element_viewport_pos(ele)
+        if target is None:
+            logger.debug(
+                f"[{log_label}] 后台 CDP 点击坐标获取失败，回退 DOM 点击: "
+                f"target={target_label}, selector={selector_label}, element={element_label}"
+            )
+            return False
+
+        click_x = target[0] + random.randint(-3, 3)
+        click_y = target[1] + random.randint(-2, 2)
+        click_x, click_y = self._clamp_viewport_point(click_x, click_y)
+
+        success = cdp_precise_click(
+            tab=self.tab,
+            x=click_x,
+            y=click_y,
+            hold_duration=random.uniform(0.025, 0.055),
+            check_cancelled=self._check_cancelled,
+        )
+        elapsed = time.perf_counter() - started_at
+        if success:
+            self._mouse_pos = (click_x, click_y)
+            logger.debug(
+                f"[{log_label}] 后台 CDP 点击完成: "
+                f"target={target_label}, total={elapsed:.2f}s, "
+                f"point=({click_x},{click_y}), strategy=cdp_fire_and_forget"
+            )
+            return True
+
+        logger.debug(
+            f"[{log_label}] 后台 CDP 点击失败，回退 DOM 点击: "
+            f"target={target_label}, selector={selector_label}, "
+            f"point=({click_x},{click_y}), total={elapsed:.2f}s"
         )
         return False
 
@@ -794,6 +860,69 @@ class WorkflowExecutorActionMixin:
             return f"{text[:max(0, max_len - 3)]}..."
         return text
 
+    def _get_current_url_snapshot(self, reason: str = "", *, allow_cache: bool = True) -> str:
+        """Read the current URL through bounded CDP calls for logging/transition checks."""
+        started_at = time.perf_counter()
+        source = "none"
+        url = ""
+        last_error = ""
+
+        try:
+            result = self.tab.run_cdp(
+                "Page.getNavigationHistory",
+                _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
+            ) or {}
+            entries = result.get("entries") or []
+            index = result.get("currentIndex")
+            try:
+                index = int(index)
+            except Exception:
+                index = len(entries) - 1
+            if isinstance(entries, list) and entries and 0 <= index < len(entries):
+                entry = entries[index] or {}
+                if isinstance(entry, dict):
+                    url = str(entry.get("url") or "").strip()
+            if url:
+                source = "Page.getNavigationHistory"
+        except Exception as exc:
+            last_error = str(exc)
+
+        if not url:
+            target_id = str(getattr(self.tab, "tab_id", "") or "").strip()
+            if target_id:
+                try:
+                    result = self.tab.run_cdp(
+                        "Target.getTargetInfo",
+                        targetId=target_id,
+                        _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
+                    ) or {}
+                    info = result.get("targetInfo") or {}
+                    if isinstance(info, dict):
+                        url = str(info.get("url") or "").strip()
+                    if url:
+                        source = "Target.getTargetInfo"
+                except Exception as exc:
+                    last_error = str(exc)
+
+        if allow_cache and not url:
+            cached = str(getattr(self.session, "last_known_url", "") or "").strip()
+            if cached:
+                url = cached
+                source = "session_cache"
+
+        elapsed = time.perf_counter() - started_at
+        if elapsed >= _URL_SNAPSHOT_TIMING_LOG_THRESHOLD:
+            error_part = f", error={self._compact_log_value(last_error, 120)}" if last_error else ""
+            logger.debug_throttled(
+                f"workflow.url_snapshot.{reason or 'url'}",
+                "[URL_READ_TIMING] "
+                f"reason={reason or '-'}, source={source}, elapsed={elapsed:.2f}s, "
+                f"url={self._compact_log_value(url, 140)}{error_part}",
+                interval_sec=5.0,
+            )
+
+        return url
+
     def _describe_element_for_log(self, ele) -> str:
         if ele is None:
             return "element=None"
@@ -843,18 +972,11 @@ class WorkflowExecutorActionMixin:
                     ele = self._wait_for_element_interactable(ele, selector, target_key)
 
                     if target_key in {"new_chat_btn", "new_chat", "new_conversation"}:
-                        try:
-                            pre_click_url = str(self.tab.url or "")
-                            logger.debug(f"[CLICK_NEW_CHAT] 点击新建对话前 URL: {pre_click_url}")
-                        except Exception:
-                            pass
+                        pre_click_url = self._get_current_url_snapshot("click_new_chat_before")
+                        logger.debug(f"[CLICK_NEW_CHAT] 点击新建对话前 URL: {pre_click_url}")
 
                     if target_key == "send_btn":
-                        send_url = ""
-                        try:
-                            send_url = str(self.tab.url or "")
-                        except Exception:
-                            pass
+                        send_url = self._get_current_url_snapshot("send_click_start")
                         before_len = self._safe_get_input_len_by_key("input_box")
                         logger.debug(f"[SEND_CLICK_START] 开始点击发送按钮, 当前 URL: {send_url}, 发送前输入框长度: {before_len}")
                         
@@ -900,13 +1022,20 @@ class WorkflowExecutorActionMixin:
                         if self._check_cancelled():
                             return
                         if self._should_use_background_safe_dom_click(target_key):
-                            if not self._stealth_dom_click_element(
+                            if not self._background_cdp_click_element(
                                 ele,
                                 target_key=target_key,
                                 selector=selector,
                                 log_label="INTERACT_CLICK",
                             ):
-                                ele.click()
+                                if not self._stealth_dom_click_element(
+                                    ele,
+                                    target_key=target_key,
+                                    selector=selector,
+                                    log_label="INTERACT_DOM_FALLBACK",
+                                    timeout=1.2,
+                                ):
+                                    ele.click()
                         else:
                             ele.click()
 
@@ -1526,9 +1655,10 @@ class WorkflowExecutorActionMixin:
                 time.sleep(0.12)
                 latest_len = self._safe_get_input_len_by_key("input_box")
                 is_success = self._is_send_success(before_len, latest_len)
+                current_url = self._get_current_url_snapshot("send_click_end")
                 logger.debug(
                     f"[SEND_CLICK_END] 发送按钮点击完成. 发送前长度: {before_len}, "
-                    f"发送后长度: {latest_len}, 判定成功={is_success}, 当前 URL: {self.tab.url}"
+                    f"发送后长度: {latest_len}, 判定成功={is_success}, 当前 URL: {current_url}"
                 )
             except Exception:
                 pass
@@ -1538,9 +1668,10 @@ class WorkflowExecutorActionMixin:
             try:
                 time.sleep(0.12)
                 latest_len = self._safe_get_input_len_by_key("input_box")
+                current_url = self._get_current_url_snapshot("send_click_end_empty")
                 logger.debug(
                     f"[SEND_CLICK_END] 发送按钮点击完成. 发送前长度: {before_len}, "
-                    f"发送后长度: {latest_len}, 判定成功=False, 当前 URL: {self.tab.url}"
+                    f"发送后长度: {latest_len}, 判定成功=False, 当前 URL: {current_url}"
                 )
             except Exception:
                 pass
@@ -1570,10 +1701,7 @@ class WorkflowExecutorActionMixin:
 
             time.sleep(interval)
 
-        try:
-            current_url = str(self.tab.url or "")
-        except Exception:
-            current_url = ""
+        current_url = self._get_current_url_snapshot("send_confirm_timeout")
         logger.warning(
             "[SEND_CONFIRM_TIMEOUT] 发送确认超时，输入框仍未满足确认条件，触发工作流重试: "
             f"before_len={before_len}, after_len={latest_len}, "
@@ -1771,13 +1899,35 @@ class WorkflowExecutorActionMixin:
         started_at = time.perf_counter()
         deadline = time.time() + timeout
         latest_url = str(current_url or "")
+        if latest_url and latest_url != previous_url:
+            if self._is_likely_chat_session_url(
+                latest_url,
+                self._get_new_chat_url_transition_patterns(),
+            ):
+                logger.info(
+                    "[TRANSITION_OK] 新建对话后 URL 成功切换: "
+                    f"before={self._compact_log_value(previous_url, 140)}, "
+                    f"current={self._compact_log_value(latest_url, 140)}, "
+                    f"elapsed={time.perf_counter() - started_at:.2f}s, source=current_snapshot"
+                )
+            else:
+                logger.info(
+                    "[TRANSITION_EMPTY] 新建对话后已离开旧会话 URL，当前是空白/入口路由: "
+                    f"before={self._compact_log_value(previous_url, 140)}, "
+                    f"current={self._compact_log_value(latest_url, 140)}, "
+                    f"elapsed={time.perf_counter() - started_at:.2f}s, source=current_snapshot"
+                )
+            return latest_url
 
         while time.time() < deadline:
             if self._check_cancelled():
                 return latest_url
 
             try:
-                latest_url = str(self.tab.url or "")
+                latest_url = self._get_current_url_snapshot(
+                    "new_chat_transition_poll",
+                    allow_cache=False,
+                )
             except Exception as exc:
                 logger.warning(
                     "[TRANSITION_ERROR] 等待新建对话 URL 切换时读取当前 URL 失败，触发工作流重试: "
@@ -1830,11 +1980,7 @@ class WorkflowExecutorActionMixin:
                 (target_key or "") == "input_box" and self._input_stability_wait_pending
             )
 
-            current_url = ""
-            try:
-                current_url = str(self.tab.url or "")
-            except Exception:
-                pass
+            current_url = self._get_current_url_snapshot("fill_input_start")
 
             if target_key == "input_box":
                 logger.debug(f"[FILL_INPUT_START] 开始填充输入框, 当前 URL: {current_url}")
@@ -1850,7 +1996,8 @@ class WorkflowExecutorActionMixin:
                     current_url=current_url,
                 )
 
-            ele = self.finder.find_with_fallback(selector, target_key)
+            find_timeout = 0.35 if fill_after_new_chat and (target_key or "") == "input_box" else None
+            ele = self.finder.find_with_fallback(selector, target_key, timeout=find_timeout)
             if not ele:
                 if not optional:
                     raise ElementNotFoundError("找不到输入框")

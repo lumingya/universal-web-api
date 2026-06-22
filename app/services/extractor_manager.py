@@ -156,6 +156,10 @@ class ExtractorConfigManager:
                 self._load_config(preserve_on_error=True)
         except Exception as e:
             logger.error(f"检查配置变化失败: {e}")
+
+    def reload_config(self) -> None:
+        """强制重新加载提取器配置，供配置备份恢复后热重载使用。"""
+        self._load_config(preserve_on_error=False)
     
     # ================= 提取器获取 =================
     

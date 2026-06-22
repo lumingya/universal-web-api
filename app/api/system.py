@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Optional, Any, Dict
 
 from app import __version__ as APP_VERSION
-from fastapi import APIRouter, Request, HTTPException, Header, Depends
+from fastapi import APIRouter, Request, HTTPException, Depends
 from fastapi.responses import JSONResponse
 
 from app.core.config import (
@@ -31,9 +31,10 @@ from app.core.config import (
     log_collector,
 )
 from app.core import get_browser, BrowserConnectionError
-from app.api.deps import extract_authorization_token
+from app.api.deps import verify_dashboard_auth as verify_auth
 from app.services.config_engine import config_engine, ConfigConstants
 from app.services.command_engine import command_engine
+from app.services.extractor_manager import extractor_manager
 from app.services.request_manager import request_manager
 from update_preserve import load_update_preserve_settings, save_update_preserve_settings
 
@@ -53,35 +54,6 @@ async def _read_json_object_or_400(request: Request) -> Dict[str, Any]:
     if not isinstance(data, dict):
         raise HTTPException(status_code=400, detail="请求体必须是 JSON 对象")
     return data
-
-
-# ================= 认证依赖 =================
-
-async def verify_auth(authorization: Optional[str] = Header(None)) -> bool:
-    """验证 Bearer Token"""
-    if not AppConfig.is_auth_enabled():
-        return True
-
-    if not AppConfig.AUTH_TOKEN:
-        raise HTTPException(status_code=500, detail="服务配置错误")
-
-    if not authorization:
-        raise HTTPException(
-            status_code=401,
-            detail="未提供认证令牌",
-            headers={"WWW-Authenticate": "Bearer"}
-        )
-
-    token = extract_authorization_token(authorization)
-
-    if token != AppConfig.get_auth_token():
-        raise HTTPException(
-            status_code=401,
-            detail="认证令牌无效",
-            headers={"WWW-Authenticate": "Bearer"}
-        )
-
-    return True
 
 
 def _load_env_config_from_file() -> Dict[str, Any]:
@@ -113,6 +85,11 @@ def _load_env_config_from_file() -> Dict[str, Any]:
                 value = float(value)
 
             config[key] = value
+
+    if "DASHBOARD_AUTH_ENABLED" not in config and "AUTH_ENABLED" in config:
+        config["DASHBOARD_AUTH_ENABLED"] = config.get("AUTH_ENABLED")
+    if "DASHBOARD_AUTH_TOKEN" not in config and config.get("AUTH_TOKEN"):
+        config["DASHBOARD_AUTH_TOKEN"] = config.get("AUTH_TOKEN")
 
     return config
 
@@ -294,6 +271,7 @@ def _build_settings_backup_bundle() -> Dict[str, Any]:
     commands_file = Path(ConfigConstants.COMMANDS_FILE)
     commands_local_file = Path(ConfigConstants.COMMANDS_LOCAL_FILE)
     browser_config_file = Path("config/browser_config.json")
+    extractors_file = Path(extractor_manager.CONFIG_FILE)
 
     return {
         "bundle_version": 1,
@@ -305,6 +283,7 @@ def _build_settings_backup_bundle() -> Dict[str, Any]:
             "commands": _read_json_file(commands_file, {"commands": []}),
             "commands_local": _read_json_file(commands_local_file, {"commands": []}),
             "browser_constants": _read_json_file(browser_config_file, {}),
+            "extractors": _read_json_file(extractors_file, extractor_manager.export_config()),
             "update_preserve": load_update_preserve_settings(),
             "env": _load_env_config_from_file(),
         },
@@ -341,6 +320,27 @@ def _validate_settings_backup_files(files: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(files["browser_constants"], dict):
             raise HTTPException(status_code=400, detail="browser_constants 配置格式无效")
         validated["browser_constants"] = files["browser_constants"]
+
+    if "extractors" in files:
+        extractors_payload = files["extractors"]
+        if not isinstance(extractors_payload, dict):
+            raise HTTPException(status_code=400, detail="extractors 配置格式无效")
+        if "extractors" not in extractors_payload:
+            raise HTTPException(status_code=400, detail="extractors 配置格式无效：缺少 extractors 字段")
+        extractors_config = extractors_payload.get("extractors")
+        if not isinstance(extractors_config, dict):
+            raise HTTPException(status_code=400, detail="extractors 配置格式无效：extractors 必须是对象")
+        invalid_entries = [
+            extractor_id
+            for extractor_id, extractor_config in extractors_config.items()
+            if not isinstance(extractor_config, dict)
+        ]
+        if invalid_entries:
+            raise HTTPException(
+                status_code=400,
+                detail="extractors 配置格式无效：提取器配置项必须是对象",
+            )
+        validated["extractors"] = extractors_payload
 
     if "update_preserve" in files:
         preserve_payload = files["update_preserve"]
@@ -757,7 +757,9 @@ async def health_check():
         "request_manager": rm_status,
         "config": {
             "sites_loaded": len(config_engine.sites),
-            "auth_enabled": AppConfig.is_auth_enabled()
+            "auth_enabled": AppConfig.is_dashboard_auth_enabled(),
+            "dashboard_auth_enabled": AppConfig.is_dashboard_auth_enabled(),
+            "service_auth_enabled": AppConfig.is_auth_enabled(),
         },
         "timestamp": int(time.time())
     }
@@ -852,6 +854,7 @@ async def import_settings_backup(
             "commands",
             "commands_local",
             "browser_constants",
+            "extractors",
             "update_preserve",
             "env",
         }
@@ -900,6 +903,9 @@ async def import_settings_backup(
                 except Exception as reload_error:
                     logger.warning(f"导入后热重载浏览器常量失败: {reload_error}")
 
+            if "extractors" in files:
+                extractor_manager.reload_config()
+
         try:
             if "sites" in files:
                 write_import_json(Path(config_engine.config_file), files["sites"])
@@ -920,6 +926,10 @@ async def import_settings_backup(
             if "browser_constants" in files:
                 write_import_json(Path("config/browser_config.json"), files["browser_constants"])
                 imported_sections.append("browser_constants")
+
+            if "extractors" in files:
+                write_import_json(Path(extractor_manager.CONFIG_FILE), files["extractors"])
+                imported_sections.append("extractors")
 
             if "update_preserve" in files:
                 remember_file(Path("config") / "update_settings.json")

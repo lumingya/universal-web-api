@@ -161,7 +161,7 @@ window.TabPoolTabComponent = {
             }
             let timeoutId = null;
             try {
-                const token = localStorage.getItem('api_token');
+                const token = window.getDashboardAuthToken ? window.getDashboardAuthToken() : '';
                 const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
                 const fetchOptions = { headers };
                 if (controller) {
@@ -211,7 +211,7 @@ window.TabPoolTabComponent = {
 
             this.allocationModeUpdating = true;
             try {
-                const token = localStorage.getItem('api_token');
+                const token = window.getDashboardAuthToken ? window.getDashboardAuthToken() : '';
                 const headers = { 'Content-Type': 'application/json' };
                 if (token) headers['Authorization'] = `Bearer ${token}`;
 
@@ -247,7 +247,7 @@ window.TabPoolTabComponent = {
         async saveRouteMethodSettings() {
             this.routeMethodUpdating = true;
             try {
-                const token = localStorage.getItem('api_token');
+                const token = window.getDashboardAuthToken ? window.getDashboardAuthToken() : '';
                 const headers = { 'Content-Type': 'application/json' };
                 if (token) headers['Authorization'] = `Bearer ${token}`;
 
@@ -303,7 +303,7 @@ window.TabPoolTabComponent = {
             );
             this.excludedUrlsUpdating = true;
             try {
-                const token = localStorage.getItem('api_token');
+                const token = window.getDashboardAuthToken ? window.getDashboardAuthToken() : '';
                 const headers = { 'Content-Type': 'application/json' };
                 if (token) headers['Authorization'] = `Bearer ${token}`;
 
@@ -340,7 +340,7 @@ window.TabPoolTabComponent = {
             this.preserveErrorTabs = nextValue;
             this.preserveErrorTabsUpdating = true;
             try {
-                const token = localStorage.getItem('api_token');
+                const token = window.getDashboardAuthToken ? window.getDashboardAuthToken() : '';
                 const headers = { 'Content-Type': 'application/json' };
                 if (token) headers['Authorization'] = `Bearer ${token}`;
 
@@ -513,7 +513,7 @@ window.TabPoolTabComponent = {
             this.presetUpdating = { ...this.presetUpdating, [tabIndex]: true };
 
             try {
-                const token = localStorage.getItem('api_token');
+                const token = window.getDashboardAuthToken ? window.getDashboardAuthToken() : '';
                 const headers = { 'Content-Type': 'application/json' };
                 if (token) headers['Authorization'] = 'Bearer ' + token;
 
@@ -545,7 +545,7 @@ window.TabPoolTabComponent = {
             if (!confirm(`确定终止标签页 #${tabIndex} 的当前任务吗？\n当前任务: ${task}`)) return;
 
             try {
-                const token = localStorage.getItem('api_token');
+                const token = window.getDashboardAuthToken ? window.getDashboardAuthToken() : '';
                 const headers = { 'Content-Type': 'application/json' };
                 if (token) headers['Authorization'] = 'Bearer ' + token;
 

@@ -16,6 +16,7 @@ from app.core.config import (
 )
 from app.utils.site_url import extract_remote_site_domain, tab_url_matches
 from app.utils.image_handler import extract_images_from_messages
+from app.core.page_lifecycle import BACKGROUND_WAKE_CDP_TIMEOUT
 from app.core.workflow import WorkflowExecutor
 from app.core.tab_pool import TabSession
 from app.models.schemas import get_modality_run_policy, is_modality_enabled
@@ -1351,6 +1352,7 @@ class BrowserWorkflowMixin:
                         tab.run_cdp(
                             "Page.addScriptToEvaluateOnNewDocument",
                             source=init_script,
+                            _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
                         )
                         setattr(session, "_audio_capture_init_script_source", init_script)
                         logger.debug("页面音频捕获预注入脚本已注册")

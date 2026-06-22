@@ -14,7 +14,12 @@ from typing import Any, Callable, Dict, Optional
 
 from app.core.config import BrowserConstants, logger
 from app.core.elements import ElementFinder
-from app.core.page_lifecycle import install_visibility_emulation, restore_visibility_emulation
+from app.core.page_lifecycle import (
+    BACKGROUND_WAKE_CDP_TIMEOUT,
+    BACKGROUND_WAKE_JS_TIMEOUT,
+    install_visibility_emulation,
+    restore_visibility_emulation,
+)
 
 
 class _PageInteractionGate:
@@ -97,12 +102,30 @@ class _PageInteractionGate:
 
 
 _PAGE_INTERACTION_GATE = _PageInteractionGate()
+_INTERACTION_TIMING_LOG_THRESHOLD = 0.25
 
 
 # ================= 工作流执行器 =================
 
 
 class WorkflowExecutorInteractionMixin:
+    @staticmethod
+    def _log_interaction_timing(
+        label: str,
+        phase: str,
+        elapsed: float,
+        *,
+        prefix: str = "INTERACT",
+        extra: str = "",
+    ) -> None:
+        if elapsed < _INTERACTION_TIMING_LOG_THRESHOLD:
+            return
+        suffix = f", {extra}" if extra else ""
+        logger.debug(
+            f"[{prefix}_TIMING] "
+            f"target={label or '-'}, phase={phase}, elapsed={elapsed:.2f}s{suffix}"
+        )
+
     def _get_page_interaction_settings(self) -> Dict[str, Any]:
         return {
             "enabled": self._coerce_bool(
@@ -361,6 +384,7 @@ class WorkflowExecutorInteractionMixin:
             return
 
         session_id = str(getattr(self.session, "id", "") or "")
+        gate_started = time.perf_counter()
         with _PAGE_INTERACTION_GATE.hold(
             label=label,
             session_id=session_id,
@@ -369,6 +393,12 @@ class WorkflowExecutorInteractionMixin:
             min_interval=settings["min_interval"],
             cancel_checker=self._check_cancelled,
         ) as acquired:
+            self._log_interaction_timing(
+                label,
+                "gate_wait",
+                time.perf_counter() - gate_started,
+                extra=f"acquired={bool(acquired)}, max_concurrent={settings['max_concurrent']}",
+            )
             if not acquired:
                 yield False
                 return
@@ -424,7 +454,20 @@ class WorkflowExecutorInteractionMixin:
 
         if enable_focus_emulation:
             try:
-                self.tab.run_cdp("Emulation.setFocusEmulationEnabled", enabled=True)
+                phase_started = time.perf_counter()
+                try:
+                    self.tab.run_cdp(
+                        "Emulation.setFocusEmulationEnabled",
+                        enabled=True,
+                        _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
+                    )
+                finally:
+                    self._log_interaction_timing(
+                        "workflow_start",
+                        "focus_enable",
+                        time.perf_counter() - phase_started,
+                        prefix=scope_label,
+                    )
                 self._workflow_focus_emulation_active = True
             except Exception as e:
                 logger.debug_throttled(
@@ -434,11 +477,20 @@ class WorkflowExecutorInteractionMixin:
                 )
 
         try:
-            install_result = install_visibility_emulation(
-                self.tab,
-                owner=self.session,
-                reason="workflow_start",
-            )
+            phase_started = time.perf_counter()
+            try:
+                install_result = install_visibility_emulation(
+                    self.tab,
+                    owner=self.session,
+                    reason="workflow_start",
+                )
+            finally:
+                self._log_interaction_timing(
+                    "workflow_start",
+                    "visibility_install",
+                    time.perf_counter() - phase_started,
+                    prefix=scope_label,
+                )
             self._workflow_visibility_emulation_active = True
             if not install_result:
                 logger.debug_throttled(
@@ -454,7 +506,20 @@ class WorkflowExecutorInteractionMixin:
             )
 
         try:
-            self.tab.run_cdp("Page.setWebLifecycleState", state="active")
+            phase_started = time.perf_counter()
+            try:
+                self.tab.run_cdp(
+                    "Page.setWebLifecycleState",
+                    state="active",
+                    _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
+                )
+            finally:
+                self._log_interaction_timing(
+                    "workflow_start",
+                    "lifecycle_active",
+                    time.perf_counter() - phase_started,
+                    prefix=scope_label,
+                )
         except Exception as e:
             logger.debug_throttled(
                 f"workflow.lifecycle.start.{scope_label.lower()}",
@@ -463,7 +528,16 @@ class WorkflowExecutorInteractionMixin:
             )
 
         try:
-            self.tab.run_js("return document.readyState || '';")
+            phase_started = time.perf_counter()
+            try:
+                self.tab.run_js("return document.readyState || '';", timeout=BACKGROUND_WAKE_JS_TIMEOUT)
+            finally:
+                self._log_interaction_timing(
+                    "workflow_start",
+                    "ready_probe",
+                    time.perf_counter() - phase_started,
+                    prefix=scope_label,
+                )
         except Exception:
             pass
 
@@ -472,7 +546,20 @@ class WorkflowExecutorInteractionMixin:
 
         try:
             if self._workflow_focus_emulation_active:
-                self.tab.run_cdp("Emulation.setFocusEmulationEnabled", enabled=False)
+                phase_started = time.perf_counter()
+                try:
+                    self.tab.run_cdp(
+                        "Emulation.setFocusEmulationEnabled",
+                        enabled=False,
+                        _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
+                    )
+                finally:
+                    self._log_interaction_timing(
+                        "workflow_end",
+                        "focus_disable",
+                        time.perf_counter() - phase_started,
+                        prefix=scope_label,
+                    )
         except Exception as e:
             logger.debug_throttled(
                 f"workflow.focus_emulation.end.{scope_label.lower()}",
@@ -483,7 +570,16 @@ class WorkflowExecutorInteractionMixin:
             self._workflow_focus_emulation_active = False
 
         try:
-            restore_visibility_emulation(self.tab, owner=self.session, reason="workflow_end")
+            phase_started = time.perf_counter()
+            try:
+                restore_visibility_emulation(self.tab, owner=self.session, reason="workflow_end")
+            finally:
+                self._log_interaction_timing(
+                    "workflow_end",
+                    "visibility_restore",
+                    time.perf_counter() - phase_started,
+                    prefix=scope_label,
+                )
         finally:
             self._workflow_visibility_emulation_active = False
 
@@ -504,7 +600,19 @@ class WorkflowExecutorInteractionMixin:
         try:
             if settings["focus_emulation"] and not self._workflow_focus_emulation_active:
                 try:
-                    self.tab.run_cdp("Emulation.setFocusEmulationEnabled", enabled=True)
+                    phase_started = time.perf_counter()
+                    try:
+                        self.tab.run_cdp(
+                            "Emulation.setFocusEmulationEnabled",
+                            enabled=True,
+                            _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
+                        )
+                    finally:
+                        self._log_interaction_timing(
+                            label,
+                            "focus_enable",
+                            time.perf_counter() - phase_started,
+                        )
                     focus_emulation_enabled = True
                 except Exception as e:
                     logger.debug_throttled(
@@ -513,7 +621,15 @@ class WorkflowExecutorInteractionMixin:
                         interval_sec=10.0,
                     )
             try:
-                install_visibility_emulation(self.tab, owner=self.session, reason=f"interaction:{label}")
+                phase_started = time.perf_counter()
+                try:
+                    install_visibility_emulation(self.tab, owner=self.session, reason=f"interaction:{label}")
+                finally:
+                    self._log_interaction_timing(
+                        label,
+                        "visibility_install",
+                        time.perf_counter() - phase_started,
+                    )
                 restore_visibility_after_interaction = not self._workflow_visibility_emulation_active
             except Exception as e:
                 logger.debug_throttled(
@@ -522,7 +638,19 @@ class WorkflowExecutorInteractionMixin:
                     interval_sec=10.0,
                 )
             try:
-                self.tab.run_cdp("Page.setWebLifecycleState", state="active")
+                phase_started = time.perf_counter()
+                try:
+                    self.tab.run_cdp(
+                        "Page.setWebLifecycleState",
+                        state="active",
+                        _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
+                    )
+                finally:
+                    self._log_interaction_timing(
+                        label,
+                        "lifecycle_active",
+                        time.perf_counter() - phase_started,
+                    )
             except Exception as e:
                 logger.debug_throttled(
                     f"interaction.lifecycle_wake.{label}",
@@ -530,21 +658,50 @@ class WorkflowExecutorInteractionMixin:
                     interval_sec=10.0,
                 )
             try:
-                self.tab.run_js(
-                    "return {readyState: document.readyState || '', hidden: !!document.hidden, visibilityState: document.visibilityState || ''};"
-                )
+                phase_started = time.perf_counter()
+                try:
+                    self.tab.run_js(
+                        "return {readyState: document.readyState || '', hidden: !!document.hidden, visibilityState: document.visibilityState || ''};",
+                        timeout=BACKGROUND_WAKE_JS_TIMEOUT,
+                    )
+                finally:
+                    self._log_interaction_timing(
+                        label,
+                        "ready_probe",
+                        time.perf_counter() - phase_started,
+                    )
             except Exception:
                 pass
             yield
         finally:
             if restore_visibility_after_interaction:
                 try:
-                    restore_visibility_emulation(self.tab, owner=self.session, reason=f"interaction_end:{label}")
+                    phase_started = time.perf_counter()
+                    try:
+                        restore_visibility_emulation(self.tab, owner=self.session, reason=f"interaction_end:{label}")
+                    finally:
+                        self._log_interaction_timing(
+                            label,
+                            "visibility_restore",
+                            time.perf_counter() - phase_started,
+                        )
                 except Exception:
                     pass
             if focus_emulation_enabled:
                 try:
-                    self.tab.run_cdp("Emulation.setFocusEmulationEnabled", enabled=False)
+                    phase_started = time.perf_counter()
+                    try:
+                        self.tab.run_cdp(
+                            "Emulation.setFocusEmulationEnabled",
+                            enabled=False,
+                            _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
+                        )
+                    finally:
+                        self._log_interaction_timing(
+                            label,
+                            "focus_disable",
+                            time.perf_counter() - phase_started,
+                        )
                 except Exception:
                     pass
 
@@ -562,7 +719,20 @@ class WorkflowExecutorInteractionMixin:
         try:
             if not self._workflow_focus_emulation_active:
                 try:
-                    self.tab.run_cdp("Emulation.setFocusEmulationEnabled", enabled=True)
+                    phase_started = time.perf_counter()
+                    try:
+                        self.tab.run_cdp(
+                            "Emulation.setFocusEmulationEnabled",
+                            enabled=True,
+                            _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
+                        )
+                    finally:
+                        self._log_interaction_timing(
+                            label,
+                            "focus_enable",
+                            time.perf_counter() - phase_started,
+                            prefix="STEALTH",
+                        )
                     focus_emulation_enabled = True
                 except Exception as e:
                     logger.debug_throttled(
@@ -572,7 +742,16 @@ class WorkflowExecutorInteractionMixin:
                     )
 
             try:
-                install_visibility_emulation(self.tab, owner=self.session, reason=f"interaction:{label}")
+                phase_started = time.perf_counter()
+                try:
+                    install_visibility_emulation(self.tab, owner=self.session, reason=f"interaction:{label}")
+                finally:
+                    self._log_interaction_timing(
+                        label,
+                        "visibility_install",
+                        time.perf_counter() - phase_started,
+                        prefix="STEALTH",
+                    )
                 restore_visibility_after_interaction = not self._workflow_visibility_emulation_active
             except Exception as e:
                 logger.debug_throttled(
@@ -582,7 +761,20 @@ class WorkflowExecutorInteractionMixin:
                 )
 
             try:
-                self.tab.run_cdp("Page.setWebLifecycleState", state="active")
+                phase_started = time.perf_counter()
+                try:
+                    self.tab.run_cdp(
+                        "Page.setWebLifecycleState",
+                        state="active",
+                        _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
+                    )
+                finally:
+                    self._log_interaction_timing(
+                        label,
+                        "lifecycle_active",
+                        time.perf_counter() - phase_started,
+                        prefix="STEALTH",
+                    )
             except Exception as e:
                 logger.debug_throttled(
                     f"interaction.stealth_lifecycle.{label}",
@@ -594,12 +786,34 @@ class WorkflowExecutorInteractionMixin:
         finally:
             if restore_visibility_after_interaction:
                 try:
-                    restore_visibility_emulation(self.tab, owner=self.session, reason=f"interaction_end:{label}")
+                    phase_started = time.perf_counter()
+                    try:
+                        restore_visibility_emulation(self.tab, owner=self.session, reason=f"interaction_end:{label}")
+                    finally:
+                        self._log_interaction_timing(
+                            label,
+                            "visibility_restore",
+                            time.perf_counter() - phase_started,
+                            prefix="STEALTH",
+                        )
                 except Exception:
                     pass
             if focus_emulation_enabled:
                 try:
-                    self.tab.run_cdp("Emulation.setFocusEmulationEnabled", enabled=False)
+                    phase_started = time.perf_counter()
+                    try:
+                        self.tab.run_cdp(
+                            "Emulation.setFocusEmulationEnabled",
+                            enabled=False,
+                            _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
+                        )
+                    finally:
+                        self._log_interaction_timing(
+                            label,
+                            "focus_disable",
+                            time.perf_counter() - phase_started,
+                            prefix="STEALTH",
+                        )
                 except Exception:
                     pass
 

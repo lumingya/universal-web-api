@@ -62,7 +62,7 @@ window.JsonPreviewDialog = {
     `
 };
 
-// -------------------- Token 配置弹窗 --------------------
+// -------------------- 控制面板访问密钥弹窗 --------------------
 window.TokenDialog = {
     name: 'TokenDialog',
     props: {
@@ -81,18 +81,18 @@ window.TokenDialog = {
              class="fixed inset-0 bg-black/50 flex items-center justify-center z-40"
              @click.self="$emit('close')">
             <div class="bg-white dark:bg-gray-800 rounded-lg p-6 w-96">
-                <h3 class="font-semibold dark:text-white mb-4">配置认证 Token</h3>
+                <h3 class="font-semibold dark:text-white mb-4">配置控制面板访问密钥</h3>
                 <div class="mb-4">
                     <label class="text-sm text-gray-600 dark:text-gray-400 mb-2 block">
-                        Bearer Token（留空则清除）
+                        控制面板访问密钥（留空则清除）
                     </label>
                     <input v-model="tempToken"
                            type="password"
-                           placeholder="your-secret-token"
+                           placeholder="dashboard-secret"
                            class="border dark:border-gray-700 px-2 py-1 rounded focus:outline-none focus:border-blue-400 w-full bg-white dark:bg-gray-700 dark:text-white">
                 </div>
                 <div class="text-xs text-gray-500 dark:text-gray-400 mb-4">
-                    Token 将保存在浏览器本地存储中
+                    仅用于访问控制面板管理接口，不等同于对外服务 API Key
                 </div>
                 <div class="flex justify-end gap-2">
                     <button @click="$emit('close')" 

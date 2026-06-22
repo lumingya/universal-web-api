@@ -115,7 +115,8 @@ class NetworkMonitor:
                  parser: ResponseParser,
                  stop_checker: Optional[Callable[[], bool]] = None,
                  stream_config: Optional[Dict] = None,
-                 event_handler: Optional[Callable[[Dict[str, Any]], bool]] = None):
+                 event_handler: Optional[Callable[[Dict[str, Any]], bool]] = None,
+                 result_handler: Optional[Callable[[Dict[str, Any]], bool]] = None):
         """
         初始化网络监听器
         
@@ -131,6 +132,7 @@ class NetworkMonitor:
         self.parser = parser
         self._should_stop = stop_checker or (lambda: False)
         self._event_handler = event_handler
+        self._result_handler = result_handler
         
         # 从配置中加载参数
         self._stream_config = stream_config or {}
@@ -816,6 +818,36 @@ class NetworkMonitor:
             return bool(self._event_handler(event))
         except Exception as e:
             logger.debug(f"[NetworkMonitor] 事件回调异常（忽略）: {e}")
+            return False
+
+    def _dispatch_result(
+        self,
+        event: Dict[str, Any],
+        raw_body: Any,
+        parse_result: Dict[str, Any],
+        raw_body_source: str,
+    ) -> bool:
+        if not self._result_handler:
+            return False
+        try:
+            parser_id = ""
+            try:
+                parser_id = str(self.parser.get_id() or "")
+            except Exception:
+                parser_id = self.parser.__class__.__name__
+            return bool(
+                self._result_handler(
+                    {
+                        "event": dict(event or {}),
+                        "raw_body": raw_body,
+                        "raw_body_source": str(raw_body_source or ""),
+                        "parse_result": dict(parse_result or {}),
+                        "parser_id": parser_id,
+                    }
+                )
+            )
+        except Exception as e:
+            logger.debug(f"[NetworkMonitor] 结果回调异常（忽略）: {e}")
             return False
 
     def _matches_stream_target(self, event: Dict[str, Any]) -> bool:
@@ -1617,6 +1649,12 @@ class NetworkMonitor:
                         if parse_result.get("error"):
                             continue
 
+                        self._dispatch_result(
+                            active_stream_event,
+                            active_stream_body,
+                            parse_result,
+                            active_stream_body_source,
+                        )
                         self._remember_last_stream_result(
                             active_stream_event,
                             active_stream_body,
@@ -1931,6 +1969,7 @@ class NetworkMonitor:
             parse_result = self._handle_parse_result(parse_result)
             if parse_result.get("error"):
                 continue
+            self._dispatch_result(event, raw_body, parse_result, raw_body_source)
             self._remember_last_stream_result(event, raw_body, parse_result)
             try:
                 self._record_parse_result_media(parse_result)
@@ -2130,7 +2169,8 @@ class NetworkMonitor:
 def create_network_monitor(tab, formatter: SSEFormatter,
                            stream_config: Dict,
                            stop_checker: Optional[Callable[[], bool]] = None,
-                           event_handler: Optional[Callable[[Dict[str, Any]], bool]] = None) -> NetworkMonitor:
+                           event_handler: Optional[Callable[[Dict[str, Any]], bool]] = None,
+                           result_handler: Optional[Callable[[Dict[str, Any]], bool]] = None) -> NetworkMonitor:
     """
     创建网络监听器（工厂函数）
     
@@ -2170,6 +2210,7 @@ def create_network_monitor(tab, formatter: SSEFormatter,
         stop_checker=stop_checker,
         stream_config=stream_config,
         event_handler=event_handler,
+        result_handler=result_handler,
     )
 
 

@@ -86,7 +86,7 @@ window.ImageConfigPanel = {
     },
     methods: {
         buildAuthHeaders(extraHeaders = {}) {
-            const token = String(localStorage.getItem('api_token') || '').trim();
+            const token = String(window.getDashboardAuthToken ? window.getDashboardAuthToken() : '').trim();
             const headers = { ...extraHeaders };
             if (token) {
                 headers['Authorization'] = 'Bearer ' + token;

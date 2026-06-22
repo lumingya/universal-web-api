@@ -194,17 +194,17 @@ class FilePasteConfig(TypedDict, total=False):
     """
     文件粘贴配置
 
-    当文本长度超过阈值时，将文本写入临时 txt/pdf 文件，
-    然后以文件形式粘贴到输入框（通过 CF_HDROP 剪贴板格式）。
-    粘贴文件后，自动在输入框中追加一句引导文本，确保能正常发送。
+    当文本长度超过阈值时，将文本写入临时 txt/pdf 文件并上传，
+    或按 error 类型直接返回自定义错误信息。
+    上传文件后，自动在输入框中追加一句引导文本，确保能正常发送。
     附件发送确认规则也优先挂在这里，避免和网络监听配置混在一起。
 
     用于 sites.json 中的 file_paste 字段
     """
     enabled: bool       # 是否启用文件粘贴模式，默认 False
     threshold: int      # 字符数阈值，超过此值时使用文件粘贴，默认 50000
-    temp_file_type: Literal["txt", "pdf"]  # 临时文件类型，默认 txt
-    hint_text: str      # 粘贴文件后追加的引导文本，默认 "完全专注于文件内容"
+    temp_file_type: Literal["txt", "pdf", "error"]  # 临时文件类型/超长处理策略，默认 txt
+    hint_text: str      # 上传后引导文本；error 类型时作为自定义错误信息
     reacquire_input_after_upload: bool  # 上传完成后是否重新定位输入框
     post_upload_input_selector: str     # 上传后专用输入框选择器
     post_upload_settle: float           # 上传完成后额外稳定等待
@@ -1119,7 +1119,7 @@ def validate_site_config(config: Dict[str, Any]) -> bool:
             return False
         if "temp_file_type" in file_paste:
             temp_file_type = str(file_paste["temp_file_type"]).strip().lower()
-            if temp_file_type not in {"txt", "pdf"}:
+            if temp_file_type not in {"txt", "pdf", "error"}:
                 return False
         if "hint_text" in file_paste and not isinstance(file_paste["hint_text"], str):
             return False

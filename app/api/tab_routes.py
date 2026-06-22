@@ -19,12 +19,12 @@ from pathlib import Path
 from typing import Optional, Any, Dict, List, Mapping
 from urllib.parse import quote
 
-from fastapi import APIRouter, Request, HTTPException, Header, Depends, Query
+from fastapi import APIRouter, Request, HTTPException, Depends, Header, Query
 from fastapi.params import Param
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from app.core.config import AppConfig, atomic_write_json, get_logger, SSEFormatter
+from app.core.config import atomic_write_json, get_logger, SSEFormatter
 from app.core import get_browser
 from app.services.request_manager import (
     request_manager,
@@ -61,7 +61,7 @@ from app.api.openai_stop import (
     iter_openai_sse_payloads,
     sse_chunk_has_done,
 )
-from app.api.deps import extract_authorization_token
+from app.api.deps import verify_dashboard_auth as verify_auth, verify_service_auth
 from app.utils.site_url import (
     encode_tab_url_route_token,
     extract_remote_site_domain,
@@ -76,6 +76,52 @@ logger = get_logger("API.TAB")
 
 router = APIRouter()
 MODEL_LIST_CREATED = int(time.time())
+
+
+def _format_rfc3339_timestamp(value: Any) -> str:
+    try:
+        timestamp = int(value or MODEL_LIST_CREATED)
+    except Exception:
+        timestamp = MODEL_LIST_CREATED
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(timestamp))
+
+
+def _build_claude_route_model_id(_value: Any) -> str:
+    # Claude filters gateway model IDs that contain provider names like "glm".
+    return "claude-sonnet-4-5"
+
+
+def _build_route_models_payload(
+    *,
+    model_id: str,
+    display_name: str,
+    anthropic_version: Optional[str] = None,
+) -> Dict[str, Any]:
+    entry = {
+        "id": model_id,
+        "object": "model",
+        "type": "model",
+        "created": MODEL_LIST_CREATED,
+        "owned_by": "universal-web-api",
+        "display_name": display_name or model_id,
+    }
+    if anthropic_version:
+        item = {
+            "type": "model",
+            "id": entry["id"],
+            "display_name": entry["display_name"],
+            "created_at": _format_rfc3339_timestamp(entry["created"]),
+        }
+        return {
+            "data": [item],
+            "has_more": False,
+            "first_id": item["id"],
+            "last_id": item["id"],
+        }
+    return {
+        "object": "list",
+        "data": [entry],
+    }
 
 
 def _unwrap_fastapi_param_value(value: Any) -> Any:
@@ -1023,35 +1069,6 @@ class TabPoolConfigRequest(BaseModel):
     preserve_error_tabs: Optional[bool] = Field(default=None)
 
 
-# ================= 认证依赖 =================
-
-async def verify_auth(authorization: Optional[str] = Header(None)) -> bool:
-    """验证 Bearer Token"""
-    if not AppConfig.is_auth_enabled():
-        return True
-
-    if not AppConfig.AUTH_TOKEN:
-        raise HTTPException(status_code=500, detail="服务配置错误")
-
-    if not authorization:
-        raise HTTPException(
-            status_code=401,
-            detail="未提供认证令牌",
-            headers={"WWW-Authenticate": "Bearer"}
-        )
-
-    token = extract_authorization_token(authorization)
-
-    if token != AppConfig.get_auth_token():
-        raise HTTPException(
-            status_code=401,
-            detail="认证令牌无效",
-            headers={"WWW-Authenticate": "Bearer"}
-        )
-
-    return True
-
-
 # ================= 标签页池 API =================
 
 @router.get("/api/tab-pool/tabs")
@@ -1204,7 +1221,7 @@ async def update_tab_pool_config(
 @router.get("/tab/{tab_index}/v1/models")
 async def list_models_with_tab(
     tab_index: int,
-    authenticated: bool = Depends(verify_auth)
+    authenticated: bool = Depends(verify_service_auth)
 ):
     """为指定标签页路由提供 OpenAI 兼容模型列表接口。"""
     if tab_index < 1:
@@ -1238,12 +1255,14 @@ async def list_models_with_tab(
     }
 
 
+@router.get("/url/{route_domain}/v1/v1/models")
 @router.get("/url/{route_domain}/v1/models")
 async def list_models_with_route_domain(
     route_domain: str,
     tab_index: Optional[int] = Query(default=None, ge=1),
     selector: Optional[str] = Query(default=None),
-    authenticated: bool = Depends(verify_auth)
+    anthropic_version: Optional[str] = Header(None, alias="anthropic-version"),
+    authenticated: bool = Depends(verify_service_auth)
 ):
     """为域名路由提供 OpenAI 兼容模型列表接口。"""
     route_key = str(route_domain or "").strip()
@@ -1262,17 +1281,11 @@ async def list_models_with_route_domain(
         selector=normalized_selector,
     )
 
-    payload = {
-        "object": "list",
-        "data": [
-            {
-                "id": "web-browser",
-                "object": "model",
-                "created": MODEL_LIST_CREATED,
-                "owned_by": "universal-web-api"
-            }
-        ]
-    }
+    payload = _build_route_models_payload(
+        model_id=_build_claude_route_model_id(route_key),
+        display_name=f"Claude Code route: {route_key}",
+        anthropic_version=anthropic_version,
+    )
     response = JSONResponse(content=payload)
     response.headers.update(
         _build_tab_resolution_headers(
@@ -1284,13 +1297,15 @@ async def list_models_with_route_domain(
     return response
 
 
+@router.get("/url/{route_domain}/{preset_name}/v1/v1/models")
 @router.get("/url/{route_domain}/{preset_name}/v1/models")
 async def list_models_with_route_domain_and_preset(
     route_domain: str,
     preset_name: str,
     tab_index: Optional[int] = Query(default=None, ge=1),
     selector: Optional[str] = Query(default=None),
-    authenticated: bool = Depends(verify_auth)
+    anthropic_version: Optional[str] = Header(None, alias="anthropic-version"),
+    authenticated: bool = Depends(verify_service_auth)
 ):
     """为域名+预设路径风格提供 OpenAI 兼容模型列表接口。"""
     route_key = str(route_domain or "").strip()
@@ -1310,17 +1325,11 @@ async def list_models_with_route_domain_and_preset(
         selector=normalized_selector,
     )
 
-    payload = {
-        "object": "list",
-        "data": [
-            {
-                "id": "web-browser",
-                "object": "model",
-                "created": MODEL_LIST_CREATED,
-                "owned_by": "universal-web-api"
-            }
-        ]
-    }
+    payload = _build_route_models_payload(
+        model_id=_build_claude_route_model_id(f"{route_key}-{preset_resolution['preset_name']}"),
+        display_name=f"Claude Code route: {route_key} / {preset_resolution['preset_name']}",
+        anthropic_version=anthropic_version,
+    )
     response = JSONResponse(content=payload)
     response.headers.update(
         _build_tab_resolution_headers(
@@ -1336,7 +1345,7 @@ async def list_models_with_route_domain_and_preset(
 @router.get("/tab-url/{url_token}/v1/models")
 async def list_models_with_exact_tab_url(
     url_token: str,
-    authenticated: bool = Depends(verify_auth)
+    authenticated: bool = Depends(verify_service_auth)
 ):
     """为精确 URL 路由提供 OpenAI 兼容模型列表接口。"""
     route_token = str(url_token or "").strip().lower()
@@ -1376,7 +1385,7 @@ async def list_models_with_exact_tab_url(
 async def list_models_with_exact_tab_url_and_preset(
     url_token: str,
     preset_name: str,
-    authenticated: bool = Depends(verify_auth)
+    authenticated: bool = Depends(verify_service_auth)
 ):
     """为 URL 绑定预设路由提供 OpenAI 兼容模型列表接口。"""
     route_token = str(url_token or "").strip().lower()
@@ -1583,7 +1592,7 @@ async def chat_with_tab(
     request: Request,
     body: ChatRequest,
     preset_name: Optional[str] = Query(default=None),
-    authenticated: bool = Depends(verify_auth)
+    authenticated: bool = Depends(verify_service_auth)
 ):
     """
     使用指定编号的标签页进行聊天
@@ -1648,7 +1657,7 @@ async def chat_with_route_domain(
     tab_index: Optional[int] = Query(default=None, ge=1),
     selector: Optional[str] = Query(default=None),
     preset_name: Optional[str] = Query(default=None),
-    authenticated: bool = Depends(verify_auth)
+    authenticated: bool = Depends(verify_service_auth)
 ):
     """使用指定域名路由匹配的标签页进行聊天。"""
     tab_index = _normalize_optional_tab_index_value(tab_index)
@@ -1741,7 +1750,7 @@ async def chat_with_route_domain_and_preset(
     body: ChatRequest,
     tab_index: Optional[int] = Query(default=None, ge=1),
     selector: Optional[str] = Query(default=None),
-    authenticated: bool = Depends(verify_auth)
+    authenticated: bool = Depends(verify_service_auth)
 ):
     """使用域名+预设路径风格进行聊天。路径中的预设优先级最高。"""
     route_key = str(route_domain or "").strip()
@@ -1767,7 +1776,7 @@ async def chat_with_exact_tab_url(
     request: Request,
     body: ChatRequest,
     preset_name: Optional[str] = Query(default=None),
-    authenticated: bool = Depends(verify_auth)
+    authenticated: bool = Depends(verify_service_auth)
 ):
     """使用标签页完整 URL 严格路由到唯一已打开标签页。"""
     route_token = str(url_token or "").strip().lower()
@@ -1830,7 +1839,7 @@ async def chat_with_exact_tab_url_and_preset(
     preset_name: str,
     request: Request,
     body: ChatRequest,
-    authenticated: bool = Depends(verify_auth)
+    authenticated: bool = Depends(verify_service_auth)
 ):
     """使用 URL 绑定预设路由进行聊天。URL 和预设都必须严格命中。"""
     route_token = str(url_token or "").strip().lower()

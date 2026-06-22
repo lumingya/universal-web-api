@@ -22,7 +22,7 @@ from fastapi import APIRouter, Request, HTTPException, Header, Depends
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from app.core.config import AppConfig, get_logger, SSEFormatter
+from app.core.config import get_logger, SSEFormatter
 from app.core import get_browser
 from app.services.request_manager import (
     request_manager, 
@@ -60,7 +60,11 @@ from app.api.openai_stop import (
     sse_chunk_has_done,
     sse_frame_data_text,
 )
-from app.api.deps import extract_authorization_token
+from app.api.deps import (
+    verify_dashboard_auth,
+    verify_service_auth,
+    verify_service_token,
+)
 from app.utils.model_routing import collect_route_domain_models, inspect_model_route
 
 logger = get_logger("API.CHAT")
@@ -1838,30 +1842,8 @@ def _iter_stream_chunks_with_optional_usage(body: ChatRequest, chunks):
 
 
 async def verify_auth(authorization: Optional[str] = Header(None)) -> bool:
-    """验证 Bearer Token"""
-    if not AppConfig.is_auth_enabled():
-        return True
-
-    if not AppConfig.AUTH_TOKEN:
-        raise HTTPException(status_code=500, detail="服务配置错误")
-
-    if not authorization:
-        raise HTTPException(
-            status_code=401,
-            detail="未提供认证令牌",
-            headers={"WWW-Authenticate": "Bearer"}
-        )
-
-    token = extract_authorization_token(authorization)
-
-    if token != AppConfig.get_auth_token():
-        raise HTTPException(
-            status_code=401,
-            detail="认证令牌无效",
-            headers={"WWW-Authenticate": "Bearer"}
-        )
-
-    return True
+    """验证对外服务 API 的 Bearer Token。"""
+    return await verify_service_auth(authorization)
 
 
 # ================= 核心聊天 API =================
@@ -2594,8 +2576,17 @@ def _pack_error_done(message: str, code: str = "error") -> str:
 def _collect_model_entries() -> List[Dict[str, Any]]:
     entries = [
         {
+            "id": "claude-web-browser",
+            "object": "model",
+            "type": "model",
+            "created": MODEL_LIST_CREATED,
+            "owned_by": "universal-web-api",
+            "display_name": "Claude Code Web Browser Gateway",
+        },
+        {
             "id": "web-browser",
             "object": "model",
+            "type": "model",
             "created": MODEL_LIST_CREATED,
             "owned_by": "universal-web-api",
             "display_name": "web-browser",
@@ -2613,6 +2604,7 @@ def _collect_model_entries() -> List[Dict[str, Any]]:
                 {
                     "id": model_id,
                     "object": "model",
+                    "type": "model",
                     "created": MODEL_LIST_CREATED,
                     "owned_by": str(item.get("route_domain") or "universal-web-api"),
                     "display_name": model_id,
@@ -2653,35 +2645,13 @@ def _verify_models_auth(
     authorization: Optional[str],
     x_api_key: Optional[str],
 ) -> None:
-    if not AppConfig.is_auth_enabled():
-        return
-
-    token_value = AppConfig.get_auth_token()
-    if not token_value:
-        raise HTTPException(status_code=500, detail="服务配置错误")
-
-    candidates: List[str] = []
-    if isinstance(authorization, str):
-        raw = authorization.strip()
-        if raw:
-            candidates.append(raw)
-            if raw.lower().startswith("bearer "):
-                candidates.append(raw[7:].strip())
-    if isinstance(x_api_key, str):
-        raw = x_api_key.strip()
-        if raw:
-            candidates.append(raw)
-
-    if token_value not in candidates:
-        raise HTTPException(
-            status_code=401,
-            detail="认证令牌无效",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    verify_service_token(authorization=authorization, x_api_key=x_api_key)
 
 
 # ================= 模型列表 =================
 
+@router.get("/models")
+@router.get("/v1/v1/models")
 @router.get("/v1/models")
 async def list_models(
     authorization: Optional[str] = Header(None),
@@ -2702,7 +2672,7 @@ async def list_models(
 
 
 @router.get("/api/pool/status")
-async def get_pool_status(authenticated: bool = Depends(verify_auth)):
+async def get_pool_status(authenticated: bool = Depends(verify_dashboard_auth)):
     """获取标签页池状态"""
     try:
         browser = get_browser(auto_connect=False)

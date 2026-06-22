@@ -128,13 +128,20 @@ def load_dotenv(env_file: str = ".env", override: bool = False):
     except Exception as e:
         print(f"[Config] 加载 .env 失败: {e}")
 
-load_dotenv()
+load_dotenv(override=os.getenv("UWAPI_DOTENV_OVERRIDE", "").lower() in ("1", "true", "yes", "on"))
 
 
 # ================= 应用配置（环境变量）=================
 
 class AppConfig:
     """应用配置（从环境变量读取）"""
+
+    @staticmethod
+    def _env_bool(name: str, default: bool = False) -> bool:
+        value = os.getenv(name)
+        if value is None or str(value).strip() == "":
+            return bool(default)
+        return str(value).strip().lower() in ("true", "1", "yes", "on")
     
     # ===== 服务配置 =====
     @staticmethod
@@ -152,15 +159,27 @@ class AppConfig:
     @staticmethod
     def get_log_level() -> str:
         return os.getenv("LOG_LEVEL", "INFO").upper()
-    
+
     # ===== 认证配置 =====
     @staticmethod
     def is_auth_enabled() -> bool:
-        return os.getenv("AUTH_ENABLED", "false").lower() in ("true", "1", "yes")
-    
+        return AppConfig._env_bool("AUTH_ENABLED", False)
+
     @staticmethod
     def get_auth_token() -> str:
-        return os.getenv("AUTH_TOKEN", "")
+        return os.getenv("AUTH_TOKEN", "").strip()
+
+    @staticmethod
+    def is_dashboard_auth_enabled() -> bool:
+        value = os.getenv("DASHBOARD_AUTH_ENABLED")
+        if value is None or str(value).strip() == "":
+            return AppConfig.is_auth_enabled()
+        return AppConfig._env_bool("DASHBOARD_AUTH_ENABLED", False)
+
+    @staticmethod
+    def get_dashboard_auth_token() -> str:
+        token = os.getenv("DASHBOARD_AUTH_TOKEN", "").strip()
+        return token or AppConfig.get_auth_token()
     
     # ===== CORS 配置 =====
     @staticmethod
@@ -316,6 +335,10 @@ class AppConfig:
     @classproperty
     def AUTH_TOKEN(cls) -> str:
         return cls.get_auth_token()
+
+    @classproperty
+    def DASHBOARD_AUTH_TOKEN(cls) -> str:
+        return cls.get_dashboard_auth_token()
 
 
 # 创建全局配置实例

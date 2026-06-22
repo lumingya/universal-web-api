@@ -4,6 +4,20 @@
     const ENV_CONFIG_SCHEMA = window.ENV_CONFIG_SCHEMA || {}
 
 const DASHBOARD_SITES_CACHE_STORAGE_KEY = 'dashboard_sites_cache_v1'
+const DASHBOARD_TOKEN_STORAGE_KEY = 'dashboard_token'
+const LEGACY_API_TOKEN_STORAGE_KEY = 'api_token'
+
+function loadStoredDashboardToken() {
+    try {
+        return String(
+            localStorage.getItem(DASHBOARD_TOKEN_STORAGE_KEY)
+            || localStorage.getItem(LEGACY_API_TOKEN_STORAGE_KEY)
+            || ''
+        ).trim()
+    } catch (error) {
+        return ''
+    }
+}
 
 function loadStoredSitesCache() {
     try {
@@ -111,11 +125,7 @@ function saveStoredSitesCache(sites, currentDomain) {
             authEnabled: false,
             tempToken: '',
             hasTokenPresent: (() => {
-                try {
-                    return !!localStorage.getItem('api_token')
-                } catch (e) {
-                    return false
-                }
+                return !!loadStoredDashboardToken()
             })(),
             tokenStorageHandler: null,
 

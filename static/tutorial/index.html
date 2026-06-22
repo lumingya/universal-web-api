@@ -711,7 +711,7 @@
                             <li>部分客户端需要完整路径：在末尾补上 <code>/chat/completions</code></li>
                         </ul>
                     </li>
-                    <li><strong>API 密钥 (API Key)</strong>：默认未启用认证时，填一个占位值即可（例如：<code>sk-local</code>）。<br><small style="color: var(--desc-color);">本项目默认不会校验这个值是否来自上游站点；唯一例外是你开启了「认证」功能（<code>AUTH_ENABLED=true</code>），这时它必须和 <code>.env</code> 中的 <code>AUTH_TOKEN</code> 保持一致。</small></li>
+                    <li><strong>API 密钥 (API Key)</strong>：未启用服务 API 认证（<code>AUTH_ENABLED=false</code>）时，填一个占位值即可（例如：<code>sk-local</code>）。<br><small style="color: var(--desc-color);">如果开启服务 API 认证，它必须和 <code>.env</code> 中的 <code>AUTH_TOKEN</code> 保持一致；控制面板访问密钥使用单独的 <code>DASHBOARD_AUTH_TOKEN</code>，不要提供给 API 使用者。</small></li>
                     <li><strong>模型名称 (Model)</strong>：建议填写一个便于客户端保存配置的占位名称（例如 <code>web-api</code> 或 <code>gemini-web</code>）。实际响应来源仍由你当前打开的站点和预设决定。</li>
                 </ul>
             </div>

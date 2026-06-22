@@ -69,7 +69,7 @@ window.WorkflowPanel = {
         },
 
         async authJsonRequest(url, options = {}) {
-            const token = localStorage.getItem('api_token');
+            const token = window.getDashboardAuthToken ? window.getDashboardAuthToken() : '';
             const headers = {
                 'Content-Type': 'application/json',
                 ...(options.headers || {})

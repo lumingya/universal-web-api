@@ -4,7 +4,7 @@
 
 # Universal Web API
 
-📖 文档 • [English](./README.md) • [简体中文](./README.zh-CN.md)
+📖 文档 • [English](./README.en.md) • [简体中文](./README.md)
 
 **Universal Web API** 是一个专为开发者设计的**本地 API 桥接调试工具**。它能够将您在本地浏览器中已登录并正常使用的 AI 网页端服务（如 ChatGPT, DeepSeek, Claude, Gemini 等）转换为本地标准的 OpenAI/Anthropic 兼容接口。
 
@@ -67,7 +67,7 @@ graph TD
 4. **账号登录**：在受控浏览器窗口中，登录您拥有的 AI 网站账号（如 ChatGPT、DeepSeek 等），并保持目标站点停留在可对话页面。
 5. **客户端配置**：在您的任意 AI 客户端（如翻译插件、Chat UI）中修改 API 配置：
    * **API 地址 (Base URL)**：`http://127.0.0.1:8199/v1`
-   * **API Key**：若未在 `.env` 中启用授权认证，可填任意值（如 `sk-local`）；若启用了配置中的密钥验证，请填写对应的自定义 Token。
+   * **API Key**：若未启用服务 API 认证（`AUTH_ENABLED=false`），可填任意值（如 `sk-local`）；若已启用，请填写 `.env` 中的 `AUTH_TOKEN`。控制面板访问密钥是单独的 `DASHBOARD_AUTH_TOKEN`，不要提供给 API 使用者。
 
 ---
 

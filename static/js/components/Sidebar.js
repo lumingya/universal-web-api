@@ -1,4 +1,16 @@
 // ==================== 侧边栏组件 ====================
+window.getDashboardAuthToken = window.getDashboardAuthToken || function () {
+    try {
+        return String(
+            localStorage.getItem('dashboard_token')
+            || localStorage.getItem('api_token')
+            || ''
+        ).trim();
+    } catch (e) {
+        return '';
+    }
+};
+
 window.SidebarComponent = {
     name: 'SidebarComponent',
     props: {
@@ -76,8 +88,8 @@ window.SidebarComponent = {
                         站点配置: {{ Object.keys(sites).length }} 个
                     </div>
                     <div v-if="authEnabled" class="text-gray-600 dark:text-gray-400 flex items-center justify-between">
-                        <span>🔒 认证: {{ hasToken ? '已配置' : '未配置' }}</span>
-                        <button @click.stop="$emit('show-token-dialog')" 
+                        <span>🔒 面板认证: {{ hasToken ? '已配置' : '未配置' }}</span>
+                        <button @click.stop="$emit('show-token-dialog')"
                                 class="text-blue-500 dark:text-blue-400">设置</button>
                     </div>
                 </div>

@@ -29,7 +29,12 @@ except ImportError:
     HAS_REQUESTS = False
 
 from app.core.config import command_log_context, get_logger
-from app.core.page_lifecycle import install_visibility_emulation, restore_visibility_emulation
+from app.core.page_lifecycle import (
+    BACKGROUND_WAKE_CDP_TIMEOUT,
+    BACKGROUND_WAKE_JS_TIMEOUT,
+    install_visibility_emulation,
+    restore_visibility_emulation,
+)
 from app.services.command_defs import ACTION_TYPES, TRIGGER_TYPES, CommandFlowAbort, _new_command_id, get_default_command
 from app.services.command_engine_actions import CommandEngineActionsMixin
 from app.services.command_engine_results import CommandEngineResultsMixin
@@ -118,6 +123,16 @@ class CommandEngine(CommandEngineRuntimeMixin, CommandEngineResultsMixin, Comman
         except Exception:
             _keepalive_interval = 20.0
         self._periodic_keepalive_interval_sec = max(5.0, _keepalive_interval)
+        try:
+            _page_check_js_timeout = float(os.getenv("CMD_PAGE_CHECK_JS_TIMEOUT_SEC", str(BACKGROUND_WAKE_JS_TIMEOUT)))
+        except Exception:
+            _page_check_js_timeout = BACKGROUND_WAKE_JS_TIMEOUT
+        self._page_check_js_timeout_sec = max(0.1, min(2.0, _page_check_js_timeout))
+        try:
+            _page_check_failure_backoff = float(os.getenv("CMD_PAGE_CHECK_FAILURE_BACKOFF_SEC", "30"))
+        except Exception:
+            _page_check_failure_backoff = 30.0
+        self._page_check_failure_backoff_sec = max(1.0, _page_check_failure_backoff)
         self._last_keepalive_by_session: Dict[str, float] = {}
         self._last_tab_pool_wait_log_at = 0.0
         self._last_periodic_summary_log_at = 0.0
@@ -281,10 +296,42 @@ class CommandEngine(CommandEngineRuntimeMixin, CommandEngineResultsMixin, Comman
         self._last_periodic_summary_log_at = now_ts
         return True
 
+    @staticmethod
+    def _session_status_value(session: 'TabSession') -> str:
+        return str(getattr(getattr(session, "status", None), "value", "")).lower()
+
+    def _is_session_closed(self, session: 'TabSession') -> bool:
+        return self._session_status_value(session) == "closed"
+
+    @staticmethod
+    def _looks_like_page_disconnected_error(error: Any) -> bool:
+        text = str(error or "").lower()
+        return (
+            "连接已断开" in text
+            or "connection disconnected" in text
+            or "target closed" in text
+            or "session closed" in text
+            or "websocket" in text and "closed" in text
+        )
+
+    def _mark_session_closed_if_disconnected(self, session: 'TabSession', error: Any, reason: str) -> bool:
+        if not self._looks_like_page_disconnected_error(error):
+            return False
+        try:
+            if hasattr(session, "mark_closed"):
+                session.mark_closed(reason)
+        except Exception:
+            pass
+        return True
+
     def _set_focus_emulation(self, session: 'TabSession', enabled: bool):
         """Best-effort focus emulation without stealing OS/browser foreground focus."""
         try:
-            session.tab.run_cdp("Emulation.setFocusEmulationEnabled", enabled=bool(enabled))
+            session.tab.run_cdp(
+                "Emulation.setFocusEmulationEnabled",
+                enabled=bool(enabled),
+                _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
+            )
             if enabled:
                 install_visibility_emulation(
                     session.tab,
@@ -305,32 +352,83 @@ class CommandEngine(CommandEngineRuntimeMixin, CommandEngineResultsMixin, Comman
         Best-effort wake-up for background/discard-prone tabs.
         Uses lifecycle and lightweight JS ping, without forcing browser focus.
         """
+        if self._is_session_closed(session):
+            return
         if not self._wake_tab_before_page_check:
+            return
+        if self._is_page_check_backing_off(session):
             return
         focus_emulation_set = False
         try:
-            session.tab.run_cdp("Emulation.setFocusEmulationEnabled", enabled=True)
+            session.tab.run_cdp(
+                "Emulation.setFocusEmulationEnabled",
+                enabled=True,
+                _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
+            )
             focus_emulation_set = True
-        except Exception:
-            pass
+        except Exception as e:
+            if self._mark_session_closed_if_disconnected(session, e, "wake_focus_emulation"):
+                return
         try:
             install_visibility_emulation(session.tab, owner=session, reason=reason or "wake_tab")
-        except Exception:
-            pass
+        except Exception as e:
+            if self._mark_session_closed_if_disconnected(session, e, "wake_visibility"):
+                return
         try:
-            session.tab.run_cdp("Page.setWebLifecycleState", state="active")
-        except Exception:
-            pass
+            session.tab.run_cdp(
+                "Page.setWebLifecycleState",
+                state="active",
+                _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
+            )
+        except Exception as e:
+            if self._mark_session_closed_if_disconnected(session, e, "wake_lifecycle"):
+                return
         try:
-            session.tab.run_js("return document.readyState || '';")
-        except Exception:
-            pass
+            session.tab.run_js("return document.readyState || '';", timeout=BACKGROUND_WAKE_JS_TIMEOUT)
+        except Exception as e:
+            if self._mark_session_closed_if_disconnected(session, e, "wake_ready_state"):
+                return
         finally:
             if focus_emulation_set:
                 try:
-                    session.tab.run_cdp("Emulation.setFocusEmulationEnabled", enabled=False)
+                    session.tab.run_cdp(
+                        "Emulation.setFocusEmulationEnabled",
+                        enabled=False,
+                        _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
+                    )
                 except Exception:
                     pass
+
+    def _run_page_check_js(self, session: 'TabSession', script: str) -> Any:
+        if self._is_session_closed(session):
+            raise RuntimeError("page_check session is closed")
+        return session.tab.run_js(script, timeout=self._page_check_js_timeout_sec)
+
+    def _is_page_check_backing_off(self, session: 'TabSession') -> bool:
+        until = float(getattr(session, "_pc_js_backoff_until", 0.0) or 0.0)
+        return until > time.time()
+
+    def _record_page_check_js_success(self, session: 'TabSession') -> None:
+        try:
+            setattr(session, "_pc_js_failures", 0)
+            setattr(session, "_pc_js_backoff_until", 0.0)
+        except Exception:
+            pass
+
+    def _record_page_check_js_failure(self, session: 'TabSession', error: Any, context: str) -> None:
+        try:
+            failures = int(getattr(session, "_pc_js_failures", 0) or 0) + 1
+            setattr(session, "_pc_js_failures", failures)
+            if failures >= 2:
+                until = time.time() + self._page_check_failure_backoff_sec
+                setattr(session, "_pc_js_backoff_until", until)
+                logger.debug(
+                    f"[CMD] 页面检查 JS 连续失败，暂停后台检查: "
+                    f"标签页={getattr(session, 'id', '-')}, failures={failures}, "
+                    f"backoff={self._page_check_failure_backoff_sec:.0f}s, context={context}, error={error}"
+                )
+        except Exception:
+            pass
 
     # --------- MutationObserver page_check 实时检测 ---------
 
@@ -650,8 +748,12 @@ return (function() {
         """Inject or update MutationObserver for real-time page_check text detection."""
         if not keywords:
             return
+        if self._is_session_closed(session):
+            return
         sid = str(getattr(session, "id", "") or "")
         if not sid:
+            return
+        if self._is_page_check_backing_off(session):
             return
         # Skip if already installed with the same keywords AND observer is still alive
         with self._lock:
@@ -664,10 +766,16 @@ return (function() {
                 return
             setattr(session, "_last_pc_observer_check_at", now)
             try:
-                alive = session.tab.run_js("return !!window.__pcObserver")
+                alive = self._run_page_check_js(session, "return !!window.__pcObserver")
                 if alive:
+                    self._record_page_check_js_success(session)
                     return
-            except Exception:
+            except Exception as e:
+                if self._is_session_closed(session):
+                    return
+                self._record_page_check_js_failure(session, e, "observer_alive")
+                if self._mark_session_closed_if_disconnected(session, e, "page_check_observer_alive"):
+                    return
                 pass
             # Observer lost — clear cache, re-inject below
             with self._lock:
@@ -679,7 +787,8 @@ return (function() {
             "%KEYWORDS%", json.dumps(sorted_kws)
         )
         try:
-            result = session.tab.run_js(js)
+            result = self._run_page_check_js(session, js)
+            self._record_page_check_js_success(session)
             with self._lock:
                 self._observer_keywords_by_session[sid] = set(keywords)
             if result != "already_installed":
@@ -688,6 +797,10 @@ return (function() {
                     f"标签页={sid}, 关键词={sorted_kws}"
                 )
         except Exception as e:
+            if self._is_session_closed(session):
+                return
+            self._record_page_check_js_failure(session, e, "observer_install")
+            self._mark_session_closed_if_disconnected(session, e, "page_check_observer_install")
             logger.debug(f"[CMD] 页面检查观察器注入失败: {e}")
 
     def _refresh_tab_pool_if_due(self, pool: Any):
@@ -790,6 +903,7 @@ return (function() {
             sessions = pool.get_idle_sessions_snapshot()
         if not sessions:
             return
+        current_session_ids = {str(getattr(s, "id", "") or "") for s in sessions}
 
         now = time.time()
         active_keys = set()
@@ -801,7 +915,10 @@ return (function() {
         ]
 
         for session in sessions:
-            session_status = str(getattr(getattr(session, "status", None), "value", "")).lower()
+            session_id = str(getattr(session, "id", "") or "")
+            if not session_id or session_id not in current_session_ids:
+                continue
+            session_status = self._session_status_value(session)
             if session_status not in {"idle", "busy"}:
                 continue
             is_busy_workflow = session_status == "busy" and self._has_active_workflow(session)
@@ -2611,6 +2728,8 @@ return (function() {
         return ned in hay
 
     def _get_page_check_snapshot_text(self, session: 'TabSession') -> str:
+        if self._is_session_closed(session):
+            return ""
         now = time.time()
         cached = getattr(session, "_pc_snapshot_cached", None)
         if isinstance(cached, tuple) and len(cached) == 2:
@@ -2622,33 +2741,54 @@ return (function() {
             if cached_ts > 0.0 and now - cached_ts < 0.5:
                 return str(cached_text or "")
 
+        if self._is_page_check_backing_off(session):
+            return ""
+
         self._try_wake_tab(session, reason="page_check")
 
         try:
-            snapshot = session.tab.run_js(
+            snapshot = self._run_page_check_js(
+                session,
                 "return window.__pcObserver ? String(window.__pcSnapshot || '') : null"
             )
+            self._record_page_check_js_success(session)
             if snapshot is not None:
                 snapshot_text = str(snapshot or "")
                 if snapshot_text.strip():
                     setattr(session, "_pc_snapshot_cached", (now, snapshot_text))
                     return snapshot_text
-        except Exception:
+        except Exception as e:
+            if self._is_session_closed(session):
+                return ""
+            self._record_page_check_js_failure(session, e, "snapshot_observer")
+            if self._mark_session_closed_if_disconnected(session, e, "page_check_snapshot_observer"):
+                return ""
             pass
 
         try:
-            page_text = str(session.tab.run_js(self._PAGE_CHECK_SNAPSHOT_JS) or "")
+            page_text = str(self._run_page_check_js(session, self._PAGE_CHECK_SNAPSHOT_JS) or "")
+            self._record_page_check_js_success(session)
             if page_text.strip():
                 setattr(session, "_pc_snapshot_cached", (now, page_text))
                 return page_text
-        except Exception:
+        except Exception as e:
+            if self._is_session_closed(session):
+                return ""
+            self._record_page_check_js_failure(session, e, "snapshot_body")
+            if self._mark_session_closed_if_disconnected(session, e, "page_check_snapshot_body"):
+                return ""
             pass
 
         try:
-            title_text = str(session.tab.run_js("return document.title || '';") or "")
+            title_text = str(self._run_page_check_js(session, "return document.title || '';") or "")
+            self._record_page_check_js_success(session)
             setattr(session, "_pc_snapshot_cached", (now, title_text))
             return title_text
-        except Exception:
+        except Exception as e:
+            if self._is_session_closed(session):
+                return ""
+            self._record_page_check_js_failure(session, e, "snapshot_title")
+            self._mark_session_closed_if_disconnected(session, e, "page_check_snapshot_title")
             return ""
 
     def _build_page_check_snapshot_preview(

@@ -2040,9 +2040,18 @@ class TextInputHandler:
         return len(text) > threshold
 
     def _get_file_paste_temp_file_type(self) -> str:
-        return normalize_temp_file_type(
+        configured = str(
             self._file_paste_config.get("temp_file_type", DEFAULT_TEMP_FILE_TYPE)
-        )
+        ).strip().lower().lstrip(".")
+        if configured == "error":
+            return configured
+        return normalize_temp_file_type(configured)
+
+    def _get_file_paste_error_message(self, *, text_length: int, threshold: int) -> str:
+        configured = str(self._file_paste_config.get("hint_text") or "").strip()
+        if configured:
+            return configured
+        return f"输入文本长度 {text_length} 字符超过限制 {threshold} 字符，已中止发送"
 
     def _cleanup_file_paste_temp_file(self, filepath: str, *, keep_for_browser: bool) -> None:
         if not filepath or not os.path.exists(filepath):
@@ -2081,6 +2090,17 @@ class TextInputHandler:
 
         threshold = self._file_paste_config.get("threshold", 50000)
         temp_file_type = self._get_file_paste_temp_file_type()
+        if temp_file_type == "error":
+            message = self._get_file_paste_error_message(
+                text_length=len(text),
+                threshold=threshold,
+            )
+            logger.error(
+                f"[FILE_PASTE] text length {len(text)} exceeds threshold {threshold}, "
+                "returning configured error"
+            )
+            raise WorkflowError(f"file_paste_length_error:{message}")
+
         logger.info(
             f"[FILE_PASTE] text length {len(text)} exceeds threshold {threshold}, "
             f"using file-paste mode (type={temp_file_type})"
@@ -2226,7 +2246,11 @@ class TextInputHandler:
             return True
 
         except WorkflowError as e:
-            if str(e) in {"file_paste_upload_unconfirmed", "file_paste_hint_unconfirmed"}:
+            error_code = str(e)
+            if (
+                error_code in {"file_paste_upload_unconfirmed", "file_paste_hint_unconfirmed"}
+                or error_code.startswith("file_paste_length_error:")
+            ):
                 logger.error(f"[FILE_PASTE] file paste failed with fatal state: {e}")
                 raise
             logger.error(f"[FILE_PASTE] file paste failed: {e}")

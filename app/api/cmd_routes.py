@@ -10,11 +10,11 @@ app/api/cmd_routes.py - 命令系统 API 路由
 import json
 from typing import Optional, List
 
-from fastapi import APIRouter, HTTPException, Depends, Header
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
 
-from app.core.config import AppConfig, get_logger
-from app.api.deps import extract_authorization_token
+from app.core.config import get_logger
+from app.api.deps import verify_dashboard_auth as verify_auth
 from app.services.command_engine import command_engine
 from app.services.request_manager import request_manager, RequestStatus
 
@@ -251,21 +251,6 @@ def _idle_tabs_for_manual_command(pool) -> List[dict]:
 
 def _manual_command_matches_scope(cmd, session) -> bool:
     return command_engine._matches_scope(cmd, session)
-
-
-# ================= 认证依赖 =================
-
-async def verify_auth(authorization: Optional[str] = Header(None)) -> bool:
-    if not AppConfig.is_auth_enabled():
-        return True
-    if not AppConfig.AUTH_TOKEN:
-        raise HTTPException(status_code=500, detail="服务配置错误")
-    if not authorization:
-        raise HTTPException(status_code=401, detail="未提供认证令牌")
-    token = extract_authorization_token(authorization)
-    if token != AppConfig.get_auth_token():
-        raise HTTPException(status_code=401, detail="认证令牌无效")
-    return True
 
 
 # ================= 请求模型 =================

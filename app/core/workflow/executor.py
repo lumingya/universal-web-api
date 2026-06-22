@@ -64,6 +64,7 @@ class WorkflowExecutor(
         self.stealth_mode = stealth_mode
         self.finder = ElementFinder(tab)
         self.formatter = SSEFormatter()
+        self._completion_id = SSEFormatter._generate_id()
         
         self._should_stop = should_stop_checker or (lambda: False)
         self._extractor = extractor
@@ -95,6 +96,8 @@ class WorkflowExecutor(
         self._workflow_scope_depth = 0
         self._workflow_focus_emulation_active = False
         self._workflow_visibility_emulation_active = False
+        self._current_result_prompt = ""
+        self._result_event_handler = self._create_result_event_handler()
         
         # 检查是否启用网络监听模式
         self._stream_mode = stream_config.get("mode", "dom") if stream_config else "dom"
@@ -146,7 +149,8 @@ class WorkflowExecutor(
                     formatter=self.formatter,
                     stream_config=effective_stream_config,
                     stop_checker=should_stop_checker,
-                    event_handler=self._handle_network_event
+                    event_handler=self._handle_network_event,
+                    result_handler=self._result_event_handler,
                 )
             except Exception as e:
                 logger.warning(f"[Executor] 网络监听器创建失败: {e}")
@@ -172,8 +176,6 @@ class WorkflowExecutor(
             stream_config=stream_config
         )
         
-        self._completion_id = SSEFormatter._generate_id()
-                
         # 🆕 隐身模式鼠标位置追踪（CDP 绝对坐标）
         self._mouse_pos = None
         self._attachment_monitor_config = self._build_attachment_monitor_config(
@@ -473,6 +475,32 @@ class WorkflowExecutor(
                 return False
         return bool(value)
 
+    def _create_result_event_handler(self):
+        try:
+            from app.services.result_event_bridge import create_result_event_handler
+            return create_result_event_handler(self._get_result_event_context)
+        except Exception as e:
+            logger.debug(f"[Executor] 结果事件桥接初始化失败（忽略）: {e}")
+            return None
+
+    def _get_result_event_context(self) -> Dict[str, Any]:
+        session_id = ""
+        if self.session is not None:
+            for attr in ("id", "session_id", "tab_id"):
+                try:
+                    value = getattr(self.session, attr, "")
+                except Exception:
+                    value = ""
+                if value:
+                    session_id = str(value)
+                    break
+
+        return {
+            "prompt": self._current_result_prompt,
+            "completion_id": self._completion_id,
+            "session_id": session_id,
+        }
+
     def _handle_network_event(self, event: Dict[str, Any]) -> bool:
         """
         将网络事件上报给命令引擎。
@@ -741,6 +769,7 @@ class WorkflowExecutor(
             
             elif action in ("STREAM_WAIT", "STREAM_OUTPUT"):
                 user_input = context.get("prompt", "") if context else ""
+                self._current_result_prompt = str(user_input or "")
                 self._last_stream_media_state = {}
                 self._last_stream_media_items = []
 
@@ -873,6 +902,13 @@ class WorkflowExecutor(
             error_code = str(e)
             logger.error(f"步骤执行失败 [{action}]: {error_code}")
             if error_code in {"new_chat_transition_timeout", "send_unconfirmed"}:
+                raise
+            if error_code.startswith("file_paste_length_error:"):
+                message = error_code.split(":", 1)[1].strip() or "输入文本超过站点配置的长度限制"
+                yield self.formatter.pack_error(
+                    message,
+                    code="file_paste_length_error",
+                )
                 raise
             if not optional:
                 file_paste_messages = {

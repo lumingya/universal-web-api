@@ -668,6 +668,7 @@ def _display_start_summary() -> None:
 
 def _run_service_loop() -> int:
     while True:
+        _load_env_file(PROJECT_DIR / ".env")
         completed = _run_project_python(["main.py"], check=False)
         if completed.returncode == 0:
             _log()

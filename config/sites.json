@@ -2999,7 +2999,7 @@
         },
         "file_paste": {
           "enabled": true,
-          "threshold": 50000,
+          "threshold": 120000,
           "temp_file_type": "pdf",
           "hint_text": "完全专注于文件内容",
           "reacquire_input_after_upload": false,
@@ -4041,9 +4041,9 @@
           "audio_capture_activity_silence_seconds": 0.65
         },
         "file_paste": {
-          "enabled": false,
-          "threshold": 50000,
-          "temp_file_type": "txt",
+          "enabled": true,
+          "threshold": 120000,
+          "temp_file_type": "pdf",
           "hint_text": "完全专注于文件内容",
           "reacquire_input_after_upload": false,
           "post_upload_input_selector": "",
@@ -5162,7 +5162,7 @@
         "file_paste": {
           "enabled": true,
           "threshold": 40000,
-          "temp_file_type": "txt",
+          "temp_file_type": "error",
           "hint_text": "文件内容为需要回复的上下文，按上下文回复",
           "reacquire_input_after_upload": false,
           "post_upload_input_selector": "",
@@ -5430,7 +5430,8 @@
           "new_chat_btn": "//div[contains(@class, 'new-session') and .//div[text()='新对话']]",
           "click_target": "img.enter_icon",
           "input_box_1": "//div[contains(@class, 'input-box-inner')]//textarea",
-          "result_container_1": "//div[contains(@class, 'code-box')]//div[contains(@class, 'markdown-body') and not(ancestor::div[contains(@class, 'advance-thinking')])]"
+          "result_container_1": "//div[contains(@class, 'code-box')]//div[contains(@class, 'markdown-body') and not(ancestor::div[contains(@class, 'advance-thinking')])]",
+          "file_input": ".el-upload__input"
         },
         "workflow": [
           {
@@ -5478,7 +5479,7 @@
             "stream_match_mode": "keyword",
             "stream_match_pattern": "/chatglm/backend-api/assistant/stream",
             "parser": "glm",
-            "silence_threshold": 3,
+            "silence_threshold": 5,
             "response_interval": 0.5
           }
         },
@@ -5582,7 +5583,7 @@
           "enabled": true,
           "threshold": 20000,
           "temp_file_type": "txt",
-          "hint_text": "文件内容为需要回复的上下文，按上下文回复",
+          "hint_text": "上传的文件内容即为上下文，请据此回复",
           "reacquire_input_after_upload": true,
           "post_upload_input_selector": ".input-box-inner textarea",
           "post_upload_settle": 0.4,
@@ -5615,6 +5616,8 @@
           },
           "attachment_monitor": {
             "root_selectors": [
+              ".search-box-container",
+              ".search-box-wrapper",
               ".input-box",
               ".input-box-inner",
               "[class*='input-box']"
@@ -5640,7 +5643,7 @@
               "disable",
               "disabled"
             ],
-            "require_attachment_present": false,
+            "require_attachment_present": true,
             "require_upload_signal_before_ready": false,
             "continue_once_on_unconfirmed_send": true,
             "idle_timeout": 8,

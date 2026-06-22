@@ -16,7 +16,7 @@ import uuid
 from collections import OrderedDict
 from typing import Any, AsyncIterator, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -26,7 +26,8 @@ from app.api.openai_stop import (
     normalize_openai_stop_sequences,
     split_stream_text_for_stop_sequences,
 )
-from app.core.config import AppConfig, get_logger
+from app.api.deps import verify_service_token
+from app.core.config import get_logger
 from app.services.request_manager import request_manager
 from app.services.sse_utils import sse_frame_data_text
 from app.services.tool_calling import _decode_tool_arguments
@@ -91,30 +92,7 @@ async def verify_anthropic_auth(
     x_api_key: Optional[str] = Header(None, alias="x-api-key"),
 ) -> bool:
     """兼容 Claude Code 常见的 Authorization / x-api-key 两种认证头。"""
-    if not AppConfig.is_auth_enabled():
-        return True
-
-    token_value = AppConfig.get_auth_token()
-    if not token_value:
-        raise HTTPException(status_code=500, detail="服务配置错误")
-
-    candidates: List[str] = []
-    if isinstance(authorization, str):
-        raw = authorization.strip()
-        if raw:
-            candidates.append(raw)
-            if raw.lower().startswith("bearer "):
-                candidates.append(raw[7:].strip())
-    if isinstance(x_api_key, str) and x_api_key.strip():
-        candidates.append(x_api_key.strip())
-
-    if token_value not in candidates:
-        raise HTTPException(
-            status_code=401,
-            detail="认证令牌无效",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
+    verify_service_token(authorization=authorization, x_api_key=x_api_key)
     return True
 
 
@@ -1564,21 +1542,11 @@ async def _anthropic_stream_from_openai(
     yield _pack_anthropic_sse("message_stop", {"type": "message_stop"})
 
 
-@router.post("/v1/messages")
-async def create_message(
-    request: Request,
+def _wrap_openai_response_as_anthropic(
+    response: Any,
     body: AnthropicMessageRequest,
-    authenticated: bool = Depends(verify_anthropic_auth),
-):
-    request_id = _new_request_id()
-    openai_payload = _anthropic_request_to_openai_payload(body)
-    chat_body = chat_api.ChatRequest(**openai_payload)
-    response = await chat_api.chat_completions(
-        request=request,
-        body=chat_body,
-        authenticated=authenticated,
-    )
-
+    request_id: str,
+) -> JSONResponse | StreamingResponse:
     if isinstance(response, StreamingResponse):
         return StreamingResponse(
             _anthropic_stream_from_openai(response, body.model, body.stop_sequences),
@@ -1623,14 +1591,115 @@ async def create_message(
     )
 
 
+def _build_count_tokens_response(body: AnthropicCountTokensRequest) -> JSONResponse:
+    request_id = _new_request_id()
+    return JSONResponse(
+        content={"input_tokens": _count_tokens_payload(body)},
+        headers={"request-id": request_id},
+    )
+
+
+@router.post("/v1/v1/messages")
+@router.post("/v1/messages")
+async def create_message(
+    request: Request,
+    body: AnthropicMessageRequest,
+    authenticated: bool = Depends(verify_anthropic_auth),
+):
+    request_id = _new_request_id()
+    openai_payload = _anthropic_request_to_openai_payload(body)
+    chat_body = chat_api.ChatRequest(**openai_payload)
+    response = await chat_api.chat_completions(
+        request=request,
+        body=chat_body,
+        authenticated=authenticated,
+    )
+    return _wrap_openai_response_as_anthropic(response, body, request_id)
+
+
+@router.post("/url/{route_domain}/v1/v1/messages")
+@router.post("/url/{route_domain}/v1/messages")
+async def create_message_with_route_domain(
+    route_domain: str,
+    request: Request,
+    body: AnthropicMessageRequest,
+    tab_index: Optional[int] = Query(default=None, ge=1),
+    selector: Optional[str] = Query(default=None),
+    authenticated: bool = Depends(verify_anthropic_auth),
+):
+    from app.api import tab_routes as tab_routes_api
+
+    request_id = _new_request_id()
+    openai_payload = _anthropic_request_to_openai_payload(body)
+    chat_body = tab_routes_api.ChatRequest(**openai_payload)
+    response = await tab_routes_api.chat_with_route_domain(
+        route_domain=route_domain,
+        request=request,
+        body=chat_body,
+        tab_index=tab_index,
+        selector=selector,
+        preset_name=None,
+        authenticated=authenticated,
+    )
+    return _wrap_openai_response_as_anthropic(response, body, request_id)
+
+
+@router.post("/url/{route_domain}/{preset_name}/v1/v1/messages")
+@router.post("/url/{route_domain}/{preset_name}/v1/messages")
+async def create_message_with_route_domain_and_preset(
+    route_domain: str,
+    preset_name: str,
+    request: Request,
+    body: AnthropicMessageRequest,
+    tab_index: Optional[int] = Query(default=None, ge=1),
+    selector: Optional[str] = Query(default=None),
+    authenticated: bool = Depends(verify_anthropic_auth),
+):
+    from app.api import tab_routes as tab_routes_api
+
+    request_id = _new_request_id()
+    openai_payload = _anthropic_request_to_openai_payload(body)
+    chat_body = tab_routes_api.ChatRequest(**openai_payload)
+    response = await tab_routes_api.chat_with_route_domain(
+        route_domain=route_domain,
+        request=request,
+        body=chat_body,
+        tab_index=tab_index,
+        selector=selector,
+        preset_name=preset_name,
+        authenticated=authenticated,
+    )
+    return _wrap_openai_response_as_anthropic(response, body, request_id)
+
+
+@router.post("/url/{route_domain}/v1/v1/messages/count_tokens")
+@router.post("/url/{route_domain}/v1/messages/count_tokens")
+async def count_message_tokens_with_route_domain(
+    route_domain: str,
+    body: AnthropicCountTokensRequest,
+    authenticated: bool = Depends(verify_anthropic_auth),
+):
+    del route_domain, authenticated
+    return _build_count_tokens_response(body)
+
+
+@router.post("/url/{route_domain}/{preset_name}/v1/v1/messages/count_tokens")
+@router.post("/url/{route_domain}/{preset_name}/v1/messages/count_tokens")
+async def count_message_tokens_with_route_domain_and_preset(
+    route_domain: str,
+    preset_name: str,
+    body: AnthropicCountTokensRequest,
+    authenticated: bool = Depends(verify_anthropic_auth),
+):
+    del route_domain, preset_name, authenticated
+    return _build_count_tokens_response(body)
+
+
+@router.post("/v1/v1/messages/count_tokens")
 @router.post("/v1/messages/count_tokens")
 async def count_message_tokens(
     body: AnthropicCountTokensRequest,
     authenticated: bool = Depends(verify_anthropic_auth),
 ):
     del authenticated
-    request_id = _new_request_id()
-    return JSONResponse(
-        content={"input_tokens": _count_tokens_payload(body)},
-        headers={"request-id": request_id},
-    )
+    return _build_count_tokens_response(body)

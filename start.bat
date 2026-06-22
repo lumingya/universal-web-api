@@ -3,6 +3,7 @@ chcp 65001 >nul
 setlocal EnableExtensions EnableDelayedExpansion
 set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
+set "UWAPI_DOTENV_OVERRIDE=1"
 
 REM ===============================
 REM Universal Web-to-API 启动脚本

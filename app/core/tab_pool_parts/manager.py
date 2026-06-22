@@ -192,6 +192,25 @@ class TabPoolManager:
 
         return any(tab_url_matches(excluded_url, current_url) for excluded_url in excluded_urls)
 
+    def _is_session_excluded_from_dynamic_routing(
+        self,
+        session: TabSession,
+        current_url: Optional[str] = None,
+    ) -> bool:
+        if current_url is None:
+            try:
+                current_url, _actual_domain = session.get_cached_route_snapshot()
+            except Exception:
+                current_url = ""
+        return self.is_url_excluded(current_url)
+
+    def _get_sessions_for_dynamic_routing(self) -> List[TabSession]:
+        return [
+            session
+            for session in self._tabs.values()
+            if not self._is_session_excluded_from_dynamic_routing(session)
+        ]
+
     def apply_runtime_config(
         self,
         *,
@@ -272,7 +291,9 @@ class TabPoolManager:
         browser_context_id = str(info.get("browserContextId") or "").strip()
         return browser_context_id or None
 
-    def _snapshot_current_tab_targets(self) -> tuple[List[Any], List[str], Dict[str, str]]:
+    def _snapshot_current_tab_targets(
+        self,
+    ) -> tuple[List[Any], List[str], Dict[str, str], Dict[str, str], set[str]]:
         current_tabs = self._list_current_tab_refs()
         current_tab_ids = [
             raw_id for raw_id in
@@ -281,12 +302,40 @@ class TabPoolManager:
         ]
 
         current_context_by_raw: Dict[str, str] = {}
+        current_url_by_raw: Dict[str, str] = {}
+        current_url_known_raw: set[str] = set()
+        for tab_ref in current_tabs:
+            raw_id = self._get_tab_ref_id(tab_ref)
+            if not raw_id:
+                continue
+            if self._tab_ref_has_url_field(tab_ref):
+                current_url_known_raw.add(raw_id)
+            url = self._get_tab_ref_url(tab_ref)
+            if url:
+                current_url_by_raw[raw_id] = url
+
+        target_info_by_raw: Dict[str, Dict[str, Any]] = {}
+        for tab_ref in current_tabs:
+            raw_id = self._get_tab_ref_id(tab_ref)
+            if not raw_id:
+                continue
+            if isinstance(tab_ref, tuple) and len(tab_ref) >= 2 and isinstance(tab_ref[1], dict):
+                target_info_by_raw[raw_id] = tab_ref[1]
+            elif isinstance(tab_ref, dict):
+                target_info_by_raw[raw_id] = tab_ref
+
         with self._lock:
             cached_contexts = dict(self._isolated_context_by_raw_id)
         for raw_id in current_tab_ids:
             cached_context = str(cached_contexts.get(raw_id) or "").strip()
             if cached_context:
                 current_context_by_raw[raw_id] = cached_context
+                continue
+            target_info = target_info_by_raw.get(raw_id) or {}
+            context_id = str(target_info.get("browserContextId") or "").strip()
+            if context_id:
+                current_context_by_raw[raw_id] = context_id
+            if raw_id in current_context_by_raw:
                 continue
             try:
                 info = self._get_target_info(raw_id)
@@ -296,7 +345,7 @@ class TabPoolManager:
             except Exception as e:
                 logger.debug(f"[TabPool] skip context lookup for {raw_id}: {e}")
 
-        return current_tabs, current_tab_ids, current_context_by_raw
+        return current_tabs, current_tab_ids, current_context_by_raw, current_url_by_raw, current_url_known_raw
 
     def _is_site_independent_cookie_enabled(self, domain: str) -> bool:
         normalized_domain = str(domain or "").strip()
@@ -496,6 +545,13 @@ class TabPoolManager:
         return self.page
 
     def _list_current_tab_ids_via_cdp(self) -> List[str]:
+        return [
+            item[0]
+            for item in self._list_current_tab_targets_via_cdp()
+            if item and item[0]
+        ]
+
+    def _list_current_tab_targets_via_cdp(self) -> List[tuple[str, Dict[str, Any]]]:
         browser = self._get_browser_handle()
         if browser is None or not hasattr(browser, "_run_cdp"):
             return []
@@ -507,7 +563,7 @@ class TabPoolManager:
             logger.debug(f"[TabPool] Target.getTargets 失败: {e}")
             return []
 
-        tab_ids: List[str] = []
+        targets: List[tuple[str, Dict[str, Any]]] = []
         for info in target_infos:
             if not isinstance(info, dict):
                 continue
@@ -515,8 +571,8 @@ class TabPoolManager:
                 continue
             target_id = str(info.get("targetId") or "").strip()
             if target_id:
-                tab_ids.append(target_id)
-        return tab_ids
+                targets.append((target_id, info))
+        return targets
 
     def _log_get_tabs_warning(self, message: str) -> None:
         now = time.time()
@@ -530,10 +586,10 @@ class TabPoolManager:
         if browser is None:
             return []
 
-        cdp_tab_ids = self._list_current_tab_ids_via_cdp()
-        if cdp_tab_ids:
+        cdp_targets = self._list_current_tab_targets_via_cdp()
+        if cdp_targets:
             self._get_tabs_retry_after = 0.0
-            return cdp_tab_ids
+            return cdp_targets
 
         now = time.time()
         if now < self._get_tabs_retry_after:
@@ -548,14 +604,14 @@ class TabPoolManager:
                 self._get_tabs_retry_after,
                 time.time() + self.GET_TABS_FAILURE_COOLDOWN_SEC,
             )
-            cdp_tab_ids = self._list_current_tab_ids_via_cdp()
-            if cdp_tab_ids:
+            cdp_targets = self._list_current_tab_targets_via_cdp()
+            if cdp_targets:
                 message = f"[TabPool] browser.get_tabs() 失败，回退到 Target.getTargets 扫描: {e}"
                 if _looks_like_transient_local_debug_error(e):
                     logger.debug(message)
                 else:
                     self._log_get_tabs_warning(message)
-                return cdp_tab_ids
+                return cdp_targets
             fallback_ids = list(getattr(browser, "tab_ids", []) or [])
             if fallback_ids:
                 message = f"[TabPool] browser.get_tabs() 失败，回退到 tab_ids 扫描: {e}"
@@ -715,6 +771,7 @@ class TabPoolManager:
                 created["raw_tab_id"],
                 browser_context_id=created.get("browser_context_id"),
                 is_isolated_context=True,
+                initial_url=created.get("url") or target_url,
             )
             self._tabs[session.id] = session
             self._start_global_monitor_for_session(session)
@@ -765,6 +822,7 @@ class TabPoolManager:
                 created["raw_tab_id"],
                 browser_context_id=created.get("browser_context_id"),
                 is_isolated_context=False,
+                initial_url=created.get("url") or target_url,
             )
             self._tabs[session.id] = session
             self._start_global_monitor_for_session(session)
@@ -1130,6 +1188,12 @@ class TabPoolManager:
         if tab_ref is None:
             return None
 
+        if isinstance(tab_ref, tuple) and tab_ref:
+            return str(tab_ref[0] or "").strip() or None
+        if isinstance(tab_ref, dict):
+            target_id = str(tab_ref.get("targetId") or tab_ref.get("tab_id") or "").strip()
+            return target_id or None
+
         tab_id = getattr(tab_ref, "tab_id", None)
         if tab_id:
             return str(tab_id)
@@ -1137,9 +1201,32 @@ class TabPoolManager:
         raw = str(tab_ref or "").strip()
         return raw or None
 
+    @staticmethod
+    def _get_tab_ref_url(tab_ref: Any) -> str:
+        if isinstance(tab_ref, tuple) and len(tab_ref) >= 2 and isinstance(tab_ref[1], dict):
+            return str(tab_ref[1].get("url") or "").strip()
+        if isinstance(tab_ref, dict):
+            return str(tab_ref.get("url") or "").strip()
+        try:
+            return str(getattr(tab_ref, "url", "") or "").strip()
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _tab_ref_has_url_field(tab_ref: Any) -> bool:
+        if isinstance(tab_ref, tuple) and len(tab_ref) >= 2 and isinstance(tab_ref[1], dict):
+            return "url" in tab_ref[1]
+        if isinstance(tab_ref, dict):
+            return "url" in tab_ref
+        return False
+
     def _resolve_tab_from_ref(self, tab_ref: Any) -> Optional[Any]:
         if tab_ref is None:
             return None
+        if isinstance(tab_ref, tuple) and len(tab_ref) >= 3:
+            existing_tab = tab_ref[2]
+            if existing_tab is not None:
+                return existing_tab
 
         try:
             existing_tab_id = getattr(tab_ref, "tab_id", None)
@@ -1165,14 +1252,16 @@ class TabPoolManager:
         *,
         browser_context_id: Optional[str] = None,
         is_isolated_context: bool = False,
+        initial_url: str = "",
     ) -> TabSession:
         self._tab_counter += 1
 
-        url = ""
-        try:
-            url = tab.url or ""
-        except:
-            pass
+        url = str(initial_url or "").strip()
+        if not url:
+            try:
+                url = tab.url or ""
+            except Exception:
+                pass
 
         abbr = self._get_domain_abbr(url)
         tab_id = f"{abbr}_{self._tab_counter}"
@@ -1290,10 +1379,8 @@ class TabPoolManager:
         return time.time() - self._last_scan_time >= self.SCAN_INTERVAL
 
     def _should_scan_for_query(self) -> bool:
-        """读接口节流扫描，避免高频查询放大浏览器探测压力。"""
-        if not self._tabs:
-            return True
-        return time.time() - self._last_scan_time >= self.QUERY_SCAN_MIN_INTERVAL_SEC
+        """读接口必须反映浏览器当前 target 状态。"""
+        return True
 
     def _scan_new_tabs(self):
         """扫描并添加新标签页（已持有锁）"""
@@ -1303,9 +1390,13 @@ class TabPoolManager:
             self._condition.release()
             try:
                 with self._scan_snapshot_lock:
-                    current_tabs, current_tab_ids, current_context_by_raw = (
-                        self._snapshot_current_tab_targets()
-                    )
+                    (
+                        current_tabs,
+                        current_tab_ids,
+                        current_context_by_raw,
+                        current_url_by_raw,
+                        current_url_known_raw,
+                    ) = self._snapshot_current_tab_targets()
             finally:
                 self._condition.acquire()
 
@@ -1371,6 +1462,13 @@ class TabPoolManager:
                 raw_id = session_raw_by_id.get(session_id)
                 if not raw_id or raw_id not in current_tab_set:
                     continue
+                if raw_id in current_url_known_raw:
+                    current_url = current_url_by_raw.get(raw_id, "")
+                    session._remember_url(current_url)
+                    try:
+                        session.current_domain = extract_remote_site_domain(current_url)
+                    except Exception:
+                        session.current_domain = None
                 if not session.is_isolated_context:
                     continue
                 if session.status == TabStatus.BUSY:
@@ -1468,11 +1566,12 @@ class TabPoolManager:
                         "tab_closed",
                         detail=f"raw={raw_id}",
                     )
-                    logger.warning(f"[{session_id}] 标签页已关闭但仍在忙碌，标记为错误")
-                    session.mark_error("标签页已被关闭")
+                    logger.warning(f"[{session_id}] 标签页已关闭但仍在忙碌，标记为关闭")
+                    session.mark_closed("tab_closed")
                     self._detach_global_monitor_for_session(session_id, reason="tab_closed")
                 else:
                     logger.info(f"[{session_id}] 标签页已关闭，从池中移除")
+                    session.mark_closed("tab_closed")
                     self._detach_global_monitor_for_session(session_id, reason="tab_closed")
                     del self._tabs[session_id]
                     self._on_session_removed(session_id)
@@ -1521,18 +1620,14 @@ class TabPoolManager:
                     continue
 
                 try:
-                    tab = self._resolve_tab_from_ref(tab_ref)
-                    if not tab:
-                        continue
-
-                    url = ""
-                    try:
-                        url = tab.url or ""
-                    except Exception:
-                        pass
+                    url = current_url_by_raw.get(raw_tab) or self._get_tab_ref_url(tab_ref)
 
                     # 本地页、浏览器内部页、空白页都不纳入标签页池。
                     if _should_skip_pool_url(url):
+                        continue
+
+                    tab = self._resolve_tab_from_ref(tab_ref)
+                    if not tab:
                         continue
 
                     isolation_result = self._ensure_cookie_isolation_for_new_tab(tab, raw_tab, url)
@@ -1546,6 +1641,7 @@ class TabPoolManager:
                         raw_tab,
                         browser_context_id=isolation_result.get("browser_context_id"),
                         is_isolated_context=isolation_result.get("is_isolated_context", False),
+                        initial_url=url,
                     )
                     self._tabs[session.id] = session
                     self._start_global_monitor_for_session(session)
@@ -1591,18 +1687,13 @@ class TabPoolManager:
                         if not raw_tab:
                             continue
 
-                        tab = self._resolve_tab_from_ref(tab_ref)
-                        if not tab:
-                            continue
-
-                        url = ""
-                        try:
-                            url = tab.url or ""
-                        except Exception:
-                            pass
-
+                        url = self._get_tab_ref_url(tab_ref)
                         # 初始化时直接跳过本地页和浏览器内部页。
                         if _should_skip_pool_url(url):
+                            continue
+
+                        tab = self._resolve_tab_from_ref(tab_ref)
+                        if not tab:
                             continue
 
                         isolation_result = self._ensure_cookie_isolation_for_new_tab(tab, raw_tab, url)
@@ -1616,6 +1707,7 @@ class TabPoolManager:
                             raw_tab,
                             browser_context_id=isolation_result.get("browser_context_id"),
                             is_isolated_context=isolation_result.get("is_isolated_context", False),
+                            initial_url=url,
                         )
                         self._tabs[session.id] = session
 
@@ -1726,7 +1818,7 @@ class TabPoolManager:
         return cancel_submitted
 
     def _cleanup_unhealthy_tabs(self):
-        """清理不健康的空闲标签页和错误状态的标签页"""
+        """清理不健康的空闲标签页、关闭状态和错误状态的标签页"""
         to_remove = []
 
         for tab_id, session in list(self._tabs.items()):
@@ -1736,8 +1828,10 @@ class TabPoolManager:
                 if session.status != TabStatus.ERROR:
                     self._preserved_error_session_ids.discard(tab_id)
 
+                if session.status == TabStatus.CLOSED:
+                    to_remove.append(tab_id)
                 # 清理 ERROR 状态的标签页（包括强制释放失败的）
-                if session.status == TabStatus.ERROR:
+                elif session.status == TabStatus.ERROR:
                     if self.preserve_error_tabs:
                         if tab_id not in self._preserved_error_session_ids:
                             logger.warning(
@@ -2135,7 +2229,7 @@ class TabPoolManager:
         for session in self._tabs.values():
             current_url, actual_domain = session.get_cached_route_snapshot()
             if route_domain_matches(target, actual_domain):
-                if self.is_url_excluded(current_url):
+                if self._is_session_excluded_from_dynamic_routing(session, current_url):
                     continue
                 matches.append(session)
 
@@ -2232,8 +2326,16 @@ class TabPoolManager:
                         self._condition.wait(timeout=min(remaining, 1.0))
                         continue
 
+                    dynamic_sessions = self._get_sessions_for_dynamic_routing()
+                    if not dynamic_sessions and self._tabs:
+                        logger.warning(
+                            f"Acquire tab skipped: all open tabs are excluded from dynamic routing "
+                            f"(task={task_id})"
+                        )
+                        return None
+
                     session = self._try_acquire_session_for_request(
-                        self._tabs.values(),
+                        dynamic_sessions,
                         task_id,
                     )
                     if session is not None:
@@ -2738,7 +2840,7 @@ class TabPoolManager:
 
         result = []
         for session in sessions:
-            info = session.get_info(allow_live_when_busy=True)
+            info = session.get_info(use_cached_url=True)
             tab_route_prefix = f"/tab/{session.persistent_index}"
             route_domain = str(info.get("route_domain") or "").strip()
             domain_route_prefix = f"/url/{route_domain}" if route_domain else ""

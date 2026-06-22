@@ -18,6 +18,7 @@ except ImportError:
     HAS_REQUESTS = False
 
 from app.core.config import get_logger
+from app.core.page_lifecycle import BACKGROUND_WAKE_CDP_TIMEOUT
 from app.core.request_transport import (
     execute_request_transport,
     get_default_request_transport_config,
@@ -170,6 +171,7 @@ class CommandEngineActionsMixin:
                 tab.run_cdp(
                     "Page.removeScriptToEvaluateOnNewDocument",
                     identifier=script_identifier,
+                    _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
                 )
                 removed_init_script = True
             except Exception as e:
@@ -951,6 +953,7 @@ return (() => {
                             tab.run_cdp(
                                 "Page.removeScriptToEvaluateOnNewDocument",
                                 identifier=previous_identifier,
+                                _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
                             )
                         except Exception as remove_error:
                             logger.debug(f"[CMD] 旧 JS 预注入脚本移除失败（忽略）: {remove_error}")
@@ -960,6 +963,7 @@ return (() => {
                         result = tab.run_cdp(
                             "Page.addScriptToEvaluateOnNewDocument",
                             source=code,
+                            _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
                         )
                         if isinstance(result, dict):
                             script_identifier = str(

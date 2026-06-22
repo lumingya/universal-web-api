@@ -3,6 +3,30 @@
     const DEFAULT_SELECTOR_DEFINITIONS = window.DEFAULT_SELECTOR_DEFINITIONS || []
     const BROWSER_CONSTANTS_SCHEMA = window.BROWSER_CONSTANTS_SCHEMA || {}
     const ENV_CONFIG_SCHEMA = window.ENV_CONFIG_SCHEMA || {}
+    const DASHBOARD_TOKEN_STORAGE_KEY = 'dashboard_token'
+    const LEGACY_API_TOKEN_STORAGE_KEY = 'api_token'
+
+    function getStoredDashboardToken() {
+        try {
+            return String(
+                localStorage.getItem(DASHBOARD_TOKEN_STORAGE_KEY)
+                || localStorage.getItem(LEGACY_API_TOKEN_STORAGE_KEY)
+                || ''
+            ).trim()
+        } catch (e) {
+            return ''
+        }
+    }
+
+    function setStoredDashboardToken(token) {
+        const value = String(token || '').trim()
+        if (value) {
+            localStorage.setItem(DASHBOARD_TOKEN_STORAGE_KEY, value)
+            return
+        }
+        localStorage.removeItem(DASHBOARD_TOKEN_STORAGE_KEY)
+        localStorage.removeItem(LEGACY_API_TOKEN_STORAGE_KEY)
+    }
 
     window.DashboardMethods = {
         async initializeDashboard() {
@@ -88,7 +112,7 @@
 
         syncTokenPresence() {
             try {
-                this.hasTokenPresent = !!localStorage.getItem('api_token')
+                this.hasTokenPresent = !!getStoredDashboardToken()
             } catch (e) {
                 this.hasTokenPresent = false
             }
@@ -104,8 +128,12 @@
             }
 
             this.tokenStorageHandler = (event) => {
-                if (!event || event.key === 'api_token') {
-                    this.hasTokenPresent = !!(event && event.newValue)
+                if (
+                    !event
+                    || event.key === DASHBOARD_TOKEN_STORAGE_KEY
+                    || event.key === LEGACY_API_TOKEN_STORAGE_KEY
+                ) {
+                    this.hasTokenPresent = !!getStoredDashboardToken()
                 }
             }
             window.addEventListener('storage', this.tokenStorageHandler)
@@ -284,8 +312,13 @@
 
         // ========== API 调用 ==========
 
+        openTokenDialog() {
+            this.tempToken = getStoredDashboardToken()
+            this.showTokenDialog = true
+        },
+
         async apiRequest(url, options = {}) {
-            const token = localStorage.getItem('api_token')
+            const token = getStoredDashboardToken()
             const timeoutMs = Number(options.timeoutMs || 0)
             const headers = {
                 'Content-Type': 'application/json',
@@ -317,8 +350,8 @@
 
                 if (!response.ok) {
                     if (response.status === 401) {
-                        this.notify('认证失败，请检查 Token', 'error')
-                        this.showTokenDialog = true
+                        this.notify('控制面板认证失败，请检查访问密钥', 'error')
+                        this.openTokenDialog()
                         throw new Error('UNAUTHORIZED')
                     }
 
@@ -1139,16 +1172,12 @@
         },
 
         getDashboardPreferencesBackup() {
-            let apiToken = '';
-            try {
-                apiToken = localStorage.getItem('api_token') || '';
-            } catch (e) {
-                apiToken = '';
-            }
+            const dashboardToken = getStoredDashboardToken();
 
             return {
                 dark_mode: !!this.darkMode,
-                api_token: apiToken
+                dashboard_token: dashboardToken,
+                api_token: dashboardToken
             };
         },
 
@@ -1159,14 +1188,10 @@
                 this.darkMode = preferences.dark_mode;
             }
 
-            if (typeof preferences.api_token === 'string') {
-                const token = preferences.api_token.trim();
+            if (typeof preferences.dashboard_token === 'string' || typeof preferences.api_token === 'string') {
+                const token = String(preferences.dashboard_token || preferences.api_token || '').trim();
                 try {
-                    if (token) {
-                        localStorage.setItem('api_token', token);
-                    } else {
-                        localStorage.removeItem('api_token');
-                    }
+                    setStoredDashboardToken(token);
                 } catch (e) { }
                 this.tempToken = token;
                 this.syncTokenPresence();
@@ -2659,11 +2684,11 @@
         saveToken() {
             const token = this.tempToken.trim()
             if (token) {
-                localStorage.setItem('api_token', token)
-                this.notify('Token 已保存', 'success')
+                setStoredDashboardToken(token)
+                this.notify('控制面板访问密钥已保存', 'success')
             } else {
-                localStorage.removeItem('api_token')
-                this.notify('Token 已清除', 'info')
+                setStoredDashboardToken('')
+                this.notify('控制面板访问密钥已清除', 'info')
             }
             this.syncTokenPresence()
 
@@ -2735,7 +2760,7 @@
                     timeoutMs: timeoutMs || 2500
                 })
                 this.browserStatus = health.browser || {}
-                this.authEnabled = health.config?.auth_enabled || false
+                this.authEnabled = health.config?.dashboard_auth_enabled ?? health.config?.auth_enabled ?? false
                 return true
             } catch (error) {
                 if (error.message === 'UNAUTHORIZED') {

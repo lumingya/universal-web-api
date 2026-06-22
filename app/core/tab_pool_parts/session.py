@@ -406,6 +406,18 @@ class TabSession:
             self.error_count += 1
             logger.warning(f"[{self.id}] 标记为错误: {reason}")
 
+    def mark_closed(self, reason: str = None):
+        with self._lock:
+            if self.status == TabStatus.CLOSED:
+                return
+            self.status = TabStatus.CLOSED
+            self.current_task_id = None
+            self._release_in_progress = False
+            self.transient_disconnect_until = 0.0
+            self.transient_disconnect_reason = None
+            self._clear_health_cache_unlocked()
+            logger.debug(f"[{self.id}] 标记为关闭: {reason or '-'}")
+
     def reset_conversation_state(self):
         with self._lock:
             self.last_conversation_activity_at = 0.0
@@ -621,4 +633,3 @@ class TabSession:
             restore_visibility_emulation(self.tab, owner=self, reason=reason)
         except Exception as e:
             logger.debug(f"[{self.id}] visibility emulation cleanup failed: {e}")
-

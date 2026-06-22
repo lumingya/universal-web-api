@@ -495,15 +495,28 @@ const ENV_CONFIG_SCHEMA = {
         label: '认证配置',
         icon: '🔐',
         items: {
+            DASHBOARD_AUTH_ENABLED: {
+                label: '启用控制面板认证',
+                desc: '保护控制面板的配置、日志、命令和标签页管理接口；未设置时兼容沿用服务 API 认证开关',
+                type: 'switch',
+                default: false
+            },
+            DASHBOARD_AUTH_TOKEN: {
+                label: '控制面板访问密钥',
+                type: 'password',
+                desc: 'DASHBOARD_AUTH_ENABLED=true 时必须设置；留空时兼容沿用服务 API Bearer Token',
+                default: ''
+            },
             AUTH_ENABLED: {
-                label: '启用认证',
+                label: '启用服务 API 认证',
+                desc: '保护 /v1、/url/.../v1、/tab/.../v1 等对外调用接口',
                 type: 'switch',
                 default: false
             },
             AUTH_TOKEN: {
-                label: 'Bearer Token',
+                label: '服务 API Bearer Token',
                 type: 'password',
-                desc: 'AUTH_ENABLED=true 时必须设置',
+                desc: 'AUTH_ENABLED=true 时必须设置；可提供给项目 API 使用者',
                 default: ''
             }
         }

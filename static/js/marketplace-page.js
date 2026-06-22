@@ -5,6 +5,18 @@
     const MARKETPLACE_SEEN_SNAPSHOT_STORAGE_KEY = 'marketplace_seen_snapshot_v1';
     const MARKETPLACE_LATEST_SNAPSHOT_STORAGE_KEY = 'marketplace_latest_snapshot_v1';
 
+    function getDashboardAuthToken() {
+        try {
+            return String(
+                localStorage.getItem('dashboard_token')
+                || localStorage.getItem('api_token')
+                || ''
+            ).trim();
+        } catch (error) {
+            return '';
+        }
+    }
+
     function deepClone(value) {
         return JSON.parse(JSON.stringify(value));
     }
@@ -288,7 +300,7 @@
             },
 
             async apiRequest(url, options = {}) {
-                const token = localStorage.getItem('api_token');
+                const token = getDashboardAuthToken();
                 const headers = {
                     'Content-Type': 'application/json',
                     ...(options.headers || {})

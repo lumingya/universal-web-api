@@ -18,6 +18,8 @@ from typing import Any, Dict, List, Optional
 
 from app.core.config import BrowserConstants, logger
 
+_ELEMENT_TIMING_LOG_THRESHOLD = 0.5
+
 
 @dataclass
 class CachedElement:
@@ -67,6 +69,33 @@ class ElementFinder:
         """
         self.tab = tab
         self._cache: Dict[str, CachedElement] = {}
+
+    @staticmethod
+    def _compact_selector(selector: str, max_len: int = 120) -> str:
+        text = str(selector or "").replace("\r", "\\r").replace("\n", "\\n").strip()
+        if len(text) > max_len:
+            return f"{text[:max(0, max_len - 3)]}..."
+        return text or "-"
+
+    def _log_find_timing(
+        self,
+        *,
+        target_key: str,
+        stage: str,
+        selector: str,
+        elapsed: float,
+        found: bool,
+    ) -> None:
+        if elapsed < _ELEMENT_TIMING_LOG_THRESHOLD:
+            return
+        compact_selector = self._compact_selector(selector, 100)
+        logger.debug_throttled(
+            f"element.find_timing.{target_key or 'generic'}.{stage}.{compact_selector}",
+            "[ELEMENT_TIMING] "
+            f"target={target_key or '-'}, stage={stage}, elapsed={elapsed:.2f}s, "
+            f"found={bool(found)}, selector={compact_selector}",
+            interval_sec=5.0,
+        )
 
     def _compute_element_hash(self, ele) -> str:
         try:
@@ -214,7 +243,15 @@ class ElementFinder:
 
         per_group_timeout = max(0.02, min(float(timeout or 0), 0.25))
         for group in groups:
+            started_at = time.perf_counter()
             ele = self._find_with_syntax(group, per_group_timeout)
+            self._log_find_timing(
+                target_key="input_box" if "textarea" in group or "contenteditable" in group else "",
+                stage="primary_group",
+                selector=group,
+                elapsed=time.perf_counter() - started_at,
+                found=bool(ele and self._is_visible_enabled(ele)),
+            )
             if ele and self._is_visible_enabled(ele):
                 return ele
         return None
@@ -287,7 +324,7 @@ class ElementFinder:
             if not ele or not self._is_visible_enabled(ele):
                 continue
             candidates.append(ele)
-            if self._looks_like_send_button(ele) and not self._looks_like_stop_button(ele):
+            if not self._looks_like_stop_button(ele):
                 return ele
 
         for fb_selector in self.FALLBACK_SELECTORS.get("send_btn", []):
@@ -331,9 +368,16 @@ class ElementFinder:
                 # 缓存失效，删除
                 del self._cache[cache_key]
         
+        grouped_selector = (
+            bool(selector)
+            and not selector.startswith(('tag:', '@', 'xpath:', 'css:'))
+            and '@@' not in selector
+            and len(self._split_css_selector_groups(selector)) > 1
+        )
+
         # 查找元素
         ele = self._find_css_groups_in_order(selector, timeout)
-        if not ele:
+        if not ele and not grouped_selector:
             ele = self._find_with_syntax(selector, timeout)
         if ele and not self._is_visible_enabled(ele):
             ele = None
@@ -408,7 +452,15 @@ class ElementFinder:
         
         # 先尝试主选择器
         if primary_selector:
+            started_at = time.perf_counter()
             ele = self.find(primary_selector, timeout)
+            self._log_find_timing(
+                target_key=target_key,
+                stage="primary",
+                selector=primary_selector,
+                elapsed=time.perf_counter() - started_at,
+                found=bool(ele),
+            )
             if ele:
                 return ele
 
@@ -421,7 +473,15 @@ class ElementFinder:
 
         fallback_timeout = BrowserConstants.FALLBACK_ELEMENT_TIMEOUT
         for fb_selector in fallback_list:
+            started_at = time.perf_counter()
             ele = self.find(fb_selector, fallback_timeout)
+            self._log_find_timing(
+                target_key=target_key,
+                stage="fallback",
+                selector=fb_selector,
+                elapsed=time.perf_counter() - started_at,
+                found=bool(ele),
+            )
             if ele:
                 logger.debug(f"回退选择器成功: {fb_selector}")
                 return ele
