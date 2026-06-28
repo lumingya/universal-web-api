@@ -1728,7 +1728,7 @@
             "value": null
           }
         ],
-        "stealth": true,
+        "stealth": false,
         "image_extraction": {
           "enabled": false,
           "modalities": {
@@ -2891,13 +2891,18 @@
         },
         "stream_config": {
           "mode": "network",
+          "request_transport": {
+            "mode": "workflow",
+            "profile": "",
+            "options": {}
+          },
           "hard_timeout": 300,
           "network": {
-            "parser": "lmarena",
-            "url_pattern": "**/nextjs-api/stream/**",
-            "method": "POST",
             "listen_pattern": "/nextjs-api/stream/",
-            "silence_threshold": 3,
+            "stream_match_mode": "keyword",
+            "stream_match_pattern": "",
+            "parser": "lmarena",
+            "silence_threshold": 6,
             "response_interval": 1
           }
         },
@@ -3010,6 +3015,27 @@
           "state_probe": {
             "enabled": false,
             "code": ""
+          },
+          "send_confirmation": {
+            "attachment_sensitivity": "medium",
+            "post_click_observe_window": 1.8,
+            "pre_retry_probe_window": 0.12,
+            "retry_observe_window": 0.9,
+            "attachment_observe_window": 6,
+            "max_retry_count": 2,
+            "retry_interval": 0.6,
+            "retry_cooldown_window": 1.5,
+            "retry_action": "click_send_btn",
+            "retry_key_combo": "Enter",
+            "retry_on_unconfirmed_send": true,
+            "accept_attachment_change": false,
+            "accept_attachment_disappear": false,
+            "accept_probe_confirmation": true,
+            "retry_block_on_stop_button": true,
+            "retry_block_if_generating": true,
+            "trust_network_activity": true,
+            "trust_generating_indicator": true,
+            "trust_send_disabled_with_input_shrink": true
           }
         },
         "prompt_padding": {
@@ -3935,13 +3961,20 @@
         },
         "stream_config": {
           "mode": "network",
+          "request_transport": {
+            "mode": "workflow",
+            "profile": "",
+            "options": {}
+          },
           "hard_timeout": 300,
           "network": {
-            "parser": "lmarena_battle_side_left",
-            "url_pattern": "**/nextjs-api/stream/**",
             "listen_pattern": "/nextjs-api/stream/",
-            "silence_threshold": 3,
-            "response_interval": 0.5
+            "stream_match_mode": "keyword",
+            "stream_match_pattern": "",
+            "parser": "lmarena_battle_side_left",
+            "silence_threshold": 5,
+            "response_interval": 0.5,
+            "url_pattern": "**/nextjs-api/stream/**"
           }
         },
         "image_extraction": {
@@ -4138,13 +4171,20 @@
         },
         "stream_config": {
           "mode": "network",
+          "request_transport": {
+            "mode": "workflow",
+            "profile": "",
+            "options": {}
+          },
           "hard_timeout": 300,
           "network": {
-            "parser": "lmarena_battle_side_right",
-            "url_pattern": "**/nextjs-api/stream/**",
             "listen_pattern": "/nextjs-api/stream/",
-            "silence_threshold": 3,
-            "response_interval": 0.5
+            "stream_match_mode": "keyword",
+            "stream_match_pattern": "",
+            "parser": "lmarena_battle_side_right",
+            "silence_threshold": 5,
+            "response_interval": 0.5,
+            "url_pattern": "**/nextjs-api/stream/**"
           }
         },
         "image_extraction": {

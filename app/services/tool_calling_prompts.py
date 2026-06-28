@@ -195,7 +195,8 @@ def build_browser_messages_for_tools(
             "role": "user",
             "content": (
                 "[Tool Output Format Reminder]\n"
-                "Reply now with exactly one JSON object and nothing else. "
+                "If you need a tool, prefer exactly one standalone XML tool-call block and nothing else. "
+                "Use JSON only as a compatibility fallback. "
                 "If you have just received a [Tool Result], do not rush to a final answer. "
                 "For search, retrieval, or analysis tasks, call another tool when the result is empty, "
                 "ambiguous, partial, too broad, too narrow, contains an error/hint/truncation/limit, "

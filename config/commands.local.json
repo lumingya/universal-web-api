@@ -15,7 +15,7 @@
     {
       "id": "cmd_cf_pagecheck_arena_verify",
       "name": "自动过cf盾",
-      "enabled": true,
+      "enabled": false,
       "group_name": "arena"
     },
     {

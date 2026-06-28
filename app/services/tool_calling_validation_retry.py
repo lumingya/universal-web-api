@@ -93,6 +93,11 @@ def _inspect_tool_response(
         for item in tools or []
         if isinstance(item, dict)
     }
+    allowed_tool_names = {
+        name.strip().lower()
+        for name in allowed_tools.keys()
+        if str(name or "").strip()
+    }
     tool_calls = parsed.get("tool_calls") or []
     required_tool_name = _get_required_tool_name(tool_choice)
 
@@ -154,7 +159,10 @@ def _inspect_tool_response(
             parsed_mode == "final" and parsed_content != raw_stripped
         )
         if not is_structured_final_payload:
-            malformed_reason = _detect_malformed_tool_payload(raw_text)
+            malformed_reason = _detect_malformed_tool_payload(
+                raw_text,
+                allowed_tool_names=allowed_tool_names,
+            )
             if malformed_reason:
                 errors.append(
                     {
@@ -376,7 +384,7 @@ def _get_required_tool_name(tool_choice: Any) -> str:
     return ""
 
 
-def _detect_malformed_tool_payload(raw_text: str) -> str:
+def _detect_malformed_tool_payload(raw_text: str, allowed_tool_names: Optional[set[str]] = None) -> str:
     stripped = str(raw_text or "").strip()
     if not stripped:
         return ""
@@ -392,7 +400,7 @@ def _detect_malformed_tool_payload(raw_text: str) -> str:
                 "into valid tool_calls."
             )
 
-    if _looks_like_tool_xml_payload(stripped):
+    if _looks_like_tool_xml_payload(stripped, allowed_tool_names=allowed_tool_names):
         return (
             "The reply looked like an XML-style tool call, but it could not be parsed "
             "into a valid declared tool."
@@ -404,15 +412,25 @@ def _detect_malformed_tool_payload(raw_text: str) -> str:
 _TOOL_XML_PAYLOAD_PATTERNS = (
     re.compile(r"<\s*(?:adapter_calls|tool_calls)\b", re.IGNORECASE),
     re.compile(r"<\s*(?:call|invoke|tool_call)\b[^>]*(?:\bname\s*=|>)", re.IGNORECASE),
-    re.compile(r"<[A-Za-z0-9_.:-]+\s+[^<>]*/>", re.IGNORECASE),
 )
 
 
-def _looks_like_tool_xml_payload(text: str) -> bool:
+def _looks_like_tool_xml_payload(text: str, allowed_tool_names: Optional[set[str]] = None) -> bool:
     value = str(text or "").strip()
     if not value.startswith("<"):
         return False
-    return any(pattern.search(value) for pattern in _TOOL_XML_PAYLOAD_PATTERNS)
+    if any(pattern.search(value) for pattern in _TOOL_XML_PAYLOAD_PATTERNS):
+        return True
+
+    if not allowed_tool_names:
+        return False
+
+    short_tag_pattern = re.compile(r"<\s*([A-Za-z0-9_.:-]+)\b[^<>]*/>", re.IGNORECASE)
+    for match in short_tag_pattern.finditer(value):
+        raw_name = str(match.group(1) or "").strip()
+        if raw_name.lower() in allowed_tool_names:
+            return True
+    return False
 
 
 def _decode_tool_arguments(tool_call: Dict[str, Any]) -> Optional[Dict[str, Any]]:
