@@ -2486,7 +2486,7 @@ class ConfigEngine:
 
         if "temp_file_type" in config:
             val = str(config.get("temp_file_type") or "").strip().lower().lstrip(".")
-            if val in {"txt", "pdf", "error"}:
+            if val in {"txt", "pdf"}:
                 result["temp_file_type"] = val
 
         if "hint_text" in config:
@@ -2945,6 +2945,7 @@ class ConfigEngine:
             "attachment_selectors",
             "pending_selectors",
             "busy_text_markers",
+            "ignored_busy_text_markers",
             "send_button_disabled_markers",
         ]
         for key in list_fields:

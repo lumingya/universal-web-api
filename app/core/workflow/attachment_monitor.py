@@ -99,7 +99,6 @@ _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
     "preparing",
     "analyzing",
     "generating",
-    "thinking",
     "\u8bfb\u53d6",
     "\u5206\u6790",
     "\u5904\u7406\u4e2d",
@@ -335,6 +334,7 @@ _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
       : prioritizeUnique(opts && opts.attachmentSelectors, []);
     const pendingSelectors = mergeUnique(defaultPendingSelectors, opts && opts.pendingSelectors);
     const busyWords = mergeUnique(defaultBusyWords, opts && opts.busyTextMarkers);
+    const ignoredBusyWords = mergeUnique([], opts && opts.ignoredBusyTextMarkers);
     const disabledMarkers = mergeUnique(
       ["disabled", "unavailable", "inactive", "readonly", "upload failed"],
       opts && opts.sendButtonDisabledMarkers
@@ -423,7 +423,11 @@ _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
 
     const matchedBusyWords = busyWords.filter((word) => {
       const needle = lower(word);
-      return needle && rootText.includes(needle);
+      if (!needle || !rootText.includes(needle)) return false;
+      return !ignoredBusyWords.some((ignored) => {
+        const ignoredNeedle = lower(ignored).trim();
+        return ignoredNeedle && needle === ignoredNeedle;
+      });
     }).slice(0, 8);
 
     const matchedDisabledMarkers = disabledMarkers.filter((word) => {
@@ -750,6 +754,7 @@ class AttachmentMonitor:
             "attachmentSelectors": self._config_list("attachment_selectors"),
             "pendingSelectors": self._config_list("pending_selectors"),
             "busyTextMarkers": self._config_list("busy_text_markers"),
+            "ignoredBusyTextMarkers": self._config_list("ignored_busy_text_markers"),
             "sendButtonDisabledMarkers": self._config_list("send_button_disabled_markers"),
         }
 
