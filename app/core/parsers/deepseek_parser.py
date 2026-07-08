@@ -29,6 +29,7 @@ class DeepSeekParser(ResponseParser):
         self._current_fragment_index = -1
         self._debug_records: List[Dict[str, Any]] = []
         self._emit_buffer = ""
+        self._has_seen_visible_response_text = False
 
     def parse_chunk(self, raw_response: str) -> Dict[str, Any]:
         result: Dict[str, Any] = {
@@ -70,6 +71,7 @@ class DeepSeekParser(ResponseParser):
         self._current_fragment_index = -1
         self._debug_records = []
         self._emit_buffer = ""
+        self._has_seen_visible_response_text = False
 
     def _consume_new_data(self, new_data: str) -> Tuple[str, bool]:
         normalized = (self._pending + new_data).replace("\r\n", "\n")
@@ -112,7 +114,7 @@ class DeepSeekParser(ResponseParser):
         if event_name in {"ready", "update_session", "title"}:
             return "", False
         if event_name in {"finish", "close"}:
-            return "", True
+            return "", self._can_accept_done_signal()
 
         payload = "\n".join(data_lines).strip()
         if not payload or payload == "{}":
@@ -141,7 +143,7 @@ class DeepSeekParser(ResponseParser):
                 return self._extract_response_object(response)
 
         if self._is_done_signal(path, value):
-            return "", True
+            return "", self._can_accept_done_signal()
 
         if self._is_fragment_append(path, operation, value):
             return self._register_fragments(value), False
@@ -151,12 +153,14 @@ class DeepSeekParser(ResponseParser):
             fragment_type = self._resolve_fragment_type(path)
             delta_text = self._apply_fragment_content_update(fragment_index, value)
             if self._should_emit_fragment_text(fragment_type):
+                self._mark_visible_response_text(fragment_type, delta_text)
                 return delta_text, False
             return "", False
 
         if not path and not operation and isinstance(value, str):
             self._append_to_current_fragment(value)
             if self._should_emit_fragment_text(self._current_fragment_type):
+                self._mark_visible_response_text(self._current_fragment_type, value)
                 return value, False
             return "", False
 
@@ -164,7 +168,7 @@ class DeepSeekParser(ResponseParser):
 
     def _extract_batch_content(self, operations: List[Dict[str, Any]]) -> Tuple[str, bool]:
         content_parts: List[str] = []
-        done = False
+        saw_done_signal = False
 
         for op in operations:
             if not isinstance(op, dict):
@@ -175,7 +179,7 @@ class DeepSeekParser(ResponseParser):
             value = op.get("v")
 
             if self._is_done_signal(path, value):
-                done = True
+                saw_done_signal = True
                 continue
 
             if self._is_fragment_append(path, operation, value):
@@ -189,19 +193,21 @@ class DeepSeekParser(ResponseParser):
                 fragment_type = self._resolve_fragment_type(path)
                 delta_text = self._apply_fragment_content_update(fragment_index, value)
                 if self._should_emit_fragment_text(fragment_type):
+                    self._mark_visible_response_text(fragment_type, delta_text)
                     content_parts.append(delta_text)
 
-        return "".join(content_parts), done
+        return "".join(content_parts), bool(saw_done_signal and self._can_accept_done_signal())
 
     def _extract_response_object(self, response: Dict[str, Any]) -> Tuple[str, bool]:
         fragments = response.get("fragments")
         content = self._register_fragments(fragments) if isinstance(fragments, list) else ""
 
         done = False
-        if self._is_done_signal("response/status", response.get("status")):
-            done = True
-        if self._is_done_signal("response/quasi_status", response.get("quasi_status")):
-            done = True
+        if self._can_accept_done_signal():
+            if self._is_done_signal("response/status", response.get("status")):
+                done = True
+            if self._is_done_signal("response/quasi_status", response.get("quasi_status")):
+                done = True
 
         return content, done
 
@@ -223,6 +229,7 @@ class DeepSeekParser(ResponseParser):
             if isinstance(text, str):
                 self._fragment_contents[self._current_fragment_index] = text
                 if text and self._should_emit_fragment_text(fragment_type):
+                    self._mark_visible_response_text(fragment_type, text)
                     content_parts.append(text)
 
         return "".join(content_parts)
@@ -326,6 +333,15 @@ class DeepSeekParser(ResponseParser):
             return True
         return fragment_type == "RESPONSE"
 
+    def _mark_visible_response_text(self, fragment_type: str, text: str) -> None:
+        if not isinstance(text, str) or not text:
+            return
+        if self._should_emit_fragment_text(fragment_type):
+            self._has_seen_visible_response_text = True
+
+    def _can_accept_done_signal(self) -> bool:
+        return bool(self._has_seen_visible_response_text)
+
     def _drain_safe_output(self, delta_text: str, force: bool = False) -> str:
         if delta_text:
             self._emit_buffer += delta_text
@@ -391,6 +407,7 @@ class DeepSeekParser(ResponseParser):
             "fragment_lengths": [len(item) for item in self._fragment_contents],
             "current_fragment_type": self._current_fragment_type,
             "current_fragment_index": self._current_fragment_index,
+            "has_seen_visible_response_text": bool(self._has_seen_visible_response_text),
             "debug_records": self._debug_records[-120:],
             "raw_response_preview": str(raw_response or "")[:12000],
         }

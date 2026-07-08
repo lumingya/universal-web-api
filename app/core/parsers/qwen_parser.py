@@ -23,6 +23,7 @@ class QwenParser(ResponseParser):
     def __init__(self) -> None:
         self._last_raw_length = 0
         self._pending = ""
+        self._has_seen_answer_text = False
 
     def parse_chunk(self, raw_response: str) -> Dict[str, Any]:
         result: Dict[str, Any] = {
@@ -57,6 +58,7 @@ class QwenParser(ResponseParser):
         self._last_raw_length = 0
         self._last_raw_response = ""
         self._pending = ""
+        self._has_seen_answer_text = False
 
     def _consume_new_data(self, new_data: str) -> Tuple[str, bool]:
         normalized = (self._pending + new_data).replace("\r\n", "\n")
@@ -120,8 +122,9 @@ class QwenParser(ResponseParser):
             text = delta.get("content", "")
             if isinstance(text, str) and text:
                 content_parts.append(text)
+                self._has_seen_answer_text = True
 
-            if delta.get("status") == "finished":
+            if delta.get("status") == "finished" and self._has_seen_answer_text:
                 done = True
 
         return "".join(content_parts), done

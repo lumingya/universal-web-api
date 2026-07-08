@@ -26,6 +26,7 @@ class DoubaoParser(ResponseParser):
         self._block_texts: Dict[str, str] = {}
         self._last_full_message = ""
         self._assembled_text = ""
+        self._has_seen_visible_text = False
 
     def parse_chunk(self, raw_response: str) -> Dict[str, Any]:
         result: Dict[str, Any] = {
@@ -60,7 +61,8 @@ class DoubaoParser(ResponseParser):
                 result["content"] = repaired
                 if repaired:
                     self._assembled_text += repaired
-                result["done"] = direct_done
+                    self._has_seen_visible_text = True
+                result["done"] = bool(direct_done and self._can_accept_done_signal(repaired))
                 return result
 
             delta_content, done = self._consume_new_data(new_data)
@@ -83,6 +85,7 @@ class DoubaoParser(ResponseParser):
         self._block_texts.clear()
         self._last_full_message = ""
         self._assembled_text = ""
+        self._has_seen_visible_text = False
 
     def _consume_new_data(self, new_data: str) -> Tuple[str, bool]:
         normalized = (self._pending + new_data).replace("\r\n", "\n")
@@ -105,6 +108,7 @@ class DoubaoParser(ResponseParser):
             if block_content:
                 content_parts.append(block_content)
                 self._assembled_text += block_content
+                self._has_seen_visible_text = True
             if block_done:
                 done = True
 
@@ -191,7 +195,7 @@ class DoubaoParser(ResponseParser):
 
         if event_name in {"STREAM_FINISH", "STREAM_END", "DONE", "COMPLETION"}:
             logger.debug(f"[DoubaoParser][SSE] event={event_name} done_only=1")
-            return "", True
+            return "", self._can_accept_done_signal()
 
         if event_name == "CHUNK_DELTA":
             text = self._extract_chunk_delta(payload)
@@ -221,7 +225,7 @@ class DoubaoParser(ResponseParser):
                     f"[DoubaoParser][SSE] event=STREAM_CHUNK text_len={len(text)} "
                     f"done={done} preview={text[:60]!r}"
                 )
-            return text, done
+            return text, bool(done and self._can_accept_done_signal(text))
 
         if event_name == "FULL_MSG_NOTIFY":
             text = self._extract_full_msg_notify(payload)
@@ -240,7 +244,7 @@ class DoubaoParser(ResponseParser):
                 f"[DoubaoParser][SSE] event=SSE_REPLY_END text_len={len(text)} "
                 f"done={done} preview={text[:60]!r}"
             )
-            return text, done
+            return text, bool(done and self._can_accept_done_signal(text))
 
         return "", False
 
@@ -412,6 +416,13 @@ class DoubaoParser(ResponseParser):
             return "", True
 
         return self._extract_full_message_delta(brief), True
+
+    def _can_accept_done_signal(self, pending_text: str = "") -> bool:
+        return bool(
+            self._has_seen_visible_text
+            or self._assembled_text
+            or str(pending_text or "")
+        )
 
     @staticmethod
     def _extract_text_from_block(block: Any) -> Tuple[str, str]:

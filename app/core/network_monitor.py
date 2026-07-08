@@ -280,6 +280,21 @@ class NetworkMonitor:
         )
 
     @staticmethod
+    def _parse_result_has_media(parse_result: Dict[str, Any]) -> bool:
+        if not isinstance(parse_result, dict):
+            return False
+        images = parse_result.get("images")
+        return isinstance(images, list) and bool(images)
+
+    def _should_fallback_on_empty_done(self, parse_result: Dict[str, Any]) -> bool:
+        return bool(
+            self._total_chunks == 0
+            and not self._parse_result_has_media(parse_result)
+            and not self._last_stream_media_items
+            and self._should_fallback_to_dom_on_empty_stream()
+        )
+
+    @staticmethod
     def _extract_http_status(event: Dict[str, Any]) -> int:
         try:
             return int(event.get("status") or 0)
@@ -1691,6 +1706,12 @@ class NetworkMonitor:
                             yield self.formatter.pack_chunk(content, completion_id=completion_id)
 
                         if done:
+                            if self._should_fallback_on_empty_done(parse_result):
+                                logger.warning(
+                                    "[NetworkMonitor] 目标流返回完成标志但未产出有效正文，回退到 DOM 监听 "
+                                    f"(source={active_stream_body_source}, body_len={len(active_stream_body or '')})"
+                                )
+                                raise NetworkMonitorTimeout("目标流完成但未产出有效正文")
                             completed_by_done = True
                             completion_reason = "done"
                             logger._logger.log(logging.DEBUG - 5, "[NetworkMonitor] 检测到结束标志，完成监听")
@@ -2011,6 +2032,12 @@ class NetworkMonitor:
                 yield self.formatter.pack_chunk(content, completion_id=completion_id)
 
             if done:
+                if self._should_fallback_on_empty_done(parse_result):
+                    logger.warning(
+                        "[NetworkMonitor] 目标流返回完成标志但未产出有效正文，回退到 DOM 监听 "
+                        f"(source={raw_body_source}, body_len={len(raw_body or '')})"
+                    )
+                    raise NetworkMonitorTimeout("目标流完成但未产出有效正文")
                 completed_by_done = True
                 completion_reason = "done"
                 logger._logger.log(logging.DEBUG - 5, "[NetworkMonitor] 检测到结束标志，完成监听")

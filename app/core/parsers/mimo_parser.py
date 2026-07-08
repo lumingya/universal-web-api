@@ -58,12 +58,14 @@ class MimoParser(ResponseParser):
         self._last_raw_length = 0
         self._pending = ""
         self._inside_think = False
+        self._has_seen_visible_text = False
 
     def reset(self) -> None:
         self._last_raw_length = 0
         self._last_raw_response = ""
         self._pending = ""
         self._inside_think = False
+        self._has_seen_visible_text = False
 
     def parse_chunk(self, raw_response: str) -> Dict[str, Any]:
         result: Dict[str, Any] = {
@@ -133,7 +135,7 @@ class MimoParser(ResponseParser):
                 data_lines.append(line[5:].strip())
 
         if event_name == "finish":
-            return "", True
+            return "", self._has_seen_visible_text
         if event_name != "message":
             return "", False
 
@@ -157,6 +159,8 @@ class MimoParser(ResponseParser):
 
         visible_text = self._strip_think_content(text)
         visible_text = self._repair_mojibake_text(visible_text)
+        if visible_text:
+            self._has_seen_visible_text = True
         return visible_text, False
 
     def _strip_think_content(self, text: str) -> str:
