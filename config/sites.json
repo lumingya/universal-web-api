@@ -4670,7 +4670,10 @@
             "require_upload_signal_before_ready": false,
             "continue_once_on_unconfirmed_send": false,
             "idle_timeout": 8,
-            "hard_max_wait": 90
+            "hard_max_wait": 90,
+            "ignored_busy_text_markers": [
+              "thinking"
+            ]
           }
         },
         "prompt_padding": {
@@ -4917,7 +4920,10 @@
             "require_upload_signal_before_ready": false,
             "continue_once_on_unconfirmed_send": false,
             "idle_timeout": 8,
-            "hard_max_wait": 90
+            "hard_max_wait": 90,
+            "ignored_busy_text_markers": [
+              "thinking"
+            ]
           }
         },
         "prompt_padding": {
@@ -5171,7 +5177,10 @@
             "require_upload_signal_before_ready": false,
             "continue_once_on_unconfirmed_send": false,
             "idle_timeout": 8,
-            "hard_max_wait": 90
+            "hard_max_wait": 90,
+            "ignored_busy_text_markers": [
+              "thinking"
+            ]
           }
         },
         "prompt_padding": {

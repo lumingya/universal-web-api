@@ -525,6 +525,7 @@ class AttachmentMonitorConfig(TypedDict, total=False):
     attachment_selectors: List[str]
     pending_selectors: List[str]
     busy_text_markers: List[str]
+    ignored_busy_text_markers: List[str]
     send_button_disabled_markers: List[str]
     require_attachment_present: bool
     require_upload_signal_before_ready: bool
@@ -1094,6 +1095,7 @@ def validate_site_config(config: Dict[str, Any]) -> bool:
                 "attachment_selectors",
                 "pending_selectors",
                 "busy_text_markers",
+                "ignored_busy_text_markers",
                 "send_button_disabled_markers",
             ]
 
@@ -1231,6 +1233,7 @@ def validate_site_config(config: Dict[str, Any]) -> bool:
                 "attachment_selectors",
                 "pending_selectors",
                 "busy_text_markers",
+                "ignored_busy_text_markers",
                 "send_button_disabled_markers",
             ]
 

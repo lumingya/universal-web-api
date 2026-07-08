@@ -43,6 +43,7 @@ from app.core.request_transport import (
     get_default_request_transport_config,
     normalize_request_transport_config,
 )
+from .cache import ConfigCache
 from .managers import GlobalConfigManager, ImagePresetsManager
 from .processors import HTMLCleaner, SelectorValidator, AIAnalyzer
 
@@ -173,6 +174,7 @@ class ConfigEngine:
         self._global_default_presets: Dict[str, str] = {}
         self._local_default_presets: Dict[str, str] = {}
         self._local_sites_payload: Dict[str, Any] = {}
+        self._cache = ConfigCache(ttl=5.0)
 
         # 子管理器
         self.global_config = GlobalConfigManager()
@@ -254,6 +256,8 @@ class ConfigEngine:
 
     def _reload_config_locked(self):
         """重新加载配置（Hot Reload）"""
+        self._cache.invalidate()
+
         if not os.path.exists(self.config_file):
             logger.warning("重载失败：配置文件不存在")
             return
@@ -354,6 +358,7 @@ class ConfigEngine:
             except Exception as e:
                 logger.warning(f"配置已保存但更新时间戳失败: {e}")
 
+            self._cache.invalidate()
             logger.info(f"配置已保存: {self.config_file}")
             return True
 
@@ -992,11 +997,19 @@ class ConfigEngine:
         """获取指定站点的默认预设名称（已解析回退）"""
         self.refresh_if_changed()
 
+        cache_key = f"default_preset:{domain}"
+        cached = self._cache.get(cache_key, _MISSING)
+        if cached is not _MISSING:
+            return cached
+
         site = self.sites.get(domain)
         if not site:
+            self._cache.set(cache_key, None)
             return None
 
-        return self._resolve_default_preset_name(site)
+        result = self._resolve_default_preset_name(site)
+        self._cache.set(cache_key, result)
+        return result
 
     def _extract_startup_url_from_script(self, script: str) -> str:
         text = str(script or "").strip()
@@ -1722,6 +1735,11 @@ class ConfigEngine:
         self.refresh_if_changed()
 
         if domain in self.sites:
+            cache_key = f"site_config:{domain}:{preset_name or ''}"
+            cached = self._cache.get(cache_key, _MISSING)
+            if cached is not _MISSING:
+                return copy.deepcopy(cached)
+
             site = self.sites.get(domain, {})
             config = self._get_site_data(domain, preset_name)
 
@@ -1789,7 +1807,9 @@ class ConfigEngine:
                     return completed_config
 
             logger.debug(f"使用缓存配置: {domain} [预设: {used_preset}]")
-            return copy.deepcopy(config)
+            result = copy.deepcopy(config)
+            self._cache.set(cache_key, result)
+            return copy.deepcopy(result)
 
         logger.info(f"🔍 未知域名 {domain}，启动 AI 识别...")
 
@@ -2701,11 +2721,18 @@ class ConfigEngine:
         """
         self.refresh_if_changed()
 
+        cache_key = f"stream_config:{domain}:{preset_name or ''}"
+        cached = self._cache.get(cache_key, _MISSING)
+        if cached is not _MISSING:
+            return copy.deepcopy(cached)
+
         default_config = get_default_stream_config()
 
         data = self._get_site_data(domain, preset_name)
         if data is None:
-            return copy.deepcopy(default_config)
+            result = copy.deepcopy(default_config)
+            self._cache.set(cache_key, result)
+            return copy.deepcopy(result)
 
         stream_config = data.get("stream_config", {})
 
@@ -2758,6 +2785,7 @@ class ConfigEngine:
                 if key in network_config:
                     result["network"][key] = network_config[key]
 
+        self._cache.set(cache_key, copy.deepcopy(result))
         return result
 
     def set_site_stream_config(self, domain: str, config: Dict[str, Any],
@@ -2968,6 +2996,7 @@ class ConfigEngine:
             "attachment_selectors",
             "pending_selectors",
             "busy_text_markers",
+            "ignored_busy_text_markers",
             "send_button_disabled_markers",
         ]
         for key in list_fields:

@@ -53,6 +53,7 @@ window.FilePastePanel = {
                 attachment_selectors: [],
                 pending_selectors: [],
                 busy_text_markers: [],
+                ignored_busy_text_markers: [],
                 send_button_disabled_markers: [],
                 require_attachment_present: false,
                 require_upload_signal_before_ready: false,
@@ -602,6 +603,17 @@ window.FilePastePanel = {
                                     class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm font-mono bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent"></textarea>
                                 <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">填发送按钮 class / title / aria-label 里会出现的关键字，命中后视为按钮不可发。</p>
                             </div>
+                        </div>
+
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">忽略忙碌文本 / token</label>
+                            <textarea
+                                :value="formatRuleList(resolvedFilePaste.attachment_monitor.ignored_busy_text_markers)"
+                                @input="updateAttachmentMonitorListField('ignored_busy_text_markers', $event.target.value)"
+                                rows="3"
+                                placeholder="thinking"
+                                class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm font-mono bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent"></textarea>
+                            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">用于排除输入区固定开关或标签文案，避免被误判成附件仍在处理。</p>
                         </div>
 
                         <div>
