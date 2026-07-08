@@ -76,7 +76,7 @@
           "input_box": "textarea[formcontrolname=\"promptText\"]",
           "send_btn": "button[aria-label=\"Run\"]",
           "result_container": ".chat-turn-container.model ms-prompt-chunk:not(:has(ms-thought-chunk)) ms-cmark-node.cmark-node",
-          "new_chat_btn": "button[aria-label=\"New chat\"]",
+          "new_chat_btn": "a.playground-link[href=\"/u/0/prompts/new_chat\"]",
           "confirm_btn": "button.ms-button-primary[type=\"button\"]"
         },
         "stream_config": {
@@ -91,10 +91,10 @@
         },
         "workflow": [
           {
-            "action": "JS_EXEC",
-            "target": "",
+            "action": "CLICK",
+            "target": "new_chat_btn",
             "optional": false,
-            "value": "window.location.assign('/');"
+            "value": null
           },
           {
             "action": "WAIT",
