@@ -1,8 +1,14 @@
 {
   "commands": [
     {
-      "id": "cmd_037f7eba",
-      "name": "ARENA自动盲测不翻牌 -GROK",
+      "id": "cmd_b136169b",
+      "name": "ARENA自动盲测不翻牌 -gpt image 2",
+      "enabled": true,
+      "group_name": "arena"
+    },
+    {
+      "id": "cmd_15d91034",
+      "name": "ARENA自动盲测不翻牌 -gpt image 2 - 单",
       "enabled": true,
       "group_name": "arena"
     },
@@ -13,9 +19,15 @@
       "group_name": "arena"
     },
     {
+      "id": "cmd_8c7f95ba",
+      "name": "ARENA自动盲测不翻牌 - 副本",
+      "enabled": true,
+      "group_name": "arena"
+    },
+    {
       "id": "cmd_cf_pagecheck_arena_verify",
       "name": "自动过cf盾",
-      "enabled": true,
+      "enabled": false,
       "group_name": "arena"
     },
     {

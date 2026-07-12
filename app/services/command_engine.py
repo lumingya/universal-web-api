@@ -1469,7 +1469,7 @@ return (function() {
             if not isinstance(field, dict):
                 continue
             field_type = str(field.get("type") or "text").strip().lower()
-            if field_type not in {"text", "textarea", "number", "boolean", "select", "password"}:
+            if field_type not in {"text", "textarea", "number", "boolean", "select", "password", "rule_list", "image"}:
                 continue
             options = field.get("options")
             if not isinstance(options, list):
@@ -1489,6 +1489,7 @@ return (function() {
                 "required": bool(field.get("required", False)),
                 "options": options,
                 "rows": rows,
+                "item_defaults": field.get("item_defaults") if isinstance(field.get("item_defaults"), dict) else {},
             })
 
         values = ui.get("values")
@@ -1499,6 +1500,7 @@ return (function() {
             "kind": kind,
             "title": title,
             "description": description,
+            "results_enabled": bool(ui.get("results_enabled", False)),
             "fields": normalized_fields,
             "values": values,
         }

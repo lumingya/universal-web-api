@@ -296,7 +296,14 @@ class WorkflowExecutor(
         })();
         """
         try:
-            return bool(self.tab.run_js(script))
+            probe_timeout = float(
+                (self._stream_config or {}).get("verification_probe_timeout_seconds", 0.5)
+            )
+        except (TypeError, ValueError):
+            probe_timeout = 0.5
+        probe_timeout = min(2.0, max(0.1, probe_timeout))
+        try:
+            return bool(self.tab.run_js(script, timeout=probe_timeout))
         except Exception as e:
             logger.debug(f"[Executor] 验证页面探测失败（忽略）: {e}")
             return False

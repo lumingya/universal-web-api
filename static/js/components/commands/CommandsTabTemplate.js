@@ -294,11 +294,11 @@ window.CommandsTabTemplate = `
                          @dragover.prevent.stop="onCommandDragOver(cmd.id, $event)"
                          @dragleave="onCommandDragLeave(cmd.id, $event)"
                          @drop.prevent.stop="onCommandDrop(cmd.id, $event)"
-                         title="拖动可调整同组命令顺序"
                          :class="['relative cursor-grab rounded-xl border p-3 transition-all shadow-sm active:cursor-grabbing',
                                   cmd.enabled
                                   ? 'bg-[linear-gradient(145deg,rgba(255,255,255,0.98),rgba(241,245,249,0.94))] border-slate-200/80 hover:-translate-y-0.5 hover:shadow-md dark:bg-[linear-gradient(145deg,rgba(15,23,42,0.96),rgba(30,41,59,0.92))] dark:border-slate-700/70'
                                   : 'bg-slate-100/85 dark:bg-slate-900 border-slate-200 dark:border-slate-700',
+                                  isCommandActionMenuOpen(cmd.id) ? 'z-40' : '',
                                   draggingCommandId === cmd.id ? 'opacity-50' : '',
                                   isCommandDropTarget(cmd.id) ? 'ring-2 ring-sky-400 ring-offset-1 ring-offset-white dark:ring-offset-slate-900' : '']">
                         <div v-if="isCommandDropTarget(cmd.id, 'before')"
@@ -1768,19 +1768,19 @@ window.CommandsTabTemplate = `
                     <div v-if="editingCommand.mode === 'advanced'" class="space-y-4">
                         <div class="flex flex-wrap items-center justify-between gap-4">
                             <div class="flex items-center gap-2 text-sm font-bold tracking-widest text-slate-700 uppercase dark:text-slate-200">
-                                <span class="h-2 w-2 rounded-full bg-violet-500 shadow-[0_0_8px_rgba(139,92,246,0.8)]"></span>
+                                <span class="h-2 w-2 rounded-full bg-amber-500"></span>
                                 高级配置
                             </div>
                             <button v-if="hasAdvancedUiForm"
                                     @click="toggleAdvancedEditorMode"
                                     type="button"
-                                    class="rounded-lg border border-violet-200 bg-violet-50 px-3 py-1.5 text-xs font-semibold text-violet-700 transition hover:bg-violet-100 dark:border-violet-800 dark:bg-violet-950/40 dark:text-violet-200 dark:hover:bg-violet-900/50">
+                                    class="rounded-lg border border-stone-200 bg-white px-3 py-1.5 text-xs font-semibold text-stone-600 transition hover:border-amber-300 hover:text-amber-700 dark:border-stone-700 dark:bg-stone-900 dark:text-stone-300 dark:hover:border-amber-500/50 dark:hover:text-amber-300">
                                 {{ getAdvancedUiModeLabel() }}
                             </button>
                         </div>
 
                         <div v-if="hasAdvancedUiForm && advancedEditorMode === 'ui'"
-                             class="rounded-2xl border border-violet-200/70 bg-violet-50/30 p-5 shadow-sm dark:border-violet-700/40 dark:bg-violet-950/20">
+                             class="rounded-lg border border-stone-200 bg-stone-50/70 p-5 dark:border-stone-700/70 dark:bg-stone-900/50">
                             <div class="mb-4">
                                 <h4 class="text-sm font-bold text-slate-800 dark:text-slate-100">{{ advancedUiTitle }}</h4>
                                 <p v-if="advancedUiDescription" class="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
@@ -1788,50 +1788,185 @@ window.CommandsTabTemplate = `
                                 </p>
                             </div>
 
-                            <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
-                                <div v-for="field in advancedUiFields"
+                            <div class="space-y-4">
+                                <div v-for="field in advancedUiRuleFields"
                                      :key="'advanced-ui-' + field.key"
-                                     :class="field.type === 'textarea' ? 'md:col-span-2' : ''">
+                                     class="w-full">
                                     <label class="mb-1.5 block text-xs font-semibold text-slate-500 dark:text-slate-400">
                                         {{ field.label || field.key }}
                                         <span v-if="field.required" class="text-rose-500">*</span>
                                     </label>
 
-                                    <textarea v-if="field.type === 'textarea'"
-                                              :value="getAdvancedUiFieldValue(field)"
-                                              @input="setAdvancedUiFieldValue(field, $event.target.value)"
-                                              :rows="Math.max(2, field.rows || 3)"
-                                              :placeholder="field.placeholder"
-                                              class="w-full resize-y rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 transition focus:border-violet-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-violet-500/20 dark:border-slate-700 dark:bg-slate-950/60 dark:text-slate-100 dark:focus:border-violet-400"></textarea>
+                                    <div v-if="field.type === 'rule_list'" class="overflow-hidden rounded-lg border border-stone-200 bg-white dark:border-stone-700 dark:bg-stone-950/40">
+                                        <div class="grid min-h-[360px] grid-cols-1 lg:grid-cols-[220px_minmax(0,1fr)]">
+                                            <aside class="border-b border-stone-200 bg-stone-50/80 p-2 dark:border-stone-800 dark:bg-black/20 lg:border-b-0 lg:border-r">
+                                                <div class="flex items-center justify-between px-2 py-1.5">
+                                                    <span class="text-[11px] font-semibold uppercase text-stone-500">模板 · {{ getRuleList(field).length }}</span>
+                                                    <button type="button" @click="addAdvancedRule(field)" title="新增规则"
+                                                            class="grid h-7 w-7 place-items-center rounded-md text-amber-600 transition hover:bg-amber-100 dark:text-amber-400 dark:hover:bg-amber-500/10">
+                                                        <span v-html="$icons.plusCircle"></span>
+                                                    </button>
+                                                </div>
+                                                <div class="flex gap-1 overflow-x-auto pb-1 lg:block lg:space-y-1 lg:overflow-visible">
+                                                    <button v-for="(rule, ruleIndex) in getRuleList(field)"
+                                                            :key="rule.id || ruleIndex"
+                                                            type="button"
+                                                            @click="selectAdvancedRule(ruleIndex)"
+                                                            :class="selectedAdvancedRuleIndex === ruleIndex
+                                                                ? 'border-amber-300 bg-amber-50 text-stone-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100'
+                                                                : 'border-transparent text-stone-500 hover:bg-stone-100 hover:text-stone-800 dark:hover:bg-stone-800/70 dark:hover:text-stone-200'"
+                                                            class="flex min-w-[180px] items-center gap-2 rounded-md border px-2.5 py-2 text-left transition lg:min-w-0 lg:w-full">
+                                                        <span :class="rule.enabled !== false ? 'bg-emerald-500' : 'bg-stone-300 dark:bg-stone-600'" class="h-1.5 w-1.5 shrink-0 rounded-full"></span>
+                                                        <span class="min-w-0 flex-1">
+                                                            <span class="block truncate text-xs font-semibold">{{ rule.name || ('规则 ' + (ruleIndex + 1)) }}</span>
+                                                            <span class="mt-0.5 block truncate font-mono text-[10px] opacity-60">{{ rule.model_name || '未命名模型' }}</span>
+                                                        </span>
+                                                    </button>
+                                                    <button v-if="!getRuleList(field).length" type="button" @click="addAdvancedRule(field)"
+                                                            class="w-full rounded-md border border-dashed border-stone-300 px-3 py-8 text-xs text-stone-500 hover:border-amber-400 hover:text-amber-600 dark:border-stone-700 dark:hover:border-amber-500/60 dark:hover:text-amber-400">
+                                                        新增第一个模板
+                                                    </button>
+                                                </div>
+                                            </aside>
 
-                                    <label v-else-if="field.type === 'boolean'"
-                                           class="flex min-h-[42px] items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-950/60 dark:text-slate-200">
-                                        <input type="checkbox"
-                                               :checked="!!getAdvancedUiFieldValue(field)"
-                                               @change="setAdvancedUiFieldValue(field, $event.target.checked)"
-                                               class="rounded border-slate-300 text-violet-600 focus:ring-violet-500">
-                                        <span>{{ field.placeholder || '启用' }}</span>
-                                    </label>
+                                            <section v-if="getSelectedAdvancedRule(field)" class="min-w-0 p-4">
+                                                <div class="mb-4 flex items-center gap-3 border-b border-stone-100 pb-3 dark:border-stone-800">
+                                                    <label class="flex cursor-pointer items-center gap-2 text-xs text-stone-500">
+                                                        <input type="checkbox"
+                                                               :checked="getSelectedAdvancedRule(field).enabled !== false"
+                                                               @change="updateAdvancedRule(field, selectedAdvancedRuleIndex, 'enabled', $event.target.checked)"
+                                                               class="accent-amber-500">
+                                                        启用
+                                                    </label>
+                                                    <input :value="getSelectedAdvancedRule(field).name"
+                                                           @input="updateAdvancedRule(field, selectedAdvancedRuleIndex, 'name', $event.target.value)"
+                                                           class="min-w-0 flex-1 border-0 bg-transparent p-0 text-sm font-semibold text-stone-800 outline-none focus:ring-0 dark:text-stone-100"
+                                                           placeholder="规则名称">
+                                                    <button type="button" @click="removeAdvancedRule(field, selectedAdvancedRuleIndex)" title="删除规则"
+                                                            class="grid h-8 w-8 place-items-center rounded-md text-stone-400 transition hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-500/10">
+                                                        <span v-html="$icons.trash"></span>
+                                                    </button>
+                                                </div>
+                                                <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                                    <label class="space-y-1.5 text-[11px] font-semibold uppercase text-stone-500">模型名
+                                                        <input :value="getSelectedAdvancedRule(field).model_name" @input="updateAdvancedRule(field, selectedAdvancedRuleIndex, 'model_name', $event.target.value)"
+                                                               class="w-full rounded-lg border border-stone-200 bg-stone-50/60 px-3 py-2 text-sm font-normal normal-case text-stone-800 outline-none transition placeholder:text-stone-400 focus:border-amber-400 dark:border-stone-700 dark:bg-stone-900/60 dark:text-stone-100" placeholder="gpt-5.4">
+                                                    </label>
+                                                    <label class="space-y-1.5 text-[11px] font-semibold uppercase text-stone-500">链接抽屉分组
+                                                        <input :value="getSelectedAdvancedRule(field).drawer_group" @input="updateAdvancedRule(field, selectedAdvancedRuleIndex, 'drawer_group', $event.target.value)"
+                                                               class="w-full rounded-lg border border-stone-200 bg-stone-50/60 px-3 py-2 text-sm font-normal normal-case text-stone-800 outline-none transition placeholder:text-stone-400 focus:border-amber-400 dark:border-stone-700 dark:bg-stone-900/60 dark:text-stone-100" placeholder="留空则使用模型名">
+                                                    </label>
+                                                    <label class="space-y-1.5 text-[11px] font-semibold uppercase text-stone-500">链接标题模板
+                                                        <input :value="getSelectedAdvancedRule(field).title_template" @input="updateAdvancedRule(field, selectedAdvancedRuleIndex, 'title_template', $event.target.value)"
+                                                               class="w-full rounded-lg border border-stone-200 bg-stone-50/60 px-3 py-2 text-sm font-normal normal-case text-stone-800 outline-none transition placeholder:text-stone-400 focus:border-amber-400 dark:border-stone-700 dark:bg-stone-900/60 dark:text-stone-100" placeholder="&#12298;{profile}&#12299;-{model}-{index:03d}">
+                                                        <span class="block text-[10px] font-normal normal-case text-stone-400">标题可任意填写；支持 {profile}、{model}、{index}，不影响用户目录路由。</span>
+                                                    </label>
+                                                    <label class="space-y-1.5 text-[11px] font-semibold uppercase text-stone-500">必须全部包含
+                                                        <textarea :value="getSelectedAdvancedRule(field).required_all" @input="updateAdvancedRule(field, selectedAdvancedRuleIndex, 'required_all', $event.target.value)"
+                                                                  rows="3" class="w-full resize-y rounded-lg border border-stone-200 bg-stone-50/60 px-3 py-2 text-sm font-normal normal-case leading-relaxed text-stone-800 outline-none transition placeholder:text-stone-400 focus:border-amber-400 dark:border-stone-700 dark:bg-stone-900/60 dark:text-stone-100" placeholder="逗号或换行分隔"></textarea>
+                                                    </label>
+                                                    <label class="space-y-1.5 text-[11px] font-semibold uppercase text-stone-500">至少包含一个
+                                                        <textarea :value="getSelectedAdvancedRule(field).required_any" @input="updateAdvancedRule(field, selectedAdvancedRuleIndex, 'required_any', $event.target.value)"
+                                                                  rows="3" class="w-full resize-y rounded-lg border border-stone-200 bg-stone-50/60 px-3 py-2 text-sm font-normal normal-case leading-relaxed text-stone-800 outline-none transition placeholder:text-stone-400 focus:border-amber-400 dark:border-stone-700 dark:bg-stone-900/60 dark:text-stone-100" placeholder="留空表示不限制"></textarea>
+                                                    </label>
+                                                    <label class="space-y-1.5 text-[11px] font-semibold uppercase text-stone-500">排除词
+                                                        <textarea :value="getSelectedAdvancedRule(field).excluded" @input="updateAdvancedRule(field, selectedAdvancedRuleIndex, 'excluded', $event.target.value)"
+                                                                  rows="3" class="w-full resize-y rounded-lg border border-stone-200 bg-stone-50/60 px-3 py-2 text-sm font-normal normal-case leading-relaxed text-stone-800 outline-none transition placeholder:text-stone-400 focus:border-amber-400 dark:border-stone-700 dark:bg-stone-900/60 dark:text-stone-100" placeholder="命中任一个即排除"></textarea>
+                                                    </label>
+                                                    <label class="space-y-1.5 text-[11px] font-semibold uppercase text-stone-500">Detector 模型关键词
+                                                        <input :value="getSelectedAdvancedRule(field).detector_keyword" @input="updateAdvancedRule(field, selectedAdvancedRuleIndex, 'detector_keyword', $event.target.value)"
+                                                               class="w-full rounded-lg border border-stone-200 bg-stone-50/60 px-3 py-2 text-sm font-normal normal-case text-stone-800 outline-none transition placeholder:text-stone-400 focus:border-amber-400 dark:border-stone-700 dark:bg-stone-900/60 dark:text-stone-100" placeholder="留空则不调用 Detector">
+                                                    </label>
+                                                </div>
 
-                                    <select v-else-if="field.type === 'select'"
-                                            :value="getAdvancedUiFieldValue(field)"
-                                            @change="setAdvancedUiFieldValue(field, $event.target.value)"
-                                            class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 transition focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/20 dark:border-slate-700 dark:bg-slate-950/60 dark:text-slate-100">
-                                        <option v-for="option in field.options" :key="field.key + '-' + option.value" :value="option.value">
-                                            {{ option.label }}
-                                        </option>
-                                    </select>
-
-                                    <input v-else
-                                           :type="field.type === 'number' ? 'number' : (field.type === 'password' ? 'password' : 'text')"
-                                           :value="getAdvancedUiFieldValue(field)"
-                                           @input="setAdvancedUiFieldValue(field, $event.target.value)"
-                                           :placeholder="field.placeholder"
-                                           class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 transition focus:border-violet-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-violet-500/20 dark:border-slate-700 dark:bg-slate-950/60 dark:text-slate-100 dark:focus:border-violet-400">
+                                                <div class="mt-5 border-t border-stone-100 pt-4 dark:border-stone-800">
+                                                    <div class="mb-2 flex items-center justify-between gap-2">
+                                                        <div class="flex items-center gap-2">
+                                                            <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
+                                                            <span class="text-xs font-semibold text-stone-700 dark:text-stone-200">当前模板结果</span>
+                                                            <span class="text-[10px] text-stone-400">{{ getSelectedRuleResults(field).length }} 条</span>
+                                                        </div>
+                                                        <div class="flex gap-1">
+                                                            <button type="button" @click="loadCommandResults()" title="刷新当前结果" class="grid h-7 w-7 place-items-center rounded-md text-stone-400 transition hover:bg-stone-100 hover:text-stone-700 dark:hover:bg-stone-800 dark:hover:text-stone-100"><span v-html="$icons.arrowPath"></span></button>
+                                                            <button type="button" @click="clearSelectedRuleResults(field)" title="清空当前模板结果" class="grid h-7 w-7 place-items-center rounded-md text-stone-400 transition hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-500/10"><span v-html="$icons.trash"></span></button>
+                                                        </div>
+                                                    </div>
+                                                    <div class="max-h-56 overflow-auto rounded-md border border-stone-200 bg-stone-50/50 dark:border-stone-800 dark:bg-black/20">
+                                                        <div v-if="commandResultsLoading" class="p-4 text-center text-xs text-stone-500">正在加载...</div>
+                                                        <div v-else-if="!getSelectedRuleResults(field).length" class="p-4 text-center text-xs text-stone-500">当前模板暂无命中结果</div>
+                                                        <div v-for="item in getSelectedRuleResults(field)" :key="item.id" class="border-b border-stone-100 px-3 py-2.5 last:border-b-0 dark:border-stone-800">
+                                                            <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+                                                                <span class="font-mono text-xs font-semibold text-stone-700 dark:text-stone-200">{{ item.title }}</span>
+                                                                <span class="text-[10px] text-stone-400">{{ item.browser_profile_name }} · Side {{ item.side }} · {{ formatCommandResultTime(item.created_at) }}</span>
+                                                                <span v-if="item.drawer && item.drawer.status" class="text-[10px] text-emerald-600 dark:text-emerald-400">抽屉 {{ item.drawer.status }}</span>
+                                                            </div>
+                                                            <a :href="item.url" target="_blank" rel="noopener noreferrer" class="mt-1 block truncate text-[11px] text-amber-700 hover:underline dark:text-amber-400">{{ item.url }}</a>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </section>
+                                        </div>
+                                    </div>
 
                                     <p v-if="field.help" class="mt-1.5 text-xs leading-5 text-slate-500 dark:text-slate-400">
                                         {{ field.help }}
                                     </p>
+                                </div>
+                                <div class="space-y-2">
+                                    <details v-for="group in advancedUiGlobalFieldGroups" :key="group.id"
+                                             class="group overflow-hidden rounded-lg border border-stone-200 bg-white dark:border-stone-700 dark:bg-stone-950/30">
+                                        <summary class="flex cursor-pointer list-none items-center gap-3 px-4 py-3 text-sm font-semibold text-stone-700 transition hover:bg-stone-50 dark:text-stone-200 dark:hover:bg-stone-800/50">
+                                            <span class="grid h-6 w-6 place-items-center rounded-md bg-stone-100 text-stone-400 dark:bg-stone-800" v-html="$icons.cog"></span>
+                                            <span class="flex-1">{{ group.label }}</span>
+                                            <span class="text-[10px] font-normal text-stone-400">{{ group.fields.length }} 项</span>
+                                            <span class="transition group-open:rotate-180" v-html="$icons.chevronDown"></span>
+                                        </summary>
+                                        <div class="grid grid-cols-1 gap-4 border-t border-stone-100 p-4 dark:border-stone-800 md:grid-cols-2">
+                                            <div v-for="field in group.fields" :key="'global-' + field.key"
+                                                 :class="field.type === 'textarea' ? 'md:col-span-2' : ''">
+                                                <label class="mb-1.5 block text-[11px] font-semibold text-stone-500">
+                                                    {{ field.label || field.key }}
+                                                    <span v-if="field.required" class="text-rose-500">*</span>
+                                                </label>
+                                                <textarea v-if="field.type === 'textarea'"
+                                                          :value="getAdvancedUiFieldValue(field)"
+                                                          @input="setAdvancedUiFieldValue(field, $event.target.value)"
+                                                          :rows="Math.max(2, Math.min(6, field.rows || 3))"
+                                                          :placeholder="field.placeholder"
+                                                          class="w-full resize-y rounded-lg border border-stone-200 bg-stone-50/60 px-3 py-2 text-sm text-stone-800 outline-none transition focus:border-amber-400 dark:border-stone-700 dark:bg-stone-900/60 dark:text-stone-100"></textarea>
+                                                <label v-else-if="field.type === 'boolean'" class="flex min-h-[38px] cursor-pointer items-center gap-2 rounded-lg border border-stone-200 bg-stone-50/60 px-3 py-2 text-sm text-stone-600 dark:border-stone-700 dark:bg-stone-900/60 dark:text-stone-300">
+                                                    <input type="checkbox" :checked="!!getAdvancedUiFieldValue(field)" @change="setAdvancedUiFieldValue(field, $event.target.checked)" class="accent-amber-500">
+                                                    <span>{{ field.placeholder || '启用' }}</span>
+                                                </label>
+                                                <select v-else-if="field.type === 'select'"
+                                                        :value="getAdvancedUiFieldValue(field)"
+                                                        @change="setAdvancedUiFieldValue(field, $event.target.value)"
+                                                        class="w-full rounded-lg border border-stone-200 bg-stone-50/60 px-3 py-2 text-sm text-stone-800 outline-none transition focus:border-amber-400 dark:border-stone-700 dark:bg-stone-900/60 dark:text-stone-100">
+                                                    <option v-for="option in field.options" :key="field.key + '-' + option.value" :value="option.value">{{ option.label }}</option>
+                                                </select>
+                                                <div v-else-if="field.type === 'image'" class="space-y-2">
+                                                    <div class="flex items-center gap-2">
+                                                        <label class="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-sm text-stone-700 transition hover:border-amber-400 dark:border-stone-700 dark:bg-stone-900 dark:text-stone-200">
+                                                            <span v-html="$icons.image"></span>
+                                                            <span>选择图片</span>
+                                                            <input type="file" accept="image/png,image/jpeg,image/webp,image/gif" class="hidden" @change="uploadAdvancedUiImage(field, $event)">
+                                                        </label>
+                                                        <button v-if="getAdvancedUiFieldValue(field)" type="button" title="移除参考图片" @click="setAdvancedUiFieldValue(field, '')"
+                                                                class="grid h-9 w-9 place-items-center rounded-lg border border-stone-200 text-stone-400 transition hover:border-rose-300 hover:text-rose-500 dark:border-stone-700"
+                                                                v-html="$icons.trash"></button>
+                                                    </div>
+                                                    <p class="break-all text-[10px] text-stone-400">{{ getAdvancedUiFieldValue(field) || '未选择，按文生图模式运行' }}</p>
+                                                </div>
+                                                <input v-else
+                                                       :type="field.type === 'number' ? 'number' : (field.type === 'password' ? 'password' : 'text')"
+                                                       :value="getAdvancedUiFieldValue(field)"
+                                                       @input="setAdvancedUiFieldValue(field, $event.target.value)"
+                                                       :placeholder="field.placeholder"
+                                                       class="w-full rounded-lg border border-stone-200 bg-stone-50/60 px-3 py-2 text-sm text-stone-800 outline-none transition focus:border-amber-400 dark:border-stone-700 dark:bg-stone-900/60 dark:text-stone-100">
+                                                <p v-if="field.help" class="mt-1.5 text-[10px] leading-4 text-stone-400">{{ field.help }}</p>
+                                            </div>
+                                        </div>
+                                    </details>
                                 </div>
                             </div>
                         </div>

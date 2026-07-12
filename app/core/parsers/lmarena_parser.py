@@ -154,6 +154,29 @@ class LmarenaParser(ResponseParser):
         self._last_debug_summary: Dict[str, Any] = {}
         self._last_debug_raw_signature = ""
 
+    @staticmethod
+    def _content_delta(accumulated: str, candidate: str) -> tuple[str, str]:
+        """Return unseen text and the new accumulated value for repeated SSE bodies."""
+        if not candidate:
+            return "", accumulated
+        if not accumulated:
+            return candidate, candidate
+        if candidate == accumulated or accumulated.startswith(candidate):
+            return "", accumulated
+        if candidate.startswith(accumulated):
+            return candidate[len(accumulated):], candidate
+
+        max_overlap = min(len(accumulated), len(candidate))
+        for overlap in range(max_overlap, 0, -1):
+            if accumulated.endswith(candidate[:overlap]):
+                delta = candidate[overlap:]
+                return delta, accumulated + delta
+
+        # A parser instance belongs to one response stream. A body that neither
+        # extends nor overlaps the emitted text is a stale/non-monotonic replay;
+        # emitting it wholesale would duplicate the response already sent.
+        return "", accumulated
+
     # ============ 对外接口 ============
 
     def parse_chunk(self, raw_response: str) -> Dict[str, Any]:
@@ -238,14 +261,12 @@ class LmarenaParser(ResponseParser):
             new_content = "".join(content_parts)
 
             if new_content:
-                if self._accumulated and new_content == self._accumulated:
+                delta, next_accumulated = self._content_delta(self._accumulated, new_content)
+                if self._accumulated and not delta:
                     logger.debug("[LmarenaParser] 检测到重复响应，跳过")
-                elif self._accumulated and new_content.startswith(self._accumulated):
-                    result["content"] = new_content[len(self._accumulated):]
-                    self._accumulated = new_content
                 else:
-                    result["content"] = new_content
-                    self._accumulated = new_content
+                    result["content"] = delta
+                self._accumulated = next_accumulated
 
             if images:
                 result["images"] = images

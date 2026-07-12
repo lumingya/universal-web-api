@@ -7,8 +7,12 @@ app/api/cmd_routes.py - 命令系统 API 路由
 - 手动触发（调试用）
 """
 
+import base64
+import binascii
 import json
 import time
+import uuid
+from pathlib import Path
 from typing import Optional, List
 
 from fastapi import APIRouter, HTTPException, Depends
@@ -17,11 +21,16 @@ from pydantic import BaseModel, Field
 from app.core.config import get_logger
 from app.api.deps import verify_dashboard_auth as verify_auth
 from app.services.command_engine import command_engine
+from app.services.command_result_store import clear_command_results, list_command_results
 from app.services.request_manager import request_manager, RequestStatus
 
 logger = get_logger("API.CMD")
 
 router = APIRouter(tags=["commands"])
+
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_COMMAND_IMAGE_DIR = _PROJECT_ROOT / "temp" / "command_images"
+_MAX_COMMAND_IMAGE_BYTES = 25 * 1024 * 1024
 
 
 SECRET_PLACEHOLDER = "__SECRET_REDACTED__"
@@ -400,7 +409,49 @@ class CommandGroupExecuteRequest(BaseModel):
     acquire_policy: str = Field(default="inherit_session")
 
 
+class CommandImageUploadRequest(BaseModel):
+    filename: str = Field(default="image.png", max_length=255)
+    data_url: str = Field(min_length=1)
+
+
 # ================= 路由 =================
+
+@router.post("/api/commands/assets/image")
+async def upload_command_image(
+    request: CommandImageUploadRequest,
+    authenticated: bool = Depends(verify_auth),
+):
+    encoded = str(request.data_url or "")
+    if "," in encoded:
+        encoded = encoded.split(",", 1)[1]
+    try:
+        payload = base64.b64decode(encoded, validate=True)
+    except (ValueError, binascii.Error) as error:
+        raise HTTPException(status_code=400, detail="图片数据不是有效的 Base64") from error
+    if not payload or len(payload) > _MAX_COMMAND_IMAGE_BYTES:
+        raise HTTPException(status_code=400, detail="图片必须小于 25 MB")
+
+    try:
+        from PIL import Image
+
+        from io import BytesIO
+
+        with Image.open(BytesIO(payload)) as image:
+            image.verify()
+            image_format = str(image.format or "").lower()
+    except Exception as error:
+        raise HTTPException(status_code=400, detail="上传内容不是有效图片") from error
+
+    suffixes = {"png": ".png", "jpeg": ".jpg", "webp": ".webp", "gif": ".gif"}
+    suffix = suffixes.get(image_format)
+    if not suffix:
+        raise HTTPException(status_code=400, detail=f"不支持的图片格式: {image_format or 'unknown'}")
+
+    _COMMAND_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+    destination = _COMMAND_IMAGE_DIR / f"{uuid.uuid4().hex}{suffix}"
+    destination.write_bytes(payload)
+    return {"path": str(destination.resolve()), "filename": Path(request.filename).name, "size": len(payload)}
+
 
 @router.get("/api/commands")
 async def list_commands(authenticated: bool = Depends(verify_auth)):
@@ -419,6 +470,25 @@ async def get_meta(authenticated: bool = Depends(verify_auth)):
 @router.get("/api/commands/states")
 async def get_trigger_states(authenticated: bool = Depends(verify_auth)):
     return {"states": command_engine.get_trigger_states()}
+
+
+@router.get("/api/commands/{command_id}/results")
+async def get_persistent_command_results(command_id: str, authenticated: bool = Depends(verify_auth)):
+    if not command_engine.get_command(command_id):
+        raise HTTPException(status_code=404, detail="命令不存在")
+    records = list_command_results(command_id)
+    return {"records": records, "count": len(records)}
+
+
+@router.delete("/api/commands/{command_id}/results")
+async def delete_persistent_command_results(
+    command_id: str,
+    rule_id: str = "",
+    authenticated: bool = Depends(verify_auth),
+):
+    if not command_engine.get_command(command_id):
+        raise HTTPException(status_code=404, detail="命令不存在")
+    return {"success": True, "removed": clear_command_results(command_id, rule_id=rule_id)}
 
 
 @router.get("/api/commands/{command_id}")

@@ -185,6 +185,7 @@ window.CommandsTabMethods = {
             next.kind = kind === 'form' ? 'form' : 'none';
             next.title = String(next.title || '').trim();
             next.description = String(next.description || '').trim();
+            next.results_enabled = !!next.results_enabled;
             next.fields = Array.isArray(next.fields)
                 ? next.fields
                     .filter(field => field && typeof field === 'object')
@@ -206,7 +207,7 @@ window.CommandsTabMethods = {
 
         normalizeAdvancedUiField(field) {
             const kind = String(field?.type || 'text').trim().toLowerCase();
-            const type = ['text', 'textarea', 'number', 'boolean', 'select', 'password'].includes(kind)
+            const type = ['text', 'textarea', 'number', 'boolean', 'select', 'password', 'rule_list', 'image'].includes(kind)
                 ? kind
                 : 'text';
             const options = Array.isArray(field?.options) ? field.options.filter(option => option !== undefined && option !== null).map(option => {
@@ -228,7 +229,10 @@ window.CommandsTabMethods = {
                 default: field?.default,
                 required: !!field?.required,
                 rows: Number.isFinite(Number(field?.rows)) ? Number(field.rows) : 3,
-                options
+                options,
+                item_defaults: field?.item_defaults && typeof field.item_defaults === 'object'
+                    ? { ...field.item_defaults }
+                    : {}
             };
         },
 
@@ -242,10 +246,16 @@ window.CommandsTabMethods = {
                 if (field.type === 'boolean') {
                     return !!field.default;
                 }
+                if (field.type === 'rule_list') {
+                    return Array.isArray(field.default) ? JSON.parse(JSON.stringify(field.default)) : [];
+                }
                 return field.default;
             }
             if (field.type === 'boolean') {
                 return false;
+            }
+            if (field.type === 'rule_list') {
+                return [];
             }
             return '';
         },
@@ -278,6 +288,133 @@ window.CommandsTabMethods = {
                 ...(this.editingCommand.advanced_ui || {}),
                 values: nextValues
             };
+        },
+
+        async uploadAdvancedUiImage(field, event) {
+            const input = event?.target;
+            const file = input?.files?.[0];
+            if (!file) return;
+            try {
+                if (!String(file.type || '').startsWith('image/')) {
+                    throw new Error('请选择图片文件');
+                }
+                if (file.size > 25 * 1024 * 1024) {
+                    throw new Error('图片必须小于 25 MB');
+                }
+                const dataUrl = await new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = () => resolve(String(reader.result || ''));
+                    reader.onerror = () => reject(new Error('读取图片失败'));
+                    reader.readAsDataURL(file);
+                });
+                const result = await this.apiRequest('/api/commands/assets/image', {
+                    method: 'POST',
+                    body: JSON.stringify({ filename: file.name, data_url: dataUrl })
+                });
+                this.setAdvancedUiFieldValue(field, result.path || '');
+                this.$emit('notify', { type: 'success', message: '参考图片已上传' });
+            } catch (error) {
+                this.$emit('notify', { type: 'error', message: '上传图片失败: ' + error.message });
+            } finally {
+                if (input) input.value = '';
+            }
+        },
+
+        getRuleList(field) {
+            const value = this.getAdvancedUiFieldValue(field);
+            return Array.isArray(value) ? value : [];
+        },
+
+        addAdvancedRule(field) {
+            const rules = this.getRuleList(field).map(item => ({ ...item }));
+            const sequence = rules.length + 1;
+            rules.push({
+                id: 'rule-' + Date.now().toString(36) + '-' + sequence,
+                enabled: true,
+                name: '规则 ' + sequence,
+                model_name: 'model-' + sequence,
+                required_all: '',
+                required_any: '',
+                excluded: '',
+                detector_keyword: '',
+                drawer_group: '',
+                title_template: '《{profile}》-{model}-{index:03d}',
+                ...(field.item_defaults || {})
+            });
+            this.setAdvancedUiFieldValue(field, rules);
+            this.selectedAdvancedRuleIndex = rules.length - 1;
+        },
+
+        selectAdvancedRule(index) {
+            this.selectedAdvancedRuleIndex = Math.max(0, Number(index) || 0);
+        },
+
+        getSelectedAdvancedRule(field) {
+            const rules = this.getRuleList(field);
+            if (!rules.length) return null;
+            const index = Math.min(Math.max(0, this.selectedAdvancedRuleIndex), rules.length - 1);
+            return rules[index] || null;
+        },
+
+        getSelectedRuleResults(field) {
+            const rule = this.getSelectedAdvancedRule(field);
+            if (!rule) return [];
+            const ruleId = String(rule.id || '').trim();
+            return this.commandResults.filter(item => String(item.rule_id || '').trim() === ruleId);
+        },
+
+        updateAdvancedRule(field, index, key, value) {
+            const rules = this.getRuleList(field).map(item => ({ ...item }));
+            if (!rules[index]) return;
+            rules[index][key] = value;
+            this.setAdvancedUiFieldValue(field, rules);
+        },
+
+        removeAdvancedRule(field, index) {
+            const rules = this.getRuleList(field).map(item => ({ ...item }));
+            rules.splice(index, 1);
+            this.setAdvancedUiFieldValue(field, rules);
+            this.selectedAdvancedRuleIndex = Math.max(0, Math.min(this.selectedAdvancedRuleIndex, rules.length - 1));
+        },
+
+        async loadCommandResults(silent = false) {
+            if (!this.editingCommand?.id || this.isNew || !this.advancedUiResultsEnabled) {
+                this.commandResults = [];
+                return;
+            }
+            if (!silent) this.commandResultsLoading = true;
+            try {
+                const data = await this.apiRequest('/api/commands/' + encodeURIComponent(this.editingCommand.id) + '/results');
+                this.commandResults = Array.isArray(data.records) ? data.records : [];
+            } catch (e) {
+                if (!silent) this.$emit('notify', { type: 'error', message: '加载结果失败: ' + e.message });
+            } finally {
+                if (!silent) this.commandResultsLoading = false;
+            }
+        },
+
+        async clearCommandResults() {
+            if (!this.editingCommand?.id || !window.confirm('确定清空这个命令的全部持久化结果吗？')) return;
+            await this.apiRequest('/api/commands/' + encodeURIComponent(this.editingCommand.id) + '/results', { method: 'DELETE' });
+            this.commandResults = [];
+            this.$emit('notify', { type: 'success', message: '结果已清空' });
+        },
+
+        async clearSelectedRuleResults(field) {
+            const rule = this.getSelectedAdvancedRule(field);
+            if (!this.editingCommand?.id || !rule?.id) return;
+            if (!window.confirm('确定清空当前模板的持久化结果吗？')) return;
+            const url = '/api/commands/' + encodeURIComponent(this.editingCommand.id)
+                + '/results?rule_id=' + encodeURIComponent(rule.id);
+            await this.apiRequest(url, { method: 'DELETE' });
+            const ruleId = String(rule.id);
+            this.commandResults = this.commandResults.filter(item => String(item.rule_id) !== ruleId);
+            this.$emit('notify', { type: 'success', message: '当前模板结果已清空' });
+        },
+
+        formatCommandResultTime(value) {
+            const date = new Date(Number(value || 0) * 1000);
+            return Number.isNaN(date.getTime()) ? '' : date.toLocaleString();
         },
 
         getAdvancedUiDefaultText() {
@@ -953,6 +1090,9 @@ window.CommandsTabMethods = {
                 .then(() => this.loadPresetOptions())
                 .finally(() => this.resetEditorViewport());
             this.resetEditorViewport();
+            this.commandResults = [];
+            this.selectedAdvancedRuleIndex = 0;
+            this.loadCommandResults();
         },
 
         addAction() {

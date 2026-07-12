@@ -290,6 +290,30 @@ window.CommandsTabComputed = {
             const fields = this.advancedUiConfig.fields;
             return Array.isArray(fields) ? fields : [];
         },
+        advancedUiRuleFields() {
+            return this.advancedUiFields.filter(field => field.type === 'rule_list');
+        },
+        advancedUiGlobalFieldGroups() {
+            const fields = this.advancedUiFields.filter(field => field.type !== 'rule_list');
+            const definitions = [
+                { id: 'execution', label: '执行与内容', keys: ['total_runs', 'prompt_text', 'reference_image', 'random_insert_chars', 'wait_reply_timeout_sec'] },
+                { id: 'page', label: '页面交互', keys: ['message_selector', 'send_selector', 'new_chat_selector', 'agree_selector', 'redirect_url'] },
+                { id: 'retry', label: '重试与恢复', keys: ['new_chat_ready_timeout_sec', 'new_chat_retry_attempts', 'new_chat_retry_delay_sec'] },
+                { id: 'integration', label: '外部集成', keys: ['link_drawer_path', 'controlled_browser_api_url', 'detector_url'] },
+                { id: 'legacy', label: '兼容设置', keys: ['arena_detector_enabled', 'arena_detector_model_keyword'] },
+            ];
+            const assigned = new Set();
+            const groups = definitions.map(definition => {
+                const groupedFields = definition.keys
+                    .map(key => fields.find(field => field.key === key))
+                    .filter(Boolean);
+                groupedFields.forEach(field => assigned.add(field.key));
+                return { ...definition, fields: groupedFields };
+            }).filter(group => group.fields.length);
+            const remaining = fields.filter(field => !assigned.has(field.key));
+            if (remaining.length) groups.push({ id: 'other', label: '其他设置', fields: remaining });
+            return groups;
+        },
         hasAdvancedUiForm() {
             return String(this.advancedUiConfig.kind || '').trim().toLowerCase() === 'form'
                 && this.advancedUiFields.length > 0;
@@ -298,7 +322,14 @@ window.CommandsTabComputed = {
             return String(this.advancedUiConfig.title || '').trim() || '高级命令配置';
         },
         advancedUiDescription() {
+            if (this.advancedUiFields.some(field => field.type === 'rule_list')) {
+                return '同一轮回复会交给所有模板独立筛选；命中 URL 持久化到结果区，并可按模板写入链接抽屉分组。';
+            }
             return String(this.advancedUiConfig.description || '').trim();
+        },
+        advancedUiResultsEnabled() {
+            return !!this.advancedUiConfig.results_enabled
+                || this.advancedUiFields.some(field => field.type === 'rule_list');
         },
         scriptPlaceholder() {
             if (!this.editingCommand) return '';

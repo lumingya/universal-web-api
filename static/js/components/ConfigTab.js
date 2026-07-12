@@ -1088,6 +1088,7 @@ window.ConfigTab = {
 
         async persistSiteAdvancedConfig(nextAdvanced, previousAdvanced, options = {}) {
             const presetScoped = !!options.presetScoped;
+            const saveSeq = Number(options.saveSeq || 0);
             const previousTarget = previousAdvanced || {};
             const domain = this.currentDomain;
             const preset = this.selectedPreset;
@@ -1105,6 +1106,7 @@ window.ConfigTab = {
                 if (
                     domain !== this.currentDomain
                     || (presetScoped && preset !== this.selectedPreset)
+                    || (saveSeq && saveSeq !== this.advancedConfigSaveSeq)
                 ) {
                     return false;
                 }
@@ -1122,6 +1124,7 @@ window.ConfigTab = {
                 if (
                     domain !== this.currentDomain
                     || (presetScoped && preset !== this.selectedPreset)
+                    || (saveSeq && saveSeq !== this.advancedConfigSaveSeq)
                 ) {
                     return false;
                 }
@@ -1168,7 +1171,7 @@ window.ConfigTab = {
             });
 
             try {
-                await this.persistSiteAdvancedConfig(nextAdvanced, previousAdvanced);
+                await this.persistSiteAdvancedConfig(nextAdvanced, previousAdvanced, { saveSeq });
             } catch (e) {
                 console.error('保存站点高级配置失败:', e);
                 alert('保存失败: ' + e.message);
@@ -1191,7 +1194,7 @@ window.ConfigTab = {
             });
 
             try {
-                await this.persistSiteAdvancedConfig(nextAdvanced, previousAdvanced);
+                await this.persistSiteAdvancedConfig(nextAdvanced, previousAdvanced, { saveSeq });
             } catch (e) {
                 console.error('保存站点高级配置失败:', e);
                 alert('保存失败: ' + e.message);
@@ -1211,7 +1214,7 @@ window.ConfigTab = {
             this.assignPresetAdvanced(this.filterPresetAdvancedFields(nextAdvanced));
 
             try {
-                await this.persistSiteAdvancedConfig(nextAdvanced, previousAdvanced, { presetScoped: true });
+                await this.persistSiteAdvancedConfig(nextAdvanced, previousAdvanced, { presetScoped: true, saveSeq });
             } catch (e) {
                 console.error('保存预设高级配置失败:', e);
                 alert('保存失败: ' + e.message);
@@ -1231,7 +1234,7 @@ window.ConfigTab = {
             this.assignPresetAdvanced(this.filterPresetAdvancedFields(nextAdvanced));
 
             try {
-                await this.persistSiteAdvancedConfig(nextAdvanced, previousAdvanced, { presetScoped: true });
+                await this.persistSiteAdvancedConfig(nextAdvanced, previousAdvanced, { presetScoped: true, saveSeq });
             } catch (e) {
                 console.error('保存预设高级配置失败:', e);
                 alert('保存失败: ' + e.message);
@@ -1251,7 +1254,7 @@ window.ConfigTab = {
             this.assignPresetAdvanced(this.filterPresetAdvancedFields(nextAdvanced));
 
             try {
-                await this.persistSiteAdvancedConfig(nextAdvanced, previousAdvanced, { presetScoped: true });
+                await this.persistSiteAdvancedConfig(nextAdvanced, previousAdvanced, { presetScoped: true, saveSeq });
             } catch (e) {
                 console.error('保存预设高级配置失败:', e);
                 alert('保存失败: ' + e.message);
@@ -1271,7 +1274,7 @@ window.ConfigTab = {
             this.assignPresetAdvanced(this.filterPresetAdvancedFields(nextAdvanced));
 
             try {
-                await this.persistSiteAdvancedConfig(nextAdvanced, previousAdvanced, { presetScoped: true });
+                await this.persistSiteAdvancedConfig(nextAdvanced, previousAdvanced, { presetScoped: true, saveSeq });
             } catch (e) {
                 console.error('保存预设高级配置失败:', e);
                 alert('保存失败: ' + e.message);
@@ -1291,7 +1294,7 @@ window.ConfigTab = {
             this.assignPresetAdvanced(this.filterPresetAdvancedFields(nextAdvanced));
 
             try {
-                await this.persistSiteAdvancedConfig(nextAdvanced, previousAdvanced, { presetScoped: true });
+                await this.persistSiteAdvancedConfig(nextAdvanced, previousAdvanced, { presetScoped: true, saveSeq });
             } catch (e) {
                 console.error('保存预设高级配置失败:', e);
                 alert('保存失败: ' + e.message);
@@ -1311,7 +1314,7 @@ window.ConfigTab = {
             this.assignPresetAdvanced(this.filterPresetAdvancedFields(nextAdvanced));
 
             try {
-                await this.persistSiteAdvancedConfig(nextAdvanced, previousAdvanced, { presetScoped: true });
+                await this.persistSiteAdvancedConfig(nextAdvanced, previousAdvanced, { presetScoped: true, saveSeq });
             } catch (e) {
                 console.error('保存预设高级配置失败:', e);
                 alert('保存失败: ' + e.message);
@@ -1331,7 +1334,7 @@ window.ConfigTab = {
             this.assignPresetAdvanced(this.filterPresetAdvancedFields(nextAdvanced));
 
             try {
-                await this.persistSiteAdvancedConfig(nextAdvanced, previousAdvanced, { presetScoped: true });
+                await this.persistSiteAdvancedConfig(nextAdvanced, previousAdvanced, { presetScoped: true, saveSeq });
             } catch (e) {
                 console.error('保存预设高级配置失败:', e);
                 alert('保存失败: ' + e.message);
@@ -1351,7 +1354,7 @@ window.ConfigTab = {
             this.assignPresetAdvanced(this.filterPresetAdvancedFields(nextAdvanced));
 
             try {
-                await this.persistSiteAdvancedConfig(nextAdvanced, previousAdvanced, { presetScoped: true });
+                await this.persistSiteAdvancedConfig(nextAdvanced, previousAdvanced, { presetScoped: true, saveSeq });
             } catch (e) {
                 console.error('保存预设高级配置失败:', e);
                 alert('保存失败: ' + e.message);

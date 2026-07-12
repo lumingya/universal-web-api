@@ -42,6 +42,7 @@ logs/
 config/app_stats.json
 config/model_name_overrides.local.json
 config/request_history.json
+config/command_results.local.json
 config/sites.local.json
 config/*.tmp
 
@@ -82,4 +83,6 @@ start_cpolar.py
 .playwright-cli/
 
 # Tests
-tests/
+tests/*
+!tests/test_browser_profile_identity.py
+!tests/test_command_result_store.py

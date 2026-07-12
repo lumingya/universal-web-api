@@ -110,6 +110,8 @@ class CommandEngineStorageMixin:
                 "select",
                 "json",
                 "password",
+                "rule_list",
+                "image",
             }:
                 continue
             normalized_fields.append({
@@ -122,6 +124,7 @@ class CommandEngineStorageMixin:
                 "required": bool(field.get("required", False)),
                 "options": field.get("options") if isinstance(field.get("options"), list) else [],
                 "rows": int(field.get("rows") or 0) if str(field.get("rows") or "").strip().isdigit() else field.get("rows"),
+                "item_defaults": field.get("item_defaults") if isinstance(field.get("item_defaults"), dict) else {},
             })
 
         values = ui.get("values")
@@ -132,6 +135,7 @@ class CommandEngineStorageMixin:
             "kind": kind,
             "title": title,
             "description": description,
+            "results_enabled": bool(ui.get("results_enabled", False)),
             "fields": normalized_fields,
             "values": values,
         }

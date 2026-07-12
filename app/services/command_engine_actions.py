@@ -25,7 +25,9 @@ from app.core.request_transport import (
     get_default_request_transport_config,
 )
 from app.services.command_defs import ACTION_TYPES, TRIGGER_TYPES, CommandFlowAbort
+from app.services.command_result_store import record_arena_rule_candidates
 from app.services.sse_utils import iter_sse_payloads
+from app.utils.browser_profile_identity import resolve_tab_browser_profile
 from app.utils.site_url import extract_remote_site_domain
 
 if TYPE_CHECKING:
@@ -39,6 +41,23 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 
 
 class CommandEngineActionsMixin:
+    _ACTION_SOFT_FAILURE_PREFIXES = (
+        "cookies_clear_failed:",
+        "refresh_failed:",
+        "new_chat_button_not_found",
+        "new_chat_selector_missing",
+        "new_chat_failed:",
+        "js_failed:",
+        "js_file_read_failed:",
+        "js_file_preinject_failed:",
+        "js_file_run_failed:",
+        "element_not_found:",
+        "click_element_failed:",
+        "click_element_skipped_no_selector",
+        "coordinates_click_failed:",
+        "navigate_failed:",
+        "navigate_skipped",
+    )
     _PYTHON_SANDBOX_ALLOWED_IMPORTS = frozenset({
         "datetime",
         "json",
@@ -63,7 +82,13 @@ class CommandEngineActionsMixin:
 
     @staticmethod
     def _is_action_soft_failure(action_result: Any) -> bool:
-        return isinstance(action_result, dict) and action_result.get("ok") is False
+        if isinstance(action_result, dict):
+            return action_result.get("ok") is False
+        if isinstance(action_result, str):
+            return action_result.startswith(
+                CommandEngineActionsMixin._ACTION_SOFT_FAILURE_PREFIXES
+            )
+        return False
 
     @staticmethod
     def _wrap_run_js_for_return(code: Any) -> Optional[str]:
@@ -3033,6 +3058,25 @@ return (() => {
                 "raise_if_command_loop_cancelled": _raise_if_command_loop_cancelled,
                 "result": "",
             }
+            collector_state = {"matched": 0, "records": []}
+
+            def _record_arena_candidates(info=None, prompt: str = "", source: str = "") -> Dict[str, Any]:
+                values = (command.get("advanced_ui") or {}).get("values") or {}
+                outcome = record_arena_rule_candidates(
+                    command_id=str(command.get("id") or ""),
+                    values=values if isinstance(values, dict) else {},
+                    info=info if isinstance(info, dict) else {},
+                    prompt=prompt,
+                    source=source,
+                    profile_resolver=lambda: resolve_tab_browser_profile(session.tab),
+                )
+                if outcome.get("identity_unresolved"):
+                    logger.warning("[CMD] Arena 命中结果未保存：无法读取命中标签页的浏览器个人资料名")
+                collector_state["matched"] += int(outcome.get("matched") or 0)
+                collector_state["records"].extend(outcome.get("recorded") or [])
+                return outcome
+
+            context["record_arena_rule_candidates"] = _record_arena_candidates
             globals_dict: Dict[str, Any] = {}
             try:
                 if self._command_env_flag("CMD_ALLOW_UNSAFE_PYTHON_COMMANDS", False):
@@ -3046,6 +3090,14 @@ return (() => {
                 globals_dict.update(context)
                 exec(script, globals_dict)
                 context.update(globals_dict)
+                if collector_state["records"]:
+                    grouped: Dict[str, int] = {}
+                    for item in collector_state["records"]:
+                        name = str(item.get("rule_name") or item.get("model_name") or "rule")
+                        grouped[name] = grouped.get(name, 0) + 1
+                    context["result"] = "多规则筛选新增结果：" + "，".join(
+                        f"{name} {count} 条" for name, count in grouped.items()
+                    )
                 logger.info("[CMD] Python 脚本执行完成")
                 return {"mode": "advanced", "result": context.get("result", ""), "steps": []}
             except Exception as e:

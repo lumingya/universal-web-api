@@ -50,6 +50,10 @@ window.CommandsTabComponent = {
             // 高级模式编辑器高度
             scriptEditorHeight: '300px',
             advancedEditorMode: 'ui',
+            commandResults: [],
+            commandResultsLoading: false,
+            commandResultsTimer: null,
+            selectedAdvancedRuleIndex: 0,
 
             // 代理切换默认配置
             proxyDefaults: {
@@ -170,6 +174,14 @@ window.CommandsTabComponent = {
         this.fetchMeta();
         this.fetchCommands();
         this.fetchBindingMeta();
+        this.commandResultsTimer = window.setInterval(() => {
+            if (this.showEditor && this.editingCommand && this.advancedUiResultsEnabled) {
+                this.loadCommandResults(true);
+            }
+        }, 5000);
+    },
+    beforeUnmount() {
+        if (this.commandResultsTimer) window.clearInterval(this.commandResultsTimer);
     },
     template: window.CommandsTabTemplate
 };
