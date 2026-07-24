@@ -146,10 +146,11 @@ class LmarenaParser(ResponseParser):
     响应格式: Vercel AI SDK Data Stream Protocol (行分隔)
     """
 
-    _PROTOCOL_PREFIXES = {"a0", "a2", "ad", "ae", "a3"}
+    _PROTOCOL_PREFIXES = {"a0", "a2", "ad", "ae", "a3", "ag", "bg"}
 
     def __init__(self) -> None:
         self._accumulated = ""
+        self._accumulated_reasoning = ""
         self._seen_image_refs: set[str] = set()
         self._last_debug_summary: Dict[str, Any] = {}
         self._last_debug_raw_signature = ""
@@ -193,6 +194,7 @@ class LmarenaParser(ResponseParser):
         """
         result: Dict[str, Any] = {
             "content": "",
+            "reasoning_content": "",
             "images": [],
             "done": False,
             "error": None,
@@ -211,6 +213,7 @@ class LmarenaParser(ResponseParser):
 
         try:
             content_parts: list[str] = []
+            reasoning_parts: list[str] = []
             images: list[Dict[str, Any]] = []
             done = False
             line_count = 0
@@ -247,6 +250,16 @@ class LmarenaParser(ResponseParser):
                             "payload_preview": payload[:160],
                         })
 
+                elif prefix in {"ag", "bg"}:
+                    text = self._parse_text_chunk(payload)
+                    if text is not None:
+                        reasoning_parts.append(text)
+                    else:
+                        parse_errors.append({
+                            "prefix": prefix,
+                            "payload_preview": payload[:160],
+                        })
+
                 elif prefix == "a2":
                     images.extend(
                         _extract_arena_image_items(
@@ -267,14 +280,23 @@ class LmarenaParser(ResponseParser):
                         done = True
 
             new_content = "".join(content_parts)
+            new_reasoning = "".join(reasoning_parts)
 
             if new_content:
                 delta, next_accumulated = self._content_delta(self._accumulated, new_content)
                 if self._accumulated and not delta:
-                    logger.debug("[LmarenaParser] 检测到重复响应，跳过")
+                    logger.debug("[LmarenaParser] 检测到重复正文响应，跳过")
                 else:
                     result["content"] = delta
                 self._accumulated = next_accumulated
+
+            if new_reasoning:
+                delta_r, next_acc_r = self._content_delta(self._accumulated_reasoning, new_reasoning)
+                if self._accumulated_reasoning and not delta_r:
+                    logger.debug("[LmarenaParser] 检测到重复思考响应，跳过")
+                else:
+                    result["reasoning_content"] = delta_r
+                self._accumulated_reasoning = next_acc_r
 
             if images:
                 result["images"] = images
@@ -288,6 +310,9 @@ class LmarenaParser(ResponseParser):
                 "content_candidate_len": len(new_content),
                 "emitted_content_len": len(str(result.get("content") or "")),
                 "accumulated_len": len(self._accumulated),
+                "reasoning_candidate_len": len(new_reasoning),
+                "emitted_reasoning_len": len(str(result.get("reasoning_content") or "")),
+                "accumulated_reasoning_len": len(self._accumulated_reasoning),
                 "done": bool(done),
                 "error": str(result.get("error") or ""),
                 "image_count": len(images),
@@ -309,6 +334,7 @@ class LmarenaParser(ResponseParser):
     def reset(self) -> None:
         """重置状态"""
         self._accumulated = ""
+        self._accumulated_reasoning = ""
         self._seen_image_refs.clear()
         self._last_debug_summary = {}
         self._last_debug_raw_signature = ""

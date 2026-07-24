@@ -1877,6 +1877,11 @@ window.CommandsTabTemplate = `
                                                         <input :value="getSelectedAdvancedRule(field).detector_keyword" @input="updateAdvancedRule(field, selectedAdvancedRuleIndex, 'detector_keyword', $event.target.value)"
                                                                class="w-full rounded-lg border border-stone-200 bg-stone-50/60 px-3 py-2 text-sm font-normal normal-case text-stone-800 outline-none transition placeholder:text-stone-400 focus:border-amber-400 dark:border-stone-700 dark:bg-stone-900/60 dark:text-stone-100" placeholder="留空则不调用 Detector">
                                                     </label>
+                                                    <label class="col-span-full flex cursor-pointer select-none items-center gap-2 text-[11px] font-semibold uppercase text-stone-500">
+                                                        <input type="checkbox" :checked="getSelectedAdvancedRule(field).exclude_reasoning" @change="updateAdvancedRule(field, selectedAdvancedRuleIndex, 'exclude_reasoning', $event.target.checked)"
+                                                               class="rounded border-stone-300 text-amber-500 focus:ring-amber-400 dark:border-stone-700 dark:bg-stone-900">
+                                                        排除有思维链的模型
+                                                    </label>
                                                 </div>
 
                                                 <div class="mt-5 border-t border-stone-100 pt-4 dark:border-stone-800">

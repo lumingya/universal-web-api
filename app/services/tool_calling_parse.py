@@ -8,19 +8,12 @@ import html
 import json
 import re
 import time
-import xml.etree.ElementTree as ET
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+import json_repair
+from bs4 import BeautifulSoup, NavigableString, Tag
+
 from app.services.sse_utils import sse_frame_data_text
-
-try:
-    from defusedxml import ElementTree as SafeET
-    from defusedxml.common import DefusedXmlException
-except Exception:  # pragma: no cover - optional dependency fallback
-    SafeET = None
-
-    class DefusedXmlException(Exception):
-        pass
 
 from app.services.tool_calling_common import (
     _LEGACY_XML_ARG_TAG,
@@ -598,589 +591,19 @@ def _decode_tool_arguments(tool_call: Dict[str, Any]) -> Optional[Dict[str, Any]
     return None
 
 
-_WINDOWS_PATH_IN_JSON_STRING_RE = re.compile(r"(^|[^\w])(?:[A-Za-z]:\\|\\\\)")
-
-
-def _escape_windows_path_backslashes_in_json_strings(text: str) -> str:
-    value = str(text or "")
-    repaired: List[str] = []
-    i = 0
-    while i < len(value):
-        if value[i] != '"':
-            repaired.append(value[i])
-            i += 1
-            continue
-
-        start = i
-        i += 1
-        body_chars: List[str] = []
-        escape = False
-        while i < len(value):
-            ch = value[i]
-            if ch == '"' and not escape:
-                break
-            body_chars.append(ch)
-            if escape:
-                escape = False
-            elif ch == "\\":
-                escape = True
-            i += 1
-
-        body = "".join(body_chars)
-        if _WINDOWS_PATH_IN_JSON_STRING_RE.search(body):
-            body = _escape_single_windows_path_backslashes(body)
-
-        repaired.append('"')
-        repaired.append(body)
-        if i < len(value) and value[i] == '"':
-            repaired.append('"')
-            i += 1
-        else:
-            repaired.append(value[start + 1 + len(body_chars) :])
-            break
-
-    return "".join(repaired)
-
-
-def _escape_single_windows_path_backslashes(body: str) -> str:
-    repaired: List[str] = []
-    i = 0
-    while i < len(body):
-        ch = body[i]
-        if ch != "\\":
-            repaired.append(ch)
-            i += 1
-            continue
-
-        if i + 1 < len(body) and body[i + 1] == "\\":
-            repaired.append("\\\\")
-            i += 2
-            continue
-
-        repaired.append("\\\\")
-        i += 1
-    return "".join(repaired)
-
-
 def _repair_json_like_argument_string(raw: str) -> str:
+    """Return canonical JSON repaired by json-repair, or the original text."""
     text = str(raw or "")
     stripped = text.lstrip()
     if not stripped or stripped[0] not in "{[":
         return text
-
-    text = _escape_windows_path_backslashes_in_json_strings(text)
-    text = _escape_control_chars_in_json_strings(text)
-
-    # Best-effort fix for nested JSON strings carrying Windows paths like
-    # {"path":"C:\Users\QIU\Desktop"} which are invalid inner JSON after the
-    # outer layer has already consumed one round of escaping.
-    repaired_chars: List[str] = []
-    i = 0
-    while i < len(text):
-        ch = text[i]
-        if ch != "\\":
-            repaired_chars.append(ch)
-            i += 1
-            continue
-
-        next_ch = text[i + 1] if i + 1 < len(text) else ""
-        if next_ch in {'"', "\\", "/", "b", "f", "n", "r", "t"}:
-            repaired_chars.append(ch)
-            repaired_chars.append(next_ch)
-            i += 2
-            continue
-        elif next_ch == "u" and i + 5 < len(text):
-            repaired_chars.append(text[i : i + 6])
-            i += 6
-            continue
-
-        repaired_chars.append("\\\\")
-        i += 1
-
-    repaired_text = _repair_unescaped_inner_quotes("".join(repaired_chars))
-    repaired_text = _repair_object_key_separators(repaired_text)
-    return _close_unmatched_json_delimiters(repaired_text)
-
-
-def _close_unmatched_json_delimiters(text: str) -> str:
-    value = str(text or "")
-    if not value:
-        return value
-
-    trimmed = value.rstrip()
-    if not trimmed:
-        return trimmed
-
-    closing_stack: List[str] = []
-    repaired_chars: List[str] = []
-    in_string = False
-    escape = False
-    mismatch_found = False
-
-    for ch in trimmed:
-        if in_string:
-            repaired_chars.append(ch)
-            if escape:
-                escape = False
-            elif ch == "\\":
-                escape = True
-            elif ch == '"':
-                in_string = False
-            continue
-
-        if ch == '"':
-            repaired_chars.append(ch)
-            in_string = True
-            continue
-        if ch == "{":
-            repaired_chars.append(ch)
-            closing_stack.append("}")
-            continue
-        if ch == "[":
-            repaired_chars.append(ch)
-            closing_stack.append("]")
-            continue
-        if ch in {"}", "]"}:
-            if closing_stack and closing_stack[-1] == ch:
-                closing_stack.pop()
-                repaired_chars.append(ch)
-            elif ch in closing_stack:
-                while closing_stack and closing_stack[-1] != ch:
-                    repaired_chars.append(closing_stack.pop())
-                if closing_stack and closing_stack[-1] == ch:
-                    closing_stack.pop()
-                    repaired_chars.append(ch)
-                else:
-                    mismatch_found = True
-                    break
-            else:
-                mismatch_found = True
-                break
-            continue
-
-        repaired_chars.append(ch)
-
-    if mismatch_found:
-        return value
-
-    repaired = "".join(repaired_chars)
-    if in_string:
-        if escape:
-            repaired += "\\"
-        repaired += '"'
-
-    repaired += "".join(reversed(closing_stack))
-    return _sanitize_truncated_json_tail(repaired)
-
-
-_TRUNCATED_JSON_LITERALS = {"t", "tr", "tru", "f", "fa", "fal", "fals", "n", "nu", "nul"}
-
-
-def _sanitize_truncated_json_tail(text: str) -> str:
-    repaired = str(text or "")
-    if not repaired:
-        return repaired
-
-    previous = None
-    while repaired != previous:
-        previous = repaired
-        repaired = _remove_trailing_commas_before_closers(repaired)
-        repaired = _remove_truncated_json_members_before_closers(repaired)
-        repaired = re.sub(r"[:,]\s*$", "", repaired)
-
-    return repaired
-
-
-def _remove_trailing_commas_before_closers(text: str) -> str:
-    value = str(text or "")
-    if not value:
-        return value
-
-    repaired: List[str] = []
-    index = 0
-    in_string = False
-    escape = False
-    while index < len(value):
-        ch = value[index]
-        if in_string:
-            repaired.append(ch)
-            if escape:
-                escape = False
-            elif ch == "\\":
-                escape = True
-            elif ch == '"':
-                in_string = False
-            index += 1
-            continue
-
-        if ch == '"':
-            repaired.append(ch)
-            in_string = True
-            index += 1
-            continue
-
-        if ch != ",":
-            repaired.append(ch)
-            index += 1
-            continue
-
-        scan = index + 1
-        while scan < len(value) and value[scan].isspace():
-            scan += 1
-        if scan < len(value) and value[scan] in "}]":
-            index += 1
-            continue
-
-        repaired.append(ch)
-        index += 1
-
-    return "".join(repaired)
-
-
-def _remove_truncated_json_members_before_closers(text: str) -> str:
-    value = str(text or "")
-    if not value:
-        return value
-
-    content_end = len(value)
-    while content_end > 0 and value[content_end - 1].isspace():
-        content_end -= 1
-
-    close_start = content_end
-    while close_start > 0 and value[close_start - 1] in "}]":
-        close_start -= 1
-
-    if close_start == content_end:
-        return value
-
-    prefix = value[:close_start]
-    suffix = value[close_start:content_end]
-    tail = value[content_end:]
-    boundary = _find_last_json_member_boundary(prefix)
-    if boundary == -1:
-        return value
-
-    boundary_char = prefix[boundary]
-    if boundary_char not in "{,[":
-        return value
-
-    candidate = prefix[boundary + 1 :]
-    if not (
-        _looks_like_truncated_json_object_member(candidate)
-        or (
-            boundary_char in {",", "["}
-            and _looks_like_truncated_json_array_item(candidate)
-        )
-    ):
-        return value
-
-    if boundary_char in {"{", "["}:
-        return prefix[: boundary + 1] + suffix + tail
-    return prefix[:boundary] + suffix + tail
-
-
-def _find_last_json_member_boundary(text: str) -> int:
-    in_string = False
-    escape = False
-    boundary = -1
-    for index, ch in enumerate(str(text or "")):
-        if in_string:
-            if escape:
-                escape = False
-            elif ch == "\\":
-                escape = True
-            elif ch == '"':
-                in_string = False
-            continue
-
-        if ch == '"':
-            in_string = True
-            continue
-        if ch in "{[,":
-            boundary = index
-    return boundary
-
-
-def _looks_like_truncated_json_object_member(fragment: str) -> bool:
-    value = str(fragment or "").lstrip()
-    if not value or value[0] != '"':
-        return False
-
-    key_end = _find_string_end(value, 0)
-    if key_end == -1:
-        return False
-
-    tail = value[key_end + 1 :].lstrip()
-    if not tail:
-        return True
-    if tail[0] != ":":
-        return False
-
-    value_tail = tail[1:].lstrip()
-    if not value_tail:
-        return True
-
-    return value_tail in _TRUNCATED_JSON_LITERALS
-
-
-def _looks_like_truncated_json_array_item(fragment: str) -> bool:
-    value = str(fragment or "").strip()
-    return value in _TRUNCATED_JSON_LITERALS
-
-
-def _escape_control_chars_in_json_strings(text: str) -> str:
-    repaired: List[str] = []
-    in_string = False
-    escape = False
-
-    for ch in text:
-        if not in_string:
-            repaired.append(ch)
-            if ch == '"':
-                in_string = True
-            continue
-
-        if escape:
-            repaired.append(ch)
-            escape = False
-            continue
-
-        if ch == "\\":
-            repaired.append(ch)
-            escape = True
-            continue
-
-        if ch == '"':
-            repaired.append(ch)
-            in_string = False
-            continue
-
-        if ch == "\n":
-            repaired.append("\\n")
-            continue
-        if ch == "\r":
-            repaired.append("\\r")
-            continue
-        if ch == "\t":
-            repaired.append("\\t")
-            continue
-
-        if ord(ch) < 0x20:
-            repaired.append(f"\\u{ord(ch):04x}")
-            continue
-
-        repaired.append(ch)
-
-    return "".join(repaired)
-
-
-def _repair_unescaped_inner_quotes(text: str) -> str:
-    repaired: List[str] = []
-    in_string = False
-    escape = False
-    i = 0
-
-    while i < len(text):
-        ch = text[i]
-
-        if not in_string:
-            repaired.append(ch)
-            if ch == '"':
-                in_string = True
-            i += 1
-            continue
-
-        if escape:
-            repaired.append(ch)
-            escape = False
-            i += 1
-            continue
-
-        if ch == "\\":
-            repaired.append(ch)
-            escape = True
-            i += 1
-            continue
-
-        if ch == '"':
-            if _looks_like_inner_quote(text, i):
-                repaired.append('\\"')
-            else:
-                repaired.append(ch)
-                in_string = False
-            i += 1
-            continue
-
-        repaired.append(ch)
-        i += 1
-
-    return "".join(repaired)
-
-
-def _repair_object_key_separators(text: str) -> str:
-    repaired: List[str] = []
-    in_string = False
-    escape = False
-    i = 0
-
-    while i < len(text):
-        ch = text[i]
-
-        if in_string:
-            repaired.append(ch)
-            if escape:
-                escape = False
-            elif ch == "\\":
-                escape = True
-            elif ch == '"':
-                in_string = False
-            i += 1
-            continue
-
-        if ch == '"' and _looks_like_quoted_key_start(text, i):
-            if _should_insert_missing_comma_before_key(repaired):
-                repaired.append(", ")
-            repaired.append(ch)
-            in_string = True
-            i += 1
-            continue
-
-        if _looks_like_bare_object_key(text, i):
-            if _should_insert_missing_comma_before_key(repaired):
-                repaired.append(", ")
-            key_end = _scan_identifier_end(text, i)
-            repaired.append(f'"{text[i:key_end]}"')
-            i = key_end
-            continue
-
-        repaired.append(ch)
-        i += 1
-
-    return "".join(repaired)
-
-
-def _looks_like_inner_quote(text: str, quote_index: int) -> bool:
-    next_index, next_char = _next_non_whitespace(text, quote_index + 1)
-    if next_char == "":
-        return False
-
-    if _looks_like_missing_comma_key_transition(text, quote_index):
-        return False
-
-    if next_char in {",", "}", "]", ":"}:
-        return False
-
-    if next_char == '"':
-        _, after_double = _next_non_whitespace(text, next_index + 1)
-        if after_double in {",", "}", "]"}:
-            return True
-
-    return True
-
-
-def _looks_like_missing_comma_key_transition(text: str, quote_index: int) -> bool:
-    next_index, next_char = _next_non_whitespace(text, quote_index + 1)
-    if next_char == "":
-        return False
-
-    if next_char == '"' and _looks_like_quoted_key_start(text, next_index):
-        return True
-
-    if next_char.isalpha() or next_char == "_":
-        key_end = _scan_identifier_end(text, next_index)
-        return _looks_like_object_key_value_boundary(text, key_end)
-
-    return False
-
-
-def _looks_like_quoted_key_start(text: str, start: int) -> bool:
-    if start < 0 or start >= len(text) or text[start] != '"':
-        return False
-
-    end = _find_string_end(text, start)
-    if end == -1:
-        return False
-
-    _, next_char = _next_non_whitespace(text, end + 1)
-    return next_char == ":"
-
-
-def _looks_like_bare_object_key(text: str, start: int) -> bool:
-    if start < 0 or start >= len(text):
-        return False
-
-    ch = text[start]
-    if not (ch.isalpha() or ch == "_"):
-        return False
-
-    prev_char = text[start - 1] if start > 0 else ""
-    if _is_identifier_char(prev_char):
-        return False
-
-    key_end = _scan_identifier_end(text, start)
-    return _looks_like_object_key_value_boundary(text, key_end)
-
-
-def _scan_identifier_end(text: str, start: int) -> int:
-    i = start
-    while i < len(text) and _is_identifier_char(text[i]):
-        i += 1
-    return i
-
-
-def _looks_like_object_key_value_boundary(text: str, key_end: int) -> bool:
-    colon_index, next_char = _next_non_whitespace(text, key_end)
-    if next_char != ":":
-        return False
-
-    _, value_start = _next_non_whitespace(text, colon_index + 1)
-    if value_start == "":
-        return False
-
-    return value_start in {'"', "{", "[", "-", "t", "f", "n"} or value_start.isdigit()
-
-
-def _is_identifier_char(ch: str) -> bool:
-    return ch.isalnum() or ch == "_"
-
-
-def _find_string_end(text: str, start: int) -> int:
-    escape = False
-    i = start + 1
-    while i < len(text):
-        ch = text[i]
-        if escape:
-            escape = False
-        elif ch == "\\":
-            escape = True
-        elif ch == '"':
-            return i
-        i += 1
-    return -1
-
-
-def _should_insert_missing_comma_before_key(repaired: List[str]) -> bool:
-    i = len(repaired) - 1
-    while i >= 0:
-        token = repaired[i]
-        if not token:
-            i -= 1
-            continue
-        for ch in reversed(token):
-            if ch.isspace():
-                continue
-            return ch not in {"{", "[", ",", ":"}
-        i -= 1
-    return False
-
-
-def _next_non_whitespace(text: str, start: int) -> Tuple[int, str]:
-    i = start
-    while i < len(text):
-        if not text[i].isspace():
-            return i, text[i]
-        i += 1
-    return -1, ""
+    try:
+        repaired = json_repair.loads(text)
+    except Exception:
+        return text
+    if not isinstance(repaired, (dict, list)):
+        return text
+    return json.dumps(repaired, ensure_ascii=False)
 
 
 _TOOL_XML_WRAPPER_OPEN_RE = re.compile(
@@ -1200,6 +623,7 @@ _TOOL_XML_INVOKE_CLOSE_RE = re.compile(
     flags=re.IGNORECASE,
 )
 _TOOL_XML_STRING_PARAM_NAMES = {
+    "code",
     "command",
     "content",
     "description",
@@ -1262,8 +686,8 @@ def _find_tool_xml_wrapper_blocks(text: str) -> List[str]:
             break
         block_end = _find_tool_xml_wrapper_end(masked, match.end())
         if block_end == -1:
-            search_from = match.end()
-            continue
+            blocks.append(text[match.start() :])
+            break
         blocks.append(text[match.start() : block_end])
         search_from = block_end
     return blocks
@@ -1376,15 +800,23 @@ def _normalize_tool_xml_markup(text: str) -> str:
     return str(text or "")
 
 
-def _safe_xml_fromstring(text: str) -> ET.Element:
+def _safe_xml_fromstring(text: str) -> Tag:
+    """Parse an LLM tool block with HTML recovery semantics."""
     value = str(text or "")
     if len(value) > _TOOL_XML_MAX_CHARS:
-        raise ET.ParseError("tool XML block exceeds maximum length")
+        raise ValueError("tool XML block exceeds maximum length")
     if _TOOL_XML_FORBIDDEN_DECL_RE.search(value):
-        raise ET.ParseError("DTD and entity declarations are not allowed in tool XML")
-    if SafeET is not None:
-        return SafeET.fromstring(value)
-    return ET.fromstring(value)
+        raise ValueError("DTD and entity declarations are not allowed in tool XML")
+
+    soup = BeautifulSoup(value, "html.parser")
+    root = soup.find(
+        lambda tag: isinstance(tag, Tag)
+        and _xml_local_name(tag.name).lower()
+        in {_PREFERRED_XML_WRAPPER_TAG, _LEGACY_XML_WRAPPER_TAG}
+    )
+    if not isinstance(root, Tag):
+        raise ValueError("tool XML wrapper not found")
+    return root
 
 
 def _xml_local_name(tag: Any) -> str:
@@ -1416,11 +848,25 @@ def _schema_prefers_string(schema: Any) -> bool:
     return False
 
 
+def _schema_property_name(schema: Any, field_name: str) -> str:
+    raw_name = str(field_name or "").strip()
+    if not isinstance(schema, dict):
+        return raw_name
+    properties = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
+    if raw_name in properties:
+        return raw_name
+    folded_name = raw_name.casefold()
+    return next(
+        (str(name) for name in properties if str(name).casefold() == folded_name),
+        raw_name,
+    )
+
+
 def _schema_property_schema(schema: Any, field_name: str) -> Optional[Dict[str, Any]]:
     if not isinstance(schema, dict):
         return None
     properties = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
-    prop_schema = properties.get(field_name)
+    prop_schema = properties.get(_schema_property_name(schema, field_name))
     if isinstance(prop_schema, dict):
         return prop_schema
     return None
@@ -1470,17 +916,21 @@ def _parse_xml_scalar_value(
 
 
 def _parse_xml_element_value(
-    element: ET.Element,
+    element: Tag,
     field_name: str = "",
     param_schema: Optional[Dict[str, Any]] = None,
 ) -> Any:
-    children = list(element)
+    children = element.find_all(recursive=False)
+    normalized_name = str(field_name or "").strip().lower()
+    if _schema_prefers_string(param_schema) or normalized_name in _TOOL_XML_STRING_PARAM_NAMES:
+        inner_markup = "".join(str(item) for item in element.contents)
+        return _parse_xml_scalar_value(inner_markup, field_name, param_schema)
     if not children:
-        return _parse_xml_scalar_value(element.text or "", field_name, param_schema)
+        return _parse_xml_scalar_value(element.get_text(), field_name, param_schema)
 
     result: Dict[str, Any] = {}
     for child in children:
-        child_name = _xml_local_name(child.tag)
+        child_name = _schema_property_name(param_schema, _xml_local_name(child.name))
         if not child_name:
             continue
         child_schema = _schema_property_schema(param_schema, child_name)
@@ -1495,28 +945,27 @@ def _parse_xml_element_value(
         items = result[item_key]
         return items if isinstance(items, list) else [items]
 
-    text_parts: List[str] = []
-    if element.text and element.text.strip():
-        text_parts.append(element.text)
-    for child in children:
-        if child.tail and child.tail.strip():
-            text_parts.append(child.tail)
+    text_parts = [
+        str(item)
+        for item in element.contents
+        if isinstance(item, NavigableString) and str(item).strip()
+    ]
     if text_parts:
         result["_text"] = _parse_xml_scalar_value("".join(text_parts), field_name, param_schema)
     return result
 
 
 def _parse_xml_invoke_arguments(
-    invoke: ET.Element,
+    invoke: Tag,
     tool_def: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
-    children = list(invoke)
+    children = invoke.find_all(recursive=False)
     if not children:
-        inner_text = str(invoke.text or "").strip()
+        inner_text = invoke.get_text().strip()
         if not inner_text:
             return {}
         try:
-            payload = json.loads(inner_text)
+            payload = json_repair.loads(inner_text)
         except Exception:
             return None
         if isinstance(payload, dict):
@@ -1530,16 +979,16 @@ def _parse_xml_invoke_arguments(
     arguments: Dict[str, Any] = {}
     parameters_schema = _tool_parameters_schema(tool_def)
     for child in children:
-        child_tag = _xml_local_name(child.tag)
+        child_tag = _xml_local_name(child.name)
         is_named_arg = child_tag.lower() in {
             _PREFERRED_XML_ARG_TAG,
             _LEGACY_XML_ARG_TAG,
             "argument",
         }
         if is_named_arg:
-            param_name = str(child.attrib.get("name", "") or "").strip()
+            param_name = str(child.attrs.get("name", "") or "").strip()
         else:
-            param_name = child_tag
+            param_name = _schema_property_name(parameters_schema, child_tag)
         if not param_name:
             continue
         schema_properties = (
@@ -1549,6 +998,7 @@ def _parse_xml_invoke_arguments(
         )
         if not is_named_arg and param_name not in schema_properties:
             continue
+        param_name = _schema_property_name(parameters_schema, param_name)
         param_schema = _schema_property_schema(parameters_schema, param_name)
         _append_xml_value(
             arguments,
@@ -1565,24 +1015,24 @@ def _parse_wrapped_xml_tool_calls(
     normalized = _normalize_tool_xml_markup(text)
     try:
         root = _safe_xml_fromstring(normalized)
-    except (ET.ParseError, DefusedXmlException):
+    except ValueError:
         return []
 
-    if _xml_local_name(root.tag).lower() not in {
+    if _xml_local_name(root.name).lower() not in {
         _PREFERRED_XML_WRAPPER_TAG,
         _LEGACY_XML_WRAPPER_TAG,
     }:
         return []
 
     tool_calls: List[Dict[str, Any]] = []
-    for child in list(root):
-        if _xml_local_name(child.tag).lower() not in {
+    for child in root.find_all(recursive=False):
+        if _xml_local_name(child.name).lower() not in {
             _PREFERRED_XML_CALL_TAG,
             _LEGACY_XML_CALL_TAG,
             "tool_call",
         }:
             continue
-        raw_name = str(child.attrib.get("name", "") or "").strip()
+        raw_name = str(child.attrs.get("name", "") or "").strip()
         name = _resolve_tool_name(raw_name, allowed_tools)
         if not name:
             continue

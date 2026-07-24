@@ -76,30 +76,67 @@ def _resolve_via_profile_page(tab: Any, timeout: float = 3.0) -> Dict[str, str]:
         if cached:
             return dict(cached)
 
-    existing_ids = {str(item.get("targetId") or "") for item in _target_infos(browser)}
     temp_target_id = ""
+    popup_token = ""
     try:
-        opened = tab.run_js('return window.open("about:blank", "_blank") !== null')
-        if opened is False:
-            return {}
         deadline = time.time() + max(0.5, float(timeout or 3.0))
-        while time.time() < deadline and not temp_target_id:
-            for item in _target_infos(browser):
-                target_id = str(item.get("targetId") or "").strip()
-                if (
-                    target_id
-                    and target_id not in existing_ids
-                    and str(item.get("type") or "").lower() == "page"
-                    and str(item.get("openerId") or "") == source_id
-                ):
-                    temp_target_id = target_id
-                    break
-            if not temp_target_id:
-                time.sleep(0.05)
+
+        # Creating the probe through CDP gives us its exact target id.  The old
+        # window.open() flow had to rediscover the popup via Target.getTargets;
+        # if that lookup failed or raced, the id stayed empty and an orphaned
+        # about:blank tab was left behind.
+        create_args: Dict[str, Any] = {"url": "about:blank"}
+        if context_id:
+            create_args["browserContextId"] = context_id
+        try:
+            created = browser._run_cdp("Target.createTarget", **create_args) or {}
+            if isinstance(created, dict):
+                temp_target_id = str(created.get("targetId") or "").strip()
+        except Exception:
+            temp_target_id = ""
+
+        # Some older Chromium/DrissionPage combinations cannot create a target
+        # in a supplied browser context. Retain the popup fallback, but keep a
+        # WindowProxy so it can still be closed when target discovery fails.
+        if not temp_target_id:
+            existing_ids = {str(item.get("targetId") or "") for item in _target_infos(browser)}
+            popup_token = f"profile-probe-{threading.get_ident()}-{time.time_ns()}"
+            opened = tab.run_js(
+                """
+                const token = arguments[0];
+                const child = window.open('about:blank', token);
+                window.__profileProbeWindows = window.__profileProbeWindows || {};
+                window.__profileProbeWindows[token] = child;
+                return child !== null;
+                """,
+                popup_token,
+            )
+            if opened is False:
+                return {}
+            while time.time() < deadline and not temp_target_id:
+                for item in _target_infos(browser):
+                    target_id = str(item.get("targetId") or "").strip()
+                    if (
+                        target_id
+                        and target_id not in existing_ids
+                        and str(item.get("type") or "").lower() == "page"
+                        and str(item.get("openerId") or "") == source_id
+                    ):
+                        temp_target_id = target_id
+                        break
+                if not temp_target_id:
+                    time.sleep(0.05)
         if not temp_target_id:
             return {}
 
-        temp_tab = browser.get_tab(temp_target_id)
+        temp_tab = None
+        while time.time() < deadline and temp_tab is None:
+            try:
+                temp_tab = browser.get_tab(temp_target_id)
+            except Exception:
+                time.sleep(0.05)
+        if temp_tab is None:
+            return {}
         temp_tab.run_cdp("Page.navigate", url="chrome://version")
         profile_path_text = ""
         while time.time() < deadline and not profile_path_text:
@@ -129,6 +166,21 @@ def _resolve_via_profile_page(tab: Any, timeout: float = 3.0) -> Dict[str, str]:
         if temp_target_id:
             try:
                 browser._run_cdp("Target.closeTarget", targetId=temp_target_id)
+            except Exception:
+                pass
+        if popup_token:
+            try:
+                tab.run_js(
+                    """
+                    const token = arguments[0];
+                    const store = window.__profileProbeWindows || {};
+                    const child = store[token];
+                    if (child && !child.closed) child.close();
+                    delete store[token];
+                    return true;
+                    """,
+                    popup_token,
+                )
             except Exception:
                 pass
 

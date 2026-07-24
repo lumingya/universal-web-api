@@ -72,6 +72,31 @@ class BrowserProfileIdentityTests(unittest.TestCase):
             self.assertEqual(han["name"], "han")
             self.assertEqual(nh["name"], "NHxxx")
             self.assertNotEqual(han["browser_context_id"], nh["browser_context_id"])
+            self.assertEqual(browser.created_contexts, ["ctx-han", "ctx-nh"])
+            self.assertEqual(browser.targets, {})
+
+    def test_failed_profile_probe_closes_exact_cdp_target(self):
+        browser = _FakeBrowser({"ctx-empty": None})
+
+        identity = _resolve_via_profile_page(
+            _FakeSourceTab(browser, "source-empty", "ctx-empty"),
+            timeout=0.01,
+        )
+
+        self.assertEqual(identity, {})
+        self.assertEqual(browser.created_contexts, ["ctx-empty"])
+        self.assertEqual(browser.targets, {})
+        self.assertEqual(browser.closed_target_ids, ["probe-1"])
+
+    def test_popup_fallback_closes_window_when_target_discovery_fails(self):
+        browser = _PopupFallbackBrowser()
+        tab = _PopupFallbackSourceTab(browser)
+
+        identity = _resolve_via_profile_page(tab, timeout=0.01)
+
+        self.assertEqual(identity, {})
+        self.assertEqual(tab.popup_open_count, 1)
+        self.assertEqual(tab.popup_close_count, 1)
 
     def test_public_resolver_retries_without_environment_fallback(self):
         with mock.patch.dict(
@@ -94,6 +119,8 @@ class _FakeBrowser:
         self.profile_paths = profile_paths
         self.targets = {}
         self.temp_tabs = {}
+        self.created_contexts = []
+        self.closed_target_ids = []
 
     def open_popup(self, opener_id, context_id):
         target_id = f"popup-{opener_id}"
@@ -106,9 +133,21 @@ class _FakeBrowser:
         self.temp_tabs[target_id] = _FakeTempTab(self.profile_paths[context_id])
 
     def _run_cdp(self, method, **kwargs):
+        if method == "Target.createTarget":
+            context_id = str(kwargs.get("browserContextId") or "")
+            target_id = f"probe-{len(self.created_contexts) + 1}"
+            self.created_contexts.append(context_id)
+            self.targets[target_id] = {
+                "targetId": target_id,
+                "type": "page",
+                "browserContextId": context_id,
+            }
+            self.temp_tabs[target_id] = _FakeTempTab(self.profile_paths[context_id])
+            return {"targetId": target_id}
         if method == "Target.getTargets":
             return {"targetInfos": list(self.targets.values())}
         if method == "Target.closeTarget":
+            self.closed_target_ids.append(kwargs["targetId"])
             self.targets.pop(kwargs["targetId"], None)
             return {"success": True}
         raise AssertionError(method)
@@ -143,7 +182,40 @@ class _FakeTempTab:
         return {"frameId": "frame"}
 
     def run_js(self, script):
-        return str(self.profile_path)
+        return str(self.profile_path) if self.profile_path is not None else ""
+
+
+class _PopupFallbackBrowser:
+    def _run_cdp(self, method, **kwargs):
+        if method == "Target.createTarget":
+            raise RuntimeError("createTarget unsupported")
+        if method == "Target.getTargets":
+            return {"targetInfos": []}
+        raise AssertionError(method)
+
+
+class _PopupFallbackSourceTab:
+    browser = None
+    tab_id = "source-popup"
+
+    def __init__(self, browser):
+        self.browser = browser
+        self.popup_open_count = 0
+        self.popup_close_count = 0
+
+    def run_cdp(self, method, **kwargs):
+        if method == "Target.getTargetInfo":
+            return {"targetInfo": {"targetId": self.tab_id, "browserContextId": "ctx-popup"}}
+        raise AssertionError(method)
+
+    def run_js(self, script, *args):
+        if "window.open" in script:
+            self.popup_open_count += 1
+            return True
+        if "child.close" in script:
+            self.popup_close_count += 1
+            return True
+        raise AssertionError(script)
 
 
 if __name__ == "__main__":

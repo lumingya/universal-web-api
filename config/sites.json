@@ -873,7 +873,7 @@
   },
   "gemini.google.com": {
     "presets": {
-      "3.5flash": {
+      "3.6flash": {
         "selectors": {
           "input_box": "rich-textarea .ql-editor[contenteditable=\"true\"][role=\"textbox\"]",
           "send_btn": "button[aria-label=\"发送\"]",
@@ -882,7 +882,7 @@
           "message_wrapper": null,
           "generating_indicator": ".blue-circle.stop-icon mat-icon[data-mat-icon-name=\"stop\"]",
           "点击模型选择": "//button[@data-test-id='bard-mode-menu-button']",
-          "选择模型": "//gem-menu-item[contains(., '3.5 Flash')]",
+          "选择模型": "//gem-menu-item[contains(., '3.6 Flash')]",
           "临时对话按钮": "//button[@aria-label='临时对话']"
         },
         "stream_config": {
@@ -921,6 +921,12 @@
             "value": null
           },
           {
+            "action": "CLICK",
+            "target": "临时对话按钮",
+            "optional": false,
+            "value": null
+          },
+          {
             "action": "WAIT",
             "target": "",
             "optional": false,
@@ -954,7 +960,27 @@
             "action": "CLICK",
             "target": "send_btn",
             "optional": false,
-            "value": null
+            "value": null,
+            "execution": {
+              "retry": {
+                "enabled": true,
+                "max_attempts": 2,
+                "interval": 0.3
+              },
+              "verification": {
+                "enabled": true,
+                "match": "any",
+                "timeout": 2,
+                "poll_interval": 0.1,
+                "conditions": [
+                  {
+                    "target": "send_btn",
+                    "state": "absent"
+                  }
+                ]
+              },
+              "click_mode": "inherit"
+            }
           },
           {
             "action": "STREAM_WAIT",
@@ -1062,7 +1088,7 @@
         },
         "file_paste": {
           "enabled": true,
-          "threshold": 50000,
+          "threshold": 80000,
           "temp_file_type": "txt",
           "hint_text": "上传的文件内容即为上下文，请据此回复",
           "txt_hint_text": "上传的文件内容即为上下文，请据此回复",
@@ -1421,7 +1447,7 @@
           "random_insert_chars": ""
         }
       },
-      "3.1 flash lite": {
+      "3.5 flash lite": {
         "selectors": {
           "input_box": "rich-textarea .ql-editor[contenteditable=\"true\"][role=\"textbox\"]",
           "send_btn": "button[aria-label=\"发送\"]",
@@ -1696,7 +1722,7 @@
         }
       }
     },
-    "default_preset": "3.5flash"
+    "default_preset": "3.6flash"
   },
   "chat.deepseek.com": {
     "presets": {
@@ -2752,9 +2778,10 @@
           "mode": "network",
           "hard_timeout": 300,
           "network": {
-            "listen_pattern": "chat_conversations",
+            "listen_pattern": "/completion",
             "parser": "claude",
-            "silence_threshold": 3,
+            "silence_threshold": 15,
+            "first_content_timeout": 60,
             "response_interval": 0.5
           }
         },
@@ -5283,7 +5310,7 @@
           "random_insert_chars": ""
         }
       },
-      "3.7": {
+      "3.8": {
         "selectors": {
           "input_box": "textarea.message-input-textarea, textarea#chat-input, textarea[data-testid=\"yuntu-textarea\"], textarea[placeholder], div[role=\"textbox\"][contenteditable=\"true\"]",
           "send_btn": "button.send-button, .send-button, .message-input-right-button-send, .chat-prompt-send-button, #send-message-button, button[type=\"submit\"], button[aria-label*=\"发送\"], button[aria-label*=\"Send\"]",
@@ -5295,7 +5322,7 @@
           "drop_zone": "body",
           "下拉框": "#qwen-chat-header-left .ant-dropdown-trigger",
           "展开更多模型": "//div[contains(text(), '展开更多模型')]",
-          "3.7max": "//div[contains(@class, 'model-item') and .//span[text()='Qwen3.7-Max-Preview']]"
+          "3.7max": "//div[@role='option'][.//span[text()='Qwen3.8-Max-Preview']]"
         },
         "workflow": [
           {
@@ -5307,12 +5334,6 @@
           {
             "action": "CLICK",
             "target": "下拉框",
-            "optional": true,
-            "value": null
-          },
-          {
-            "action": "CLICK",
-            "target": "展开更多模型",
             "optional": true,
             "value": null
           },
@@ -5459,9 +5480,9 @@
         "file_paste": {
           "enabled": true,
           "threshold": 40000,
-          "temp_file_type": "error",
-          "hint_text": "文件内容为需要回复的上下文，按上下文回复",
-          "txt_hint_text": "完全专注于文件内容",
+          "temp_file_type": "txt",
+          "hint_text": "上传的文件内容即为上下文，请据此回复",
+          "txt_hint_text": "上传的文件内容即为上下文，请据此回复",
           "pdf_hint_text": "完全专注于文件内容",
           "error_hint_text": "文件内容为需要回复的上下文，按上下文回复",
           "reacquire_input_after_upload": false,
@@ -5543,7 +5564,7 @@
         }
       }
     },
-    "default_preset": "3.7"
+    "default_preset": "3.8"
   },
   "www.kimi.com": {
     "presets": {
@@ -6203,7 +6224,6 @@
     "default_preset": "主预设"
   },
   "www.google.com": {
-    "default_preset": "主预设",
     "presets": {
       "主预设": {
         "selectors": {
@@ -6274,21 +6294,21 @@
             "image": {
               "enabled": false,
               "run_policy": "disabled",
-              "quick_probe_timeout_seconds": 1.0,
-              "late_wait_timeout_seconds": 45.0,
-              "blind_wait_timeout_seconds": 1.0
+              "quick_probe_timeout_seconds": 1,
+              "late_wait_timeout_seconds": 45,
+              "blind_wait_timeout_seconds": 1
             },
             "audio": {
               "enabled": false,
               "run_policy": "disabled",
-              "quick_probe_timeout_seconds": 1.0,
-              "capture_timeout_seconds": 12.0
+              "quick_probe_timeout_seconds": 1,
+              "capture_timeout_seconds": 12
             },
             "video": {
               "enabled": false,
               "run_policy": "disabled",
-              "quick_probe_timeout_seconds": 1.0,
-              "late_wait_timeout_seconds": 90.0
+              "quick_probe_timeout_seconds": 1,
+              "late_wait_timeout_seconds": 90
             }
           },
           "selector": "img",
@@ -6296,9 +6316,9 @@
           "video_selector": "video, video source",
           "container_selector": null,
           "force_postprocess": false,
-          "debounce_seconds": 2.0,
+          "debounce_seconds": 2,
           "wait_for_load": true,
-          "load_timeout_seconds": 5.0,
+          "load_timeout_seconds": 5,
           "download_blobs": true,
           "max_size_mb": 10,
           "canvas_export_mime": "image/jpeg",
@@ -6321,9 +6341,9 @@
             "tts",
             "voice"
           ],
-          "audio_capture_max_wait_seconds": 12.0,
-          "audio_capture_min_wait_seconds": 2.0,
-          "audio_capture_hard_max_wait_seconds": 45.0,
+          "audio_capture_max_wait_seconds": 12,
+          "audio_capture_min_wait_seconds": 2,
+          "audio_capture_hard_max_wait_seconds": 45,
           "audio_capture_estimated_chars_per_second": 4.8,
           "audio_capture_wait_padding_seconds": 1.2,
           "audio_network_capture": {
@@ -6347,7 +6367,7 @@
             "speech_rate": 0,
             "pitch": 0,
             "format": "aac",
-            "timeout_seconds": 30.0,
+            "timeout_seconds": 30,
             "pc_version": "3.20.2",
             "aid": "497858",
             "real_aid": "497858",
@@ -6374,9 +6394,9 @@
           "error_hint_text": "输入文本长度超过限制，已中止发送",
           "reacquire_input_after_upload": false,
           "post_upload_input_selector": "",
-          "post_upload_settle": 0.0,
+          "post_upload_settle": 0,
           "upload_signal_timeout": 2.5,
-          "upload_signal_grace": 3.0,
+          "upload_signal_grace": 3,
           "state_probe": {
             "enabled": false,
             "code": ""
@@ -6386,7 +6406,7 @@
             "post_click_observe_window": 1.8,
             "pre_retry_probe_window": 0.12,
             "retry_observe_window": 0.9,
-            "attachment_observe_window": 6.0,
+            "attachment_observe_window": 6,
             "max_retry_count": 2,
             "retry_interval": 0.6,
             "retry_cooldown_window": 1.5,
@@ -6411,8 +6431,8 @@
             "require_attachment_present": false,
             "require_upload_signal_before_ready": false,
             "continue_once_on_unconfirmed_send": true,
-            "idle_timeout": 8.0,
-            "hard_max_wait": 90.0
+            "idle_timeout": 8,
+            "hard_max_wait": 90
           }
         },
         "prompt_padding": {
@@ -6423,6 +6443,7 @@
           "random_insert_chars": ""
         }
       }
-    }
+    },
+    "default_preset": "主预设"
   }
 }

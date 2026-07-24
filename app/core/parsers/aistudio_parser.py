@@ -35,6 +35,7 @@ class AIStudioParser(ResponseParser):
     
     def __init__(self):
         self._accumulated_content = ""
+        self._accumulated_reasoning = ""
         self._is_done = False
         self._last_raw_length = 0
         self._pending_raw = ""
@@ -47,6 +48,7 @@ class AIStudioParser(ResponseParser):
         """
         result = {
             "content": "",
+            "reasoning_content": "",
             "images": [],
             "done": False,
             "error": None
@@ -66,10 +68,13 @@ class AIStudioParser(ResponseParser):
             content = ""
             is_done = False
 
+            reasoning = ""
             for data in payloads:
-                current_content, current_done = self._extract_content(data)
+                current_content, current_reasoning, current_done = self._extract_content(data)
                 if current_content:
                     content = current_content
+                if current_reasoning:
+                    reasoning = current_reasoning
                 if current_done:
                     is_done = True
 
@@ -86,6 +91,16 @@ class AIStudioParser(ResponseParser):
                 if delta:
                     result["content"] = delta
 
+            if reasoning:
+                if reasoning.startswith(self._accumulated_reasoning):
+                    delta_r = reasoning[len(self._accumulated_reasoning):]
+                    self._accumulated_reasoning = reasoning
+                else:
+                    delta_r = reasoning
+                    self._accumulated_reasoning += reasoning
+                if delta_r:
+                    result["reasoning_content"] = delta_r
+
             result["done"] = is_done
 
         except json.JSONDecodeError as e:
@@ -100,6 +115,7 @@ class AIStudioParser(ResponseParser):
     def reset(self):
         """重置状态"""
         self._accumulated_content = ""
+        self._accumulated_reasoning = ""
         self._is_done = False
         self._last_raw_length = 0
         self._last_raw_response = ""
@@ -142,6 +158,11 @@ class AIStudioParser(ResponseParser):
                 self._pending_raw = remainder
             if payloads:
                 return payloads
+
+            repaired = self._try_repair_unclosed_json(normalized)
+            if repaired is not None:
+                return [repaired]
+
             logger.debug_throttled(
                 f"aistudio.incomplete_json.{id(self)}",
                 "[AIStudioParser] JSON 未完整，继续等待流增长 "
@@ -149,6 +170,24 @@ class AIStudioParser(ResponseParser):
                 interval_sec=3.0,
             )
             return []
+
+    @staticmethod
+    def _try_repair_unclosed_json(text: str) -> Any:
+        stripped = text.strip()
+        if not stripped:
+            return None
+        for pad in range(0, 30):
+            try:
+                attempt = stripped + (']' * pad)
+                return json.loads(attempt)
+            except Exception:
+                pass
+            try:
+                attempt = stripped + '"]' + (']' * pad)
+                return json.loads(attempt)
+            except Exception:
+                pass
+        return None
 
     @classmethod
     def _extract_visible_text_from_raw_body(cls, raw_response: Any) -> str:
@@ -310,19 +349,20 @@ class AIStudioParser(ResponseParser):
 
         return []
 
-    def _extract_content(self, data: Any) -> Tuple[str, bool]:
+    def _extract_content(self, data: Any) -> Tuple[str, str, bool]:
         """
-        从响应数据中提取文本内容
+        从响应数据中提取文本内容与思考过程
 
         Returns:
-            (accumulated_text, is_done)
+            (accumulated_text, accumulated_reasoning, is_done)
         """
         try:
             outer = self._normalize_outer_blocks(data)
             if not outer:
-                return "", False
+                return "", "", False
 
             accumulated = ""
+            accumulated_reasoning = ""
             is_done = False
 
             for block in outer:
@@ -337,21 +377,21 @@ class AIStudioParser(ResponseParser):
                 # 提取文本
                 text, block_done, is_thinking = self._extract_block_content(block)
 
-                # 跳过 thinking 内容
                 if is_thinking:
-                    continue
-
-                if text:
-                    accumulated += text
+                    if text:
+                        accumulated_reasoning += text
+                else:
+                    if text:
+                        accumulated += text
 
                 if block_done:
                     is_done = True
 
-            return accumulated, is_done
+            return accumulated, accumulated_reasoning, is_done
 
         except Exception as e:
             logger.debug(f"[AIStudioParser] _extract_content 异常: {e}")
-            return "", False
+            return "", "", False
 
     def _is_stats_block(self, block: list) -> bool:
         """检查是否是统计块（响应结束）"""

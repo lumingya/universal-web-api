@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import tempfile
@@ -11,6 +12,8 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional
+
+logger = logging.getLogger(__name__)
 
 try:
     import requests
@@ -290,6 +293,15 @@ def record_arena_rule_candidates(
             continue
         for side_index, response_text in enumerate(response_sides):
             text = str(response_text or "").strip()
+            
+            is_reasoning_side = False
+            has_reasoning_sides = info.get("has_reasoning_sides") if isinstance(info, dict) else None
+            if isinstance(has_reasoning_sides, list) and side_index < len(has_reasoning_sides):
+                is_reasoning_side = bool(has_reasoning_sides[side_index])
+                
+            if rule.get("exclude_reasoning") and is_reasoning_side:
+                continue
+                
             matched, _ = _matches_rule(text, rule)
             if not matched:
                 continue
@@ -302,6 +314,11 @@ def record_arena_rule_candidates(
         identity = _resolve_profile()
         if not str(identity.get("name") or "").strip():
             identity_unresolved = True
+            logger.warning(
+                "[CMD_RESULT] browser profile name 为空，%d 条候选命中将被跳过。"
+                "请确认 profile_resolver 已正确返回 identity。",
+                len(candidates),
+            )
 
     with _LOCK:
         payload = _load_results()

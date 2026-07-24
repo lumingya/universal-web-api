@@ -845,10 +845,18 @@ def _get_tabs_by_exposed_model_name(browser, model_name: str) -> List[Dict[str, 
     if not target:
         return []
 
+    # Model-name routing is still dynamic routing.  Keep it consistent with
+    # domain routing so tabs explicitly excluded from the pool can never be
+    # selected just because they expose the same model name.
+    excluded_urls = _get_tab_pool_excluded_urls(browser.tab_pool)
     matches: List[Dict[str, Any]] = []
     for item in browser.tab_pool.get_tabs_with_index():
         exposed_name = _normalize_model_name_key(item.get("exposed_model_name"))
-        if exposed_name and exposed_name == target:
+        if (
+            exposed_name
+            and exposed_name == target
+            and not _tab_item_is_excluded(item, excluded_urls)
+        ):
             matches.append(item)
     return matches
 

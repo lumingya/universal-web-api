@@ -192,9 +192,11 @@ STREAM_CAPTURE_SNIPPET = """
 # CODEX_LISTENER_STREAM_CAPTURE_V1
 try:
     _codecs_v1 = __import__('codecs')
+    _copy_v1 = __import__('copy')
     _orig_listener_set_callback_v1 = Listener._set_callback
     _orig_listener_pause_v1 = Listener.pause
     _orig_listener_stop_v1 = Listener.stop
+    _orig_listener_request_will_be_sent_v1 = Listener._requestWillBeSent
     _orig_listener_response_received_v1 = Listener._response_received
     _orig_listener_loading_finished_v1 = Listener._loading_finished
     _orig_listener_loading_failed_v1 = Listener._loading_failed
@@ -216,6 +218,33 @@ try:
         stream.setdefault('fullText', '')
         stream.setdefault('complete', False)
         return stream
+
+    def _listener_stream_debug_v1(packet, phase, **details):
+        try:
+            import json as _json_v1
+            from pathlib import Path as _Path_v1
+            raw_request = getattr(packet, '_raw_request', {}) or {}
+            request = raw_request.get('request', {}) if isinstance(raw_request, dict) else {}
+            raw_response = getattr(packet, '_raw_response', {}) or {}
+            stream = _listener_stream_dict_v1(packet)
+            payload = {
+                'captured_at': __import__('time').time(),
+                'phase': phase,
+                'request_id': getattr(packet, '_stream_request_id', None),
+                'url': request.get('url', '') if isinstance(request, dict) else '',
+                'method': request.get('method', '') if isinstance(request, dict) else '',
+                'mime_type': raw_response.get('mimeType', '') if isinstance(raw_response, dict) else '',
+                'stream_complete': bool(stream.get('complete', False)),
+                'full_text_len': len(str(stream.get('fullText', '') or '')),
+                'chunks_len': len(stream.get('chunks', [])) if isinstance(stream.get('chunks'), list) else 0,
+            }
+            payload.update(details)
+            path = _Path_v1('logs') / 'network_parser_debug' / 'drission_stream_events.jsonl'
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open('a', encoding='utf-8', newline='\n') as handle:
+                handle.write(_json_v1.dumps(payload, ensure_ascii=False) + '\n')
+        except Exception:
+            pass
 
     def _listener_stream_text_v1(packet, raw_data):
         if raw_data in (None, ''):
@@ -258,6 +287,19 @@ try:
             listener._caught.put(packet)
             packet._stream_emitted = True
 
+    def _listener_request_will_be_sent_stream_v1(self, **kwargs):
+        _orig_listener_request_will_be_sent_v1(self, **kwargs)
+        request_id = kwargs.get('requestId')
+        packet = self._request_ids.get(request_id, None)
+        if packet is not None:
+            # CDP event dictionaries can be reused by the driver; retain an immutable
+            # request snapshot so later requests cannot rewrite an active packet.
+            try:
+                packet._raw_request = _copy_v1.deepcopy(packet._raw_request)
+            except Exception:
+                packet._raw_request = dict(packet._raw_request or {})
+            packet._stream_request_id = request_id
+
     def _listener_attach_stream_response_v1(listener, packet, request_id):
         driver = getattr(listener, '_driver', None)
         if not packet or getattr(packet, '_stream_enabled', False):
@@ -275,6 +317,7 @@ try:
         if buffered not in (None, ''):
             _listener_append_stream_v1(packet, buffered, 'bufferedData')
         stream['complete'] = False
+        _listener_stream_debug_v1(packet, 'stream_attached', buffered_len=len(str(buffered or '')))
         _listener_emit_stream_packet_v1(listener, packet)
         return True
 
@@ -327,6 +370,7 @@ try:
     def _listener_set_callback_stream_v1(self):
         _orig_listener_set_callback_v1(self)
         self._driver.set_callback('Network.dataReceived', self._data_received)
+        self._driver.set_callback('Network.eventSourceMessageReceived', self._event_source_message_received)
 
     def _listener_pause_stream_v1(self, clear=True):
         if self.listening:
@@ -340,6 +384,7 @@ try:
                     'Network.loadingFinished',
                     'Network.loadingFailed',
                     'Network.dataReceived',
+                    'Network.eventSourceMessageReceived',
                 ):
                     try:
                         driver.set_callback(event_name, None)
@@ -379,21 +424,55 @@ try:
 
     def _listener_response_received_stream_v1(self, **kwargs):
         _orig_listener_response_received_v1(self, **kwargs)
-        packet = self._request_ids.get(kwargs.get('requestId'), None)
+        request_id = kwargs.get('requestId')
+        packet = self._request_ids.get(request_id, None)
         if packet is not None:
-            _listener_attach_stream_response_v1(self, packet, kwargs.get('requestId'))
+            try:
+                packet._raw_response = _copy_v1.deepcopy(packet._raw_response)
+            except Exception:
+                packet._raw_response = dict(packet._raw_response or {})
+            packet._stream_request_id = request_id
+            _listener_attach_stream_response_v1(self, packet, request_id)
 
     def _listener_data_received_stream_v1(self, **kwargs):
         packet = self._request_ids.get(kwargs.get('requestId'), None)
         if not packet or not getattr(packet, '_stream_enabled', False):
             return
-        _listener_append_stream_v1(packet, kwargs.get('data'), 'dataReceived')
+        data = kwargs.get('data')
+        appended = _listener_append_stream_v1(packet, data, 'dataReceived')
+        _listener_stream_debug_v1(
+            packet,
+            'data_received',
+            raw_data_len=len(str(data or '')),
+            decoded_data_len=len(appended),
+            data_length=kwargs.get('dataLength'),
+            encoded_data_length=kwargs.get('encodedDataLength'),
+        )
+
+    def _listener_event_source_message_received_stream_v1(self, **kwargs):
+        packet = self._request_ids.get(kwargs.get('requestId'), None)
+        if not packet or not getattr(packet, '_stream_enabled', False):
+            return
+        event_name = str(kwargs.get('eventName') or '').strip()
+        data = kwargs.get('data')
+        if data in (None, ''):
+            return
+        payload = f"event: {event_name}\ndata: {data}\n\n" if event_name else f"data: {data}\n\n"
+        appended = _listener_append_stream_v1(packet, payload, 'eventSourceMessageReceived')
+        _listener_stream_debug_v1(
+            packet,
+            'event_source_message_received',
+            event_name=event_name,
+            raw_data_len=len(str(data)),
+            decoded_data_len=len(appended),
+        )
 
     def _listener_loading_finished_stream_v1(self, **kwargs):
         request_id = kwargs.get('requestId')
         packet = self._request_ids.get(request_id, None)
         if packet and getattr(packet, '_stream_enabled', False):
             self._running_requests -= 1
+            _listener_stream_debug_v1(packet, 'loading_finished')
             if _listener_finalize_stream_v1(self, request_id):
                 return
         _orig_listener_loading_finished_v1(self, **kwargs)
@@ -403,6 +482,7 @@ try:
         packet = self._request_ids.get(request_id, None)
         if packet and getattr(packet, '_stream_enabled', False):
             self._running_requests -= 1
+            _listener_stream_debug_v1(packet, 'loading_failed', error_text=str(kwargs.get('errorText') or ''))
             if _listener_finalize_stream_v1(self, request_id, failed_kwargs=kwargs):
                 return
         _orig_listener_loading_failed_v1(self, **kwargs)
@@ -414,8 +494,10 @@ try:
     Listener._set_callback = _listener_set_callback_stream_v1
     Listener.pause = _listener_pause_stream_v1
     Listener.stop = _listener_stop_stream_v1
+    Listener._requestWillBeSent = _listener_request_will_be_sent_stream_v1
     Listener._response_received = _listener_response_received_stream_v1
     Listener._data_received = _listener_data_received_stream_v1
+    Listener._event_source_message_received = _listener_event_source_message_received_stream_v1
     Listener._loading_finished = _listener_loading_finished_stream_v1
     Listener._loading_failed = _listener_loading_failed_stream_v1
     Response.stream = property(_response_stream_property_v1)

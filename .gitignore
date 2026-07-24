@@ -103,3 +103,4 @@ tests/*
 !tests/test_tab_route_groups.py
 !tests/test_tab_route_group_api.py
 !tests/test_arena_direct_models.py
+!tests/test_tool_calling_repairs.py

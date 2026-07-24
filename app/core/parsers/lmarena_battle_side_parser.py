@@ -24,6 +24,7 @@ class _LmarenaBattleSideParser(ResponseParser):
 
     def __init__(self) -> None:
         self._accumulated = ""
+        self._accumulated_reasoning = ""
         self._seen_image_refs: set[str] = set()
         self._completed_sides: set[str] = set()
         self._completed = False
@@ -32,6 +33,7 @@ class _LmarenaBattleSideParser(ResponseParser):
     def parse_chunk(self, raw_response: str) -> Dict[str, Any]:
         result: Dict[str, Any] = {
             "content": "",
+            "reasoning_content": "",
             "images": [],
             "done": False,
             "error": None,
@@ -53,6 +55,7 @@ class _LmarenaBattleSideParser(ResponseParser):
 
         try:
             content_parts: List[str] = []
+            reasoning_parts: List[str] = []
             images: List[Dict[str, Any]] = []
 
             for line in raw_response.split("\n"):
@@ -71,6 +74,10 @@ class _LmarenaBattleSideParser(ResponseParser):
                     text = self._parse_text_chunk(payload)
                     if text is not None:
                         content_parts.append(text)
+                elif prefix == f"{self.SIDE_PREFIX}g":
+                    text = self._parse_text_chunk(payload)
+                    if text is not None:
+                        reasoning_parts.append(text)
                 elif prefix == f"{self.SIDE_PREFIX}2":
                     images.extend(
                         _extract_arena_image_items(
@@ -92,6 +99,8 @@ class _LmarenaBattleSideParser(ResponseParser):
                         )
 
             new_content = "".join(content_parts)
+            new_reasoning = "".join(reasoning_parts)
+
             if new_content:
                 delta, next_accumulated = LmarenaParser._content_delta(
                     self._accumulated,
@@ -105,6 +114,20 @@ class _LmarenaBattleSideParser(ResponseParser):
                 else:
                     result["content"] = delta
                 self._accumulated = next_accumulated
+
+            if new_reasoning:
+                delta_r, next_acc_r = LmarenaParser._content_delta(
+                    self._accumulated_reasoning,
+                    new_reasoning,
+                    append_disjoint=True,
+                )
+                if self._accumulated_reasoning and not delta_r:
+                    logger.debug(
+                        f"[LmarenaBattleSideParser] duplicate {self.SIDE_LABEL} reasoning response ignored"
+                    )
+                else:
+                    result["reasoning_content"] = delta_r
+                self._accumulated_reasoning = next_acc_r
 
             if images:
                 result["images"] = images
@@ -124,6 +147,7 @@ class _LmarenaBattleSideParser(ResponseParser):
 
     def reset(self):
         self._accumulated = ""
+        self._accumulated_reasoning = ""
         self._seen_image_refs.clear()
         self._completed_sides.clear()
         self._completed = False
@@ -182,6 +206,7 @@ class LmarenaBattleWinnerParser(ResponseParser):
 
     def __init__(self) -> None:
         self._buffers = {"left": "", "right": ""}
+        self._reasoning_buffers = {"left": "", "right": ""}
         self._seen_image_refs = {"left": set(), "right": set()}
         self._images = {"left": [], "right": []}
         self._completed_sides: set[str] = set()
@@ -192,6 +217,7 @@ class LmarenaBattleWinnerParser(ResponseParser):
     def parse_chunk(self, raw_response: str) -> Dict[str, Any]:
         result: Dict[str, Any] = {
             "content": "",
+            "reasoning_content": "",
             "images": [],
             "done": False,
             "error": None,
@@ -213,6 +239,7 @@ class LmarenaBattleWinnerParser(ResponseParser):
 
         try:
             content_parts = {"left": [], "right": []}
+            reasoning_parts = {"left": [], "right": []}
 
             for line in raw_response.split("\n"):
                 line = line.strip()
@@ -234,6 +261,14 @@ class LmarenaBattleWinnerParser(ResponseParser):
                     text = _LmarenaBattleSideParser._parse_text_chunk(payload)
                     if text is not None:
                         content_parts["right"].append(text)
+                elif prefix == "ag":
+                    text = _LmarenaBattleSideParser._parse_text_chunk(payload)
+                    if text is not None:
+                        reasoning_parts["left"].append(text)
+                elif prefix == "bg":
+                    text = _LmarenaBattleSideParser._parse_text_chunk(payload)
+                    if text is not None:
+                        reasoning_parts["right"].append(text)
                 elif prefix == "a2":
                     self._images["left"].extend(
                         _extract_arena_image_items(
@@ -265,9 +300,13 @@ class LmarenaBattleWinnerParser(ResponseParser):
             for side, parts in content_parts.items():
                 self._merge_text(side, "".join(parts))
 
+            for side, parts in reasoning_parts.items():
+                self._merge_reasoning(side, "".join(parts))
+
             if self._winner_side and not self._emitted_winner:
                 self._emitted_winner = True
                 result["content"] = self._buffers[self._winner_side]
+                result["reasoning_content"] = self._reasoning_buffers[self._winner_side]
                 result["images"] = self._images[self._winner_side]
                 result["winner_side"] = self._winner_side
 
@@ -294,10 +333,27 @@ class LmarenaBattleWinnerParser(ResponseParser):
         )
         self._buffers[side] = next_accumulated
 
+    def _merge_reasoning(self, side: str, text: str) -> None:
+        if not text:
+            return
+
+        current = self._reasoning_buffers[side]
+        _delta, next_accumulated = LmarenaParser._content_delta(
+            current,
+            text,
+            append_disjoint=True,
+        )
+        self._reasoning_buffers[side] = next_accumulated
+
     def reset(self):
         self._buffers = {"left": "", "right": ""}
+        self._reasoning_buffers = {"left": "", "right": ""}
         self._seen_image_refs = {"left": set(), "right": set()}
         self._images = {"left": [], "right": []}
+        self._completed_sides.clear()
+        self._completed = False
+        self._winner_side = ""
+        self._emitted_winner = False
         self._completed_sides.clear()
         self._completed = False
         self._winner_side = ""

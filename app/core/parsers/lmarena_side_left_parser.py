@@ -27,11 +27,13 @@ class LmarenaSideLeftParser(ResponseParser):
 
     def __init__(self) -> None:
         self._accumulated = ""
+        self._accumulated_reasoning = ""
         self._seen_image_refs: set[str] = set()
 
     def parse_chunk(self, raw_response: str) -> Dict[str, Any]:
         result: Dict[str, Any] = {
             "content": "",
+            "reasoning_content": "",
             "images": [],
             "done": False,
             "error": None,
@@ -47,6 +49,7 @@ class LmarenaSideLeftParser(ResponseParser):
 
         try:
             content_parts: List[str] = []
+            reasoning_parts: List[str] = []
             images: List[Dict[str, Any]] = []
             done = False
 
@@ -67,6 +70,10 @@ class LmarenaSideLeftParser(ResponseParser):
                     text = self._parse_text_chunk(payload)
                     if text is not None:
                         content_parts.append(text)
+                elif prefix == "ag":
+                    text = self._parse_text_chunk(payload)
+                    if text is not None:
+                        reasoning_parts.append(text)
                 elif prefix == "a2":
                     images.extend(
                         _extract_arena_image_items(
@@ -87,6 +94,8 @@ class LmarenaSideLeftParser(ResponseParser):
                         done = True
 
             new_content = "".join(content_parts)
+            new_reasoning = "".join(reasoning_parts)
+
             if new_content:
                 delta, next_accumulated = LmarenaParser._content_delta(
                     self._accumulated,
@@ -98,6 +107,18 @@ class LmarenaSideLeftParser(ResponseParser):
                 else:
                     result["content"] = delta
                 self._accumulated = next_accumulated
+
+            if new_reasoning:
+                delta_r, next_acc_r = LmarenaParser._content_delta(
+                    self._accumulated_reasoning,
+                    new_reasoning,
+                    append_disjoint=True,
+                )
+                if self._accumulated_reasoning and not delta_r:
+                    logger.debug("[LmarenaSideLeftParser] duplicate reasoning response ignored")
+                else:
+                    result["reasoning_content"] = delta_r
+                self._accumulated_reasoning = next_acc_r
 
             if images:
                 result["images"] = images
@@ -111,6 +132,7 @@ class LmarenaSideLeftParser(ResponseParser):
 
     def reset(self):
         self._accumulated = ""
+        self._accumulated_reasoning = ""
         self._seen_image_refs.clear()
 
     def should_abort_on_error(self) -> bool:

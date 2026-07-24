@@ -100,7 +100,7 @@ class NetworkMonitor:
     DEFAULT_FIRST_RESPONSE_TIMEOUT = 300.0   # 首次响应超时（触发回退）
     DEFAULT_HARD_TIMEOUT = 300             # 全局硬超时
     DEFAULT_RESPONSE_INTERVAL = 0.5        # 响应轮询间隔
-    DEFAULT_SILENCE_THRESHOLD = 3.0        # 静默超时（无新数据）
+    DEFAULT_SILENCE_THRESHOLD = 4.0        # 静默超时（无新数据）
     DEFAULT_FIRST_CONTENT_TIMEOUT = 15.0   # 命中目标流后，等待首个有效正文的宽限
     DEFAULT_INITIAL_TARGET_BODY_WAIT = 4.0  # 首个目标响应空 body 时的补等宽限
     MAX_LISTEN_RESTARTS = 3                # 监听状态异常后的最大重建次数
@@ -220,6 +220,8 @@ class NetworkMonitor:
         self._debug_capture_session_key = f"{int(time.time() * 1000)}_{id(self):x}"
         self._debug_capture_written_stages = set()
         self._debug_capture_has_content_snapshot = False
+        self._debug_trace_counter = 0
+        self._debug_trace_path: Optional[Path] = None
         self._last_stream_event: Dict[str, Any] = {}
         self._last_stream_raw_body: str = ""
         self._last_stream_raw_body_len: int = 0
@@ -271,6 +273,28 @@ class NetworkMonitor:
     def _should_fallback_to_dom_on_empty_stream(self) -> bool:
         try:
             return bool(self.parser.should_fallback_to_dom_when_no_visible_content())
+        except Exception:
+            return False
+
+    def _should_require_explicit_done(self) -> bool:
+        checker = getattr(self.parser, "should_require_explicit_done", None)
+        if not callable(checker):
+            return False
+        try:
+            return bool(checker())
+        except Exception:
+            return False
+
+    def _should_wait_for_replacement_stream_on_incomplete_capture(self) -> bool:
+        checker = getattr(
+            self.parser,
+            "should_wait_for_replacement_stream_on_incomplete_capture",
+            None,
+        )
+        if not callable(checker):
+            return False
+        try:
+            return bool(checker())
         except Exception:
             return False
 
@@ -1343,6 +1367,7 @@ class NetworkMonitor:
             stored_body = raw_body_text[:max_chars] if truncated else raw_body_text
             stored_body = str(sanitize_sensitive_data(stored_body))
             has_content = bool(str(parse_result.get("content", "") or ""))
+            has_reasoning = bool(str(parse_result.get("reasoning_content", "") or ""))
 
             parser_debug = None
             if hasattr(self.parser, "export_debug_data"):
@@ -1354,6 +1379,7 @@ class NetworkMonitor:
                     parser_debug = {"error": str(parser_exc)}
 
             content_preview = str(parse_result.get("content", "") or "")[:800]
+            reasoning_text = str(parse_result.get("reasoning_content", "") or "")
 
             context_data = {
                 "domain": getattr(self.tab, "current_domain", None),
@@ -1387,6 +1413,8 @@ class NetworkMonitor:
                 "parse_result": {
                     "content_len": len(str(parse_result.get("content", "") or "")),
                     "content_preview": sanitize_sensitive_data(content_preview),
+                    "reasoning_len": len(reasoning_text),
+                    "reasoning_preview": sanitize_sensitive_data(reasoning_text[:800]),
                     "done": bool(parse_result.get("done", False)),
                     "error": sanitize_sensitive_data(str(parse_result.get("error") or "")),
                     "image_count": len(parse_result.get("images", []) or []),
@@ -1409,7 +1437,7 @@ class NetworkMonitor:
                 newline="\n",
             )
             self._debug_capture_written_stages.add(capture_stage)
-            if has_content:
+            if has_content or has_reasoning:
                 self._debug_capture_has_content_snapshot = True
             logger.debug_throttled(
                 f"network.parser_debug_dump.{id(self)}",
@@ -1421,9 +1449,123 @@ class NetworkMonitor:
         except Exception as exc:
             logger.debug(f"[NetworkMonitor] 写入网络解析调试快照失败: {exc}")
 
+    def _append_network_debug_trace(
+        self,
+        phase: str,
+        response: Any = None,
+        raw_body: Any = "",
+        raw_body_source: str = "",
+        parse_result: Optional[Dict[str, Any]] = None,
+        is_event_stream: bool = False,
+        extra_payload: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Append low-level stream diagnostics without consuming a stage slot."""
+        if not self._is_network_debug_capture_enabled():
+            return
+
+        try:
+            parser_id = str(self.parser.get_id() or "").strip().lower()
+            parser_filter = self._get_network_debug_capture_parser_filter()
+            if parser_filter and parser_id != parser_filter:
+                return
+
+            max_events = 2000
+            if self._debug_trace_counter >= max_events:
+                return
+
+            body_text = self._normalize_raw_body(raw_body)
+            normalized_body = body_text.replace("\r\n", "\n").replace("\r", "\n")
+            event_names = []
+            for line in normalized_body.split("\n"):
+                line = line.strip()
+                if line.startswith("event:"):
+                    name = line[6:].strip()
+                    if name and (not event_names or event_names[-1] != name):
+                        event_names.append(name)
+
+            response_obj = getattr(response, "response", None)
+            stream_records = []
+            for stream_path, stream_obj in (
+                ("response._stream", self._nested_get(response_obj, "_stream")),
+                ("response.stream", self._nested_get(response_obj, "stream")),
+                ("event._stream", self._nested_get(response, "_stream")),
+                ("event.stream", self._nested_get(response, "stream")),
+            ):
+                if stream_obj in (None, "", [], ()):
+                    continue
+                full_text = self._nested_get(stream_obj, "fullText")
+                chunks = self._nested_get(stream_obj, "chunks")
+                stream_records.append(
+                    {
+                        "path": stream_path,
+                        "type": type(stream_obj).__name__,
+                        "complete": self._nested_get(stream_obj, "complete"),
+                        "full_text_len": len(self._normalize_raw_body(full_text)) if full_text not in (None, "") else 0,
+                        "chunks_len": len(chunks) if isinstance(chunks, list) else None,
+                    }
+                )
+
+            parser_state = {
+                "type": type(self.parser).__name__,
+                "pending_len": len(str(getattr(self.parser, "_pending", "") or "")),
+                "last_raw_length": int(getattr(self.parser, "_last_raw_length", 0) or 0),
+                "last_raw_response_len": len(str(getattr(self.parser, "_last_raw_response", "") or "")),
+            }
+            result = parse_result if isinstance(parse_result, dict) else {}
+            payload = {
+                "trace_index": self._debug_trace_counter + 1,
+                "captured_at": time.time(),
+                "phase": str(phase or "unknown"),
+                "parser": parser_id,
+                "capture_session": self._debug_capture_session_key,
+                "event": {
+                    "url": sanitize_sensitive_data(str((self._extract_event(response) if response is not None else {}).get("url", "") or "")),
+                    "method": str((self._extract_event(response) if response is not None else {}).get("method", "") or ""),
+                    "status": int((self._extract_event(response) if response is not None else {}).get("status", 0) or 0),
+                },
+                "source": str(raw_body_source or ""),
+                "is_event_stream": bool(is_event_stream),
+                "body": {
+                    "length": len(body_text),
+                    "prefix": sanitize_sensitive_data(body_text[:600]),
+                    "suffix": sanitize_sensitive_data(body_text[-1200:]) if body_text else "",
+                    "event_names": event_names[-40:],
+                    "has_message_stop": "message_stop" in event_names,
+                },
+                "response": {
+                    "type": type(response).__name__ if response is not None else None,
+                    "response_type": type(response_obj).__name__ if response_obj is not None else None,
+                    "content_type": self._extract_content_type(response) if response is not None else "",
+                    "streams": stream_records,
+                },
+                "parser_state": parser_state,
+                "parse_result": {
+                    "content_len": len(str(result.get("content", "") or "")),
+                    "reasoning_len": len(str(result.get("reasoning_content", "") or "")),
+                    "done": bool(result.get("done", False)),
+                    "error": sanitize_sensitive_data(str(result.get("error") or "")),
+                },
+            }
+            if extra_payload:
+                payload["extra"] = sanitize_sensitive_data(dict(extra_payload))
+
+            dump_dir = Path("logs") / "network_parser_debug"
+            dump_dir.mkdir(parents=True, exist_ok=True)
+            if self._debug_trace_path is None:
+                self._debug_trace_path = dump_dir / f"{self._debug_capture_session_key}_trace_{parser_id or 'unknown'}.jsonl"
+                logger.debug(
+                    f"[NetworkMonitor] 网络解析 trace 已启用 ({self._debug_trace_path})"
+                )
+            with self._debug_trace_path.open("a", encoding="utf-8", newline="\n") as handle:
+                handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+            self._debug_trace_counter += 1
+        except Exception as exc:
+            logger.debug(f"[NetworkMonitor] 写入网络解析 trace 失败: {exc}")
+
     def _select_network_debug_capture_stage(self, parse_result: Dict[str, Any]) -> str:
         error_text = str(parse_result.get("error") or "").strip()
         has_content = bool(str(parse_result.get("content", "") or ""))
+        has_reasoning = bool(str(parse_result.get("reasoning_content", "") or ""))
         done = bool(parse_result.get("done", False))
 
         if error_text:
@@ -1432,7 +1574,7 @@ class NetworkMonitor:
             stage = "done"
         elif self._debug_capture_counter == 0:
             stage = "initial"
-        elif has_content and not self._debug_capture_has_content_snapshot:
+        elif (has_content or has_reasoning) and not self._debug_capture_has_content_snapshot:
             stage = "first_content"
         else:
             return ""
@@ -1613,6 +1755,14 @@ class NetworkMonitor:
             if self._should_stop():
                 logger.debug("[NetworkMonitor] 监听被取消")
                 completion_reason = "cancelled"
+                self._append_network_debug_trace(
+                    "cancelled",
+                    active_stream_response,
+                    active_stream_body,
+                    active_stream_body_source,
+                    is_event_stream=active_stream_response is not None,
+                    extra_payload={"elapsed": time.time() - phase_start},
+                )
                 break
 
             # 设置超时时间
@@ -1666,6 +1816,19 @@ class NetworkMonitor:
                         active_stream_body,
                         active_stream_body_source,
                     )
+                    self._append_network_debug_trace(
+                        "active_wait_result",
+                        active_stream_response,
+                        next_body or active_stream_body,
+                        next_source or active_stream_body_source,
+                        is_event_stream=True,
+                        extra_payload={
+                            "previous_body_len": len(active_stream_body or ""),
+                            "next_body_len": len(next_body or ""),
+                            "changed": bool(next_body and next_body != active_stream_body),
+                            "capture_complete": self._stream_capture_complete(active_stream_response),
+                        },
+                    )
                     if next_body and next_body != active_stream_body:
                         self._handle_stream_body_replacement(
                             active_stream_body,
@@ -1685,7 +1848,24 @@ class NetworkMonitor:
                             parse_result = self.parser.parse_chunk(active_stream_body)
                         except Exception as e:
                             logger.warning(f"[NetworkMonitor] 活跃流二次解析异常: {e}")
+                            self._append_network_debug_trace(
+                                "active_growth_parse_error",
+                                active_stream_response,
+                                active_stream_body,
+                                active_stream_body_source,
+                                is_event_stream=True,
+                                extra_payload={"error": str(e)},
+                            )
                             continue
+
+                        self._append_network_debug_trace(
+                            "active_growth_parse",
+                            active_stream_response,
+                            active_stream_body,
+                            active_stream_body_source,
+                            parse_result,
+                            True,
+                        )
 
                         self._write_parser_debug_dump(
                             active_stream_body,
@@ -1721,7 +1901,18 @@ class NetworkMonitor:
                         except Exception as parser_exc:
                             logger.debug(f"[NetworkMonitor] 媒体状态提取失败（忽略）: {parser_exc}")
                         content = parse_result.get("content", "")
+                        reasoning_content = parse_result.get("reasoning_content", "")
                         done = parse_result.get("done", False)
+
+                        if reasoning_content:
+                            last_activity_time = time.time()
+                            self._total_chunks += 1
+                            yield self.formatter.pack_chunk(
+                                content="",
+                                reasoning_content=reasoning_content,
+                                completion_id=completion_id,
+                            )
+
                         if content:
                             self._total_chunks += 1
                             self._total_content_chars += len(content)
@@ -1744,6 +1935,15 @@ class NetworkMonitor:
                                     f"(source={active_stream_body_source}, body_len={len(active_stream_body or '')})"
                                 )
                                 raise NetworkMonitorTimeout("目标流完成但未产出有效正文")
+                            self._append_network_debug_trace(
+                                "protocol_done",
+                                active_stream_response,
+                                active_stream_body,
+                                active_stream_body_source,
+                                parse_result,
+                                True,
+                                extra_payload={"total_chunks": self._total_chunks},
+                            )
                             completed_by_done = True
                             completion_reason = "done"
                             logger._logger.log(logging.DEBUG - 5, "[NetworkMonitor] 检测到结束标志，完成监听")
@@ -1751,7 +1951,11 @@ class NetworkMonitor:
 
                         continue
 
-                    if self._stream_capture_complete(active_stream_response):
+                    if (
+                        self._stream_capture_complete(active_stream_response)
+                        and (self._total_chunks > 0 or completed_by_done)
+                        and (completed_by_done or not self._should_require_explicit_done())
+                    ):
                         if self._should_wait_for_followup_stream():
                             waiting_for_followup_stream = True
                             active_stream_response = None
@@ -1783,8 +1987,68 @@ class NetworkMonitor:
                         logger.debug("[NetworkMonitor] 活跃流响应已完成，结束监听")
                         break
 
+                    if (
+                        active_stream_response is not None
+                        and self._stream_capture_complete(active_stream_response)
+                        and self._should_require_explicit_done()
+                        and not completed_by_done
+                    ):
+                        if self._should_wait_for_replacement_stream_on_incomplete_capture():
+                            logger.warning(
+                                "[NetworkMonitor] Claude 当前流已结束但缺少 message_stop，继续等待后续流"
+                            )
+                            self._append_network_debug_trace(
+                                "await_replacement_stream",
+                                active_stream_response,
+                                active_stream_body,
+                                active_stream_body_source,
+                                is_event_stream=True,
+                                extra_payload={
+                                    "capture_complete": True,
+                                    "total_chunks": self._total_chunks,
+                                    "last_activity_age": time.time() - last_activity_time,
+                                },
+                            )
+                            waiting_for_followup_stream = True
+                            active_stream_response = None
+                            active_stream_event = {}
+                            active_stream_body = ""
+                            active_stream_body_source = ""
+                            self._prepare_parser_for_followup_stream()
+                            last_activity_time = time.time()
+                            continue
+                        logger.warning(
+                            "[NetworkMonitor] 流响应已捕获完成但缺少协议结束事件，回退到 DOM 监听"
+                        )
+                        self._append_network_debug_trace(
+                            "terminate_missing_message_stop",
+                            active_stream_response,
+                            active_stream_body,
+                            active_stream_body_source,
+                            is_event_stream=True,
+                            extra_payload={
+                                "capture_complete": True,
+                                "total_chunks": self._total_chunks,
+                                "last_activity_age": time.time() - last_activity_time,
+                            },
+                        )
+                        raise NetworkMonitorTimeout("目标流缺少明确结束事件")
+
                 silence_duration = time.time() - last_activity_time
                 effective_silence_threshold = float(self._silence_threshold)
+                if self._total_chunks > 0:
+                    effective_silence_threshold = max(effective_silence_threshold, 4.0)
+                if (
+                    active_stream_response is not None
+                    and self._should_require_explicit_done()
+                    and not completed_by_done
+                ):
+                    # Claude can pause while Extended Thinking is still active;
+                    # its explicit message_stop remains the completion signal.
+                    effective_silence_threshold = max(
+                        effective_silence_threshold,
+                        float(self._first_content_timeout),
+                    )
                 if waiting_for_followup_stream:
                     effective_silence_threshold = max(
                         float(self._first_content_timeout),
@@ -1810,11 +2074,11 @@ class NetworkMonitor:
                 if silence_duration > effective_silence_threshold:
                     if waiting_for_followup_stream:
                         logger.warning(
-                            "[NetworkMonitor] 等待 GLM 自动确认后的后续流超时，回退到 DOM 监听 "
+                            "[NetworkMonitor] 等待后续流超时，回退到 DOM 监听 "
                             f"(idle={silence_duration:.1f}s, limit={effective_silence_threshold:.1f}s)"
                         )
                         raise NetworkMonitorTimeout(
-                            f"GLM 后续流未在宽限期内到达（{silence_duration:.1f}s）"
+                            f"后续流未在宽限期内到达（{silence_duration:.1f}s）"
                         )
                     if (
                         self._total_chunks > 0
@@ -1859,8 +2123,29 @@ class NetworkMonitor:
                                 f"body_len={len(active_stream_body or '')})"
                             )
                             raise NetworkMonitorTimeout(
-                                f"目标流未完整结束（{silence_duration:.1f}s）"
-                            )
+                            f"目标流未完整结束（{silence_duration:.1f}s）"
+                        )
+                    if (
+                        active_stream_response is not None
+                        and self._should_require_explicit_done()
+                        and not completed_by_done
+                    ):
+                        logger.warning(
+                            "[NetworkMonitor] Claude 流静默且未收到 message_stop，回退到 DOM 监听"
+                        )
+                        self._append_network_debug_trace(
+                            "terminate_silence_without_message_stop",
+                            active_stream_response,
+                            active_stream_body,
+                            active_stream_body_source,
+                            is_event_stream=True,
+                            extra_payload={
+                                "silence_duration": silence_duration,
+                                "effective_silence_threshold": effective_silence_threshold,
+                                "total_chunks": self._total_chunks,
+                            },
+                        )
+                        raise NetworkMonitorTimeout("目标流静默且缺少明确结束事件")
                     completion_reason = "silence"
                     logger.debug(f"[NetworkMonitor] 静默超时 ({silence_duration:.1f}s)，结束监听")
                     break
@@ -1977,6 +2262,10 @@ class NetworkMonitor:
                 is_event_stream,
             )
 
+            if is_event_stream and response is not None:
+                active_stream_response = response
+                active_stream_event = dict(event or {})
+
             if not raw_body:
                 empty_body_skips += 1
                 if should_probe_initial_target_body:
@@ -2016,7 +2305,7 @@ class NetworkMonitor:
             if waiting_for_followup_stream:
                 waiting_for_followup_stream = False
                 logger.info(
-                    "[NetworkMonitor] 已捕获 GLM 自动确认后的后续流正文 "
+                    "[NetworkMonitor] 已捕获后续流正文 "
                     f"(target={stream_target_hits}, body_len={len(raw_body)})"
                 )
 
@@ -2025,7 +2314,29 @@ class NetworkMonitor:
                 parse_result = self.parser.parse_chunk(raw_body)
             except Exception as e:
                 logger.warning(f"[NetworkMonitor] 解析异常: {e}")
+                self._append_network_debug_trace(
+                    "initial_parse_error",
+                    response,
+                    raw_body,
+                    raw_body_source,
+                    is_event_stream=is_event_stream,
+                    extra_payload={"error": str(e)},
+                )
                 continue
+
+            self._append_network_debug_trace(
+                "target_response_parse",
+                response,
+                raw_body,
+                raw_body_source,
+                parse_result,
+                is_event_stream,
+                extra_payload={
+                    "stream_target_hits": stream_target_hits,
+                    "total_responses": total_responses,
+                    "capture_complete": self._stream_capture_complete(response),
+                },
+            )
 
             if (
                 is_event_stream
@@ -2051,7 +2362,25 @@ class NetworkMonitor:
                         parse_result = self.parser.parse_chunk(raw_body)
                     except Exception as e:
                         logger.warning(f"[NetworkMonitor] 二次解析异常: {e}")
+                        self._append_network_debug_trace(
+                            "initial_growth_parse_error",
+                            response,
+                            raw_body,
+                            raw_body_source,
+                            is_event_stream=is_event_stream,
+                            extra_payload={"error": str(e)},
+                        )
                         continue
+
+                    self._append_network_debug_trace(
+                        "initial_growth_parse",
+                        response,
+                        raw_body,
+                        raw_body_source,
+                        parse_result,
+                        is_event_stream,
+                        extra_payload={"capture_complete": self._stream_capture_complete(response)},
+                    )
 
             self._write_parser_debug_dump(
                 raw_body,
@@ -2084,7 +2413,17 @@ class NetworkMonitor:
 
             # 提取内容
             content = parse_result.get("content", "")
+            reasoning_content = parse_result.get("reasoning_content", "")
             done = parse_result.get("done", False)
+
+            if reasoning_content:
+                last_activity_time = time.time()
+                self._total_chunks += 1
+                yield self.formatter.pack_chunk(
+                    content="",
+                    reasoning_content=reasoning_content,
+                    completion_id=completion_id,
+                )
 
             if content:
                 last_activity_time = time.time()
@@ -2109,6 +2448,15 @@ class NetworkMonitor:
                         f"(source={raw_body_source}, body_len={len(raw_body or '')})"
                     )
                     raise NetworkMonitorTimeout("目标流完成但未产出有效正文")
+                self._append_network_debug_trace(
+                    "protocol_done",
+                    response,
+                    raw_body,
+                    raw_body_source,
+                    parse_result,
+                    is_event_stream,
+                    extra_payload={"total_chunks": self._total_chunks},
+                )
                 completed_by_done = True
                 completion_reason = "done"
                 logger._logger.log(logging.DEBUG - 5, "[NetworkMonitor] 检测到结束标志，完成监听")

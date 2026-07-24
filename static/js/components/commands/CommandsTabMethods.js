@@ -337,6 +337,7 @@ window.CommandsTabMethods = {
                 required_any: '',
                 excluded: '',
                 detector_keyword: '',
+                exclude_reasoning: false,
                 drawer_group: '',
                 title_template: '《{profile}》-{model}-{index:03d}',
                 ...(field.item_defaults || {})

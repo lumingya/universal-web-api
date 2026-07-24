@@ -2637,11 +2637,12 @@ class SSEFormatter:
     @classmethod
     def pack_chunk(
         cls,
-        content: str,
+        content: str | None = None,
         model: str = "web-browser",
-        completion_id: str = None,
+        completion_id: str | None = None,
         images: list[str] | None = None,
         media: list[dict] | None = None,
+        reasoning_content: str | None = None,
     ) -> str:
         """打包流式 chunk。
 
@@ -2649,7 +2650,11 @@ class SSEFormatter:
         同时补充自定义 media 字段，供需要结构化媒体数据的前端直接消费。
         """
         chunk_id = completion_id or cls._generate_id()
-        delta = {"content": content}
+        delta = {}
+        if content is not None:
+            delta["content"] = content
+        if reasoning_content:
+            delta["reasoning_content"] = reasoning_content
         if media is not None:
             delta["media"] = media
         data = {

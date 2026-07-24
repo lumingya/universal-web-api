@@ -121,6 +121,14 @@ class ResponseParser(ABC):
         """
         return False
 
+    def should_require_explicit_done(self) -> bool:
+        """Whether a stream must expose its protocol-level completion event."""
+        return False
+
+    def should_wait_for_replacement_stream_on_incomplete_capture(self) -> bool:
+        """Whether an incomplete captured response may be followed by another stream."""
+        return False
+
     def get_media_generation_state(
         self,
         raw_response: str = "",

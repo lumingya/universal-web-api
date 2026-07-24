@@ -3,7 +3,7 @@ claude_parser.py - Claude SSE response parser.
 
 Observed stream traits:
 - event: content_block_delta with delta.type=text_delta carries answer text
-- thinking blocks use thinking_delta / thinking_summary_delta and should be ignored
+- event: content_block_delta with delta.type=thinking_delta carries Extended Thinking CoT text
 - event: message_stop marks stream completion
 """
 
@@ -26,6 +26,7 @@ class ClaudeParser(ResponseParser):
     def parse_chunk(self, raw_response: str) -> Dict[str, Any]:
         result: Dict[str, Any] = {
             "content": "",
+            "reasoning_content": "",
             "images": [],
             "done": False,
             "error": None,
@@ -41,9 +42,11 @@ class ClaudeParser(ResponseParser):
             if not new_data:
                 return result
 
-            delta_content, done = self._consume_new_data(new_data)
+            delta_content, delta_reasoning, done = self._consume_new_data(new_data)
             if delta_content:
                 result["content"] = delta_content
+            if delta_reasoning:
+                result["reasoning_content"] = delta_reasoning
             result["done"] = done
 
         except Exception as e:
@@ -57,10 +60,11 @@ class ClaudeParser(ResponseParser):
         self._last_raw_response = ""
         self._pending = ""
 
-    def _consume_new_data(self, new_data: str) -> Tuple[str, bool]:
-        normalized = (self._pending + new_data).replace("\r\n", "\n")
+    def _consume_new_data(self, new_data: str) -> Tuple[str, str, bool]:
+        # Browser stream snapshots can use either CRLF or lone CR line endings.
+        normalized = (self._pending + new_data).replace("\r\n", "\n").replace("\r", "\n")
         if not normalized:
-            return "", False
+            return "", "", False
 
         blocks = normalized.split("\n\n")
         if normalized.endswith("\n\n"):
@@ -71,18 +75,21 @@ class ClaudeParser(ResponseParser):
             complete_blocks = [block for block in blocks if block.strip()]
 
         content_parts: List[str] = []
+        reasoning_parts: List[str] = []
         done = False
 
         for block in complete_blocks:
-            block_content, block_done = self._parse_event_block(block)
+            block_content, block_reasoning, block_done = self._parse_event_block(block)
             if block_content:
                 content_parts.append(block_content)
+            if block_reasoning:
+                reasoning_parts.append(block_reasoning)
             if block_done:
                 done = True
 
-        return "".join(content_parts), done
+        return "".join(content_parts), "".join(reasoning_parts), done
 
-    def _parse_event_block(self, block: str) -> Tuple[str, bool]:
+    def _parse_event_block(self, block: str) -> Tuple[str, str, bool]:
         event_name = ""
         data_lines: List[str] = []
 
@@ -96,26 +103,50 @@ class ClaudeParser(ResponseParser):
                 data_lines.append(line[5:].strip())
 
         if event_name == "message_stop":
-            return "", True
+            return "", "", True
 
         payload = "\n".join(data_lines).strip()
-        if event_name != "content_block_delta" or not payload:
-            return "", False
+        if not payload:
+            return "", "", False
 
         try:
             data = json.loads(payload)
         except json.JSONDecodeError:
-            return "", False
+            return "", "", False
 
-        delta = data.get("delta", {})
-        if not isinstance(delta, dict):
-            return "", False
+        # Some response wrappers omit the SSE event line but preserve the
+        # protocol event type in the JSON payload.
+        if not event_name:
+            event_name = str(data.get("type") or "").strip()
 
-        if delta.get("type") != "text_delta":
-            return "", False
+        if event_name == "message_stop":
+            return "", "", True
 
-        text = delta.get("text", "")
-        return (text, False) if isinstance(text, str) else ("", False)
+        if event_name == "content_block_start":
+            cb = data.get("content_block", {})
+            if isinstance(cb, dict):
+                cb_type = cb.get("type")
+                if cb_type == "text" and isinstance(cb.get("text"), str):
+                    return cb.get("text", ""), "", False
+                elif cb_type == "thinking" and isinstance(cb.get("thinking"), str):
+                    return "", cb.get("thinking", ""), False
+
+        if event_name == "content_block_delta":
+            delta = data.get("delta", {})
+            if isinstance(delta, dict):
+                delta_type = delta.get("type")
+                if delta_type == "text_delta":
+                    text = delta.get("text", "")
+                    return (text, "", False) if isinstance(text, str) else ("", "", False)
+                elif delta_type == "thinking_delta":
+                    thinking_text = delta.get("thinking", "")
+                    return ("", thinking_text, False) if isinstance(thinking_text, str) else ("", "", False)
+
+                elif delta_type == "thinking_summary_delta":
+                    summary_text = delta.get("summary", delta.get("thinking", ""))
+                    return ("", summary_text, False) if isinstance(summary_text, str) else ("", "", False)
+
+        return "", "", False
 
     @classmethod
     def get_id(cls) -> str:
@@ -127,11 +158,22 @@ class ClaudeParser(ResponseParser):
 
     @classmethod
     def get_description(cls) -> str:
-        return "Parse Claude SSE streams and ignore thinking blocks"
+        return "Parse Claude SSE streams including Extended Thinking blocks"
+
+    def should_require_explicit_done(self) -> bool:
+        # Claude's stream object may report capture completion after an
+        # intermediate snapshot; message_stop is the reliable protocol end.
+        return True
+
+    def should_wait_for_replacement_stream_on_incomplete_capture(self) -> bool:
+        return True
 
     @classmethod
     def get_supported_patterns(cls) -> List[str]:
-        return ["chat_conversations", "/completion"]
+        # The conversation path is also used by /title and other JSON requests.
+        # Match the actual SSE completion endpoint so auxiliary requests cannot
+        # replace the active stream.
+        return ["/completion"]
 
 
 __all__ = ["ClaudeParser"]

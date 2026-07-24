@@ -139,6 +139,8 @@ class GeminiParser(ResponseParser):
     def __init__(self) -> None:
         self._last_len = 0      # 已发送给上层的字符数
         self._full_cache = ""   # 最新完整文本
+        self._last_reasoning_len = 0
+        self._full_reasoning_cache = ""
         self._last_raw_length = 0
         self._pending_raw = ""
         self._seen_media_refs: set[str] = set()
@@ -163,6 +165,7 @@ class GeminiParser(ResponseParser):
             if not new_data:
                 return {
                     "content": "",
+                    "reasoning_content": "",
                     "images": [],
                     "done": False,
                     "error": None,
@@ -171,14 +174,14 @@ class GeminiParser(ResponseParser):
                     ),
                 }
 
-            full_txt, done = self._parse_incremental(
+            full_txt, full_reasoning, done = self._parse_incremental(
                 new_data,
                 is_stream_start=is_stream_start,
             )
             images = self._extract_generated_images_from_increment(new_data)
         except Exception as exc:  # pragma: no cover
             logger.debug(f"[GeminiParser] 解析异常: {exc}")
-            return {"content": "", "images": [], "done": False, "error": str(exc)}
+            return {"content": "", "reasoning_content": "", "images": [], "done": False, "error": str(exc)}
 
         delta = ""
         if full_txt is not None and len(full_txt) > self._last_len:
@@ -186,8 +189,15 @@ class GeminiParser(ResponseParser):
             self._last_len = len(full_txt)
             self._full_cache = full_txt
 
+        delta_reasoning = ""
+        if full_reasoning is not None and len(full_reasoning) > self._last_reasoning_len:
+            delta_reasoning = full_reasoning[self._last_reasoning_len :]
+            self._last_reasoning_len = len(full_reasoning)
+            self._full_reasoning_cache = full_reasoning
+
         return {
             "content": delta,
+            "reasoning_content": delta_reasoning,
             "images": images,
             "done": done,
             "error": None,
@@ -199,6 +209,8 @@ class GeminiParser(ResponseParser):
     def reset(self) -> None:
         self._last_len = 0
         self._full_cache = ""
+        self._last_reasoning_len = 0
+        self._full_reasoning_cache = ""
         self._last_raw_length = 0
         self._last_raw_response = ""
         self._pending_raw = ""
@@ -354,9 +366,7 @@ class GeminiParser(ResponseParser):
         elif len(text) >= 24:
             score += 5
 
-        if cls._looks_like_reasoning(text):
-            score -= 400
-        elif text.startswith("**"):
+        if text.startswith("**"):
             score -= 30
 
         if lowered.startswith(("r_", "c_", "rc_")) and len(text) <= 80:
@@ -422,19 +432,70 @@ class GeminiParser(ResponseParser):
 
         return best_text
 
+    @classmethod
+    def _extract_thinking(cls, inner: Any) -> Optional[str]:
+        try:
+            content_block = cls._list_get(inner, 4)
+            if not isinstance(content_block, list) or not content_block:
+                return None
+
+            for item in content_block:
+                if not isinstance(item, list):
+                    continue
+
+                candidate = item
+                if isinstance(item, list) and item and isinstance(item[0], list):
+                    candidate = item[0]
+
+                if not isinstance(candidate, list):
+                    continue
+
+                # 1. 优先读取标准 37 槽位（零开销命中）
+                if len(candidate) > 37 and isinstance(candidate[37], list) and candidate[37]:
+                    thinking_data = candidate[37]
+                    if (
+                        isinstance(thinking_data, list)
+                        and thinking_data
+                        and isinstance(thinking_data[0], list)
+                        and thinking_data[0]
+                        and isinstance(thinking_data[0][0], str)
+                    ):
+                        text = thinking_data[0][0].strip()
+                        if text:
+                            return text
+
+                # 2. 备用：结构化特征扫描（抵御未来索引偏移变动）
+                for sub in candidate:
+                    if (
+                        isinstance(sub, list)
+                        and len(sub) >= 2
+                        and isinstance(sub[0], list)
+                        and sub[0]
+                        and isinstance(sub[0][0], str)
+                    ):
+                        text = sub[0][0].strip()
+                        if text and (
+                            text.startswith(("**Initiating", "**Assessing", "**Thinking", "**Outlining", "**Dissecting", "**Refining"))
+                            or "I'm " in text or "I've " in text or "Initiating " in text
+                        ):
+                            return text
+        except Exception:
+            pass
+        return None
+
     # ---------- 内部逻辑 ---------- #
     def _parse_incremental(
         self,
         raw_text: str,
         *,
         is_stream_start: bool = False,
-    ) -> Tuple[Optional[str], bool]:
+    ) -> Tuple[Optional[str], Optional[str], bool]:
         """
-        解析 Gemini 的 *增量* HTTP body 片段，返回 (完整文本, 是否结束)
+        解析 Gemini 的 *增量* HTTP body 片段，返回 (完整文本, 完整思考过程, 是否结束)
         """
         combined = f"{self._pending_raw}{str(raw_text or '')}"
         if not combined:
-            return None, False
+            return None, None, False
 
         # 仅在全新流的首个片段上清理安全前缀。
         if is_stream_start:
@@ -442,6 +503,7 @@ class GeminiParser(ResponseParser):
 
         lines = combined.splitlines(keepends=True)
         full_content: Optional[str] = None
+        full_reasoning: Optional[str] = None
         done = False
         pending_start = len(combined)
         i = 0
@@ -471,9 +533,11 @@ class GeminiParser(ResponseParser):
                 if self._is_end_signal(outer):
                     done = True
                 else:
-                    content = self._extract_content(outer)
+                    content, reasoning = self._extract_content(outer)
                     if content:
                         full_content = content
+                    if reasoning:
+                        full_reasoning = reasoning
                 cursor = line_end + len(lines[i + 1])
                 i += 2
             else:
@@ -481,7 +545,7 @@ class GeminiParser(ResponseParser):
                 i += 1
 
         self._pending_raw = combined[pending_start:] if pending_start < len(combined) else ""
-        return full_content, done
+        return full_content, full_reasoning, done
 
     @staticmethod
     def _is_end_signal(data: list) -> bool:
@@ -500,27 +564,27 @@ class GeminiParser(ResponseParser):
         return False
 
     # -------- 核心：提取 & 转义修复 -------- #
-    def _extract_content(self, outer: list) -> Optional[str]:
+    def _extract_content(self, outer: list) -> Tuple[Optional[str], Optional[str]]:
         """
-        outer → inner → content
-        outer[0][2] 是 *字符串*，再 json.loads 得 inner
-        inner[4][0][1][0] 是转义后的文本
+        outer → inner → (content, reasoning_content)
         """
         try:
             first = outer[0]
             if not (isinstance(first, list) and len(first) >= 3 and first[0] == "wrb.fr"):
-                return None
+                return None, None
 
             inner_raw: str = first[2]
             if not isinstance(inner_raw, str):
-                return None
+                return None, None
             inner = json.loads(inner_raw)  # type: ignore[arg-type]
 
-            return self._extract_direct_answer(inner)
+            content = self._extract_direct_answer(inner)
+            reasoning = self._extract_thinking(inner)
+            return content, reasoning
 
         except Exception as exc:  # pragma: no cover
             logger.debug(f"[GeminiParser] 提取失败: {exc}")
-            return None
+            return None, None
 
     def should_fallback_to_dom_when_no_visible_content(self) -> bool:
         return True

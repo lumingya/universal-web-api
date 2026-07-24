@@ -480,6 +480,34 @@ def test_global_chat_routes_plain_catalog_model_to_arena(monkeypatch):
     assert "'arena.ai'" not in matched_log
 
 
+def test_exposed_model_route_ignores_tabs_excluded_from_dynamic_routing():
+    class _TabPool:
+        excluded_urls = [
+            "https://arena.ai/c/one",
+            "https://arena.ai/c/two",
+            "https://arena.ai/c/three",
+        ]
+
+        @staticmethod
+        def get_tabs_with_index():
+            return [
+                {
+                    "persistent_index": index,
+                    "status": "idle",
+                    "url": f"https://arena.ai/c/{name}",
+                    "current_domain": "arena.ai",
+                    "exposed_model_name": "arena.ai",
+                }
+                for index, name in enumerate(("one", "two", "three", "four"), 1)
+            ]
+
+    browser = SimpleNamespace(tab_pool=_TabPool())
+    assert [
+        item["persistent_index"]
+        for item in tab_routes_api._get_tabs_by_exposed_model_name(browser, "arena.ai")
+    ] == [4]
+
+
 def test_sillytavern_models_aliases_are_registered():
     paths = {route.path for route in tab_routes_api.router.routes}
 
