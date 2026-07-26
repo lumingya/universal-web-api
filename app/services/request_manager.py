@@ -30,6 +30,15 @@ logger = get_logger("REQUEST")
 MAX_CAPTURED_RESPONSE_CHARS = 30000
 MAX_SSE_CHUNK_BUFFER_CHARS = 262144
 
+# 修复#3a：data:URI 与超长 base64 正则改为模块级预编译，供文本清洗与 token 估算共用
+_DATA_URI_PATTERN = re.compile(
+    r"data:(?:image|audio|video)/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\r\n]{1024,}",
+    re.IGNORECASE,
+)
+_LONG_BASE64_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{8192,}={0,2}(?![A-Za-z0-9+/])"
+)
+
 
 def _get_positive_int_env(name: str, default: int) -> int:
     try:
@@ -93,6 +102,9 @@ class RequestContext:
     _cancel_flag: bool = field(default=False, repr=False)
     cancel_reason: Optional[str] = None
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    # 修复#1：历史写入专用锁，串行化 _append_monitor_history 的"判重→插入"全过程；
+    # 必须最外层获取，持有期间允许再拿 ctx._lock / manager._history_lock（内层顺序不变）
+    _history_append_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _sse_chunk_buffer: str = field(default="", repr=False)
     
     # v2.0 新增：关联的标签页 ID
@@ -173,6 +185,17 @@ class RequestContext:
     
     def mark_failed(self, reason: str = None):
         with self._lock:
+            # 修复#2：终态保护——已 COMPLETED/FAILED/CANCELLED 的请求不再改写为 FAILED
+            if self.status in (
+                RequestStatus.COMPLETED,
+                RequestStatus.FAILED,
+                RequestStatus.CANCELLED,
+            ):
+                logger.debug(
+                    f"[{self.request_id}] mark_failed 忽略：已处于终态 "
+                    f"{self.status.value} (reason={reason or '-'})"
+                )
+                return
             self._cancel_flag = True
             self.status = RequestStatus.FAILED
             self.finished_at = time.time()
@@ -263,6 +286,7 @@ class RequestManager:
     _instance_lock = threading.Lock()
         
     # 僵尸请求超时时间（秒）- 超过此时间的 RUNNING 请求将被强制清理
+    # 注意：该类属性在 import 时求值，仅作兼容兜底；运行时请使用 _zombie_ttl() 以支持热配置
     ZOMBIE_TTL = _get_positive_int_env("REQUEST_ZOMBIE_TTL", 600)
 
     def __new__(cls):
@@ -291,7 +315,9 @@ class RequestManager:
         self._history_save_lock = threading.Lock()
         self._stats_save_lock = threading.Lock()
         self._save_schedule_lock = threading.Lock()
-        self._history_revision_cache: Optional[tuple[tuple[Any, ...], str]] = None
+        # 修复#5：缓存三元组 (cache_key, revision, 记录对象引用列表)，
+        # 持有引用保证 id() 在缓存有效期内不被 CPython 地址复用
+        self._history_revision_cache: Optional[tuple[tuple[Any, ...], str, List[Dict[str, Any]]]] = None
         self._stats_save_requested = False
         self._history_save_requested = False
         self._stats_save_worker: Optional[threading.Thread] = None
@@ -303,9 +329,18 @@ class RequestManager:
         self._cleanup_stale_temp_files()
         self._load_stats()
         self._load_history()
-        
+
+        # 修复#4：启动定时僵尸清扫 daemon 线程，低流量时段也能清理超时请求
+        # （保留 create_request 里的现有触发；daemon 线程随进程退出，无需 shutdown 处理）
+        self._zombie_sweep_thread = threading.Thread(
+            target=self._run_zombie_sweep_loop,
+            daemon=True,
+            name="request-zombie-sweep",
+        )
+        self._zombie_sweep_thread.start()
+
         self._initialized = True
-        
+
         logger.debug("RequestManager 初始化完成")
         
     def _load_stats(self):
@@ -353,6 +388,10 @@ class RequestManager:
 
     def _request_monitor_max_records(self) -> int:
         return _browser_int("REQUEST_MONITOR_MAX_RECORDS", 200, min_value=0, max_value=2000)
+
+    def _zombie_ttl(self) -> int:
+        """僵尸请求判定阈值（秒）。优先读 BrowserConstants，便于前端热配置。"""
+        return _browser_int("REQUEST_ZOMBIE_TTL", int(self.ZOMBIE_TTL or 600), min_value=30, max_value=3600)
 
     def _request_monitor_enabled(self) -> bool:
         return _browser_bool("REQUEST_MONITOR_ENABLED", True) and self._request_monitor_max_records() > 0
@@ -502,14 +541,9 @@ class RequestManager:
         if "[内容已截断，原始长度" in text:
             return text
 
-        data_uri_pattern = re.compile(
-            r"data:(?:image|audio|video)/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\r\n]{1024,}",
-            re.IGNORECASE,
-        )
-        text = data_uri_pattern.sub("[图片占位符]", text)
-
-        long_base64_pattern = re.compile(r"(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{8192,}={0,2}(?![A-Za-z0-9+/])")
-        text = long_base64_pattern.sub("[图片占位符]", text)
+        # 修复#3a：使用模块级预编译正则，避免每次调用重复编译
+        text = _DATA_URI_PATTERN.sub("[图片占位符]", text)
+        text = _LONG_BASE64_PATTERN.sub("[图片占位符]", text)
 
         if len(text) > max_chars:
             return text[:max_chars] + f"\n\n[内容已截断，原始长度 {len(text)} 字符]"
@@ -720,10 +754,24 @@ class RequestManager:
     def _estimate_tokens(text: str) -> int:
         if not text:
             return 0
+        # 修复#3a：先把 data:URI 与超长 base64 替换成短占位符（空格），
+        # 避免三个 findall 在大 base64 上全量执行；被剥离的字节按每 4 字符≈1 token 折算补偿
+        stripped_tokens = 0
+        if len(text) >= 1024:
+            original_len = len(text)
+            text = _DATA_URI_PATTERN.sub(" ", text)
+            text = _LONG_BASE64_PATTERN.sub(" ", text)
+            stripped_chars = original_len - len(text)
+            if stripped_chars > 0:
+                stripped_tokens = stripped_chars // 4
         ascii_words = re.findall(r"[A-Za-z0-9_]+", text)
         non_ascii_chars = re.findall(r"[^\x00-\x7F\s]", text)
         punctuation = re.findall(r"[^\w\s]", text, flags=re.UNICODE)
-        return max(1, int(len(ascii_words) * 1.25 + len(non_ascii_chars) * 0.8 + len(punctuation) * 0.25))
+        return max(
+            1,
+            int(len(ascii_words) * 1.25 + len(non_ascii_chars) * 0.8 + len(punctuation) * 0.25)
+            + stripped_tokens,
+        )
 
     @staticmethod
     def _coerce_token_count(value: Any) -> int:
@@ -804,7 +852,7 @@ class RequestManager:
         records: List[Dict[str, Any]],
         record: Dict[str, Any],
         *,
-        max_records: int = 200,
+        max_records: int = 200,  # 兜底值；调用方应显式传入 _request_monitor_max_records()
     ) -> None:
         key = cls._history_order_key(record)
         left = 0
@@ -857,7 +905,10 @@ class RequestManager:
         if replace_index is not None:
             previous_record = self._monitor_history.pop(replace_index)
 
-        self._append_sorted_history_record_unlocked(self._monitor_history, record)
+        # 修复：显式传入配置上限，否则回落到默认 200 条，与 REQUEST_MONITOR_MAX_RECORDS 冲突并批量截断历史
+        self._append_sorted_history_record_unlocked(
+            self._monitor_history, record, max_records=self._request_monitor_max_records()
+        )
         self._history_revision_cache = None
         return previous_record
 
@@ -1201,17 +1252,33 @@ class RequestManager:
             return []
 
         text = chunk.replace("\r\n", "\n").replace("\r", "\n")
+        dropped_chars = 0
+        complete_segments: List[str] = []
         with ctx._lock:
             combined = f"{ctx._sse_chunk_buffer}{text}"
             if "\n\n" not in combined:
-                ctx._sse_chunk_buffer = combined[-MAX_SSE_CHUNK_BUFFER_CHARS:]
-                return []
+                # 修复#6：超限时清空缓冲而非截尾——截断片段可能与后续数据拼出坏帧
+                if len(combined) > MAX_SSE_CHUNK_BUFFER_CHARS:
+                    dropped_chars = len(combined)
+                    ctx._sse_chunk_buffer = ""
+                else:
+                    ctx._sse_chunk_buffer = combined
+            else:
+                segments = combined.split("\n\n")
+                complete_segments = segments[:-1]
+                tail = segments[-1]
+                # 修复#6：尾部超限同样清空丢弃
+                if tail and len(tail) > MAX_SSE_CHUNK_BUFFER_CHARS:
+                    dropped_chars = len(tail)
+                    ctx._sse_chunk_buffer = ""
+                else:
+                    ctx._sse_chunk_buffer = tail or ""
 
-            segments = combined.split("\n\n")
-            complete_segments = segments[:-1]
-            tail = segments[-1]
-            ctx._sse_chunk_buffer = tail[-MAX_SSE_CHUNK_BUFFER_CHARS:] if tail else ""
-
+        if dropped_chars:
+            logger.debug(
+                f"[{ctx.request_id}] SSE 监控缓冲超过 {MAX_SSE_CHUNK_BUFFER_CHARS} 字符"
+                f"（实际 {dropped_chars}），已整体清空丢弃（仅影响监控采集，不影响转发）"
+            )
         if not complete_segments:
             return []
         return self._iter_sse_payloads("\n\n".join(complete_segments) + "\n\n")
@@ -1265,27 +1332,30 @@ class RequestManager:
         detail_enabled = self._request_monitor_detail_enabled()
         prompt_capture_limit = min(20000, self._request_monitor_capture_chars())
 
+        # 修复#3b：重清洗（正则替换/递归拷贝）全部移到 ctx._lock 之外执行，锁内只做赋值。
+        # payload_dict / prompt_text / messages 均为本地变量，锁外清洗无竞态。
+        monitor_route_domain = self._canonical_monitor_domain(route_domain)
+        monitor_update = {
+            "endpoint": endpoint,
+            "route_domain": monitor_route_domain,
+            "target_domain": monitor_route_domain,
+            "route_group": str(route_group or "").strip(),
+            "tab_index": tab_index,
+            "preset_name": resolved_preset,
+            "model": model,
+            "request_type": request_type,
+            "is_stream": is_stream,
+            "is_multimodal": self._has_multimodal_payload(messages),
+            "prompt_tokens": prompt_tokens,
+        }
+        if detail_enabled and prompt_capture_limit > 0:
+            monitor_update["prompt"] = self._sanitize_text_for_storage(
+                prompt_text,
+                max_chars=prompt_capture_limit,
+            )
+            monitor_update["payload"] = self._sanitize_for_storage(payload_dict)
+
         with ctx._lock:
-            monitor_route_domain = self._canonical_monitor_domain(route_domain)
-            monitor_update = {
-                "endpoint": endpoint,
-                "route_domain": monitor_route_domain,
-                "target_domain": monitor_route_domain,
-                "route_group": str(route_group or "").strip(),
-                "tab_index": tab_index,
-                "preset_name": resolved_preset,
-                "model": model,
-                "request_type": request_type,
-                "is_stream": is_stream,
-                "is_multimodal": self._has_multimodal_payload(messages),
-                "prompt_tokens": prompt_tokens,
-            }
-            if detail_enabled and prompt_capture_limit > 0:
-                monitor_update["prompt"] = self._sanitize_text_for_storage(
-                    prompt_text,
-                    max_chars=prompt_capture_limit,
-                )
-                monitor_update["payload"] = self._sanitize_for_storage(payload_dict)
             ctx.monitor.update(monitor_update)
 
     def update_request_metadata(self, request_id: str, **metadata: Any) -> bool:
@@ -1531,6 +1601,14 @@ class RequestManager:
             monitor.pop("response_text", None)
 
     def _append_monitor_history(self, ctx: RequestContext) -> None:
+        # 修复#1：整个"判重→插入完成"流程持 ctx 专用历史锁执行，消除
+        # finish_request / cancel_request / capture_external_response 并发时
+        # 判重(ctx._lock 内)与插入(_history_lock 内)之间的跨锁竞态窗口。
+        # 该锁为最外层锁；锁内可再获取 ctx._lock / _history_lock，内层顺序保持不变。
+        with ctx._history_append_lock:
+            self._append_monitor_history_inner(ctx)
+
+    def _append_monitor_history_inner(self, ctx: RequestContext) -> None:
         tail_payloads = self._flush_sse_payloads_for_context(ctx)
         if tail_payloads:
             self._capture_response_payloads(ctx, tail_payloads)
@@ -1695,7 +1773,10 @@ class RequestManager:
                     previous_history_key=previous_history_key,
                 )
             else:
-                self._append_sorted_history_record_unlocked(self._monitor_history, record)
+                # 修复：显式传入配置上限，否则回落到默认 200 条，与 REQUEST_MONITOR_MAX_RECORDS 冲突并批量截断历史
+                self._append_sorted_history_record_unlocked(
+                    self._monitor_history, record, max_records=self._request_monitor_max_records()
+                )
                 self._history_revision_cache = None
             self._trim_monitor_history_unlocked()
 
@@ -1801,7 +1882,11 @@ class RequestManager:
         if cache and cache[0] == cache_key:
             return cache[1]
         revision = self._history_revision_unlocked(records)
-        self._history_revision_cache = (cache_key, revision)
+        # 修复#5：缓存 value 同时持有记录对象引用（侵入最小方案）。
+        # 由于旧记录对象被缓存持有而保持存活，其 id() 不可能被新对象复用；
+        # 因此 cache_key 中 id 相等即等价于 is 同一对象，消除 not_modified 误报。
+        # （记录 dict 插入历史后不做原地修改，替换总是生成新 dict，故内部字符串 id 同样稳定）
+        self._history_revision_cache = (cache_key, revision, list(records))
         return revision
 
     @staticmethod
@@ -2022,6 +2107,8 @@ class RequestManager:
     def _cleanup_old_requests(self) -> List[RequestContext]:
         """清理旧请求（修复版：不因单个未完成请求阻塞所有清理）"""
         now = time.time()
+        # 修复：改为运行时读取，支持前端热配置（原类属性在 import 时求值，改配置需重启）
+        zombie_ttl = self._zombie_ttl()
         over_capacity = len(self._requests) > self._max_history
         to_delete = []
         history_contexts: List[RequestContext] = []
@@ -2038,7 +2125,7 @@ class RequestManager:
             elif status == RequestStatus.RUNNING:
                 started = snapshot["started_at"] or snapshot["created_at"]
                 active_at = snapshot.get("last_activity_at") or started
-                if now - active_at > self.ZOMBIE_TTL:
+                if now - active_at > zombie_ttl:
                     logger.warning(
                         f"[{req_id}] 僵尸请求 (无活动 {now - active_at:.0f}s, 运行 {now - started:.0f}s)，强制清理"
                     )
@@ -2047,7 +2134,7 @@ class RequestManager:
                     history_contexts.append(ctx)
             elif status == RequestStatus.QUEUED:
                 queued_at = snapshot["created_at"] or now
-                if now - queued_at > self.ZOMBIE_TTL:
+                if now - queued_at > zombie_ttl:
                     logger.warning(
                         f"[{req_id}] 排队请求超时 (等待 {now - queued_at:.0f}s)，强制清理"
                     )
@@ -2063,7 +2150,22 @@ class RequestManager:
             logger.debug(f"清理了 {len(to_delete)} 个旧请求")
 
         return history_contexts
-    
+
+    def _run_zombie_sweep_loop(self) -> None:
+        """修复#4：每 60 秒清扫一次僵尸/超时请求（daemon 线程，捕获所有异常防止线程死亡）"""
+        while True:
+            time.sleep(60)
+            try:
+                with self._requests_lock:
+                    cleanup_history_contexts = self._cleanup_old_requests()
+                for stale_ctx in cleanup_history_contexts:
+                    try:
+                        self._append_monitor_history(stale_ctx)
+                    except Exception as e:
+                        logger.debug(f"写入清理请求监控历史失败: {e}")
+            except Exception as e:
+                logger.debug(f"僵尸请求定时清扫异常: {e}")
+
     def start_request(self, ctx: RequestContext, tab_id: str = None):
         """标记请求开始执行"""
         ctx.mark_running(tab_id)

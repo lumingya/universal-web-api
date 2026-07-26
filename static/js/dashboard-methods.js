@@ -6,6 +6,23 @@
     const DASHBOARD_TOKEN_STORAGE_KEY = 'dashboard_token'
     const LEGACY_API_TOKEN_STORAGE_KEY = 'api_token'
 
+    function formatGitCompareErrorText(error) {
+        const raw = String((error && error.message) || error || '').trim()
+        const lowered = raw.toLowerCase()
+        if (raw.includes('未找到 git') || raw.includes('未检测到 Git') || lowered.includes('git 命令')) {
+            return '未检测到 Git：对比 main 需要本机安装 Git，且程序目录是 git clone 出来的仓库。这不影响其它功能的使用。'
+        }
+        if (lowered.includes('not a git repository') || raw.includes('不是 Git 仓库')) {
+            return '当前程序目录不是 Git 仓库（例如压缩包解压安装），读不到 main 分支的已提交配置。这不影响其它功能的使用。'
+        }
+        if (lowered.includes('unknown revision') || lowered.includes('bad revision')
+            || lowered.includes('invalid object name') || lowered.includes('ambiguous argument')) {
+            return '本地仓库里找不到 main 分支：可以先执行 git fetch，或确认默认分支名称。'
+        }
+        return raw || '读取 main 分支失败'
+    }
+    window.formatGitCompareErrorText = formatGitCompareErrorText
+
     function getStoredDashboardToken() {
         try {
             return String(
@@ -28,7 +45,43 @@
         localStorage.removeItem(LEGACY_API_TOKEN_STORAGE_KEY)
     }
 
+    // 站点友好名称：解决 "domain.split('.')[0]" 在 chat.deepseek.com / chat.qwen.ai
+    // 或 aistudio.google.com / aistudio.xiaomimimo.com 这类站点上撞出一堆同名（chat、aistudio）的问题
+    const SITE_FRIENDLY_NAMES = {
+        'aistudio.google.com': 'Google AI Studio',
+        'aistudio.xiaomimimo.com': '小米 MiMo AI Studio',
+        'grok.com': 'Grok',
+        'chatgpt.com': 'ChatGPT',
+        'gemini.google.com': 'Gemini',
+        'chat.deepseek.com': 'DeepSeek',
+        'www.doubao.com': '豆包 Doubao',
+        'claude.ai': 'Claude',
+        'arena.ai': 'LMArena',
+        'chat.qwen.ai': '通义千问 Qwen',
+        'www.kimi.com': 'Kimi',
+        'chatglm.cn': '智谱清言 ChatGLM',
+        'ai.google.dev': 'Google AI (ai.google.dev)',
+        'www.google.com': 'Google'
+    }
+    // 域名首段是这些通用词时，单独显示会分不清是哪个站点（比如两个 "chat"）
+    const GENERIC_DOMAIN_LABELS = new Set(['www', 'chat', 'ai', 'app', 'api', 'web', 'my', 'portal', 'console', 'platform'])
+
+    function siteDisplayName(domain) {
+        const value = String(domain || '').trim()
+        if (!value) return domain
+        if (SITE_FRIENDLY_NAMES[value]) return SITE_FRIENDLY_NAMES[value]
+
+        const labels = value.replace(/^www\./, '').split('.')
+        const first = labels[0] || value
+        if (GENERIC_DOMAIN_LABELS.has(first.toLowerCase()) && labels.length > 1) {
+            return first + ' · ' + labels[1]
+        }
+        return first
+    }
+    window.siteDisplayName = siteDisplayName
+
     window.DashboardMethods = {
+        siteDisplayName,
         async initializeDashboard() {
             await this.loadConfig(true)
             await this.loadBrowserConstants().catch(() => {})
@@ -548,6 +601,15 @@
             }
         },
 
+        // 修复：FilePastePanel / PromptPaddingPanel 编辑的是独立草稿，必须 flush 才会回写到
+        // presetConfig。原先只有 saveConfig 调用，导致 JSON 预览既显示旧值也保存旧值。
+        // 抽成方法后在读取/保存配置的各处统一调用。
+        flushConfigTabDrafts() {
+            if (this.$refs && this.$refs.configTab && typeof this.$refs.configTab.flushMutableSectionDrafts === 'function') {
+                this.$refs.configTab.flushMutableSectionDrafts()
+            }
+        },
+
         async saveConfig() {
             if (!this.validateConfig()) {
                 return
@@ -555,9 +617,7 @@
 
             this.isSaving = true
             try {
-                if (this.$refs && this.$refs.configTab && typeof this.$refs.configTab.flushMutableSectionDrafts === 'function') {
-                    this.$refs.configTab.flushMutableSectionDrafts()
-                }
+                this.flushConfigTabDrafts()
                 await this.apiRequest('/api/config', {
                     method: 'POST',
                     body: JSON.stringify({ config: this.sites })
@@ -810,7 +870,7 @@
                 return true;
             } catch (error) {
                 this.mainCompareSummaryItems = [];
-                this.mainCompareSummaryError = error.message;
+                this.mainCompareSummaryError = formatGitCompareErrorText(error);
                 return false;
             } finally {
                 this.mainCompareSummaryLoading = false;
@@ -984,6 +1044,7 @@
 
         getLogColorClass(level) {
             const colors = {
+                'DEBUG': 'bg-slate-50 dark:bg-slate-900/30',
                 'INFO': 'bg-green-50 dark:bg-green-900/20',
                 'AI': 'bg-purple-50 dark:bg-purple-900/20',
                 'OK': 'bg-green-50 dark:bg-green-900/20',
@@ -996,6 +1057,7 @@
 
         getLogLevelClass(level) {
             const colors = {
+                'DEBUG': 'text-slate-500 dark:text-slate-400',
                 'INFO': 'text-green-600 dark:text-green-400',
                 'AI': 'text-purple-600 dark:text-purple-400',
                 'OK': 'text-green-600 dark:text-green-400',
@@ -1400,73 +1462,9 @@
             }
         },
 
-        normalizeBrowserConstantsForEditor(rawConfig = {}) {
-            const raw = rawConfig && typeof rawConfig === 'object' ? rawConfig : {};
-            const normalized = {};
-
-            for (const group of Object.values(BROWSER_CONSTANTS_SCHEMA)) {
-                for (const [key, field] of Object.entries(group.items || {})) {
-                    normalized[key] = field.default;
-                }
-            }
-
-            for (const key of Object.keys(normalized)) {
-                if (key.startsWith('TAB_POOL_')) {
-                    continue;
-                }
-                if (Object.prototype.hasOwnProperty.call(raw, key)) {
-                    normalized[key] = raw[key];
-                }
-            }
-
-            const tabPool = raw.tab_pool && typeof raw.tab_pool === 'object' ? raw.tab_pool : {};
-            normalized.TAB_POOL_MAX_TABS = raw.TAB_POOL_MAX_TABS ?? tabPool.max_tabs ?? normalized.TAB_POOL_MAX_TABS;
-            normalized.TAB_POOL_MIN_TABS = raw.TAB_POOL_MIN_TABS ?? tabPool.min_tabs ?? normalized.TAB_POOL_MIN_TABS;
-            normalized.TAB_POOL_IDLE_TIMEOUT = raw.TAB_POOL_IDLE_TIMEOUT ?? tabPool.idle_timeout ?? normalized.TAB_POOL_IDLE_TIMEOUT;
-            normalized.TAB_POOL_ACQUIRE_TIMEOUT = raw.TAB_POOL_ACQUIRE_TIMEOUT ?? tabPool.acquire_timeout ?? normalized.TAB_POOL_ACQUIRE_TIMEOUT;
-            normalized.TAB_POOL_STUCK_TIMEOUT = raw.TAB_POOL_STUCK_TIMEOUT ?? tabPool.stuck_timeout ?? normalized.TAB_POOL_STUCK_TIMEOUT;
-
-            return normalized;
-        },
-
-        serializeBrowserConstants(editorConfig = {}, rawBase = {}) {
-            const base = rawBase && typeof rawBase === 'object'
-                ? JSON.parse(JSON.stringify(rawBase))
-                : {};
-            const merged = this.normalizeBrowserConstantsForEditor(editorConfig);
-            const obsoleteKeys = [
-                'DEFAULT_PORT',
-                'STREAM_RERENDER_WAIT',
-                'STREAM_MIN_VALID_LENGTH',
-                'STREAM_INITIAL_ELEMENT_WAIT',
-                'STREAM_MAX_ABNORMAL_COUNT',
-                'STREAM_MAX_ELEMENT_MISSING',
-                'STREAM_CONTENT_SHRINK_THRESHOLD'
-            ];
-
-            for (const key of obsoleteKeys) {
-                delete base[key];
-            }
-
-            for (const key of Object.keys(merged)) {
-                if (key.startsWith('TAB_POOL_')) {
-                    continue;
-                }
-                base[key] = merged[key];
-            }
-
-            const existingTabPool = base.tab_pool && typeof base.tab_pool === 'object' ? base.tab_pool : {};
-            base.tab_pool = {
-                ...existingTabPool,
-                max_tabs: merged.TAB_POOL_MAX_TABS,
-                min_tabs: merged.TAB_POOL_MIN_TABS,
-                idle_timeout: merged.TAB_POOL_IDLE_TIMEOUT,
-                acquire_timeout: merged.TAB_POOL_ACQUIRE_TIMEOUT,
-                stuck_timeout: merged.TAB_POOL_STUCK_TIMEOUT
-            };
-
-            return base;
-        },
+        // 修复：此处原有一份与下方「浏览器常量」区块完全相同的
+        // normalizeBrowserConstantsForEditor / serializeBrowserConstants 重复定义（后定义者生效），
+        // 已删除这份无效的前置副本，只保留下方那份。
 
         async importSettingsBackup(payload) {
             if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
@@ -1507,9 +1505,21 @@
             this.isLoadingEnv = true;
             try {
                 const data = await this.apiRequest('/api/settings/env');
+                const fileConfig = data.config || {};
+                // 修复：DASHBOARD_AUTH_ENABLED 未写进 .env 时，后端运行时语义是「沿用 AUTH_ENABLED」。
+                // 若这里直接用 schema 默认值 false 填充，用户保存任意一项都会把
+                // DASHBOARD_AUTH_ENABLED=false 写进 .env，静默关掉控制面板认证。
+                // 后端在 effective 里给出真实生效值，仅在 .env 确实缺该键时采纳。
+                const effective = (data.effective && typeof data.effective === 'object') ? data.effective : {};
+                const inherited = {};
+                if (!Object.prototype.hasOwnProperty.call(fileConfig, 'DASHBOARD_AUTH_ENABLED')
+                    && Object.prototype.hasOwnProperty.call(effective, 'DASHBOARD_AUTH_ENABLED')) {
+                    inherited.DASHBOARD_AUTH_ENABLED = !!effective.DASHBOARD_AUTH_ENABLED;
+                }
                 this.envConfig = {
                     ...this.getEnvDefaults(),
-                    ...(data.config || {})
+                    ...inherited,
+                    ...fileConfig
                 };
                 this.envConfigOriginal = JSON.parse(JSON.stringify(this.envConfig));
             } catch (error) {
@@ -1700,7 +1710,21 @@
         async saveBrowserConstants() {
             this.isSavingConstants = true;
             try {
-                const payload = this.serializeBrowserConstants(this.browserConstants, this.browserConstantsRaw);
+                // 修复：browserConstantsRaw 只在首屏/首次进设置页加载各一次，期间「标签页池」页签
+                // 可能已通过 PUT /api/tab-pool/config 改过同一个 browser_config.json。用陈旧快照做
+                // merge 基底会把 route_groups / excluded_urls / allocation_mode 等整块回退。
+                // 这里只重新拉取 raw 基底，不调用 loadBrowserConstants()，以免覆盖用户当前未保存的编辑。
+                let rawBase = this.browserConstantsRaw;
+                try {
+                    const fresh = await this.apiRequest('/api/settings/browser-constants');
+                    if (fresh && fresh.config && typeof fresh.config === 'object') {
+                        rawBase = fresh.config;
+                    }
+                } catch (error) {
+                    console.warn('刷新浏览器常量基底失败，沿用上次快照:', error);
+                }
+
+                const payload = this.serializeBrowserConstants(this.browserConstants, rawBase);
                 await this.apiRequest('/api/settings/browser-constants', {
                     method: 'POST',
                     body: JSON.stringify({ config: payload })
@@ -1788,14 +1812,19 @@
             const current = this.updateCheck && typeof this.updateCheck === 'object'
                 ? this.updateCheck
                 : {};
+            // 修复：检查失败时后端会把 latest_* 显式清空，这里若继续用 `||` 回落旧值，
+            // 界面会同时显示"最新版本号"和"检查失败"，语义矛盾。
+            // 只有后端确实没带这些键（如轮询中的部分响应）才回落。
+            const hasKey = (key) => !!data && Object.prototype.hasOwnProperty.call(data, key);
+            const pick = (key) => String((hasKey(key) ? data[key] : current[key]) || '');
             this.updateCheck = {
                 checked: !!(data && data.checked),
                 checking: !!(data && data.checking),
                 available: !!(data && data.available),
                 current_version: String((data && data.current_version) || current.current_version || ''),
-                latest_version: String((data && data.latest_version) || current.latest_version || ''),
-                latest_tag: String((data && data.latest_tag) || current.latest_tag || ''),
-                published_at: String((data && data.published_at) || current.published_at || ''),
+                latest_version: pick('latest_version'),
+                latest_tag: pick('latest_tag'),
+                published_at: pick('published_at'),
                 repo: String((data && data.repo) || current.repo || ''),
                 checked_at: data && data.checked_at ? data.checked_at : (current.checked_at || null),
                 error: String((data && data.error) || '')
@@ -1815,6 +1844,30 @@
                     this.notify('版本检查状态读取失败: ' + error.message, 'error');
                 }
                 throw error;
+            }
+        },
+
+        async refreshUpdateCheck() {
+            // 补齐入口：后端 POST /api/update/check 会真正访问 GitHub 重查一次，
+            // 而 GET 只读启动时的缓存状态（system.py 注释明确「不会访问 GitHub」）。
+            // 此前前端只调 GET，用户没有任何"立即检查更新"的入口。
+            if (this.updateCheckRefreshing) return;
+            this.updateCheckRefreshing = true;
+            try {
+                const data = await this.apiRequest('/api/update/check', { method: 'POST', timeoutMs: 20000 });
+                const applied = this.applyUpdateCheck(data);
+                if (applied.error) {
+                    this.notify('版本检查失败: ' + applied.error, 'error');
+                } else if (applied.available) {
+                    this.notify('发现新版本: ' + (applied.latest_tag || applied.latest_version), 'info');
+                } else {
+                    this.notify('已是最新版本', 'success');
+                }
+                return applied;
+            } catch (error) {
+                this.notify('版本检查失败: ' + error.message, 'error');
+            } finally {
+                this.updateCheckRefreshing = false;
             }
         },
 
@@ -2218,8 +2271,12 @@
                                 prompt: item.prompt,
                                 response: item.response,
                                 error_stack: item.error_stack,
-                                payload: item.payload,
-                                response_payload: item.response_payload,
+                                // 修复：这里原本缓存 payload / response_payload，但后端从未产出这两个键，
+                                // 每次轮询都会把两个 undefined 键塞进每条记录，已删除。
+                                // 同时补上 error_message / summary：不缓存的话，下一次轮询会用列表里的
+                                // 截断版本覆盖掉已加载的完整详情。
+                                error_message: item.error_message,
+                                summary: item.summary,
                                 detail_loaded: true,
                                 has_detail: true
                             }])
@@ -2295,8 +2352,12 @@
                         prompt: detailPayload.prompt ?? current.prompt,
                         response: detailPayload.response ?? current.response,
                         error_stack: detailPayload.error_stack ?? current.error_stack,
-                        payload: detailPayload.payload ?? current.payload,
-                        response_payload: detailPayload.response_payload ?? current.response_payload,
+                        // 修复：列表投影会把 error_message 截到 800 字、summary 截到 240 字，
+                        // 详情接口返回的才是完整原文；此前白名单漏掉这两个键，详情抽屉永远显示截断版本。
+                        error_message: detailPayload.error_message ?? current.error_message,
+                        summary: detailPayload.summary ?? current.summary,
+                        // 修复：这里原本还合并 payload / response_payload，但后端从未产出这两个键，只会
+                        // 给记录塞进两个 undefined 字段，已删除。
                         token_estimate: detailPayload.token_estimate ?? current.token_estimate,
                         detail_text_lengths: detailPayload.detail_text_lengths ?? current.detail_text_lengths,
                         detail_loaded: true,
@@ -2528,6 +2589,12 @@
 
         selectSite(domain) {
             this.currentDomain = domain
+        },
+
+        selectSiteFromSearch(domain) {
+            if (!domain) return
+            this.selectSite(domain)
+            this.searchQuery = ''
         },
 
         addNewSite() {
@@ -2836,11 +2903,15 @@
         },
 
         getJsonPreviewData() {
+            // 修复：先把面板草稿回写到 presetConfig，否则预览显示的是未包含本次编辑的旧值
+            this.flushConfigTabDrafts()
             const config = this.getActivePresetConfig() || {}
             return JSON.parse(JSON.stringify(config))
         },
 
         async saveJsonPreview(rawText) {
+            // 修复：保存前同样要 flush 面板草稿，否则这条保存路径会静默丢弃用户未回写的编辑
+            this.flushConfigTabDrafts()
             if (!this.currentDomain) {
                 this.notify('请先选择站点', 'warning')
                 return

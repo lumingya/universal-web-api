@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import codecs
 import json
+import re
 import time
 import uuid
 from typing import Any, AsyncIterator, Dict, List, Optional
@@ -386,6 +387,10 @@ def _anthropic_messages_to_openai(messages: Any) -> List[Dict[str, Any]]:
                 continue
 
             block_type = str(block.get("type") or "").strip().lower()
+            # 修复1: thinking/redacted_thinking 块直接丢弃，避免整段 thinking JSON（含 signature base64）
+            # 走 fallback 序列化被塞进 prompt；其他未知类型仍保持原有 fallback 行为
+            if block_type in {"thinking", "redacted_thinking"}:
+                continue
             if block_type == "tool_use" and role == "assistant":
                 tool_name = str(block.get("name") or "").strip()
                 tool_use_id = str(block.get("id") or "").strip() or f"call_{uuid.uuid4().hex[:12]}"
@@ -751,6 +756,18 @@ def _estimate_message_tokens(text: str) -> int:
     return int(request_manager._estimate_tokens(text))
 
 
+# 修复5: 用于在估算 token 前剥离 base64 图片数据的正则
+_DATA_URI_RE = re.compile(r"data:[^;]+;base64,[A-Za-z0-9+/=]+")
+# Anthropic image block 的 base64 是裸串（无 data: 前缀），用长 base64 连续串兜底
+_LONG_BASE64_RE = re.compile(r"[A-Za-z0-9+/]{256,}={0,2}")
+
+
+def _strip_base64_for_estimate(text: str) -> str:
+    # 修复5: 估算前把 data:URI 与超长 base64 串替换为短占位符，避免 base64 图片导致 input_tokens 严重虚高
+    text = _DATA_URI_RE.sub("[data_uri_omitted]", text)
+    return _LONG_BASE64_RE.sub("[base64_omitted]", text)
+
+
 def _count_tokens_payload(body: AnthropicCountTokensRequest) -> int:
     parts: List[str] = []
     if body.system not in (None, "", []):
@@ -758,7 +775,9 @@ def _count_tokens_payload(body: AnthropicCountTokensRequest) -> int:
     parts.append(_serialize_content_value(body.messages))
     if body.tools:
         parts.append(json.dumps(body.tools, ensure_ascii=False))
-    return _estimate_message_tokens("\n\n".join(part for part in parts if part))
+    return _estimate_message_tokens(
+        _strip_base64_for_estimate("\n\n".join(part for part in parts if part))
+    )
 
 
 def _serialize_tool_arguments_fragment(value: Any) -> str:
@@ -932,7 +951,9 @@ async def _anthropic_stream_from_openai_inner(
 
     def _content_part_blocks_to_text(parts: Any) -> str:
         blocks = _openai_content_parts_to_anthropic_blocks(parts)
-        return "\n".join(
+        # 修复3: 同一 delta 内多个 text part 直接拼接（与 chat.py 的 _extract_delta_content_text 一致），
+        # 避免插入原文不存在的换行
+        return "".join(
             str(block.get("text") or "")
             for block in blocks
             if isinstance(block, dict) and block.get("type") == "text" and str(block.get("text") or "")
@@ -1025,7 +1046,8 @@ async def _anthropic_stream_from_openai_inner(
         parts = emitted_responses_message_parts.get(message_key)
         if not isinstance(parts, dict):
             return ""
-        return "\n".join(
+        # 修复3: 已发送 part 直接拼接，与实际输出的 text delta 保持一致，避免多余换行
+        return "".join(
             text
             for _index, text in sorted(parts.items())
             if str(text or "")
@@ -1502,6 +1524,8 @@ async def _anthropic_stream_from_openai_inner(
                 "stop_sequence": matched_stop_sequence or fallback_stop_sequence,
             },
             "usage": {
+                # 修复4: 按 Anthropic 协议在 message_delta 的 usage 中一并输出已收集的 input_tokens
+                "input_tokens": input_tokens,
                 "output_tokens": output_tokens
                 if saw_usage_chunk
                 else _estimate_message_tokens("".join(emitted_text_for_usage)),
@@ -1587,6 +1611,31 @@ def _wrap_openai_response_as_anthropic(
     )
 
 
+def _http_exception_to_anthropic_response(exc: HTTPException, request_id: str) -> JSONResponse:
+    # 修复2: 内部 chat 工作流抛出的 HTTPException 不再以 OpenAI/FastAPI 的 {"detail":...} 冒泡，
+    # 保留原 status_code，包装成 Anthropic 错误结构返回
+    detail = exc.detail
+    if isinstance(detail, str):
+        message = detail
+    else:
+        try:
+            message = json.dumps(detail, ensure_ascii=False)
+        except Exception:
+            message = str(detail)
+    headers: Dict[str, str] = {"request-id": request_id}
+    if exc.headers:
+        headers.update(exc.headers)
+    return JSONResponse(
+        content=_build_anthropic_error_payload(
+            status_code=exc.status_code,
+            message=message,
+            request_id=request_id,
+        ),
+        status_code=exc.status_code,
+        headers=headers,
+    )
+
+
 def _build_count_tokens_response(body: AnthropicCountTokensRequest) -> JSONResponse:
     request_id = _new_request_id()
     return JSONResponse(
@@ -1605,11 +1654,15 @@ async def create_message(
     request_id = _new_request_id()
     openai_payload = _anthropic_request_to_openai_payload(body)
     chat_body = chat_api.ChatRequest(**openai_payload)
-    response = await chat_api.chat_completions(
-        request=request,
-        body=chat_body,
-        authenticated=authenticated,
-    )
+    # 修复2: 捕获内部工作流的 HTTPException，转换为 Anthropic 错误格式
+    try:
+        response = await chat_api.chat_completions(
+            request=request,
+            body=chat_body,
+            authenticated=authenticated,
+        )
+    except HTTPException as exc:
+        return _http_exception_to_anthropic_response(exc, request_id)
     return _wrap_openai_response_as_anthropic(response, body, request_id)
 
 
@@ -1628,15 +1681,19 @@ async def create_message_with_route_domain(
     request_id = _new_request_id()
     openai_payload = _anthropic_request_to_openai_payload(body)
     chat_body = tab_routes_api.ChatRequest(**openai_payload)
-    response = await tab_routes_api.chat_with_route_domain(
-        route_domain=route_domain,
-        request=request,
-        body=chat_body,
-        tab_index=tab_index,
-        selector=selector,
-        preset_name=None,
-        authenticated=authenticated,
-    )
+    # 修复2: 捕获内部工作流的 HTTPException，转换为 Anthropic 错误格式
+    try:
+        response = await tab_routes_api.chat_with_route_domain(
+            route_domain=route_domain,
+            request=request,
+            body=chat_body,
+            tab_index=tab_index,
+            selector=selector,
+            preset_name=None,
+            authenticated=authenticated,
+        )
+    except HTTPException as exc:
+        return _http_exception_to_anthropic_response(exc, request_id)
     return _wrap_openai_response_as_anthropic(response, body, request_id)
 
 
@@ -1656,15 +1713,19 @@ async def create_message_with_route_domain_and_preset(
     request_id = _new_request_id()
     openai_payload = _anthropic_request_to_openai_payload(body)
     chat_body = tab_routes_api.ChatRequest(**openai_payload)
-    response = await tab_routes_api.chat_with_route_domain(
-        route_domain=route_domain,
-        request=request,
-        body=chat_body,
-        tab_index=tab_index,
-        selector=selector,
-        preset_name=preset_name,
-        authenticated=authenticated,
-    )
+    # 修复2: 捕获内部工作流的 HTTPException，转换为 Anthropic 错误格式
+    try:
+        response = await tab_routes_api.chat_with_route_domain(
+            route_domain=route_domain,
+            request=request,
+            body=chat_body,
+            tab_index=tab_index,
+            selector=selector,
+            preset_name=preset_name,
+            authenticated=authenticated,
+        )
+    except HTTPException as exc:
+        return _http_exception_to_anthropic_response(exc, request_id)
     return _wrap_openai_response_as_anthropic(response, body, request_id)
 
 

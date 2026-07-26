@@ -8,6 +8,9 @@ window.CommandsTabComponent = {
         return {
             commands: [],
             loading: false,
+            // action_id -> 上一次的动作类型；用于切换类型时判断 selector/timeout 等
+            // 同名字段的语义分组是否变化（仅组件内部状态，不写入命令 JSON）
+            actionTypeSnapshots: {},
             meta: { trigger_types: {}, action_types: {} },
             availableDomains: [],
             availableTabs: [],

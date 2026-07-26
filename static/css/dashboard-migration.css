@@ -159,11 +159,21 @@ html:not(.dark) #app .text-slate-400 {
     min-width: var(--uwa-sidebar-width);
     height: 100%;
     flex-direction: column;
-    overflow: hidden;
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-width: none; /* Firefox：隐藏滚动条，仍可滚动 */
+    -ms-overflow-style: none; /* IE/旧版 Edge */
     border-right: 1px solid var(--uwa-border);
     background: var(--uwa-surface);
     color: var(--uwa-text);
     transition: width 180ms ease, min-width 180ms ease, transform 180ms ease;
+}
+
+/* Chrome / Safari / 新版 Edge：隐藏滚动条，仍可滚动 */
+.app-sidebar::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
 }
 
 .app-brand {

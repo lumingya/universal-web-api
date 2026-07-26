@@ -166,6 +166,18 @@ window.StreamConfigPanel = {
             ];
         }
     },
+    watch: {
+        // 修复：组件被 v-show 复用时不会重新 mounted，切到 network 模式的站点后
+        // availableParsers 仍为空，导致已配置的解析器在下拉里匹配不到 option
+        isNetworkMode: {
+            immediate: true,
+            handler(value) {
+                if (value && !(this.availableParsers || []).length && !this.loadingParsers) {
+                    this.loadParsers();
+                }
+            }
+        }
+    },
     mounted() {
         this.loadTransportProfiles();
         if (this.isNetworkMode) {
@@ -375,7 +387,7 @@ window.StreamConfigPanel = {
                  @click="toggle">
                 <div class="flex items-center gap-2">
                     <span class="w-4 inline-flex justify-center text-gray-500 dark:text-gray-400" v-html="collapsed ? $icons.chevronDown : $icons.chevronUp"></span>
-                    <h3 class="font-semibold text-gray-900 dark:text-white">📡 网络监听模式</h3>
+                    <h3 class="font-semibold text-gray-900 dark:text-white">网络监听模式</h3>
                     <span v-if="isNetworkMode" class="text-xs font-medium px-2 py-0.5 rounded bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400">已启用</span>
                     <span v-else class="text-xs font-medium px-2 py-0.5 rounded bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400">DOM 流式</span>
                 </div>

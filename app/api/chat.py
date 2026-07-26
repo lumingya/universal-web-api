@@ -9,6 +9,7 @@ app/api/chat.py - 核心聊天 API
 
 import json
 import codecs
+import contextlib  # 修复(7)：用于 aclosing 确保内部异步生成器及时清理
 import copy
 import os
 import re
@@ -87,7 +88,9 @@ RESPONSES_STATE_MAX_ENTRIES = 1024
 RESPONSES_STATE_TTL_SEC = 3600.0
 
 _responses_state_lock = threading.RLock()
-_responses_state_by_id: "OrderedDict[str, tuple[float, List[Dict[str, Any]]]]" = OrderedDict()
+# 修复(4)：会话历史改存 json.dumps 序列化字符串（不可变），
+# 读写两侧不再对含 base64 图片的完整消息历史做 deepcopy，序列化/反序列化均在锁外执行
+_responses_state_by_id: "OrderedDict[str, tuple[float, str]]" = OrderedDict()
 
 
 class _ToolCallingExecutionCancelled(Exception):
@@ -121,6 +124,36 @@ def _manual_terminate_response() -> JSONResponse:
         status_code=499,
         headers={"x-should-retry": "false"},
     )
+
+
+def _request_cancelled_response() -> JSONResponse:
+    # 修复(2)：非手动终止的内部取消也返回与手动终止一致的结构化 499，而非无结构 500
+    return JSONResponse(
+        content={
+            "error": {
+                "message": "请求已被取消",
+                "type": "request_cancelled",
+                "code": "request_cancelled",
+            }
+        },
+        status_code=499,
+        headers={"x-should-retry": "false"},
+    )
+
+
+def _is_genuine_task_cancellation() -> bool:
+    """修复(2)：区分「当前协程真的被外部 cancel」与「内部路径把取消转换成的 CancelledError」。
+
+    cancelling() > 0 说明本任务确实收到了外部取消（如服务关闭、连接层取消），
+    此时必须继续向上抛；否则视为内部转换信号，可安全地做结构化收尾。
+    """
+    task = asyncio.current_task()
+    if task is None:
+        return True  # 保守：无法判断时按真实取消处理
+    try:
+        return task.cancelling() > 0
+    except AttributeError:
+        return True
 
 
 def _is_absolute_request_timeout_error(error: Any) -> bool:
@@ -300,7 +333,9 @@ def _validate_image_inputs(messages: list) -> None:
 
             if isinstance(content, str):
                 s = content.strip()
-                if "image_url" in s:
+                # 修复(1)：字符串 content 仅在包含 "data:image" 前缀时才视为声明了图片；
+                # 之前只要含 "image_url" 子串（如纯文本聊到这个词）就会被误判为图片声明而 400
+                if "data:image" in s:
                     has_image_declared = True
                 if "data:image" in s and "base64," in s and not s.endswith("base64,"):
                     has_any_valid_image = True
@@ -428,7 +463,11 @@ def _load_responses_state(previous_response_id: Optional[str]) -> List[Dict[str,
                 detail=f"previous_response_id not found or expired: {response_id}",
             )
         _responses_state_by_id.move_to_end(response_id)
-        return copy.deepcopy(entry[1])
+        serialized = entry[1]
+    # 修复(4)：锁内只做 dict 读写与 LRU 维护；大 payload 的反序列化放到锁外，
+    # 避免含 base64 图片的历史在全局锁持有期间做重拷贝阻塞其他请求。
+    # json round-trip 对该数据（本就来自 JSON 请求体）与 deepcopy 语义等价
+    return json.loads(serialized)
 
 
 def _store_responses_state(
@@ -447,17 +486,25 @@ def _store_responses_state(
     if assistant is None:
         return
 
-    history = copy.deepcopy(list(request_messages or []))
-    assistant_message = copy.deepcopy(assistant)
+    # 修复(4)：不再 deepcopy 完整历史；仅浅拷贝 assistant 消息以安全改写 role，
+    # 随后整体 json.dumps 成不可变字符串存储（序列化在锁外执行，dumps 本身不改动源数据）
+    history = list(request_messages or [])
+    assistant_message = dict(assistant)
     assistant_message["role"] = "assistant"
     history.append(assistant_message)
 
     key = str(response_id or "").strip()
     if not key:
         return
+    try:
+        serialized = json.dumps(history, ensure_ascii=False)
+    except (TypeError, ValueError) as e:
+        # 数据理论上均来自 JSON 请求体/响应体，不可序列化属异常场景：跳过存储而非让请求 500
+        logger.warning(f"responses 会话历史序列化失败（跳过存储）: {e}")
+        return
     with _responses_state_lock:
         _prune_responses_state_locked()
-        _responses_state_by_id[key] = (time.time(), history)
+        _responses_state_by_id[key] = (time.time(), serialized)
         _responses_state_by_id.move_to_end(key)
         _prune_responses_state_locked()
 
@@ -1888,7 +1935,19 @@ def _should_include_stream_usage(body: ChatRequest) -> bool:
     return isinstance(stream_options, dict) and bool(stream_options.get("include_usage"))
 
 
-def _pack_stream_usage_chunk(model: str) -> str:
+def _pack_stream_usage_chunk(model: str, ctx: Optional[RequestContext] = None) -> str:
+    # 修复(8)：usage 不再硬编码 0。request_manager 已在 ctx.monitor 上维护估算值：
+    # prompt_tokens 由 record_request_input 写入，response_tokens 由
+    # capture_response_chunk/capture_response_payload 累计，此处低成本读取填入
+    prompt_tokens = 0
+    completion_tokens = 0
+    if ctx is not None:
+        try:
+            prompt_tokens = max(0, int(ctx.monitor.get("prompt_tokens") or 0))
+            completion_tokens = max(0, int(ctx.monitor.get("response_tokens") or 0))
+        except (TypeError, ValueError, AttributeError):
+            prompt_tokens = 0
+            completion_tokens = 0
     data = {
         "id": f"chatcmpl-usage-{int(time.time() * 1000)}",
         "object": "chat.completion.chunk",
@@ -1896,18 +1955,21 @@ def _pack_stream_usage_chunk(model: str) -> str:
         "model": model,
         "choices": [],
         "usage": {
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
         },
     }
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-def _maybe_pack_stream_usage_chunk(body: ChatRequest) -> Optional[str]:
+def _maybe_pack_stream_usage_chunk(
+    body: ChatRequest,
+    ctx: Optional[RequestContext] = None,
+) -> Optional[str]:
     if not _should_include_stream_usage(body):
         return None
-    return _pack_stream_usage_chunk(body.model)
+    return _pack_stream_usage_chunk(body.model, ctx)
 
 
 def _split_sse_done_frame(chunk: Any) -> tuple[str, bool]:
@@ -1927,7 +1989,11 @@ def _split_sse_done_frame(chunk: Any) -> tuple[str, bool]:
     return "".join(kept_frames), had_done
 
 
-def _iter_stream_chunks_with_optional_usage(body: ChatRequest, chunks):
+def _iter_stream_chunks_with_optional_usage(
+    body: ChatRequest,
+    chunks,
+    ctx: Optional[RequestContext] = None,
+):
     usage_emitted = False
     for chunk in chunks:
         emit_chunk, chunk_had_done = _split_sse_done_frame(chunk)
@@ -1935,7 +2001,8 @@ def _iter_stream_chunks_with_optional_usage(body: ChatRequest, chunks):
             yield emit_chunk
         if chunk_had_done:
             if not usage_emitted:
-                usage_chunk = _maybe_pack_stream_usage_chunk(body)
+                # 修复(8)：透传 ctx 以便 usage 携带已有的 token 估算
+                usage_chunk = _maybe_pack_stream_usage_chunk(body, ctx)
                 if usage_chunk:
                     usage_emitted = True
                     yield usage_chunk
@@ -1979,7 +2046,9 @@ async def chat_completions(
     catalog_tab_index: Optional[int] = None
     try:
         browser = get_browser(auto_connect=False)
-        tabs = browser.tab_pool.get_tabs_with_index()
+        # get_tabs_with_index 可能触发同步 CDP 扫描（阻塞网络 I/O），
+        # 不能在事件循环线程直接调用，否则浏览器卡顿时全服务假死。
+        tabs = await asyncio.to_thread(browser.tab_pool.get_tabs_with_index)
         route_info = inspect_model_route(body.model, tabs)
         route_domain = str(route_info.get("route_domain") or "")
         if route_info.get("match_type") == "none":
@@ -2093,29 +2162,41 @@ async def chat_completions(
     except Exception as e:
         logger.debug(f"[DIAG] 估算原始请求长度失败: {e}")
 
-    request_manager.record_request_input(
-        ctx,
-        body.model_dump(),
-        endpoint="/v1/chat/completions",
-        route_domain=route_domain,
-        preset_name=body.preset_name,
-    )
-    with logger.context(ctx.request_id):
-        logger.info("开始")
+    # 修复(5)：create_request 之后、生命周期函数（其内部 finally 才会 finish_request）
+    # 接管之前若抛异常，主动 finish_request 清理，避免 ctx 永久滞留 QUEUED 状态
+    try:
+        # 修复(6)：record_request_input 内部对完整消息执行重正则/大文本处理，
+        # 用 to_thread 移到线程池执行，避免阻塞事件循环；调用顺序保持不变
+        await asyncio.to_thread(
+            request_manager.record_request_input,
+            ctx,
+            body.model_dump(),
+            endpoint="/v1/chat/completions",
+            route_domain=route_domain,
+            preset_name=body.preset_name,
+        )
+        with logger.context(ctx.request_id):
+            logger.info("开始")
 
-        try:
-            logger.debug(
-                "[chat] 请求消息摘要: "
-                f"{summarize_messages_for_debug(body.messages)}"
+            try:
+                logger.debug(
+                    "[chat] 请求消息摘要: "
+                    f"{summarize_messages_for_debug(body.messages)}"
+                )
+            except Exception as e:
+                logger.debug(f"[chat] 请求消息摘要生成失败: {e}")
+
+            is_tool_calling = has_tool_calling_request(
+                messages=body.messages,
+                tools=body.tools,
+                functions=body.functions,
             )
-        except Exception as e:
-            logger.debug(f"[chat] 请求消息摘要生成失败: {e}")
+    except Exception:
+        request_manager.finish_request(ctx, success=False)
+        raise
 
-        if has_tool_calling_request(
-            messages=body.messages,
-            tools=body.tools,
-            functions=body.functions,
-        ):
+    with logger.context(ctx.request_id):
+        if is_tool_calling:
             if body.stream:
                 return StreamingResponse(
                     _stream_tool_calling_with_lifecycle(request, body, ctx),
@@ -2272,6 +2353,8 @@ async def _stream_with_lifecycle(
                 logger.debug("工作线程结束")
 
         worker_thread = threading.Thread(target=worker, daemon=True)
+        # 供 TabRecovery 判定旧 worker 是否退出（setattr 规避 dataclass 字段限制）
+        setattr(ctx, "worker_thread", worker_thread)
         worker_thread.start()
 
         last_sse_emit_at = time.monotonic()
@@ -2310,6 +2393,13 @@ async def _stream_with_lifecycle(
                     timeout=STREAM_QUEUE_POLL_TIMEOUT,
                 )
             except queue.Empty:
+                # 兜底：worker 的结束哨兵（None）在队列持续打满时可能被
+                # put_worker_queue_item 丢弃（final 宽限超时/取消时立即丢弃）。
+                # 若 worker 线程已退出且队列已排空，说明流已结束，直接收尾，
+                # 避免空转到 300 秒绝对超时并把已完成的响应误报为错误。
+                if not worker_thread.is_alive() and chunk_queue.empty():
+                    logger.warning("工作线程已退出且队列为空（结束标记疑似丢失），提前收尾流式消费")
+                    break
                 if time.monotonic() - last_sse_emit_at >= SSE_HEARTBEAT_INTERVAL:
                     yield SSEFormatter.pack_comment("keepalive")
                     last_sse_emit_at = time.monotonic()
@@ -2349,7 +2439,8 @@ async def _stream_with_lifecycle(
                     done_emitted = True
                     break
                 if chunk_had_done:
-                    usage_chunk = _maybe_pack_stream_usage_chunk(body)
+                    # 修复(8)：透传 ctx 以便 usage 携带已有的 token 估算
+                    usage_chunk = _maybe_pack_stream_usage_chunk(body, ctx)
                     if usage_chunk:
                         request_manager.capture_response_chunk(ctx, usage_chunk)
                         yield usage_chunk
@@ -2370,21 +2461,42 @@ async def _stream_with_lifecycle(
                 break
             await asyncio.sleep(0)
 
+        # 修复(3)：外部取消（如手动终止）后不再补发 usage+[DONE] 伪装成正常完成；
+        # stream_done/stop_sequence/audio_media_fast_return 是正常完成路径设置的取消原因，
+        # 仍走原有 flush 收尾
+        cancelled_midway = (
+            ctx.should_stop()
+            and str(ctx.cancel_reason or "") not in {
+                "stream_done",
+                "stop_sequence",
+                "audio_media_fast_return",
+            }
+        )
         if (
             not client_disconnected
             and not done_emitted
             and ctx.status != RequestStatus.FAILED
         ):
-            for tail_chunk in flush_openai_stop_state(stop_state, body.model):
-                request_manager.capture_response_chunk(ctx, tail_chunk)
-                yield tail_chunk
-            usage_chunk = _maybe_pack_stream_usage_chunk(body)
-            if usage_chunk:
-                request_manager.capture_response_chunk(ctx, usage_chunk)
-                yield usage_chunk
-            done_chunk = _pack_done()
-            request_manager.capture_response_chunk(ctx, done_chunk)
-            yield done_chunk
+            if cancelled_midway:
+                # 明确告知客户端响应因取消而不完整，避免半截回复被当成完整响应
+                cancel_code = "manual_terminate" if _is_manual_terminate(ctx) else "request_cancelled"
+                cancel_chunk = _pack_error("请求已被取消，响应不完整", cancel_code)
+                request_manager.capture_response_chunk(ctx, cancel_chunk)
+                yield cancel_chunk
+                done_chunk = _pack_done()
+                request_manager.capture_response_chunk(ctx, done_chunk)
+                yield done_chunk
+            else:
+                for tail_chunk in flush_openai_stop_state(stop_state, body.model):
+                    request_manager.capture_response_chunk(ctx, tail_chunk)
+                    yield tail_chunk
+                usage_chunk = _maybe_pack_stream_usage_chunk(body, ctx)
+                if usage_chunk:
+                    request_manager.capture_response_chunk(ctx, usage_chunk)
+                    yield usage_chunk
+                done_chunk = _pack_done()
+                request_manager.capture_response_chunk(ctx, done_chunk)
+                yield done_chunk
 
         if not ctx.should_stop() and ctx.status == RequestStatus.RUNNING:
             ctx.mark_completed()
@@ -2479,13 +2591,16 @@ async def _non_stream_with_lifecycle(
                 collected_content.append(content_text)
         return True
 
-    async for chunk in _stream_with_lifecycle(request, body, ctx):
-        if isinstance(chunk, str):
-            for data in _iter_buffered_stream_payloads(chunk):
-                if not _consume_stream_payload(data):
+    # 修复(7)：error 时 break 提前退出 async for，内部生成器的 finally（含 finish_request、
+    # worker 清理）会被推迟到 GC 才执行；用 aclosing 保证退出本块时同步 aclose
+    async with contextlib.aclosing(_stream_with_lifecycle(request, body, ctx)) as stream_gen:
+        async for chunk in stream_gen:
+            if isinstance(chunk, str):
+                for data in _iter_buffered_stream_payloads(chunk):
+                    if not _consume_stream_payload(data):
+                        break
+                if error_data:
                     break
-            if error_data:
-                break
 
     if not error_data:
         for data in _flush_buffered_stream_payloads():
@@ -2706,7 +2821,11 @@ async def _non_stream_tool_calling_with_lifecycle(
     except asyncio.CancelledError:
         if _is_manual_terminate(ctx):
             return _manual_terminate_response()
-        raise
+        # 修复(2)：内部转换出的取消信号（非真实协程取消）裸抛会让客户端收到
+        # 无结构 500；改为返回与手动终止一致的结构化 499 响应
+        if _is_genuine_task_cancellation():
+            raise
+        return _request_cancelled_response()
     except Exception as e:
         if _is_manual_terminate(ctx):
             return _manual_terminate_response()
@@ -2751,12 +2870,22 @@ async def _stream_tool_calling_with_lifecycle(
                 parsed,
                 legacy_function_call=legacy_function_call,
             ),
+            ctx=ctx,  # 修复(8)：透传 ctx 以便 usage 携带已有的 token 估算
         ):
             if await request.is_disconnected():
                 ctx.request_cancel("client_disconnected")
                 break
             yield chunk
             await asyncio.sleep(0)
+    except asyncio.CancelledError:
+        # 修复(2)：_complete_tool_calling_with_lifecycle 会把非手动终止的取消
+        # 转换为 CancelledError，此处原先只捕获 Exception，导致连接被硬切且无 [DONE]。
+        # 真实协程取消必须继续上抛；内部转换信号则发结构化错误事件后正常收尾
+        if _is_genuine_task_cancellation():
+            raise
+        cancel_code = "manual_terminate" if _is_manual_terminate(ctx) else "request_cancelled"
+        yield _pack_error("请求已被取消", cancel_code)
+        yield _pack_done()
     except Exception as e:
         message, code = _format_tool_calling_error(e)
         ctx.mark_failed(message)
@@ -2908,7 +3037,8 @@ async def list_models(
 ):
     """列出可用模型"""
     _verify_models_auth(authorization, x_api_key)
-    data = _collect_model_entries()
+    # _collect_model_entries 内部会触达浏览器（tab 扫描），移入线程池避免阻塞事件循环
+    data = await asyncio.to_thread(_collect_model_entries)
 
     if anthropic_version:
         return _build_anthropic_models_response(data)

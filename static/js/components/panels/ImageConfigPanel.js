@@ -54,7 +54,8 @@ window.ImageConfigPanel = {
                 timeout_seconds: 2.5,
                 transport: 'page_websocket_probe',
                 url_patterns: ['voicegenie', 'speech', 'audio', 'tts'],
-                extractor: 'voicegenie_ogg_pages',
+                // 修复：默认值与后端 get_default_*（voicegenie_binary_stream）对齐
+                extractor: 'voicegenie_binary_stream',
                 settle_seconds: 0.35,
                 max_payload_bytes: 10 * 1024 * 1024,
                 ...((this.imageConfig && this.imageConfig.audio_network_capture) || {})
@@ -325,7 +326,7 @@ window.ImageConfigPanel = {
                  @click="toggle">
                 <div class="flex items-center gap-2 flex-wrap">
                     <span class="w-4 inline-flex justify-center text-gray-500 dark:text-gray-400" v-html="collapsed ? $icons.chevronDown : $icons.chevronUp"></span>
-                    <h3 class="font-semibold text-gray-900 dark:text-white">🎞️ 多模态提取</h3>
+                    <h3 class="font-semibold text-gray-900 dark:text-white">多模态提取</h3>
                     <span v-if="isEnabled" class="px-2 py-0.5 text-xs bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-300 rounded font-medium">已启用</span>
                     <span v-else class="px-2 py-0.5 text-xs bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 rounded">未启用</span>
                     <span v-for="label in enabledLabels" :key="label"
@@ -394,6 +395,8 @@ window.ImageConfigPanel = {
                                         <option value="disabled">disabled</option>
                                         <option value="generic_only">generic_only</option>
                                         <option value="on_signal">on_signal</option>
+                                        <!-- 修复：补齐后端 MODALITY_RUN_POLICY_VALUES 的第 5 个枚举 -->
+                                        <option value="probe_if_trigger_found">probe_if_trigger_found</option>
                                         <option value="always_probe">always_probe</option>
                                     </select>
                                 </div>
@@ -492,6 +495,8 @@ window.ImageConfigPanel = {
                                         <option value="disabled">disabled</option>
                                         <option value="generic_only">generic_only</option>
                                         <option value="on_signal">on_signal</option>
+                                        <!-- 修复：补齐后端 MODALITY_RUN_POLICY_VALUES 的第 5 个枚举 -->
+                                        <option value="probe_if_trigger_found">probe_if_trigger_found</option>
                                         <option value="always_probe">always_probe</option>
                                     </select>
                                 </div>
@@ -576,17 +581,16 @@ window.ImageConfigPanel = {
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div>
                         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">最大大小 (MB)</label>
-                        <select :value="imageConfig.max_size_mb" @change="updateField('max_size_mb', parseInt($event.target.value))"
-                                class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent">
-                            <option :value="5">5 MB</option>
-                            <option :value="10">10 MB</option>
-                            <option :value="20">20 MB</option>
-                            <option :value="50">50 MB</option>
-                        </select>
+                        <!-- 修复：后端取值域是连续区间 1..100，原下拉只有 5/10/20/50，存 100 的预设会渲染空白并被砍到 ≤50 -->
+                        <input type="number" :value="imageConfig.max_size_mb"
+                               @input="updateField('max_size_mb', numberOrFallback($event.target.value, 10))"
+                               min="1" max="100" step="1"
+                               class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent">
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">防抖延迟 (秒)</label>
-                        <input type="number" :value="imageConfig.debounce_seconds" @input="updateField('debounce_seconds', parseFloat($event.target.value) || 2)" min="0" max="30" step="0.5"
+                        <!-- 修复：parseFloat("0") || 2 恒为 2，用户输 0 关防抖会被写成 2 秒；后端下限是 0 -->
+                        <input type="number" :value="imageConfig.debounce_seconds" @input="updateField('debounce_seconds', numberOrFallback($event.target.value, 2))" min="0" max="30" step="0.5"
                                class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent">
                     </div>
                     <div>
@@ -700,6 +704,8 @@ window.ImageConfigPanel = {
                                         :disabled="!audioNetworkCapture.enabled"
                                         class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent disabled:cursor-not-allowed">
                                     <option value="voicegenie_ogg_pages">voicegenie_ogg_pages</option>
+                                    <!-- 修复：补齐后端合法枚举，否则已存该值的预设会渲染成空白 -->
+                                    <option value="voicegenie_binary_stream">voicegenie_binary_stream</option>
                                 </select>
                             </div>
                         </div>

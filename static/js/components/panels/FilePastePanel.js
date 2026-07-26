@@ -11,6 +11,12 @@ window.FilePastePanel = {
     emits: ['update:collapsed'],
     data() {
         return {
+            // 内部分区折叠状态：高级附件规则默认收起，其余默认展开
+            sectionCollapsed: {
+                pasteMode: false,
+                sendConfirm: false,
+                advancedRules: true
+            },
             defaultFilePaste: {
                 enabled: false,
                 threshold: 50000,
@@ -34,8 +40,14 @@ window.FilePastePanel = {
                 { value: 'pdf', label: 'PDF' },
                 { value: 'error', label: 'ERROR' }
             ],
+            // 修复：补齐后端 get_default_send_confirmation_config() 的 7 个缺失键，
+            // 否则未配过这些项的预设打开面板时对应输入框为空（如 pre_retry_probe_window）
             defaultSendConfirmation: {
                 attachment_sensitivity: 'medium',
+                post_click_observe_window: 1.8,
+                pre_retry_probe_window: 0.12,
+                retry_observe_window: 0.9,
+                attachment_observe_window: 6.0,
                 max_retry_count: 2,
                 retry_interval: 0.6,
                 retry_cooldown_window: 1.5,
@@ -46,7 +58,10 @@ window.FilePastePanel = {
                 accept_attachment_disappear: false,
                 accept_probe_confirmation: true,
                 retry_block_on_stop_button: true,
-                retry_block_if_generating: true
+                retry_block_if_generating: true,
+                trust_network_activity: true,
+                trust_generating_indicator: true,
+                trust_send_disabled_with_input_shrink: true
             },
             defaultAttachmentMonitor: {
                 root_selectors: [],
@@ -116,6 +131,10 @@ window.FilePastePanel = {
             this.$emit('update:collapsed', !this.collapsed);
         },
 
+        toggleSection(key) {
+            this.sectionCollapsed[key] = !this.sectionCollapsed[key];
+        },
+
         getMutableFilePaste() {
             return this.filePasteConfig || {};
         },
@@ -150,10 +169,11 @@ window.FilePastePanel = {
         },
 
         updateThreshold(value) {
+            // 修复：此前 <1000 直接丢弃，DOM 与模型脱节；改为与后端一致的夹取
             const num = parseInt(value);
-            if (!isNaN(num) && num >= 1000) {
-                this.getMutableFilePaste().threshold = num;
-            }
+            this.getMutableFilePaste().threshold = Number.isFinite(num)
+                ? Math.max(1000, Math.min(num, 10000000))
+                : 50000;
         },
 
         updateTempFileType(value) {
@@ -221,7 +241,7 @@ window.FilePastePanel = {
                  @click="toggle">
                 <div class="flex items-center gap-2">
                     <span class="w-4 inline-flex justify-center text-gray-500 dark:text-gray-400" v-html="collapsed ? $icons.chevronDown : $icons.chevronUp"></span>
-                    <h3 class="font-semibold text-gray-900 dark:text-white">📄 文件粘贴 / 附件发送</h3>
+                    <h3 class="font-semibold text-gray-900 dark:text-white">文件粘贴 / 附件发送</h3>
                     <span class="text-sm text-gray-500 dark:text-gray-400">({{ statusText }})</span>
                 </div>
             </div>
@@ -233,21 +253,26 @@ window.FilePastePanel = {
                     </div>
                 </div>
 
-                <div class="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50/60 dark:bg-gray-900/30 p-4 space-y-4">
-                    <div class="flex items-center justify-between gap-4">
+                <div class="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50/60 dark:bg-gray-900/30 p-4"
+                     :class="sectionCollapsed.pasteMode ? '' : 'space-y-4'">
+                    <div class="flex items-center justify-between gap-4 cursor-pointer select-none -m-2 p-2 rounded-md hover:bg-gray-100/70 dark:hover:bg-gray-800/60 transition-colors"
+                         @click="toggleSection('pasteMode')">
                         <div>
-                            <div class="text-sm font-medium text-gray-800 dark:text-gray-100">文件粘贴模式</div>
-                            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400 leading-5">
+                            <div class="flex items-center gap-2 text-sm font-medium text-gray-800 dark:text-gray-100">
+                                <span class="w-4 inline-flex justify-center text-gray-400 dark:text-gray-500" v-html="sectionCollapsed.pasteMode ? $icons.chevronDown : $icons.chevronUp"></span>
+                                <span>文件粘贴模式</span>
+                            </div>
+                            <p v-show="!sectionCollapsed.pasteMode" class="mt-1 text-xs text-gray-500 dark:text-gray-400 leading-5">
                                 当文本长度超过阈值时，将文本写入所选临时文件并走附件上传；选择 ERROR 时会直接返回错误，并使用下方错误信息。
                             </p>
                         </div>
-                        <label class="toggle-label scale-90 flex-shrink-0">
+                        <label class="toggle-label scale-90 flex-shrink-0" @click.stop>
                             <input type="checkbox" :checked="resolvedFilePaste.enabled" @change="toggleEnabled" class="sr-only peer">
                             <div class="toggle-bg"></div>
                         </label>
                     </div>
 
-                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div v-show="!sectionCollapsed.pasteMode" class="grid grid-cols-1 md:grid-cols-3 gap-4">
                         <div>
                             <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">阈值</label>
                             <div class="flex items-center gap-2">
@@ -255,6 +280,7 @@ window.FilePastePanel = {
                                        :value="resolvedFilePaste.threshold"
                                        @input="updateThreshold($event.target.value)"
                                        min="1000"
+                                       max="10000000"
                                        step="1000"
                                        class="flex-1 border dark:border-gray-600 px-3 py-2 rounded-md text-sm text-right bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent">
                                 <span class="text-sm text-gray-500 dark:text-gray-400">字符</span>
@@ -284,7 +310,7 @@ window.FilePastePanel = {
                         </div>
                     </div>
 
-                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div v-show="!sectionCollapsed.pasteMode" class="grid grid-cols-1 md:grid-cols-3 gap-4">
                         <div>
                             <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">上传信号超时</label>
                             <div class="flex items-center gap-2">
@@ -326,7 +352,7 @@ window.FilePastePanel = {
                         </div>
                     </div>
 
-                    <label class="flex items-center gap-3 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
+                    <label v-show="!sectionCollapsed.pasteMode" class="flex items-center gap-3 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
                         <input type="checkbox"
                                class="rounded"
                                :checked="resolvedFilePaste.reacquire_input_after_upload"
@@ -334,7 +360,7 @@ window.FilePastePanel = {
                         <span>上传完成后重新定位输入框</span>
                     </label>
 
-                    <div>
+                    <div v-show="!sectionCollapsed.pasteMode">
                         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">上传后专用输入框 selector</label>
                         <input type="text"
                                :value="resolvedFilePaste.post_upload_input_selector"
@@ -345,19 +371,23 @@ window.FilePastePanel = {
                 </div>
 
                 <div class="rounded-xl border border-blue-200/80 dark:border-blue-800/70 bg-blue-50/70 dark:bg-blue-900/20 p-4">
-                    <div class="flex items-start justify-between gap-3">
+                    <div class="flex items-start justify-between gap-3 cursor-pointer select-none -m-2 p-2 rounded-md hover:bg-blue-100/50 dark:hover:bg-blue-900/30 transition-colors"
+                         @click="toggleSection('sendConfirm')">
                         <div>
-                            <div class="text-sm font-medium text-gray-800 dark:text-gray-100">附件发送判定</div>
-                            <p class="mt-1 text-xs leading-5 text-gray-600 dark:text-gray-300">
+                            <div class="flex items-center gap-2 text-sm font-medium text-gray-800 dark:text-gray-100">
+                                <span class="w-4 inline-flex justify-center text-gray-400 dark:text-gray-500" v-html="sectionCollapsed.sendConfirm ? $icons.chevronDown : $icons.chevronUp"></span>
+                                <span>附件发送判定</span>
+                            </div>
+                            <p v-show="!sectionCollapsed.sendConfirm" class="mt-1 text-xs leading-5 text-gray-600 dark:text-gray-300">
                                 这里会同时作用于文件粘贴和图片粘贴。点击发送后，系统会先观察附件预览、上传中状态、发送按钮灰态和页面进入生成态的信号，再决定这次附件是否真的发出去了。
                             </p>
                         </div>
-                        <span class="px-2 py-0.5 text-xs rounded-full bg-white/80 dark:bg-gray-800/80 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-700">
+                        <span class="px-2 py-0.5 text-xs rounded-full bg-white/80 dark:bg-gray-800/80 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-700 flex-shrink-0">
                             当前：{{ attachmentSensitivityMeta.label }}
                         </span>
                     </div>
 
-                    <div class="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3 items-start">
+                    <div v-show="!sectionCollapsed.sendConfirm" class="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3 items-start">
                         <div>
                             <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">敏感度</label>
                             <select :value="resolvedFilePaste.send_confirmation.attachment_sensitivity"
@@ -375,7 +405,7 @@ window.FilePastePanel = {
                         </div>
                     </div>
 
-                    <div class="mt-4 grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div v-show="!sectionCollapsed.sendConfirm" class="mt-4 grid grid-cols-1 md:grid-cols-4 gap-4">
                         <div>
                             <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">最大重试次数</label>
                             <div class="flex items-center gap-2">
@@ -430,7 +460,7 @@ window.FilePastePanel = {
                         </div>
                     </div>
 
-                    <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div v-show="!sectionCollapsed.sendConfirm" class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
                             <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">自动重试动作</label>
                             <select :value="resolvedFilePaste.send_confirmation.retry_action"
@@ -456,15 +486,21 @@ window.FilePastePanel = {
                         </div>
                     </div>
 
-                    <div class="mt-4 border-t border-blue-100 dark:border-blue-900/60 pt-4 space-y-4">
-                        <div>
-                            <div class="text-sm font-medium text-gray-800 dark:text-gray-100">高级附件规则</div>
-                            <p class="mt-1 text-xs leading-5 text-gray-600 dark:text-gray-300">
+                    <div v-show="!sectionCollapsed.sendConfirm" class="mt-4 border-t border-blue-100 dark:border-blue-900/60 pt-4"
+                         :class="sectionCollapsed.advancedRules ? '' : 'space-y-4'">
+                        <div class="cursor-pointer select-none -m-2 p-2 rounded-md hover:bg-blue-100/50 dark:hover:bg-blue-900/30 transition-colors"
+                             @click="toggleSection('advancedRules')">
+                            <div class="flex items-center gap-2 text-sm font-medium text-gray-800 dark:text-gray-100">
+                                <span class="w-4 inline-flex justify-center text-gray-400 dark:text-gray-500" v-html="sectionCollapsed.advancedRules ? $icons.chevronDown : $icons.chevronUp"></span>
+                                <span>高级附件规则</span>
+                                <span v-show="sectionCollapsed.advancedRules" class="text-xs font-normal text-gray-400 dark:text-gray-500">（点击展开）</span>
+                            </div>
+                            <p v-show="!sectionCollapsed.advancedRules" class="mt-1 text-xs leading-5 text-gray-600 dark:text-gray-300">
                                 像 Gemini 这类站点，可以在这里补发送按钮灰态 token、附件预览 selector 和 pending 文案。即使文件粘贴没开，这块也会继续影响图片上传和发送前的附件 gate。
                             </p>
                         </div>
 
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div v-show="!sectionCollapsed.advancedRules" class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <label class="flex items-center gap-3 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
                                 <input type="checkbox"
                                        class="rounded"
@@ -530,7 +566,7 @@ window.FilePastePanel = {
                             </label>
                         </div>
 
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div v-show="!sectionCollapsed.advancedRules" class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
                                 <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">空闲超时</label>
                                 <div class="flex items-center gap-2">
@@ -559,7 +595,7 @@ window.FilePastePanel = {
                             </div>
                         </div>
 
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div v-show="!sectionCollapsed.advancedRules" class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
                                 <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">附件预览 selector</label>
                                 <textarea
@@ -582,7 +618,7 @@ window.FilePastePanel = {
                             </div>
                         </div>
 
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div v-show="!sectionCollapsed.advancedRules" class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div>
                                 <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">忙碌文本 / token</label>
                                 <textarea
@@ -605,7 +641,7 @@ window.FilePastePanel = {
                             </div>
                         </div>
 
-                        <div>
+                        <div v-show="!sectionCollapsed.advancedRules">
                             <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">忽略忙碌文本 / token</label>
                             <textarea
                                 :value="formatRuleList(resolvedFilePaste.attachment_monitor.ignored_busy_text_markers)"
@@ -616,7 +652,7 @@ window.FilePastePanel = {
                             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">用于排除输入区固定开关或标签文案，避免被误判成附件仍在处理。</p>
                         </div>
 
-                        <div>
+                        <div v-show="!sectionCollapsed.advancedRules">
                             <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">根容器 selector</label>
                             <textarea
                                 :value="formatRuleList(resolvedFilePaste.attachment_monitor.root_selectors)"
@@ -627,7 +663,7 @@ window.FilePastePanel = {
                             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">当通用根容器猜错时再填。这里会限制附件节点和 pending 节点的查找范围。</p>
                         </div>
 
-                        <div class="border-t border-blue-100 dark:border-blue-900/60 pt-4 space-y-3">
+                        <div v-show="!sectionCollapsed.advancedRules" class="border-t border-blue-100 dark:border-blue-900/60 pt-4 space-y-3">
                             <div class="flex items-center justify-between gap-3">
                                 <div>
                                     <div class="text-sm font-medium text-gray-800 dark:text-gray-100">JS 状态探针</div>

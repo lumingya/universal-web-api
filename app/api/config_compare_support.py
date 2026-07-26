@@ -29,10 +29,26 @@ def _load_git_branch_sites_config(branch_name: str = "main") -> Dict[str, Any]:
         )
     except subprocess.CalledProcessError as exc:
         stderr = str(exc.stderr or "").strip()
-        detail = stderr or f"无法读取分支 {branch_name} 中的 {relative_config_path}"
+        lowered = stderr.lower()
+        if "not a git repository" in lowered:
+            detail = "当前程序目录不是 Git 仓库（例如压缩包解压安装），读不到 main 分支的已提交配置。这不影响其它功能的使用。"
+        elif (
+            "unknown revision" in lowered
+            or "bad revision" in lowered
+            or "invalid object name" in lowered
+            or "ambiguous argument" in lowered
+        ):
+            detail = f"本地仓库里找不到 {branch_name} 分支：可以先执行 git fetch，或确认默认分支名称。"
+        else:
+            detail = stderr or f"无法读取分支 {branch_name} 中的 {relative_config_path}"
         raise HTTPException(status_code=404, detail=detail)
     except FileNotFoundError:
-        raise HTTPException(status_code=500, detail="系统未找到 git 命令")
+        raise HTTPException(
+            status_code=500,
+            detail="未检测到 Git：对比 main 需要本机安装 Git，且程序目录是 git clone 出来的仓库。这不影响其它功能的使用。"
+        )
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"调用 git 失败: {exc}")
 
     try:
         payload = json.loads(result.stdout or "{}")

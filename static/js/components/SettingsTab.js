@@ -27,7 +27,8 @@ window.SettingsTab = {
         releasesLoading: { type: Boolean, default: false },
         releasesError: { type: String, default: '' },
         releasesCurrentVersion: { type: String, default: '' },
-        switchingTag: { type: String, default: null }
+        switchingTag: { type: String, default: null },
+        updateCheckRefreshing: { type: Boolean, default: false }
     },
     emits: [
         'save-env', 'reset-env', 'toggle-env-group',
@@ -36,7 +37,8 @@ window.SettingsTab = {
         'save-definitions', 'reset-definitions',
         'add-definition', 'edit-definition', 'remove-definition', 
         'toggle-definition', 'move-definition',
-        'load-releases', 'switch-to-version', 'show-changelog'
+        'load-releases', 'switch-to-version', 'show-changelog',
+        'refresh-update-check'
     ],
     data() {
         return {
@@ -234,6 +236,15 @@ window.SettingsTab = {
                         <div class="flex gap-2 items-center">
                             <span class="text-xs px-2 py-1 bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-700 rounded-full text-blue-700 dark:text-blue-300 font-mono font-medium">当前版本: v{{ releasesCurrentVersion || '加载中...' }}</span>
                             <div class="h-6 w-px bg-gray-200 dark:bg-gray-600 mx-2"></div>
+                            <!-- 补齐入口：POST /api/update/check 会真正访问 GitHub 重查；GET 只读启动缓存 -->
+                            <button @click.stop="$emit('refresh-update-check')" title="立即联网检查最新版本"
+                                    :disabled="updateCheckRefreshing"
+                                    :class="['px-2.5 py-1.5 text-xs rounded-lg border transition-colors',
+                                             updateCheckRefreshing
+                                                ? 'border-gray-200 dark:border-gray-600 text-gray-400 cursor-not-allowed'
+                                                : 'border-blue-200 dark:border-blue-700 text-blue-700 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/30']">
+                                {{ updateCheckRefreshing ? '检查中...' : '立即检查' }}
+                            </button>
                             <button @click.stop="$emit('load-releases')" title="刷新版本列表"
                                     :disabled="releasesLoading"
                                     class="p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors flex items-center justify-center">

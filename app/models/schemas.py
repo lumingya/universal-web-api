@@ -87,7 +87,7 @@ DEFAULT_SELECTOR_DEFINITIONS: List[SelectorDefinition] = [
     },
     {
         "key": "send_btn",
-        "description": "发送消息的按钮（通常是 type=submit 或带有发送图标 of 按钮）",
+        "description": "发送消息的按钮（通常是 type=submit 或带有发送图标的按钮）",
         "enabled": True,
         "required": True
     },

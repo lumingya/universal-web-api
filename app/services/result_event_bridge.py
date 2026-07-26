@@ -378,20 +378,36 @@ def _dedupe_and_append(event: Dict[str, Any]) -> bool:
         f"{event.get('session_id')}:{event.get('completion_id')}:"
         f"{event.get('conversation_id')}:{event.get('parser_id')}"
     )
+    # 修复#7：_DEDUPE_LOCK 内只做判重与占位更新，磁盘追加写移到锁外，
+    # 避免磁盘慢时所有标签页解析回调被该锁串行阻塞（_WRITE_LOCK 已保证写串行）。
+    # 占位保证并发的相同事件在写入完成前也会被判重拦截，不会重复落盘。
+    previous_digest: Optional[str] = None
     with _DEDUPE_LOCK:
         if digest and _LAST_DIGEST_BY_KEY.get(dedupe_key) == digest:
             _LAST_DIGEST_BY_KEY.move_to_end(dedupe_key)
             return False
 
-        # Keep the check, write, and cache update atomic so concurrent parser
-        # callbacks cannot append the same event more than once.
-        _append_event(event)
         if digest:
+            previous_digest = _LAST_DIGEST_BY_KEY.get(dedupe_key)
             _LAST_DIGEST_BY_KEY[dedupe_key] = digest
             _LAST_DIGEST_BY_KEY.move_to_end(dedupe_key)
             max_entries = _get_dedupe_max_entries()
             while len(_LAST_DIGEST_BY_KEY) > max_entries:
                 _LAST_DIGEST_BY_KEY.popitem(last=False)
+
+    try:
+        _append_event(event)
+    except Exception:
+        # 修复#7：写失败回滚占位记录（恢复旧摘要或删除），
+        # 避免该事件因"判重已记录但从未落盘"而被永久丢弃
+        if digest:
+            with _DEDUPE_LOCK:
+                if _LAST_DIGEST_BY_KEY.get(dedupe_key) == digest:
+                    if previous_digest is not None:
+                        _LAST_DIGEST_BY_KEY[dedupe_key] = previous_digest
+                    else:
+                        _LAST_DIGEST_BY_KEY.pop(dedupe_key, None)
+        raise
     return True
 
 

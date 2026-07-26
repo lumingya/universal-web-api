@@ -18,7 +18,12 @@ window.LogsTab = {
                 return this.logs;
             }
             if (this.filter === 'INFO') {
-                return this.logs.filter(log => log.level === 'INFO' || log.level === 'OK');
+                // 修复：normalizeLogLevel 会把带 [AI] / [OK] 标记的 INFO 日志重分类成 'AI' / 'OK'，
+                // 此前只按重分类后的 level 过滤，导致 INFO 档漏掉全部 [AI] 日志。
+                // rawLevel 保留了服务端原始级别，用它兜底把 INFO 还原成超集。
+                return this.logs.filter(log =>
+                    log.rawLevel === 'INFO' || log.level === 'INFO' || log.level === 'OK'
+                );
             }
             return this.logs.filter(log => log.level === this.filter);
         }
@@ -69,6 +74,7 @@ window.LogsTab = {
             if (log.level === 'WARN') return 'WARN';
             if (log.level === 'AI') return 'AI';
             if (log.level === 'OK') return 'OK';
+            if (log.level === 'DEBUG') return 'DEBUG';
             if (log.level === 'INFO' && this.isKeyCmdLog(this.getLogText(log))) return 'KEY';
             return 'INFO';
         },
@@ -76,6 +82,7 @@ window.LogsTab = {
         getLogColorClass(log) {
             const tone = this.getLogTone(log);
             const colors = {
+                'DEBUG': 'bg-slate-50 dark:bg-slate-900/30',
                 'INFO': 'bg-green-50 dark:bg-green-900/20',
                 'KEY': 'bg-sky-50 dark:bg-sky-900/20',
                 'AI': 'bg-purple-50 dark:bg-purple-900/20',
@@ -89,6 +96,7 @@ window.LogsTab = {
         getLogLevelClass(log) {
             const tone = this.getLogTone(log);
             const colors = {
+                'DEBUG': 'text-slate-500 dark:text-slate-400',
                 'INFO': 'text-green-600 dark:text-green-400',
                 'KEY': 'text-sky-500 dark:text-sky-300',
                 'AI': 'text-purple-600 dark:text-purple-400',
@@ -97,6 +105,13 @@ window.LogsTab = {
                 'ERROR': 'text-red-600 dark:text-red-400'
             };
             return colors[tone] || colors['INFO'];
+        },
+
+        getLogTextClass(log) {
+            // DEBUG 行正文做视觉降噪（灰色弱化），与控制台的暗灰 DEBUG 保持一致
+            return this.getLogTone(log) === 'DEBUG'
+                ? 'text-gray-500 dark:text-gray-400'
+                : 'dark:text-gray-200';
         }
     },
     updated() {
@@ -167,7 +182,7 @@ window.LogsTab = {
                             {{ log.requestTag || log.requestId }}
                         </span>
                     </div>
-                    <div class="mt-1 dark:text-gray-200 break-all whitespace-pre-wrap">
+                    <div :class="['mt-1 break-all whitespace-pre-wrap', getLogTextClass(log)]">
                         <span>{{ getLogText(log) }}</span>
                         <button v-if="hasRawLogText(log)"
                                 @click="toggleRawLog(log)"

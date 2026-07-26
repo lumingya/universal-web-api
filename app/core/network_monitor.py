@@ -110,6 +110,7 @@ class NetworkMonitor:
     CANCEL_CHECK_SLICE = 1.0              # 长等待期间的取消检查切片（秒）
     ACTIVE_STREAM_RESPONSE_POLL_TIMEOUT = 0.01  # 锁定 SSE 后仅快速扫队列，不阻塞吐出
     LISTEN_RESTART_BACKOFF = 0.1          # 异常重建后的最小退避，避免忙循环
+    PRESERVED_LISTENER_TTL = 120.0        # 修复#3b：可恢复错误后保留监听的最长存活时间（秒）
     
     def __init__(self, tab, formatter: SSEFormatter,
                  parser: ResponseParser,
@@ -233,7 +234,9 @@ class NetworkMonitor:
         self._send_attempt_baseline_targets = 0
         self._send_attempt_baseline_requests = 0
         self._send_attempt_marked_at = 0.0
-        
+        # 修复#3b：保留监听的过期时间戳（0 表示当前无保留状态）
+        self._preserve_deadline = 0.0
+
         logger.debug(
             f"[NetworkMonitor] 初始化完成 "
             f"(pattern={self._listen_pattern!r}, "
@@ -396,18 +399,37 @@ class NetworkMonitor:
         return f"HTTP {status_code} {reason}"
 
     @staticmethod
+    def _extract_status_code_from_error_detail(error: Any) -> int:
+        """修复#3a：从错误详情中解析 HTTP 状态码数值，解析不出返回 0。
+
+        本文件的终态 HTTP 错误统一经 _build_http_status_error_text 生成
+        "HTTP <code> <reason>" 格式；另兼容 "status=<code>" 类写法。
+        """
+        detail = str(error or "")
+        match = re.search(r"\bHTTP[ _:-]?\s*(\d{3})\b", detail, flags=re.IGNORECASE)
+        if not match:
+            match = re.search(
+                r"\bstatus(?:[ _-]?code)?\s*[=:]\s*(\d{3})\b",
+                detail,
+                flags=re.IGNORECASE,
+            )
+        if not match:
+            return 0
+        try:
+            return int(match.group(1))
+        except Exception:
+            return 0
+
+    @staticmethod
     def _should_preserve_listener_after_terminal_error(error: Any) -> bool:
-        """Keep Network listeners alive for challenge flows that auto-replay the request."""
-        detail = str(error or "").strip().lower()
-        return (
-            "429" in detail
-            or "403" in detail
-            or "503" in detail
-            or "too many requests" in detail
-            or "rate limit" in detail
-            or "forbidden" in detail
-            or "service unavailable" in detail
-        )
+        """Keep Network listeners alive for challenge flows that auto-replay the request.
+
+        修复#3a：不再用 "429"/"403" 子串匹配（URL、token 数等无关数字会误触发），
+        改为解析出 HTTP 状态码数值后与可自动重放的状态码集合比较；
+        解析不出数值则不保留监听。
+        """
+        status_code = NetworkMonitor._extract_status_code_from_error_detail(error)
+        return status_code in (403, 429, 503)
 
     def _listen_is_active(self) -> bool:
         try:
@@ -1001,7 +1023,10 @@ class NetworkMonitor:
         if data in (None, ""):
             return ""
         if isinstance(data, (bytes, bytearray)):
-            return data.decode("utf-8", errors="ignore")
+            # 修复#5：补丁层（patch_drissionpage.py 的 _listener_append_stream_v1）
+            # 已用增量 UTF-8 解码器保证 chunks[].data 恒为 str，此分支仅为防御性兜底；
+            # 若真出现 bytes，用 replace 暴露问题而非 ignore 静默丢字。
+            return data.decode("utf-8", errors="replace")
         if not isinstance(data, str):
             return str(data)
         return data
@@ -1103,8 +1128,10 @@ class NetworkMonitor:
         if isinstance(raw_body, str):
             return raw_body
         if isinstance(raw_body, (bytes, bytearray)):
+            # 修复#5：流式路径的 body 由补丁层拼接为 str，bytes 仅出现在非流式兜底；
+            # 统一用 replace 暴露编码问题而非 ignore 静默丢字。
             try:
-                return bytes(raw_body).decode("utf-8", errors="ignore")
+                return bytes(raw_body).decode("utf-8", errors="replace")
             except Exception:
                 return bytes(raw_body).decode("utf-8", "replace")
         if isinstance(raw_body, (dict, list)):
@@ -1329,6 +1356,85 @@ class NetworkMonitor:
         except Exception as e:
             logger.debug(f"[NetworkMonitor] 重置解析器失败（忽略）: {e}")
         return True
+
+    def _drain_completed_stream_tail(
+        self,
+        response: Any,
+        current_body: str,
+        current_source: str,
+        event: Dict[str, Any],
+        completion_id: str,
+    ) -> Generator[str, None, tuple[str, str, bool]]:
+        """修复#2：capture_complete 收尾竞态的尾部补读。
+
+        补丁层是"先追加尾块、后置 complete"，而读取侧是"先取 body 快照、再查
+        complete"；若尾块追加+置位发生在两步之间，外层看到 complete 直接 break
+        会丢失尾部。判定 capture_complete 成立后调用本方法强制再做一次 body
+        提取 + parse_chunk 增量下发（解析器有增量游标，重复调用幂等、代价极小）。
+
+        Returns:
+            (最新 body, body 来源, 补读解析是否产出 done 标志)
+        """
+        try:
+            raw_body, raw_body_source = self._extract_raw_body(response)
+            next_body = self._normalize_raw_body(raw_body)
+        except Exception as e:
+            logger.debug(f"[NetworkMonitor] 收尾补读 body 失败（忽略）: {e}")
+            return current_body, current_source, False
+
+        if not next_body or next_body == (current_body or ""):
+            return current_body, current_source, False
+
+        # 非前缀替换交由既有逻辑处理（可能重置解析器或触发 DOM 回退），保持行为一致
+        self._handle_stream_body_replacement(current_body, next_body, raw_body_source)
+
+        try:
+            parse_result = self.parser.parse_chunk(next_body)
+        except Exception as e:
+            logger.warning(f"[NetworkMonitor] 收尾补读解析异常: {e}")
+            return current_body, current_source, False
+
+        self._append_network_debug_trace(
+            "capture_complete_tail_drain",
+            response,
+            next_body,
+            raw_body_source,
+            parse_result,
+            True,
+            extra_payload={
+                "previous_body_len": len(current_body or ""),
+                "next_body_len": len(next_body),
+            },
+        )
+        parse_result = self._handle_parse_result(parse_result)
+        if parse_result.get("error"):
+            return next_body, raw_body_source, False
+
+        self._dispatch_result(event, next_body, parse_result, raw_body_source)
+        self._remember_last_stream_result(event, next_body, parse_result)
+        try:
+            self._record_parse_result_media(parse_result)
+        except Exception as media_exc:
+            logger.debug(f"[NetworkMonitor] 媒体结果记录失败（忽略）: {media_exc}")
+
+        reasoning_content = parse_result.get("reasoning_content", "")
+        content = parse_result.get("content", "")
+        if reasoning_content:
+            self._total_chunks += 1
+            yield self.formatter.pack_chunk(
+                content="",
+                reasoning_content=reasoning_content,
+                completion_id=completion_id,
+            )
+        if content:
+            self._total_chunks += 1
+            self._total_content_chars += len(content)
+            logger.debug(
+                f"[NetworkMonitor] capture_complete 收尾补发尾部增量（{len(content)} 字符）"
+            )
+            yield self.formatter.pack_chunk(content, completion_id=completion_id)
+
+        return next_body, raw_body_source, bool(parse_result.get("done", False))
 
     def _write_parser_debug_dump(
         self,
@@ -1623,17 +1729,35 @@ class NetworkMonitor:
         except Exception:
             return ""
         
+    def _expire_stale_preserved_listener(self) -> None:
+        """修复#3b：处理上一轮因可恢复错误（429/403/503）保留下来的监听。
+
+        保留监听后若上层不再重建，监听回调与 DrissionPage 无上限抓包队列会
+        随 tab 存活期一直泄漏。此处在下一次进入本实例时检查：
+        - 保留状态已超过 PRESERVED_LISTENER_TTL 仍未被复用 → 先执行 _cleanup()；
+        - 未过期 → 视为本次进入即复用，仅清除截止标记。
+        """
+        deadline = float(getattr(self, "_preserve_deadline", 0.0) or 0.0)
+        if deadline <= 0:
+            return
+        self._preserve_deadline = 0.0
+        if time.time() >= deadline:
+            logger.debug("[NetworkMonitor] 保留监听已超过存活上限，先执行清理")
+            self._cleanup()
+
     def pre_start(self):
         """
         在发送动作之前启动网络监听
-        
+
         v5.11 改进：
         - 恢复实际启动（延迟启动会错过 requestWillBeSent 事件）
         - 但调用时机从 FILL_INPUT 延后到 CLICK send_btn / KEY_PRESS Enter 之前
         - 暴露窗口：从"发送前一刻"到"回复结束"，而非"输入开始"到"回复结束"
-        
+
         调用时机：仅在 CLICK send_btn 或 KEY_PRESS Enter 之前
         """
+        # 修复#3b：先处理过期的保留监听，避免复用已泄漏的监听状态
+        self._expire_stale_preserved_listener()
         if self._pre_started and self._listen_is_active():
             return
         
@@ -1672,7 +1796,10 @@ class NetworkMonitor:
         """
         if not self._listen_pattern:
             raise NetworkMonitorError("listen_pattern 未配置")
-        
+
+        # 修复#3b：进入 monitor 前先检查上一轮保留监听是否已过期，过期则先清理
+        self._expire_stale_preserved_listener()
+
         if completion_id is None:
             completion_id = SSEFormatter._generate_id()
         
@@ -1711,10 +1838,18 @@ class NetworkMonitor:
             if preserve_listener:
                 self._is_listening = self._listen_is_active()
                 self._pre_started = self._is_listening
+                # 修复#3b：记录保留监听的截止时间；若上层不再重建/复用，
+                # 下次进入本实例（monitor/pre_start）时按过期清理，避免长期泄漏
+                self._preserve_deadline = (
+                    time.time() + self.PRESERVED_LISTENER_TTL
+                    if self._is_listening
+                    else 0.0
+                )
             else:
                 # 立即停止：关闭 Network.enable + 释放额外 CDP session
                 self._cleanup()
                 self._pre_started = False
+                self._preserve_deadline = 0.0
     
     def _stream_output_phase(self, completion_id: str) -> Generator[str, None, None]:
         """
@@ -1801,6 +1936,22 @@ class NetworkMonitor:
 
             # 检查是否为无效响应
             if response is None or response is False:
+                # 修复#4：_wait_for_response 在收到取消信号时会提前返回 False，
+                # 先识别取消并走既有取消收尾路径（静默 break），
+                # 避免被误报为 NetworkMonitorTimeout 触发 DOM 回退
+                if self._should_stop():
+                    logger.debug("[NetworkMonitor] 等待响应期间监听被取消")
+                    completion_reason = "cancelled"
+                    self._append_network_debug_trace(
+                        "cancelled",
+                        active_stream_response,
+                        active_stream_body,
+                        active_stream_body_source,
+                        is_event_stream=active_stream_response is not None,
+                        extra_payload={"elapsed": time.time() - phase_start},
+                    )
+                    break
+
                 elapsed = time.time() - phase_start
                 if elapsed >= hard_timeout:
                     logger.error(f"[NetworkMonitor] 超过最大监听时间 {hard_timeout:.1f}s，触发回退")
@@ -1951,8 +2102,29 @@ class NetworkMonitor:
 
                         continue
 
+                    # 修复#2：capture_complete 判定成立后，先强制补读一次 body 并做
+                    # parse_chunk 增量下发，再进入两处 break/回退判定；
+                    # 避免"取快照→尾块追加+complete 置位→查 complete"竞态丢失尾部。
+                    capture_complete_now = self._stream_capture_complete(active_stream_response)
+                    if capture_complete_now:
+                        (
+                            active_stream_body,
+                            active_stream_body_source,
+                            tail_done,
+                        ) = yield from self._drain_completed_stream_tail(
+                            active_stream_response,
+                            active_stream_body,
+                            active_stream_body_source,
+                            active_stream_event,
+                            completion_id,
+                        )
+                        if tail_done:
+                            # 尾部补读解析出结束标志：按协议完成处理，
+                            # 使下方 require_explicit_done 分支不再误判缺失结束事件
+                            completed_by_done = True
+
                     if (
-                        self._stream_capture_complete(active_stream_response)
+                        capture_complete_now
                         and (self._total_chunks > 0 or completed_by_done)
                         and (completed_by_done or not self._should_require_explicit_done())
                     ):
@@ -1989,7 +2161,8 @@ class NetworkMonitor:
 
                     if (
                         active_stream_response is not None
-                        and self._stream_capture_complete(active_stream_response)
+                        # 修复#2：复用上方已补读过尾部的 capture_complete 判定结果
+                        and capture_complete_now
                         and self._should_require_explicit_done()
                         and not completed_by_done
                     ):
@@ -2156,7 +2329,11 @@ class NetworkMonitor:
                 has_received_response = True
                 logger._logger.log(logging.DEBUG - 5, "[NetworkMonitor] 已捕获到首次响应")
             total_responses += 1
-            last_activity_time = time.time()
+            # 修复#1：此处不再重置 last_activity_time——任意命中 listen_pattern 的
+            # 响应（如周期性心跳/埋点）都会把静默计时清零，导致 silence 结束条件
+            # 永远达不到、请求挂满硬超时。仅当 _matches_stream_target 通过后
+            # （下方目标命中处）才视为目标流活动并重置计时；event_only 模式在其
+            # 自身分支内仍按"任意事件即活动"处理。
             listen_restart_attempts = 0
 
             event = self._extract_event(response)

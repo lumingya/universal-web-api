@@ -220,10 +220,8 @@ def inspect_model_route(model: Any, tabs: List[Dict[str, Any]]) -> Dict[str, Any
         "available_model_ids": available_model_ids,
     }
 
-    if normalized_model in _GENERIC_MODEL_IDS:
-        info["match_type"] = "generic"
-        return info
-
+    # 修复#8：先做精确匹配并直接返回，避免暴露名恰为通用 id（如 gpt-4o）的
+    # 标签页被 generic 判定抢先、永远无法被精确路由
     for item in models:
         if normalized_model == _normalize_model_id(item["id"]):
             info["route_domain"] = str(item.get("route_domain") or "")
@@ -232,6 +230,11 @@ def inspect_model_route(model: Any, tabs: List[Dict[str, Any]]) -> Dict[str, Any
             info["matched_id"] = str(item.get("id") or "")
             info["match_type"] = "exact"
             return info
+
+    # 修复#8：精确匹配未命中时，通用模型 id 才落回 generic 默认分配流程
+    if normalized_model in _GENERIC_MODEL_IDS:
+        info["match_type"] = "generic"
+        return info
 
     for item in models:
         if item.get("allow_prefix") and _matches_model_alias(normalized_model, _normalize_model_id(item["id"])):

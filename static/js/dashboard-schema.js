@@ -23,6 +23,20 @@ const DEFAULT_SELECTOR_DEFINITIONS = [
         enabled: true,
         required: false
     },
+    // 修复：补齐后端 app/models/schemas.py 的 11 项定义（前端此前只有 6 项），
+    // 该常量是 loadSelectorDefinitions 失败时的兜底，且保存时会原样 POST 回后端。
+    {
+        key: "retry_send_btn",
+        description: "重新运行/重试当前回复的按钮（通常是回复卡片顶部的圆形箭头）",
+        enabled: false,
+        required: false
+    },
+    {
+        key: "stop_btn",
+        description: "停止/打断大模型输出的按钮（通常在生成过程中显示）",
+        enabled: false,
+        required: false
+    },
     {
         key: "message_wrapper",
         description: "消息完整容器（包裹单条消息的外层元素，用于多节点拼接）",
@@ -32,6 +46,24 @@ const DEFAULT_SELECTOR_DEFINITIONS = [
     {
         key: "generating_indicator",
         description: "生成中指示器（如停止按钮、加载动画，用于检测是否还在输出）",
+        enabled: false,
+        required: false
+    },
+    {
+        key: "upload_btn",
+        description: "打开文件选择器的上传按钮（点击后通常会弹出原生选文件）",
+        enabled: false,
+        required: false
+    },
+    {
+        key: "file_input",
+        description: "原生文件输入框（input[type=file]），用于直接注入文件",
+        enabled: false,
+        required: false
+    },
+    {
+        key: "drop_zone",
+        description: "支持拖拽上传的区域（某些站点不支持粘贴但支持拖拽）",
         enabled: false,
         required: false
     }
@@ -237,6 +269,17 @@ const BROWSER_CONSTANTS_SCHEMA = {
                 max: 200000,
                 step: 1000,
                 default: 30000
+            },
+            // 新增：后端 request_manager.py 已支持（min 30 / max 3600），前端此前无入口
+            REQUEST_ZOMBIE_TTL: {
+                label: '僵尸请求判定时长',
+                unit: '秒',
+                desc: '一个请求卡住超过该时长后被判定为僵尸请求，强制结束并计入失败历史。保存后此处的值优先于 .env 里的同名变量。',
+                type: 'number',
+                min: 30,
+                max: 3600,
+                step: 30,
+                default: 600
             },
             DASHBOARD_LOG_POLL_INTERVAL_MS: {
                 label: '日志页轮询间隔',
@@ -541,6 +584,37 @@ const BROWSER_CONSTANTS_SCHEMA = {
             }
         }
     },
+    // 新增：后端 config.py / system.py 已支持，但前端此前没有配置入口
+    pageInteraction: {
+        label: '页面交互节流',
+        icon: '🚦',
+        collapsed: true,
+        items: {
+            PAGE_INTERACTION_THROTTLE_ENABLED: {
+                label: '启用页面交互节流',
+                desc: '开启后，点击、输入、滚动等页面交互会走全局并发闸门排队；关闭则所有标签页同时抢占浏览器主线程。',
+                type: 'switch',
+                default: true
+            },
+            PAGE_INTERACTION_MAX_CONCURRENT: {
+                label: '最大并发交互数',
+                unit: '路',
+                desc: '跨标签页的全局页面交互并发上限，与上面的「最大标签页数」是两回事：池子开 12 个标签页、这里设 3，则同时只有 3 路在做页面交互，其余排队等待。',
+                type: 'number',
+                min: 1,
+                default: 3
+            },
+            PAGE_INTERACTION_MAX_WAIT: {
+                label: '交互排队最长等待',
+                unit: '秒',
+                desc: '排队超过该时长仍拿不到交互名额时，直接放行执行，避免高负载下彻底卡死。',
+                type: 'number',
+                min: 0,
+                step: 1,
+                default: 20
+            }
+        }
+    },
     conversation: {
         label: '对话复用',
         icon: '💬',
@@ -595,7 +669,9 @@ const ENV_CONFIG_SCHEMA = {
                 label: '调试模式',
                 desc: '开启 API 文档和详细错误',
                 type: 'switch',
-                default: true
+                // 修复：后端 config.py 默认为 false，前端默认 true 会在 .env 缺此键时把
+                // APP_DEBUG=true 静默写盘，重启后暴露 /docs、/redoc 和详细错误栈。
+                default: false
             },
             LOG_LEVEL: {
                 label: '日志级别',
@@ -772,8 +848,13 @@ const ENV_CONFIG_SCHEMA = {
             },
             HELPER_BASE_URL: {
                 label: 'API 地址',
+                // 修复：原默认值端口 5104 在本项目中没有任何来源（本服务是 8199），
+                // 点一次「重置」就会把 AI 分析指向不存在的端口。与后端 config.py 对齐为空串。
+                // 说明：设置页的文本框 placeholder 绑定的是 field.default，不支持独立的
+                // placeholder 字段，因此把示例写进 desc。
+                desc: '留空则不启用外部辅助 AI。示例：http://127.0.0.1:8199/url/gemini.com/v1',
                 type: 'text',
-                default: 'http://127.0.0.1:5104/v1'
+                default: ''
             },
             HELPER_API_PROVIDER: {
                 label: 'API 提供商',
@@ -785,7 +866,8 @@ const ENV_CONFIG_SCHEMA = {
             HELPER_MODEL: {
                 label: '模型名称',
                 type: 'text',
-                default: 'gemini-3.0-pro'
+                // 修复：与后端 config.py 的默认值 gpt-4 对齐
+                default: 'gpt-4'
             },
             MAX_HTML_CHARS: {
                 label: 'HTML 最大字符数',
@@ -802,6 +884,69 @@ const ENV_CONFIG_SCHEMA = {
                 min: 1,
                 step: 256,
                 default: 1024
+            }
+        }
+    },
+    // 新增：后端 config.py 已支持，但前端此前没有任何配置入口
+    tabRecovery: {
+        apply: 'service',
+        label: '标签页自动恢复',
+        icon: '🩹',
+        desc: '标签页超时被标记 ERROR 后，用 AI 看截图判断能否刷新恢复。⚠️ 隐私提示：配置了外部 API 地址时，出错标签页的截图会被发送到该外部 API；留空则只调用本服务自身，不出网。',
+        items: {
+            TAB_RECOVERY_ENABLED: {
+                label: '启用 AI 恢复判断',
+                desc: '关闭时：旧工作线程退出后直接解除隔离并自动重入池，不截图、不调用任何 AI API。隔离机制本身始终生效。',
+                type: 'switch',
+                default: false
+            },
+            TAB_RECOVERY_API_URL: {
+                label: 'API 地址',
+                desc: 'OpenAI 兼容的 chat/completions 完整地址。⚠️ 填写外部地址后，出错标签页的截图会被发送到该外部服务。留空 = 本地模式：调用本服务自身的 /v1/chat/completions，用池中其他空闲标签页完成判断（自动复用 AUTH_TOKEN）。',
+                type: 'text',
+                default: ''
+            },
+            TAB_RECOVERY_API_KEY: {
+                label: 'API Key',
+                desc: '外部 API 的 Bearer Key，仅在上面的 API 地址非空时使用。',
+                type: 'password',
+                default: ''
+            },
+            TAB_RECOVERY_MODEL: {
+                label: '模型名称',
+                desc: '判断使用的模型名，需支持图片输入。',
+                type: 'text',
+                default: 'gpt-4o'
+            },
+            TAB_RECOVERY_MAX_ATTEMPTS: {
+                label: '每标签页最大恢复次数',
+                unit: '次',
+                desc: '恢复后再次超时即视为不可恢复，永久隔离且不再调用 AI API。设为 0 表示不尝试恢复。',
+                type: 'number',
+                min: 0,
+                default: 1
+            },
+            TAB_RECOVERY_TIMEOUT_SEC: {
+                label: 'AI 判断超时',
+                unit: '秒',
+                desc: '本地模式要经过完整浏览器往返，不建议设置过短。',
+                type: 'number',
+                min: 1,
+                default: 120
+            },
+            TAB_RECOVERY_WORKER_EXIT_WAIT_SEC: {
+                label: '等待旧工作线程退出',
+                unit: '秒',
+                desc: '超过该时长旧线程仍未退出，则永久隔离该标签页。',
+                type: 'number',
+                min: 0,
+                default: 600
+            },
+            TAB_RECOVERY_REFRESH_ON_UNKNOWN: {
+                label: '无法判断时仍尝试刷新',
+                desc: '截图、AI 调用或解析失败等「无法判断」的情况：开启=刷新后重入池，关闭=直接永久隔离。',
+                type: 'switch',
+                default: true
             }
         }
     },
@@ -861,6 +1006,21 @@ const ENV_CONFIG_SCHEMA = {
                 desc: '开启后，函数调用在解析 assistant 内容前会移除占位链接和尾部媒体 Markdown。推荐保持开启；只有需要完全回退旧行为时再关闭。',
                 type: 'switch',
                 default: true
+            }
+        }
+    },
+    // 新增：后端已支持但前端无入口的高危开关，单独成组以便醒目展示
+    dangerZone: {
+        apply: 'service',
+        label: '高危开关',
+        icon: '☠️',
+        desc: '这里的开关会显著降低系统安全边界，除非你完全理解后果，否则请保持关闭。',
+        items: {
+            CMD_ALLOW_UNSAFE_PYTHON_COMMANDS: {
+                label: '允许非沙箱 Python 命令',
+                desc: '⚠️ 高危：开启后命令引擎会跳过 Python 脚本安全校验，以完整 __builtins__ 执行任意脚本（可读写文件、发起网络请求、执行系统命令）。仅在站点配置完全可信、且确实需要平滑鼠标轨迹/物理点击时开启。默认关闭。',
+                type: 'switch',
+                default: false
             }
         }
     },

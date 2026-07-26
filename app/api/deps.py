@@ -55,7 +55,12 @@ def _verify_token_candidates(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    if not any(hmac.compare_digest(expected, candidate) for candidate in normalized):
+    # 修复6: str 版 compare_digest 遇到非 ASCII 令牌会抛 TypeError 导致 500，统一按 UTF-8 编码后比较
+    expected_bytes = expected.encode("utf-8")
+    if not any(
+        hmac.compare_digest(expected_bytes, candidate.encode("utf-8"))
+        for candidate in normalized
+    ):
         raise HTTPException(
             status_code=401,
             detail="认证令牌无效",

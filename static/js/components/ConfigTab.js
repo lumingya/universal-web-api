@@ -31,9 +31,18 @@ window.ConfigTab = {
             showNewPresetInput: false,
             renamePresetName: '',
             showRenamePresetInput: false,
+            showPresetHint: false,
 
             // 当前配置分类
             activeWorkspaceSection: 'selectors',
+            // 各配置面板折叠状态（默认展开）
+            collapsedPanels: {
+                selectors: false,
+                media: false,
+                response: false,
+                filePaste: false,
+                promptPadding: false
+            },
             presetSectionDrafts: {
                 file_paste: [],
                 prompt_padding: []
@@ -206,7 +215,11 @@ window.ConfigTab = {
                 },
                 send_confirmation: {
                     ...(this.defaultStreamConfig.send_confirmation || {}),
-                    ...((streamConfig && streamConfig.send_confirmation) || {})
+                    // 修复：send_confirmation 的权威存储已迁移到 file_paste（后端 engine.py 会把
+                    // stream_config 里的同名键剥离并 merge 进 file_paste），此处只从 stream_config
+                    // 读会恒为默认值，并在用户改动时把默认值整份写回、覆盖真实配置。
+                    ...((streamConfig && streamConfig.send_confirmation) || {}),
+                    ...(((this.presetConfig && this.presetConfig.file_paste) || {}).send_confirmation || {})
                 },
                 hard_timeout: streamConfig.hard_timeout || this.defaultStreamConfig.hard_timeout,
                 network: streamConfig.network || this.defaultStreamConfig.network
@@ -755,6 +768,14 @@ window.ConfigTab = {
             await this.openConfigCompare();
         },
 
+        formatGitCompareErrorMessage(error) {
+            if (typeof window.formatGitCompareErrorText === 'function') {
+                return window.formatGitCompareErrorText(error);
+            }
+            const raw = String((error && error.message) || error || '').trim();
+            return raw || '读取 main 分支失败';
+        },
+
         async loadMainBranchCompareConfig() {
             if (!this.currentDomain) return;
 
@@ -780,7 +801,7 @@ window.ConfigTab = {
             } catch (error) {
                 if (domain !== this.currentDomain || preset !== (this.selectedPreset || '')) return;
                 console.error('加载 main 分支配置失败:', error);
-                this.compareMainError = error && error.message ? error.message : '加载失败';
+                this.compareMainError = this.formatGitCompareErrorMessage(error);
                 this.compareMainPresetName = '';
                 this.compareMainMatchMode = '';
                 this.compareMainPath = '';
@@ -895,7 +916,20 @@ window.ConfigTab = {
             const saveSeq = Number(this.streamConfigSaveSeq || 0) + 1;
             this.streamConfigSaveSeq = saveSeq;
             const pc = this.presetConfig;
-            if (pc) pc.stream_config = nextConfig;
+            if (pc) {
+                pc.stream_config = nextConfig;
+                // 修复：后端 set_site_stream_config 会把 send_confirmation 从 stream_config 剥离、
+                // merge 进 file_paste（engine.py:2826-2840），而 streamConfig computed 又以
+                // file_paste 为权威。若这里只写 stream_config，用户在「流式配置 → 发送确认」
+                // 的改动会在下一次重算时被旧的 file_paste 值盖回去，看起来像"没保存成功"。
+                if (nextConfig && nextConfig.send_confirmation && typeof nextConfig.send_confirmation === 'object') {
+                    if (!pc.file_paste || typeof pc.file_paste !== 'object') pc.file_paste = {};
+                    pc.file_paste.send_confirmation = {
+                        ...(pc.file_paste.send_confirmation || {}),
+                        ...nextConfig.send_confirmation
+                    };
+                }
+            }
 
             const previousSave = this.streamConfigSaveQueue || Promise.resolve();
             const saveRequest = previousSave
@@ -1242,7 +1276,13 @@ window.ConfigTab = {
         },
 
         async updateInputStabilityWaitEnabled(enabled) {
-            if (!this.currentDomain || !this.currentConfig || !this.presetConfig) return;
+            // 修复：切站点时 selectedPreset 会被短暂置空，空预设名会被后端当作站点级配置写入，污染该站点全部预设
+            if (!this.currentDomain || !this.currentConfig || !this.presetConfig || !this.selectedPreset) {
+                if (this.currentDomain && !this.selectedPreset) {
+                    this.notifyCompare('预设尚未加载完成，请稍后重试', 'warning');
+                }
+                return;
+            }
 
             const saveSeq = this.startAdvancedConfigSave();
             const previousAdvanced = { ...(this.presetConfig.advanced || {}) };
@@ -1262,7 +1302,13 @@ window.ConfigTab = {
         },
 
         async updateInputStabilityWaitAfterNewChatOnly(enabled) {
-            if (!this.currentDomain || !this.currentConfig || !this.presetConfig) return;
+            // 修复：切站点时 selectedPreset 会被短暂置空，空预设名会被后端当作站点级配置写入，污染该站点全部预设
+            if (!this.currentDomain || !this.currentConfig || !this.presetConfig || !this.selectedPreset) {
+                if (this.currentDomain && !this.selectedPreset) {
+                    this.notifyCompare('预设尚未加载完成，请稍后重试', 'warning');
+                }
+                return;
+            }
 
             const saveSeq = this.startAdvancedConfigSave();
             const previousAdvanced = { ...(this.presetConfig.advanced || {}) };
@@ -1282,7 +1328,13 @@ window.ConfigTab = {
         },
 
         async updateInputStabilityWaitTimeout(value) {
-            if (!this.currentDomain || !this.currentConfig || !this.presetConfig) return;
+            // 修复：切站点时 selectedPreset 会被短暂置空，空预设名会被后端当作站点级配置写入，污染该站点全部预设
+            if (!this.currentDomain || !this.currentConfig || !this.presetConfig || !this.selectedPreset) {
+                if (this.currentDomain && !this.selectedPreset) {
+                    this.notifyCompare('预设尚未加载完成，请稍后重试', 'warning');
+                }
+                return;
+            }
 
             const saveSeq = this.startAdvancedConfigSave();
             const previousAdvanced = { ...(this.presetConfig.advanced || {}) };
@@ -1302,7 +1354,13 @@ window.ConfigTab = {
         },
 
         async updateUrlTransitionWaitOnNewChat(enabled) {
-            if (!this.currentDomain || !this.currentConfig || !this.presetConfig) return;
+            // 修复：切站点时 selectedPreset 会被短暂置空，空预设名会被后端当作站点级配置写入，污染该站点全部预设
+            if (!this.currentDomain || !this.currentConfig || !this.presetConfig || !this.selectedPreset) {
+                if (this.currentDomain && !this.selectedPreset) {
+                    this.notifyCompare('预设尚未加载完成，请稍后重试', 'warning');
+                }
+                return;
+            }
 
             const saveSeq = this.startAdvancedConfigSave();
             const previousAdvanced = { ...(this.presetConfig.advanced || {}) };
@@ -1322,7 +1380,13 @@ window.ConfigTab = {
         },
 
         async updateUrlTransitionWaitPatterns(value) {
-            if (!this.currentDomain || !this.currentConfig || !this.presetConfig) return;
+            // 修复：切站点时 selectedPreset 会被短暂置空，空预设名会被后端当作站点级配置写入，污染该站点全部预设
+            if (!this.currentDomain || !this.currentConfig || !this.presetConfig || !this.selectedPreset) {
+                if (this.currentDomain && !this.selectedPreset) {
+                    this.notifyCompare('预设尚未加载完成，请稍后重试', 'warning');
+                }
+                return;
+            }
 
             const saveSeq = this.startAdvancedConfigSave();
             const previousAdvanced = { ...(this.presetConfig.advanced || {}) };
@@ -1342,7 +1406,13 @@ window.ConfigTab = {
         },
 
         async updateSendConfirmationCheckEnabled(enabled) {
-            if (!this.currentDomain || !this.currentConfig || !this.presetConfig) return;
+            // 修复：切站点时 selectedPreset 会被短暂置空，空预设名会被后端当作站点级配置写入，污染该站点全部预设
+            if (!this.currentDomain || !this.currentConfig || !this.presetConfig || !this.selectedPreset) {
+                if (this.currentDomain && !this.selectedPreset) {
+                    this.notifyCompare('预设尚未加载完成，请稍后重试', 'warning');
+                }
+                return;
+            }
 
             const saveSeq = this.startAdvancedConfigSave();
             const previousAdvanced = { ...(this.presetConfig.advanced || {}) };
@@ -1362,7 +1432,13 @@ window.ConfigTab = {
         },
 
         async updateSendConfirmationCheckTimeout(value) {
-            if (!this.currentDomain || !this.currentConfig || !this.presetConfig) return;
+            // 修复：切站点时 selectedPreset 会被短暂置空，空预设名会被后端当作站点级配置写入，污染该站点全部预设
+            if (!this.currentDomain || !this.currentConfig || !this.presetConfig || !this.selectedPreset) {
+                if (this.currentDomain && !this.selectedPreset) {
+                    this.notifyCompare('预设尚未加载完成，请稍后重试', 'warning');
+                }
+                return;
+            }
 
             const saveSeq = this.startAdvancedConfigSave();
             const previousAdvanced = { ...(this.presetConfig.advanced || {}) };
@@ -1382,7 +1458,13 @@ window.ConfigTab = {
         },
 
         async updateSkipNewChatOnRetry(enabled) {
-            if (!this.currentDomain || !this.currentConfig || !this.presetConfig) return;
+            // 修复：切站点时 selectedPreset 会被短暂置空，空预设名会被后端当作站点级配置写入，污染该站点全部预设
+            if (!this.currentDomain || !this.currentConfig || !this.presetConfig || !this.selectedPreset) {
+                if (this.currentDomain && !this.selectedPreset) {
+                    this.notifyCompare('预设尚未加载完成，请稍后重试', 'warning');
+                }
+                return;
+            }
 
             const saveSeq = this.startAdvancedConfigSave();
             const previousAdvanced = { ...(this.presetConfig.advanced || {}) };
@@ -1488,7 +1570,12 @@ window.ConfigTab = {
                 if (!this.availablePresets.length) {
                     this.availablePresets = ['主预设'];
                     this.defaultPreset = '主预设';
-                    this.selectedPreset = '主预设';
+                }
+                // 修复：切站点时 selectedPreset 会先被同步清空。若此处只在 availablePresets
+                // 为空时才纠正，上一个站点的列表还在（非空）就会让 selectedPreset 永久卡在 ''，
+                // 导致所有预设级开关一直被守卫拒绝，且用户无从察觉。
+                if (!this.selectedPreset) {
+                    this.selectedPreset = this.defaultPreset || this.availablePresets[0] || '主预设';
                 }
             } finally {
                 if (domain === this.currentDomain) {
@@ -1692,91 +1779,98 @@ window.ConfigTab = {
                 <div class="config-preset-card bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg shadow-sm px-4 py-3">
                     <div class="config-preset-toolbar flex items-center justify-between flex-wrap gap-3">
                         <div class="config-preset-meta flex items-center gap-3">
-                            <span class="text-sm font-semibold text-gray-700 dark:text-gray-300">🎛️ 预设:</span>
+                            <span class="config-preset-label">预设</span>
                             <select v-model="selectedPreset"
                                     @change="switchPreset(selectedPreset)"
                                     :disabled="presetLoading"
-                                    class="border dark:border-gray-600 px-3 py-1.5 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent min-w-[140px]">
+                                    class="border dark:border-gray-600 px-3 py-1.5 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent min-w-[150px]">
                                 <option v-for="p in availablePresets" :key="p" :value="p">{{ p }}</option>
                             </select>
-                            <span class="text-xs text-gray-400 dark:text-gray-500">
-                                ({{ availablePresets.length }} 个预设)
-                            </span>
-                            <span class="text-xs px-2 py-0.5 rounded bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
-                                默认: {{ defaultPreset || '主预设' }}
+                            <span class="config-preset-count">共 {{ availablePresets.length }} 个</span>
+                            <span class="config-preset-chip" :title="'未手动指定预设的标签页会使用默认预设'">
+                                默认 · {{ defaultPreset || '主预设' }}
                             </span>
                         </div>
 
                         <div class="config-preset-actions flex items-center gap-2">
-                            <!-- 设为默认 -->
-                            <button @click="setDefaultPreset"
-                                    :disabled="!selectedPreset || selectedPreset === defaultPreset"
-                                    class="px-3 py-1 text-xs font-medium text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700 rounded hover:bg-emerald-50 dark:hover:bg-emerald-900/30 disabled:opacity-30">
-                                ⭐ 设为默认
-                            </button>
-
-                            <!-- 新建预设 -->
-                            <div v-if="showNewPresetInput" class="flex items-center gap-2">
+                            <!-- 新建预设：行内输入 -->
+                            <template v-if="showNewPresetInput">
                                 <input v-model="newPresetName"
                                        @keyup.enter="createPreset"
                                        @keyup.escape="showNewPresetInput = false; newPresetName = ''"
-                                       placeholder="输入预设名称"
-                                       class="border dark:border-gray-600 px-2 py-1 rounded text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white w-32 focus:ring-2 focus:ring-blue-400"
+                                       placeholder="输入新预设名称"
+                                       class="preset-inline-input border dark:border-gray-600 px-2 py-1 rounded text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400"
                                        autofocus>
                                 <button @click="createPreset"
                                         :disabled="!newPresetName.trim()"
-                                        class="px-2 py-1 text-xs bg-green-500 text-white rounded hover:bg-green-600 disabled:opacity-50">
+                                        class="preset-btn is-primary">
                                     创建
                                 </button>
-                                <button @click="showNewPresetInput = false"
-                                        class="px-2 py-1 text-xs bg-gray-300 dark:bg-gray-600 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-400 dark:hover:bg-gray-500">
+                                <button @click="showNewPresetInput = false; newPresetName = ''"
+                                        class="preset-btn">
                                     取消
                                 </button>
-                            </div>
-                            <button v-else @click="showNewPresetInput = true; showRenamePresetInput = false; renamePresetName = ''"
-                                    class="px-3 py-1 text-xs font-medium bg-blue-500 text-white rounded hover:bg-blue-600 flex items-center gap-1">
-                                ＋ 新建预设
-                            </button>
+                            </template>
 
-                            <!-- 重命名预设 -->
-                            <div v-if="showRenamePresetInput" class="flex items-center gap-2">
+                            <!-- 重命名预设：行内输入 -->
+                            <template v-else-if="showRenamePresetInput">
                                 <input v-model="renamePresetName"
                                        @keyup.enter="renamePreset"
                                        @keyup.escape="showRenamePresetInput = false; renamePresetName = ''"
                                        :placeholder="'重命名 ' + selectedPreset"
-                                       class="border dark:border-gray-600 px-2 py-1 rounded text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white w-36 focus:ring-2 focus:ring-amber-400">
+                                       class="preset-inline-input border dark:border-gray-600 px-2 py-1 rounded text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400">
                                 <button @click="renamePreset"
                                         :disabled="!renamePresetName.trim()"
-                                        class="px-2 py-1 text-xs bg-amber-500 text-white rounded hover:bg-amber-600 disabled:opacity-50">
+                                        class="preset-btn is-primary">
                                     重命名
                                 </button>
                                 <button @click="showRenamePresetInput = false; renamePresetName = ''"
-                                        class="px-2 py-1 text-xs bg-gray-300 dark:bg-gray-600 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-400 dark:hover:bg-gray-500">
+                                        class="preset-btn">
                                     取消
                                 </button>
-                            </div>
-                            <button v-else
-                                    @click="showRenamePresetInput = true; renamePresetName = selectedPreset; showNewPresetInput = false; newPresetName = ''"
-                                    :disabled="!selectedPreset"
-                                    class="px-3 py-1 text-xs font-medium text-amber-700 dark:text-amber-300 border border-amber-300 dark:border-amber-700 rounded hover:bg-amber-50 dark:hover:bg-amber-900/30 disabled:opacity-30">
-                                ✎ 重命名
-                            </button>
+                            </template>
 
-                            <button @click="openConfigCompare"
-                                    class="px-3 py-1 text-xs font-medium text-slate-700 dark:text-slate-200 border border-slate-300 dark:border-slate-600 rounded hover:bg-slate-50 dark:hover:bg-slate-700/60">
-                                ⇄ 对比 main
-                            </button>
+                            <!-- 常规操作 -->
+                            <template v-else>
+                                <button @click="setDefaultPreset"
+                                        :disabled="!selectedPreset || selectedPreset === defaultPreset"
+                                        :title="selectedPreset === defaultPreset ? '当前预设已是默认预设' : '把当前预设设为默认'"
+                                        class="preset-btn">
+                                    设为默认
+                                </button>
+                                <button @click="showNewPresetInput = true; showRenamePresetInput = false; renamePresetName = ''"
+                                        class="preset-btn is-primary">
+                                    <span v-html="$icons.plusCircle"></span>新建预设
+                                </button>
+                                <details class="preset-more">
+                                    <summary title="更多操作" aria-label="更多操作"><span v-html="$icons.ellipsisVertical"></span></summary>
+                                    <div class="preset-more-pop">
+                                        <button @click="showRenamePresetInput = true; renamePresetName = selectedPreset; showNewPresetInput = false; newPresetName = ''; $event.currentTarget.closest('details').open = false"
+                                                :disabled="!selectedPreset">
+                                            <span v-html="$icons.pencil"></span>重命名预设
+                                        </button>
+                                        <button @click="$event.currentTarget.closest('details').open = false; openConfigCompare()">
+                                            <span v-html="$icons.arrowPathRoundedSquare"></span>对比 main 分支
+                                        </button>
+                                        <hr class="preset-more-sep">
+                                        <button class="is-danger"
+                                                :disabled="availablePresets.length <= 1"
+                                                :title="availablePresets.length <= 1 ? '不能删除最后一个预设' : '删除当前预设'"
+                                                @click="$event.currentTarget.closest('details').open = false; deletePreset()">
+                                            <span v-html="$icons.trash"></span>删除当前预设
+                                        </button>
+                                    </div>
+                                </details>
+                            </template>
 
-                            <!-- 删除预设 -->
-                            <button @click="deletePreset"
-                                    :disabled="availablePresets.length <= 1"
-                                    class="px-3 py-1 text-xs font-medium text-red-600 dark:text-red-400 border border-red-300 dark:border-red-600 rounded hover:bg-red-50 dark:hover:bg-red-900/30 disabled:opacity-30 disabled:cursor-not-allowed"
-                                    :title="availablePresets.length <= 1 ? '不能删除最后一个预设' : '删除当前预设'">
-                                🗑️ 删除
+                            <button type="button"
+                                    class="preset-hint-toggle"
+                                    @click="showPresetHint = !showPresetHint">
+                                说明<span v-html="showPresetHint ? $icons.chevronUp : $icons.chevronDown"></span>
                             </button>
                         </div>
                     </div>
-                    <p class="text-xs text-gray-400 dark:text-gray-500 mt-2">
+                    <p v-show="showPresetHint" class="config-preset-hint text-xs text-gray-400 dark:text-gray-500 mt-2">
                         新建预设会克隆当前选中的预设配置。在标签页池中可为不同标签页选择不同预设。未手动指定时会自动使用“默认预设”。“对比 main”会读取 Git main 分支里已提交的 config/sites.json，不会把你当前工作区未提交的改动算进去。
                     </p>
                 </div>
@@ -1793,7 +1887,8 @@ window.ConfigTab = {
                 <!-- 选择器面板 -->
                 <selector-panel v-if="presetConfig" v-show="activeWorkspaceSection === 'selectors'" class="config-fixed-panel"
                     :selectors="presetConfig.selectors || {}"
-                    :collapsed="false"
+                    :collapsed="collapsedPanels.selectors"
+                    @update:collapsed="collapsedPanels.selectors = $event"
                     @add-selector="$emit('add-selector', $event)"
                     @remove-selector="$emit('remove-selector', $event)"
                     @update-selector-key="(oldKey, newKey) => $emit('update-selector-key', oldKey, newKey)"
@@ -1805,7 +1900,8 @@ window.ConfigTab = {
                 <image-config-panel v-if="presetConfig" v-show="activeWorkspaceSection === 'media'" class="config-fixed-panel"
                     :image-config="imageConfig"
                     :current-domain="currentDomain"
-                    :collapsed="false"
+                    :collapsed="collapsedPanels.media"
+                    @update:collapsed="collapsedPanels.media = $event"
                     @update-image-config="$emit('update-image-config', $event)"
                     @reload-config="$emit('reload-config')"
                 />
@@ -1814,7 +1910,8 @@ window.ConfigTab = {
                 <stream-config-panel v-if="presetConfig" v-show="activeWorkspaceSection === 'response'" class="config-fixed-panel"
                     :stream-config="streamConfig"
                     :current-domain="currentDomain"
-                    :collapsed="false"
+                    :collapsed="collapsedPanels.response"
+                    @update:collapsed="collapsedPanels.response = $event"
                     @save-stream-config="saveStreamConfig"
                 />
                 <!-- 文件粘贴配置面板 -->
@@ -1822,18 +1919,20 @@ window.ConfigTab = {
                     :file-paste-config="filePasteConfigRef"
                     :current-domain="currentDomain"
                     :selected-preset="selectedPreset"
-                    :collapsed="false"
+                    :collapsed="collapsedPanels.filePaste"
+                    @update:collapsed="collapsedPanels.filePaste = $event"
                 />
                 <prompt-padding-panel v-if="presetConfig" v-show="activeWorkspaceSection === 'input'" class="config-fixed-panel"
                     :prompt-padding-config="promptPaddingConfigRef"
                     :current-domain="currentDomain"
                     :selected-preset="selectedPreset"
-                    :collapsed="false"
+                    :collapsed="collapsedPanels.promptPadding"
+                    @update:collapsed="collapsedPanels.promptPadding = $event"
                 />
                 <!-- 高级功能面板 -->
                 <div v-show="activeWorkspaceSection === 'advanced'" class="config-advanced-panel config-fixed-panel bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg shadow-sm">
                     <div class="px-4 py-3 border-b dark:border-gray-700 flex items-center gap-2">
-                        <h3 class="font-semibold text-gray-900 dark:text-white">🔒 高级功能</h3>
+                        <h3 class="font-semibold text-gray-900 dark:text-white">高级功能</h3>
                         <span class="text-sm text-gray-500 dark:text-gray-400">
                             (独立 Cookie:
                             <span :class="siteAdvancedConfig.independent_cookies ? 'text-green-500' : 'text-gray-400'">

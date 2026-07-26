@@ -60,6 +60,8 @@ window.TabPoolTabComponent = {
             preserveErrorTabs: false,
             preserveErrorTabsUpdating: false,
             showRouteSettings: false,
+            // 修复：标记持久化配置是否真正加载成功，未成功时禁止任何写回操作
+            configLoaded: false,
             fetchInFlight: false,
             fetchRequestSeq: 0,
             fetchAbortController: null,
@@ -93,6 +95,8 @@ window.TabPoolTabComponent = {
                     case 'idle': return 'bg-green-500';
                     case 'busy': return 'bg-yellow-500';
                     case 'error': return 'bg-red-500';
+                    // 修复：补齐后端 TabStatus.CLOSED，用浅灰与错误态/未知态区分
+                    case 'closed': return 'bg-gray-400';
                     default: return 'bg-gray-500';
                 }
             };
@@ -103,6 +107,8 @@ window.TabPoolTabComponent = {
                     case 'idle': return '空闲';
                     case 'busy': return '忙碌';
                     case 'error': return '错误';
+                    // 修复：补齐后端 TabStatus.CLOSED，避免直接展示英文原值
+                    case 'closed': return '已关闭';
                     default: return status;
                 }
             };
@@ -399,6 +405,17 @@ window.TabPoolTabComponent = {
                 
                 const data = await response.json();
                 if (requestSeq !== this.fetchRequestSeq) return;
+                // 修复：后端异常时只返回 tabs/count/error 和静态选项表，不含持久化配置字段。
+                // 此时若继续按 `data.x || 兜底值` 赋值，会把兜底值当成真实配置展示并在下次保存时写回磁盘
+                // （尤其 route_groups 会被空数组抹掉），因此这里只更新列表和静态选项后直接返回。
+                if (data && data.error) {
+                    this.error = data.error;
+                    this.tabs = Array.isArray(data.tabs) ? data.tabs : [];
+                    this.allocationModeOptions = data.allocation_mode_options || this.allocationModeOptions;
+                    this.routeMethodOptions = data.route_method_options || this.routeMethodOptions;
+                    this.lastUpdate = new Date().toLocaleTimeString();
+                    return;
+                }
                 const signature = this.makeTabsResponseSignature(data);
                 const shouldApplyResponse = force || !signature || signature !== this.tabsResponseSignature;
                 if (shouldApplyResponse) {
@@ -413,6 +430,8 @@ window.TabPoolTabComponent = {
                     this.tabsResponseSignature = signature;
                     this.lastUpdate = new Date().toLocaleTimeString();
                 }
+                // 正常路径：配置字段确实来自后端，允许写回
+                this.configLoaded = true;
                 if (this.error) {
                     this.error = null;
                 }
@@ -434,6 +453,7 @@ window.TabPoolTabComponent = {
         async updateAllocationMode(newMode) {
             const nextMode = String(newMode || '').trim();
             if (!nextMode || nextMode === this.allocationMode) return;
+            if (!this.ensureConfigLoaded()) return;
 
             this.allocationModeUpdating = true;
             try {
@@ -470,7 +490,15 @@ window.TabPoolTabComponent = {
             return this.routeMethodSet.has(method);
         },
 
+        // 修复：配置未加载成功时禁止一切写回，避免把前端兜底值覆盖到磁盘上的真实配置
+        ensureConfigLoaded() {
+            if (this.configLoaded) return true;
+            this.$emit('notify', { type: 'error', message: '标签页池配置尚未加载成功，暂时无法保存' });
+            return false;
+        },
+
         async saveRouteMethodSettings() {
+            if (!this.ensureConfigLoaded()) return;
             this.routeMethodUpdating = true;
             try {
                 const token = window.getDashboardAuthToken ? window.getDashboardAuthToken() : '';
@@ -524,6 +552,7 @@ window.TabPoolTabComponent = {
         },
 
         async saveExcludedUrls(nextValue = null) {
+            if (!this.ensureConfigLoaded()) return;
             const nextUrls = this.sanitizeExcludedUrls(
                 nextValue === null ? this.excludedUrlsDraft : nextValue
             );
@@ -561,6 +590,7 @@ window.TabPoolTabComponent = {
         },
 
         async updatePreserveErrorTabs(enabled) {
+            if (!this.ensureConfigLoaded()) return;
             const previous = !!this.preserveErrorTabs;
             const nextValue = !!enabled;
             this.preserveErrorTabs = nextValue;
@@ -855,6 +885,7 @@ window.TabPoolTabComponent = {
         },
 
         async saveRouteGroup() {
+            if (!this.ensureConfigLoaded()) return;
             const modal = this.routeGroupModal;
             const groupId = String(modal.id || '').trim().toLowerCase();
             if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(groupId)) {
@@ -903,6 +934,7 @@ window.TabPoolTabComponent = {
         },
 
         async deleteRouteGroup(group, index) {
+            if (!this.ensureConfigLoaded()) return;
             if (!window.confirm(`删除路由组 ${group.name || group.id}？`)) return;
             try {
                 const nextGroups = (this.routeGroups || []).filter((_, itemIndex) => itemIndex !== index);
@@ -1191,9 +1223,12 @@ window.TabPoolTabComponent = {
         },
 
         getCurrentPreset(tab) {
-            return tab.is_using_default_preset
-                ? this.getDefaultPresetOptionValue()
-                : (tab.preset_name || '主预设');
+            if (tab.is_using_default_preset) return this.getDefaultPresetOptionValue();
+            // 修复：预设被删除后 session 仍指向旧名，而 available_presets 已不含它，
+            // 会导致 <select> 渲染为空白且用户无法脱困；此时回落到默认预设选项。
+            const current = tab.preset_name || '主预设';
+            const options = Array.isArray(tab.available_presets) ? tab.available_presets : [];
+            return options.includes(current) ? current : this.getDefaultPresetOptionValue();
         }
     },
     mounted() {
@@ -1252,7 +1287,8 @@ window.TabPoolTabComponent = {
 
                     <div class="tab-pool-group-heading">
                         <span>路由组 · {{ routeGroups.length }}</span>
-                        <button type="button" @click="createRouteGroup" title="新建路由组" v-html="$icons.plusCircle"></button>
+                        <!-- 修复：配置未加载成功时禁用写操作入口 -->
+                        <button type="button" @click="createRouteGroup" :disabled="!configLoaded" title="新建路由组" v-html="$icons.plusCircle"></button>
                     </div>
 
                     <button
@@ -1284,7 +1320,7 @@ window.TabPoolTabComponent = {
                         <select
                             :value="allocationMode"
                             @change="updateAllocationMode($event.target.value)"
-                            :disabled="allocationModeUpdating"
+                            :disabled="allocationModeUpdating || !configLoaded"
                         >
                             <option v-for="mode in allocationModeOptions" :key="mode.value" :value="mode.value">{{ mode.label }}</option>
                         </select>
@@ -1344,7 +1380,7 @@ window.TabPoolTabComponent = {
                                 <div class="tab-pool-setting-list">
                                     <label v-for="method in routeMethodOptions" :key="method.value">
                                         <span>{{ method.label }}</span>
-                                        <input type="checkbox" :checked="isRouteMethodEnabled(method.value)" :disabled="routeMethodUpdating" @change="toggleRouteMethod(method.value)">
+                                        <input type="checkbox" :checked="isRouteMethodEnabled(method.value)" :disabled="routeMethodUpdating || !configLoaded" @change="toggleRouteMethod(method.value)">
                                     </label>
                                 </div>
                                 <div class="tab-pool-setting-block">
@@ -1352,12 +1388,12 @@ window.TabPoolTabComponent = {
                                     <textarea :value="excludedUrlsDraft" @input="handleExcludedUrlsDraftInput" :disabled="excludedUrlsUpdating" rows="5" placeholder="https://chatgpt.com/c/..."></textarea>
                                     <div class="tab-pool-setting-actions">
                                         <button type="button" @click="resetExcludedUrlsDraft" :disabled="excludedUrlsUpdating || !excludedUrlsDraftDirty">重置</button>
-                                        <button type="button" class="primary" @click="saveExcludedUrls()" :disabled="excludedUrlsUpdating">{{ excludedUrlsUpdating ? '保存中...' : '保存排除列表' }}</button>
+                                        <button type="button" class="primary" @click="saveExcludedUrls()" :disabled="excludedUrlsUpdating || !configLoaded">{{ excludedUrlsUpdating ? '保存中...' : '保存排除列表' }}</button>
                                     </div>
                                 </div>
                                 <label class="tab-pool-preserve-setting">
                                     <span><strong>错误/超时保留标签页</strong><small>异常时只记录错误，不自动关闭浏览器标签页。</small></span>
-                                    <input type="checkbox" :checked="preserveErrorTabs" :disabled="preserveErrorTabsUpdating" @change="updatePreserveErrorTabs($event.target.checked)">
+                                    <input type="checkbox" :checked="preserveErrorTabs" :disabled="preserveErrorTabsUpdating || !configLoaded" @change="updatePreserveErrorTabs($event.target.checked)">
                                 </label>
                             </div>
                         </div>
@@ -1383,6 +1419,8 @@ window.TabPoolTabComponent = {
                                 <li v-if="isRouteMethodEnabled('route_group')"><strong>标签页路由组</strong><code>/group/{组ID}/v1/chat/completions</code><span>只在组内原子选择空闲标签页。</span></li>
                                 <li v-if="isRouteMethodEnabled('fixed_tab')"><strong>固定标签页</strong><code>/tab/{编号}/v1/chat/completions</code><span>精确使用指定标签页。</span></li>
                                 <li v-if="isRouteMethodEnabled('exact_url')"><strong>精确 URL</strong><code>/tab-url/{token}/v1/chat/completions</code><span>只匹配当前已打开的 URL。</span></li>
+                                <!-- 修复：补齐缺失的第 5 种路由方式说明 -->
+                                <li v-if="isRouteMethodEnabled('exact_url_preset')"><strong>URL 绑定预设</strong><code>/tab-url/{token}/{预设名}/v1/chat/completions</code><span>在精确 URL 路由基础上强制指定预设。</span></li>
                             </ul>
                         </section>
 
@@ -1396,7 +1434,7 @@ window.TabPoolTabComponent = {
                                     </span>
                                     <span :class="['group-editor-chevron', { open: !editorCollapsed }]" v-html="$icons.chevronDown"></span>
                                 </button>
-                                <button v-if="routeGroupModal.editIndex >= 0" type="button" class="danger" @click="deleteRouteGroup(routeGroups[routeGroupModal.editIndex], routeGroupModal.editIndex)" v-html="$icons.trash" title="删除路由组"></button>
+                                <button v-if="routeGroupModal.editIndex >= 0" type="button" class="danger" @click="deleteRouteGroup(routeGroups[routeGroupModal.editIndex], routeGroupModal.editIndex)" :disabled="!configLoaded" v-html="$icons.trash" title="删除路由组"></button>
                             </div>
                             <div v-show="!editorCollapsed" class="group-editor-grid">
                                 <div class="group-editor-fields">
@@ -1437,7 +1475,7 @@ window.TabPoolTabComponent = {
                                     </div>
                                     <div class="group-editor-actions">
                                         <button type="button" @click="selectAllTabs">取消</button>
-                                        <button type="button" class="primary" @click="saveRouteGroup" :disabled="routeGroupModal.saving">{{ routeGroupModal.saving ? '保存中...' : '保存路由组' }}</button>
+                                        <button type="button" class="primary" @click="saveRouteGroup" :disabled="routeGroupModal.saving || !configLoaded">{{ routeGroupModal.saving ? '保存中...' : '保存路由组' }}</button>
                                     </div>
                                 </div>
                             </div>
@@ -1469,9 +1507,12 @@ window.TabPoolTabComponent = {
                                     </div>
                                     <p class="tab-card-url" :title="tab.url">{{ tab.url || '(空)' }}</p>
                                     <div class="tab-route-list">
-                                        <div v-for="groupId in getTabRouteGroupIds(tab)" :key="'route-' + groupId" class="tab-route-row">
-                                            <span>路由组</span><code>/group/{{ groupId }}/v1/chat/completions</code><button type="button" @click="copyEndpoint('/group/' + groupId, '已复制路由组端点')" title="复制路由组端点" v-html="$icons.copy"></button>
-                                        </div>
+                                        <!-- 修复：补上 route_group 的显示守卫（Vue3 不允许同元素 v-if + v-for，故外层包 template） -->
+                                        <template v-if="isRouteMethodEnabled('route_group')">
+                                            <div v-for="groupId in getTabRouteGroupIds(tab)" :key="'route-' + groupId" class="tab-route-row">
+                                                <span>路由组</span><code>/group/{{ groupId }}/v1/chat/completions</code><button type="button" @click="copyEndpoint('/group/' + groupId, '已复制路由组端点')" title="复制路由组端点" v-html="$icons.copy"></button>
+                                            </div>
+                                        </template>
                                         <div v-if="isRouteMethodEnabled('domain') && getDomainRoutePrefix(tab)" class="tab-route-row">
                                             <span>站点域名</span><code>{{ getDomainRoutePrefix(tab) }}/v1/chat/completions</code><button type="button" @click="copyEndpoint(getDomainRoutePrefix(tab), '已复制站点域名路由')" title="复制站点域名路由" v-html="$icons.copy"></button>
                                         </div>
@@ -1507,7 +1548,7 @@ window.TabPoolTabComponent = {
                                     <p v-if="getCommandLoopText(tab)" class="tab-task-line">{{ getCommandLoopText(tab) }}</p>
                                     <p v-if="tab.current_task" class="tab-task-line">任务: {{ tab.current_task }}</p>
                                     <div class="tab-card-actions">
-                                        <button v-if="tab.url" type="button" @click="toggleTabExcluded(tab)" :disabled="excludedUrlsUpdating">{{ tab.route_excluded ? '解除排除' : '排除域名路由' }}</button>
+                                        <button v-if="tab.url" type="button" @click="toggleTabExcluded(tab)" :disabled="excludedUrlsUpdating || !configLoaded">{{ tab.route_excluded ? '解除排除' : '排除域名路由' }}</button>
                                         <button v-if="tab.status === 'busy' || tab.current_task || tab.command_task || tab.current_command" type="button" class="danger" @click="openTerminateModal(tab)">终止并解锁</button>
                                     </div>
                                 </aside>

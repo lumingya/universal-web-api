@@ -26,6 +26,7 @@ from app.utils.tab_route_groups import (
 
 from ._utils import _looks_like_transient_local_debug_error, _should_skip_pool_url
 from .network import _GlobalNetworkInterceptionManager
+from .recovery import TabQuarantineEntry, TabRecoveryService
 from .session import TabSession, TabStatus
 
 
@@ -150,6 +151,23 @@ class TabPoolManager:
             max_workers=self.MAINTENANCE_WORKER_LIMIT,
             thread_name_prefix="tab-maint",
         )
+        # acquire 专用线程池（懒创建）：阻塞式 acquire 可占线程最长 acquire_timeout，
+        # 若复用 asyncio 默认 executor，池满时一批被取消/慢的 acquire 会占满默认
+        # executor，拖垮事件循环上所有 to_thread 调用。创建用独立小锁保护，
+        # 避免事件循环线程为建池去竞争可能被长持有的池锁。
+        self._acquire_executor: Optional[ThreadPoolExecutor] = None
+        self._acquire_executor_lock = threading.Lock()
+
+        # 错误标签页隔离集合（池锁 self._condition 保护下读写）。
+        # ERROR 会话被移出池但浏览器标签页保留时，其 raw id 先进隔离集合，
+        # 阻止 _scan_new_tabs 立即把同一 tab 当"新标签页"重新入池——
+        # 旧请求的 worker 线程可能仍阻塞在对该 tab 的同步 DrissionPage 调用里，
+        # 直接重入池会造成新旧工作流并发驱动同一页面。
+        self._quarantined_raw_ids: Dict[str, TabQuarantineEntry] = {}
+        # 恢复服务懒创建：创建仅涉及线程池构造（非阻塞），
+        # 用独立小锁保护，不与池锁竞争。
+        self._recovery_service: Optional[TabRecoveryService] = None
+        self._recovery_service_lock = threading.Lock()
 
         # 全局常驻网络监听（可配置）
         self._global_network_enabled = self._to_bool(
@@ -1458,19 +1476,96 @@ class TabPoolManager:
             )
             return False
 
+    # ================= 错误标签页隔离与恢复 =================
+
+    def resolve_quarantine(self, raw_tab_id: str, release: bool) -> bool:
+        """解除或永久化一个隔离条目（供 TabRecoveryService 回调）。
+
+        release=True：从隔离集合移除，下一次 _scan_new_tabs 自然重新入池；
+        release=False：置 entry.permanent=True 永久隔离，扫描永远跳过该 raw id。
+        """
+        raw_id = str(raw_tab_id or "").strip()
+        if not raw_id:
+            return False
+        with self._condition:
+            entry = self._quarantined_raw_ids.get(raw_id)
+            if entry is None:
+                return False
+            if release:
+                self._quarantined_raw_ids.pop(raw_id, None)
+                self._condition.notify_all()
+            else:
+                entry.permanent = True
+            return True
+
+    def get_quarantine_entry(self, raw_tab_id: str) -> Optional[TabQuarantineEntry]:
+        with self._condition:
+            return self._quarantined_raw_ids.get(str(raw_tab_id or "").strip())
+
+    def _get_recovery_service(self) -> Optional[TabRecoveryService]:
+        if self._shutdown:
+            return None
+        service = self._recovery_service
+        if service is not None:
+            return service
+        with self._recovery_service_lock:
+            if self._recovery_service is None:
+                self._recovery_service = TabRecoveryService(
+                    resolve_quarantine=self.resolve_quarantine,
+                    get_quarantine_entry=self.get_quarantine_entry,
+                )
+            return self._recovery_service
+
+    def _submit_recovery(self, entry: TabQuarantineEntry) -> None:
+        """把隔离条目投递给恢复服务；持池锁调用也安全（仅入队，不阻塞外呼）。"""
+
+        def _submit() -> None:
+            try:
+                service = self._get_recovery_service()
+                if service is not None:
+                    service.submit(entry)
+            except Exception as e:
+                logger.warning(
+                    f"[TabRecovery] 投递恢复任务失败 ({entry.raw_tab_id}): {e}"
+                )
+
+        executor = self._maintenance_executor
+        if executor is not None:
+            try:
+                executor.submit(_submit)
+                return
+            except RuntimeError as e:
+                logger.debug(
+                    f"[TabRecovery] maintenance submit failed "
+                    f"(recovery:{entry.raw_tab_id}): {e}"
+                )
+        # 兜底：maintenance executor 不可用时直接入队（submit 本身非阻塞）。
+        _submit()
+
     def _should_scan(self) -> bool:
         """检查是否需要扫描新标签页"""
         return time.time() - self._last_scan_time >= self.SCAN_INTERVAL
 
     def _should_scan_for_query(self) -> bool:
-        """读接口必须反映浏览器当前 target 状态。"""
-        return True
+        """读接口需要较新的浏览器 target 状态，但按 QUERY_SCAN_MIN_INTERVAL_SEC 节流。
+
+        此前恒返回 True，导致每个 /v1/chat/completions、/v1/models 请求都触发
+        一次全量 CDP 扫描（Target.getTargets 等同步网络 I/O），并发时扫描成本
+        线性叠加到首字延迟上；浏览器卡顿时还会拖住调用线程。
+        1 秒内的快照对路由决策而言足够新鲜。
+        """
+        return time.time() - self._last_scan_time >= self.QUERY_SCAN_MIN_INTERVAL_SEC
 
     def _scan_new_tabs(self):
         """扫描并添加新标签页（已持有锁）"""
         try:
             # 先占住本次扫描窗口，避免唤醒后多个等待线程重复扫描。
             self._last_scan_time = time.time()
+            # 锁序考量：下面会释放池锁去采集浏览器快照，期间新入池的会话
+            # （create_shared_site_tab / create_isolated_site_tab 等）不会出现在
+            # 这份过期快照里。记录快照起始时间，应用移除逻辑时据此跳过晚入池的会话
+            # （session.created_at 即入池时刻，构造后随即持池锁入池）。
+            snapshot_started_at = time.time()
             self._condition.release()
             try:
                 with self._scan_snapshot_lock:
@@ -1583,6 +1678,16 @@ class TabPoolManager:
                 raw_id = session_raw_by_id.get(session_id)
 
                 if raw_id is None or raw_id not in current_tab_set:
+                    # 入池晚于本次快照起始的会话必然不在快照里，不能据此判定"已关闭"
+                    # （isolated 会话有 rebind 宽限兜底，shared 会话没有，会被直接移除）。
+                    # 跳过本轮，等下一轮新快照再判定。
+                    joined_at = float(getattr(session, "created_at", 0.0) or 0.0)
+                    if joined_at > snapshot_started_at:
+                        logger.debug(
+                            f"[{session_id}] 跳过过期快照的移除判定 "
+                            f"(入池晚于快照起始 {joined_at - snapshot_started_at:.3f}s, raw={raw_id})"
+                        )
+                        continue
                     sessions_to_remove.append((session_id, raw_id, session))
 
             for session_id, raw_id, session in sessions_to_remove:
@@ -1700,6 +1805,12 @@ class TabPoolManager:
                 if raw_tab in tabs_in_pool:
                     continue
 
+                # 隔离中的错误标签页不重新入池：旧 worker 可能尚未退出，
+                # 由 TabRecoveryService 决定何时解除隔离（或永久排除）。
+                if raw_tab in self._quarantined_raw_ids:
+                    logger.debug(f"[TabRecovery] 扫描跳过隔离中的标签页: {raw_tab}")
+                    continue
+
                 try:
                     url = current_url_by_raw.get(raw_tab) or self._get_tab_ref_url(tab_ref)
 
@@ -1805,8 +1916,12 @@ class TabPoolManager:
 
             # 重置所有状态为 IDLE
             for session in self._tabs.values():
-                session.status = TabStatus.IDLE
-                session.current_task_id = None
+                # 锁序考量：状态迁移须在 session._lock 内进行，与 acquire/release 的
+                # 状态检查互斥。既有锁序为 池锁 → session._lock（release 等路径同序），
+                # session._lock 内不会反向取池锁，无死锁风险。
+                with session._lock:
+                    session.status = TabStatus.IDLE
+                    session.current_task_id = None
                 self._start_global_monitor_for_session(session)
 
             self._initialized = True
@@ -1977,11 +2092,16 @@ class TabPoolManager:
                 logger.warning(f"[TabPool] cleanup check failed for tab {tab_id}: {e}")
                 to_remove[tab_id] = "health_check_failed"
 
+        newly_quarantined: List[TabQuarantineEntry] = []
         for tab_id, removal_reason in list(to_remove.items()):
             try:
                 session = self._tabs.get(tab_id)
                 if not session:
                     continue
+                # mark_closed 会清空 current_task_id，先捕获用于隔离条目
+                quarantine_task_id = str(
+                    getattr(session, "current_task_id", "") or ""
+                ).strip()
                 self._cancel_active_request_for_session(
                     session,
                     removal_reason,
@@ -2008,6 +2128,32 @@ class TabPoolManager:
                     browser_context_id = self._isolated_context_by_raw_id.pop(raw_id, None)
                     if browser_context_id:
                         self._mark_orphaned_isolated_context(browser_context_id)
+                    if removal_reason == "error":
+                        # ERROR 会话移出池但浏览器标签页保留：旧 worker 可能仍
+                        # 阻塞在该 tab 的同步调用里。先隔离 raw id，阻止下次扫描
+                        # 立即重新入池（双工作流串扰的根源）；由 TabRecoveryService
+                        # 在锁外确认旧 worker 退出后决定解除或永久隔离。
+                        entry = TabQuarantineEntry(
+                            raw_tab_id=raw_id,
+                            persistent_index=int(
+                                getattr(session, "persistent_index", 0) or 0
+                            ),
+                            task_id=quarantine_task_id,
+                            tab=getattr(session, "tab", None),
+                            session_id=tab_id,
+                            reason=str(
+                                getattr(session, "_workflow_stop_reason", "") or ""
+                            ).strip() or removal_reason,
+                            url=str(getattr(session, "last_known_url", "") or ""),
+                        )
+                        self._quarantined_raw_ids[raw_id] = entry
+                        newly_quarantined.append(entry)
+                        logger.info(
+                            f"[TabRecovery] 已隔离错误标签页 "
+                            f"(raw={raw_id}, tab={tab_id}, "
+                            f"task={quarantine_task_id or '-'}, "
+                            f"reason={entry.reason})"
+                        )
 
                 # 清理持久编号映射
                 p_idx = session.persistent_index
@@ -2023,6 +2169,11 @@ class TabPoolManager:
                 self._on_session_removed(tab_id)
             except Exception as e:
                 logger.warning(f"[TabPool] cleanup remove failed for tab {tab_id}: {e}")
+
+        # 投递到 maintenance executor 由恢复服务处理（submit 仅入队，
+        # 持池锁调用不会阻塞，也不触发任何 CDP/网络操作）。
+        for entry in newly_quarantined:
+            self._submit_recovery(entry)
 
         if to_remove:
             self._condition.notify_all()
@@ -2117,9 +2268,28 @@ class TabPoolManager:
             task_id,
         )
 
+    def _ensure_acquire_executor(self) -> ThreadPoolExecutor:
+        # 双重检查懒创建：读属性无锁，创建走专用小锁（不碰池锁，事件循环线程不会
+        # 被池维护路径阻塞）。max_workers=32 覆盖"池满 + 一批客户端断连"的堆积场景。
+        executor = self._acquire_executor
+        if executor is not None:
+            return executor
+        with self._acquire_executor_lock:
+            if self._acquire_executor is None:
+                self._acquire_executor = ThreadPoolExecutor(
+                    max_workers=32,
+                    thread_name_prefix="tab-acquire",
+                )
+            return self._acquire_executor
+
     async def _run_cancellable_acquire(self, acquire_fn, task_id: str) -> Optional[TabSession]:
         """Release a session acquired after the awaiting task was cancelled."""
-        acquire_task = asyncio.create_task(asyncio.to_thread(acquire_fn))
+        # 改用专用 executor：默认 executor 线程数有限（约 min(32, cpu+4)），被取消的
+        # acquire 仍会占线程直到超时，占满后所有 to_thread 排不上队。
+        # run_in_executor 返回的 Future 同样兼容 shield 与 add_done_callback，
+        # shield 语义不变：外层取消不打断底层 acquire 线程，结果由回调兜底释放。
+        loop = asyncio.get_running_loop()
+        acquire_task = loop.run_in_executor(self._ensure_acquire_executor(), acquire_fn)
         try:
             return await asyncio.shield(acquire_task)
         except asyncio.CancelledError:
@@ -2130,18 +2300,41 @@ class TabPoolManager:
                     return
                 if session is None:
                     return
-                try:
-                    self.release(
-                        session.id,
-                        check_triggers=False,
-                        rollback_request_count=True,
-                        expected_task_id=task_id,
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        f"Cancelled acquire cleanup failed (task={task_id}, "
-                        f"tab={getattr(session, 'id', '-')}, error={exc})"
-                    )
+
+                def _do_release() -> None:
+                    try:
+                        self.release(
+                            session.id,
+                            check_triggers=False,
+                            rollback_request_count=True,
+                            expected_task_id=task_id,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            f"Cancelled acquire cleanup failed (task={task_id}, "
+                            f"tab={getattr(session, 'id', '-')}, error={exc})"
+                        )
+
+                # 锁序考量：done callback 在事件循环线程执行，release 含池锁竞争与
+                # CDP 调用（visibility 恢复各 0.5s 超时），不能同步跑在事件循环里。
+                # 投递到 maintenance executor；submit 失败（已关闭）回退 daemon 线程。
+                executor = self._maintenance_executor
+                submitted = False
+                if executor is not None:
+                    try:
+                        executor.submit(_do_release)
+                        submitted = True
+                    except RuntimeError as exc:
+                        logger.debug(
+                            f"[TabPool] maintenance submit failed "
+                            f"(late-release:{getattr(session, 'id', '-')}): {exc}"
+                        )
+                if not submitted:
+                    threading.Thread(
+                        target=_do_release,
+                        name="tab-late-release",
+                        daemon=True,
+                    ).start()
 
             acquire_task.add_done_callback(_release_late_session)
             raise
@@ -2206,7 +2399,13 @@ class TabPoolManager:
 
         with self._condition:
             if self._tabs.get(tab_id) is session:
-                self._start_global_monitor_for_session(session)
+                # 锁序考量：不在持池锁时同步启动 monitor——start_for_session 可能
+                # join 停止中的 worker 最长 2s（本文件他处已注明持池锁禁止 join worker）。
+                # 复用 _restart_global_monitor_for_session_async 投递到 maintenance
+                # executor：它会在池锁外复核会话仍存在且 IDLE 再启动，start_for_session
+                # 本身幂等（已有存活 worker 时直接返回）；若会话已被再次 acquire，
+                # 复核发现非 IDLE 即放弃，acquire 侧的 handoff stop 亦会兜底摘除。
+                self._restart_global_monitor_for_session_async(tab_id, "release")
                 self._condition.notify_all()
                 logger.debug(
                     f"[{tab_id}] 已释放 "
@@ -2223,6 +2422,20 @@ class TabPoolManager:
             pending: List[tuple[TabSession, Dict[str, Any]]] = []
             for session in self._tabs.values():
                 if session.status == TabStatus.BUSY:
+                    # 先请求取消旧工作流再强制释放：否则 BUSY 会话被洗成 IDLE 后，
+                    # 旧工作流尚未退出，同一 tab 可能立刻被再分配，新旧任务并发操作
+                    # 同一页面。锁序安全：_cancel_active_request_for_session 只向
+                    # maintenance executor 投递，持池锁时不外呼。
+                    busy_task = str(session.current_task_id or "").strip()
+                    cancel_submitted = self._cancel_active_request_for_session(
+                        session,
+                        "force_release_all",
+                        detail=f"task={busy_task or '-'}",
+                    )
+                    logger.warning(
+                        f"[{session.id}] force_release_all 强制释放忙碌会话 "
+                        f"(task={busy_task or '-'}, cancel_submitted={cancel_submitted})"
+                    )
                     release_state = session._begin_release_state(
                         clear_page=False,
                         force=True,
@@ -2285,7 +2498,12 @@ class TabPoolManager:
             session.mark_error(str(e))
             raise
         finally:
-            self.release(session.id, expected_task_id=task_id)
+            # 锁序考量：release 含池锁竞争与 CDP 调用（visibility 恢复各 0.5s 超时），
+            # 移出事件循环线程执行。shield 保证 __aexit__ 期间再次被取消时，
+            # release 仍在后台任务/线程中完成，不会泄漏标签页占用。
+            await asyncio.shield(
+                asyncio.to_thread(self.release, session.id, expected_task_id=task_id)
+            )
 
     def acquire_by_raw_tab_id(
         self,
@@ -3083,7 +3301,11 @@ class TabPoolManager:
                             task_id,
                             activate=self._auto_activate_on_acquire and session.id != self._active_session_id,
                         ):
-                            continue
+                            # 与 acquire/acquire_by_route_domain 等路径保持一致：
+                            # handoff 失败直接返回 None。此处 waiter 已出队，若 continue
+                            # 会因 _is_waiter_turn 永远轮不到而空转到超时。
+                            # 调用方（workflow.py）已有 session is None 的处理分支。
+                            return None
                         self._mark_allocation_cursor(session, route_domain=f"group::{target}")
                         logger.debug(
                             f"TabPool -> {session.id} "
@@ -3498,15 +3720,29 @@ class TabPoolManager:
             self._global_network_monitor = None
             maintenance_executor = self._maintenance_executor
             self._maintenance_executor = None
+        # acquire 专用线程池随池一起关闭（不等待：阻塞中的 acquire 线程会因
+        # _shutdown + notify_all 自行退出）。
+        with self._acquire_executor_lock:
+            acquire_executor = self._acquire_executor
+            self._acquire_executor = None
+        with self._recovery_service_lock:
+            recovery_service = self._recovery_service
+            self._recovery_service = None
 
         if monitor:
             monitor.shutdown()
         if maintenance_executor:
             maintenance_executor.shutdown(wait=False, cancel_futures=True)
+        if acquire_executor:
+            acquire_executor.shutdown(wait=False, cancel_futures=True)
+        if recovery_service:
+            # 内部同样以 wait=False, cancel_futures=True 关闭其线程池
+            recovery_service.shutdown()
 
         with self._lock:
             self._tabs.clear()
             self._known_tab_ids.clear()
+            self._quarantined_raw_ids.clear()
             self._active_session_id = None  # 🆕 重置活动标签页记录
             # 🆕 清理编号映射
             self._raw_id_to_persistent.clear()

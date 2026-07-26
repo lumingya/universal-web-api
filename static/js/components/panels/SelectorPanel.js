@@ -255,7 +255,7 @@ window.SelectorPanel = {
                  @click="toggle">
                 <div class="flex items-center gap-2">
                     <span class="w-4 inline-flex justify-center text-gray-500 dark:text-gray-400" v-html="collapsed ? $icons.chevronDown : $icons.chevronUp"></span>
-                    <h3 class="font-semibold text-gray-900 dark:text-white">🏷️ 选择器</h3>
+                    <h3 class="font-semibold text-gray-900 dark:text-white">选择器</h3>
                     <span class="text-sm text-gray-500 dark:text-gray-400">({{ count }})</span>
                 </div>
 

@@ -194,13 +194,14 @@ window.SidebarComponent = {
 
             <div class="app-sidebar-footer">
                 <button type="button" class="app-guide-link" @click="$emit('open-guide')" title="重新打开新手指南">
-                    <span v-html="$icons.clipboardList" aria-hidden="true"></span>
+                    <span class="app-footer-icon" v-html="$icons.bookOpen" aria-hidden="true"></span>
                     <span>新手指南</span>
                 </button>
                 <button type="button" class="app-theme-toggle"
                         @click.prevent.stop="$emit('toggle-dark')"
                         :aria-pressed="darkMode"
                         :title="darkMode ? '切换到日间模式' : '切换到夜间模式'">
+                    <span class="app-footer-icon" v-html="darkMode ? $icons.sun : $icons.moon" aria-hidden="true"></span>
                     <span>{{ darkMode ? '日间模式' : '夜间模式' }}</span>
                     <i aria-hidden="true"></i>
                 </button>

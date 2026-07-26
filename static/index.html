@@ -6,25 +6,42 @@
     <title>Universal Web-to-API Dashboard</title>
     <link rel="icon" type="image/svg+xml" href="/static/images/logo.svg">
     <link rel="shortcut icon" href="/static/images/logo.svg">
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f7f3ea">
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#141915">
+
+    <!-- 提前应用夜间模式，避免刷新时先闪一下亮色（FOUC） -->
+    <script>
+        (function () {
+            try {
+                var saved = localStorage.getItem('darkMode');
+                var dark = saved === null
+                    ? window.matchMedia('(prefers-color-scheme: dark)').matches
+                    : saved === 'true';
+                if (dark) document.documentElement.classList.add('dark');
+            } catch (e) { /* ignore */ }
+        })();
+    </script>
 
     <!-- 外部依赖 -->
 
     <!-- Tailwind 配置 -->
 
     <!-- 自定义样式 -->
-    <link rel="stylesheet" href="/static/css/dashboard.css?v=2.6.17">
-    <link rel="stylesheet" href="/static/css/dashboard-migration.css?v=3.0.0">
-    <link rel="stylesheet" href="/static/css/dashboard-reference.css?v=3.1.3">
+    <link rel="stylesheet" href="/static/css/dashboard.css?v=2.6.18">
+    <link rel="stylesheet" href="/static/css/dashboard-migration.css?v=3.0.2">
+    <link rel="stylesheet" href="/static/css/dashboard-reference.css?v=3.2.3">
     <link rel="stylesheet" href="/static/css/onboarding-guide.css?v=1.0.0">
+    <link rel="stylesheet" href="/static/css/dashboard-dark.css?v=1.1.2">
 
     <!-- 图标定义 -->
 </head>
 <body class="bg-gray-50 dark:bg-gray-900 transition-colors duration-300 h-screen overflow-hidden">
-    <div id="app-shell" class="app-shell" style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:24px;background:radial-gradient(circle at top, rgba(59,130,246,.16), transparent 38%), linear-gradient(180deg, #111827 0%, #0f172a 100%);z-index:9999;">
-        <div class="app-shell-card" style="width:min(480px,100%);padding:28px;border:1px solid rgba(148,163,184,.24);border-radius:18px;background:rgba(15,23,42,.88);box-shadow:0 20px 50px rgba(0,0,0,.35);color:#e5eefc;text-align:center;">
-            <img src="/static/images/logo.svg" alt="Universal Web API logo" style="display:block;width:72px;height:72px;margin:0 auto 16px;object-fit:contain;">
+    <div id="app-shell" class="app-shell">
+        <div class="app-shell-card">
+            <img src="/static/images/logo.svg" alt="Universal Web API logo" class="app-shell-logo">
             <div class="app-shell-title">控制面板加载中</div>
             <p class="app-shell-text">正在加载前端资源和配置。如果停留太久，通常是本地服务初始化或接口响应较慢。</p>
+            <span class="app-shell-spinner" aria-hidden="true"></span>
             <button type="button" class="app-shell-button" onclick="window.location.reload()">重新加载</button>
         </div>
     </div>
@@ -35,16 +52,15 @@
         <input type="file" ref="backupImportInput" accept=".json" class="hidden" @change="handleSettingsBackupImportFile">
 
         <!-- Toast 通知 -->
-        <div class="fixed top-4 right-4 z-50 max-w-sm">
+        <div class="uwa-toast-stack" aria-live="polite">
             <div v-for="toast in toasts"
                  :key="toast.id"
-                 :class="['px-4 py-2 rounded shadow-lg text-white mb-2 transition-opacity duration-300',
-                          {'bg-green-500': toast.type === 'success',
-                           'bg-red-500': toast.type === 'error',
-                           'bg-blue-500': toast.type === 'info',
-                           'bg-yellow-500': toast.type === 'warning'}]"
+                 :class="['uwa-toast', 'is-' + toast.type]"
+                 role="status"
+                 title="点击关闭"
                  @click="removeToast(toast.id)">
-                {{ toast.message }}
+                <i class="uwa-toast-dot" aria-hidden="true"></i>
+                <span>{{ toast.message }}</span>
             </div>
         </div>
 
@@ -248,12 +264,28 @@
                     </header>
 
                     <div class="uwa-config-toolbar">
-                        <label class="uwa-search-field">
-                            <span v-html="$icons.magnifyingGlass"></span>
-                            <input v-model="searchQuery" type="search" autocomplete="off" placeholder="搜索站点或域名">
-                        </label>
+                        <div class="uwa-config-search">
+                            <label class="uwa-search-field">
+                                <span v-html="$icons.magnifyingGlass"></span>
+                                <input v-model="searchQuery" type="search" autocomplete="off" placeholder="搜索站点或域名"
+                                       @keyup.escape="searchQuery = ''"
+                                       @keyup.enter="filteredSites.length && selectSiteFromSearch(filteredSites[0])">
+                            </label>
+                            <div v-if="searchQuery.trim()" class="uwa-config-search-pop">
+                                <button v-for="domain in filteredSites"
+                                        :key="'search-hit-' + domain"
+                                        type="button"
+                                        :class="{ 'is-active': currentDomain === domain }"
+                                        @click="selectSiteFromSearch(domain)">
+                                    <span class="uwa-site-mark">{{ domain.charAt(0).toUpperCase() }}</span>
+                                    <span class="uwa-search-hit-name">{{ domain }}</span>
+                                    <i v-if="currentDomain === domain">当前</i>
+                                </button>
+                                <div v-if="filteredSites.length === 0" class="uwa-search-hit-empty">没有匹配的站点</div>
+                            </div>
+                        </div>
                         <div class="uwa-config-toolbar-meta">
-                            <span><strong>{{ Object.keys(sites).length }}</strong> 个站点</span>
+                            <span><strong>{{ filteredSites.length }}</strong><template v-if="searchQuery.trim()">&nbsp;/ {{ Object.keys(sites).length }}</template> 个站点</span>
                             <button type="button" @click="refreshStatus" title="刷新状态" aria-label="刷新状态"><span v-html="$icons.arrowPath"></span>刷新</button>
                             <button type="button" @click="openMainCompareSummaryDialog"><span v-html="$icons.clipboardList"></span>配置对比</button>
                         </div>
@@ -275,7 +307,7 @@
                                             <div v-for="domain in filteredSites" :key="domain" :class="['uwa-switcher-site', { 'is-active': currentDomain === domain }]">
                                                 <button type="button" class="uwa-switcher-select" @click="selectSite(domain); $event.currentTarget.closest('details').open = false">
                                                     <span class="uwa-site-mark">{{ domain.charAt(0).toUpperCase() }}</span>
-                                                    <span class="uwa-site-details"><strong>{{ domain.split('.')[0] || domain }}</strong><small>{{ domain }}</small></span>
+                                                    <span class="uwa-site-details"><strong>{{ siteDisplayName(domain) }}</strong><small>{{ domain }}</small></span>
                                                     <i aria-hidden="true"></i>
                                                 </button>
                                                 <span class="uwa-switcher-actions">
@@ -293,6 +325,7 @@
                                         <input type="checkbox" :checked="getActivePresetConfig().stealth" @change="getActivePresetConfig().stealth = $event.target.checked">
                                         <i></i>
                                     </label>
+                                    <i v-if="getActivePresetConfig()" class="uwa-actions-divider" aria-hidden="true"></i>
                                     <button type="button" class="uwa-icon-button" @click="showJsonPreview = true" title="查看 JSON" aria-label="查看 JSON"><span v-html="$icons.clipboardList"></span></button>
                                     <button type="button" class="uwa-button" @click="reanalyzeCurrentSite">重新分析</button>
                                     <button type="button" class="uwa-button is-primary" @click="saveConfig" :disabled="isSaving"><span v-html="$icons.arrowDownTray"></span>{{ isSaving ? '保存中' : '保存配置' }}</button>
@@ -355,6 +388,7 @@
                                      :max-records="requestHistoryMaxRecords"
                                      :detail-loading="requestHistoryDetailLoading"
                                      :system-stats="systemStats"
+                                     :system-stats-enabled="isSystemStatsPollingEnabled()"
                                      :loading="requestHistoryLoading"
                                      :error="requestHistoryError"
                                      @refresh="fetchRequestHistory({ silent: false, force: true }); fetchSystemStats({ timeoutMs: 5000 })"
@@ -410,7 +444,9 @@
                               :releases-error="releasesError"
                               :releases-current-version="releasesCurrentVersion"
                               :switching-tag="switchingTag"
+                              :update-check-refreshing="updateCheckRefreshing"
                               @load-releases="loadReleases"
+                              @refresh-update-check="refreshUpdateCheck"
                               @switch-to-version="switchToVersion"
                               @show-changelog="showChangelog">
                     </settings-tab>
@@ -419,7 +455,10 @@
         </main>
 
         <!-- 弹窗区域 -->
-        <json-preview-dialog :show="showJsonPreview"
+        <!-- v-if：getJsonPreviewData() 会先 flush 面板草稿再深拷贝整份预设，
+             不加 v-if 的话每次根组件重渲染（日志 1s / 系统统计 3s 轮询）都会白跑一遍 -->
+        <json-preview-dialog v-if="showJsonPreview"
+                             :show="showJsonPreview"
                              :json-data="getJsonPreviewData()"
                              :title="'配置 JSON · ' + getActivePresetName()"
                              @close="showJsonPreview = false"
@@ -604,37 +643,61 @@
     <script src="/static/vendor/tailwindcss.js?v=2.6.7"></script>
     <script>
         window.tailwind = window.tailwind || {};
-        window.tailwind.config = { darkMode: 'class' };
+        (function () {
+            // 中性色（gray/slate/stone）改为读取 CSS 变量：
+            // 亮色下与 Tailwind 默认值一致；夜间由 dashboard-dark.css 统一收敛到暖绿色板，
+            // 使旧组件的 dark: 工具类与橄榄主题保持一致，不再出现冷蓝灰。
+            var shades = [50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950];
+            function scale(name) {
+                var out = {};
+                shades.forEach(function (s) {
+                    out[s] = 'rgb(var(--twc-' + name + '-' + s + ') / <alpha-value>)';
+                });
+                return out;
+            }
+            window.tailwind.config = {
+                darkMode: 'class',
+                theme: {
+                    extend: {
+                        colors: {
+                            gray: scale('gray'),
+                            slate: scale('slate'),
+                            stone: scale('stone')
+                        }
+                    }
+                }
+            };
+        })();
     </script>
     <script src="/static/vendor/vue.global.prod.js?v=2.6.7"></script>
-    <script src="/static/js/icons.js?v=3.1.0"></script>
+    <script src="/static/js/icons.js?v=3.1.1"></script>
     <script src="/static/js/components/Sidebar.js?v=3.1.3"></script>
     <script src="/static/js/components/OnboardingGuide.js?v=1.0.0"></script>
-    <script src="/static/js/components/HomeTab.js?v=3.1.0"></script>
+    <script src="/static/js/components/HomeTab.js?v=3.1.1"></script>
     <!-- 子组件（在 ConfigTab 之前） -->
-    <script src="static/js/components/panels/SelectorPanel.js?v=2.6.12"></script>
-    <script src="static/js/components/panels/ImageConfigPanel.js?v=2.6.11"></script>
-    <script src="static/js/components/panels/StreamConfigPanel.js?v=2.6.10"></script>
-    <script src="static/js/components/panels/WorkflowPanel.js?v=2.6.9"></script>
-    <script src="static/js/components/panels/FilePastePanel.js?v=2.6.9"></script>
-    <script src="static/js/components/panels/PromptPaddingPanel.js?v=2.6.25"></script>
+    <script src="static/js/components/panels/SelectorPanel.js?v=2.6.13"></script>
+    <script src="static/js/components/panels/ImageConfigPanel.js?v=2.6.13"></script>
+    <script src="static/js/components/panels/StreamConfigPanel.js?v=2.6.12"></script>
+    <script src="static/js/components/panels/WorkflowPanel.js?v=2.6.11"></script>
+    <script src="static/js/components/panels/FilePastePanel.js?v=2.6.12"></script>
+    <script src="static/js/components/panels/PromptPaddingPanel.js?v=2.6.26"></script>
 
     <!-- 主组件 -->
-    <script src="static/js/components/ConfigTab.js?v=3.0.1"></script>
-    <script src="/static/js/components/LogsTab.js?v=3.0.0"></script>
-    <script src="/static/js/components/RequestMonitorTab.js?v=3.0.0"></script>
-    <script src="/static/js/components/SettingsTab.js?v=3.0.0"></script>
+    <script src="static/js/components/ConfigTab.js?v=3.1.4"></script>
+    <script src="/static/js/components/LogsTab.js?v=3.0.1"></script>
+    <script src="/static/js/components/RequestMonitorTab.js?v=3.0.2"></script>
+    <script src="/static/js/components/SettingsTab.js?v=3.0.1"></script>
     <script src="/static/js/components/Dialogs.js?v=2.6.9"></script>
-    <script src="/static/js/components/TabPoolTab.js?v=2.6.14"></script>
-    <script src="/static/js/components/commands/CommandsTabComputed.js?v=2.6.8"></script>
-    <script src="/static/js/components/commands/CommandsTabMethods.js?v=2.6.14"></script>
-    <script src="/static/js/components/commands/CommandsTabTemplate.js?v=3.0.0"></script>
-    <script src="/static/js/components/CommandsTab.js?v=2.6.13"></script>
+    <script src="/static/js/components/TabPoolTab.js?v=2.6.15"></script>
+    <script src="/static/js/components/commands/CommandsTabComputed.js?v=2.6.9"></script>
+    <script src="/static/js/components/commands/CommandsTabMethods.js?v=2.6.16"></script>
+    <script src="/static/js/components/commands/CommandsTabTemplate.js?v=3.0.1"></script>
+    <script src="/static/js/components/CommandsTab.js?v=2.6.14"></script>
 
     <!-- 主应用逻辑 -->
-<script src="/static/js/dashboard-schema.js?v=2.6.27"></script>
-    <script src="/static/js/dashboard-state.js?v=3.1.2"></script>
-    <script src="/static/js/dashboard-methods.js?v=2.6.27"></script>
+<script src="/static/js/dashboard-schema.js?v=2.6.29"></script>
+    <script src="/static/js/dashboard-state.js?v=3.1.3"></script>
+    <script src="/static/js/dashboard-methods.js?v=2.6.31"></script>
     <script src="/static/js/dashboard.js?v=3.1.0"></script>
 </body>
 </html>

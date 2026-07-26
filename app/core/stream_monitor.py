@@ -105,9 +105,15 @@ def _normalize_snapshot_image_urls(raw_urls: Any) -> List[str]:
 
 class StreamContext:
     """流式监控上下文（v5.5 增加图片追踪）"""
+
+    # 修复#7：前缀一致性完整比对的降频周期（每 N 次 calculate_diff 执行一次）
+    PREFIX_CHECK_INTERVAL = 5
+
     def __init__(self):
         self.max_seen_text = ""
         self.sent_content_length = 0
+        # 修复#7：前缀一致性比对降频计数器
+        self.prefix_check_counter = 0
 
         self.baseline_snapshot = None
         self.active_turn_started = False
@@ -151,6 +157,8 @@ class StreamContext:
         self.last_stable_text = ""
         self.active_turn_baseline_len = 0
         self.content_ever_changed = False
+        # 修复#7：切换目标后重置降频计数器
+        self.prefix_check_counter = 0
         self.network_sent_content_length = preserved_network_sent_length
         self.network_sent_offset_pending = bool(preserved_network_sent_length > 0)
         self.network_sent_offset_confirmed = False
@@ -198,32 +206,39 @@ class StreamContext:
 
         # 🆕 前缀一致性检查（如果已发送过内容）
         if self.sent_content_length > 0 and len(current_text) >= effective_start:
-            sent_prefix_end = self.active_turn_baseline_len + self.sent_content_length
-            
-            # 获取已发送部分对应的当前文本
-            current_sent_part = current_text[self.active_turn_baseline_len:sent_prefix_end]
-            
-            # 与历史记录比对
-            if self.max_seen_text and len(self.max_seen_text) >= sent_prefix_end:
-                expected_sent_part = self.max_seen_text[self.active_turn_baseline_len:sent_prefix_end]
-                
-                # 检测前缀不匹配
-                if current_sent_part != expected_sent_part:
-                    # 容错：只有差异超过 5% 才认为是真实不匹配（容忍微小变化）
-                    mismatch_threshold = max(10, len(expected_sent_part) * 0.05)
-                    
-                    mismatch_count = sum(
-                        1 for i in range(min(len(current_sent_part), len(expected_sent_part)))
-                        if i < len(current_sent_part) and i < len(expected_sent_part)
-                        and current_sent_part[i] != expected_sent_part[i]
-                    )
-                    
-                    if mismatch_count > mismatch_threshold:
-                        logger.warning(
-                            f"[PREFIX_MISMATCH] 检测到内容重写 "
-                            f"(mismatch={mismatch_count}/{len(expected_sent_part)})"
+            # 修复#7：完整前缀比对为 O(已发送长度)/轮，长回复下开销大。
+            # 降频为每 PREFIX_CHECK_INTERVAL 次调用执行一次完整比对；
+            # 但当 current_text 比历史快照变短（疑似回退/重写）时立即执行完整比对。
+            self.prefix_check_counter += 1
+            suspect_rewrite = bool(self.max_seen_text) and len(current_text) < len(self.max_seen_text)
+            if suspect_rewrite or self.prefix_check_counter >= self.PREFIX_CHECK_INTERVAL:
+                self.prefix_check_counter = 0
+                sent_prefix_end = self.active_turn_baseline_len + self.sent_content_length
+
+                # 获取已发送部分对应的当前文本
+                current_sent_part = current_text[self.active_turn_baseline_len:sent_prefix_end]
+
+                # 与历史记录比对
+                if self.max_seen_text and len(self.max_seen_text) >= sent_prefix_end:
+                    expected_sent_part = self.max_seen_text[self.active_turn_baseline_len:sent_prefix_end]
+
+                    # 检测前缀不匹配
+                    if current_sent_part != expected_sent_part:
+                        # 容错：只有差异超过 5% 才认为是真实不匹配（容忍微小变化）
+                        mismatch_threshold = max(10, len(expected_sent_part) * 0.05)
+
+                        mismatch_count = sum(
+                            1 for i in range(min(len(current_sent_part), len(expected_sent_part)))
+                            if i < len(current_sent_part) and i < len(expected_sent_part)
+                            and current_sent_part[i] != expected_sent_part[i]
                         )
-                        return "", False, "prefix_mismatch"
+
+                        if mismatch_count > mismatch_threshold:
+                            logger.warning(
+                                f"[PREFIX_MISMATCH] 检测到内容重写 "
+                                f"(mismatch={mismatch_count}/{len(expected_sent_part)})"
+                            )
+                            return "", False, "prefix_mismatch"
 
         # 原有逻辑：长度增长
         if len(current_text) > effective_start:
@@ -317,6 +332,10 @@ class StreamMonitor:
     
     DEFAULT_HARD_TIMEOUT = 300  # 默认硬超时（秒）
     BASELINE_POLLUTION_THRESHOLD = 20
+    FINAL_SETTLE_HARDCAP = 5.0  # 收尾 settle 观察的基础硬顶（秒）
+    # 修复#6b：收尾期间相邻快照持续发生变化（内容仍在生成/渲染）时，
+    # 允许延长观察窗口的总上限（秒），避免生成中被 5s 硬顶提前截断。
+    FINAL_SETTLE_EXTENDED_HARDCAP = 15.0
 
     def __init__(self, tab, finder: ElementFinder, formatter: SSEFormatter,
                  stop_checker: Optional[Callable[[], bool]] = None,
@@ -1064,7 +1083,9 @@ class StreamMonitor:
             silence_threshold = BrowserConstants.STREAM_SILENCE_THRESHOLD
             silence_threshold_fallback = BrowserConstants.STREAM_SILENCE_THRESHOLD_FALLBACK
             stable_count_threshold = BrowserConstants.STREAM_STABLE_COUNT_THRESHOLD
-            if ctx.network_sent_offset_confirmed:
+            # 修复#6a：仅当生成指示器不再活跃（not still_generating）时才启用收紧后的
+            # 1.2s 快速阈值；生成中的自然停顿仍使用原阈值，避免回复被提前截断。
+            if ctx.network_sent_offset_confirmed and not still_generating:
                 silence_threshold = min(float(silence_threshold), 1.2)
                 silence_threshold_fallback = min(float(silence_threshold_fallback), 2.0)
                 stable_count_threshold = min(int(stable_count_threshold), 2)
@@ -1147,14 +1168,46 @@ class StreamMonitor:
         if not self._should_stop():
             yield from self._final_settle_and_output(selector, ctx, completion_id=completion_id)
 
+    @staticmethod
+    def _resolve_final_effective_start(ctx: StreamContext, final_text: str) -> int:
+        """计算最终补齐阶段的起始偏移。
+
+        网络监听半途回退 DOM 时会把"网络层已发送的原始流字符数"种入 ctx，
+        但 DOM 渲染文本通常比原始 markdown 流短（语法字符被渲染吃掉），
+        长度确认条件可能永远达不到：network_sent_offset_pending 一直为 True、
+        sent_content_length 保持 0。此前这里直接用 baseline + sent_content_length
+        作为起点，等于把网络层已经流出的内容整段重发一遍，客户端收到大段重复文本。
+        偏移始终未确认时，保守地按网络已发字符数推进——宁可少补尾部，也不整段重发。
+        """
+        effective_start = ctx.active_turn_baseline_len + ctx.sent_content_length
+        if (
+            getattr(ctx, "network_sent_offset_pending", False)
+            and ctx.network_sent_content_length > ctx.sent_content_length
+        ):
+            logger.warning(
+                "[Final] 网络偏移始终未确认，按网络已发字符数收尾以避免重发 "
+                f"(network_sent={ctx.network_sent_content_length}, "
+                f"dom_sent={ctx.sent_content_length}, final_len={len(final_text)})"
+            )
+            effective_start = min(
+                len(final_text),
+                ctx.active_turn_baseline_len + ctx.network_sent_content_length,
+            )
+        return effective_start
+
     def _final_settle_and_output(self, selector: str, ctx: StreamContext,
                                  completion_id: Optional[str] = None) -> Generator[str, None, None]:
         """最终阶段（v5.5：包含图片提取）"""
         settle_time = 1.5
-        hardcap = 5.0
+        # 修复#6b：基础硬顶保持 5s；当「本轮快照相比上轮有变化」持续发生
+        # （内容仍在生成/渲染）时允许延长，总上限放宽到 FINAL_SETTLE_EXTENDED_HARDCAP。
+        hardcap = float(self.FINAL_SETTLE_HARDCAP)
+        extended_hardcap = float(self.FINAL_SETTLE_EXTENDED_HARDCAP)
 
         start = time.time()
         stable_start = time.time()
+        # 修复#6b：记录上一轮快照对比是否发生变化，决定是否启用延长后的硬顶
+        snapshot_changing = False
 
         last_snap = self._get_snapshot_prefer_anchor(selector, ctx.output_target_anchor)
 
@@ -1162,7 +1215,8 @@ class StreamMonitor:
             if self._should_stop():
                 break
             now = time.time()
-            if now - start > hardcap:
+            effective_hardcap = extended_hardcap if snapshot_changing else hardcap
+            if now - start > effective_hardcap:
                 break
             if now - stable_start >= settle_time:
                 break
@@ -1179,6 +1233,7 @@ class StreamMonitor:
                     ctx.reset_for_new_target()
                     last_snap = snap
                     stable_start = time.time()
+                    snapshot_changing = True  # 修复#6b：切换目标同样视为变化
                     continue
 
             if snap['text_len'] != last_snap['text_len']:
@@ -1191,6 +1246,7 @@ class StreamMonitor:
 
             if changed:
                 stable_start = time.time()
+            snapshot_changing = changed
             last_snap = snap
 
         final_snap = self._get_snapshot_prefer_anchor(selector, ctx.output_target_anchor)
@@ -1203,7 +1259,7 @@ class StreamMonitor:
 
         # 文本补齐
         if final_text:
-            final_effective_start = ctx.active_turn_baseline_len + ctx.sent_content_length
+            final_effective_start = self._resolve_final_effective_start(ctx, final_text)
             if len(final_text) > final_effective_start:
                 remaining = final_text[final_effective_start:]
                 if remaining:
@@ -1221,7 +1277,7 @@ class StreamMonitor:
         else:
             fallback_text = self._get_active_turn_text(selector)
             if fallback_text:
-                final_effective_start = ctx.active_turn_baseline_len + ctx.sent_content_length
+                final_effective_start = self._resolve_final_effective_start(ctx, fallback_text)
                 if len(fallback_text) > final_effective_start:
                     remaining = fallback_text[final_effective_start:]
                     if remaining:

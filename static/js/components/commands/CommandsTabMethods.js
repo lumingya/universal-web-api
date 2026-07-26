@@ -102,6 +102,12 @@ window.CommandsTabMethods = {
             this.initHttpRequestAction(next);
             this.initAppendFileAction(next);
             this.initRunJsFileAction(next);
+            // 新增：run_js / 人机验证点击 / 中止任务的参数默认值
+            this.initRunJsAction(next);
+            this.initCaptchaChallengeAction(next);
+            this.initAbortTaskAction(next);
+            // 记录初始类型，供 handleActionTypeChange 判断语义分组是否真的变化
+            this.rememberActionType(next);
             return next;
         },
 
@@ -1138,7 +1144,86 @@ window.CommandsTabMethods = {
             this.editingCommand.actions.push(this.normalizeAction({ type: 'wait', seconds: 1 }, nextIndex));
         },
 
+        // selector / timeout / raise_for_status 被多种动作类型共用，但语义完全不同：
+        // selector 在 click_element / read_element / write_element 里是 CSS·XPath 选择器，
+        // 在 switch_proxy 里却是 Clash 代理组名；timeout / raise_for_status 在
+        // send_webhook 与 send_napcat 之间默认值也不一样（8/false vs 8/true）。
+        // 由于 initXxx 用 `||` 短路保留旧值，不清理就会把 #submit-btn 当成代理组名。
+        // 这里在切换类型时无条件删掉这三个字段，让后面的 initXxx 按新类型重填默认值；
+        // 其余字段一律原样保留，维持“手工写进 commands.json 的参数不会被 UI 丢弃”的特性。
+        // 同名字段在不同动作类型下语义不同，切换类型时必须清理，否则会"串味"。
+        // selector：click/read/write_element 里是 CSS 选择器，switch_proxy 里是 Clash 代理组名。
+        // timeout / raise_for_status：send_webhook 与 send_napcat 的默认值不同。
+        // 只有在语义分组真的发生变化时才清理，避免 click_element → write_element
+        // 这类同语义切换白白丢掉用户已填的选择器。
+        actionFieldSemanticGroup(field, type) {
+            if (field === 'selector') {
+                if (['click_element', 'read_element', 'write_element'].includes(type)) return 'css';
+                if (type === 'switch_proxy') return 'proxy_group';
+                return null;
+            }
+            if (field === 'timeout' || field === 'raise_for_status') {
+                if (type === 'send_webhook') return 'webhook';
+                if (type === 'send_napcat') return 'napcat';
+                return null;
+            }
+            // fail_on_falsy 在 run_js 默认 true、run_js_file 默认 false，语义相反，不能跨类型继承
+            if (field === 'fail_on_falsy') return type === 'run_js' || type === 'run_js_file' ? type : null;
+            // timeout_sec / max_attempts 的量级在各类型间差异很大（工作流 45s vs 验证码 6s）
+            if (field === 'timeout_sec' || field === 'max_attempts') {
+                return ['http_request', 'write_element', 'read_element', 'execute_workflow',
+                    'click_captcha_challenge'].includes(type) ? type : null;
+            }
+            return null;
+        },
+
+        clearConflictingActionFields(action, previousType) {
+            if (!action) return;
+            const nextType = action.type;
+            if (!previousType || previousType === nextType) return;
+            for (const field of ['selector', 'timeout', 'raise_for_status',
+                'fail_on_falsy', 'timeout_sec', 'max_attempts']) {
+                if (!Object.prototype.hasOwnProperty.call(action, field)) continue;
+                const before = this.actionFieldSemanticGroup(field, previousType);
+                const after = this.actionFieldSemanticGroup(field, nextType);
+                // 语义分组不同（含"新类型根本不用这个字段"）就删掉，让后续 initXxx 按新类型重填默认值
+                if (before !== after) {
+                    delete action[field];
+                }
+            }
+        },
+
+        // Vue 的 v-model.number 在输入框被清空时会写入空串 ''，而后端一律用
+        // action.get(key, default) —— 键存在就不会取默认值，"留空则继承/跟随环境变量"
+        // 的界面说明会失效。保存前把这些空值字段删掉，让后端真正走默认分支。
+        stripEmptyNumericActionFields(actions) {
+            const numericFields = [
+                'timeout_sec', 'workflow_priority', 'max_attempts', 'random_radius',
+                'retry_attempts', 'retry_wait_seconds', 'timeout'
+            ];
+            for (const action of (actions || [])) {
+                if (!action || typeof action !== 'object') continue;
+                for (const field of numericFields) {
+                    if (!Object.prototype.hasOwnProperty.call(action, field)) continue;
+                    const value = action[field];
+                    if (value === '' || value === null || (typeof value === 'number' && Number.isNaN(value))) {
+                        delete action[field];
+                    }
+                }
+            }
+        },
+
+        rememberActionType(action) {
+            if (!action || !action.action_id) return;
+            if (!this.actionTypeSnapshots) this.actionTypeSnapshots = {};
+            this.actionTypeSnapshots[action.action_id] = action.type;
+        },
+
         async handleActionTypeChange(action) {
+            // actionTypeSnapshots 只存在于组件状态里，不会被 {...action} 带进保存的 JSON
+            const previousType = (this.actionTypeSnapshots || {})[action && action.action_id];
+            this.clearConflictingActionFields(action, previousType);
+            this.rememberActionType(action);
             this.initClickAction(action);
             this.initProxyAction(action);
             this.initWebhookAction(action);
@@ -1149,6 +1234,10 @@ window.CommandsTabMethods = {
             this.initHttpRequestAction(action);
             this.initAppendFileAction(action);
             this.initRunJsFileAction(action);
+            // 新增：run_js / 人机验证点击 / 中止任务的参数默认值
+            this.initRunJsAction(action);
+            this.initCaptchaChallengeAction(action);
+            this.initAbortTaskAction(action);
             if (action.type === 'execute_workflow' && action.prompt === undefined) {
                 action.prompt = '';
             }
@@ -1301,6 +1390,8 @@ window.CommandsTabMethods = {
             if (action.timeout_sec === undefined) action.timeout_sec = this.httpRequestDefaults.timeout_sec;
             if (action.fail_on_http_error === undefined) action.fail_on_http_error = this.httpRequestDefaults.fail_on_http_error;
             if (action.save_as === undefined) action.save_as = this.httpRequestDefaults.save_as;
+            // consume_response：后端默认 false（仅触发请求即返回），决定 save_as 能否拿到正文
+            if (action.consume_response === undefined) action.consume_response = false;
         },
 
         initAppendFileAction(action) {
@@ -1326,6 +1417,58 @@ window.CommandsTabMethods = {
             if (action.fail_on_falsy === undefined) {
                 action.fail_on_falsy = defaults.fail_on_falsy === true;
             }
+            // teardown_js 是预注入脚本的卸载钩子，后端也兼容旧名 cleanup_js；
+            // 这里只做展示层回填，不删除 cleanup_js，避免动到已有配置
+            if (action.teardown_js === undefined) {
+                action.teardown_js = action.cleanup_js === undefined ? '' : action.cleanup_js;
+            }
+        },
+
+        // run_js：后端 fail_on_falsy 默认 true，必须显式初始化，
+        // 否则复选框显示成“关闭”，与真实行为相反（JS 返回 undefined 就被判失败）
+        initRunJsAction(action) {
+            if (action.type !== 'run_js') return;
+            if (action.code === undefined) action.code = '';
+            if (action.retry_on_results === undefined) action.retry_on_results = [];
+            if (action.retry_attempts === undefined) action.retry_attempts = 0;
+            if (action.retry_after_refresh === undefined) action.retry_after_refresh = false;
+            if (action.retry_wait_seconds === undefined) action.retry_wait_seconds = 0;
+            if (action.fail_on_falsy === undefined) action.fail_on_falsy = true;
+        },
+
+        // click_captcha_challenge：后端默认 timeout_sec=6 / random_radius=4，
+        // max_attempts 缺省表示超时前不限次数（保持 null 让后端走 None 分支）
+        initCaptchaChallengeAction(action) {
+            if (action.type !== 'click_captcha_challenge') return;
+            if (action.timeout_sec === undefined) action.timeout_sec = 6;
+            if (action.random_radius === undefined) action.random_radius = 4;
+            if (action.max_attempts === undefined) action.max_attempts = null;
+        },
+
+        // abort_task：后端 reason 默认 "abort_task_action"、stop_actions 默认 true（可关）
+        initAbortTaskAction(action) {
+            if (action.type !== 'abort_task') return;
+            if (action.reason === undefined || action.reason === null || action.reason === '') {
+                action.reason = 'abort_task_action';
+            }
+            if (action.stop_actions === undefined) action.stop_actions = true;
+        },
+
+        // run_js 的 retry_on_results 是数组，用换行分隔的文本框编辑
+        getRunJsRetryResultsText(action) {
+            const raw = action?.retry_on_results;
+            if (Array.isArray(raw)) return raw.join('\n');
+            // 兼容后端也接受的逗号分隔字符串写法
+            return String(raw === undefined || raw === null ? '' : raw);
+        },
+
+        // 由 @change（失焦）触发：边输入边规范化会把用户刚敲的换行吃掉
+        setRunJsRetryResultsText(action, text) {
+            if (!action) return;
+            action.retry_on_results = String(text === undefined || text === null ? '' : text)
+                .split('\n')
+                .map(item => item.trim())
+                .filter(Boolean);
         },
 
         isAutomationVarNameValid(value) {
@@ -1496,6 +1639,7 @@ window.CommandsTabMethods = {
             trigger.periodic_enabled = !!trigger.periodic_enabled;
             trigger.check_while_busy_workflow = !!trigger.check_while_busy_workflow;
             trigger.priority = priority;
+            this.stripEmptyNumericActionFields(this.editingCommand.actions);
             const presetActions = (this.editingCommand.actions || []).filter(action => ['execute_preset', 'execute_workflow'].includes(action.type));
             for (const action of presetActions) {
                 action.preset_name = this.normalizePresetActionValue(action.preset_name);
@@ -1657,7 +1801,8 @@ window.CommandsTabMethods = {
                     });
                     this.$emit('notify', { type: 'success', message: '命令已创建' });
                 } else {
-                    await this.apiRequest('/api/commands/' + this.editingCommand.id, {
+                    // 命令 id 允许手写（commands.json 里已有自定义 id），统一转义后再拼进 URL
+                    await this.apiRequest('/api/commands/' + encodeURIComponent(this.editingCommand.id), {
                         method: 'PUT',
                         body: JSON.stringify(this.editingCommand)
                     });
@@ -1673,7 +1818,8 @@ window.CommandsTabMethods = {
         async deleteCommand(cmd) {
             if (!confirm('确定删除命令「' + cmd.name + '」吗？')) return;
             try {
-                await this.apiRequest('/api/commands/' + cmd.id, { method: 'DELETE' });
+                // 同上：命令 id 统一转义
+                await this.apiRequest('/api/commands/' + encodeURIComponent(cmd.id), { method: 'DELETE' });
                 this.$emit('notify', { type: 'success', message: '命令已删除' });
                 await this.fetchCommands();
             } catch (e) {
@@ -1683,7 +1829,8 @@ window.CommandsTabMethods = {
 
         async toggleCommand(cmd) {
             try {
-                await this.apiRequest('/api/commands/' + cmd.id, {
+                // 同上：命令 id 统一转义
+                await this.apiRequest('/api/commands/' + encodeURIComponent(cmd.id), {
                     method: 'PUT',
                     body: JSON.stringify({ enabled: !cmd.enabled })
                 });
@@ -1695,7 +1842,8 @@ window.CommandsTabMethods = {
 
         async testCommand(cmd) {
             try {
-                const result = await this.apiRequest('/api/commands/' + cmd.id + '/test', { method: 'POST' });
+                // 同上：命令 id 统一转义
+                const result = await this.apiRequest('/api/commands/' + encodeURIComponent(cmd.id) + '/test', { method: 'POST' });
                 this.$emit('notify', { type: 'success', message: result.message || '命令已执行' });
             } catch (e) {
                 this.$emit('notify', { type: 'error', message: '执行失败: ' + e.message });

@@ -17,11 +17,16 @@ window.RequestMonitorTab = {
                 cpu_percent: 0,
                 project_cpu: 0,
                 memory_percent: 0,
-                project_memory_percent: 0
+                project_memory_percent: 0,
+                running_count: 0,
+                queued_count: 0
             })
         },
         loading: { type: Boolean, default: false },
-        error: { type: String, default: '' }
+        error: { type: String, default: '' },
+        // 系统统计是否在轮询（DASHBOARD_SYSTEM_STATS_ENABLED）。关闭时 systemStats
+        // 恒为初值，「正在执行」不能直接信任它，需退回历史记录统计。
+        systemStatsEnabled: { type: Boolean, default: true }
     },
     emits: ['refresh', 'load-detail'],
     data() {
@@ -52,6 +57,11 @@ window.RequestMonitorTab = {
             const sorted = this.recordsAreNewestFirst(items)
                 ? items
                 : items.slice().sort((a, b) => this.compareRecordsNewestFirst(a, b))
+            // 修复：KPI 与状态页签计数此前基于未过滤的 sorted，与「包含多模态」开关脱节。
+            // sorted 仍保留全量（排序/分页/查找依赖它），聚合统计一律改用 base 子集。
+            const base = this.includeMultimodal
+                ? sorted
+                : sorted.filter(item => !(item && item.is_multimodal))
             const domains = new Map()
             const models = new Map()
             const durations = []
@@ -59,7 +69,7 @@ window.RequestMonitorTab = {
             let successDurationTotal = 0
             let promptTokens = 0
             let responseTokens = 0
-            sorted.forEach(item => {
+            base.forEach(item => {
                 if (item && item.success) {
                     success += 1
                     successDurationTotal += Number(item.duration_ms || 0)
@@ -116,9 +126,10 @@ window.RequestMonitorTab = {
 
             return {
                 sorted,
+                base,
                 success,
-                failure: sorted.length - success,
-                successRate: sorted.length ? Math.round((success / sorted.length) * 100) : 0,
+                failure: base.length - success,
+                successRate: base.length ? Math.round((success / base.length) * 100) : 0,
                 avgDuration: success ? Math.round(successDurationTotal / success) : 0,
                 p95Duration: durations.length ? Math.round(durations[p95Index]) : 0,
                 promptTokens,
@@ -129,6 +140,10 @@ window.RequestMonitorTab = {
         },
         sortedRecords() {
             return this.recordSummary.sorted
+        },
+        // 修复：只应用「包含多模态」过滤、不应用 statusFilter，供各类计数展示使用
+        baseRecords() {
+            return this.recordSummary.base
         },
         visibleRecords() {
             const page = Math.min(Math.max(1, this.currentPage), this.totalPages)
@@ -165,8 +180,8 @@ window.RequestMonitorTab = {
         },
         filteredRecords() {
             const query = String(this.query || '').trim().toLowerCase()
-            return this.sortedRecords.filter(record => {
-                if (!this.includeMultimodal && record.is_multimodal) return false
+            // 修复：多模态过滤已在 baseRecords 完成，这里只负责 statusFilter 与关键词
+            return this.baseRecords.filter(record => {
                 if (this.statusFilter === 'success' && !record.success) return false
                 if (this.statusFilter === 'failed' && (record.success || record.status === 'cancelled')) return false
                 if (this.statusFilter === 'cancelled' && record.status !== 'cancelled') return false
@@ -185,7 +200,27 @@ window.RequestMonitorTab = {
             })
         },
         runningCount() {
-            return this.sortedRecords.filter(record => ['running', 'pending', 'processing'].includes(String(record.status || '').toLowerCase())).length
+            // 修复：/api/system/request-history 结构上只保存终态记录（写入点全在 finalize 之后），
+            // 靠它统计"正在执行"恒为 0。改读 /api/system/stats 的实时字段。
+            // 历史记录里的 running/queued 仅作为兜底（真实枚举为 queued/running/completed/cancelled/failed，
+            // 此前写的 'pending'/'processing' 根本不存在于后端）。
+            // systemStats 关闭时（DASHBOARD_SYSTEM_STATS_ENABLED=false）不会轮询，
+            // 字段恒为初值 0，此时退回历史记录统计而不是谎报 0。
+            if (this.liveCountsAvailable) {
+                const live = Number((this.systemStats || {}).running_count)
+                if (Number.isFinite(live) && live >= 0) return live
+            }
+            return this.baseRecords.filter(record => ['running', 'queued'].includes(String(record.status || '').toLowerCase())).length
+        },
+        queuedCount() {
+            if (!this.liveCountsAvailable) return 0
+            const queued = Number((this.systemStats || {}).queued_count)
+            return Number.isFinite(queued) && queued >= 0 ? queued : 0
+        },
+        liveCountsAvailable() {
+            // 只有在系统统计确实在轮询、且后端返回过实时计数字段时才信任它
+            const stats = this.systemStats || {}
+            return Object.prototype.hasOwnProperty.call(stats, 'running_count') && !!this.systemStatsEnabled
         },
         trendRangeSeconds() {
             if (this.trendRange === '1h') return 60 * 60
@@ -277,6 +312,11 @@ window.RequestMonitorTab = {
         maxRankingTotal() {
             return Math.max(1, ...this.rankingStats.map(item => item.total))
         },
+        // 修复：详情抽屉里的 selectedRecord 是 this.records 的原始对象，不带 toRecordView 生成的
+        // __toolCallingErrorInfo，导致工具调用错误面板恒不显示；这里按需现算，且不污染原始数据。
+        selectedRecordToolCallingError() {
+            return this.selectedRecord ? this.toolCallingErrorInfo(this.selectedRecord) : null
+        },
         successCount() {
             return this.recordSummary.success
         },
@@ -284,7 +324,8 @@ window.RequestMonitorTab = {
             return this.recordSummary.failure
         },
         cancelledCount() {
-            return this.sortedRecords.filter(record => String(record.status || '').toLowerCase() === 'cancelled').length
+            // 修复：改用 baseRecords，与其它状态页签计数口径保持一致
+            return this.baseRecords.filter(record => String(record.status || '').toLowerCase() === 'cancelled').length
         },
         globalSuccessRate() {
             return this.recordSummary.successRate
@@ -1076,7 +1117,7 @@ window.RequestMonitorTab = {
                     <div><span>样本 Token</span><strong>{{ formatTokenNumber(sampleTokens) }}</strong><small>当前历史估算用量</small></div>
                     <div><span>样本成功率</span><strong>{{ globalSuccessRate }}%</strong><small>{{ successCount }} 成功 · {{ failureCount }} 未成功</small></div>
                     <div><span>响应耗时</span><strong>{{ formatDurationMs(avgDuration) }}</strong><small>P95 {{ formatDurationMs(p95Duration) }}</small></div>
-                    <div><span>正在执行</span><strong>{{ runningCount }}</strong><small>实时请求状态</small></div>
+                    <div><span>正在执行</span><strong>{{ runningCount }}</strong><small>实时状态 · 排队 {{ queuedCount }}</small></div>
                 </div>
 
                 <section class="uwa-monitor-overview">
@@ -1136,7 +1177,7 @@ window.RequestMonitorTab = {
                 <div class="uwa-request-filters">
                     <label class="uwa-search-field"><span v-html="$icons.magnifyingGlass"></span><input v-model="query" type="search" autocomplete="off" placeholder="搜索模型、域名或请求 ID"></label>
                     <div class="uwa-segmented uwa-status-tabs">
-                        <button type="button" :class="{ 'is-active': statusFilter === 'all' }" @click="statusFilter = 'all'">全部 {{ sortedRecords.length }}</button>
+                        <button type="button" :class="{ 'is-active': statusFilter === 'all' }" @click="statusFilter = 'all'">全部 {{ baseRecords.length }}</button>
                         <button type="button" :class="{ 'is-active': statusFilter === 'success' }" @click="statusFilter = 'success'">成功 {{ successCount }}</button>
                         <button type="button" :class="{ 'is-active': statusFilter === 'failed' }" @click="statusFilter = 'failed'">失败 {{ Math.max(0, failureCount - cancelledCount) }}</button>
                         <button type="button" :class="{ 'is-active': statusFilter === 'cancelled' }" @click="statusFilter = 'cancelled'">取消 {{ cancelledCount }}</button>
@@ -1149,7 +1190,8 @@ window.RequestMonitorTab = {
                         <span>状态</span><span>模型 / 路由</span><span>端点</span><span>输入 / 输出</span><span>耗时</span><span>时间</span><span></span>
                     </div>
                     <button v-for="record in visibleRecords" :key="record.__historyKey" type="button" class="uwa-request-row" @click="openRecord(record)">
-                        <span class="uwa-request-status" :class="statusTone(record)"><i></i><strong>{{ record.is_stream && !record.finished_at ? '流式响应' : record.__statusText }}</strong></span>
+                        <!-- 修复：后端保证 finished_at 恒非空，原「流式响应」分支恒不成立，已删除死条件 -->
+                        <span class="uwa-request-status" :class="statusTone(record)"><i></i><strong>{{ record.__statusText }}</strong></span>
                         <span class="uwa-request-route"><strong>{{ record.model || record.preset_name || '默认模型' }}</strong><small>{{ record.__domain }}<template v-if="record.route_group"> · {{ record.route_group }}</template><template v-if="record.is_multimodal"> · 多模态</template></small></span>
                         <code>{{ record.endpoint || record.request_type || '-' }}</code>
                         <span>{{ formatTokenNumber(record.token_estimate ? record.token_estimate.prompt : 0) }} / {{ formatTokenNumber(record.token_estimate ? record.token_estimate.response : 0) }}</span>
@@ -1303,7 +1345,7 @@ window.RequestMonitorTab = {
                                 </div>
                             </div>
                             <div class="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-300">
-                                样本 {{ sortedRecords.length }}
+                                样本 {{ baseRecords.length }}
                             </div>
                         </div>
                         <div class="mt-3.5 h-1.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
@@ -1326,7 +1368,7 @@ window.RequestMonitorTab = {
                                 <h3 class="text-sm font-bold text-slate-950 dark:text-white">历史请求列表</h3>
                                 <p class="mt-0.5 text-[10px] text-slate-400 dark:text-slate-500">默认展示最新 20 条，点击条目查看完整上下文。</p>
                             </div>
-                            <span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-500 dark:bg-slate-800 dark:text-slate-300">{{ visibleRecords.length }} / {{ sortedRecords.length }}</span>
+                            <span class="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-500 dark:bg-slate-800 dark:text-slate-300">{{ visibleRecords.length }} / {{ baseRecords.length }}</span>
                         </div>
 
                         <div class="space-y-2 p-3 overflow-y-auto max-h-[42rem]">
@@ -1455,11 +1497,11 @@ window.RequestMonitorTab = {
                                     {{ showErrorStack ? '收起错误日志' : '查看完整错误日志' }}
                                 </button>
                             </div>
-                            <p class="mt-3 text-sm leading-6">{{ selectedRecord.__toolCallingErrorInfo ? selectedRecord.__toolCallingErrorInfo.summary : (selectedRecord.error_message || '请求执行失败，暂无更多错误摘要。') }}</p>
-                            <div v-if="selectedRecord.__toolCallingErrorInfo"
+                            <p class="mt-3 text-sm leading-6">{{ selectedRecordToolCallingError ? selectedRecordToolCallingError.summary : (selectedRecord.error_message || '请求执行失败，暂无更多错误摘要。') }}</p>
+                            <div v-if="selectedRecordToolCallingError"
                                  class="mt-3 border-t border-rose-200/70 pt-3 text-xs leading-5 text-rose-700 dark:border-rose-400/25 dark:text-rose-100">
-                                <div class="font-semibold">{{ selectedRecord.__toolCallingErrorInfo.title }}</div>
-                                <div class="mt-1 opacity-90">{{ selectedRecord.__toolCallingErrorInfo.detail }}</div>
+                                <div class="font-semibold">{{ selectedRecordToolCallingError.title }}</div>
+                                <div class="mt-1 opacity-90">{{ selectedRecordToolCallingError.detail }}</div>
                             </div>
                             <pre v-if="showErrorStack" class="mt-3 max-h-64 overflow-auto rounded-xl bg-white/80 p-3 text-xs leading-5 text-rose-900 dark:bg-slate-950/50 dark:text-rose-100">{{ selectedRecord.error_stack || selectedRecord.error_message || '暂无错误栈' }}</pre>
                         </div>

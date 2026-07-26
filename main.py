@@ -498,10 +498,14 @@ app = FastAPI(
 
 # CORS 配置
 if AppConfig.is_cors_enabled():
+    _cors_origins = AppConfig.get_cors_origins()
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=AppConfig.get_cors_origins(),
-        allow_credentials=True,
+        allow_origins=_cors_origins,
+        # 安全：origins 为 "*" 时 Starlette 在 allow_credentials=True 下会
+        # 反射任意 Origin 并允许携带凭据，等于任何网页都可跨源读取本服务。
+        # 仅在明确配置了具体来源时才开启 credentials。
+        allow_credentials="*" not in _cors_origins,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -686,7 +690,9 @@ async def media_file(
     requested_format = str(format or "").strip().lower() if isinstance(format, str) else ""
 
     if requested_format:
-        media_path = _transcode_media(source_path, requested_format)
+        # ffmpeg 转码最长可达 60 秒，必须放到线程池执行，
+        # 否则会同步阻塞事件循环，冻结所有并发 SSE 流。
+        media_path = await asyncio.to_thread(_transcode_media, source_path, requested_format)
         media_type = _MEDIA_TRANSCODE_FORMATS[requested_format]["mime"]
     else:
         media_path = source_path

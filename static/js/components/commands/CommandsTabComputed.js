@@ -70,6 +70,8 @@ window.CommandsTabComputed = {
                 navigate: '页面操作',
                 click_element: '页面操作',
                 click_coordinates: '页面操作',
+                // 补齐遗漏的分类映射，否则该动作会被 categoryMap[...] || '其他' 扔进“其他”分组
+                click_captcha_challenge: '页面操作',
                 write_element: '自动化',
                 read_element: '自动化',
                 http_request: '自动化',

@@ -108,8 +108,9 @@ function saveStoredSitesCache(sites, currentDomain) {
             // 浏览器状态
             browserStatus: {
                 connected: false,
-                tab_url: null,
-                tab_title: null
+                // 后端 health_check 实际返回 status/connected/port/tab_pool/error
+                // （此前这里声明的 tab_url / tab_title 后端从未产出，属假接口，已移除）
+                tab_pool: null
             },
 
             // 系统占用统计
@@ -122,7 +123,10 @@ function saveStoredSitesCache(sites, currentDomain) {
                 cpu_percent: 0,
                 project_cpu: 0,
                 memory_percent: 0,
-                project_memory_percent: 0
+                project_memory_percent: 0,
+                // 实时请求计数（后端 /api/system/stats 提供，请求监控页「正在执行」KPI 使用）
+                running_count: 0,
+                queued_count: 0
             },
 
             // 认证
@@ -235,6 +239,7 @@ function saveStoredSitesCache(sites, currentDomain) {
                 error: ''
             },
             updateCheckTimer: null,
+            updateCheckRefreshing: false,  // 「立即检查」按钮的进行中标记
             switchingTag: null,           // 正在切换的 tag
             switchStatusPolling: null,    // 轮询定时器
             switchStatusPollingActive: false,

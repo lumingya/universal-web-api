@@ -42,6 +42,7 @@ from app.services.tool_calling_validation_retry import (
     _get_tool_failure_degrade_enabled,
     _get_tool_retry_strategy,
     _get_tool_validation_retry_limit,
+    _has_non_retryable_tool_errors,
     _inspect_tool_response,
     _is_partial_tool_success_eligible,
     _summarize_tool_response_errors,
@@ -102,18 +103,29 @@ def complete_tool_calling_roundtrip(
                 )
             return parsed
 
-        if _is_partial_tool_success_eligible(inspection, parallel_tool_calls):
-            return _build_partial_tool_success_response(parsed, inspection)
-
         last_summary = _summarize_tool_response_errors(errors)
-        if attempt >= total_attempts:
-            logger.warning(
-                "[tool_calling] 函数调用内部修复次数已耗尽 "
-                f"轮次={attempt}/{total_attempts} "
-                f"配置上限={retry_limit} "
-                f"策略={_describe_tool_retry_strategy(retry_strategy)} "
-                f"最后错误={last_summary}"
-            )
+        # 修复(2a)：请求侧确定性错误（如客户端 tools schema 非法，invalid_request）
+        # 模型重试也不可能通过，直接按“无剩余重试”处理，不再烧掉重试轮次。
+        non_retryable = _has_non_retryable_tool_errors(errors)
+        if non_retryable or attempt >= total_attempts:
+            # 修复(1)：部分成功只在重试额度耗尽（或确定不可重试）后才启用，
+            # 避免第一轮出现 ≥1 通过 + ≥1 被拒时就提前返回子集、静默丢弃失败的调用。
+            if _is_partial_tool_success_eligible(inspection, parallel_tool_calls):
+                return _build_partial_tool_success_response(parsed, inspection)
+            if non_retryable:
+                logger.warning(
+                    "[tool_calling] 检测到请求侧确定性错误(invalid_request)，停止内部修复重试 "
+                    f"轮次={attempt}/{total_attempts} "
+                    f"最后错误={last_summary}"
+                )
+            else:
+                logger.warning(
+                    "[tool_calling] 函数调用内部修复次数已耗尽 "
+                    f"轮次={attempt}/{total_attempts} "
+                    f"配置上限={retry_limit} "
+                    f"策略={_describe_tool_retry_strategy(retry_strategy)} "
+                    f"最后错误={last_summary}"
+                )
             if _get_tool_failure_degrade_enabled():
                 logger.warning("[tool_calling] 修复耗尽，尝试保留原始 tool_calls；不会降级为普通文本")
                 return _build_tool_calling_degraded_response(last_parsed, inspection, last_summary)
@@ -208,18 +220,29 @@ async def complete_tool_calling_roundtrip_async(
                 )
             return parsed
 
-        if _is_partial_tool_success_eligible(inspection, parallel_tool_calls):
-            return _build_partial_tool_success_response(parsed, inspection)
-
         last_summary = _summarize_tool_response_errors(errors)
-        if attempt >= total_attempts:
-            logger.warning(
-                "[tool_calling] 函数调用内部修复次数已耗尽 "
-                f"轮次={attempt}/{total_attempts} "
-                f"配置上限={retry_limit} "
-                f"策略={_describe_tool_retry_strategy(retry_strategy)} "
-                f"最后错误={last_summary}"
-            )
+        # 修复(2a)：请求侧确定性错误（如客户端 tools schema 非法，invalid_request）
+        # 模型重试也不可能通过，直接按“无剩余重试”处理，不再烧掉重试轮次。
+        non_retryable = _has_non_retryable_tool_errors(errors)
+        if non_retryable or attempt >= total_attempts:
+            # 修复(1)：部分成功只在重试额度耗尽（或确定不可重试）后才启用，
+            # 避免第一轮出现 ≥1 通过 + ≥1 被拒时就提前返回子集、静默丢弃失败的调用。
+            if _is_partial_tool_success_eligible(inspection, parallel_tool_calls):
+                return _build_partial_tool_success_response(parsed, inspection)
+            if non_retryable:
+                logger.warning(
+                    "[tool_calling] 检测到请求侧确定性错误(invalid_request)，停止内部修复重试 "
+                    f"轮次={attempt}/{total_attempts} "
+                    f"最后错误={last_summary}"
+                )
+            else:
+                logger.warning(
+                    "[tool_calling] 函数调用内部修复次数已耗尽 "
+                    f"轮次={attempt}/{total_attempts} "
+                    f"配置上限={retry_limit} "
+                    f"策略={_describe_tool_retry_strategy(retry_strategy)} "
+                    f"最后错误={last_summary}"
+                )
             if _get_tool_failure_degrade_enabled():
                 logger.warning("[tool_calling] 修复耗尽，尝试保留原始 tool_calls；不会降级为普通文本")
                 return _build_tool_calling_degraded_response(last_parsed, inspection, last_summary)

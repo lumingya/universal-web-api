@@ -1563,6 +1563,50 @@ class ConfigEngine:
             logger.debug(f"同步活动标签页预设引用失败（忽略）: {e}")
             return 0
 
+    def _clear_preset_references_in_active_tabs(self, domain: str, preset_name: str) -> int:
+        """预设被删除后，把在用标签页里指向它的 preset_name 置为 None（回落站点默认预设）。"""
+        target = str(preset_name or "").strip()
+        if not target:
+            return 0
+
+        # 兼容历史命名：带/不带“预设_”前缀都视为命中同一个预设
+        targets = {target}
+        if target.startswith("预设_"):
+            stripped = target[len("预设_"):].strip()
+            if stripped:
+                targets.add(stripped)
+        else:
+            targets.add(f"预设_{target}")
+
+        try:
+            from app.core import browser as browser_module
+
+            instance = getattr(browser_module, "_browser_instance", None)
+            if instance is None:
+                return 0
+
+            pool = getattr(instance, "_tab_pool", None)
+            if pool is None or not hasattr(pool, "get_sessions_snapshot"):
+                return 0
+
+            cleared = 0
+            for session in pool.get_sessions_snapshot():
+                session_domain = str(getattr(session, "current_domain", "") or "").strip().lower()
+                if session_domain != str(domain or "").strip().lower():
+                    continue
+
+                current_preset = str(getattr(session, "preset_name", "") or "").strip()
+                if current_preset not in targets:
+                    continue
+
+                session.preset_name = None
+                cleared += 1
+
+            return cleared
+        except Exception as e:
+            logger.debug(f"清理活动标签页预设引用失败（忽略）: {e}")
+            return 0
+
     def delete_preset(self, domain: str, preset_name: str) -> bool:
         """
         删除预设（不允许删除最后一个预设）
@@ -1610,7 +1654,18 @@ class ConfigEngine:
             self._local_default_presets = previous_local_default
             return False
 
-        logger.info(f"✅ 站点 {domain} 删除预设: '{resolved_preset_name}'")
+        # 预设已删除并落盘：清理在用标签页对它的残留引用，否则 session.preset_name 会指向不存在的预设
+        cleared_tab_refs = 0
+        try:
+            cleared_tab_refs = self._clear_preset_references_in_active_tabs(domain, resolved_preset_name)
+        except Exception as e:
+            # 浏览器可能未连接：清理失败只告警，绝不让删除预设这个操作本身失败
+            logger.warning(f"清理活动标签页预设引用失败（忽略）: {e}")
+
+        logger.info(
+            f"✅ 站点 {domain} 删除预设: '{resolved_preset_name}' "
+            f"(活动标签页同步 {cleared_tab_refs} 处)"
+        )
         return True
 
     def rename_preset(self, domain: str, old_name: str, new_name: str) -> bool:
@@ -2271,6 +2326,13 @@ class ConfigEngine:
                     ]
                     if patterns:
                         network_capture["url_patterns"] = patterns
+            if "max_payload_bytes" in raw_network_capture:
+                # 修复：此前漏处理该键，导致前端设置的单条载荷上限被静默重置为默认 10MB
+                try:
+                    val = int(raw_network_capture["max_payload_bytes"])
+                    network_capture["max_payload_bytes"] = max(65536, min(val, 104857600))
+                except (ValueError, TypeError):
+                    pass
 
         # 兼容旧平铺字段，最终统一收口到新对象
         if "audio_network_capture_enabled" in config:

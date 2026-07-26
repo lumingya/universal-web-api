@@ -449,6 +449,14 @@ def _normalize_parsed_payload(
             }
         if raw_calls:
             return None
+        # 修复(2b)：{"tool_calls": [], "content": "..."} 的空调用形式直接作为最终文本回复返回，
+        # 避免返回 None 后退化为原文再被 malformed 检测误判、触发无谓重试。
+        if payload.get("content") is not None:
+            return {
+                "mode": "final",
+                "content": str(payload.get("content", "") or ""),
+                "tool_calls": [],
+            }
 
     if mode == "final":
         return {
@@ -888,7 +896,9 @@ def _parse_xml_scalar_value(
     param_name: str = "",
     param_schema: Optional[Dict[str, Any]] = None,
 ) -> Any:
-    text = html.unescape(str(raw_text or ""))
+    # 修复(6)：BeautifulSoup(html.parser) 已把实体解码过一次（已验证 &amp;lt; -> &lt;），
+    # 这里不再二次 html.unescape，否则参数里的字面 "&lt;" 样式文本会被改写成 "<"。
+    text = str(raw_text or "")
     stripped = text.strip()
     if not stripped:
         return ""
@@ -923,7 +933,14 @@ def _parse_xml_element_value(
     children = element.find_all(recursive=False)
     normalized_name = str(field_name or "").strip().lower()
     if _schema_prefers_string(param_schema) or normalized_name in _TOOL_XML_STRING_PARAM_NAMES:
-        inner_markup = "".join(str(item) for item in element.contents)
+        # 修复(6)：NavigableString 已被 BS4 解码一次，直接取值；嵌套 Tag 用 formatter=None
+        # 序列化避免输出时再转义，配合 _parse_xml_scalar_value 去掉二次 unescape 后语义一致。
+        inner_markup = "".join(
+            str(item)
+            if isinstance(item, NavigableString)
+            else item.decode(formatter=None)
+            for item in element.contents
+        )
         return _parse_xml_scalar_value(inner_markup, field_name, param_schema)
     if not children:
         return _parse_xml_scalar_value(element.get_text(), field_name, param_schema)
@@ -1068,15 +1085,23 @@ def _try_parse_xml_tool_calls(
                 tool_calls.extend(_parse_wrapped_xml_tool_calls(block, allowed_tools))
 
     if not tool_calls:
-        pattern = re.compile(r"<([A-Za-z0-9_.:-]+)\s*([^<>]*?)\s*/>")
-        matches = list(pattern.finditer(raw))
+        # 注意：不要在这里使用 r"<(name)\s*([^<>]*?)\s*/>" 这类写法——
+        # 相邻的 \s* 与惰性 [^<>]*? 都能匹配空白，会产生灾难性回溯
+        # （实测 3KB 的 "<a" + 大量空格输入即可阻塞事件循环 10 秒以上）。
+        # 改用单个贪婪字符类，属性两端空白在下面 strip 处理，语义不变。
+        # 修复(5)：回退扫描改在掩码文本上进行——掩码函数已验证保长（忽略区替换为等长空白），
+        # span 与原文对齐；这样模型在 ``` 代码块或行内代码里举例写的
+        # `<get_weather city="X"/>` 不会再被当成真实调用。属性值直接取掩码文本同 span 内容。
+        pattern = re.compile(r"<([A-Za-z0-9_.:-]+)([^<>]*)/>")
+        masked_raw = _mask_ignored_tool_markup_regions(raw)
+        matches = list(pattern.finditer(masked_raw))
         for match in matches:
             raw_name = str(match.group(1) or "").strip()
             name = _resolve_tool_name(raw_name, allowed_tools)
             if not name:
                 continue
 
-            attrs = _parse_xml_attrs(match.group(2) or "")
+            attrs = _parse_xml_attrs((match.group(2) or "").strip())
             tool_calls.append(
                 {
                     "id": _new_tool_call_id(),

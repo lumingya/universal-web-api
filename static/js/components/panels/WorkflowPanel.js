@@ -113,6 +113,9 @@ window.WorkflowPanel = {
                 const message = payload.detail || payload.message || ('HTTP ' + response.status);
                 const error = new Error(message);
                 error.status = response.status;
+                // 修复：挂载业务负载，便于调用方区分「后端业务失败」与「真正的传输异常」
+                error.payload = payload;
+                error.isBusinessError = (response.status >= 400 && response.status < 500) || response.status === 503;
                 throw error;
             }
 
@@ -196,7 +199,15 @@ window.WorkflowPanel = {
                     alert('注入失败: ' + (result.message || '未知错误'));
                 }
             } catch (e) {
-                alert('网络错误: ' + e.message);
+                // 修复：后端所有失败路径都用非 2xx 承载 success:false（浏览器未连接/域名不匹配等），
+                // 会被 authJsonRequest 抛出，此前一律提示「网络错误」，误导用户去排查网络
+                const hasBusinessPayload = e && e.payload && typeof e.payload === 'object'
+                    && Object.keys(e.payload).length > 0;
+                if (e && (e.isBusinessError || hasBusinessPayload)) {
+                    alert('注入失败: ' + (e.message || '未知错误'));
+                } else {
+                    alert('网络错误: ' + ((e && e.message) || '未知错误'));
+                }
             } finally {
                 this.editorInjecting = false;
             }
@@ -377,11 +388,12 @@ window.WorkflowPanel = {
 
         getHintToneClasses(step) {
             const tone = this.normalizeHintStepValue(step).tone;
+            // 语气配色统一走 uwa 主题层（dashboard-reference.css / dashboard-dark.css）
             const toneMap = {
-                info: 'border-sky-200 bg-sky-50/90 text-sky-800 dark:border-sky-800 dark:bg-sky-900/20 dark:text-sky-200',
-                success: 'border-emerald-200 bg-emerald-50/90 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-200',
-                warning: 'border-amber-200 bg-amber-50/90 text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-200',
-                danger: 'border-rose-200 bg-rose-50/90 text-rose-800 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-200'
+                info: 'uwa-wf-hint is-info',
+                success: 'uwa-wf-hint is-success',
+                warning: 'uwa-wf-hint is-warning',
+                danger: 'uwa-wf-hint is-danger'
             };
             return toneMap[tone] || toneMap.info;
         },
@@ -391,12 +403,12 @@ window.WorkflowPanel = {
         }
     },
     template: `
-        <div class="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg shadow-sm">
+        <div class="uwa-workflow-panel bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg shadow-sm">
             <div class="px-4 py-3 border-b dark:border-gray-700 flex justify-between items-center cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
                  @click="toggle">
                 <div class="flex items-center gap-2">
                     <span class="w-4 inline-flex justify-center text-gray-500 dark:text-gray-400" v-html="collapsed ? $icons.chevronDown : $icons.chevronUp"></span>
-                    <h3 class="font-semibold text-gray-900 dark:text-white">🔧 工作流</h3>
+                    <h3 class="font-semibold text-gray-900 dark:text-white">工作流</h3>
                     <span class="text-sm text-gray-500 dark:text-gray-400">({{ workflow.length }} 步)</span>
                 </div>
 
@@ -492,6 +504,8 @@ window.WorkflowPanel = {
                                 <option value="COORD_CLICK">坐标点击</option>
                                 <option value="COORD_SCROLL">模拟滑动</option>
                                 <option value="STREAM_WAIT">流式等待</option>
+                                <!-- 修复：STREAM_OUTPUT 是后端 STREAM_WAIT 的完整别名，缺失会导致动作列渲染空白 -->
+                                <option value="STREAM_OUTPUT">流式输出（同流式等待）</option>
                                 <option value="WAIT">等待</option>
                                 <option value="KEY_PRESS">按键</option>
                                 <option value="JS_EXEC">执行 JavaScript</option>
@@ -501,10 +515,11 @@ window.WorkflowPanel = {
 
                         <div class="flex-1 min-w-0">
                             <label v-if="step.action !== 'READONLY_HINT'" class="text-xs font-medium text-gray-500 dark:text-gray-400">
-                                {{ step.action === 'SELECT_MODEL' ? '模型选择器' : ['FILL_INPUT', 'CLICK', 'STREAM_WAIT'].includes(step.action) ? '目标选择器' : step.action === 'PAGE_FETCH' ? '发送方式' : ['COORD_CLICK', 'COORD_SCROLL'].includes(step.action) ? '坐标参数' : step.action === 'JS_EXEC' ? 'JavaScript' : step.action === 'READONLY_HINT' ? '提示内容' : '参数' }}
+                                {{ step.action === 'SELECT_MODEL' ? '模型选择器' : ['FILL_INPUT', 'CLICK', 'STREAM_WAIT', 'STREAM_OUTPUT'].includes(step.action) ? '目标选择器' : step.action === 'PAGE_FETCH' ? '发送方式' : ['COORD_CLICK', 'COORD_SCROLL'].includes(step.action) ? '坐标参数' : step.action === 'JS_EXEC' ? 'JavaScript' : step.action === 'READONLY_HINT' ? '提示内容' : '参数' }}
                             </label>
 
-                            <select v-if="['FILL_INPUT', 'SELECT_MODEL', 'CLICK', 'STREAM_WAIT'].includes(step.action)" v-model="step.target"
+                            <!-- 修复：STREAM_OUTPUT 与 STREAM_WAIT 等价，参数区需同步显示目标选择器 -->
+                            <select v-if="['FILL_INPUT', 'SELECT_MODEL', 'CLICK', 'STREAM_WAIT', 'STREAM_OUTPUT'].includes(step.action)" v-model="step.target"
                                     class="border dark:border-gray-600 px-2 py-1.5 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent w-full mt-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
                                 <option value="" disabled>选择选择器...</option>
                                 <option v-for="(v, k) in selectors" :key="k" :value="k">{{ k }} ({{ v || '未设置' }})</option>
@@ -632,6 +647,8 @@ window.WorkflowPanel = {
                                                 <option value="COORD_CLICK">坐标点击</option>
                                                 <option value="COORD_SCROLL">模拟滑动</option>
                                                 <option value="STREAM_WAIT">流式等待</option>
+                                                <!-- 修复：STREAM_OUTPUT 是后端 STREAM_WAIT 的完整别名，缺失会导致动作列渲染空白 -->
+                                                <option value="STREAM_OUTPUT">流式输出（同流式等待）</option>
                                                 <option value="WAIT">等待</option>
                                                 <option value="KEY_PRESS">按键</option>
                                                 <option value="JS_EXEC">执行 JavaScript</option>
@@ -676,7 +693,7 @@ window.WorkflowPanel = {
                             </div>
 
                             <div v-else-if="step.action === 'PAGE_FETCH'" class="mt-1 space-y-2">
-                                <div class="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm leading-6 text-sky-800 dark:border-sky-800 dark:bg-sky-900/20 dark:text-sky-200">
+                                <div class="uwa-wf-note rounded-md px-3 py-2 text-sm leading-6">
                                     使用当前预设的页面直发配置发送已构造的 prompt。失败且回退模式为工作流时，会继续执行后续填入 / 按键 / 等待步骤。
                                 </div>
                             </div>

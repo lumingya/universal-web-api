@@ -2,16 +2,21 @@
 
 import copy
 import time
-from typing import Optional, Dict, Any, Callable
+from typing import Optional, Dict, Any, Callable, get_args
 
 from fastapi import HTTPException
 
 from app.core.config import get_logger
 from app.core.page_lifecycle import BACKGROUND_WAKE_CDP_TIMEOUT, BACKGROUND_WAKE_JS_TIMEOUT
+from app.models.schemas import ActionType
 from app.services.config_engine import config_engine
 from app.utils.site_url import extract_remote_site_domain
 
 logger = get_logger('API.CONFIG.WORKFLOW')
+
+# 修复：保存时校验动作名。合法集合直接取自 schemas.ActionType；
+# 运行期 executor 的 dispatch 用原始 action 精确匹配大写字面量、不做归一化，故此处也要求精确大写。
+VALID_WORKFLOW_ACTIONS = frozenset(get_args(ActionType))
 
 def _notify_workflow_editor_action_result(tab, action_id: str, success: bool, message: str) -> None:
     """将测试结果回推给已注入的可视化编辑器页面。"""
@@ -117,10 +122,13 @@ def _execute_workflow_editor_test_payload(
         "COORD_SCROLL": "模拟滑动",
         "FILL_INPUT": "填入内容",
         "STREAM_WAIT": "流式等待",
+        # 修复：补上缺失的两项，否则测试进度提示会退化成显示英文原始 action 名
+        "STREAM_OUTPUT": "流式等待",
         "WAIT": "等待",
         "KEY_PRESS": "按键",
         "JS_EXEC": "执行脚本",
         "PAGE_FETCH": "页面直发",
+        "READONLY_HINT": "只读提示",
     }
 
     domain = str(data.get("domain") or "").strip()
@@ -238,6 +246,15 @@ def _execute_workflow_editor_test_payload(
             "prompt": prompt_text,
             "images": [],
         }
+        # 修复：此前不透传 model/model_catalog，导致 SELECT_MODEL 步骤在编辑器测试里必然 early return，
+        # 但仍计入 executed_steps，测试显示“成功”而实际未执行。
+        requested_model = str((data or {}).get("model") or "").strip()
+        if requested_model:
+            context["model"] = requested_model
+        model_catalog = (data or {}).get("model_catalog")
+        if isinstance(model_catalog, dict) and model_catalog:
+            context["model_catalog"] = model_catalog
+        skipped_select_model = 0
 
         with executor.workflow_execution_scope():
             step_index = 0
@@ -257,14 +274,27 @@ def _execute_workflow_editor_test_payload(
                     f"selector={selector!r} optional={optional}"
                 )
 
+                if not action:
+                    raise HTTPException(status_code=400, detail="workflow 中存在缺少 action 的步骤")
+
+                # 修复：未指定模型时 SELECT_MODEL 必然 early return（executor_actions.py:1284-1289），
+                # 此前仍会计入 executed_steps，让"已测试 N 个步骤"虚高、掩盖空跑。
+                # 注意：这是 while 循环，跳过前必须自行推进 step_index，否则死循环。
+                if action == "SELECT_MODEL" and not requested_model:
+                    skipped_select_model += 1
+                    if progress_callback:
+                        progress_callback(
+                            "step",
+                            f"跳过 {current_index}/{len(workflow)} · 选择请求模型（未指定测试模型名）"
+                        )
+                    step_index += 1
+                    continue
+
                 if progress_callback:
                     progress_callback(
                         "step",
                         f"执行 {current_index}/{len(workflow)} · {action_labels.get(action, action)}"
                     )
-
-                if not action:
-                    raise HTTPException(status_code=400, detail="workflow 中存在缺少 action 的步骤")
 
                 if action == "FILL_INPUT" and value is not None:
                     context["prompt"] = str(value)
@@ -298,13 +328,19 @@ def _execute_workflow_editor_test_payload(
             f"executed_steps={executed} duration={time.time() - started_at:.2f}s"
         )
 
+        # 修复：把被跳过的 SELECT_MODEL 步骤如实告知前端，避免“已测试 N 个步骤”掩盖空跑
+        message = f"已测试 {executed} 个步骤"
+        if skipped_select_model:
+            message += f"（其中 {skipped_select_model} 个选择模型步骤已跳过：未指定测试模型名）"
+
         return {
             "success": True,
-            "message": f"已测试 {executed} 个步骤",
+            "message": message,
             "domain": domain,
             "tab_id": tab_id or str(getattr(tab, "tab_id", "") or ""),
             "preset_name": preset_name or config_engine.get_default_preset(domain) or "主预设",
             "executed_steps": executed,
+            "skipped_select_model_steps": skipped_select_model,
             "_tab_ref": tab,
         }
     finally:
@@ -333,6 +369,21 @@ def _save_site_workflow_payload(domain: str, data: Dict[str, Any]) -> Dict[str, 
 
     if not isinstance(new_workflow, list):
         raise HTTPException(status_code=400, detail="workflow 必须是数组")
+
+    # 修复：此前不校验动作名，拼错（如 STREAM_WIAT）或小写（click）会静默入库，
+    # 运行期只在 debug 日志里记一行“未知动作”，表现为工作流跑完但什么都没发生。
+    for i, step in enumerate(new_workflow):
+        if not isinstance(step, dict):
+            raise HTTPException(status_code=400, detail=f"第 {i + 1} 步必须是对象")
+        action = step.get("action")
+        if not isinstance(action, str) or action not in VALID_WORKFLOW_ACTIONS:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"第 {i + 1} 步的动作类型无效: {action}"
+                    f"（动作名必须大写，可选值：{'、'.join(sorted(VALID_WORKFLOW_ACTIONS))}）"
+                ),
+            )
 
     if new_selectors is not None and (
         not isinstance(new_selectors, dict) or isinstance(new_selectors, list)

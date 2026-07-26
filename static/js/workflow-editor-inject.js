@@ -54,6 +54,10 @@
 
     const state = {
         steps: [],
+        // 修复：可视化编辑器不支持的原始步骤（如 READONLY_HINT / STREAM_OUTPUT）在此暂存，保存时按原下标回插，避免被静默删除
+        preservedSteps: [],
+        // 修复：测试时可选的模型名，传给后端 context.model 供 SELECT_MODEL 使用
+        testModel: '',
         siteConfig: null,
         presetName: null,
         isPickingElement: false,
@@ -266,6 +270,19 @@
         overflow: hidden;
         text-overflow: ellipsis;
       }
+      /* 修复：测试模型名输入框（可选，留空则不传 model） */
+      .wfe-toolbar-input {
+        width: 120px;
+        min-height: 28px;
+        padding: 0 8px;
+        border: 1px solid #d1d5db;
+        border-radius: 6px;
+        font-size: 11px;
+        font-family: inherit;
+        color: #111827;
+        background: white;
+      }
+      .wfe-toolbar-input:focus { outline: none; border-color: #3b82f6; }
       .wfe-toolbar-menu {
         position: absolute;
         left: 0;
@@ -791,6 +808,17 @@
       }
     });
 
+    // 修复：只有在构建整份工作流（保存路径，stepSubset 为空）时才回插保留步骤；
+    // 单步/整体测试传入的是小球子集，回插会污染测试内容。
+    if (!Array.isArray(stepSubset)) {
+      (state.preservedSteps || [])
+        .slice()
+        .sort((a, b) => a.index - b.index)
+        .forEach(({ index, step }) => {
+          newWorkflow.splice(Math.min(index, newWorkflow.length), 0, step);
+        });
+    }
+
     return { workflow: newWorkflow, selectors };
   }
 
@@ -947,7 +975,10 @@
       stealth: !!siteConfig.stealth,
       stream_config: siteConfig.stream_config || {},
       image_extraction: siteConfig.image_extraction || {},
-      file_paste: siteConfig.file_paste || {}
+      file_paste: siteConfig.file_paste || {},
+      // 修复：补上 model / model_catalog，否则 SELECT_MODEL 在测试里必然 early return
+      model: String(state.testModel || '').trim(),
+      model_catalog: siteConfig.model_catalog || {}
     };
 
     console.debug('[WorkflowEditor] runWorkflowTest', {
@@ -1042,6 +1073,8 @@
     const base =
       type === 'INPUT' ? 'input_box' :
       type === 'READ' ? 'result_container' :
+      // 修复：模型球拾取后应生成运行期约定的 model_select_btn，而不是通用 click_target
+      type === 'MODEL' ? 'model_select_btn' :
       'click_target';
 
     if (!used[base]) {
@@ -1529,6 +1562,19 @@
         });
         body.appendChild(clickPickBtn);
       }
+    } else if (ball.type === 'MODEL') {
+      // 修复：模型球此前只有 Key 输入框、没有拾取入口，导致 config.selector 恒为空
+      body.appendChild(el('div', { className: 'wfe-menu-item disabled' }, [
+        el('span', { className: 'wfe-menu-label' }, [`Selector: ${ball.config.selector || '(unset)'}`])
+      ]));
+      const modelPickBtn = el('div', { className: 'wfe-menu-item clickable' }, [
+        el('span', { className: 'wfe-menu-label', style: { color: '#8b5cf6' } }, ['Pick element'])
+      ]);
+      modelPickBtn.addEventListener('click', () => {
+        hideMenu();
+        startPicker(ball);
+      });
+      body.appendChild(modelPickBtn);
     } else if (ball.type === 'COORD_SCROLL') {
       const endXInput = el('input', {
         type: 'number',
@@ -1807,7 +1853,8 @@
         }
 
         // 仅在新建步骤时自动拾取；坐标点击直接使用保存的坐标
-        if (!config.selector && !Number.isFinite(config.x) && ['CLICK', 'INPUT', 'READ'].includes(type)) {
+        // 修复：补上 MODEL，否则新建的模型球永远没有 selector，选择器映射写不进 selectors
+        if (!config.selector && !Number.isFinite(config.x) && ['CLICK', 'MODEL', 'INPUT', 'READ'].includes(type)) {
             setTimeout(() => startPicker(ball), 100);
         }
 
@@ -1842,10 +1889,15 @@
 
         const workflow = state.siteConfig.workflow;
 
+        // 修复：每次加载都重置保留区，避免跨预设残留
+        state.preservedSteps = [];
+
         workflow.forEach((step, idx) => {
             const action = step.action;
             if (!SUPPORTED_VISUAL_WORKFLOW_ACTIONS.has(action)) {
-                console.log(`[WorkflowEditor] 跳过步骤类型: ${action}`);
+                // 修复：编辑器不支持的步骤连同原始下标一起保留，保存时回插，避免被静默删除
+                state.preservedSteps.push({ index: idx, step });
+                console.log(`[WorkflowEditor] 保留（编辑器不支持）步骤类型: ${action} @${idx}`);
                 return;
             }
 
@@ -1944,7 +1996,7 @@
             addBall(type, stepConfig);
         });
 
-        console.log(`[WorkflowEditor] ✅ 已加载 ${state.steps.length} 个步骤`);
+        console.log(`[WorkflowEditor] ✅ 已加载 ${state.steps.length} 个步骤，保留 ${state.preservedSteps.length} 个不支持的步骤`);
 
         // 汇总显示未找到的元素
         const warningBalls = state.steps.filter(b => b.isWarning);
@@ -1972,6 +2024,7 @@
   let toolbarActionMenu;
   let toolbarActionToggle;
   let toolbarPresetBadge;
+  let toolbarModelInput;
   let toolbarDragState = null;
   let testingStatus;
   let testingStatusText;
@@ -2084,10 +2137,24 @@
           toolbarPresetBadge
       ]);
 
+      // 修复：可选的测试模型名，供 SELECT_MODEL 步骤在测试时真正执行（留空则不传 model）
+      toolbarModelInput = el('input', {
+          type: 'text',
+          className: 'wfe-toolbar-input',
+          value: state.testModel || '',
+          placeholder: '测试模型名(可选)',
+          title: '测试时传给后端的模型名，留空则 SELECT_MODEL 步骤保持页面当前选择'
+      });
+      toolbarModelInput.addEventListener('input', () => {
+          state.testModel = String(toolbarModelInput.value || '').trim();
+      });
+      toolbarModelInput.addEventListener('mousedown', e => e.stopPropagation());
+
       toolbar = el('div', { className: 'wfe-toolbar', id: 'wfe-toolbar' }, [
           handle,
           toolbarMeta,
           actionWrap,
+          toolbarModelInput,
           el('button', { className: 'wfe-btn', 'data-action': 'test-all' }, ['🧪 测试']),
           el('button', { className: 'wfe-btn primary', 'data-action': 'save' }, ['💾 保存']),
           el('button', { className: 'wfe-btn danger', 'data-action': 'clear' }, ['清空']),
@@ -2154,6 +2221,12 @@
         const steps = state.steps;
         const { workflow: newWorkflow, selectors } = buildWorkflowPayload();
 
+        // 修复：明确告知用户有多少个编辑器不支持的步骤被原样保留
+        const preservedCount = (state.preservedSteps || []).length;
+        const preservedNote = preservedCount > 0
+            ? `\n已保留 ${preservedCount} 个可视化编辑器不支持的步骤（如只读提示）`
+            : '';
+
         // 获取当前域名
         const domain = window.location.hostname;
         const presetName = getCurrentPresetName();
@@ -2169,7 +2242,7 @@
 
         if (shouldPreferBridgeMode()) {
             enqueueBackendAction('save_workflow', savePayload, { trackTestStatus: false });
-            showToast(`保存请求已提交，等待本地控制台写入配置。`, 'info', 2200);
+            showToast(`保存请求已提交，等待本地控制台写入配置。${preservedNote.replace(/\n/g, ' ')}`, 'info', 2200);
             return;
         }
 
@@ -2187,7 +2260,7 @@
                     selectors,
                     workflow: newWorkflow
                 };
-                alert(`✅ 保存成功！\n\n已更新 ${steps.length} 个步骤到 ${domain} / ${presetName}`);
+                alert(`✅ 保存成功！\n\n已更新 ${steps.length} 个步骤到 ${domain} / ${presetName}${preservedNote}`);
                 console.log('[WorkflowEditor] 保存结果:', result);
             } else {
                 const error = await response.json();
@@ -2367,6 +2440,7 @@
       toolbarActionMenu = null;
       toolbarActionToggle = null;
       toolbarPresetBadge = null;
+      toolbarModelInput = null;
       hideTestingStatus();
       document.getElementById('wfe-styles')?.remove();
       document.querySelectorAll('.wfe-toast, .wfe-pick-tip, .wfe-test-ring, .wfe-highlight').forEach(node => node.remove());

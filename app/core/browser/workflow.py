@@ -1806,7 +1806,9 @@ class BrowserWorkflowMixin:
                         f"{', '.join(step_extra_parts)}"
                     )
 
-                    if not selector and action not in ("WAIT", "KEY_PRESS", "COORD_CLICK", "COORD_SCROLL", "JS_EXEC", "READONLY_HINT", "PAGE_FETCH"):
+                    # 修复：补入 SELECT_MODEL。执行器 executor_actions.py 对空 selector 有硬编码兜底，
+                    # 且编辑器测试路径无此校验，漏配会导致"测试通过、生产报 缺少配置: model_select_btn"
+                    if not selector and action not in ("WAIT", "KEY_PRESS", "COORD_CLICK", "COORD_SCROLL", "JS_EXEC", "READONLY_HINT", "PAGE_FETCH", "SELECT_MODEL"):
                         if optional:
                             logger.debug(
                                 f"{step_tag} 跳过: "

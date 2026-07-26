@@ -4,12 +4,14 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from app.core.config import SSEFormatter
+from app.core.config import SSEFormatter, get_logger
 from app.services.sse_utils import (
     extract_sse_error_message,
     iter_sse_payloads,
     sse_frame_data_text,
 )
+
+logger = get_logger("API.OPENAI_STOP")
 
 
 @dataclass
@@ -29,6 +31,18 @@ class StopSequenceStreamState:
 
 
 MAX_STOP_SSE_FRAME_BUFFER_CHARS = 262144
+
+
+def _cap_sse_frame_buffer(buffered: str) -> str:
+    # 修复7: 单个未完成 SSE 帧超过缓冲上限时整帧丢弃并告警；
+    # 原先从头截断保留尾部片段，帧完成后会拼出坏 JSON 转发给客户端
+    if len(buffered) > MAX_STOP_SSE_FRAME_BUFFER_CHARS:
+        logger.warning(
+            f"SSE 帧超过缓冲上限 {MAX_STOP_SSE_FRAME_BUFFER_CHARS} 字符"
+            f"（实际 {len(buffered)}），该帧过大已被丢弃"
+        )
+        return ""
+    return buffered
 
 
 def normalize_openai_stop_sequences(value: Any) -> List[str]:
@@ -787,12 +801,14 @@ def filter_openai_stop_sse_chunk(
 
     combined = f"{state.sse_frame_buffer}{chunk}".replace("\r\n", "\n").replace("\r", "\n")
     if "\n\n" not in combined:
-        state.sse_frame_buffer = combined[-MAX_STOP_SSE_FRAME_BUFFER_CHARS:]
+        # 修复7: 超限帧直接丢弃，不再保留截断片段
+        state.sse_frame_buffer = _cap_sse_frame_buffer(combined)
         return []
 
     frames = combined.split("\n\n")
     tail = frames[-1]
-    state.sse_frame_buffer = tail[-MAX_STOP_SSE_FRAME_BUFFER_CHARS:] if tail else ""
+    # 修复7: 超限帧直接丢弃，不再保留截断片段
+    state.sse_frame_buffer = _cap_sse_frame_buffer(tail) if tail else ""
     output: List[str] = []
     for frame in frames[:-1]:
         frame = frame.strip("\n")
@@ -854,12 +870,14 @@ def _normalize_done_sse_frames(
 ) -> List[str]:
     combined = f"{state.sse_frame_buffer}{chunk}".replace("\r\n", "\n").replace("\r", "\n")
     if "\n\n" not in combined:
-        state.sse_frame_buffer = combined[-MAX_STOP_SSE_FRAME_BUFFER_CHARS:]
+        # 修复7: 超限帧直接丢弃，不再保留截断片段
+        state.sse_frame_buffer = _cap_sse_frame_buffer(combined)
         return []
 
     frames = combined.split("\n\n")
     tail = frames[-1]
-    state.sse_frame_buffer = tail[-MAX_STOP_SSE_FRAME_BUFFER_CHARS:] if tail else ""
+    # 修复7: 超限帧直接丢弃，不再保留截断片段
+    state.sse_frame_buffer = _cap_sse_frame_buffer(tail) if tail else ""
     output: List[str] = []
     for frame in frames[:-1]:
         frame = frame.strip("\n")

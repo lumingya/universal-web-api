@@ -41,7 +41,17 @@ window.HomeTab = {
         },
         browserLabel() {
             if (!(this.browserStatus && this.browserStatus.connected)) return '等待浏览器连接';
-            return this.browserStatus.tab_title || this.browserStatus.tab_url || '受控浏览器已连接';
+            // 修复：此前读的 tab_title / tab_url 后端从未返回（health_check 只产出
+            // status/connected/port/tab_pool/error），导致这里恒为兜底文案。
+            // 改用 health 里真实存在的 tab_pool 概览。
+            const pool = this.browserStatus.tab_pool;
+            if (pool && typeof pool === 'object') {
+                const total = Number(pool.total || 0);
+                const busy = Number(pool.busy || 0);
+                const idle = Number(pool.idle || 0);
+                if (total > 0) return `受控浏览器已连接 · ${total} 个标签页（忙碌 ${busy} / 空闲 ${idle}）`;
+            }
+            return '受控浏览器已连接';
         },
         latestRecord() {
             return this.sortedRecords[0] || null;

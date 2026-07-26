@@ -226,21 +226,38 @@ def _inspect_tool_response(
             )
 
         schema = tool_def.get("function", {}).get("parameters")
-        schema_errors = _validate_tool_arguments_against_schema(
-            args=args,
-            schema=schema,
-            path="arguments",
-        )
-        for message in schema_errors:
+        # 修复(2a)：schema 本身非法属于客户端请求参数问题（invalid_request），
+        # 模型怎么修都过不了，单独标记为不可重试错误码，调用方据此立即停止重试。
+        schema_invalid_reason = _check_tool_schema_invalid_reason(schema)
+        if schema_invalid_reason:
             tool_call_errors.append(
                 {
-                    "code": "schema_validation_failed",
-                    "message": f'Tool "{tool_name}" {message}',
+                    "code": "invalid_tool_schema",
+                    "message": (
+                        f'invalid_request: the client-declared parameters schema for tool "{tool_name}" '
+                        f"is not a valid JSON Schema (客户端 tools schema 非法): {schema_invalid_reason}"
+                    ),
                     "tool_call_id": tool_call_id,
                     "tool_name": tool_name,
                     "tool_call_index": index,
                 }
             )
+        else:
+            schema_errors = _validate_tool_arguments_against_schema(
+                args=args,
+                schema=schema,
+                path="arguments",
+            )
+            for message in schema_errors:
+                tool_call_errors.append(
+                    {
+                        "code": "schema_validation_failed",
+                        "message": f'Tool "{tool_name}" {message}',
+                        "tool_call_id": tool_call_id,
+                        "tool_name": tool_name,
+                        "tool_call_index": index,
+                    }
+                )
 
         if tool_call_id:
             if tool_call_id in seen_tool_call_ids:
@@ -258,17 +275,14 @@ def _inspect_tool_response(
 
         signature = f"{tool_name}\u0000{_canonicalize_tool_args(args)}"
         if signature in seen_tool_call_signatures:
-            tool_call_errors.append(
-                {
-                    "code": "duplicate_tool_call",
-                    "message": f'Tool "{tool_name}" duplicates an earlier tool call with identical arguments.',
-                    "tool_call_id": tool_call_id,
-                    "tool_name": tool_name,
-                    "tool_call_index": index,
-                }
+            # 修复(3)：OpenAI 协议不禁止对同一工具用相同参数并行调用；
+            # 相同签名的重复调用改为静默去重保留第一个（不记 error、不触发重试）。
+            logger.debug(
+                "[tool_calling] 忽略相同参数的重复工具调用 "
+                f'tool="{tool_name}" index={index} tool_call_id="{tool_call_id}"'
             )
-        else:
-            seen_tool_call_signatures.add(signature)
+            continue
+        seen_tool_call_signatures.add(signature)
 
         if tool_call_errors:
             errors.extend(tool_call_errors)
@@ -399,6 +413,26 @@ def _get_required_tool_name(tool_choice: Any) -> str:
     return ""
 
 
+def _contains_nonempty_tool_calls_field(payload: Any, depth: int = 0) -> bool:
+    """递归查找 payload 中是否存在非空的 tool_calls 列表（限深，避免深层结构开销）。"""
+    if depth > 4:
+        return False
+    if isinstance(payload, dict):
+        calls = payload.get("tool_calls")
+        if isinstance(calls, list) and calls:
+            return True
+        return any(
+            _contains_nonempty_tool_calls_field(item, depth + 1)
+            for item in payload.values()
+        )
+    if isinstance(payload, list):
+        return any(
+            _contains_nonempty_tool_calls_field(item, depth + 1)
+            for item in payload
+        )
+    return False
+
+
 def _detect_malformed_tool_payload(raw_text: str, allowed_tool_names: Optional[set[str]] = None) -> str:
     stripped = str(raw_text or "").strip()
     if not stripped:
@@ -406,14 +440,27 @@ def _detect_malformed_tool_payload(raw_text: str, allowed_tool_names: Optional[s
 
     lowered = stripped.lower()
     if stripped[:1] in {"{", "["}:
-        if any(
-            marker in lowered
-            for marker in ('"tool_calls"', '"function"', '"arguments"', '"tool_name"')
-        ):
-            return (
-                "The reply looked like a structured tool payload, but it could not be parsed "
-                "into valid tool_calls."
-            )
+        # 修复(2b)：收窄 malformed 判定。旧逻辑只要以 {/[ 开头且含 "function"/"arguments"
+        # 子串就判 malformed，用户让模型输出一段 OpenAI 响应示例 JSON 会误触发重试。
+        # 现在仅当文本带 tool_calls 结构标记，且属于“解析出了部分调用结构片段但不完整”：
+        #   - JSON 本身残缺无法解析（真实调用尝试被截断），或
+        #   - JSON 可解析且带非空 tool_calls / 顶层 tool_name（真实调用尝试未能规整成有效调用）
+        # 才判定 malformed。完整可解析、又没有实际调用结构的 JSON 视为普通最终文本。
+        if any(marker in lowered for marker in ('"tool_calls"', '"tool_name"')):
+            try:
+                payload = json.loads(stripped)
+            except Exception:
+                return (
+                    "The reply looked like a structured tool payload, but it could not be parsed "
+                    "into valid tool_calls."
+                )
+            if _contains_nonempty_tool_calls_field(payload) or (
+                isinstance(payload, dict) and str(payload.get("tool_name", "") or "").strip()
+            ):
+                return (
+                    "The reply contained a tool-call structure, but it could not be normalized "
+                    "into valid tool_calls."
+                )
 
     if _looks_like_tool_xml_payload(stripped, allowed_tool_names=allowed_tool_names):
         return (
@@ -470,6 +517,32 @@ def _decode_tool_arguments(tool_call: Dict[str, Any]) -> Optional[Dict[str, Any]
         if isinstance(parsed, dict):
             return parsed
     return None
+
+
+# 修复(2a)：请求侧确定性错误码集合——这些错误源自客户端请求参数本身，
+# 模型重试不可能修复，命中后应立即停止内部修复重试。
+_NON_RETRYABLE_TOOL_ERROR_CODES = {"invalid_tool_schema"}
+
+
+def _has_non_retryable_tool_errors(errors: List[Dict[str, Any]]) -> bool:
+    """判断校验错误中是否存在“重试无意义”的请求侧确定性错误。"""
+    return any(
+        str(item.get("code", "") or "").strip() in _NON_RETRYABLE_TOOL_ERROR_CODES
+        for item in errors or []
+        if isinstance(item, dict)
+    )
+
+
+def _check_tool_schema_invalid_reason(schema: Any) -> str:
+    """schema 本身非法（客户端请求问题）时返回原因，合法或缺省返回空串。"""
+    if not isinstance(schema, dict):
+        return ""
+    try:
+        validator_class = validator_for(schema)
+        validator_class.check_schema(schema)
+    except Exception as e:
+        return str(e)
+    return ""
 
 
 def _validate_tool_arguments_against_schema(
@@ -972,17 +1045,34 @@ def _truncate_rejected_tool_call_payload(tool_call: Dict[str, Any]) -> Dict[str,
 
 def _summarize_tool_calls_for_feedback(parsed: Dict[str, Any]) -> List[Dict[str, Any]]:
     summary: List[Dict[str, Any]] = []
+    limit = _get_rejected_tool_argument_preview_limit()
     for item in parsed.get("tool_calls") or []:
         if not isinstance(item, dict):
             continue
-        compact_item = _truncate_rejected_tool_call_payload(item)
-        function_data = compact_item.get("function") if isinstance(compact_item.get("function"), dict) else {}
-        arguments = _decode_tool_arguments(compact_item)
+        function_data = item.get("function") if isinstance(item.get("function"), dict) else {}
+        # 修复(4)：先对“原始”参数字符串做 _decode_tool_arguments，再对解码结果做展示层截断。
+        # 旧逻辑先截断再解码，json_repair 可能把截断残片“修”出凭空捏造的假参数展示给模型。
+        arguments = _decode_tool_arguments(item)
+        if arguments is not None:
+            try:
+                serialized = json.dumps(arguments, ensure_ascii=False)
+            except Exception:
+                serialized = repr(arguments)
+            display_arguments: Any = (
+                arguments if len(serialized) <= limit else _trim_retry_text(serialized, limit)
+            )
+        else:
+            # 解码失败时退回原始参数文本的截断预览（仅作展示，不再尝试修复）
+            raw_arguments = function_data.get("arguments")
+            display_arguments = _trim_retry_text(
+                raw_arguments if isinstance(raw_arguments, str) else str(raw_arguments or ""),
+                limit,
+            )
         summary.append(
             {
-                "id": str(compact_item.get("id", "") or ""),
+                "id": str(item.get("id", "") or ""),
                 "name": str(function_data.get("name", "") or ""),
-                "arguments": arguments if arguments is not None else function_data.get("arguments"),
+                "arguments": display_arguments,
             }
         )
     return summary

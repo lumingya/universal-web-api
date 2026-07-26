@@ -1049,6 +1049,26 @@ window.CommandsTabTemplate = `
                                        type="text"
                                        placeholder="可选测试消息"
                                        class="mt-2 w-full rounded border border-slate-600 bg-slate-700 px-2 py-1.5 text-sm text-white">
+                                <!-- execute_workflow 的超时与工作流优先级：后端读取但此前 UI 无入口 -->
+                                <div v-if="action.type === 'execute_workflow'" class="mt-2 grid grid-cols-2 gap-2">
+                                    <div>
+                                        <label class="mb-1 block text-xs text-slate-400">超时（秒）</label>
+                                        <input v-model.number="action.timeout_sec"
+                                               type="number" min="1" step="1"
+                                               placeholder="默认 45"
+                                               class="w-full rounded border border-slate-600 bg-slate-700 px-2 py-1.5 text-sm text-white">
+                                    </div>
+                                    <div>
+                                        <label class="mb-1 block text-xs text-slate-400">工作流优先级</label>
+                                        <input v-model.number="action.workflow_priority"
+                                               type="number" step="1"
+                                               placeholder="继承当前命令"
+                                               class="w-full rounded border border-slate-600 bg-slate-700 px-2 py-1.5 text-sm text-white">
+                                    </div>
+                                </div>
+                                <p v-if="action.type === 'execute_workflow'" class="mt-1 text-xs text-slate-400">
+                                    超时留空时跟随环境变量 CMD_EXECUTE_WORKFLOW_TIMEOUT_SEC（兜底 45 秒，下限 1 秒）；优先级为任意整数，数值越大越优先，留空则继承当前命令的优先级。
+                                </p>
                                 <p class="mt-1 text-xs text-slate-400">
                                     {{ getPresetHint() }}
                                 </p>
@@ -1098,8 +1118,13 @@ window.CommandsTabTemplate = `
                             <span v-if="action.type === 'send_napcat'" class="flex-1 text-xs font-mono text-slate-400">
                                 NapCat · {{ action.target_type === 'group' ? ('群 ' + (action.group_id || '未填写')) : ('QQ ' + (action.user_id || '未填写')) }}
                             </span>
+                            <!-- 说明文字按真实语义改写：stop_actions 可关，关闭后仅取消请求、动作列表继续往下走 -->
                             <span v-if="action.type === 'abort_task'" class="flex-1 text-xs text-slate-400">
-                                触发后取消当前请求并停止后续动作
+                                取消当前请求并停止页面加载{{ action.stop_actions === false ? '（不中断后续动作）' : '（并中断后续动作）' }}
+                            </span>
+                            <!-- 人机验证点击此前在动作行里没有任何提示 -->
+                            <span v-if="action.type === 'click_captcha_challenge'" class="flex-1 text-xs text-slate-400">
+                                自动定位并点击人机验证框（Cloudflare / Turnstile 等）
                             </span>
                             <span v-if="action.type === 'release_tab_lock'" class="flex-1 text-xs text-slate-400">
                                 解除当前标签页占用（可强制释放并清空页面）                            </span>
@@ -1114,6 +1139,123 @@ window.CommandsTabTemplate = `
                             <button @click="moveAction(i, -1)" :disabled="i === 0" class="text-sm text-slate-400 hover:text-slate-200 disabled:opacity-30">↑</button>
                             <button @click="moveAction(i, 1)" :disabled="i === editingCommand.actions.length - 1" class="text-sm text-slate-400 hover:text-slate-200 disabled:opacity-30">↓</button>
                             <button @click="removeAction(i)" class="text-sm text-red-400 hover:text-red-300">✕</button>
+                        </div>
+
+                        <!-- run_js 的重试与假值判定参数：后端一直支持，此前 UI 只有一个代码框 -->
+                        <div v-for="(action, i) in editingCommand.actions.filter(a => a.type === 'run_js')"
+                             :key="'run-js-' + i"
+                             class="mt-4 rounded-lg border border-violet-200 bg-violet-50 p-4 dark:border-violet-800 dark:bg-violet-900/20">
+                            <h5 class="mb-3 text-sm font-semibold text-violet-800 dark:text-violet-300">⚙️ JS 重试与结果判定</h5>
+
+                            <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+                                <div>
+                                    <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">命中即重试的返回值（每行一个）</label>
+                                    <!-- retry_on_results 是数组，用 @change（失焦时）解析，避免边输入边规范化把换行吃掉 -->
+                                    <textarea :value="getRunJsRetryResultsText(action)"
+                                              @change="setRunJsRetryResultsText(action, $event.target.value)"
+                                              rows="4"
+                                              placeholder="每行一个返回值，例如：&#10;not_ready&#10;false"
+                                              class="w-full rounded border px-2 py-1.5 text-sm font-mono dark:border-gray-600 dark:bg-gray-700 dark:text-white"></textarea>
+                                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                                        JS 返回值转成字符串后命中任意一行才会重试；留空表示从不重试。
+                                    </p>
+                                </div>
+                                <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                    <div>
+                                        <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">重试次数</label>
+                                        <input v-model.number="action.retry_attempts" type="number" min="0" step="1"
+                                               placeholder="0"
+                                               class="w-full rounded border px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white">
+                                    </div>
+                                    <div>
+                                        <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">每次重试前等待（秒）</label>
+                                        <input v-model.number="action.retry_wait_seconds" type="number" min="0" step="0.5"
+                                               placeholder="0"
+                                               class="w-full rounded border px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white">
+                                    </div>
+                                    <div class="sm:col-span-2">
+                                        <label class="flex items-center gap-2 cursor-pointer text-sm dark:text-gray-300">
+                                            <input type="checkbox" v-model="action.retry_after_refresh" class="rounded">
+                                            重试前先刷新页面（刷新后固定再等 2 秒）
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="mt-3 rounded border border-violet-200/80 bg-white/70 px-3 py-2 dark:border-violet-700/60 dark:bg-violet-950/20">
+                                <label class="flex items-center gap-2 cursor-pointer text-sm dark:text-gray-300">
+                                    <input type="checkbox" v-model="action.fail_on_falsy" class="rounded">
+                                    JS 返回假值时判为失败（后端默认开启）
+                                </label>
+                                <p class="mt-1 text-xs leading-5 text-violet-700 dark:text-violet-300">
+                                    开启时，JS 返回 undefined / null / 空字符串 / 0 / false 都会被记成失败（返回 ok:false），page_check 触发器会据此重置 latch 并继续重试。
+                                    如果脚本本来就可能没有返回值（例如只做点击、只改样式），请关掉这一项，否则会被一直误判为失败且很难从日志里看出原因。
+                                </p>
+                            </div>
+                        </div>
+
+                        <!-- run_js_file 的编码 / 假值判定 / 卸载脚本：后端读取但此前 UI 没有入口 -->
+                        <div v-for="(action, i) in editingCommand.actions.filter(a => a.type === 'run_js_file')"
+                             :key="'run-js-file-' + i"
+                             class="mt-4 rounded-lg border border-sky-200 bg-sky-50 p-4 dark:border-sky-800 dark:bg-sky-900/20">
+                            <h5 class="mb-3 text-sm font-semibold text-sky-800 dark:text-sky-300">📜 JS 文件注入参数</h5>
+
+                            <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
+                                <div>
+                                    <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">文件编码</label>
+                                    <input v-model.trim="action.encoding" type="text"
+                                           placeholder="utf-8-sig"
+                                           class="w-full rounded border px-2 py-1.5 text-sm font-mono dark:border-gray-600 dark:bg-gray-700 dark:text-white">
+                                </div>
+                                <div class="flex items-center pt-5 md:col-span-2">
+                                    <label class="flex items-center gap-2 cursor-pointer text-sm dark:text-gray-300">
+                                        <input type="checkbox" v-model="action.fail_on_falsy" class="rounded">
+                                        “立即执行”返回假值时判为失败（后端默认关闭）
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div class="mt-3">
+                                <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">卸载脚本 teardown_js（可选）</label>
+                                <textarea v-model="action.teardown_js" rows="4"
+                                          placeholder="命令被禁用或删除时执行，用来还原预注入脚本改过的页面状态；旧字段名 cleanup_js 仍然兼容"
+                                          class="w-full rounded border px-2 py-1.5 text-sm font-mono dark:border-gray-600 dark:bg-gray-700 dark:text-white"></textarea>
+                                <p class="mt-1 text-xs text-sky-700 dark:text-sky-300">
+                                    只有勾选了“预注入”才有意义：移除 addScriptToEvaluateOnNewDocument 之后会在当前页面执行这段 JS 做善后。
+                                </p>
+                            </div>
+                        </div>
+
+                        <!-- click_captcha_challenge 此前完全没有参数编辑器 -->
+                        <div v-for="(action, i) in editingCommand.actions.filter(a => a.type === 'click_captcha_challenge')"
+                             :key="'captcha-' + i"
+                             class="mt-4 rounded-lg border border-rose-200 bg-rose-50 p-4 dark:border-rose-800 dark:bg-rose-900/20">
+                            <h5 class="mb-3 text-sm font-semibold text-rose-800 dark:text-rose-300">🛡️ 人机验证点击</h5>
+
+                            <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
+                                <div>
+                                    <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">探测超时（秒）</label>
+                                    <input v-model.number="action.timeout_sec" type="number" min="0.5" step="0.5"
+                                           placeholder="6"
+                                           class="w-full rounded border px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white">
+                                </div>
+                                <div>
+                                    <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">点击随机偏移半径（像素）</label>
+                                    <input v-model.number="action.random_radius" type="number" min="0" step="1"
+                                           placeholder="4"
+                                           class="w-full rounded border px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white">
+                                </div>
+                                <div>
+                                    <label class="mb-1 block text-xs text-gray-500 dark:text-gray-400">最多尝试次数（可选）</label>
+                                    <input v-model.number="action.max_attempts" type="number" min="1" step="1"
+                                           placeholder="留空 = 超时前不限次数"
+                                           class="w-full rounded border px-2 py-1.5 text-sm dark:border-gray-600 dark:bg-gray-700 dark:text-white">
+                                </div>
+                            </div>
+
+                            <p class="mt-2 text-xs leading-5 text-rose-700 dark:text-rose-300">
+                                每轮探测之间固定间隔 0.25 秒，超时或达到尝试次数上限就返回失败。偏移半径设为 0 表示每次都点在完全相同的坐标上，更容易被判定为机器行为；建议保留默认值 4。
+                            </p>
                         </div>
 
                         <div v-for="(action, i) in editingCommand.actions.filter(a => a.type === 'write_element')"
@@ -1471,6 +1613,17 @@ window.CommandsTabTemplate = `
                                 </div>
                             </div>
 
+                            <!-- consume_response：后端读取但此前 UI 无入口，直接决定 save_as 能否拿到正文 -->
+                            <div class="mt-3 rounded border border-cyan-200/80 bg-white/70 px-3 py-2 dark:border-cyan-700/60 dark:bg-cyan-950/20">
+                                <label class="flex items-center gap-2 cursor-pointer text-sm dark:text-gray-300">
+                                    <input type="checkbox" v-model="action.consume_response" class="rounded">
+                                    等待并读完响应内容（默认关闭：仅触发请求就立即返回）
+                                </label>
+                                <p class="mt-1 text-xs leading-5 text-cyan-700 dark:text-cyan-300">
+                                    关闭时动作发出请求后马上返回，上面的“保存成变量”只能拿到触发结果而拿不到正文；需要把回复内容写进变量再给后续动作用时必须勾选。当前仅“DeepSeek 直发”配置会读取这个参数。
+                                </p>
+                            </div>
+
                             <p class="mt-2 text-xs text-cyan-700 dark:text-cyan-300">
                                 <span v-if="action.request_profile !== 'deepseek_completion'">请求在当前页面上下文里执行，会尽量沿用当前标签页的 Cookie / 会话。URL、Headers、Body 都支持模板变量。</span>
                                 <span v-else>直发模式会自动复用当前 DeepSeek 登录态与页面内 PoW 求解逻辑。提示词支持模板变量。</span>
@@ -1749,6 +1902,32 @@ window.CommandsTabTemplate = `
                                     执行后中断后续动作                                </label>
                             </div>
                         </div>
+
+                        <!-- abort_task 与 release_tab_lock 结构对称，此前却只有一行写死的说明文字 -->
+                        <div v-for="(action, i) in editingCommand.actions.filter(a => a.type === 'abort_task')"
+                             :key="'abort-task-' + i"
+                             class="mt-4 p-4 bg-red-50 dark:bg-red-900/20 rounded-lg border border-red-200 dark:border-red-800">
+                            <h5 class="text-sm font-semibold text-red-800 dark:text-red-300 mb-3">🛑 中止任务配置</h5>
+
+                            <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                <div class="md:col-span-2">
+                                    <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">原因标记</label>
+                                    <input v-model.trim="action.reason" type="text"
+                                           placeholder="abort_task_action"
+                                           class="w-full px-2 py-1.5 border dark:border-gray-600 rounded bg-white dark:bg-gray-700 dark:text-white text-sm font-mono">
+                                </div>
+                                <div class="flex items-center pt-5">
+                                    <label class="flex items-center gap-2 cursor-pointer text-sm dark:text-gray-300">
+                                        <input type="checkbox" v-model="action.stop_actions" class="rounded">
+                                        执行后中断后续动作
+                                    </label>
+                                </div>
+                            </div>
+
+                            <p class="mt-2 text-xs text-red-700 dark:text-red-300">
+                                原因标记会传给请求管理器，用于取消回执和日志排查。取消勾选“执行后中断后续动作”时，本步只取消当前请求并停止页面加载，动作列表会继续往下执行。
+                            </p>
+                        </div>
                         </div>
                         </div> <!-- Close action floating panel -->
                     </div>
@@ -1866,11 +2045,11 @@ window.CommandsTabTemplate = `
                                                         <input :value="getSelectedAdvancedRule(field).detector_keyword" @input="updateAdvancedRule(field, selectedAdvancedRuleIndex, 'detector_keyword', $event.target.value)"
                                                                class="w-full rounded-lg border border-stone-200 bg-stone-50/60 px-3 py-2 text-sm font-normal normal-case text-stone-800 outline-none transition placeholder:text-stone-400 focus:border-amber-400 dark:border-stone-700 dark:bg-stone-900/60 dark:text-stone-100" placeholder="留空则不调用 Detector">
                                                     </label>
-                                                    <label class="col-span-full flex cursor-pointer select-none items-center gap-2 text-[11px] font-semibold uppercase text-stone-500">
-                                                        <input type="checkbox" :checked="getSelectedAdvancedRule(field).exclude_reasoning" @change="updateAdvancedRule(field, selectedAdvancedRuleIndex, 'exclude_reasoning', $event.target.checked)"
-                                                               class="rounded border-stone-300 text-amber-500 focus:ring-amber-400 dark:border-stone-700 dark:bg-stone-900">
-                                                        排除有思维链的模型
-                                                    </label>
+                                                    <label class="col-span-full flex cursor-pointer select-none items-center gap-2 text-[11px] font-semibold uppercase text-stone-500">
+                                                        <input type="checkbox" :checked="getSelectedAdvancedRule(field).exclude_reasoning" @change="updateAdvancedRule(field, selectedAdvancedRuleIndex, 'exclude_reasoning', $event.target.checked)"
+                                                               class="rounded border-stone-300 text-amber-500 focus:ring-amber-400 dark:border-stone-700 dark:bg-stone-900">
+                                                        排除有思维链的模型
+                                                    </label>
                                                 </div>
 
                                                 <div class="mt-5 border-t border-stone-100 pt-4 dark:border-stone-800">

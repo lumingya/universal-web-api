@@ -1360,17 +1360,14 @@ async def get_tab_pool_tabs(authenticated: bool = Depends(verify_auth)):
         }
     except Exception as e:
         logger.error(f"获取标签页列表失败: {e}")
+        # 修复：不再伪造 allocation_mode / preserve_error_tabs / route_groups 等持久化配置，
+        # 否则前端会把这些默认值当作真实配置展示并在下次保存时写回磁盘，抹掉用户设置。
         return {
             "tabs": [],
             "count": 0,
             "error": str(e),
-            "allocation_mode": "first_idle",
             "allocation_mode_options": TAB_POOL_ALLOCATION_OPTIONS,
-            "enabled_route_methods": [item["value"] for item in TAB_ROUTE_METHOD_OPTIONS],
             "route_method_options": TAB_ROUTE_METHOD_OPTIONS,
-            "excluded_urls": [],
-            "preserve_error_tabs": False,
-            "route_groups": [],
         }
 
 
@@ -2535,6 +2532,8 @@ async def _stream_with_tab_index(
                 _put_route_worker_queue_item(chunk_queue, ctx, None, final=True)
 
         worker_thread = threading.Thread(target=worker, daemon=True)
+        # 供 TabRecovery 判定旧 worker 是否退出（setattr 规避 dataclass 字段限制）
+        setattr(ctx, "worker_thread", worker_thread)
         worker_thread.start()
 
         last_sse_emit_at = time.monotonic()
@@ -2571,6 +2570,11 @@ async def _stream_with_tab_index(
                     timeout=STREAM_QUEUE_POLL_TIMEOUT,
                 )
             except queue.Empty:
+                # 兜底：worker 的结束哨兵（None）在队列持续打满时可能被丢弃，
+                # 若 worker 线程已退出且队列已排空，直接收尾避免空转到绝对超时。
+                if not worker_thread.is_alive() and chunk_queue.empty():
+                    logger.warning("工作线程已退出且队列为空（结束标记疑似丢失），提前收尾流式消费")
+                    break
                 if time.monotonic() - last_sse_emit_at >= SSE_HEARTBEAT_INTERVAL:
                     yield SSEFormatter.pack_comment("keepalive")
                     last_sse_emit_at = time.monotonic()
@@ -2838,6 +2842,8 @@ async def _stream_with_route_domain(
                 _put_route_worker_queue_item(chunk_queue, ctx, None, final=True)
 
         worker_thread = threading.Thread(target=worker, daemon=True)
+        # 供 TabRecovery 判定旧 worker 是否退出（setattr 规避 dataclass 字段限制）
+        setattr(ctx, "worker_thread", worker_thread)
         worker_thread.start()
 
         last_sse_emit_at = time.monotonic()
@@ -2874,6 +2880,11 @@ async def _stream_with_route_domain(
                     timeout=STREAM_QUEUE_POLL_TIMEOUT,
                 )
             except queue.Empty:
+                # 兜底：worker 的结束哨兵（None）在队列持续打满时可能被丢弃，
+                # 若 worker 线程已退出且队列已排空，直接收尾避免空转到绝对超时。
+                if not worker_thread.is_alive() and chunk_queue.empty():
+                    logger.warning("工作线程已退出且队列为空（结束标记疑似丢失），提前收尾流式消费")
+                    break
                 if time.monotonic() - last_sse_emit_at >= SSE_HEARTBEAT_INTERVAL:
                     yield SSEFormatter.pack_comment("keepalive")
                     last_sse_emit_at = time.monotonic()
@@ -3133,6 +3144,8 @@ async def _stream_with_exact_url(
                 _put_route_worker_queue_item(chunk_queue, ctx, None, final=True)
 
         worker_thread = threading.Thread(target=worker, daemon=True)
+        # 供 TabRecovery 判定旧 worker 是否退出（setattr 规避 dataclass 字段限制）
+        setattr(ctx, "worker_thread", worker_thread)
         worker_thread.start()
 
         last_sse_emit_at = time.monotonic()
@@ -3169,6 +3182,11 @@ async def _stream_with_exact_url(
                     timeout=STREAM_QUEUE_POLL_TIMEOUT,
                 )
             except queue.Empty:
+                # 兜底：worker 的结束哨兵（None）在队列持续打满时可能被丢弃，
+                # 若 worker 线程已退出且队列已排空，直接收尾避免空转到绝对超时。
+                if not worker_thread.is_alive() and chunk_queue.empty():
+                    logger.warning("工作线程已退出且队列为空（结束标记疑似丢失），提前收尾流式消费")
+                    break
                 if time.monotonic() - last_sse_emit_at >= SSE_HEARTBEAT_INTERVAL:
                     yield SSEFormatter.pack_comment("keepalive")
                     last_sse_emit_at = time.monotonic()

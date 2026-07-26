@@ -57,6 +57,24 @@ async def _read_json_object_or_400(request: Request) -> Dict[str, Any]:
     return data
 
 
+# 修复：仅对数值语义的键做数字推断。此前对所有值 isdigit() 转 int，
+# 会把 AUTH_TOKEN=00123456 这类字符串令牌静默改写成 123456；
+# 同理 CURRENT_VERSION=1.10 会被转成 float 1.1 后回写成 1.1。
+_NUMERIC_ENV_KEYS = {
+    "APP_PORT", "BROWSER_PORT", "MAX_HTML_CHARS", "CANVAS_IMAGE_MAX_SIZE",
+    "TOOL_CALLING_INTERNAL_RETRY_MAX", "TOOL_CALLING_MAX_TOOL_RESULT_CHARS",
+    "TAB_RECOVERY_MAX_ATTEMPTS", "TAB_RECOVERY_TIMEOUT_SEC",
+    "TAB_RECOVERY_WORKER_EXIT_WAIT_SEC",
+    "REQUEST_ZOMBIE_TTL", "LOG_MAX_BYTES", "LOG_BACKUP_COUNT",
+    "MAX_TABS", "MIN_TABS",
+    "CMD_ASYNC_MAX_WORKERS", "CMD_PAGE_CHECK_FAILURE_BACKOFF_SEC",
+    "CMD_PAGE_CHECK_JS_TIMEOUT_SEC", "CMD_PERIODIC_KEEPALIVE_INTERVAL_SEC",
+    "CMD_REQUEST_PRIORITY_BASELINE", "CMD_TAB_POOL_REFRESH_INTERVAL_SEC",
+    "TEMP_CLEANUP_MIN_AGE_SECONDS", "PASTE_TEMP_CLEANUP_MIN_AGE_SECONDS",
+    "ARENA_EVENT_BRIDGE_COMMAND_TEXT_LIMIT", "ARENA_EVENT_BRIDGE_DEDUPE_MAX_ENTRIES",
+}
+
+
 def _load_env_config_from_file() -> Dict[str, Any]:
     """读取 .env 文件配置。"""
     env_path = Path(".env")
@@ -80,17 +98,16 @@ def _load_env_config_from_file() -> Dict[str, Any]:
                 value = True
             elif value.lower() == "false":
                 value = False
-            elif value.isdigit():
+            elif key in _NUMERIC_ENV_KEYS and value.isdigit():
                 value = int(value)
-            elif re.match(r"^\d+\.\d+$", value):
+            elif key in _NUMERIC_ENV_KEYS and re.match(r"^\d+\.\d+$", value):
                 value = float(value)
 
             config[key] = value
 
-    if "DASHBOARD_AUTH_ENABLED" not in config and "AUTH_ENABLED" in config:
-        config["DASHBOARD_AUTH_ENABLED"] = config.get("AUTH_ENABLED")
-    if "DASHBOARD_AUTH_TOKEN" not in config and config.get("AUTH_TOKEN"):
-        config["DASHBOARD_AUTH_TOKEN"] = config.get("AUTH_TOKEN")
+    # 修复：不再凭空合成 DASHBOARD_AUTH_* —— 前端会把合成值原样回写，
+    # 把「留空即沿用 AUTH_*」的动态回退语义固化成硬编码副本。
+    # 生效值改由 GET /api/settings/env 的只读 effective 字段返回。
 
     return config
 
@@ -420,6 +437,11 @@ DEFAULT_BROWSER_CONSTANTS: Dict[str, Any] = {
     "REQUEST_MONITOR_DETAIL_ENABLED": True,
     "REQUEST_MONITOR_SAVE_TO_FILE": True,
     "REQUEST_MONITOR_MAX_CAPTURED_RESPONSE_CHARS": 30000,
+    # 修复：补齐缺失的入口，否则前端无法通过 /api/settings/browser-constants 配置它们
+    "REQUEST_ZOMBIE_TTL": 600,
+    "PAGE_INTERACTION_THROTTLE_ENABLED": True,
+    "PAGE_INTERACTION_MAX_CONCURRENT": 3,
+    "PAGE_INTERACTION_MAX_WAIT": 20.0,
     "DASHBOARD_LOG_POLL_INTERVAL_MS": 1000,
     "DASHBOARD_LOG_BACKGROUND_POLL_INTERVAL_MS": 5000,
     "DASHBOARD_REQUEST_HISTORY_POLL_INTERVAL_MS": 3000,
@@ -810,10 +832,77 @@ async def clear_logs(authenticated: bool = Depends(verify_auth)):
 async def get_env_config(authenticated: bool = Depends(verify_auth)):
     """读取 .env 文件配置"""
     try:
-        return {"config": _load_env_config_from_file()}
+        # 修复：config 结构保持不变（前端只读 data.config）；
+        # 另附只读 effective 字段暴露 DASHBOARD_AUTH_* 的实际生效值，前端不会回写它。
+        return {
+            "config": _load_env_config_from_file(),
+            "effective": {
+                "DASHBOARD_AUTH_ENABLED": AppConfig.is_dashboard_auth_enabled(),
+                "DASHBOARD_AUTH_TOKEN_SET": bool(AppConfig.get_dashboard_auth_token()),
+            },
+        }
     except Exception as e:
         logger.error(f"读取环境配置失败: {e}")
         raise HTTPException(status_code=500, detail=f"读取失败: {str(e)}")
+
+
+def _env_value_is_true(value: Any) -> bool:
+    """与后端 AppConfig._env_bool 一致的真值白名单语义。"""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in ("true", "1", "yes", "on")
+
+
+def _validate_env_config_payload(new_config: Dict[str, Any]) -> None:
+    """写入 .env 前校验：拦截非法键名、换行注入，以及会把控制面板锁死的认证组合。"""
+    # 修复：键名/值零校验时，值里带 \n 就能往 .env 注入额外行
+    # （例如注入 DASHBOARD_AUTH_ENABLED=false 关掉认证）。
+    #
+    # 注意：前端会把 GET 读到的整份 .env 原样回传，其中可能包含 http_proxy、no_proxy
+    # 这类小写的存量键。对这些"读进来又原样送回来、值也没变"的键做键名校验会让用户
+    # 完全无法保存任何设置，因此键名规则只对新增/变更的键生效。
+    try:
+        existing_env: Dict[str, Any] = _load_env_config_from_file()
+    except Exception:
+        existing_env = {}
+
+    for key, value in new_config.items():
+        serialized = _serialize_env_value(value)
+        if "\r" in serialized or "\n" in serialized:
+            raise HTTPException(status_code=400, detail=f"配置值不能包含换行: {key}")
+        unchanged_existing = (
+            key in existing_env
+            and _serialize_env_value(existing_env.get(key)) == serialized
+        )
+        if unchanged_existing:
+            continue
+        if not isinstance(key, str) or not re.match(r"^[A-Z][A-Z0-9_]*$", key):
+            raise HTTPException(status_code=400, detail=f"非法的配置键名: {key}")
+
+    # 修复：认证自锁保护。开启认证却留空令牌时，deps.py 会对每个 /api/* 抛 500，
+    # 控制面板此后打不开，只能手改 .env 恢复。按合并后的最终生效值判断。
+    merged: Dict[str, Any] = {**existing_env, **new_config}
+
+    auth_enabled = _env_value_is_true(merged.get("AUTH_ENABLED"))
+    auth_token = str(merged.get("AUTH_TOKEN") or "").strip()
+    if auth_enabled and not auth_token:
+        raise HTTPException(status_code=400, detail="启用 API 认证时必须设置 AUTH_TOKEN")
+
+    # DASHBOARD_AUTH_ENABLED 未设置/为空时沿用 AUTH_ENABLED
+    dashboard_raw = merged.get("DASHBOARD_AUTH_ENABLED")
+    if dashboard_raw is None or (not isinstance(dashboard_raw, bool) and str(dashboard_raw).strip() == ""):
+        dashboard_enabled = auth_enabled
+    else:
+        dashboard_enabled = _env_value_is_true(dashboard_raw)
+
+    dashboard_token = str(merged.get("DASHBOARD_AUTH_TOKEN") or "").strip()
+    if dashboard_enabled and not dashboard_token and not auth_token:
+        raise HTTPException(
+            status_code=400,
+            detail="启用控制面板认证时必须设置 DASHBOARD_AUTH_TOKEN 或 AUTH_TOKEN"
+        )
 
 
 @router.post("/api/settings/env")
@@ -827,6 +916,7 @@ async def save_env_config(
         new_config = data.get("config", {})
         if not isinstance(new_config, dict):
             raise HTTPException(status_code=400, detail="环境配置必须是 JSON 对象")
+        _validate_env_config_payload(new_config)
         _write_env_config_file(new_config)
 
         logger.info(f"环境配置已保存: {len(new_config)} 项，准备触发重启...")
@@ -1951,6 +2041,9 @@ _SYSTEM_STATS_CACHE = {
         "project_cpu": 0.0,
         "memory_percent": 0.0,
         "project_memory_percent": 0.0,
+        # 与实际构建的 payload 保持同一形状，避免消费方缺键
+        "running_count": 0,
+        "queued_count": 0,
     },
 }
 _SYSTEM_STATS_CACHE_LOCK = _threading.Lock()
@@ -1978,6 +2071,9 @@ def _reset_system_stats_cache_for_tests() -> None:
             "project_cpu": 0.0,
             "memory_percent": 0.0,
             "project_memory_percent": 0.0,
+            # 与实际构建的 payload 保持同一形状，避免消费方缺键
+            "running_count": 0,
+            "queued_count": 0,
         }
 
     with _PROJECT_PROCESS_CACHE_LOCK:
@@ -2090,6 +2186,19 @@ def _get_project_disk_usage_mb_cached(ttl_seconds: float = 60.0) -> float:
     return _refresh_project_disk_usage_cache(ttl)
 
 
+def _get_live_request_counts() -> Dict[str, int]:
+    """实时请求计数（运行中 / 排队中）。stats 是高频轮询接口，取值失败一律回落 0，不能因此整体 500。"""
+    try:
+        status = request_manager.get_status() or {}
+        status_counts = status.get("status_counts") or {}
+        return {
+            "running_count": int(status.get("running_count", 0) or 0),
+            "queued_count": int(status_counts.get("queued", 0) or 0),
+        }
+    except Exception:
+        return {"running_count": 0, "queued_count": 0}
+
+
 def _get_fresh_system_stats_payload() -> Optional[Dict[str, Any]]:
     now = time.monotonic()
     cached_payload = _SYSTEM_STATS_CACHE.get("payload") or {}
@@ -2130,6 +2239,9 @@ def _get_system_stats_payload_cached(ttl_seconds: float = 2.0) -> Dict[str, Any]
         except Exception:
             project_memory_percent = 0.0
 
+        # 追加实时请求计数：request-history 只落终态记录，无法反映“正在执行”
+        live_counts = _get_live_request_counts()
+
         payload = {
             "memory_mb": project_memory_mb,
             "disk_status": _format_disk_usage(_get_project_disk_usage_mb_cached()),
@@ -2140,6 +2252,8 @@ def _get_system_stats_payload_cached(ttl_seconds: float = 2.0) -> Dict[str, Any]
             "project_cpu": project_cpu,
             "memory_percent": memory_percent,
             "project_memory_percent": project_memory_percent,
+            "running_count": live_counts["running_count"],
+            "queued_count": live_counts["queued_count"],
         }
         _SYSTEM_STATS_CACHE["payload"] = payload
         _SYSTEM_STATS_CACHE["expires_at"] = now + max(0.8, float(ttl_seconds or 2.0))
@@ -2269,11 +2383,16 @@ def _run_update_check(repo: Optional[str] = None) -> Dict[str, Any]:
         return _set_update_check_state(**payload)
     except Exception as exc:
         logger.warning(f"版本检查失败: {exc}")
+        # 修复：_set_update_check_state 是 merge 语义，失败时若不显式清空这三项，
+        # 上一次成功检查的 latest_* 会残留下来，前端会同时显示"最新版本号"和"检查失败"。
         return _set_update_check_state(
             checked=True,
             checking=False,
             available=False,
             current_version=get_current_version(),
+            latest_version="",
+            latest_tag="",
+            published_at="",
             checked_at=int(time.time()),
             error=str(exc),
         )
