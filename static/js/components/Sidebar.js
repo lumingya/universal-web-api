@@ -20,7 +20,7 @@ window.SidebarComponent = {
         authEnabled: { type: Boolean, default: false },
         hasToken: { type: Boolean, default: false },
         darkMode: { type: Boolean, default: false },
-        activeTab: { type: String, default: 'config' },  // ✨ 新增
+        activeTab: { type: String, default: 'home' },
         updateAvailable: { type: Boolean, default: false },
         systemStats: { type: Object, default: () => ({ memory_mb: 0, disk_status: '未知', total_requests: 0 }) }
     },
@@ -32,167 +32,194 @@ window.SidebarComponent = {
         'toggle-dark', 
         'refresh-status', 
         'trigger-import', 
-        'export-all', 
+        'export-all',
         'show-token-dialog',
+        'open-guide',
+        'primary-action',
+        'collapse-change',
         'change-tab'  // ✨ 新增
     ],
     data() {
         return {
-            searchQuery: '',
-            isStatsExpanded: false
+            navCollapsed: false,
+            mobileOpen: false,
+            tourNavigationSnapshot: null
         };
     },
     computed: {
-        filteredSites() {
-            const domains = Object.keys(this.sites);
-            if (!this.searchQuery) return domains;
-            const query = this.searchQuery.toLowerCase();
-            return domains.filter(d => d.toLowerCase().includes(query));
+        primaryActionLabel() {
+            return this.activeTab === 'commands' ? '新建命令' : '新增站点';
+        }
+    },
+    mounted() {
+        try {
+            this.navCollapsed = localStorage.getItem('dashboard_nav_collapsed') === '1';
+        } catch (e) {
+            this.navCollapsed = false;
+        }
+        this.$emit('collapse-change', this.navCollapsed);
+    },
+    methods: {
+        toggleNavCollapsed() {
+            this.navCollapsed = !this.navCollapsed;
+            this.$emit('collapse-change', this.navCollapsed);
+            try {
+                localStorage.setItem('dashboard_nav_collapsed', this.navCollapsed ? '1' : '0');
+            } catch (e) {
+                // Layout persistence is optional.
+            }
+        },
+        openMobileNav() {
+            this.mobileOpen = true;
+        },
+        closeMobileNav() {
+            this.mobileOpen = false;
+        },
+        beginTourNavigation() {
+            if (!this.tourNavigationSnapshot) {
+                this.tourNavigationSnapshot = {
+                    navCollapsed: this.navCollapsed,
+                    mobileOpen: this.mobileOpen
+                };
+            }
+            this.navCollapsed = false;
+            this.mobileOpen = window.innerWidth <= 900;
+            this.$emit('collapse-change', false);
+        },
+        endTourNavigation() {
+            const snapshot = this.tourNavigationSnapshot;
+            this.mobileOpen = false;
+            if (snapshot) {
+                this.navCollapsed = snapshot.navCollapsed;
+                this.$emit('collapse-change', this.navCollapsed);
+            }
+            this.tourNavigationSnapshot = null;
+        },
+        selectTab(tab) {
+            this.mobileOpen = false;
+            this.$emit('change-tab', tab);
+        },
+        selectSite(domain) {
+            this.mobileOpen = false;
+            this.$emit('select-site', domain);
+        },
+        runPrimaryAction() {
+            this.mobileOpen = false;
+            this.$emit('primary-action', this.activeTab);
         }
     },
     template: `
-        <aside class="w-64 bg-white dark:bg-gray-800 border-r dark:border-gray-700 flex flex-col">
-            <div class="p-4 border-b dark:border-gray-700 bg-gradient-to-r from-slate-50 via-white to-blue-50 dark:from-gray-900 dark:via-gray-900 dark:to-slate-800">
-                <div class="flex items-center gap-3">
-                    <img src="/static/images/logo.svg"
-                         alt="Universal Web API logo"
-                         class="h-12 w-12 rounded-xl bg-white/80 p-1 shadow-sm ring-1 ring-slate-200/70 dark:bg-slate-800/90 dark:ring-slate-700/80">
-                    <div class="min-w-0">
-                        <div class="truncate text-sm font-semibold text-slate-900 dark:text-white">Universal Web API</div>
-                        <div class="text-xs text-slate-500 dark:text-slate-400">控制面板</div>
-                    </div>
+        <div :class="['app-sidebar-layer', { 'is-mobile-open': mobileOpen }]">
+        <button type="button" class="app-sidebar-scrim" @click="closeMobileNav" aria-label="关闭导航"></button>
+        <aside :class="['app-sidebar', { 'is-collapsed': navCollapsed }]" aria-label="主导航">
+            <div class="app-brand">
+                <img src="/static/images/logo.svg" alt="Universal Web API logo" class="app-brand-logo">
+                <div class="app-brand-copy">
+                    <strong>Universal API</strong>
+                    <span>Local AI bridge</span>
                 </div>
-            </div>
-            <div class="p-3 border-b dark:border-gray-700 bg-gray-50 dark:bg-gray-900">
-                <div class="flex items-center justify-between mb-2">
-                    <span class="text-sm font-semibold dark:text-white">服务状态</span>
-                    <div class="flex gap-2">
-                        <button @click.prevent.stop="$emit('toggle-dark')"
-                                class="rounded-md border border-gray-200 px-2 py-0.5 text-xs text-gray-600 transition hover:bg-gray-100 hover:text-blue-700 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-blue-300"
-                                :title="darkMode ? '切换到日间模式' : '切换到夜间模式'">
-                            {{ darkMode ? '☀️ 日间' : '🌙 夜间' }}
-                        </button>
-                        <button @click="$emit('refresh-status')" 
-                                class="text-xs text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300">
-                            刷新
-                        </button>
-                    </div>
-                </div>
-                <div class="text-xs space-y-1">
-                    <div class="flex items-center dark:text-gray-300">
-                        <span :class="['inline-block w-2 h-2 rounded-full mr-1', 
-                                       browserStatus.connected ? 'bg-green-500' : 'bg-red-500']"></span>
-                        <span>浏览器: {{ browserStatus.connected ? '已连接' : '未连接' }}</span>
-                    </div>
-                    <div class="text-gray-600 dark:text-gray-400">
-                        站点配置: {{ Object.keys(sites).length }} 个
-                    </div>
-                    <div v-if="authEnabled" class="text-gray-600 dark:text-gray-400 flex items-center justify-between">
-                        <span>🔒 面板认证: {{ hasToken ? '已配置' : '未配置' }}</span>
-                        <button @click.stop="$emit('show-token-dialog')"
-                                class="text-blue-500 dark:text-blue-400">设置</button>
-                    </div>
-                </div>
-            </div>
-
-            <!-- ✨ 新增：Tab 切换 -->
-            <div class="border-b dark:border-gray-700">
-                <div class="flex">
-                    <button @click="$emit('change-tab', 'config')"
-                            :class="['flex-1 py-2 text-xs font-medium transition-colors border-b-2',
-                                     activeTab === 'config'
-                                     ? 'border-blue-500 text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20'
-                                     : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50']">
-                        ⚙️ 站点
-                    </button>
-                    <button @click="$emit('change-tab', 'tabpool')"
-                            :class="['flex-1 py-2 text-xs font-medium transition-colors border-b-2',
-                                     activeTab === 'tabpool'
-                                     ? 'border-blue-500 text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20'
-                                     : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50']">
-                        🗂️ 标签页
-                    </button>
-                    <button @click="$emit('change-tab', 'logs')"
-                            :class="['flex-1 py-2 text-xs font-medium transition-colors border-b-2',
-                                     activeTab === 'logs'
-                                     ? 'border-blue-500 text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20' 
-                                     : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50']">
-                        📋 日志
-                    </button>
-                    <button @click="$emit('change-tab', 'monitor')"
-                            :class="['flex-1 py-2 text-xs font-medium transition-colors border-b-2',
-                                     activeTab === 'monitor'
-                                     ? 'border-blue-500 text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20'
-                                     : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50']">
-                        📊 监控
-                    </button>
-                    <button @click="$emit('change-tab', 'settings')"
-                            :title="updateAvailable ? '发现新版本' : '设置'"
-                            :class="['relative flex flex-1 items-center justify-center gap-1 py-2 text-xs font-medium transition-colors border-b-2',
-                                     activeTab === 'settings'
-                                     ? 'border-blue-500 text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/20'
-                                     : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700/50']">
-                        <span class="relative inline-flex items-center justify-center">
-                            🔧
-                            <span v-if="updateAvailable"
-                                  class="absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-white dark:ring-gray-800"></span>
-                        </span>
-                        <span>设置</span>
-                    </button>
-                </div>
-            </div>
-
-            <div class="p-3 border-b dark:border-gray-700">
-                <input v-model="searchQuery"
-                       type="search"
-                       name="site_search_query_final"
-                       autocomplete="new-password"
-                       placeholder="搜索站点..."
-                       class="border dark:border-gray-700 px-2 py-1 rounded focus:outline-none focus:border-blue-400 w-full text-sm bg-white dark:bg-gray-700 dark:text-white dark:placeholder-gray-400">
-            </div>
-
-            <div class="flex-1 overflow-auto">
-                <div v-for="domain in filteredSites"
-                     :key="domain"
-                     @click="$emit('select-site', domain)"
-                     class="cursor-pointer px-3 py-2 border-b dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors group"
-                     :class="{'bg-blue-50 dark:bg-blue-900/30 border-l-4 border-l-blue-500': currentDomain === domain}">
-                    <div class="flex items-center justify-between">
-                        <span class="text-sm dark:text-white truncate flex-1">{{ domain }}</span>
-                        <div class="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <button @click.stop="$emit('export-site', domain)"
-                                    class="text-blue-500 text-xs" title="导出此站点">
-                                <span v-html="$icons.arrowUpTray"></span>
-                            </button>
-                            <button @click.stop="$emit('delete-site', domain)"
-                                    class="text-red-500 text-xs" title="删除">
-                                <span v-html="$icons.trash"></span>
-                            </button>
-                        </div>
-                    </div>
-                </div>
-                <div v-if="filteredSites.length === 0" 
-                     class="p-4 text-center text-gray-400 dark:text-gray-500 text-sm">
-                    无匹配结果
-                </div>
-            </div>
-
-            <div class="p-3 border-t dark:border-gray-700 space-y-2">
-                <button @click="$emit('add-site')" 
-                        class="px-3 py-1 border dark:border-gray-700 rounded transition-colors bg-blue-500 text-white hover:bg-blue-600 border-blue-500 w-full text-sm">
-                    <span v-html="$icons.plusCircle"></span> 新增站点
+                <button type="button" class="app-nav-collapse" @click="toggleNavCollapsed"
+                        :title="navCollapsed ? '展开导航' : '折叠导航'"
+                        :aria-label="navCollapsed ? '展开导航' : '折叠导航'">
+                    <span v-if="navCollapsed" class="app-collapse-lines" aria-hidden="true"></span>
+                    <span v-else v-html="$icons.xMark" aria-hidden="true"></span>
                 </button>
-                <div class="flex gap-2">
-                    <button @click="$emit('trigger-import')" 
-                            class="flex-1 px-3 py-1 border dark:border-gray-700 rounded hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-white transition-colors text-sm">
-                        <span v-html="$icons.documentArrowDown"></span> 导入
-                    </button>
-                    <button @click="$emit('export-all')" 
-                            class="flex-1 px-3 py-1 border dark:border-gray-700 rounded hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-white transition-colors text-sm">
-                        <span v-html="$icons.arrowUpTray"></span> 导出
-                    </button>
+                <button type="button" class="app-nav-mobile-close" @click="closeMobileNav" title="关闭导航" aria-label="关闭导航" v-html="$icons.xMark"></button>
+                <button type="button" class="app-collapsed-status" @click="$emit('refresh-status')" title="刷新状态" aria-label="刷新服务状态">
+                    <i :class="['app-service-dot', { 'is-online': browserStatus.connected }]"></i>
+                    <span>{{ browserStatus.connected ? '在线' : '离线' }}</span>
+                </button>
+            </div>
+
+            <nav class="app-primary-nav" aria-label="功能区">
+                <button type="button" @click="selectTab('home')"
+                        :class="['app-nav-item', { 'is-active': activeTab === 'home' }]"
+                        title="首页" aria-label="首页"
+                        :aria-current="activeTab === 'home' ? 'page' : null">
+                    <span class="app-nav-icon" v-html="$icons.home"></span>
+                    <span>首页</span>
+                </button>
+                <button type="button" @click="selectTab('config')"
+                        data-tour-target="config"
+                        :class="['app-nav-item', { 'is-active': activeTab === 'config' }]"
+                        title="站点配置" aria-label="站点配置"
+                        :aria-current="activeTab === 'config' ? 'page' : null">
+                    <span class="app-nav-icon" v-html="$icons.clipboardList"></span>
+                    <span>站点配置</span>
+                    <span class="app-nav-count">{{ Object.keys(sites).length }}</span>
+                </button>
+                <button type="button" @click="selectTab('tabpool')"
+                        data-tour-target="tabpool"
+                        :class="['app-nav-item', { 'is-active': activeTab === 'tabpool' }]"
+                        title="标签页池" aria-label="标签页池"
+                        :aria-current="activeTab === 'tabpool' ? 'page' : null">
+                    <span class="app-nav-icon" v-html="$icons.folderOpen"></span>
+                    <span>标签页池</span>
+                </button>
+                <button type="button" @click="selectTab('monitor')"
+                        data-tour-target="monitor"
+                        :class="['app-nav-item', { 'is-active': activeTab === 'monitor' }]"
+                        title="请求监控" aria-label="请求监控"
+                        :aria-current="activeTab === 'monitor' ? 'page' : null">
+                    <span class="app-nav-icon" v-html="$icons.chartBar"></span>
+                    <span>请求监控</span>
+                </button>
+                <button type="button" @click="selectTab('commands')"
+                        data-tour-target="commands"
+                        :class="['app-nav-item', { 'is-active': activeTab === 'commands' }]"
+                        title="命令系统" aria-label="命令系统"
+                        :aria-current="activeTab === 'commands' ? 'page' : null">
+                    <span class="app-nav-icon" v-html="$icons.arrowPathRoundedSquare"></span>
+                    <span>命令系统</span>
+                </button>
+                <button type="button" @click="selectTab('logs')"
+                        data-tour-target="logs"
+                        :class="['app-nav-item', { 'is-active': activeTab === 'logs' }]"
+                        title="运行日志" aria-label="运行日志"
+                        :aria-current="activeTab === 'logs' ? 'page' : null">
+                    <span class="app-nav-icon" v-html="$icons.documentArrowDown"></span>
+                    <span>运行日志</span>
+                </button>
+                <button type="button" @click="selectTab('settings')"
+                        data-tour-target="settings"
+                        :class="['app-nav-item', { 'is-active': activeTab === 'settings' }]"
+                        title="设置" aria-label="设置"
+                        :aria-current="activeTab === 'settings' ? 'page' : null">
+                    <span class="app-nav-icon" v-html="$icons.cog"></span>
+                    <span>设置</span>
+                    <span v-if="updateAvailable" class="app-update-dot" title="发现新版本"></span>
+                </button>
+            </nav>
+            <div class="app-sidebar-spacer"></div>
+
+            <div class="app-sidebar-footer">
+                <button type="button" class="app-guide-link" @click="$emit('open-guide')" title="重新打开新手指南">
+                    <span v-html="$icons.clipboardList" aria-hidden="true"></span>
+                    <span>新手指南</span>
+                </button>
+                <button type="button" class="app-theme-toggle"
+                        @click.prevent.stop="$emit('toggle-dark')"
+                        :aria-pressed="darkMode"
+                        :title="darkMode ? '切换到日间模式' : '切换到夜间模式'">
+                    <span>{{ darkMode ? '日间模式' : '夜间模式' }}</span>
+                    <i aria-hidden="true"></i>
+                </button>
+                <div class="app-service-row">
+                    <span :class="['app-service-dot', { 'is-online': browserStatus.connected }]"></span>
+                    <span>{{ browserStatus.connected ? '浏览器已连接' : '浏览器未连接' }}</span>
+                    <button type="button" @click="$emit('refresh-status')" title="刷新状态" aria-label="刷新状态" v-html="$icons.arrowPath"></button>
                 </div>
+                <button v-if="authEnabled" type="button" class="app-auth-row" @click.stop="$emit('show-token-dialog')">
+                    <span>面板认证</span>
+                    <strong>{{ hasToken ? '已配置' : '待配置' }}</strong>
+                </button>
+                <button type="button" class="app-sidebar-primary" @click="runPrimaryAction" :title="primaryActionLabel" :aria-label="primaryActionLabel">
+                    <span v-html="$icons.plusCircle"></span>
+                    <span>{{ primaryActionLabel }}</span>
+                </button>
+                <div class="app-sidebar-version"><span>本地模式</span><strong>v2.9.5</strong></div>
             </div>
         </aside>
+        </div>
     `
 };

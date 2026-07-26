@@ -87,7 +87,7 @@
     {
       "id": "cmd_gemblk001",
       "name": "临时对话异常空白自动刷新",
-      "enabled": true,
+      "enabled": false,
       "group_name": "gemini"
     },
     {

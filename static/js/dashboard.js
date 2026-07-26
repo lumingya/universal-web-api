@@ -15,6 +15,8 @@ const app = createApp({
 
 // ========== 组件注册 ==========
 app.component('sidebar-component', window.SidebarComponent);
+app.component('onboarding-guide', window.OnboardingGuide);
+app.component('home-tab', window.HomeTab);
 app.component('config-tab', window.ConfigTab);
 app.component('request-monitor-tab', window.RequestMonitorTab);
 app.component('tabpool-tab', window.TabPoolTabComponent);

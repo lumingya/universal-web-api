@@ -1987,15 +1987,20 @@ async def chat_completions(
 
             catalog_tab = None
             catalog_preset = None
-            for tab in tabs:
-                candidate = get_arena_direct_catalog_for_tab(
-                    config_engine,
-                    tab,
-                    preset_name=body.preset_name,
-                )
-                if candidate:
-                    catalog_tab = tab
-                    catalog_preset = candidate
+            # 优先选择处于空闲 (idle) 状态的标签页，若无空闲标签页再选择繁忙 (busy) 标签页，避免请求被无故锁定排队
+            for target_status in ("idle", "busy"):
+                for tab in tabs:
+                    if str(tab.get("status") or "").strip().lower() == target_status:
+                        candidate = get_arena_direct_catalog_for_tab(
+                            config_engine,
+                            tab,
+                            preset_name=body.preset_name,
+                        )
+                        if candidate:
+                            catalog_tab = tab
+                            catalog_preset = candidate
+                            break
+                if catalog_tab:
                     break
             requested_key = str(body.model or "").strip().casefold()
             catalog_models = list_arena_direct_models(

@@ -32,14 +32,8 @@ window.ConfigTab = {
             renamePresetName: '',
             showRenamePresetInput: false,
 
-            // 折叠状态
-            selectorCollapsed: true,
-            workflowCollapsed: true,
-            imageConfigCollapsed: true,
-            streamConfigCollapsed: true,
-            filePasteCollapsed: true,
-            promptPaddingCollapsed: true,
-            advancedConfigCollapsed: true,
+            // 当前配置分类
+            activeWorkspaceSection: 'selectors',
             presetSectionDrafts: {
                 file_paste: [],
                 prompt_padding: []
@@ -1682,7 +1676,7 @@ window.ConfigTab = {
         }
     },
     template: `
-        <div class="h-full overflow-auto p-4">
+        <div class="config-workspace h-full overflow-auto p-4">
             <!-- 空状态 -->
             <div v-if="!currentDomain || !currentConfig" class="h-full flex items-center justify-center">
                 <div class="text-center text-gray-400 dark:text-gray-500">
@@ -1695,9 +1689,9 @@ window.ConfigTab = {
             <div v-else class="space-y-4">
 
                 <!-- 🆕 预设选择器 -->
-                <div class="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg shadow-sm px-4 py-3">
-                    <div class="flex items-center justify-between flex-wrap gap-3">
-                        <div class="flex items-center gap-3">
+                <div class="config-preset-card bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg shadow-sm px-4 py-3">
+                    <div class="config-preset-toolbar flex items-center justify-between flex-wrap gap-3">
+                        <div class="config-preset-meta flex items-center gap-3">
                             <span class="text-sm font-semibold text-gray-700 dark:text-gray-300">🎛️ 预设:</span>
                             <select v-model="selectedPreset"
                                     @change="switchPreset(selectedPreset)"
@@ -1713,7 +1707,7 @@ window.ConfigTab = {
                             </span>
                         </div>
 
-                        <div class="flex items-center gap-2">
+                        <div class="config-preset-actions flex items-center gap-2">
                             <!-- 设为默认 -->
                             <button @click="setDefaultPreset"
                                     :disabled="!selectedPreset || selectedPreset === defaultPreset"
@@ -1787,13 +1781,19 @@ window.ConfigTab = {
                     </p>
                 </div>
 
-
+                <nav class="uwa-config-section-nav" aria-label="配置分类">
+                    <button type="button" :class="{ 'is-active': activeWorkspaceSection === 'selectors' }" @click="activeWorkspaceSection = 'selectors'">元素选择器</button>
+                    <button type="button" :class="{ 'is-active': activeWorkspaceSection === 'media' }" @click="activeWorkspaceSection = 'media'">媒体提取</button>
+                    <button type="button" :class="{ 'is-active': activeWorkspaceSection === 'response' }" @click="activeWorkspaceSection = 'response'">响应解析</button>
+                    <button type="button" :class="{ 'is-active': activeWorkspaceSection === 'input' }" @click="activeWorkspaceSection = 'input'">输入处理</button>
+                    <button type="button" :class="{ 'is-active': activeWorkspaceSection === 'advanced' }" @click="activeWorkspaceSection = 'advanced'">高级功能</button>
+                    <button type="button" :class="{ 'is-active': activeWorkspaceSection === 'workflow' }" @click="activeWorkspaceSection = 'workflow'">请求工作流</button>
+                </nav>
 
                 <!-- 选择器面板 -->
-                <selector-panel v-if="presetConfig"
+                <selector-panel v-if="presetConfig" v-show="activeWorkspaceSection === 'selectors'" class="config-fixed-panel"
                     :selectors="presetConfig.selectors || {}"
-                    :collapsed="selectorCollapsed"
-                    @update:collapsed="selectorCollapsed = $event"
+                    :collapsed="false"
                     @add-selector="$emit('add-selector', $event)"
                     @remove-selector="$emit('remove-selector', $event)"
                     @update-selector-key="(oldKey, newKey) => $emit('update-selector-key', oldKey, newKey)"
@@ -1802,43 +1802,37 @@ window.ConfigTab = {
                 />
 
                 <!-- 图片配置面板 -->
-                <image-config-panel v-if="presetConfig"
+                <image-config-panel v-if="presetConfig" v-show="activeWorkspaceSection === 'media'" class="config-fixed-panel"
                     :image-config="imageConfig"
                     :current-domain="currentDomain"
-                    :collapsed="imageConfigCollapsed"
-                    @update:collapsed="imageConfigCollapsed = $event"
+                    :collapsed="false"
                     @update-image-config="$emit('update-image-config', $event)"
                     @reload-config="$emit('reload-config')"
                 />
 
                 <!-- 流式配置面板 -->
-                <stream-config-panel v-if="presetConfig"
+                <stream-config-panel v-if="presetConfig" v-show="activeWorkspaceSection === 'response'" class="config-fixed-panel"
                     :stream-config="streamConfig"
                     :current-domain="currentDomain"
-                    :collapsed="streamConfigCollapsed"
-                    @update:collapsed="streamConfigCollapsed = $event"
+                    :collapsed="false"
                     @save-stream-config="saveStreamConfig"
                 />
                 <!-- 文件粘贴配置面板 -->
-                <file-paste-panel v-if="presetConfig"
+                <file-paste-panel v-if="presetConfig" v-show="activeWorkspaceSection === 'input'" class="config-fixed-panel"
                     :file-paste-config="filePasteConfigRef"
                     :current-domain="currentDomain"
                     :selected-preset="selectedPreset"
-                    :collapsed="filePasteCollapsed"
-                    @update:collapsed="filePasteCollapsed = $event"
+                    :collapsed="false"
                 />
-                <prompt-padding-panel v-if="presetConfig"
+                <prompt-padding-panel v-if="presetConfig" v-show="activeWorkspaceSection === 'input'" class="config-fixed-panel"
                     :prompt-padding-config="promptPaddingConfigRef"
                     :current-domain="currentDomain"
                     :selected-preset="selectedPreset"
-                    :collapsed="promptPaddingCollapsed"
-                    @update:collapsed="promptPaddingCollapsed = $event"
+                    :collapsed="false"
                 />
-                <!-- 高级功能折叠面板 -->
-                <div class="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg shadow-sm">
-                    <div class="px-4 py-3 border-b dark:border-gray-700 flex items-center gap-2 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors select-none"
-                         @click="advancedConfigCollapsed = !advancedConfigCollapsed">
-                        <span class="w-4 inline-flex justify-center text-gray-500 dark:text-gray-400" v-html="advancedConfigCollapsed ? $icons.chevronDown : $icons.chevronUp"></span>
+                <!-- 高级功能面板 -->
+                <div v-show="activeWorkspaceSection === 'advanced'" class="config-advanced-panel config-fixed-panel bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg shadow-sm">
+                    <div class="px-4 py-3 border-b dark:border-gray-700 flex items-center gap-2">
                         <h3 class="font-semibold text-gray-900 dark:text-white">🔒 高级功能</h3>
                         <span class="text-sm text-gray-500 dark:text-gray-400">
                             (独立 Cookie:
@@ -1847,7 +1841,7 @@ window.ConfigTab = {
                             </span>)
                         </span>
                     </div>
-                    <div v-show="!advancedConfigCollapsed" class="p-4 space-y-4">
+                    <div class="p-4 space-y-4">
                         <p class="text-xs text-gray-400 dark:text-gray-500">
                             适合像 arena.ai 这类需要多匿名会话的站点。
                         </p>
@@ -2025,14 +2019,13 @@ window.ConfigTab = {
                     </div>
                 </div>
                 <!-- 工作流面板 -->
-                <workflow-panel v-if="presetConfig"
+                <workflow-panel v-if="presetConfig" v-show="activeWorkspaceSection === 'workflow'" class="config-fixed-panel"
                     :workflow="presetConfig.workflow || []"
                     :selectors="presetConfig.selectors || {}"
                     :model-catalog="presetConfig.model_catalog || {}"
                     :current-domain="currentDomain"
                     :selected-preset="selectedPreset"
-                    :collapsed="workflowCollapsed"
-                    @update:collapsed="workflowCollapsed = $event"
+                    :collapsed="false"
                     @update:model-catalog="updateModelCatalog"
                     @add-step="$emit('add-step')"
                     @remove-step="$emit('remove-step', $event)"

@@ -2161,7 +2161,9 @@ async def get_request_history(
     if_revision: Optional[str] = None,
     authenticated: bool = Depends(verify_auth),
 ):
-    safe_limit = max(1, min(200, int(limit or 200)))
+    # RequestManager applies the configured REQUEST_MONITOR_MAX_RECORDS boundary.
+    # Do not impose a second 200-record ceiling at the API layer.
+    safe_limit = max(1, int(limit or 200))
     return await asyncio.to_thread(
         request_manager.get_request_history_payload,
         safe_limit,

@@ -2091,6 +2091,19 @@
             this.activeTab = tab;
         },
 
+        handleSidebarPrimaryAction(tab) {
+            if (tab === 'commands') {
+                this.changeTab('commands')
+                this.$nextTick(() => {
+                    if (this.$refs.commandsTab && typeof this.$refs.commandsTab.openNewCommand === 'function') {
+                        this.$refs.commandsTab.openNewCommand()
+                    }
+                })
+                return
+            }
+            this.addNewSite()
+        },
+
         async ensureTabDataLoaded(tab) {
             if (tab === 'monitor') {
                 const now = Date.now()
@@ -2125,6 +2138,7 @@
         async fetchRequestHistory({ silent = false, ifChanged = false, force = false } = {}) {
             if (!this.isRequestMonitorEnabled()) {
                 this.requestHistory = [];
+                this.requestHistoryMaxRecords = 0;
                 this.requestHistoryRevision = '';
                 this.requestHistoryError = '';
                 this.requestHistoryPendingRefresh = null;
@@ -2156,6 +2170,7 @@
                 const maxRecords = this.getBrowserConstantNumber('REQUEST_MONITOR_MAX_RECORDS', 200, { min: 0, max: 2000 });
                 if (maxRecords <= 0) {
                     this.requestHistory = [];
+                    this.requestHistoryMaxRecords = 0;
                     this.requestHistoryRevision = '';
                     this.requestHistoryError = '';
                     return this.requestHistory;
@@ -2179,12 +2194,17 @@
                 }
                 if (data && data.enabled === false) {
                     this.requestHistory = [];
+                    this.requestHistoryMaxRecords = 0;
                     this.requestHistoryRevision = '';
                     this.requestHistoryFetchedAt = Date.now();
                     this.requestHistoryError = '';
                     return this.requestHistory;
                 }
                 const revision = String(data.revision || '');
+                this.requestHistoryMaxRecords = Math.max(
+                    0,
+                    Number(data && data.max_records || maxRecords || 0)
+                );
                 if (data.not_modified && revision && revision === this.requestHistoryRevision) {
                     this.requestHistoryFetchedAt = Date.now();
                     this.requestHistoryError = '';

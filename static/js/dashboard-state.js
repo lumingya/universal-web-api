@@ -78,6 +78,7 @@ function saveStoredSitesCache(sites, currentDomain) {
             showTestDialog: false,
             showSelectorMenu: false,
             darkMode: false,
+            sidebarCollapsed: false,
             showMainCompareSummaryDialog: false,
             mainCompareSummaryLoading: false,
             mainCompareSummaryError: '',
@@ -94,8 +95,9 @@ function saveStoredSitesCache(sites, currentDomain) {
             mainCompareShowSame: false,
 
             // Tab 切换（新增 settings）
-            activeTab: 'config',  // 'config' | 'logs' | 'settings'
+            activeTab: 'home',
             mountedTabs: {
+                home: true,
                 config: true
             },
 
@@ -158,6 +160,7 @@ function saveStoredSitesCache(sites, currentDomain) {
 
             // 请求监控
             requestHistory: [],
+            requestHistoryMaxRecords: 0,
             requestHistoryLoading: false,
             requestHistoryError: '',
             requestHistoryTimer: null,
@@ -312,6 +315,12 @@ function saveStoredSitesCache(sites, currentDomain) {
     },
 
     watch: {
+        sidebarCollapsed(collapsed) {
+            const appRoot = document.getElementById('app')
+            if (appRoot) {
+                appRoot.classList.toggle('sidebar-is-collapsed', !!collapsed)
+            }
+        },
         activeTab(tab) {
             this.markTabAsVisited(tab)
             this.ensureTabDataLoaded(tab)

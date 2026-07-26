@@ -13,6 +13,9 @@
 
     <!-- 自定义样式 -->
     <link rel="stylesheet" href="/static/css/dashboard.css?v=2.6.17">
+    <link rel="stylesheet" href="/static/css/dashboard-migration.css?v=3.0.0">
+    <link rel="stylesheet" href="/static/css/dashboard-reference.css?v=3.1.3">
+    <link rel="stylesheet" href="/static/css/onboarding-guide.css?v=1.0.0">
 
     <!-- 图标定义 -->
 </head>
@@ -46,7 +49,7 @@
         </div>
 
         <!-- 左侧栏组件 -->
-        <sidebar-component v-show="activeTab !== 'tabpool'"
+        <sidebar-component ref="sidebar"
                            :sites="sites"
                            :current-domain="currentDomain"
                            :browser-status="browserStatus"
@@ -65,14 +68,40 @@
                            @trigger-import="triggerImport"
                            @export-all="exportConfig"
                            @show-token-dialog="openTokenDialog"
+                           @open-guide="$refs.onboarding && $refs.onboarding.open(true)"
+                           @primary-action="handleSidebarPrimaryAction"
+                           @collapse-change="sidebarCollapsed = $event"
                            @change-tab="changeTab">
         </sidebar-component>
 
+        <onboarding-guide ref="onboarding"
+                          @tour-start="$refs.sidebar && $refs.sidebar.beginTourNavigation()"
+                          @tour-end="$refs.sidebar && $refs.sidebar.endTourNavigation()">
+        </onboarding-guide>
+
         <!-- 主内容区 -->
-        <main class="flex-1 flex flex-col overflow-x-hidden overflow-y-auto bg-gray-50 dark:bg-gray-900">
+        <main class="dashboard-main flex-1 flex flex-col overflow-x-hidden overflow-y-auto bg-gray-50 dark:bg-gray-900">
+            <header class="mobile-app-header">
+                <button type="button"
+                        @click="$refs.sidebar && $refs.sidebar.openMobileNav()"
+                        title="打开导航"
+                        aria-label="打开导航">
+                    <span class="mobile-menu-lines" aria-hidden="true"></span>
+                </button>
+                <div>
+                    <strong>Universal API</strong>
+                </div>
+                <button type="button"
+                        @click="refreshStatus"
+                        title="刷新状态"
+                        aria-label="刷新状态">
+                    <i :class="['mobile-service-dot', { 'is-online': browserStatus.connected }]"></i>
+                    <span class="mobile-service-text">{{ browserStatus.connected ? '在线' : '离线' }}</span>
+                </button>
+            </header>
 
             <header v-if="activeTab === 'config' && currentDomain && currentConfig"
-                    class="bg-white dark:bg-gray-800 border-b dark:border-gray-700 p-4">
+                    class="workspace-header bg-white dark:bg-gray-800 border-b dark:border-gray-700 p-4">
                 <div class="flex justify-between items-center">
                     <div class="flex items-center gap-4">
                         <h2 class="text-xl font-bold dark:text-white">{{ currentDomain }}</h2>
@@ -119,7 +148,7 @@
 
             <!-- 设置页头部 -->
             <header v-if="activeTab === 'settings'"
-                    class="bg-white dark:bg-gray-800 border-b dark:border-gray-700 p-4">
+                    class="workspace-header bg-white dark:bg-gray-800 border-b dark:border-gray-700 p-4">
                 <div class="flex justify-between items-center">
                     <div class="flex items-center gap-3">
                         <span v-html="$icons.cog" class="text-gray-600 dark:text-gray-400"></span>
@@ -144,6 +173,7 @@
 
             <!-- Tab 切换栏 -->
             <div class="dashboard-tab-strip bg-white dark:bg-gray-800 border-b dark:border-gray-700 px-4 flex flex-wrap items-center gap-2"
+                 aria-label="移动端主导航"
                  :class="{ 'tab-pool-tab-strip': activeTab === 'tabpool' }">
                 <button @click="activeTab = 'config'"
                         :class="['px-4 py-2 text-sm font-medium border-b-2 transition-colors',
@@ -191,25 +221,110 @@
                           class="ml-1 w-2 h-2 bg-orange-500 rounded-full inline-block"></span>
                 </button>
             </div>
-            <div class="flex-1 overflow-y-auto">
+            <div class="dashboard-scroll-region flex-1 overflow-y-auto">
                 <!-- Tab 内容区 -->
-                <config-tab ref="configTab"
-                            v-if="activeTab === 'config'"
-                            :current-domain="currentDomain"
-                            :current-config="currentConfig"
-                            @add-selector="addSelector"
-                            @remove-selector="removeSelector"
-                            @update-selector-key="updateSelectorKey"
-                            @test-selector="testSelector"
-                            @add-step="addStep"
-                            @remove-step="removeStep"
-                            @move-step="moveStep"
-                            @action-change="onActionChange"
-                            @show-templates="showTemplates"
-                            @update-image-config="updateImageConfig"
-                            @test-image-extraction="testImageExtraction"
-                            @reload-config="reloadConfig">
-                </config-tab>
+                <home-tab v-if="activeTab === 'home'"
+                          :sites="sites"
+                          :browser-status="browserStatus"
+                          :system-stats="systemStats"
+                          :records="requestHistory"
+                          @change-tab="changeTab"
+                          @add-site="addNewSite"
+                          @notify="notify($event.message, $event.type)">
+                </home-tab>
+
+                <section v-if="activeTab === 'config'" class="uwa-page uwa-config-page">
+                    <header class="uwa-page-header">
+                        <div>
+                            <p class="uwa-eyebrow">SITES</p>
+                            <h1>站点配置</h1>
+                            <p>管理站点识别、内容提取、文件输入与请求工作流。</p>
+                        </div>
+                        <div class="uwa-page-actions">
+                            <button type="button" class="uwa-button" @click="triggerImport"><span v-html="$icons.documentArrowDown"></span>导入</button>
+                            <button type="button" class="uwa-button" @click="exportConfig"><span v-html="$icons.arrowUpTray"></span>导出</button>
+                            <button type="button" class="uwa-button is-primary" @click="addNewSite"><span v-html="$icons.plusCircle"></span>新增站点</button>
+                        </div>
+                    </header>
+
+                    <div class="uwa-config-toolbar">
+                        <label class="uwa-search-field">
+                            <span v-html="$icons.magnifyingGlass"></span>
+                            <input v-model="searchQuery" type="search" autocomplete="off" placeholder="搜索站点或域名">
+                        </label>
+                        <div class="uwa-config-toolbar-meta">
+                            <span><strong>{{ Object.keys(sites).length }}</strong> 个站点</span>
+                            <button type="button" @click="refreshStatus" title="刷新状态" aria-label="刷新状态"><span v-html="$icons.arrowPath"></span>刷新</button>
+                            <button type="button" @click="openMainCompareSummaryDialog"><span v-html="$icons.clipboardList"></span>配置对比</button>
+                        </div>
+                    </div>
+
+                    <div class="uwa-config-workspace">
+                        <section class="uwa-config-editor">
+                            <div v-if="currentDomain && currentConfig" class="uwa-editor-heading">
+                                <details class="uwa-site-switcher">
+                                    <summary title="切换站点">
+                                        <span class="uwa-editor-site-icon">{{ currentDomain.charAt(0).toUpperCase() }}</span>
+                                        <span class="uwa-site-switcher-current"><h2>{{ currentDomain }}</h2><p>{{ getActivePresetName() }} · 点击切换站点</p></span>
+                                        <span class="uwa-site-switcher-chevron" v-html="$icons.chevronDown"></span>
+                                    </summary>
+                                    <div class="uwa-site-switcher-popover">
+                                        <div class="uwa-site-switcher-top"><strong>切换站点</strong><span>{{ filteredSites.length }} / {{ Object.keys(sites).length }}</span></div>
+                                        <label class="uwa-search-field"><span v-html="$icons.magnifyingGlass"></span><input v-model="searchQuery" type="search" autocomplete="off" placeholder="搜索站点或域名"></label>
+                                        <div class="uwa-site-switcher-list">
+                                            <div v-for="domain in filteredSites" :key="domain" :class="['uwa-switcher-site', { 'is-active': currentDomain === domain }]">
+                                                <button type="button" class="uwa-switcher-select" @click="selectSite(domain); $event.currentTarget.closest('details').open = false">
+                                                    <span class="uwa-site-mark">{{ domain.charAt(0).toUpperCase() }}</span>
+                                                    <span class="uwa-site-details"><strong>{{ domain.split('.')[0] || domain }}</strong><small>{{ domain }}</small></span>
+                                                    <i aria-hidden="true"></i>
+                                                </button>
+                                                <span class="uwa-switcher-actions">
+                                                    <button type="button" @click="exportSingleSite(domain)" title="导出站点" aria-label="导出站点" v-html="$icons.arrowUpTray"></button>
+                                                    <button type="button" @click="confirmDelete(domain)" title="删除站点" aria-label="删除站点" v-html="$icons.trash"></button>
+                                                </span>
+                                            </div>
+                                            <div v-if="filteredSites.length === 0" class="uwa-rail-empty">没有匹配的站点</div>
+                                        </div>
+                                    </div>
+                                </details>
+                                <div class="uwa-editor-actions">
+                                    <label v-if="getActivePresetConfig()" class="uwa-switch-label">
+                                        <span>低熵模式</span>
+                                        <input type="checkbox" :checked="getActivePresetConfig().stealth" @change="getActivePresetConfig().stealth = $event.target.checked">
+                                        <i></i>
+                                    </label>
+                                    <button type="button" class="uwa-icon-button" @click="showJsonPreview = true" title="查看 JSON" aria-label="查看 JSON"><span v-html="$icons.clipboardList"></span></button>
+                                    <button type="button" class="uwa-button" @click="reanalyzeCurrentSite">重新分析</button>
+                                    <button type="button" class="uwa-button is-primary" @click="saveConfig" :disabled="isSaving"><span v-html="$icons.arrowDownTray"></span>{{ isSaving ? '保存中' : '保存配置' }}</button>
+                                </div>
+                            </div>
+
+                            <config-tab ref="configTab"
+                                        v-if="currentDomain && currentConfig"
+                                        :current-domain="currentDomain"
+                                        :current-config="currentConfig"
+                                        @add-selector="addSelector"
+                                        @remove-selector="removeSelector"
+                                        @update-selector-key="updateSelectorKey"
+                                        @test-selector="testSelector"
+                                        @add-step="addStep"
+                                        @remove-step="removeStep"
+                                        @move-step="moveStep"
+                                        @action-change="onActionChange"
+                                        @show-templates="showTemplates"
+                                        @update-image-config="updateImageConfig"
+                                        @test-image-extraction="testImageExtraction"
+                                        @reload-config="reloadConfig">
+                            </config-tab>
+                            <div v-else class="uwa-config-empty">
+                                <span v-html="$icons.globe"></span>
+                                <h2>选择一个站点开始配置</h2>
+                                <p>从左侧站点列表选择，或新建一个站点。</p>
+                                <button type="button" class="uwa-button is-primary" @click="addNewSite">新增站点</button>
+                            </div>
+                        </section>
+                    </div>
+                </section>
 
                 <!-- 标签页池 Tab -->
                 <tabpool-tab v-if="activeTab === 'tabpool'"
@@ -218,23 +333,26 @@
                 </tabpool-tab>
 
                 <!-- 命令 Tab -->
-                <commands-tab v-if="shouldRenderTab('commands')"
-                              v-show="activeTab === 'commands'"
-                              :dark-mode="darkMode"
-                              @notify="notify($event.message, $event.type)">
-                </commands-tab>
+                <section v-if="shouldRenderTab('commands')" v-show="activeTab === 'commands'" class="uwa-component-page uwa-commands-page">
+                    <commands-tab ref="commandsTab" :dark-mode="darkMode" @notify="notify($event.message, $event.type)"></commands-tab>
+                </section>
                 <!-- 日志 Tab -->
-                <logs-tab v-if="activeTab === 'logs'"
-                          :logs="logs"
-                          :filter="logLevelFilter"
-                          :paused="pauseLogs"
-                          @clear="clearLogs"
-                          @change-filter="logLevelFilter = $event"
-                          @toggle-pause="pauseLogs = !pauseLogs">
-                </logs-tab>
+                <section v-if="activeTab === 'logs'" class="uwa-page uwa-simple-page uwa-logs-page">
+                    <header class="uwa-page-header">
+                        <div><p class="uwa-eyebrow">RUNTIME</p><h1>运行日志</h1><p>检查服务、浏览器与请求执行过程中的实时事件。</p></div>
+                    </header>
+                    <logs-tab :logs="logs"
+                              :filter="logLevelFilter"
+                              :paused="pauseLogs"
+                              @clear="clearLogs"
+                              @change-filter="logLevelFilter = $event"
+                              @toggle-pause="pauseLogs = !pauseLogs">
+                    </logs-tab>
+                </section>
 
                 <request-monitor-tab v-if="activeTab === 'monitor'"
                                      :records="requestHistory"
+                                     :max-records="requestHistoryMaxRecords"
                                      :detail-loading="requestHistoryDetailLoading"
                                      :system-stats="systemStats"
                                      :loading="requestHistoryLoading"
@@ -244,7 +362,16 @@
                 </request-monitor-tab>
 
                 <!-- 设置 Tab -->
-                <settings-tab v-if="activeTab === 'settings'"
+                <section v-if="activeTab === 'settings'" class="uwa-page uwa-simple-page uwa-settings-page">
+                    <header class="uwa-page-header">
+                        <div><p class="uwa-eyebrow">PREFERENCES</p><h1>系统设置</h1><p>管理运行环境、浏览器常量、更新保留项与元素定义。</p></div>
+                        <div class="uwa-page-actions">
+                            <button type="button" class="uwa-button" @click="triggerSettingsBackupImport"><span v-html="$icons.documentArrowDown"></span>完整导入</button>
+                            <button type="button" class="uwa-button" @click="exportSettingsBackup"><span v-html="$icons.arrowUpTray"></span>完整导出</button>
+                            <button type="button" class="uwa-button" @click="loadEnvConfig(); loadBrowserConstants(); loadUpdatePreserveSettings(); loadSelectorDefinitions()"><span v-html="$icons.arrowPath"></span>刷新</button>
+                        </div>
+                    </header>
+                    <settings-tab
                               :env-config="envConfig"
                               :env-schema="envSchema"
                               :env-collapsed="envCollapsed"
@@ -286,7 +413,8 @@
                               @load-releases="loadReleases"
                               @switch-to-version="switchToVersion"
                               @show-changelog="showChangelog">
-                </settings-tab>
+                    </settings-tab>
+                </section>
             </div>
         </main>
 
@@ -479,8 +607,10 @@
         window.tailwind.config = { darkMode: 'class' };
     </script>
     <script src="/static/vendor/vue.global.prod.js?v=2.6.7"></script>
-    <script src="/static/js/icons.js?v=2.6.12"></script>
-    <script src="/static/js/components/Sidebar.js?v=2.6.7"></script>
+    <script src="/static/js/icons.js?v=3.1.0"></script>
+    <script src="/static/js/components/Sidebar.js?v=3.1.3"></script>
+    <script src="/static/js/components/OnboardingGuide.js?v=1.0.0"></script>
+    <script src="/static/js/components/HomeTab.js?v=3.1.0"></script>
     <!-- 子组件（在 ConfigTab 之前） -->
     <script src="static/js/components/panels/SelectorPanel.js?v=2.6.12"></script>
     <script src="static/js/components/panels/ImageConfigPanel.js?v=2.6.11"></script>
@@ -490,21 +620,21 @@
     <script src="static/js/components/panels/PromptPaddingPanel.js?v=2.6.25"></script>
 
     <!-- 主组件 -->
-    <script src="static/js/components/ConfigTab.js?v=2.6.25"></script>
-    <script src="/static/js/components/LogsTab.js?v=2.6.7"></script>
-    <script src="/static/js/components/RequestMonitorTab.js?v=2.6.22"></script>
-    <script src="/static/js/components/SettingsTab.js?v=2.6.8"></script>
+    <script src="static/js/components/ConfigTab.js?v=3.0.1"></script>
+    <script src="/static/js/components/LogsTab.js?v=3.0.0"></script>
+    <script src="/static/js/components/RequestMonitorTab.js?v=3.0.0"></script>
+    <script src="/static/js/components/SettingsTab.js?v=3.0.0"></script>
     <script src="/static/js/components/Dialogs.js?v=2.6.9"></script>
     <script src="/static/js/components/TabPoolTab.js?v=2.6.14"></script>
     <script src="/static/js/components/commands/CommandsTabComputed.js?v=2.6.8"></script>
     <script src="/static/js/components/commands/CommandsTabMethods.js?v=2.6.14"></script>
-    <script src="/static/js/components/commands/CommandsTabTemplate.js?v=2.6.16"></script>
+    <script src="/static/js/components/commands/CommandsTabTemplate.js?v=3.0.0"></script>
     <script src="/static/js/components/CommandsTab.js?v=2.6.13"></script>
 
     <!-- 主应用逻辑 -->
 <script src="/static/js/dashboard-schema.js?v=2.6.27"></script>
-    <script src="/static/js/dashboard-state.js?v=2.6.27"></script>
+    <script src="/static/js/dashboard-state.js?v=3.1.2"></script>
     <script src="/static/js/dashboard-methods.js?v=2.6.27"></script>
-    <script src="/static/js/dashboard.js?v=2.6.27"></script>
+    <script src="/static/js/dashboard.js?v=3.1.0"></script>
 </body>
 </html>

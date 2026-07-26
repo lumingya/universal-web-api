@@ -324,6 +324,14 @@ def test_tab_catalog_requires_live_direct_page_and_enabled_effective_preset():
 
     assert result["preset_name"] == "direct"
     assert result["catalog"]["enabled"] is True
+
+    chat_result = get_arena_direct_catalog_for_tab(
+        config_engine,
+        {**direct_tab, "url": "https://arena.ai/c/019f93c5-0ec7-70d9-9851-7089931253db"},
+    )
+    assert chat_result is not None
+    assert chat_result["preset_name"] == "direct"
+
     assert get_arena_direct_catalog_for_tab(
         config_engine,
         {**direct_tab, "status": "closed"},
@@ -711,3 +719,36 @@ def test_arena_main_direct_workflow_selects_model_before_filling_prompt():
     assert preset["model_catalog"]["source"] == "arena_direct"
     assert 'href="/code"' in preset["selectors"]["new_chat_btn"]
     assert actions.index("SELECT_MODEL") < actions.index("FILL_INPUT")
+
+
+def test_is_arena_direct_url_with_presets():
+    from app.services.arena_direct_models import _is_arena_direct_url
+
+    # /text/direct 静态路径无论是否有 catalog_preset 均返回 True
+    assert _is_arena_direct_url("https://arena.ai/text/direct") is True
+    assert _is_arena_direct_url("https://arena.ai/text/direct/sub") is True
+
+    # /c/ 会话路径当未提供 catalog_preset 时默认返回 True
+    assert _is_arena_direct_url("https://arena.ai/c/019f93c5-0ec7-70d9-9851-7089931253db") is True
+
+    # /c/ 会话路径当提供了生效的 arena_direct 预设时返回 True
+    direct_preset = {
+        "model_catalog": {
+            "enabled": True,
+            "source": "arena_direct",
+        }
+    }
+    assert _is_arena_direct_url("https://arena.ai/c/019f93c5-0ec7-70d9-9851-7089931253db", catalog_preset=direct_preset) is True
+
+    # /c/ 会话路径当提供的预设未启用 catalog 或来源不符时返回 False
+    disabled_preset = {
+        "model_catalog": {
+            "enabled": False,
+            "source": "arena_direct",
+        }
+    }
+    assert _is_arena_direct_url("https://arena.ai/c/019f93c5-0ec7-70d9-9851-7089931253db", catalog_preset=disabled_preset) is False
+
+    # 畸形或非 Arena URL 防御
+    assert _is_arena_direct_url("about:blank") is False
+    assert _is_arena_direct_url("https://gemini.google.com/app") is False

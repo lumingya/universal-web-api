@@ -108,7 +108,7 @@ window.LogsTab = {
         });
     },
     template: `
-        <div class="h-full flex flex-col bg-white dark:bg-gray-800">
+        <div class="logs-workspace h-full flex flex-col bg-white dark:bg-gray-800">
             <div class="p-4 border-b dark:border-gray-700 flex justify-between items-center">
                 <div class="flex gap-2">
                     <button @click="$emit('change-filter', 'DEBUG')"

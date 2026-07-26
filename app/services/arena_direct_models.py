@@ -231,9 +231,6 @@ def get_arena_direct_catalog_for_tab(
         return None
 
     current_url = str(tab.get("url") or "").strip()
-    if not _is_arena_direct_url(current_url):
-        return None
-
     effective_preset_name = str(preset_name or tab.get("preset_name") or "").strip()
     try:
         config_engine.refresh_if_changed()
@@ -253,6 +250,10 @@ def get_arena_direct_catalog_for_tab(
     catalog = normalize_model_catalog_config(preset.get("model_catalog"))
     if not catalog["enabled"] or catalog["source"] != MODEL_CATALOG_SOURCE:
         return None
+
+    if not _is_arena_direct_url(current_url, catalog_preset=preset):
+        return None
+
     return {
         "preset_name": effective_preset_name,
         "preset": preset,
@@ -260,16 +261,29 @@ def get_arena_direct_catalog_for_tab(
     }
 
 
-def _is_arena_direct_url(value: Any) -> bool:
+def _is_arena_direct_url(value: Any, catalog_preset: Optional[Dict[str, Any]] = None) -> bool:
     current_url = str(value or "").strip()
-    actual_domain = extract_remote_site_domain(current_url) or ""
-    if not route_domain_matches("arena.ai", actual_domain):
+    if not current_url or current_url.lower() in {"about:blank", "javascript:void(0)"}:
         return False
+
     try:
+        actual_domain = extract_remote_site_domain(current_url) or ""
+        if not route_domain_matches("arena.ai", actual_domain):
+            return False
         path = str(urlparse(current_url).path or "").rstrip("/").lower()
     except Exception:
         return False
-    return path == "/text/direct" or path.startswith("/text/direct/")
+
+    if path == "/text/direct" or path.startswith("/text/direct/"):
+        return True
+
+    if path == "/c" or path.startswith("/c/"):
+        if catalog_preset is not None:
+            catalog = normalize_model_catalog_config(catalog_preset.get("model_catalog"))
+            return bool(catalog.get("enabled") and catalog.get("source") == MODEL_CATALOG_SOURCE)
+        return True
+
+    return False
 
 
 def _filter_models(
@@ -364,13 +378,7 @@ def _load_alias_overrides() -> Dict[str, Dict[str, Any]]:
     except (FileNotFoundError, OSError, ValueError, TypeError):
         return {}
     models = payload.get("models") if isinstance(payload, dict) else None
-    if not isinstance(models, dict):
-        return {}
-    return {
-        str(name).strip().casefold(): value
-        for name, value in models.items()
-        if str(name).strip() and isinstance(value, dict)
-    }
+    return models if isinstance(models, dict) else {}
 
 
 def read_arena_direct_models_from_tab(tab: Any) -> List[Dict[str, Any]]:
@@ -385,7 +393,7 @@ def _cache_snapshot() -> tuple[float, List[Dict[str, Any]]]:
         return _cached_at, copy.deepcopy(_cached_models)
 
 
-def _replace_cache(models: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _replace_cache(models: Any) -> List[Dict[str, Any]]:
     global _cached_at, _cached_models
     normalized = _normalize_models(models)
     if not normalized:
@@ -407,6 +415,8 @@ def _arena_sessions(browser: Any) -> List[Any]:
     except Exception:
         return []
 
+    from app.services.config_engine import config_engine
+
     result = []
     for session in sessions or []:
         status = str(getattr(getattr(session, "status", None), "value", "") or "").strip().lower()
@@ -416,7 +426,14 @@ def _arena_sessions(browser: Any) -> List[Any]:
             current_url, _domain = session.get_cached_route_snapshot()
         except Exception:
             current_url = str(getattr(getattr(session, "tab", None), "url", "") or "")
-        if not _is_arena_direct_url(current_url):
+
+        tab_dict = {
+            "status": status,
+            "url": current_url,
+            "preset_name": getattr(session, "preset_name", None),
+            "terminating": False,
+        }
+        if not get_arena_direct_catalog_for_tab(config_engine, tab_dict):
             continue
         result.append(session)
     result.sort(key=lambda item: (not _session_is_idle(item), int(getattr(item, "persistent_index", 0) or 0)))

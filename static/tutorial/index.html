@@ -22,7 +22,7 @@
       <div class="sb-logo"><i data-lucide="globe" style="width:20px;height:20px"></i></div>
       <div>
         <div class="sb-name">Universal Web-to-API</div>
-        <div class="sb-sub">docs · v2.9.4</div>
+        <div class="sb-sub">docs · v2.9.5</div>
       </div>
     </div>
     <div class="sb-search">
@@ -40,7 +40,7 @@
       <button class="tb-btn" id="menuBtn" aria-label="打开导航"><i data-lucide="menu" style="width:16px;height:16px"></i></button>
       <div class="tb-crumb"><span>使用手册</span><i data-lucide="chevron-right" style="width:13px;height:13px"></i><b id="crumbNow">项目概览</b></div>
       <div class="tb-right">
-        <span class="tb-ver">v2.8.9</span>
+        <span class="tb-ver">v2.9.5</span>
         <button class="tb-btn" id="themeBtn" aria-label="切换主题"><i data-lucide="sun" style="width:15px;height:15px" id="themeIcon"></i></button>
         <a class="tb-btn" href="https://github.com/lumingya/universal-web-api" target="_blank" rel="noopener"><i data-lucide="github" style="width:15px;height:15px"></i><span class="hide-sm">GitHub</span></a>
       </div>
@@ -52,7 +52,7 @@
         <div class="hero">
           <div class="hero-in">
             <div class="hero-eyebrow">
-              <span class="bdg"><i data-lucide="sparkles" style="width:11px;height:11px"></i>&nbsp;v2.8.9</span>
+              <span class="bdg"><i data-lucide="sparkles" style="width:11px;height:11px"></i>&nbsp;v2.9.5</span>
               <span class="bdg g">OpenAI 兼容</span>
               <span class="bdg g">本地部署 · 免费开源</span>
             </div>
@@ -262,7 +262,7 @@
             <i data-lucide="info" style="width:18px;height:18px"></i>
             <div class="co-bd">
               <span class="co-t">文档重点覆盖的站点</span>
-              <p>ChatGPT、DeepSeek、Gemini、Claude、Kimi、通义千问、Grok、豆包、AI Studio、Arena AI。站点卡片会在页面加载后按当前配置动态刷新；若本地改过站点域名或启动地址，以卡片和控制面板里的实际内容为准。</p>
+              <p>ChatGPT、DeepSeek、Gemini、Claude、Kimi、通义千问、Grok、豆包、AI Studio、Arena AI。下面的站点卡片列出的是文档内置的默认域名；若你在本地改过站点域名或启动地址，请以控制面板里的实际站点列表为准。</p>
             </div>
           </div>
           <div class="co co-warn">
@@ -439,11 +439,11 @@ curl http://127.0.0.1:8199/tab-url/abc123def456/pro/v1/chat/completions -d "..."
             <div class="q-card">
               <div class="qc-ic"><i data-lucide="panel-left" style="width:17px;height:17px"></i></div>
               <h5>中控侧边栏</h5>
-              <p>提供系统级指标：全局健康度、当前已连接受控浏览器端口状态（默认 9222）以及站点配置、标签页池、实时日志、命令与全局设置的无缝切换。</p>
+              <p>提供系统级指标：全局健康度、当前已连接受控浏览器端口状态（默认 9222），以及首页、站点配置、标签页池、请求监控、命令系统、运行日志与设置之间的无缝切换。</p>
             </div>
             <div class="q-card">
               <div class="qc-ic"><i data-lucide="activity" style="width:17px;height:17px"></i></div>
-              <h5>流量监控 (Request Monitor)</h5>
+              <h5>请求监控 (Request Monitor)</h5>
               <p>显示系统级指标，包括受控浏览器和 Python 后端内存占用、累计请求流量。并提供详细的<strong>历史请求队列明细与底层执行链追踪</strong>，支持一键单条详情弹窗分析。</p>
             </div>
             <div class="q-card">
@@ -456,7 +456,7 @@ curl http://127.0.0.1:8199/tab-url/abc123def456/pro/v1/chat/completions -d "..."
           <h3>请求异常调试与排查步骤</h3>
           <p>高并发或接口对接遇到瓶颈时，控制台是您的排障利器。请遵循以下标准诊断流程：</p>
           <ol class="steps">
-            <li><strong>查看请求监控列表</strong>：点击失败记录，检查该请求是在哪个阶段失败的（如 <code>acquire_tab_timeout</code> 排队等待超时，还是 <code>wait_first_response_timeout</code> 首包响应超时）。</li>
+            <li><strong>查看请求监控列表</strong>：点击失败记录，检查该请求是在哪个阶段失败的——是排队获取标签页时超时（<code>acquire_timeout</code>，默认 60s），还是网络监听等首包响应时超时（<code>first_response_timeout</code>，默认 300s）。</li>
             <li><strong>联合日志追踪</strong>：在日志页面中，通过请求的唯一 <code>RequestID</code> 或短追踪哈希，把该轮交互在 <code>[ROUTE]</code>（路由分发）、<code>[POOL]</code>（标签分配）、<code>[INPUT]</code>（粘贴输入）、<code>[STREAM]</code>（输出截获）以及 <code>[NetworkMonitor]</code> 模块的全部可爱化日志串联分析。</li>
             <li><strong>会话调试隔离</strong>：如果发现特定的标签页频繁出现卡死或慢速现象，可点击「标签页池」查看当前被锁定的页面状态，使用取消按钮强行中断或使用调试接口释放。</li>
           </ol>
@@ -530,11 +530,12 @@ curl http://127.0.0.1:8199/tab-url/abc123def456/pro/v1/chat/completions -d "..."
           <p>工作流定义了一轮 API 交互在受控浏览器中的执行动作顺序（如清除历史、输入提示词、点击发送以及等待流式完成）。最新的工作流支持在控制台进行<strong>完全可视化的拖拽与编辑</strong>，无需编写 JSON 代码。</p>
 
           <h3>🖱️ 可视化节点编辑器使用指南</h3>
-          <p>在站点配置的【工作流】区域，所有交互动作均呈现为从左到右或从上到下的动作节点链。您可以像搭积木一样进行拼装与配置：</p>
+          <p>在站点配置的【请求工作流】区域，所有交互动作均呈现为从左到右或从上到下的动作节点链。您可以像搭积木一样进行拼装与配置：</p>
           <ul>
-            <li><strong>添加动作步骤</strong>：点击“＋ 增加步骤”按钮，即可直接在交互链末端追加新的动作卡片。</li>
+            <li><strong>添加动作步骤</strong>：点击“新增步骤”按钮，即可直接在交互链末端追加新的动作卡片；也可以直接套用内置模板一键生成一条最短可用工作流。</li>
             <li><strong>拖拽调整顺序</strong>：用鼠标按住动作卡片左侧，拖动卡片即可直接调整交互执行的先后顺序，顺序不会丢失或错位。</li>
             <li><strong>删除不需要的动作</strong>：点击卡片右上角的“垃圾桶”图标，即可从交互链中安全删除该步骤。</li>
+            <li><strong>标记必需 / 可选</strong>：每张卡片底部有一个“必需步骤”勾选框——默认勾选表示必需（找不到目标元素就报错）；<strong>取消勾选即变为可选</strong>，找不到元素时会自动跳过该步骤。</li>
           </ul>
 
           <div class="tw"><table class="tbl">
@@ -556,17 +557,48 @@ curl http://127.0.0.1:8199/tab-url/abc123def456/pro/v1/chat/completions -d "..."
                 <td>使交互进程硬性暂停指定秒数（如 <code>0.5</code>），常用于等待某些过渡动画或异步请求完成。</td>
               </tr>
               <tr>
-                <td><strong>KEY_PRESS</strong><br><small>模拟按键</small></td>
-                <td>按键键值 (Value)</td>
-                <td>模拟真实的键盘物理按键。例如在没有 <code>send_btn</code> 或发送按钮不可靠时，可以直接追加一个 `Enter` 动作来触发消息发送。</td>
+                <td><strong>KEY_PRESS</strong><br><small>按键</small></td>
+                <td>按键键值 (Target)<br>内置常用组合下拉</td>
+                <td>模拟真实的键盘物理按键。例如在没有 <code>send_btn</code> 或发送按钮不可靠时，可以直接追加一个 <code>Enter</code> 动作来触发消息发送；支持 <code>Ctrl+Enter</code>、<code>Shift+Enter</code> 等组合键。</td>
+              </tr>
+              <tr>
+                <td><strong>SELECT_MODEL</strong><br><small>选择请求模型</small></td>
+                <td>模型选择器 (Target)</td>
+                <td>在支持切换模型的站点上，按请求携带的模型名去页面上点选对应模型项，实现"同站点按模型分流"。</td>
+              </tr>
+              <tr>
+                <td><strong>PAGE_FETCH</strong><br><small>页面直发</small></td>
+                <td>发送方式（页面直发配置）</td>
+                <td>使用当前预设的"页面直发"配置直接提交已构造好的 Prompt（绕过逐步点选）。若直发失败且回退模式设为工作流，会继续执行后面的填入 / 按键 / 等待步骤兜底。</td>
+              </tr>
+              <tr>
+                <td><strong>COORD_CLICK</strong><br><small>坐标点击</small></td>
+                <td>X / Y（viewport 坐标）<br>随机半径</td>
+                <td>按 viewport CSS 坐标（非屏幕坐标）点击某个位置，可设随机半径抖动。适用于没有稳定选择器、只能靠位置点击的按钮。</td>
+              </tr>
+              <tr>
+                <td><strong>COORD_SCROLL</strong><br><small>模拟滑动</small></td>
+                <td>起点 / 终点坐标</td>
+                <td>在指定起终点之间模拟滚动。普通模式直接派发滚轮事件，低熵模式会按站点 stealth 配置走人类化轨迹。</td>
+              </tr>
+              <tr>
+                <td><strong>JS_EXEC</strong><br><small>执行 JavaScript</small></td>
+                <td>JavaScript 代码</td>
+                <td>在当前页面上下文执行一段自定义 JS，用于处理特殊弹窗、预处理页面状态等常规节点覆盖不到的场景。</td>
+              </tr>
+              <tr>
+                <td><strong>READONLY_HINT</strong><br><small>只读提示</small></td>
+                <td>标题 / 正文 / 语气</td>
+                <td>纯说明卡片，执行时<strong>不会</strong>点击、输入或等待页面，仅用于在工作流里给自己或他人留下备注。</td>
               </tr>
               <tr>
                 <td><strong>STREAM_WAIT</strong><br><small>等待输出捕获</small></td>
                 <td>结果容器选择器 (Target)</td>
-                <td>等待 AI 的流式响应输出结束，并捕获内容。<strong>每条工作流必须且只能以它作为最终收尾步骤。</strong></td>
+                <td>等待 AI 的流式响应输出结束，并捕获内容。<strong>常规 UI 工作流必须以它作为最终收尾步骤</strong>（改用 <code>PAGE_FETCH</code> 页面直发的链路除外）。</td>
               </tr>
             </tbody>
           </table></div>
+          <p style="color:var(--tx3);font-size:13.5px">下拉里的动作以控制面板实际选项为准；本表覆盖当前可选的全部节点类型。</p>
 
           <h3>🛡️ 预设防风控与开头注入</h3>
           <p>在部分严格防爬的站点（如 GPT、Gemini、Arena 等）上，频繁发送相似模式的 Prompt 极易触发限频与风控。您可以通过控制面板开启防风控手段：</p>
@@ -601,7 +633,7 @@ curl http://127.0.0.1:8199/tab-url/abc123def456/pro/v1/chat/completions -d "..."
           <h3>🛡️ 网络监听超时自愈回退（双模安全网）</h3>
           <p>网络拦截模式虽然精准，但在网页改版、参数变化或解析器报错时可能会捕获失败，导致请求死锁白屏。系统配置中支持如下弹性策略：</p>
           <ul>
-            <li><strong>首次响应超时自动回退</strong>：网络监听在触发请求发送后，会开启 <code>wait_first_response_timeout</code> 超时侦测。如果在设定时间（默认 300s，在 <code>stream_config</code> 中的 <code>network</code> 项下）未检测到符合 <code>listen_pattern</code> 拦截规则的流量，系统会自动抛出超时异常，并<strong>无缝回退到 DOM 监控模式</strong>（<code>StreamMonitor</code>）继续捕获网页渲染出的文本，确保整个请求不因接口变动或匹配失效而挂起白屏。</li>
+            <li><strong>首次响应超时自动回退</strong>：网络监听在触发请求发送后，会开启 <code>first_response_timeout</code> 超时侦测（默认 300s，位于流式配置的 <code>network</code> 项下）。如果在设定时间内未检测到符合 <code>listen_pattern</code> 拦截规则的流量，系统会自动抛出超时异常，并<strong>无缝回退到 DOM 监控模式</strong>（<code>StreamMonitor</code>）继续捕获网页渲染出的文本，确保整个请求不因接口变动或匹配失效而挂起白屏。</li>
           </ul>
 
           <h3>⚡ 发送确认与自愈重试判定</h3>
@@ -614,7 +646,7 @@ curl http://127.0.0.1:8199/tab-url/abc123def456/pro/v1/chat/completions -d "..."
 
           <h3>DOM 模式结束判定公式</h3>
           <div class="cb" data-lang="text"><div class="cb-top"><span class="cb-dots"><i></i><i></i><i></i></span><span class="cb-lang">稳定判定条件</span><button class="cb-copy"><i data-lucide="copy" style="width:12px;height:12px"></i><span>复制</span></button></div><pre><code>生成结束判定 = (连续稳定次数 ≥ 稳定判定次数) AND (静默时间 > 静默超时阈值)</code></pre></div>
-          <p>DOM 检查时，内容没有再变化，稳定计数增加，静默时间累加。两个阈值同时达到时，判定本轮回复完成。全局硬超时（如 300 秒）是两种模式共用的物理保底限时。</p>
+          <p>DOM 检查时，内容没有再变化，稳定计数增加，静默时间累加。两个阈值同时达到时，判定本轮回复完成。全局硬超时（DOM 模式默认 <strong>600 秒</strong>，即浏览器常量里的「最大超时」；网络拦截模式则另有各自的首包与硬超时）是本轮监听的物理保底，无论如何都会在到点后强制收尾。</p>
 </section>
 
         <!-- ============ 09 预设系统 ============ -->
@@ -1004,11 +1036,13 @@ curl http://127.0.0.1:8199/tab-url/abc123def456/pro/v1/chat/completions -d "..."
               <tr><td><code>navigate</code></td><td>导航控制跳转至新的 URL</td><td>目标 URL</td></tr>
               <tr><td><code>switch_proxy</code></td><td><strong>Clash 代理一键轮换</strong>。切换 Clash 的代理组节点以突破 IP 限频。</td><td>Clash API 端口与新节点名称</td></tr>
               <tr><td><code>send_webhook</code></td><td>向外部服务器发送 Webhook 通知告警（如企业微信/钉钉/TG/Server酱）</td><td>URL、Payload、Header</td></tr>
-              <tr><td><code>send_napcat</code> / <code>napcat_qq_notice</code></td><td><strong>发送 NapCat QQ 提醒</strong>。直接联动 NapCat QQ 消息推送机器人。</td><td>NapCat 接口地址与目标 QQ/群号</td></tr>
-              <tr><td><code>click_captcha_challenge</code> / <code>solve_captcha</code></td><td><strong>过盾自愈与 Turnstile 人机解密</strong>。检测到 Cloudflare Turnstile 等盾时自动寻找并点击按钮。</td><td>验证码选择器</td></tr>
-              <tr><td><code>write_element</code> / <code>read_element</code> / <code>read_write_web</code></td><td><strong>网页读写与存储劫持</strong>。在受控浏览器页面直接读取或写入特定 DOM 元素/本地存储。</td><td>元素选择器、写入数据/变量名</td></tr>
+              <tr><td><code>send_napcat</code></td><td><strong>发送 NapCat QQ 提醒</strong>。直接联动 NapCat QQ 消息推送机器人。</td><td>NapCat 接口地址与目标 QQ/群号</td></tr>
+              <tr><td><code>click_captcha_challenge</code></td><td><strong>过盾自愈与 Turnstile 人机解密</strong>。检测到 Cloudflare Turnstile 等盾时自动寻找并点击按钮。</td><td>验证码选择器</td></tr>
+              <tr><td><code>click_element</code> / <code>click_coordinates</code></td><td>按选择器点击页面元素，或按 viewport 坐标点击指定位置。</td><td>元素选择器 / X、Y 坐标</td></tr>
+              <tr><td><code>write_element</code> / <code>read_element</code></td><td><strong>网页读写</strong>。在受控浏览器页面直接读取或写入特定 DOM 元素/本地存储。</td><td>元素选择器、写入数据/变量名</td></tr>
               <tr><td><code>http_request</code></td><td>直接在当前受控网页的 Fetch 域中发起自定义网络请求。</td><td>URL、Method、Payload</td></tr>
               <tr><td><code>append_file</code></td><td>将命令输出结果或报错数据追加写入到本地文件归档。</td><td>本地文件绝对/相对路径</td></tr>
+              <tr><td><code>execute_command_group</code></td><td>调用并执行另一组已定义的命令组，便于复用与串联多条自愈链。</td><td>目标命令组名称 / ID</td></tr>
               <tr><td><code>abort_task</code> / <code>release_tab_lock</code></td><td>强行中断当前的并发 API 任务，或强行解锁释放标签页</td><td>中断理由</td></tr>
             </tbody>
           </table></div>
@@ -1061,11 +1095,11 @@ curl http://127.0.0.1:8199/tab-url/abc123def456/pro/v1/chat/completions -d "..."
           <h3>🖱️ 前端工作流配置面板拼装推荐步骤（最短可用工作流）</h3>
           <p>在工作流面板中，一个能够正常驱动绝大多数聊天网站的最简可用工作流节点顺序如下，您可以通过点击【＋ 增加步骤】进行拼接：</p>
           <ol class="steps">
-            <li><code>CLICK</code> 节点：目标填入 <code>new_chat_btn</code>，勾选“可选（Optional）”，以防首次打开本就处于新对话时点击失败。</li>
+            <li><code>CLICK</code> 节点：目标填入 <code>new_chat_btn</code>，<strong>取消勾选“必需步骤”</strong>（即标记为可选），以防首次打开本就处于新对话时点击失败。</li>
             <li><code>WAIT</code> 节点：时值设为 <code>0.5</code> 秒，给页面重置预留少许过渡时间。</li>
             <li><code>FILL_INPUT</code> 节点：目标填入 <code>input_box</code>。这是将用户提示词灌入输入框的必需步骤。</li>
             <li><code>CLICK</code> 节点：目标填入 <code>send_btn</code>，用于点击发送按钮。</li>
-            <li><code>KEY_PRESS</code> 节点：目标填入 <code>Enter</code>，勾选“可选”，可在部分回车也能发送的网站上作为备用指令。</li>
+            <li><code>KEY_PRESS</code> 节点：目标填入 <code>Enter</code>，<strong>取消勾选“必需步骤”</strong>（标记为可选），可在部分回车也能发送的网站上作为备用指令。</li>
             <li><code>STREAM_WAIT</code> 节点：目标填入 <code>result_container</code>。用于捕获流式输出。<strong>必须以此步骤作为整条工作流的最终结尾。</strong></li>
           </ol>
 
@@ -1094,7 +1128,7 @@ curl http://127.0.0.1:8199/tab-url/abc123def456/pro/v1/chat/completions -d "..."
               <tr><td>代理地址</td><td><code>socks5://127.0.0.1:1080</code></td><td>支持 socks5:// 或 http://</td></tr>
               <tr><td>绕过代理</td><td><code>localhost,127.0.0.1</code></td><td>不走代理的地址，逗号分隔</td></tr>
               <tr><td rowspan="4">AI 分析</td><td>API Key</td><td>空</td><td>辅助 AI 的 API 密钥</td></tr>
-              <tr><td>API 地址</td><td><code>http://127.0.0.1:5104/v1</code></td><td>API 基础 URL</td></tr>
+              <tr><td>API 地址</td><td><code>http://127.0.0.1:8199/url/gemini.com/v1</code></td><td>API 基础 URL（默认回指反代自身的 Gemini 路由，可改为任意 OpenAI 兼容端点）</td></tr>
               <tr><td>模型名称</td><td><code>gemini-3.0-pro</code></td><td>使用的模型</td></tr>
               <tr><td>HTML 最大字符数</td><td><code>120000</code></td><td>超过会截断以节省 Token</td></tr>
               <tr><td>浏览器</td><td>Chrome 调试端口</td><td><code>9222</code></td><td>浏览器远程调试端口</td></tr>
@@ -1138,8 +1172,8 @@ BROWSER_PROFILE_NAME=Default</code></pre></div>
             <tbody>
               <tr><td rowspan="2">连接</td><td>调试端口</td><td><code>9222</code></td><td>Chrome DevTools 远程调试端口</td></tr>
               <tr><td>连接超时</td><td><code>10</code> 秒</td><td>浏览器连接超时时间</td></tr>
-              <tr><td rowspan="4">操作延迟</td><td>低熵延迟下限 / 上限</td><td><code>0.1</code> / <code>0.3</code> 秒</td><td>低熵操作的随机延迟范围</td></tr>
-              <tr><td>动作延迟下限 / 上限</td><td><code>0.15</code> / <code>0.3</code> 秒</td><td>点击 / 输入等动作的随机延迟，防止被识别为机器人</td></tr>
+              <tr><td rowspan="4">操作延迟</td><td>低熵延迟下限 / 上限</td><td><code>0.03</code> / <code>0.1</code> 秒</td><td>低熵操作的随机延迟范围</td></tr>
+              <tr><td>动作延迟下限 / 上限</td><td><code>0.06</code> / <code>0.14</code> 秒</td><td>点击 / 输入等动作的随机延迟，防止被识别为机器人</td></tr>
               <tr><td>默认 / 备用等待</td><td><code>3</code> / <code>1</code> 秒</td><td>查找元素的超时与首次失败重试超时</td></tr>
               <tr><td>缓存有效期</td><td><code>5</code> 秒</td><td>元素位置缓存时间</td></tr>
               <tr><td rowspan="4">响应检测 🔑</td><td>检查间隔（下 / 默认 / 上）</td><td><code>0.1 / 0.3 / 1.0</code> 秒</td><td>轮询检测频率范围</td></tr>
@@ -1147,7 +1181,7 @@ BROWSER_PROFILE_NAME=Default</code></pre></div>
               <tr><td><strong>稳定判定次数</strong></td><td><code>8</code> 次</td><td>🔑 连续多少次检查不变判定完成</td></tr>
               <tr><td>最大超时</td><td><code>600</code> 秒</td><td>单次请求绝对超时上限</td></tr>
               <tr><td rowspan="4">高级</td><td>重渲染等待</td><td><code>0.5</code> 秒</td><td>等待页面重新渲染</td></tr>
-              <tr><td>内容收缩阈值</td><td><code>0.3</code></td><td>内容缩减超 30% 视为异常——思考模型折叠思维链时可见文本会短暂大幅缩减，此参数防误判</td></tr>
+              <tr><td>内容收缩阈值</td><td><code>3</code> 字符</td><td>允许正文回缩的最大字符数，超过才视为异常回退——思考模型折叠思维链时可见文本会短暂缩短，此参数用作容差防误判</td></tr>
               <tr><td>最小有效长度</td><td><code>10</code> 字符</td><td>响应被视为有效的最小长度</td></tr>
               <tr><td>最大异常 / 元素丢失次数</td><td><code>5</code> / <code>10</code> 次</td><td>连续异常中止 / 元素持续丢失退出</td></tr>
               <tr><td rowspan="2">输入验证</td><td>消息最大长度</td><td><code>100000</code> 字符</td><td>单条消息最大字符数</td></tr>
@@ -1289,7 +1323,7 @@ BROWSER_PROFILE_NAME=Default</code></pre></div>
     </div>
 
     <footer class="foot">
-      <span>Universal Web-to-API · 社区教程（重构版） · v2.8.9</span>
+      <span>Universal Web-to-API · 社区教程（重构版） · v2.9.5</span>
       <span>反馈：GitHub Issues · QQ 群 1073037753</span>
     </footer>
   </div>

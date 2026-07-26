@@ -15,45 +15,81 @@ body.app-mounted #app-shell {
     justify-content: center;
     padding: 24px;
     background:
-        radial-gradient(circle at top, rgba(59, 130, 246, 0.16), transparent 38%),
-        linear-gradient(180deg, #111827 0%, #0f172a 100%);
+        radial-gradient(circle at top, rgba(143, 188, 143, 0.18), transparent 42%),
+        var(--uwa-paper, #f7f3ea);
     z-index: 9999;
 }
 
 .app-shell-card {
     width: min(480px, 100%);
-    padding: 28px;
-    border: 1px solid rgba(148, 163, 184, 0.24);
-    border-radius: 18px;
-    background: rgba(15, 23, 42, 0.88);
-    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
-    color: #e5eefc;
+    padding: 30px 28px;
+    border: 1px solid var(--uwa-line, #ddd4c3);
+    border-radius: 12px;
+    background: var(--uwa-paper-strong, #fffdf8);
+    box-shadow: 0 20px 50px rgba(47, 55, 39, 0.16);
+    color: var(--uwa-ink, #33402c);
     text-align: center;
 }
 
+.dark .app-shell-card {
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
+}
+
+.app-shell-logo {
+    display: block;
+    width: 72px;
+    height: 72px;
+    margin: 0 auto 16px;
+    border: 1px solid var(--uwa-line, #ddd4c3);
+    border-radius: 12px;
+    object-fit: contain;
+    background: var(--uwa-paper, #f7f3ea);
+}
+
 .app-shell-title {
-    font-size: 24px;
-    font-weight: 700;
-    letter-spacing: 0.02em;
+    color: var(--uwa-ink-strong, #263321);
+    font-size: 22px;
+    font-weight: 800;
+    letter-spacing: 0.01em;
 }
 
 .app-shell-text {
     margin: 12px 0 0;
-    line-height: 1.6;
-    color: #cbd5e1;
+    line-height: 1.65;
+    color: var(--uwa-muted, #6e775f);
+    font-size: 14px;
+}
+
+.app-shell-spinner {
+    display: block;
+    width: 26px;
+    height: 26px;
+    margin: 20px auto 0;
+    border: 3px solid var(--uwa-line, #ddd4c3);
+    border-top-color: var(--uwa-olive, #5d6b4d);
+    border-radius: 50%;
+    animation: app-shell-spin 0.9s linear infinite;
+}
+
+@keyframes app-shell-spin {
+    to { transform: rotate(360deg); }
 }
 
 .app-shell-button {
     margin-top: 18px;
     min-width: 140px;
     padding: 10px 16px;
-    border: 1px solid rgba(96, 165, 250, 0.55);
-    border-radius: 10px;
-    background: linear-gradient(180deg, #2563eb 0%, #1d4ed8 100%);
-    color: #eff6ff;
+    border: 1px solid var(--uwa-olive, #5d6b4d);
+    border-radius: 8px;
+    background: var(--uwa-olive, #5d6b4d);
+    color: #fff;
     font-size: 14px;
-    font-weight: 600;
+    font-weight: 700;
     cursor: pointer;
+}
+
+.dark .app-shell-button {
+    color: #16200f;
 }
 
 .app-shell-button:hover {

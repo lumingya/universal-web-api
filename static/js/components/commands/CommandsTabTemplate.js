@@ -1,16 +1,30 @@
 // ==================== CommandsTab Template ====================
 window.CommandsTabTemplate = `
-    <div class="p-4 space-y-4">
+    <div class="command-system-page p-4 space-y-4">
         <!-- 标题栏 -->
         <div class="flex flex-col gap-3 rounded-2xl border border-slate-200/80 bg-[linear-gradient(135deg,rgba(255,255,255,0.98),rgba(241,245,249,0.92))] p-4 shadow-[0_14px_36px_-32px_rgba(15,23,42,0.55)] dark:border-slate-700/70 dark:bg-[linear-gradient(145deg,rgba(15,23,42,0.98),rgba(30,41,59,0.92))] lg:flex-row lg:items-center lg:justify-between">
             <div>
-                <h2 class="text-xl font-bold dark:text-white">⚡ 自动化命令</h2>
+                <h2 class="text-xl font-bold dark:text-white">命令系统</h2>
                 <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
                     设置触发条件和执行动作，实现标签页自动化管理
                 </p>
             </div>
             <div class="flex flex-wrap items-center gap-3">
+                <label v-if="commands.length > 0" class="command-page-size-control flex items-center gap-2 text-xs text-slate-500 dark:text-slate-300">
+                    <span>每页</span>
+                    <input v-model.number="pageSize"
+                           @change="applyPageSize"
+                           type="number"
+                           min="1"
+                           max="500"
+                           list="command-page-size-options"
+                           class="h-9 w-20 rounded-lg border border-slate-200 bg-white px-2 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200">
+                    <datalist id="command-page-size-options">
+                        <option v-for="size in pageSizeOptions" :key="size" :value="size">{{ size }}</option>
+                    </datalist>
+                </label>
                 <button @click.stop="toggleHelp"
+                        title="查看命令系统说明" aria-label="查看命令系统说明"
                         class="flex h-9 w-9 items-center justify-center rounded-xl border border-amber-300/60 bg-white/80 text-sm font-bold text-amber-600 transition hover:bg-amber-50 dark:border-amber-500/30 dark:bg-slate-900/70 dark:text-amber-300 dark:hover:bg-slate-800">
                     ?
                 </button>
@@ -20,7 +34,7 @@ window.CommandsTabTemplate = `
                 </button>
                 <button @click="openNewCommand"
                         class="rounded-xl bg-blue-500 px-3 py-2 text-sm font-semibold text-white shadow-md shadow-blue-500/20 transition hover:bg-blue-600">
-                    + 新建命令
+                    <span v-html="$icons.plusCircle"></span> 新建命令
                 </button>
             </div>
         </div>
@@ -41,31 +55,6 @@ window.CommandsTabTemplate = `
             <div class="text-4xl mb-4">⚙️</div>
             <p>还没有自动化命令</p>
             <p class="text-sm mt-2">点击「新建命令」开始配置</p>
-        </div>
-
-        <!-- 命令列表 -->
-        <div v-if="commands.length > 0" class="rounded-xl border border-slate-200/80 bg-white/80 p-3 shadow-sm dark:border-slate-700/70 dark:bg-slate-900/70">
-            <div class="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-                <div class="flex flex-wrap items-center gap-3 text-sm text-slate-600 dark:text-slate-300">
-                    <span class="rounded-full bg-slate-900/5 px-3 py-1.5 dark:bg-white/5">总数 {{ commands.length }}</span>
-                    <span class="rounded-full bg-emerald-500/10 px-3 py-1.5 text-emerald-600 dark:text-emerald-300">启用 {{ enabledCount }}</span>
-                    <span class="rounded-full bg-slate-500/10 px-3 py-1.5">禁用 {{ disabledCount }}</span>
-                    <span>当前显示 {{ pageStartIndex }} - {{ pageEndIndex }}</span>
-                </div>
-                <label class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
-                    <span>每页</span>
-                    <input v-model.number="pageSize"
-                           @change="applyPageSize"
-                           type="number"
-                           min="1"
-                           max="500"
-                           list="command-page-size-options"
-                           class="w-24 rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200">
-                    <datalist id="command-page-size-options">
-                        <option v-for="size in pageSizeOptions" :key="size" :value="size">{{ size }}</option>
-                    </datalist>
-                </label>
-            </div>
         </div>
 
         <section v-if="commands.length > 0"

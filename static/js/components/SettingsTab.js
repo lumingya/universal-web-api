@@ -84,7 +84,7 @@ window.SettingsTab = {
         }
     },
     template: `
-        <div class="h-full overflow-auto p-4 md:p-6 bg-gray-50 dark:bg-gray-900">
+        <div class="settings-workspace h-full overflow-auto p-4 md:p-6 bg-gray-50 dark:bg-gray-900">
             <div class="max-w-7xl mx-auto space-y-6">
                 
                 <!-- ========== AI 元素识别 - 放在最上面 ========== -->
