@@ -71,6 +71,14 @@ def _manager(sessions, *, excluded_urls=None) -> TabPoolManager:
     manager._cleanup_unhealthy_tabs = lambda: None
     manager._should_defer_to_command = lambda *_args, **_kwargs: False
     manager._complete_acquired_session_for_return = lambda *_args, **_kwargs: True
+    # 与 __init__ 对齐（见 TabPoolManager.__init__）：release()/terminate_by_index
+    # 会访问这些懒创建资源，缺失会让用例挂在 AttributeError 上而不是断言业务行为。
+    manager._maintenance_executor = None
+    manager._acquire_executor = None
+    manager._acquire_executor_lock = threading.Lock()
+    manager._recovery_service = None
+    manager._recovery_service_lock = threading.Lock()
+    manager._quarantined_raw_ids = {}
     return manager
 
 

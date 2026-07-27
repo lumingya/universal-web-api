@@ -537,6 +537,9 @@ def test_cross_origin_media_fetch_drops_cookies_and_referer(monkeypatch):
 
 def test_cancelled_async_acquire_releases_late_session():
     manager = TabPoolManager.__new__(TabPoolManager)
+    manager._acquire_executor = None
+    manager._acquire_executor_lock = threading.Lock()
+    manager._maintenance_executor = None
     worker_started = threading.Event()
     worker_finish = threading.Event()
     released = threading.Event()

@@ -177,12 +177,10 @@ HEADER_VALUE_QUOTE_SAFE = ":/?#[]@!$&'()*+,;=%-._~"
 
 def _encode_response_header_value(value: Any) -> str:
     text = "" if value is None else str(value)
-    try:
-        text.encode("latin-1")
-        needs_quote = any(ord(ch) < 32 or ord(ch) == 127 for ch in text)
-    except UnicodeEncodeError:
-        needs_quote = True
-
+    # 判据用 ASCII 而不是 latin-1：latin-1 可编码 U+0080–U+00FF（如预设名 "Café"），
+    # 于是这些字符会以裸字节进响应头，按 UTF-8 解析响应头的客户端
+    # （Node/undici、Go 等）会拿到乱码甚至解码失败。非 ASCII 一律百分号编码。
+    needs_quote = (not text.isascii()) or any(ord(ch) < 32 or ord(ch) == 127 for ch in text)
     if not needs_quote:
         return text
     return quote(text, safe=HEADER_VALUE_QUOTE_SAFE)
@@ -196,6 +194,13 @@ def _encode_response_headers(headers: Optional[Mapping[str, Any]]) -> Dict[str, 
 
 def _get_tab_pool_allocation_mode(tab_pool: Any) -> str:
     mode = str(getattr(tab_pool, "allocation_mode", "") or "").strip() or "first_idle"
+    valid_modes = {"first_idle", "round_robin", "random"}
+    return mode if mode in valid_modes else "first_idle"
+
+
+def _get_config_allocation_mode(tab_pool_config: Any) -> str:
+    source = tab_pool_config if isinstance(tab_pool_config, dict) else {}
+    mode = str(source.get("allocation_mode") or "").strip().lower() or "first_idle"
     valid_modes = {"first_idle", "round_robin", "random"}
     return mode if mode in valid_modes else "first_idle"
 
@@ -749,6 +754,53 @@ def _get_tab_pool_route_groups(tab_pool: Any, config: Optional[Dict[str, Any]] =
     return _get_route_groups_from_config(config)
 
 
+def _get_enabled_route_methods(config: Optional[Dict[str, Any]] = None) -> List[str]:
+    payload = config if isinstance(config, dict) else _read_browser_config()
+    tab_pool_config = payload.get("tab_pool") if isinstance(payload, dict) else {}
+    if not isinstance(tab_pool_config, dict):
+        tab_pool_config = {}
+    return _normalize_enabled_route_methods(tab_pool_config.get("enabled_route_methods"))
+
+
+def _route_method_guard(method: str):
+    """把路由方式开关做成 FastAPI 依赖，而不是在处理函数体里内联校验。
+
+    /url/{d}/{preset}/... 会在 Python 层直接调用 chat_with_route_domain，
+    app/api/chat.py 的 arena catalog 分支、anthropic_routes 也一样。若把校验写在
+    函数体里，这些内部委派会一并被拦下——关掉"站点域名路由"会连普通的
+    /v1/chat/completions 都 403。依赖只在 HTTP 进入该条路由时执行，内部调用不触发，
+    拦截面正好落在用户在面板上看到的那几条前缀上。
+    """
+    async def _guard() -> None:
+        _ensure_route_method_enabled(method)
+
+    return _guard
+
+
+def _ensure_route_method_enabled(method: str) -> None:
+    """拦截被关闭的寻址方式。
+
+    enabled_route_methods 此前只被读写和回显，没有任何路由分支消费它：
+    面板上取消勾选"固定标签页路由"后，/tab/1/v1/chat/completions 照样 200，
+    对外暴露服务时会给出"已关掉"的错觉。读配置失败时保持放行（fail-open），
+    不因为配置文件问题把正常路由全部打死。
+    """
+    normalized = str(method or "").strip().lower()
+    if not normalized:
+        return
+    try:
+        enabled = _get_enabled_route_methods()
+    except Exception as e:
+        logger.debug(f"读取已启用路由方式失败（放行）: {e}")
+        return
+    if normalized not in enabled:
+        label = next(
+            (item["label"] for item in TAB_ROUTE_METHOD_OPTIONS if item["value"] == normalized),
+            normalized,
+        )
+        raise HTTPException(status_code=403, detail=f"路由方式已在标签页池设置中关闭: {label}")
+
+
 def _get_tab_pool_excluded_urls(tab_pool: Any, config: Optional[Dict[str, Any]] = None) -> List[str]:
     try:
         excluded_urls = getattr(tab_pool, "excluded_urls", None)
@@ -864,10 +916,12 @@ def _get_tabs_by_exposed_model_name(browser, model_name: str) -> List[Dict[str, 
 def _list_candidate_tabs(browser, route_domain: str = "") -> List[Dict[str, Any]]:
     tabs = browser.tab_pool.get_tabs_with_index()
     target = normalize_route_domain(route_domain)
-    if not target:
-        return tabs
-
     excluded_urls = _get_tab_pool_excluded_urls(browser.tab_pool)
+    if not target:
+        # 无域名约束时同样要过滤"已从动态路由排除"的标签页，
+        # 否则这条分支会成为绕过 excluded_urls 的后门。
+        return [item for item in tabs if not _tab_item_is_excluded(item, excluded_urls)]
+
     result: List[Dict[str, Any]] = []
     for item in tabs:
         actual_domain = str(item.get("current_domain") or item.get("route_domain") or "").strip()
@@ -962,17 +1016,29 @@ def _resolve_target_tab(
                 )
         return tab_info
 
+    # exact_url / url_token 两条分支的解析结果会作为 resolved_tab_index 硬绑定传给
+    # execute_workflow_for_exact_url（下游只认这一个编号），所以必须和 model / domain
+    # 分支一样优先选空闲标签页；否则同 URL 开了多个标签页时，轮询游标可能挑中正忙的
+    # 那个，请求白等 60 秒超时，而旁边空闲的标签页全程没人用。
     if target_exact_url:
         matches = _get_tabs_by_exact_url(browser, target_exact_url)
         if not matches:
             raise HTTPException(status_code=404, detail="URL 路由没有匹配的已打开标签页")
-        return _select_round_robin_tab(matches, f"exact_url::{target_exact_url}")
+        idle_matches = [
+            item for item in matches
+            if str(item.get("status") or "").strip().lower() == "idle"
+        ]
+        return _select_round_robin_tab(idle_matches or matches, f"exact_url::{target_exact_url}")
 
     if target_url_token:
         matches = _get_tabs_by_url_route_token(browser, target_url_token)
         if not matches:
             raise HTTPException(status_code=404, detail="URL 路由没有匹配的已打开标签页")
-        return _select_round_robin_tab(matches, f"url_token::{target_url_token}")
+        idle_matches = [
+            item for item in matches
+            if str(item.get("status") or "").strip().lower() == "idle"
+        ]
+        return _select_round_robin_tab(idle_matches or matches, f"url_token::{target_url_token}")
 
     if target_model_name:
         matches = _get_tabs_by_exposed_model_name(browser, target_model_name)
@@ -1116,16 +1182,41 @@ def _resolve_strict_tab_preset(tab_info: Dict[str, Any], preset_name: str) -> Di
     if not requested:
         raise HTTPException(status_code=400, detail="预设名称不能为空")
 
-    domain = _get_tab_config_domain(tab_info)
-    if not domain:
+    raw_domain = _get_tab_config_domain(tab_info)
+    if not raw_domain:
         raise HTTPException(status_code=400, detail="URL 路由已匹配标签页，但无法解析站点域名")
+
+    # 标签页记的是页面真实主机名（可能是 www. 前缀或 site_rules 里的别名），
+    # 而预设是按配置里的站点域名存的。这里和 _resolve_strict_domain_preset、
+    # /api/tab-pool/tabs 的预设回显保持一致，补上 canonical 域名候选，
+    # 否则面板上显示"有这个预设"、走 /tab/{i}?preset_name=... 却 404。
+    candidate_domains = [
+        item for item in (
+            normalize_route_domain(raw_domain) or raw_domain,
+            get_canonical_route_domain(raw_domain) or "",
+        ) if item
+    ]
+    candidate_domains = list(dict.fromkeys(candidate_domains)) or [raw_domain]
 
     try:
         from app.services.config_engine import config_engine
 
-        preset_names = config_engine.list_presets(domain)
-        preset_map = {str(name): True for name in preset_names}
-        resolved = config_engine._resolve_preset_alias_key(requested, preset_map)
+        domain = candidate_domains[0]
+        preset_map: Dict[str, bool] = {}
+        resolved = requested
+        for candidate_domain in candidate_domains:
+            candidate_presets = config_engine.list_presets(candidate_domain)
+            candidate_preset_map = {str(name): True for name in candidate_presets}
+            candidate_resolved = config_engine._resolve_preset_alias_key(requested, candidate_preset_map)
+            if candidate_preset_map and candidate_resolved in candidate_preset_map:
+                domain = candidate_domain
+                preset_map = candidate_preset_map
+                resolved = candidate_resolved
+                break
+            if not preset_map:
+                domain = candidate_domain
+                preset_map = candidate_preset_map
+                resolved = candidate_resolved
     except HTTPException:
         raise
     except Exception as e:
@@ -1281,7 +1372,12 @@ def _iter_stream_chunks_with_optional_usage(body: ChatRequest, chunks):
 
 class TabPoolConfigRequest(BaseModel):
     """标签页池配置更新请求。"""
-    allocation_mode: str = Field(default="first_idle")
+    # allocation_mode / enabled_route_methods 用 None 表示"本次请求没带这个字段"，
+    # 与 excluded_urls / preserve_error_tabs / route_groups 的部分更新语义保持一致。
+    # 此前 allocation_mode 有默认值 "first_idle"、enabled_route_methods 为 None 时
+    # 被归一成"全部启用"，于是任何只带部分字段的 PUT（例如只保存路由组）都会把
+    # 用户设好的分配模式和路由方式开关静默重置掉。
+    allocation_mode: Optional[str] = Field(default=None)
     enabled_route_methods: Optional[List[str]] = Field(default=None)
     excluded_urls: Optional[List[str]] = Field(default=None)
     preserve_error_tabs: Optional[bool] = Field(default=None)
@@ -1460,9 +1556,11 @@ async def update_tab_pool_config(
     authenticated: bool = Depends(verify_auth)
 ):
     """更新标签页池运行模式并持久化到 browser_config.json。"""
+    request_includes_allocation_mode = body.allocation_mode is not None
     allocation_mode = str(body.allocation_mode or "").strip().lower()
-    if allocation_mode not in {"first_idle", "round_robin", "random"}:
+    if request_includes_allocation_mode and allocation_mode not in {"first_idle", "round_robin", "random"}:
         raise HTTPException(status_code=400, detail="invalid_allocation_mode")
+    request_includes_enabled_route_methods = body.enabled_route_methods is not None
     enabled_route_methods = _normalize_enabled_route_methods(body.enabled_route_methods)
     request_includes_excluded_urls = body.excluded_urls is not None
     excluded_urls = _normalize_excluded_urls(body.excluded_urls)
@@ -1477,8 +1575,10 @@ async def update_tab_pool_config(
             tab_pool_config = config.get("tab_pool") or {}
             if not isinstance(tab_pool_config, dict):
                 tab_pool_config = {}
-            tab_pool_config["allocation_mode"] = allocation_mode
-            tab_pool_config["enabled_route_methods"] = enabled_route_methods
+            if request_includes_allocation_mode:
+                tab_pool_config["allocation_mode"] = allocation_mode
+            if request_includes_enabled_route_methods:
+                tab_pool_config["enabled_route_methods"] = enabled_route_methods
             if request_includes_excluded_urls:
                 tab_pool_config["excluded_urls"] = excluded_urls
             if request_includes_preserve_error_tabs:
@@ -1488,6 +1588,10 @@ async def update_tab_pool_config(
             current_excluded_urls = _normalize_excluded_urls(tab_pool_config.get("excluded_urls"))
             current_preserve_error_tabs = _coerce_bool(tab_pool_config.get("preserve_error_tabs"), False)
             current_route_groups = normalize_route_groups(tab_pool_config.get("route_groups"))
+            current_allocation_mode = _get_config_allocation_mode(tab_pool_config)
+            current_enabled_route_methods = _normalize_enabled_route_methods(
+                tab_pool_config.get("enabled_route_methods")
+            )
             config["tab_pool"] = tab_pool_config
             _write_browser_config_unlocked(config)
 
@@ -1502,7 +1606,7 @@ async def update_tab_pool_config(
         try:
             browser = get_browser(auto_connect=False)
             runtime_kwargs: Dict[str, Any] = {
-                "allocation_mode": allocation_mode,
+                "allocation_mode": current_allocation_mode,
                 "preserve_error_tabs": current_preserve_error_tabs,
             }
             if request_includes_excluded_urls:
@@ -1517,9 +1621,9 @@ async def update_tab_pool_config(
         return {
             "success": True,
             "message": "标签页池分配模式已更新",
-            "allocation_mode": allocation_mode,
+            "allocation_mode": current_allocation_mode,
             "allocation_mode_options": TAB_POOL_ALLOCATION_OPTIONS,
-            "enabled_route_methods": enabled_route_methods,
+            "enabled_route_methods": current_enabled_route_methods,
             "route_method_options": TAB_ROUTE_METHOD_OPTIONS,
             "excluded_urls": current_excluded_urls,
             "preserve_error_tabs": current_preserve_error_tabs,
@@ -1538,7 +1642,8 @@ async def update_tab_pool_config(
 @router.get("/tab/{tab_index}/v1/models")
 async def list_models_with_tab(
     tab_index: int,
-    authenticated: bool = Depends(verify_service_auth)
+    authenticated: bool = Depends(verify_service_auth),
+    _route_method: None = Depends(_route_method_guard("fixed_tab")),
 ):
     """为指定标签页路由提供 OpenAI 兼容模型列表接口。"""
     if tab_index < 1:
@@ -1546,15 +1651,14 @@ async def list_models_with_tab(
 
     try:
         browser = get_browser(auto_connect=False)
-        task_id = f"models_tab_{tab_index}_{time.time_ns()}"
-        session = browser.tab_pool.acquire_by_index(
-            tab_index,
-            task_id=task_id,
-            timeout=0.1,
-        )
-        if session is None:
-            raise HTTPException(status_code=404, detail=f"标签页 #{tab_index} 不可用或不存在")
-        browser.tab_pool.release(session.id, expected_task_id=task_id)
+        # 这里只需要判断"这个编号的标签页存在吗"，不要用 acquire 探测：
+        # 1) acquire 对 BUSY 标签页返回 None，会把"正在处理长请求"误判成"不存在"，
+        #    而客户端（Claude Code / Cherry Studio 等）每次会话前都会拉模型列表，
+        #    一个 3 分钟的流式请求会让这条路由在客户端眼里整段不可用；
+        # 2) acquire/release 会推高 request_count 并触发 command_engine 的释放触发器，
+        #    让"每 N 次请求新建对话"这类规则被纯轮询打满。
+        if _get_tab_info_by_index(browser, tab_index) is None:
+            raise HTTPException(status_code=404, detail=f"标签页 #{tab_index} 不存在")
     except HTTPException:
         raise
     except Exception as e:
@@ -1581,11 +1685,14 @@ async def list_models_with_route_domain(
     tab_index: Optional[int] = Query(default=None, ge=1),
     selector: Optional[str] = Query(default=None),
     anthropic_version: Optional[str] = Header(None, alias="anthropic-version"),
-    authenticated: bool = Depends(verify_service_auth)
+    authenticated: bool = Depends(verify_service_auth),
+    _route_method: None = Depends(_route_method_guard("domain")),
 ):
     """为域名路由提供 OpenAI 兼容模型列表接口。"""
     route_key = str(route_domain or "").strip()
-    if not route_key:
+    # 归一化后为空也要拒绝（例如 "..." / "."）：否则 target_route 一路是空串，
+    # _list_candidate_tabs 退化成"任意标签页"，tab_index 的归属校验也会失效。
+    if not route_key or not normalize_route_domain(route_key):
         raise HTTPException(status_code=400, detail="域名路由不能为空")
 
     browser = get_browser(auto_connect=False)
@@ -1651,11 +1758,14 @@ async def list_models_with_route_domain_and_preset(
     tab_index: Optional[int] = Query(default=None, ge=1),
     selector: Optional[str] = Query(default=None),
     anthropic_version: Optional[str] = Header(None, alias="anthropic-version"),
-    authenticated: bool = Depends(verify_service_auth)
+    authenticated: bool = Depends(verify_service_auth),
+    _route_method: None = Depends(_route_method_guard("domain")),
 ):
     """为域名+预设路径风格提供 OpenAI 兼容模型列表接口。"""
     route_key = str(route_domain or "").strip()
-    if not route_key:
+    # 归一化后为空也要拒绝（例如 "..." / "."）：否则 target_route 一路是空串，
+    # _list_candidate_tabs 退化成"任意标签页"，tab_index 的归属校验也会失效。
+    if not route_key or not normalize_route_domain(route_key):
         raise HTTPException(status_code=400, detail="域名路由不能为空")
     preset_resolution = _resolve_strict_domain_preset(route_key, preset_name)
 
@@ -1710,7 +1820,8 @@ async def list_models_with_route_domain_and_preset(
 @router.get("/tab-url/{url_token}/v1/models")
 async def list_models_with_exact_tab_url(
     url_token: str,
-    authenticated: bool = Depends(verify_service_auth)
+    authenticated: bool = Depends(verify_service_auth),
+    _route_method: None = Depends(_route_method_guard("exact_url")),
 ):
     """为精确 URL 路由提供 OpenAI 兼容模型列表接口。"""
     route_token = str(url_token or "").strip().lower()
@@ -1750,7 +1861,8 @@ async def list_models_with_exact_tab_url(
 async def list_models_with_exact_tab_url_and_preset(
     url_token: str,
     preset_name: str,
-    authenticated: bool = Depends(verify_service_auth)
+    authenticated: bool = Depends(verify_service_auth),
+    _route_method: None = Depends(_route_method_guard("exact_url_preset")),
 ):
     """为 URL 绑定预设路由提供 OpenAI 兼容模型列表接口。"""
     route_token = str(url_token or "").strip().lower()
@@ -1792,6 +1904,7 @@ async def list_models_with_exact_tab_url_and_preset(
 async def list_models_with_route_group(
     group_id: str,
     authenticated: bool = Depends(verify_service_auth),
+    _route_method: None = Depends(_route_method_guard("route_group")),
 ):
     browser = get_browser(auto_connect=False)
     group = _resolve_route_group(browser, group_id)
@@ -1819,6 +1932,7 @@ async def list_models_with_route_group_and_preset(
     group_id: str,
     preset_name: str,
     authenticated: bool = Depends(verify_service_auth),
+    _route_method: None = Depends(_route_method_guard("route_group")),
 ):
     browser = get_browser(auto_connect=False)
     group = _resolve_route_group(browser, group_id)
@@ -2020,7 +2134,8 @@ async def chat_with_tab(
     request: Request,
     body: ChatRequest,
     preset_name: Optional[str] = Query(default=None),
-    authenticated: bool = Depends(verify_service_auth)
+    authenticated: bool = Depends(verify_service_auth),
+    _route_method: None = Depends(_route_method_guard("fixed_tab")),
 ):
     """
     使用指定编号的标签页进行聊天
@@ -2085,7 +2200,8 @@ async def chat_with_route_domain(
     tab_index: Optional[int] = Query(default=None, ge=1),
     selector: Optional[str] = Query(default=None),
     preset_name: Optional[str] = Query(default=None),
-    authenticated: bool = Depends(verify_service_auth)
+    authenticated: bool = Depends(verify_service_auth),
+    _route_method: None = Depends(_route_method_guard("domain")),
 ):
     """使用指定域名路由匹配的标签页进行聊天。"""
     tab_index = _normalize_optional_tab_index_value(tab_index)
@@ -2093,7 +2209,9 @@ async def chat_with_route_domain(
     preset_name = _unwrap_fastapi_param_value(preset_name)
 
     route_key = str(route_domain or "").strip()
-    if not route_key:
+    # 归一化后为空也要拒绝（例如 "..." / "."）：否则 target_route 一路是空串，
+    # _list_candidate_tabs 退化成"任意标签页"，tab_index 的归属校验也会失效。
+    if not route_key or not normalize_route_domain(route_key):
         raise HTTPException(status_code=400, detail="域名路由不能为空")
 
     resolved_preset_name = str(preset_name or body.preset_name or "").strip() or None
@@ -2234,7 +2352,8 @@ async def chat_with_route_domain_and_preset(
     body: ChatRequest,
     tab_index: Optional[int] = Query(default=None, ge=1),
     selector: Optional[str] = Query(default=None),
-    authenticated: bool = Depends(verify_service_auth)
+    authenticated: bool = Depends(verify_service_auth),
+    _route_method: None = Depends(_route_method_guard("domain")),
 ):
     """使用域名+预设路径风格进行聊天。路径中的预设优先级最高。"""
     route_key = str(route_domain or "").strip()
@@ -2261,6 +2380,7 @@ async def chat_with_route_group(
     body: ChatRequest,
     preset_name: Optional[str] = Query(default=None),
     authenticated: bool = Depends(verify_service_auth),
+    _route_method: None = Depends(_route_method_guard("route_group")),
 ):
     browser = get_browser(auto_connect=False)
     group = _resolve_route_group(browser, group_id)
@@ -2269,12 +2389,20 @@ async def chat_with_route_group(
         preset_name or group.get("preset_name") or body.preset_name or ""
     ).strip() or None
     if resolved_preset_name:
-        if not route_domain:
-            raise HTTPException(status_code=400, detail="路由组未配置站点域名，不能绑定预设")
-        resolved_preset_name = _resolve_strict_domain_preset(
-            route_domain,
-            resolved_preset_name,
-        )["preset_name"]
+        if route_domain:
+            resolved_preset_name = _resolve_strict_domain_preset(
+                route_domain,
+                resolved_preset_name,
+            )["preset_name"]
+        else:
+            # 路由组的 route_domain 是可选字段（normalize_route_groups 允许留空，
+            # 组内成员选取也完全不依赖它），此前只要带预设就直接 400，
+            # 等于让"配了预设但没填域名"的组彻底不可用。没有域名时无法做站点级
+            # 校验，交给下游按实际命中的标签页所属站点解析（组成员本来也可能跨站）。
+            logger.debug(
+                f"路由组 '{group['id']}' 未配置站点域名，预设 "
+                f"'{resolved_preset_name}' 改由命中的标签页按其站点解析"
+            )
     if resolved_preset_name != body.preset_name:
         body = body.model_copy(update={"preset_name": resolved_preset_name})
 
@@ -2330,6 +2458,7 @@ async def chat_with_route_group_and_preset(
     request: Request,
     body: ChatRequest,
     authenticated: bool = Depends(verify_service_auth),
+    _route_method: None = Depends(_route_method_guard("route_group")),
 ):
     return await chat_with_route_group(
         group_id=group_id,
@@ -2346,7 +2475,8 @@ async def chat_with_exact_tab_url(
     request: Request,
     body: ChatRequest,
     preset_name: Optional[str] = Query(default=None),
-    authenticated: bool = Depends(verify_service_auth)
+    authenticated: bool = Depends(verify_service_auth),
+    _route_method: None = Depends(_route_method_guard("exact_url")),
 ):
     """使用标签页完整 URL 严格路由到唯一已打开标签页。"""
     route_token = str(url_token or "").strip().lower()
@@ -2409,7 +2539,8 @@ async def chat_with_exact_tab_url_and_preset(
     preset_name: str,
     request: Request,
     body: ChatRequest,
-    authenticated: bool = Depends(verify_service_auth)
+    authenticated: bool = Depends(verify_service_auth),
+    _route_method: None = Depends(_route_method_guard("exact_url_preset")),
 ):
     """使用 URL 绑定预设路由进行聊天。URL 和预设都必须严格命中。"""
     route_token = str(url_token or "").strip().lower()

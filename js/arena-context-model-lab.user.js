@@ -86,6 +86,7 @@
   let lastClientContextBackup = null;
   const patchedStores = [];
   let domPollTimer = null;
+  let modelPollTimer = null;
 
   function safeCall(fn, fallback) {
     try {
@@ -407,9 +408,15 @@
 
   function startModelChangePoll(source, referenceSeq) {
     if (!config.captureModelChanges) return;
+    // 与紧邻的 startDomPoll 采用同一策略：已有轮询在跑就直接跳过，不再新开。
+    // 原实现里 timer 只是局部变量、没有任何去重，连续投票会叠加出多个并发的
+    // 100ms 定时器，每个 tick 都要跑一次 storeSnapshot()（含 React fiber 遍历），
+    // CPU 随点击次数线性累加。这里保留先到的那一轮（它的基线更贴近首次点击时刻）。
+    if (modelPollTimer) return;
     let lastSignature = messageModelSignature(storeSnapshot());
     const deadline = Date.now() + MODEL_POLL_DURATION_MS;
-    const timer = setInterval(() => {
+    let timer = null;
+    timer = setInterval(() => {
       const store = storeSnapshot();
       const nextSignature = messageModelSignature(store);
       if (nextSignature !== lastSignature) {
@@ -420,8 +427,12 @@
           store: compactModelState(store),
         });
       }
-      if (Date.now() >= deadline) clearInterval(timer);
+      if (Date.now() >= deadline) {
+        clearInterval(timer);
+        if (modelPollTimer === timer) modelPollTimer = null;
+      }
     }, MODEL_POLL_INTERVAL_MS);
+    modelPollTimer = timer;
   }
 
   function domTextSignature() {

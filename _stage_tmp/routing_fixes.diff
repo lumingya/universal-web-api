@@ -1,0 +1,937 @@
+diff -ru '--exclude=__pycache__' '--exclude=.git' '--exclude=*.log*' '--exclude=*.json' /tmp/orig/.pytest_cache/v/cache/lastfailed /tmp/proj/.pytest_cache/v/cache/lastfailed
+--- /tmp/orig/.pytest_cache/v/cache/lastfailed	2026-07-26 16:57:08.481599281 +0000
++++ /tmp/proj/.pytest_cache/v/cache/lastfailed	2026-07-26 16:56:50.182888907 +0000
+@@ -1,4 +1,13 @@
+ {
++  "tests/test_arena_cf_redirect_command.py::test_cf_redirect_guard_runs_before_captcha_click": true,
++  "tests/test_arena_cf_redirect_command.py::test_cf_redirect_guard_rechecks_after_ten_seconds": true,
++  "tests/test_arena_cf_redirect_command.py::test_cf_page_check_can_run_during_an_active_workflow": true,
++  "tests/test_arena_cf_redirect_command.py::test_cf_page_check_uses_iframe_probe_instead_of_cross_origin_text": true,
++  "tests/test_arena_cf_redirect_command.py::test_cf_timeout_guard_recognizes_hcaptcha": true,
++  "tests/test_media_stream_image_precedence.py::test_all_gemini_presets_wait_on_explicit_video_generation_signal": true,
++  "tests/test_workflow_step_execution.py::test_missing_configured_selector_never_confirms_absence": true,
++  "tests/test_arena_direct_models.py::test_catalog_filters_by_readable_model_metadata": true,
++  "tests/test_arena_direct_models.py::test_arena_main_direct_workflow_selects_model_before_filling_prompt": true,
+   "tests/test_arena_auto_battle_command.py::test_arena_auto_battle_script_has_valid_python_syntax": true,
+   "tests/test_arena_auto_battle_command.py::test_auto_battle_embeds_the_cf_commands_probe_with_explicit_return": true,
+   "tests/test_arena_auto_battle_command.py::test_auto_battle_captcha_redirect_continues_later_rounds": true,
+@@ -36,11 +45,6 @@
+   "tests/test_arena_auto_battle_command.py::test_rate_limit_text_triggers_immediate_proxy_rotation[You have reached a rate limit. Please try again in a moment.]": true,
+   "tests/test_arena_auto_battle_command.py::test_interruption_returns_urls_collected_so_far[raise RuntimeError('python_script_cancelled')-cancelled]": true,
+   "tests/test_arena_auto_battle_command.py::test_interruption_returns_urls_collected_so_far[raise ValueError('connection lost')-failed]": true,
+-  "tests/test_arena_cf_redirect_command.py::test_cf_redirect_guard_runs_before_captcha_click": true,
+-  "tests/test_arena_cf_redirect_command.py::test_cf_redirect_guard_rechecks_after_ten_seconds": true,
+-  "tests/test_arena_cf_redirect_command.py::test_cf_page_check_can_run_during_an_active_workflow": true,
+-  "tests/test_arena_cf_redirect_command.py::test_cf_page_check_uses_iframe_probe_instead_of_cross_origin_text": true,
+-  "tests/test_arena_cf_redirect_command.py::test_cf_timeout_guard_recognizes_hcaptcha": true,
+   "tests/test_arena_command_persistence.py::ArenaCommandPersistenceTests::test_arena_clear_error_command_clicks_clear_then_aborts_workflow": true,
+   "tests/test_arena_command_persistence.py::ArenaCommandPersistenceTests::test_arena_clear_error_command_is_enabled_in_local_overrides": true,
+   "tests/test_arena_command_persistence.py::ArenaCommandPersistenceTests::test_arena_commands_persist_current_page_before_manual_stop": true,
+@@ -48,18 +52,5 @@
+   "tests/test_arena_command_persistence.py::ArenaCommandPersistenceTests::test_context_model_lab_is_disabled_by_default": true,
+   "tests/test_arena_command_persistence.py::ArenaCommandPersistenceTests::test_deepseek_refresh_does_not_observe_arena_pages": true,
+   "tests/test_arena_command_persistence.py::ArenaCommandPersistenceTests::test_main_command_persists_each_completed_round": true,
+-  "tests/test_arena_direct_models.py::test_catalog_filters_by_readable_model_metadata": true,
+-  "tests/test_arena_direct_models.py::test_arena_main_direct_workflow_selects_model_before_filling_prompt": true,
+-  "tests/test_core_review_regressions.py::test_cancelled_async_acquire_releases_late_session": true,
+-  "tests/test_media_stream_image_precedence.py::test_all_gemini_presets_wait_on_explicit_video_generation_signal": true,
+-  "tests/test_prompt_padding.py::test_direct_preinjected_image_preset_reuses_the_current_conversation": true,
+-  "tests/test_tab_pool_dynamic_exclusions.py::test_tab_pool_query_scans_current_cdp_target_urls_without_live_tab_url_reads": true,
+-  "tests/test_tab_pool_dynamic_exclusions.py::test_tab_pool_query_removes_tab_when_current_cdp_url_becomes_invalid": true,
+-  "tests/test_tab_pool_lifecycle_regressions.py::test_ownerless_late_release_cannot_release_a_new_task": true,
+-  "tests/test_tab_pool_lifecycle_regressions.py::test_exact_url_waiter_rechecks_live_url_after_wakeup": true,
+-  "tests/test_tab_pool_lifecycle_regressions.py::test_route_domain_waiter_rechecks_live_domain_after_wakeup": true,
+-  "tests/test_tab_route_groups.py::test_route_group_waiter_acquires_member_after_release": true,
+-  "tests/test_tab_route_groups.py::test_route_group_waiters_are_served_in_fifo_order": true,
+-  "tests/test_tab_route_groups.py::test_terminate_quarantines_only_target_member_until_owner_releases": true,
+-  "tests/test_workflow_step_execution.py::test_missing_configured_selector_never_confirms_absence": true
++  "tests/test_prompt_padding.py::test_direct_preinjected_image_preset_reuses_the_current_conversation": true
+ }
+\ No newline at end of file
+diff -ru '--exclude=__pycache__' '--exclude=.git' '--exclude=*.log*' '--exclude=*.json' /tmp/orig/.pytest_cache/v/cache/nodeids /tmp/proj/.pytest_cache/v/cache/nodeids
+--- /tmp/orig/.pytest_cache/v/cache/nodeids	2026-07-26 17:08:55.330348223 +0000
++++ /tmp/proj/.pytest_cache/v/cache/nodeids	2026-07-26 16:57:58.923902621 +0000
+@@ -307,6 +307,22 @@
+   "tests/test_tab_route_groups.py::test_route_group_waiters_are_served_in_fifo_order",
+   "tests/test_tab_route_groups.py::test_terminate_quarantines_only_target_member_until_owner_releases",
+   "tests/test_tab_route_groups.py::test_terminate_rejects_stale_task_ownership_without_touching_new_owner",
++  "tests/test_tab_route_regressions.py::test_acquire_timeout_normalization_is_uniform[-3-0.0]",
++  "tests/test_tab_route_regressions.py::test_acquire_timeout_normalization_is_uniform[0-0.0]",
++  "tests/test_tab_route_regressions.py::test_acquire_timeout_normalization_is_uniform[0.5-0.5]",
++  "tests/test_tab_route_regressions.py::test_acquire_timeout_normalization_is_uniform[None-60.0]",
++  "tests/test_tab_route_regressions.py::test_acquire_timeout_normalization_is_uniform[bad-60.0]",
++  "tests/test_tab_route_regressions.py::test_disabled_route_method_is_rejected",
++  "tests/test_tab_route_regressions.py::test_empty_after_normalization_route_domain_is_rejected",
++  "tests/test_tab_route_regressions.py::test_exact_url_route_prefers_idle_tab",
++  "tests/test_tab_route_regressions.py::test_exact_url_waiters_share_one_queue_across_equivalent_urls",
++  "tests/test_tab_route_regressions.py::test_partial_tab_pool_config_update_keeps_allocation_mode",
++  "tests/test_tab_route_regressions.py::test_response_header_value_quotes_latin1_non_ascii",
++  "tests/test_tab_route_regressions.py::test_route_group_snapshot_does_not_pin_members",
++  "tests/test_tab_route_regressions.py::test_route_group_waiter_gives_up_when_the_group_is_deleted_mid_wait",
++  "tests/test_tab_route_regressions.py::test_route_method_check_fails_open_when_config_is_unreadable",
++  "tests/test_tab_route_regressions.py::test_route_snapshot_refresh_skips_busy_tabs",
++  "tests/test_tab_route_regressions.py::test_unregister_waiter_keeps_a_queue_created_by_another_thread",
+   "tests/test_tool_calling_regressions.py::test_anthropic_tool_name_lookup_is_scoped_to_one_request",
+   "tests/test_tool_calling_regressions.py::test_bare_content_json_remains_a_normal_json_answer",
+   "tests/test_tool_calling_regressions.py::test_embedded_content_object_is_not_misclassified_as_adapter_payload",
+diff -ru '--exclude=__pycache__' '--exclude=.git' '--exclude=*.log*' '--exclude=*.json' /tmp/orig/app/api/anthropic_routes.py /tmp/proj/app/api/anthropic_routes.py
+--- /tmp/orig/app/api/anthropic_routes.py	2026-07-26 12:02:03.000000000 +0000
++++ /tmp/proj/app/api/anthropic_routes.py	2026-07-26 17:12:24.857083421 +0000
+@@ -1666,6 +1666,21 @@
+     return _wrap_openai_response_as_anthropic(response, body, request_id)
+ 
+ 
++def _anthropic_route_method_guard(method: str):
++    """与 OpenAI 侧同一个"路由方式开关"，作用在 /url/... 的 Anthropic 端点上。
++
++    做成依赖而不是函数体内校验：这些端点会在 Python 层直接调用
++    tab_routes.chat_with_route_domain，函数体内校验会连带拦下普通
++    /v1/messages 的内部委派。
++    """
++    async def _guard() -> None:
++        from app.api import tab_routes as tab_routes_api
++
++        tab_routes_api._ensure_route_method_enabled(method)
++
++    return _guard
++
++
+ @router.post("/url/{route_domain}/v1/v1/messages")
+ @router.post("/url/{route_domain}/v1/messages")
+ async def create_message_with_route_domain(
+@@ -1675,6 +1690,7 @@
+     tab_index: Optional[int] = Query(default=None, ge=1),
+     selector: Optional[str] = Query(default=None),
+     authenticated: bool = Depends(verify_anthropic_auth),
++    _route_method: None = Depends(_anthropic_route_method_guard("domain")),
+ ):
+     from app.api import tab_routes as tab_routes_api
+ 
+@@ -1707,6 +1723,7 @@
+     tab_index: Optional[int] = Query(default=None, ge=1),
+     selector: Optional[str] = Query(default=None),
+     authenticated: bool = Depends(verify_anthropic_auth),
++    _route_method: None = Depends(_anthropic_route_method_guard("domain")),
+ ):
+     from app.api import tab_routes as tab_routes_api
+ 
+@@ -1715,13 +1732,21 @@
+     chat_body = tab_routes_api.ChatRequest(**openai_payload)
+     # 修复2: 捕获内部工作流的 HTTPException，转换为 Anthropic 错误格式
+     try:
++        # 与 OpenAI 侧 /url/{d}/{preset}/v1/chat/completions 对齐，走同一套严格校验：
++        # chat_with_route_domain 对 preset_name 只做 strip，不校验存在性也不解析别名。
++        # 少了这一步，ANTHROPIC_BASE_URL 里的预设名打错会静默退回站点默认预设，
++        # 用户完全无感，而同一个 URL 走 OpenAI 端点则明确 404。
++        forced_preset_name = tab_routes_api._resolve_strict_domain_preset(
++            route_domain,
++            preset_name,
++        )["preset_name"]
+         response = await tab_routes_api.chat_with_route_domain(
+             route_domain=route_domain,
+             request=request,
+             body=chat_body,
+             tab_index=tab_index,
+             selector=selector,
+-            preset_name=preset_name,
++            preset_name=forced_preset_name,
+             authenticated=authenticated,
+         )
+     except HTTPException as exc:
+diff -ru '--exclude=__pycache__' '--exclude=.git' '--exclude=*.log*' '--exclude=*.json' /tmp/orig/app/api/tab_routes.py /tmp/proj/app/api/tab_routes.py
+--- /tmp/orig/app/api/tab_routes.py	2026-07-26 15:48:57.000000000 +0000
++++ /tmp/proj/app/api/tab_routes.py	2026-07-26 17:14:40.253410976 +0000
+@@ -177,12 +177,10 @@
+ 
+ def _encode_response_header_value(value: Any) -> str:
+     text = "" if value is None else str(value)
+-    try:
+-        text.encode("latin-1")
+-        needs_quote = any(ord(ch) < 32 or ord(ch) == 127 for ch in text)
+-    except UnicodeEncodeError:
+-        needs_quote = True
+-
++    # 判据用 ASCII 而不是 latin-1：latin-1 可编码 U+0080–U+00FF（如预设名 "Café"），
++    # 于是这些字符会以裸字节进响应头，按 UTF-8 解析响应头的客户端
++    # （Node/undici、Go 等）会拿到乱码甚至解码失败。非 ASCII 一律百分号编码。
++    needs_quote = (not text.isascii()) or any(ord(ch) < 32 or ord(ch) == 127 for ch in text)
+     if not needs_quote:
+         return text
+     return quote(text, safe=HEADER_VALUE_QUOTE_SAFE)
+@@ -200,6 +198,13 @@
+     return mode if mode in valid_modes else "first_idle"
+ 
+ 
++def _get_config_allocation_mode(tab_pool_config: Any) -> str:
++    source = tab_pool_config if isinstance(tab_pool_config, dict) else {}
++    mode = str(source.get("allocation_mode") or "").strip().lower() or "first_idle"
++    valid_modes = {"first_idle", "round_robin", "random"}
++    return mode if mode in valid_modes else "first_idle"
++
++
+ def _attach_preset_info_to_tabs(tabs: List[Dict[str, Any]], config_engine: Any) -> None:
+     preset_cache: Dict[str, tuple[List[str], Optional[str]]] = {}
+     for tab_info in tabs:
+@@ -749,6 +754,53 @@
+     return _get_route_groups_from_config(config)
+ 
+ 
++def _get_enabled_route_methods(config: Optional[Dict[str, Any]] = None) -> List[str]:
++    payload = config if isinstance(config, dict) else _read_browser_config()
++    tab_pool_config = payload.get("tab_pool") if isinstance(payload, dict) else {}
++    if not isinstance(tab_pool_config, dict):
++        tab_pool_config = {}
++    return _normalize_enabled_route_methods(tab_pool_config.get("enabled_route_methods"))
++
++
++def _route_method_guard(method: str):
++    """把路由方式开关做成 FastAPI 依赖，而不是在处理函数体里内联校验。
++
++    /url/{d}/{preset}/... 会在 Python 层直接调用 chat_with_route_domain，
++    app/api/chat.py 的 arena catalog 分支、anthropic_routes 也一样。若把校验写在
++    函数体里，这些内部委派会一并被拦下——关掉"站点域名路由"会连普通的
++    /v1/chat/completions 都 403。依赖只在 HTTP 进入该条路由时执行，内部调用不触发，
++    拦截面正好落在用户在面板上看到的那几条前缀上。
++    """
++    async def _guard() -> None:
++        _ensure_route_method_enabled(method)
++
++    return _guard
++
++
++def _ensure_route_method_enabled(method: str) -> None:
++    """拦截被关闭的寻址方式。
++
++    enabled_route_methods 此前只被读写和回显，没有任何路由分支消费它：
++    面板上取消勾选"固定标签页路由"后，/tab/1/v1/chat/completions 照样 200，
++    对外暴露服务时会给出"已关掉"的错觉。读配置失败时保持放行（fail-open），
++    不因为配置文件问题把正常路由全部打死。
++    """
++    normalized = str(method or "").strip().lower()
++    if not normalized:
++        return
++    try:
++        enabled = _get_enabled_route_methods()
++    except Exception as e:
++        logger.debug(f"读取已启用路由方式失败（放行）: {e}")
++        return
++    if normalized not in enabled:
++        label = next(
++            (item["label"] for item in TAB_ROUTE_METHOD_OPTIONS if item["value"] == normalized),
++            normalized,
++        )
++        raise HTTPException(status_code=403, detail=f"路由方式已在标签页池设置中关闭: {label}")
++
++
+ def _get_tab_pool_excluded_urls(tab_pool: Any, config: Optional[Dict[str, Any]] = None) -> List[str]:
+     try:
+         excluded_urls = getattr(tab_pool, "excluded_urls", None)
+@@ -864,10 +916,12 @@
+ def _list_candidate_tabs(browser, route_domain: str = "") -> List[Dict[str, Any]]:
+     tabs = browser.tab_pool.get_tabs_with_index()
+     target = normalize_route_domain(route_domain)
++    excluded_urls = _get_tab_pool_excluded_urls(browser.tab_pool)
+     if not target:
+-        return tabs
++        # 无域名约束时同样要过滤"已从动态路由排除"的标签页，
++        # 否则这条分支会成为绕过 excluded_urls 的后门。
++        return [item for item in tabs if not _tab_item_is_excluded(item, excluded_urls)]
+ 
+-    excluded_urls = _get_tab_pool_excluded_urls(browser.tab_pool)
+     result: List[Dict[str, Any]] = []
+     for item in tabs:
+         actual_domain = str(item.get("current_domain") or item.get("route_domain") or "").strip()
+@@ -962,17 +1016,29 @@
+                 )
+         return tab_info
+ 
++    # exact_url / url_token 两条分支的解析结果会作为 resolved_tab_index 硬绑定传给
++    # execute_workflow_for_exact_url（下游只认这一个编号），所以必须和 model / domain
++    # 分支一样优先选空闲标签页；否则同 URL 开了多个标签页时，轮询游标可能挑中正忙的
++    # 那个，请求白等 60 秒超时，而旁边空闲的标签页全程没人用。
+     if target_exact_url:
+         matches = _get_tabs_by_exact_url(browser, target_exact_url)
+         if not matches:
+             raise HTTPException(status_code=404, detail="URL 路由没有匹配的已打开标签页")
+-        return _select_round_robin_tab(matches, f"exact_url::{target_exact_url}")
++        idle_matches = [
++            item for item in matches
++            if str(item.get("status") or "").strip().lower() == "idle"
++        ]
++        return _select_round_robin_tab(idle_matches or matches, f"exact_url::{target_exact_url}")
+ 
+     if target_url_token:
+         matches = _get_tabs_by_url_route_token(browser, target_url_token)
+         if not matches:
+             raise HTTPException(status_code=404, detail="URL 路由没有匹配的已打开标签页")
+-        return _select_round_robin_tab(matches, f"url_token::{target_url_token}")
++        idle_matches = [
++            item for item in matches
++            if str(item.get("status") or "").strip().lower() == "idle"
++        ]
++        return _select_round_robin_tab(idle_matches or matches, f"url_token::{target_url_token}")
+ 
+     if target_model_name:
+         matches = _get_tabs_by_exposed_model_name(browser, target_model_name)
+@@ -1116,16 +1182,41 @@
+     if not requested:
+         raise HTTPException(status_code=400, detail="预设名称不能为空")
+ 
+-    domain = _get_tab_config_domain(tab_info)
+-    if not domain:
++    raw_domain = _get_tab_config_domain(tab_info)
++    if not raw_domain:
+         raise HTTPException(status_code=400, detail="URL 路由已匹配标签页，但无法解析站点域名")
+ 
++    # 标签页记的是页面真实主机名（可能是 www. 前缀或 site_rules 里的别名），
++    # 而预设是按配置里的站点域名存的。这里和 _resolve_strict_domain_preset、
++    # /api/tab-pool/tabs 的预设回显保持一致，补上 canonical 域名候选，
++    # 否则面板上显示"有这个预设"、走 /tab/{i}?preset_name=... 却 404。
++    candidate_domains = [
++        item for item in (
++            normalize_route_domain(raw_domain) or raw_domain,
++            get_canonical_route_domain(raw_domain) or "",
++        ) if item
++    ]
++    candidate_domains = list(dict.fromkeys(candidate_domains)) or [raw_domain]
++
+     try:
+         from app.services.config_engine import config_engine
+ 
+-        preset_names = config_engine.list_presets(domain)
+-        preset_map = {str(name): True for name in preset_names}
+-        resolved = config_engine._resolve_preset_alias_key(requested, preset_map)
++        domain = candidate_domains[0]
++        preset_map: Dict[str, bool] = {}
++        resolved = requested
++        for candidate_domain in candidate_domains:
++            candidate_presets = config_engine.list_presets(candidate_domain)
++            candidate_preset_map = {str(name): True for name in candidate_presets}
++            candidate_resolved = config_engine._resolve_preset_alias_key(requested, candidate_preset_map)
++            if candidate_preset_map and candidate_resolved in candidate_preset_map:
++                domain = candidate_domain
++                preset_map = candidate_preset_map
++                resolved = candidate_resolved
++                break
++            if not preset_map:
++                domain = candidate_domain
++                preset_map = candidate_preset_map
++                resolved = candidate_resolved
+     except HTTPException:
+         raise
+     except Exception as e:
+@@ -1281,7 +1372,12 @@
+ 
+ class TabPoolConfigRequest(BaseModel):
+     """标签页池配置更新请求。"""
+-    allocation_mode: str = Field(default="first_idle")
++    # allocation_mode / enabled_route_methods 用 None 表示"本次请求没带这个字段"，
++    # 与 excluded_urls / preserve_error_tabs / route_groups 的部分更新语义保持一致。
++    # 此前 allocation_mode 有默认值 "first_idle"、enabled_route_methods 为 None 时
++    # 被归一成"全部启用"，于是任何只带部分字段的 PUT（例如只保存路由组）都会把
++    # 用户设好的分配模式和路由方式开关静默重置掉。
++    allocation_mode: Optional[str] = Field(default=None)
+     enabled_route_methods: Optional[List[str]] = Field(default=None)
+     excluded_urls: Optional[List[str]] = Field(default=None)
+     preserve_error_tabs: Optional[bool] = Field(default=None)
+@@ -1460,9 +1556,11 @@
+     authenticated: bool = Depends(verify_auth)
+ ):
+     """更新标签页池运行模式并持久化到 browser_config.json。"""
++    request_includes_allocation_mode = body.allocation_mode is not None
+     allocation_mode = str(body.allocation_mode or "").strip().lower()
+-    if allocation_mode not in {"first_idle", "round_robin", "random"}:
++    if request_includes_allocation_mode and allocation_mode not in {"first_idle", "round_robin", "random"}:
+         raise HTTPException(status_code=400, detail="invalid_allocation_mode")
++    request_includes_enabled_route_methods = body.enabled_route_methods is not None
+     enabled_route_methods = _normalize_enabled_route_methods(body.enabled_route_methods)
+     request_includes_excluded_urls = body.excluded_urls is not None
+     excluded_urls = _normalize_excluded_urls(body.excluded_urls)
+@@ -1477,8 +1575,10 @@
+             tab_pool_config = config.get("tab_pool") or {}
+             if not isinstance(tab_pool_config, dict):
+                 tab_pool_config = {}
+-            tab_pool_config["allocation_mode"] = allocation_mode
+-            tab_pool_config["enabled_route_methods"] = enabled_route_methods
++            if request_includes_allocation_mode:
++                tab_pool_config["allocation_mode"] = allocation_mode
++            if request_includes_enabled_route_methods:
++                tab_pool_config["enabled_route_methods"] = enabled_route_methods
+             if request_includes_excluded_urls:
+                 tab_pool_config["excluded_urls"] = excluded_urls
+             if request_includes_preserve_error_tabs:
+@@ -1488,6 +1588,10 @@
+             current_excluded_urls = _normalize_excluded_urls(tab_pool_config.get("excluded_urls"))
+             current_preserve_error_tabs = _coerce_bool(tab_pool_config.get("preserve_error_tabs"), False)
+             current_route_groups = normalize_route_groups(tab_pool_config.get("route_groups"))
++            current_allocation_mode = _get_config_allocation_mode(tab_pool_config)
++            current_enabled_route_methods = _normalize_enabled_route_methods(
++                tab_pool_config.get("enabled_route_methods")
++            )
+             config["tab_pool"] = tab_pool_config
+             _write_browser_config_unlocked(config)
+ 
+@@ -1502,7 +1606,7 @@
+         try:
+             browser = get_browser(auto_connect=False)
+             runtime_kwargs: Dict[str, Any] = {
+-                "allocation_mode": allocation_mode,
++                "allocation_mode": current_allocation_mode,
+                 "preserve_error_tabs": current_preserve_error_tabs,
+             }
+             if request_includes_excluded_urls:
+@@ -1517,9 +1621,9 @@
+         return {
+             "success": True,
+             "message": "标签页池分配模式已更新",
+-            "allocation_mode": allocation_mode,
++            "allocation_mode": current_allocation_mode,
+             "allocation_mode_options": TAB_POOL_ALLOCATION_OPTIONS,
+-            "enabled_route_methods": enabled_route_methods,
++            "enabled_route_methods": current_enabled_route_methods,
+             "route_method_options": TAB_ROUTE_METHOD_OPTIONS,
+             "excluded_urls": current_excluded_urls,
+             "preserve_error_tabs": current_preserve_error_tabs,
+@@ -1538,7 +1642,8 @@
+ @router.get("/tab/{tab_index}/v1/models")
+ async def list_models_with_tab(
+     tab_index: int,
+-    authenticated: bool = Depends(verify_service_auth)
++    authenticated: bool = Depends(verify_service_auth),
++    _route_method: None = Depends(_route_method_guard("fixed_tab")),
+ ):
+     """为指定标签页路由提供 OpenAI 兼容模型列表接口。"""
+     if tab_index < 1:
+@@ -1546,15 +1651,14 @@
+ 
+     try:
+         browser = get_browser(auto_connect=False)
+-        task_id = f"models_tab_{tab_index}_{time.time_ns()}"
+-        session = browser.tab_pool.acquire_by_index(
+-            tab_index,
+-            task_id=task_id,
+-            timeout=0.1,
+-        )
+-        if session is None:
+-            raise HTTPException(status_code=404, detail=f"标签页 #{tab_index} 不可用或不存在")
+-        browser.tab_pool.release(session.id, expected_task_id=task_id)
++        # 这里只需要判断"这个编号的标签页存在吗"，不要用 acquire 探测：
++        # 1) acquire 对 BUSY 标签页返回 None，会把"正在处理长请求"误判成"不存在"，
++        #    而客户端（Claude Code / Cherry Studio 等）每次会话前都会拉模型列表，
++        #    一个 3 分钟的流式请求会让这条路由在客户端眼里整段不可用；
++        # 2) acquire/release 会推高 request_count 并触发 command_engine 的释放触发器，
++        #    让"每 N 次请求新建对话"这类规则被纯轮询打满。
++        if _get_tab_info_by_index(browser, tab_index) is None:
++            raise HTTPException(status_code=404, detail=f"标签页 #{tab_index} 不存在")
+     except HTTPException:
+         raise
+     except Exception as e:
+@@ -1581,11 +1685,14 @@
+     tab_index: Optional[int] = Query(default=None, ge=1),
+     selector: Optional[str] = Query(default=None),
+     anthropic_version: Optional[str] = Header(None, alias="anthropic-version"),
+-    authenticated: bool = Depends(verify_service_auth)
++    authenticated: bool = Depends(verify_service_auth),
++    _route_method: None = Depends(_route_method_guard("domain")),
+ ):
+     """为域名路由提供 OpenAI 兼容模型列表接口。"""
+     route_key = str(route_domain or "").strip()
+-    if not route_key:
++    # 归一化后为空也要拒绝（例如 "..." / "."）：否则 target_route 一路是空串，
++    # _list_candidate_tabs 退化成"任意标签页"，tab_index 的归属校验也会失效。
++    if not route_key or not normalize_route_domain(route_key):
+         raise HTTPException(status_code=400, detail="域名路由不能为空")
+ 
+     browser = get_browser(auto_connect=False)
+@@ -1651,11 +1758,14 @@
+     tab_index: Optional[int] = Query(default=None, ge=1),
+     selector: Optional[str] = Query(default=None),
+     anthropic_version: Optional[str] = Header(None, alias="anthropic-version"),
+-    authenticated: bool = Depends(verify_service_auth)
++    authenticated: bool = Depends(verify_service_auth),
++    _route_method: None = Depends(_route_method_guard("domain")),
+ ):
+     """为域名+预设路径风格提供 OpenAI 兼容模型列表接口。"""
+     route_key = str(route_domain or "").strip()
+-    if not route_key:
++    # 归一化后为空也要拒绝（例如 "..." / "."）：否则 target_route 一路是空串，
++    # _list_candidate_tabs 退化成"任意标签页"，tab_index 的归属校验也会失效。
++    if not route_key or not normalize_route_domain(route_key):
+         raise HTTPException(status_code=400, detail="域名路由不能为空")
+     preset_resolution = _resolve_strict_domain_preset(route_key, preset_name)
+ 
+@@ -1710,7 +1820,8 @@
+ @router.get("/tab-url/{url_token}/v1/models")
+ async def list_models_with_exact_tab_url(
+     url_token: str,
+-    authenticated: bool = Depends(verify_service_auth)
++    authenticated: bool = Depends(verify_service_auth),
++    _route_method: None = Depends(_route_method_guard("exact_url")),
+ ):
+     """为精确 URL 路由提供 OpenAI 兼容模型列表接口。"""
+     route_token = str(url_token or "").strip().lower()
+@@ -1750,7 +1861,8 @@
+ async def list_models_with_exact_tab_url_and_preset(
+     url_token: str,
+     preset_name: str,
+-    authenticated: bool = Depends(verify_service_auth)
++    authenticated: bool = Depends(verify_service_auth),
++    _route_method: None = Depends(_route_method_guard("exact_url_preset")),
+ ):
+     """为 URL 绑定预设路由提供 OpenAI 兼容模型列表接口。"""
+     route_token = str(url_token or "").strip().lower()
+@@ -1792,6 +1904,7 @@
+ async def list_models_with_route_group(
+     group_id: str,
+     authenticated: bool = Depends(verify_service_auth),
++    _route_method: None = Depends(_route_method_guard("route_group")),
+ ):
+     browser = get_browser(auto_connect=False)
+     group = _resolve_route_group(browser, group_id)
+@@ -1819,6 +1932,7 @@
+     group_id: str,
+     preset_name: str,
+     authenticated: bool = Depends(verify_service_auth),
++    _route_method: None = Depends(_route_method_guard("route_group")),
+ ):
+     browser = get_browser(auto_connect=False)
+     group = _resolve_route_group(browser, group_id)
+@@ -2020,7 +2134,8 @@
+     request: Request,
+     body: ChatRequest,
+     preset_name: Optional[str] = Query(default=None),
+-    authenticated: bool = Depends(verify_service_auth)
++    authenticated: bool = Depends(verify_service_auth),
++    _route_method: None = Depends(_route_method_guard("fixed_tab")),
+ ):
+     """
+     使用指定编号的标签页进行聊天
+@@ -2085,7 +2200,8 @@
+     tab_index: Optional[int] = Query(default=None, ge=1),
+     selector: Optional[str] = Query(default=None),
+     preset_name: Optional[str] = Query(default=None),
+-    authenticated: bool = Depends(verify_service_auth)
++    authenticated: bool = Depends(verify_service_auth),
++    _route_method: None = Depends(_route_method_guard("domain")),
+ ):
+     """使用指定域名路由匹配的标签页进行聊天。"""
+     tab_index = _normalize_optional_tab_index_value(tab_index)
+@@ -2093,7 +2209,9 @@
+     preset_name = _unwrap_fastapi_param_value(preset_name)
+ 
+     route_key = str(route_domain or "").strip()
+-    if not route_key:
++    # 归一化后为空也要拒绝（例如 "..." / "."）：否则 target_route 一路是空串，
++    # _list_candidate_tabs 退化成"任意标签页"，tab_index 的归属校验也会失效。
++    if not route_key or not normalize_route_domain(route_key):
+         raise HTTPException(status_code=400, detail="域名路由不能为空")
+ 
+     resolved_preset_name = str(preset_name or body.preset_name or "").strip() or None
+@@ -2234,7 +2352,8 @@
+     body: ChatRequest,
+     tab_index: Optional[int] = Query(default=None, ge=1),
+     selector: Optional[str] = Query(default=None),
+-    authenticated: bool = Depends(verify_service_auth)
++    authenticated: bool = Depends(verify_service_auth),
++    _route_method: None = Depends(_route_method_guard("domain")),
+ ):
+     """使用域名+预设路径风格进行聊天。路径中的预设优先级最高。"""
+     route_key = str(route_domain or "").strip()
+@@ -2261,6 +2380,7 @@
+     body: ChatRequest,
+     preset_name: Optional[str] = Query(default=None),
+     authenticated: bool = Depends(verify_service_auth),
++    _route_method: None = Depends(_route_method_guard("route_group")),
+ ):
+     browser = get_browser(auto_connect=False)
+     group = _resolve_route_group(browser, group_id)
+@@ -2269,12 +2389,20 @@
+         preset_name or group.get("preset_name") or body.preset_name or ""
+     ).strip() or None
+     if resolved_preset_name:
+-        if not route_domain:
+-            raise HTTPException(status_code=400, detail="路由组未配置站点域名，不能绑定预设")
+-        resolved_preset_name = _resolve_strict_domain_preset(
+-            route_domain,
+-            resolved_preset_name,
+-        )["preset_name"]
++        if route_domain:
++            resolved_preset_name = _resolve_strict_domain_preset(
++                route_domain,
++                resolved_preset_name,
++            )["preset_name"]
++        else:
++            # 路由组的 route_domain 是可选字段（normalize_route_groups 允许留空，
++            # 组内成员选取也完全不依赖它），此前只要带预设就直接 400，
++            # 等于让"配了预设但没填域名"的组彻底不可用。没有域名时无法做站点级
++            # 校验，交给下游按实际命中的标签页所属站点解析（组成员本来也可能跨站）。
++            logger.debug(
++                f"路由组 '{group['id']}' 未配置站点域名，预设 "
++                f"'{resolved_preset_name}' 改由命中的标签页按其站点解析"
++            )
+     if resolved_preset_name != body.preset_name:
+         body = body.model_copy(update={"preset_name": resolved_preset_name})
+ 
+@@ -2330,6 +2458,7 @@
+     request: Request,
+     body: ChatRequest,
+     authenticated: bool = Depends(verify_service_auth),
++    _route_method: None = Depends(_route_method_guard("route_group")),
+ ):
+     return await chat_with_route_group(
+         group_id=group_id,
+@@ -2346,7 +2475,8 @@
+     request: Request,
+     body: ChatRequest,
+     preset_name: Optional[str] = Query(default=None),
+-    authenticated: bool = Depends(verify_service_auth)
++    authenticated: bool = Depends(verify_service_auth),
++    _route_method: None = Depends(_route_method_guard("exact_url")),
+ ):
+     """使用标签页完整 URL 严格路由到唯一已打开标签页。"""
+     route_token = str(url_token or "").strip().lower()
+@@ -2409,7 +2539,8 @@
+     preset_name: str,
+     request: Request,
+     body: ChatRequest,
+-    authenticated: bool = Depends(verify_service_auth)
++    authenticated: bool = Depends(verify_service_auth),
++    _route_method: None = Depends(_route_method_guard("exact_url_preset")),
+ ):
+     """使用 URL 绑定预设路由进行聊天。URL 和预设都必须严格命中。"""
+     route_token = str(url_token or "").strip().lower()
+diff -ru '--exclude=__pycache__' '--exclude=.git' '--exclude=*.log*' '--exclude=*.json' /tmp/orig/app/core/tab_pool_parts/manager.py /tmp/proj/app/core/tab_pool_parts/manager.py
+--- /tmp/orig/app/core/tab_pool_parts/manager.py	2026-07-26 12:02:07.000000000 +0000
++++ /tmp/proj/app/core/tab_pool_parts/manager.py	2026-07-26 16:43:24.262815026 +0000
+@@ -2191,6 +2191,21 @@
+             return False
+         return False
+ 
++    def _normalize_acquire_timeout(self, timeout: Optional[float]) -> float:
++        """统一各 acquire 路径的 timeout 语义。
++
++        原先大多数路径写 `timeout = timeout or self.acquire_timeout`，于是
++        timeout=0（调用方想表达"不等待，立刻失败"）会被当成"未传"而退化成默认
++        60 秒阻塞，只有 acquire_by_route_group 一条路径按显式值处理。
++        统一成：None -> 池默认；其余按显式值处理，负数收敛到 0。
++        """
++        if timeout is None:
++            return float(self.acquire_timeout)
++        try:
++            return max(0.0, float(timeout))
++        except (TypeError, ValueError):
++            return float(self.acquire_timeout)
++
+     def _next_waiter_token(self, task_id: str) -> str:
+         self._waiter_counter += 1
+         base = str(task_id or "task").strip() or "task"
+@@ -2222,7 +2237,17 @@
+         except ValueError:
+             removed = False
+ 
+-        if owner_map is not None and owner_key is not None and not waiters:
++        # 只有当 owner_map 里登记的仍是同一个队列对象时才摘除。
++        # 成功路径会先显式 _unregister_waiter 一次（此时队列可能已空并被摘除），
++        # 随后 finally 再调一次；期间池锁可能被 _complete_acquired_session_for_return
++        # 短暂释放，其他线程会用同一个 key 建出**新的**队列。若这里无条件 pop，
++        # 就会把新队列连同里面排队的等待者一起丢掉，破坏 FIFO 公平性。
++        if (
++            owner_map is not None
++            and owner_key is not None
++            and not waiters
++            and owner_map.get(owner_key) is waiters
++        ):
+             owner_map.pop(owner_key, None)
+ 
+         if removed:
+@@ -2523,7 +2548,7 @@
+         if not raw_tab_id:
+             return None
+ 
+-        timeout = timeout or self.acquire_timeout
++        timeout = self._normalize_acquire_timeout(timeout)
+         deadline = time.time() + timeout
+ 
+         with self._condition:
+@@ -2649,7 +2674,19 @@
+             return True
+         return False
+ 
+-    def _get_sessions_for_route_group(self, group_id: str) -> List[TabSession]:
++    def _get_sessions_for_route_group(
++        self,
++        group_id: str,
++        *,
++        bind: bool = True,
++    ) -> List[TabSession]:
++        """解析路由组当前的成员标签页。
++
++        bind=False 供只读查询（/api/tabs 面板轮询、组快照）使用：只做匹配，
++        不写 _route_group_bindings。否则一次与请求无关的面板轮询就会替真实请求
++        提前把成员钉死在某个标签页上（绑定是粘滞的），后续请求再也轮不到同 URL
++        的其他标签页。
++        """
+         group = self._get_route_group_config(group_id)
+         if not group:
+             return []
+@@ -2657,11 +2694,18 @@
+         normalized_id = group["id"]
+         members = group.get("members") or []
+         valid_member_keys = {route_group_member_key(member) for member in members}
+-        bindings = self._route_group_bindings.setdefault(normalized_id, {})
+-        for member_key in list(bindings):
+-            session_id = bindings.get(member_key)
+-            if member_key not in valid_member_keys or session_id not in self._tabs:
+-                bindings.pop(member_key, None)
++        if bind:
++            bindings = self._route_group_bindings.setdefault(normalized_id, {})
++            for member_key in list(bindings):
++                session_id = bindings.get(member_key)
++                if member_key not in valid_member_keys or session_id not in self._tabs:
++                    bindings.pop(member_key, None)
++        else:
++            bindings = {
++                member_key: session_id
++                for member_key, session_id in self._route_group_bindings.get(normalized_id, {}).items()
++                if member_key in valid_member_keys and session_id in self._tabs
++            }
+ 
+         sessions: List[TabSession] = []
+         used_session_ids = set()
+@@ -2707,7 +2751,7 @@
+             groups = normalize_route_groups(getattr(self, "route_groups", []))
+             result = []
+             for group in groups:
+-                sessions = self._get_sessions_for_route_group(group["id"])
++                sessions = self._get_sessions_for_route_group(group["id"], bind=False)
+                 item = dict(group)
+                 item["live_member_count"] = len(sessions)
+                 item["idle_member_count"] = sum(
+@@ -2723,6 +2767,15 @@
+         """Refresh live tab URL/domain snapshots; callers must not hold self._condition."""
+         for session in sessions:
+             try:
++                # BUSY 标签页跳过实时读取：
++                # 1) 该 tab 正被别的工作流线程用同步 DrissionPage 调用驱动，
++                #    这里再发一次 CDP 是并发访问同一 target（_scan_new_tabs 同样避开 BUSY）；
++                # 2) 工作流中途导航时 tab.url 会瞬时变成 about:blank，
++                #    _refresh_current_domain 会据此把 current_domain 清空，
++                #    使并发的 /url/<domain> 请求匹配不到这个标签页而误报 404。
++                # BUSY 标签页的 URL 已由 _scan_new_tabs 从 Target.getTargets 快照刷新。
++                if session.status == TabStatus.BUSY:
++                    continue
+                 current_url = session._safe_get_url(allow_live_when_busy=True)
+                 if current_url:
+                     session._refresh_current_domain(current_url)
+@@ -2779,7 +2832,7 @@
+ 
+     def acquire(self, task_id: str, timeout: float = None) -> Optional[TabSession]:
+         """ASCII-safe fair acquire for generic request routing."""
+-        timeout = timeout or self.acquire_timeout
++        timeout = self._normalize_acquire_timeout(timeout)
+         deadline = time.time() + timeout
+         logged_waiting = False
+         first_iteration = True
+@@ -2906,16 +2959,22 @@
+ 
+     def acquire_by_exact_url(self, exact_url: str, task_id: str, timeout: float = None) -> Optional[TabSession]:
+         """Acquire a tab by strict full-URL match, round-robin within identical URLs."""
+-        target = str(exact_url or "").strip()
+-        if not target:
++        raw_target = str(exact_url or "").strip()
++        if not raw_target:
+             logger.warning("Exact tab URL is empty; cannot acquire a tab")
+             return None
+ 
+-        timeout = timeout or self.acquire_timeout
++        # 队列 key / 轮询游标 key 必须用归一化后的 URL：匹配侧 tab_url_matches 会剥掉
++        # 默认端口等差异，若这里仍用原始串，"https://x/a" 与 "https://x:443/a"
++        # 会落进两条互不相干的等待队列，各自都是队首，FIFO 互斥形同虚设。
++        target = normalize_exact_tab_url(raw_target) or raw_target
++        waiter_key = f"url::{target}"
++
++        timeout = self._normalize_acquire_timeout(timeout)
+         deadline = time.time() + timeout
+ 
+         with self._condition:
+-            waiters = self._route_waiters.setdefault(f"url::{target}", deque())
++            waiters = self._route_waiters.setdefault(waiter_key, deque())
+             waiter_token = self._next_waiter_token(task_id)
+             waiters.append(waiter_token)
+             try:
+@@ -2952,7 +3011,7 @@
+                     session = self._try_acquire_session_for_request(
+                         matching_sessions,
+                         task_id,
+-                        route_domain=f"url::{target}",
++                        route_domain=waiter_key,
+                         defer_context="exact-url acquire",
+                     )
+                     if session is not None:
+@@ -2960,7 +3019,7 @@
+                             waiters,
+                             waiter_token,
+                             owner_map=self._route_waiters,
+-                            owner_key=f"url::{target}",
++                            owner_key=waiter_key,
+                         )
+                         if not self._complete_acquired_session_for_return(
+                             session,
+@@ -2969,7 +3028,7 @@
+                             activate=self._auto_activate_on_acquire and session.id != self._active_session_id,
+                         ):
+                             return None
+-                        self._mark_allocation_cursor(session, route_domain=f"url::{target}")
++                        self._mark_allocation_cursor(session, route_domain=waiter_key)
+ 
+                         logger.debug(
+                             f"TabPool -> {session.id} "
+@@ -2998,12 +3057,12 @@
+                     waiters,
+                     waiter_token,
+                     owner_map=self._route_waiters,
+-                    owner_key=f"url::{target}",
++                    owner_key=waiter_key,
+                 )
+ 
+     def acquire_by_index(self, persistent_index: int, task_id: str, timeout: float = None) -> Optional[TabSession]:
+         """ASCII-safe fair acquire for a fixed persistent tab index."""
+-        timeout = timeout or self.acquire_timeout
++        timeout = self._normalize_acquire_timeout(timeout)
+         deadline = time.time() + timeout
+ 
+         with self._condition:
+@@ -3132,7 +3191,7 @@
+             logger.warning("Route domain is empty; cannot acquire a tab")
+             return None
+ 
+-        timeout = timeout or self.acquire_timeout
++        timeout = self._normalize_acquire_timeout(timeout)
+         deadline = time.time() + timeout
+ 
+         with self._condition:
+@@ -3239,7 +3298,7 @@
+             logger.warning("Route group ID is invalid")
+             return None
+ 
+-        timeout = self.acquire_timeout if timeout is None else max(0.1, float(timeout))
++        timeout = self._normalize_acquire_timeout(timeout)
+         deadline = time.time() + timeout
+         first_iteration = True
+ 
+@@ -3257,6 +3316,16 @@
+                     if self._shutdown:
+                         return None
+ 
++                    # 组配置每轮重新读取：apply_runtime_config 可能在等待期间
++                    # 删除/改名该组或改掉分配模式。用循环外的旧快照会让等待者既不
++                    # 报"组不存在"也匹配不到成员，只能空转到超时。
++                    group = self._get_route_group_config(target)
++                    if not group:
++                        logger.warning(
++                            f"Route group '{target}' no longer exists (task={task_id})"
++                        )
++                        return None
++
+                     if first_iteration or self._should_scan():
+                         self._scan_new_tabs()
+                         first_iteration = False
+@@ -3519,7 +3588,7 @@
+             sessions = list(self._tabs.values())
+             groups_by_session: Dict[str, List[str]] = {}
+             for group in normalize_route_groups(getattr(self, "route_groups", [])):
+-                for member_session in self._get_sessions_for_route_group(group["id"]):
++                for member_session in self._get_sessions_for_route_group(group["id"], bind=False):
+                     groups_by_session.setdefault(member_session.id, []).append(group["id"])
+ 
+         result = []
+diff -ru '--exclude=__pycache__' '--exclude=.git' '--exclude=*.log*' '--exclude=*.json' /tmp/orig/tests/test_core_review_regressions.py /tmp/proj/tests/test_core_review_regressions.py
+--- /tmp/orig/tests/test_core_review_regressions.py	2026-07-15 11:30:04.000000000 +0000
++++ /tmp/proj/tests/test_core_review_regressions.py	2026-07-26 16:45:06.930993049 +0000
+@@ -537,6 +537,9 @@
+ 
+ def test_cancelled_async_acquire_releases_late_session():
+     manager = TabPoolManager.__new__(TabPoolManager)
++    manager._acquire_executor = None
++    manager._acquire_executor_lock = threading.Lock()
++    manager._maintenance_executor = None
+     worker_started = threading.Event()
+     worker_finish = threading.Event()
+     released = threading.Event()
+diff -ru '--exclude=__pycache__' '--exclude=.git' '--exclude=*.log*' '--exclude=*.json' /tmp/orig/tests/test_tab_pool_dynamic_exclusions.py /tmp/proj/tests/test_tab_pool_dynamic_exclusions.py
+--- /tmp/orig/tests/test_tab_pool_dynamic_exclusions.py	2026-07-10 13:38:02.000000000 +0000
++++ /tmp/proj/tests/test_tab_pool_dynamic_exclusions.py	2026-07-26 16:45:27.465856402 +0000
+@@ -133,6 +133,13 @@
+     manager._next_persistent_index = 1
+     manager._active_session_id = None
+     manager._maintenance_executor = None
++    manager._acquire_executor = None
++    manager._acquire_executor_lock = threading.Lock()
++    manager._recovery_service = None
++    manager._recovery_service_lock = threading.Lock()
++    # 与 __init__ 对齐：_scan_new_tabs 会读隔离集合，缺失时扫描会整轮吞异常，
++    # 让用例看到的是"标签页 0 个"而不是真实的入池结果。
++    manager._quarantined_raw_ids = {}
+     manager._global_network_monitor = None
+     manager._global_network_enabled = False
+     manager.preserve_error_tabs = False
+@@ -200,6 +207,13 @@
+     manager._next_persistent_index = 1
+     manager._active_session_id = None
+     manager._maintenance_executor = None
++    manager._acquire_executor = None
++    manager._acquire_executor_lock = threading.Lock()
++    manager._recovery_service = None
++    manager._recovery_service_lock = threading.Lock()
++    # 与 __init__ 对齐：_scan_new_tabs 会读隔离集合，缺失时扫描会整轮吞异常，
++    # 让用例看到的是"标签页 0 个"而不是真实的入池结果。
++    manager._quarantined_raw_ids = {}
+     manager._global_network_monitor = None
+     manager._global_network_enabled = False
+     manager.preserve_error_tabs = False
+@@ -213,5 +227,8 @@
+     assert len(manager.get_tabs_with_index()) == 1
+ 
+     manager.page.url = "about:blank"
++    # 读接口扫描有 QUERY_SCAN_MIN_INTERVAL_SEC 节流（_should_scan_for_query），
++    # 这里显式过期掉上一次扫描时间，断言的是"重新扫描后会移除标签页"。
++    manager._last_scan_time = 0.0
+ 
+     assert manager.get_tabs_with_index() == []
+diff -ru '--exclude=__pycache__' '--exclude=.git' '--exclude=*.log*' '--exclude=*.json' /tmp/orig/tests/test_tab_pool_lifecycle_regressions.py /tmp/proj/tests/test_tab_pool_lifecycle_regressions.py
+--- /tmp/orig/tests/test_tab_pool_lifecycle_regressions.py	2026-07-10 13:44:34.000000000 +0000
++++ /tmp/proj/tests/test_tab_pool_lifecycle_regressions.py	2026-07-26 16:44:27.598637036 +0000
+@@ -23,6 +23,14 @@
+     manager._global_monitor_transition_lock = threading.RLock()
+     manager._shutdown = False
+     manager._global_network_monitor = None
++    # 与 __init__ 对齐：release()/异步 acquire 会用到这些懒创建资源，
++    # 缺失会让本该断言业务行为的用例挂在 AttributeError 上。
++    manager._maintenance_executor = None
++    manager._acquire_executor = None
++    manager._acquire_executor_lock = threading.Lock()
++    manager._recovery_service = None
++    manager._recovery_service_lock = threading.Lock()
++    manager._quarantined_raw_ids = {}
+     return manager
+ 
+ 
+diff -ru '--exclude=__pycache__' '--exclude=.git' '--exclude=*.log*' '--exclude=*.json' /tmp/orig/tests/test_tab_route_groups.py /tmp/proj/tests/test_tab_route_groups.py
+--- /tmp/orig/tests/test_tab_route_groups.py	2026-07-17 15:31:28.000000000 +0000
++++ /tmp/proj/tests/test_tab_route_groups.py	2026-07-26 16:44:27.598981483 +0000
+@@ -71,6 +71,14 @@
+     manager._cleanup_unhealthy_tabs = lambda: None
+     manager._should_defer_to_command = lambda *_args, **_kwargs: False
+     manager._complete_acquired_session_for_return = lambda *_args, **_kwargs: True
++    # 与 __init__ 对齐（见 TabPoolManager.__init__）：release()/terminate_by_index
++    # 会访问这些懒创建资源，缺失会让用例挂在 AttributeError 上而不是断言业务行为。
++    manager._maintenance_executor = None
++    manager._acquire_executor = None
++    manager._acquire_executor_lock = threading.Lock()
++    manager._recovery_service = None
++    manager._recovery_service_lock = threading.Lock()
++    manager._quarantined_raw_ids = {}
+     return manager
+ 
+ 
+Only in /tmp/proj/tests: test_tab_route_regressions.py

@@ -426,7 +426,38 @@
     return null;
   }
 
+  // 极短 TTL 的 store 微缓存。
+  // repairActiveStreamState 每秒一次，但一次 tick 内会通过
+  // updateOverlay / 直接调用 / cleanupStaleStreamController 触发 3 次
+  // findStoreFromFiber，每次都要做 4 个 querySelector + 最多 80 层 fiber 向上遍历
+  // + 每层 5 个 bucket 的深度 4 递归扫描，是页面里最贵的常驻开销之一。
+  // 这里只在 200ms 内复用结果（远短于 1s 的巡检周期），且复用前仍用
+  // looksLikeArenaStore 完整校验，保证拿到的仍是合法 store，不改变判定语义。
+  const STORE_CACHE_TTL_MS = 200;
+  let cachedArenaStore = null;
+  let cachedArenaStoreAt = 0;
+  let cachedArenaStoreId = '';
+
+  // 复用缓存前的三重校验：TTL 未过期 + 仍满足 looksLikeArenaStore +
+  // state.id 没变（会话/路由切换会换 id，换了就重新搜索，宁可多扫一次也不拿旧 store）。
+  function reusableCachedStore() {
+    if (!cachedArenaStore) return null;
+    if ((Date.now() - cachedArenaStoreAt) >= STORE_CACHE_TTL_MS) return null;
+    if (!looksLikeArenaStore(cachedArenaStore)) return null;
+    const state = safeCall(() => cachedArenaStore.getState());
+    const stateId = state && typeof state.id === 'string' ? state.id : '';
+    if (stateId !== cachedArenaStoreId) return null;
+    const locationId = getSessionIdFromLocation();
+    if (locationId && stateId && locationId !== stateId) return null;
+    return cachedArenaStore;
+  }
+
   function findStoreFromFiber() {
+    const reusable = reusableCachedStore();
+    if (reusable) return reusable;
+    cachedArenaStore = null;
+    cachedArenaStoreId = '';
+
     const roots = [
       document.querySelector('button[aria-label="Stop generation"]'),
       document.querySelector('button[aria-label="Send message"][type="submit"]'),
@@ -446,7 +477,13 @@
         ];
         for (const bucket of buckets) {
           const found = findArenaStoreIn(bucket, 4, new WeakSet());
-          if (found) return found;
+          if (found) {
+            const foundState = safeCall(() => found.getState());
+            cachedArenaStore = found;
+            cachedArenaStoreAt = Date.now();
+            cachedArenaStoreId = foundState && typeof foundState.id === 'string' ? foundState.id : '';
+            return found;
+          }
         }
       }
     }
@@ -542,6 +579,18 @@
       updateMessageLocal(info, { id: stoppedState.parentMessageId, status: 'success' });
     }
     updateSessionLocal(info, { showStoppedUserPrompt: false });
+  }
+
+  // 只清理已过期（超过 30s TTL）的条目，不依赖 messagesById。
+  // 原来唯一的清理入口 cleanupStoppedMessageGuards 被 healStoppedRerunFailure
+  // 开头的 ENABLE_FAILED_RERUN_HEAL(=false) 挡住，永远执行不到，
+  // 导致每次"硬停止"写入的条目只增不删。这里补一个无副作用的过期清扫。
+  function sweepExpiredStoppedGuards() {
+    if (!stoppedMessageGuards.size) return;
+    const now = Date.now();
+    for (const [id, guard] of stoppedMessageGuards) {
+      if (!guard || guard.expiresAt <= now) stoppedMessageGuards.delete(id);
+    }
   }
 
   function cleanupStoppedMessageGuards(messagesById) {
@@ -1065,6 +1114,7 @@
   }
 
   function repairActiveStreamState() {
+    sweepExpiredStoppedGuards();
     updateOverlay();
 
     const store = findStoreFromFiber();

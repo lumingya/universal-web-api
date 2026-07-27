@@ -2191,6 +2191,21 @@ class TabPoolManager:
             return False
         return False
 
+    def _normalize_acquire_timeout(self, timeout: Optional[float]) -> float:
+        """统一各 acquire 路径的 timeout 语义。
+
+        原先大多数路径写 `timeout = timeout or self.acquire_timeout`，于是
+        timeout=0（调用方想表达"不等待，立刻失败"）会被当成"未传"而退化成默认
+        60 秒阻塞，只有 acquire_by_route_group 一条路径按显式值处理。
+        统一成：None -> 池默认；其余按显式值处理，负数收敛到 0。
+        """
+        if timeout is None:
+            return float(self.acquire_timeout)
+        try:
+            return max(0.0, float(timeout))
+        except (TypeError, ValueError):
+            return float(self.acquire_timeout)
+
     def _next_waiter_token(self, task_id: str) -> str:
         self._waiter_counter += 1
         base = str(task_id or "task").strip() or "task"
@@ -2222,7 +2237,17 @@ class TabPoolManager:
         except ValueError:
             removed = False
 
-        if owner_map is not None and owner_key is not None and not waiters:
+        # 只有当 owner_map 里登记的仍是同一个队列对象时才摘除。
+        # 成功路径会先显式 _unregister_waiter 一次（此时队列可能已空并被摘除），
+        # 随后 finally 再调一次；期间池锁可能被 _complete_acquired_session_for_return
+        # 短暂释放，其他线程会用同一个 key 建出**新的**队列。若这里无条件 pop，
+        # 就会把新队列连同里面排队的等待者一起丢掉，破坏 FIFO 公平性。
+        if (
+            owner_map is not None
+            and owner_key is not None
+            and not waiters
+            and owner_map.get(owner_key) is waiters
+        ):
             owner_map.pop(owner_key, None)
 
         if removed:
@@ -2523,7 +2548,7 @@ class TabPoolManager:
         if not raw_tab_id:
             return None
 
-        timeout = timeout or self.acquire_timeout
+        timeout = self._normalize_acquire_timeout(timeout)
         deadline = time.time() + timeout
 
         with self._condition:
@@ -2649,7 +2674,19 @@ class TabPoolManager:
             return True
         return False
 
-    def _get_sessions_for_route_group(self, group_id: str) -> List[TabSession]:
+    def _get_sessions_for_route_group(
+        self,
+        group_id: str,
+        *,
+        bind: bool = True,
+    ) -> List[TabSession]:
+        """解析路由组当前的成员标签页。
+
+        bind=False 供只读查询（/api/tabs 面板轮询、组快照）使用：只做匹配，
+        不写 _route_group_bindings。否则一次与请求无关的面板轮询就会替真实请求
+        提前把成员钉死在某个标签页上（绑定是粘滞的），后续请求再也轮不到同 URL
+        的其他标签页。
+        """
         group = self._get_route_group_config(group_id)
         if not group:
             return []
@@ -2657,11 +2694,18 @@ class TabPoolManager:
         normalized_id = group["id"]
         members = group.get("members") or []
         valid_member_keys = {route_group_member_key(member) for member in members}
-        bindings = self._route_group_bindings.setdefault(normalized_id, {})
-        for member_key in list(bindings):
-            session_id = bindings.get(member_key)
-            if member_key not in valid_member_keys or session_id not in self._tabs:
-                bindings.pop(member_key, None)
+        if bind:
+            bindings = self._route_group_bindings.setdefault(normalized_id, {})
+            for member_key in list(bindings):
+                session_id = bindings.get(member_key)
+                if member_key not in valid_member_keys or session_id not in self._tabs:
+                    bindings.pop(member_key, None)
+        else:
+            bindings = {
+                member_key: session_id
+                for member_key, session_id in self._route_group_bindings.get(normalized_id, {}).items()
+                if member_key in valid_member_keys and session_id in self._tabs
+            }
 
         sessions: List[TabSession] = []
         used_session_ids = set()
@@ -2707,7 +2751,7 @@ class TabPoolManager:
             groups = normalize_route_groups(getattr(self, "route_groups", []))
             result = []
             for group in groups:
-                sessions = self._get_sessions_for_route_group(group["id"])
+                sessions = self._get_sessions_for_route_group(group["id"], bind=False)
                 item = dict(group)
                 item["live_member_count"] = len(sessions)
                 item["idle_member_count"] = sum(
@@ -2723,6 +2767,15 @@ class TabPoolManager:
         """Refresh live tab URL/domain snapshots; callers must not hold self._condition."""
         for session in sessions:
             try:
+                # BUSY 标签页跳过实时读取：
+                # 1) 该 tab 正被别的工作流线程用同步 DrissionPage 调用驱动，
+                #    这里再发一次 CDP 是并发访问同一 target（_scan_new_tabs 同样避开 BUSY）；
+                # 2) 工作流中途导航时 tab.url 会瞬时变成 about:blank，
+                #    _refresh_current_domain 会据此把 current_domain 清空，
+                #    使并发的 /url/<domain> 请求匹配不到这个标签页而误报 404。
+                # BUSY 标签页的 URL 已由 _scan_new_tabs 从 Target.getTargets 快照刷新。
+                if session.status == TabStatus.BUSY:
+                    continue
                 current_url = session._safe_get_url(allow_live_when_busy=True)
                 if current_url:
                     session._refresh_current_domain(current_url)
@@ -2779,7 +2832,7 @@ class TabPoolManager:
 
     def acquire(self, task_id: str, timeout: float = None) -> Optional[TabSession]:
         """ASCII-safe fair acquire for generic request routing."""
-        timeout = timeout or self.acquire_timeout
+        timeout = self._normalize_acquire_timeout(timeout)
         deadline = time.time() + timeout
         logged_waiting = False
         first_iteration = True
@@ -2906,16 +2959,22 @@ class TabPoolManager:
 
     def acquire_by_exact_url(self, exact_url: str, task_id: str, timeout: float = None) -> Optional[TabSession]:
         """Acquire a tab by strict full-URL match, round-robin within identical URLs."""
-        target = str(exact_url or "").strip()
-        if not target:
+        raw_target = str(exact_url or "").strip()
+        if not raw_target:
             logger.warning("Exact tab URL is empty; cannot acquire a tab")
             return None
 
-        timeout = timeout or self.acquire_timeout
+        # 队列 key / 轮询游标 key 必须用归一化后的 URL：匹配侧 tab_url_matches 会剥掉
+        # 默认端口等差异，若这里仍用原始串，"https://x/a" 与 "https://x:443/a"
+        # 会落进两条互不相干的等待队列，各自都是队首，FIFO 互斥形同虚设。
+        target = normalize_exact_tab_url(raw_target) or raw_target
+        waiter_key = f"url::{target}"
+
+        timeout = self._normalize_acquire_timeout(timeout)
         deadline = time.time() + timeout
 
         with self._condition:
-            waiters = self._route_waiters.setdefault(f"url::{target}", deque())
+            waiters = self._route_waiters.setdefault(waiter_key, deque())
             waiter_token = self._next_waiter_token(task_id)
             waiters.append(waiter_token)
             try:
@@ -2952,7 +3011,7 @@ class TabPoolManager:
                     session = self._try_acquire_session_for_request(
                         matching_sessions,
                         task_id,
-                        route_domain=f"url::{target}",
+                        route_domain=waiter_key,
                         defer_context="exact-url acquire",
                     )
                     if session is not None:
@@ -2960,7 +3019,7 @@ class TabPoolManager:
                             waiters,
                             waiter_token,
                             owner_map=self._route_waiters,
-                            owner_key=f"url::{target}",
+                            owner_key=waiter_key,
                         )
                         if not self._complete_acquired_session_for_return(
                             session,
@@ -2969,7 +3028,7 @@ class TabPoolManager:
                             activate=self._auto_activate_on_acquire and session.id != self._active_session_id,
                         ):
                             return None
-                        self._mark_allocation_cursor(session, route_domain=f"url::{target}")
+                        self._mark_allocation_cursor(session, route_domain=waiter_key)
 
                         logger.debug(
                             f"TabPool -> {session.id} "
@@ -2998,12 +3057,12 @@ class TabPoolManager:
                     waiters,
                     waiter_token,
                     owner_map=self._route_waiters,
-                    owner_key=f"url::{target}",
+                    owner_key=waiter_key,
                 )
 
     def acquire_by_index(self, persistent_index: int, task_id: str, timeout: float = None) -> Optional[TabSession]:
         """ASCII-safe fair acquire for a fixed persistent tab index."""
-        timeout = timeout or self.acquire_timeout
+        timeout = self._normalize_acquire_timeout(timeout)
         deadline = time.time() + timeout
 
         with self._condition:
@@ -3132,7 +3191,7 @@ class TabPoolManager:
             logger.warning("Route domain is empty; cannot acquire a tab")
             return None
 
-        timeout = timeout or self.acquire_timeout
+        timeout = self._normalize_acquire_timeout(timeout)
         deadline = time.time() + timeout
 
         with self._condition:
@@ -3239,7 +3298,7 @@ class TabPoolManager:
             logger.warning("Route group ID is invalid")
             return None
 
-        timeout = self.acquire_timeout if timeout is None else max(0.1, float(timeout))
+        timeout = self._normalize_acquire_timeout(timeout)
         deadline = time.time() + timeout
         first_iteration = True
 
@@ -3255,6 +3314,16 @@ class TabPoolManager:
             try:
                 while True:
                     if self._shutdown:
+                        return None
+
+                    # 组配置每轮重新读取：apply_runtime_config 可能在等待期间
+                    # 删除/改名该组或改掉分配模式。用循环外的旧快照会让等待者既不
+                    # 报"组不存在"也匹配不到成员，只能空转到超时。
+                    group = self._get_route_group_config(target)
+                    if not group:
+                        logger.warning(
+                            f"Route group '{target}' no longer exists (task={task_id})"
+                        )
                         return None
 
                     if first_iteration or self._should_scan():
@@ -3519,7 +3588,7 @@ class TabPoolManager:
             sessions = list(self._tabs.values())
             groups_by_session: Dict[str, List[str]] = {}
             for group in normalize_route_groups(getattr(self, "route_groups", [])):
-                for member_session in self._get_sessions_for_route_group(group["id"]):
+                for member_session in self._get_sessions_for_route_group(group["id"], bind=False):
                     groups_by_session.setdefault(member_session.id, []).append(group["id"])
 
         result = []

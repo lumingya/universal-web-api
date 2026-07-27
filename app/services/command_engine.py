@@ -47,6 +47,12 @@ if TYPE_CHECKING:
 logger = get_logger("CMD_ENG")
 FOLLOW_DEFAULT_PRESET = "__DEFAULT__"
 
+# 页面文本匹配相关的正则预编译：这些会在 page_check 高频路径上
+# 对整页快照（可能几十上百 KB）反复求值，逐次 re.* 的模式缓存查找是不必要的开销。
+_WHITESPACE_RE = re.compile(r"\s+")
+_NON_ASCII_RE = re.compile(r"[^\x00-\x7F]")
+_WORD_LIKE_KEYWORD_RE = re.compile(r"[a-z0-9 _-]+")
+
 
 # ================= 常量 =================
 
@@ -60,6 +66,8 @@ class CommandEngine(CommandEngineRuntimeMixin, CommandEngineResultsMixin, Comman
         self._commands_local_file = None
         self._commands_mtime = 0.0
         self._commands_local_mtime = 0.0
+        # (cache_key, compact_text)：page_check 去空白页面文本的单槽缓存
+        self._compact_haystack_cache: Optional[tuple] = None
         self._commands_loaded = False
         self._commands_cache: List[Dict[str, Any]] = []
         self._command_runtime_stats: Dict[str, Dict[str, Any]] = {}
@@ -108,6 +116,18 @@ class CommandEngine(CommandEngineRuntimeMixin, CommandEngineResultsMixin, Comman
         self._wake_tab_before_page_check = str(
             os.getenv("CMD_WAKE_TAB_BEFORE_PAGE_CHECK", "true")
         ).strip().lower() in {"1", "true", "yes", "y", "on"}
+        # 唤醒标签页的 CDP 状态（focus / visibility / Page.setWebLifecycleState=active）
+        # 是粘性的，不需要每条 page_check 命令都重发一遍。
+        # 每次唤醒是 4~6 次 CDP 往返 + 一次整页可见性补丁 JS，
+        # 而一个会话上往往同时挂着多条 page_check 命令，实际调用频率是每秒数次。
+        # 默认 2s 限频：既能把唤醒风暴压下去，最坏也只比原来晚 2s 唤醒
+        # （page_check 自身的最小轮询间隔就是 1.5s，量级相当）。
+        # 设为 0 可恢复"每次都唤醒"的旧行为；若观察到后台页仍被冻结可调小。
+        try:
+            _wake_min_interval = float(os.getenv("CMD_WAKE_TAB_MIN_INTERVAL_SEC", "2"))
+        except Exception:
+            _wake_min_interval = 2.0
+        self._wake_tab_min_interval_sec = max(0.0, _wake_min_interval)
         self._tab_pool_auto_refresh = str(
             os.getenv("CMD_TAB_POOL_AUTO_REFRESH", "true")
         ).strip().lower() in {"1", "true", "yes", "y", "on"}
@@ -352,6 +372,37 @@ class CommandEngine(CommandEngineRuntimeMixin, CommandEngineResultsMixin, Comman
         except Exception as e:
             logger.debug(f"[CMD] 焦点模拟设置失败（忽略）: enabled={enabled}, 错误={e}")
 
+    def _should_wake_tab_now(self, session: 'TabSession') -> bool:
+        """按会话限频唤醒动作：唤醒后的 CDP 状态是粘性的，不必每轮都重发。"""
+        interval = float(self._wake_tab_min_interval_sec or 0.0)
+        if interval <= 0.0:
+            return True
+        try:
+            # 上一轮 page_check JS 已经出错，说明页面可能真的被冻结/丢弃了。
+            # 这种情况下不限频，保持原来"每轮都唤醒"的行为，
+            # 避免连续两轮失败把会话推进 30s 退避。
+            if int(getattr(session, "_pc_js_failures", 0) or 0) > 0:
+                setattr(session, "_pc_last_wake_at", time.time())
+                return True
+        except Exception:
+            return True
+        try:
+            now = time.time()
+            last_at = float(getattr(session, "_pc_last_wake_at", 0.0) or 0.0)
+            if last_at > 0.0 and (now - last_at) < interval:
+                return False
+            setattr(session, "_pc_last_wake_at", now)
+        except Exception:
+            return True
+        return True
+
+    def _invalidate_wake_throttle(self, session: 'TabSession') -> None:
+        """让下一次 page_check 立即重新唤醒（JS 失败/页面可能已被冻结时调用）。"""
+        try:
+            setattr(session, "_pc_last_wake_at", 0.0)
+        except Exception:
+            pass
+
     def _try_wake_tab(self, session: 'TabSession', reason: str = ""):
         """
         Best-effort wake-up for background/discard-prone tabs.
@@ -362,6 +413,8 @@ class CommandEngine(CommandEngineRuntimeMixin, CommandEngineResultsMixin, Comman
         if not self._wake_tab_before_page_check:
             return
         if self._is_page_check_backing_off(session):
+            return
+        if not self._should_wake_tab_now(session):
             return
         focus_emulation_set = False
         try:
@@ -421,6 +474,9 @@ class CommandEngine(CommandEngineRuntimeMixin, CommandEngineResultsMixin, Comman
             pass
 
     def _record_page_check_js_failure(self, session: 'TabSession', error: Any, context: str) -> None:
+        # JS 执行失败通常意味着页面被冻结/丢弃或已导航，
+        # 清掉唤醒限频，让下一轮立刻重新唤醒，不受最小间隔限制。
+        self._invalidate_wake_throttle(session)
         try:
             failures = int(getattr(session, "_pc_js_failures", 0) or 0) + 1
             setattr(session, "_pc_js_failures", failures)
@@ -440,12 +496,30 @@ class CommandEngine(CommandEngineRuntimeMixin, CommandEngineResultsMixin, Comman
     _PAGE_CHECK_OBSERVER_JS = r"""
 (function() {
     var kws = %KEYWORDS%;
+    function newSeen() {
+        // Set 判重是 O(1)；旧实现用数组 + indexOf 是 O(n)，整页遍历退化成
+        // O(n^2)，长对话页面每次快照要跑上千万次比较，是浏览器端 CPU 的主要来源。
+        try {
+            if (typeof Set === 'function') {
+                var s = new Set();
+                return {
+                    has: function(n) { return s.has(n); },
+                    add: function(n) { s.add(n); }
+                };
+            }
+        } catch (e) {}
+        var arr = [];
+        return {
+            has: function(n) { return arr.indexOf(n) !== -1; },
+            add: function(n) { arr.push(n); }
+        };
+    }
     function appendText(parts, value) {
         if (typeof value === 'string' && value) parts.push(value);
     }
     function collectText(node, parts, seen) {
-        if (!node || seen.indexOf(node) !== -1) return;
-        seen.push(node);
+        if (!node || seen.has(node)) return;
+        seen.add(node);
 
         if (node.nodeType === 1) {
             var tag = String(node.tagName || '').toUpperCase();
@@ -517,7 +591,7 @@ class CommandEngine(CommandEngineRuntimeMixin, CommandEngineResultsMixin, Comman
     }
     function buildSnapshot() {
         var parts = [];
-        var seen = [];
+        var seen = newSeen();
         appendText(parts, document.title || '');
         collectRootText(document.documentElement || document.body, parts, seen);
         var text = parts.join('\n').toLowerCase();
@@ -571,8 +645,20 @@ class CommandEngine(CommandEngineRuntimeMixin, CommandEngineResultsMixin, Comman
     window.__pcKeywords = kws;
     window.__pcHits = {};
     var pending = null;
+    var MIN_DELAY_MS = 200;
+    var MAX_DELAY_MS = 800;
+    // 自适应节流：下一次扫描的间隔取"上次扫描耗时 × 4"，钳在 200~800ms。
+    // 换成 Set 判重后，即使 6 万节点的页面单次扫描也只要 30ms 左右，
+    // 算出来仍是下限 200ms —— 正常页面行为完全不变。
+    // 只有扫描耗时超过 50ms 的病态页面才会退避，且最多退到 800ms，
+    // 不会拖慢 page_check 对 Cloudflare 盾 / 报错文案的识别。
+    var nextDelayMs = MIN_DELAY_MS;
     function doCheck() {
         pending = null;
+        var startedAt = 0;
+        try {
+            startedAt = (window.performance && performance.now) ? performance.now() : Date.now();
+        } catch (e) {}
         try {
             var text = buildSnapshot();
             window.__pcSnapshot = text;
@@ -581,10 +667,17 @@ class CommandEngine(CommandEngineRuntimeMixin, CommandEngineResultsMixin, Comman
                 window.__pcHits[k] = text.indexOf(k) !== -1;
             }
         } catch(e) {}
+        try {
+            var endedAt = (window.performance && performance.now) ? performance.now() : Date.now();
+            var cost = Math.max(0, endedAt - startedAt);
+            nextDelayMs = Math.min(MAX_DELAY_MS, Math.max(MIN_DELAY_MS, Math.round(cost * 4)));
+        } catch (e) {
+            nextDelayMs = MIN_DELAY_MS;
+        }
     }
     doCheck();
     window.__pcObserver = new MutationObserver(function() {
-        if (!pending) pending = setTimeout(doCheck, 200);
+        if (!pending) pending = setTimeout(doCheck, nextDelayMs);
     });
     var target = document.body || document.documentElement;
     if (target) {
@@ -598,12 +691,29 @@ class CommandEngine(CommandEngineRuntimeMixin, CommandEngineResultsMixin, Comman
 
     _PAGE_CHECK_SNAPSHOT_JS = r"""
 return (function() {
+    function newSeen() {
+        // 同 _PAGE_CHECK_OBSERVER_JS：数组 indexOf 判重会让整页遍历退化成 O(n^2)。
+        try {
+            if (typeof Set === 'function') {
+                var s = new Set();
+                return {
+                    has: function(n) { return s.has(n); },
+                    add: function(n) { s.add(n); }
+                };
+            }
+        } catch (e) {}
+        var arr = [];
+        return {
+            has: function(n) { return arr.indexOf(n) !== -1; },
+            add: function(n) { arr.push(n); }
+        };
+    }
     function appendText(parts, value) {
         if (typeof value === 'string' && value) parts.push(value);
     }
     function collectText(node, parts, seen) {
-        if (!node || seen.indexOf(node) !== -1) return;
-        seen.push(node);
+        if (!node || seen.has(node)) return;
+        seen.add(node);
 
         if (node.nodeType === 1) {
             var tag = String(node.tagName || '').toUpperCase();
@@ -675,7 +785,7 @@ return (function() {
     }
     var parts = [];
     appendText(parts, document.title || '');
-    collectRootText(document.documentElement || document.body, parts, []);
+    collectRootText(document.documentElement || document.body, parts, newSeen());
     var text = parts.join('\n').toLowerCase();
     var cfIndicators = [];
     if (text.indexOf('security verification') !== -1) cfIndicators.push('security verification');
@@ -2998,7 +3108,25 @@ return (function() {
         text = str(value or "").strip().lower()
         if not text:
             return ""
-        return re.sub(r"\s+", " ", text)
+        return _WHITESPACE_RE.sub(" ", text)
+
+    def _get_compact_haystack(self, hay: str) -> str:
+        """去空白版页面文本（带缓存）。
+
+        page_check 每个非 ASCII 关键词都要一份去空白文本，
+        而页面快照往往有几十上百 KB；原实现按关键词重复做全文 re.sub，
+        一次检查里同一段文本会被重复扫描 N 次。这里按内容缓存一份即可。
+        """
+        if not hay:
+            return ""
+        cached = self._compact_haystack_cache
+        # 用对象身份比较：同一轮检查里各个关键词拿到的 hay 是同一个字符串对象，
+        # 比 (len, hash) 更简单，也不存在哈希碰撞返回错误结果的可能。
+        if cached is not None and cached[0] is hay:
+            return cached[1]
+        compact = _WHITESPACE_RE.sub("", hay)
+        self._compact_haystack_cache = (hay, compact)
+        return compact
 
     def _text_contains_needle(
         self,
@@ -3011,15 +3139,15 @@ return (function() {
         if not hay or not ned:
             return False
 
-        if re.search(r"[^\x00-\x7F]", ned):
-            compact_hay = re.sub(r"\s+", "", hay)
-            compact_ned = re.sub(r"\s+", "", ned)
+        if _NON_ASCII_RE.search(ned):
+            compact_hay = self._get_compact_haystack(hay)
+            compact_ned = _WHITESPACE_RE.sub("", ned)
             if compact_hay and compact_ned and compact_ned in compact_hay:
                 return True
 
         # For plain word-like keywords (for example "battle"), prefer whole-word
         # matching to reduce accidental substring hits.
-        if re.fullmatch(r"[a-z0-9 _-]+", ned):
+        if _WORD_LIKE_KEYWORD_RE.fullmatch(ned):
             pattern = rf"(?<![a-z0-9]){re.escape(ned)}(?![a-z0-9])"
             return re.search(pattern, hay) is not None
 

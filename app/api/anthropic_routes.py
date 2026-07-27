@@ -1666,6 +1666,21 @@ async def create_message(
     return _wrap_openai_response_as_anthropic(response, body, request_id)
 
 
+def _anthropic_route_method_guard(method: str):
+    """与 OpenAI 侧同一个"路由方式开关"，作用在 /url/... 的 Anthropic 端点上。
+
+    做成依赖而不是函数体内校验：这些端点会在 Python 层直接调用
+    tab_routes.chat_with_route_domain，函数体内校验会连带拦下普通
+    /v1/messages 的内部委派。
+    """
+    async def _guard() -> None:
+        from app.api import tab_routes as tab_routes_api
+
+        tab_routes_api._ensure_route_method_enabled(method)
+
+    return _guard
+
+
 @router.post("/url/{route_domain}/v1/v1/messages")
 @router.post("/url/{route_domain}/v1/messages")
 async def create_message_with_route_domain(
@@ -1675,6 +1690,7 @@ async def create_message_with_route_domain(
     tab_index: Optional[int] = Query(default=None, ge=1),
     selector: Optional[str] = Query(default=None),
     authenticated: bool = Depends(verify_anthropic_auth),
+    _route_method: None = Depends(_anthropic_route_method_guard("domain")),
 ):
     from app.api import tab_routes as tab_routes_api
 
@@ -1707,6 +1723,7 @@ async def create_message_with_route_domain_and_preset(
     tab_index: Optional[int] = Query(default=None, ge=1),
     selector: Optional[str] = Query(default=None),
     authenticated: bool = Depends(verify_anthropic_auth),
+    _route_method: None = Depends(_anthropic_route_method_guard("domain")),
 ):
     from app.api import tab_routes as tab_routes_api
 
@@ -1715,13 +1732,21 @@ async def create_message_with_route_domain_and_preset(
     chat_body = tab_routes_api.ChatRequest(**openai_payload)
     # 修复2: 捕获内部工作流的 HTTPException，转换为 Anthropic 错误格式
     try:
+        # 与 OpenAI 侧 /url/{d}/{preset}/v1/chat/completions 对齐，走同一套严格校验：
+        # chat_with_route_domain 对 preset_name 只做 strip，不校验存在性也不解析别名。
+        # 少了这一步，ANTHROPIC_BASE_URL 里的预设名打错会静默退回站点默认预设，
+        # 用户完全无感，而同一个 URL 走 OpenAI 端点则明确 404。
+        forced_preset_name = tab_routes_api._resolve_strict_domain_preset(
+            route_domain,
+            preset_name,
+        )["preset_name"]
         response = await tab_routes_api.chat_with_route_domain(
             route_domain=route_domain,
             request=request,
             body=chat_body,
             tab_index=tab_index,
             selector=selector,
-            preset_name=preset_name,
+            preset_name=forced_preset_name,
             authenticated=authenticated,
         )
     except HTTPException as exc:
