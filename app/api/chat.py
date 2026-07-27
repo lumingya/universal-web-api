@@ -2056,10 +2056,14 @@ async def chat_completions(
 
             catalog_tab = None
             catalog_preset = None
+            is_url_excluded = getattr(browser.tab_pool, "is_url_excluded", None)
             # 优先选择处于空闲 (idle) 状态的标签页，若无空闲标签页再选择繁忙 (busy) 标签页，避免请求被无故锁定排队
             for target_status in ("idle", "busy"):
                 for tab in tabs:
                     if str(tab.get("status") or "").strip().lower() == target_status:
+                        tab_url = str(tab.get("url") or "").strip()
+                        if callable(is_url_excluded) and is_url_excluded(tab_url):
+                            continue
                         candidate = get_arena_direct_catalog_for_tab(
                             config_engine,
                             tab,

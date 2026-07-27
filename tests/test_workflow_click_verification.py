@@ -1,4 +1,10 @@
+from contextlib import contextmanager
+
+import pytest
+
+from app.core.config import WorkflowError
 from app.core.workflow.executor_actions import WorkflowExecutorActionMixin
+from app.core.workflow.executor_send import WorkflowExecutorSendMixin
 from app.core.page_lifecycle import BACKGROUND_WAKE_CDP_TIMEOUT
 
 
@@ -107,3 +113,58 @@ def test_box_model_skips_degenerate_content_quad():
     executor.tab = _BorderBoxModelTab()
 
     assert executor._get_element_viewport_pos(_RectUnavailableElement()) == (70, 45)
+
+
+class _StopOnlyFinder:
+    _last_send_btn_blocked_by_stop = True
+
+    @staticmethod
+    def find_with_fallback(_selector, _target_key):
+        return None
+
+
+def test_send_click_reports_not_dispatched_when_only_stop_button_exists():
+    executor = WorkflowExecutorActionMixin.__new__(WorkflowExecutorActionMixin)
+    executor.finder = _StopOnlyFinder()
+    executor._check_cancelled = lambda: False
+    pressed_keys = []
+    executor._execute_keypress = pressed_keys.append
+
+    @contextmanager
+    def interaction_slot(_action, _target_key):
+        yield True
+
+    executor._page_interaction_slot = interaction_slot
+
+    dispatched = executor._execute_click("button.send", "send_btn", optional=False)
+
+    assert dispatched is False
+    assert pressed_keys == []
+
+
+def test_preexisting_generation_is_waited_out_before_send():
+    executor = WorkflowExecutorSendMixin.__new__(WorkflowExecutorSendMixin)
+    states = iter(
+        [
+            {"generating": True, "sendLooksLikeStop": True},
+            {"generating": False, "sendLooksLikeStop": False},
+        ]
+    )
+    executor._probe_send_post_click_state = lambda _selector: next(states)
+    executor._get_send_confirmation_window = lambda *_args, **_kwargs: 0.02
+    executor._check_cancelled = lambda: False
+
+    assert executor._wait_for_send_idle_before_action("button.send") is True
+
+
+def test_stealth_send_does_not_confirm_when_click_was_skipped():
+    executor = WorkflowExecutorSendMixin.__new__(WorkflowExecutorSendMixin)
+    executor._context = {"images": []}
+    executor._network_monitor = None
+    executor._get_send_confirmation_flag = lambda *_args, **_kwargs: True
+    executor._read_stable_send_input_len = lambda *_args, **_kwargs: 12
+    executor._wait_for_send_idle_before_action = lambda _selector: True
+    executor._execute_click = lambda *_args, **_kwargs: False
+
+    with pytest.raises(WorkflowError, match="send_action_not_dispatched"):
+        executor._execute_click_send_stealth("button.send", "send_btn", optional=False)

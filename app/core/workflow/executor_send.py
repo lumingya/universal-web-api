@@ -475,6 +475,49 @@ class WorkflowExecutorSendMixin:
             return False
         return bool(state.get("generating") or state.get("sendLooksLikeStop"))
 
+    def _wait_for_send_idle_before_action(self, send_selector: str) -> bool:
+        """Wait out generation owned by an earlier action before submitting this prompt."""
+        state = self._probe_send_post_click_state(send_selector)
+        if not self._is_send_post_click_confirmed(state):
+            return True
+
+        wait_timeout = self._get_send_confirmation_window(
+            "pre_send_idle_timeout",
+            120.0,
+            min_value=0.0,
+            max_value=300.0,
+            raw_only=True,
+        )
+        logger.warning(
+            "[SEND] 发送前检测到页面仍处于旧生成/停止态，"
+            f"等待其结束后再提交本次消息 (timeout={wait_timeout:.1f}s)"
+        )
+        deadline = time.time() + wait_timeout
+        while time.time() < deadline:
+            if self._check_cancelled():
+                return False
+            time.sleep(min(0.25, max(0.0, deadline - time.time())))
+            state = self._probe_send_post_click_state(send_selector)
+            if not self._is_send_post_click_confirmed(state):
+                logger.info("[SEND] 旧生成态已结束，继续提交本次消息")
+                return True
+
+        logger.error(
+            "[SEND] 等待旧生成态结束超时，本次发送动作尚未执行，"
+            "不会把旧生成状态误判为发送成功"
+        )
+        raise WorkflowError("send_blocked_by_preexisting_generation")
+
+    @staticmethod
+    def _require_send_action_dispatched(dispatched: Any) -> None:
+        """Reject confirmation when the click layer explicitly skipped submission."""
+        if dispatched is not False:
+            return
+        logger.error(
+            "[SEND] 本次发送动作未执行，禁止使用页面已有的生成/停止态确认发送成功"
+        )
+        raise WorkflowError("send_action_not_dispatched")
+
     def _get_recent_fill_expected_text_length(self, max_age: float = 12.0) -> int:
         try:
             completed_at = float(getattr(self, "_last_fill_completed_at", 0.0) or 0.0)
@@ -570,7 +613,7 @@ class WorkflowExecutorSendMixin:
         optional: bool,
         *,
         retry_action_config: Optional[Dict[str, str]] = None,
-    ) -> None:
+    ) -> bool:
         config = retry_action_config or self._get_send_retry_action_config()
         retry_action = str(config.get("retry_action") or "click_send_btn").strip().lower()
         if self._network_monitor is not None:
@@ -579,9 +622,9 @@ class WorkflowExecutorSendMixin:
         if retry_action == "key_press":
             key_combo = str(config.get("retry_key_combo") or "Enter").strip() or "Enter"
             self._execute_keypress_combo(key_combo)
-            return
+            return True
 
-        self._execute_click(selector, target_key, optional)
+        return self._execute_click(selector, target_key, optional)
 
     def _get_attachment_send_confirmation_profile(self) -> Dict[str, Any]:
         """Resolve the 3-level attachment send sensitivity profile."""
@@ -1164,9 +1207,12 @@ class WorkflowExecutorSendMixin:
             use_recent_fill_hint=True,
         )
         baseline_attachment_state = self._probe_attachment_readiness(selector) if avoid_repeat_click else {}
+        if not self._wait_for_send_idle_before_action(selector):
+            return
         if self._network_monitor is not None:
             self._network_monitor.mark_send_attempt()
-        self._execute_click(selector, target_key, optional)
+        send_dispatched = self._execute_click(selector, target_key, optional)
+        self._require_send_action_dispatched(send_dispatched)
         last_send_action_at = time.time()
 
         time.sleep(0.25)
@@ -1453,9 +1499,12 @@ class WorkflowExecutorSendMixin:
                 "input_box",
                 use_recent_fill_hint=True,
             )
+            if not self._wait_for_send_idle_before_action(selector):
+                return
             if self._network_monitor is not None:
                 self._network_monitor.mark_send_attempt()
-            self._execute_click(selector, target_key, optional)
+            send_dispatched = self._execute_click(selector, target_key, optional)
+            self._require_send_action_dispatched(send_dispatched)
             time.sleep(0.25)
             after_len = self._read_stable_send_input_len("input_box")
             post_state = self._probe_send_post_click_state(selector)
@@ -1543,6 +1592,8 @@ class WorkflowExecutorSendMixin:
             "input_box",
             use_recent_fill_hint=True,
         )
+        if not self._wait_for_send_idle_before_action(selector):
+            return
         if self._network_monitor is not None:
             self._network_monitor.mark_send_attempt()
 
@@ -1551,7 +1602,8 @@ class WorkflowExecutorSendMixin:
             f"(observe={observe_window:.1f}s, max_retry={max_retry_count})"
         )
 
-        self._execute_click(selector, target_key, optional)
+        send_dispatched = self._execute_click(selector, target_key, optional)
+        self._require_send_action_dispatched(send_dispatched)
         last_send_action_at = time.time()
         time.sleep(0.25)
         after_len = self._read_stable_send_input_len("input_box")

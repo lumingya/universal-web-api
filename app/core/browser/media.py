@@ -913,6 +913,11 @@ class BrowserMediaMixin:
         fallback_stream_media_items = self._dedupe_media_items(
             [dict(item) for item in (stream_media_items or []) if isinstance(item, dict)]
         )
+        dom_baseline_active = bool(
+            media_dom_baseline
+            and media_dom_baseline.get("token")
+            and media_dom_baseline.get("property")
+        )
 
         def _apply_stream_media_fallback(dom_media_items: List[Dict]) -> List[Dict]:
             return self._merge_dom_and_stream_media_items(
@@ -1011,12 +1016,7 @@ class BrowserMediaMixin:
                     return None
 
                 strategy = str(image_config.get("final_target_strategy", "container") or "container").strip().lower()
-                baseline_active = bool(
-                    media_dom_baseline
-                    and media_dom_baseline.get("token")
-                    and media_dom_baseline.get("property")
-                )
-                if baseline_active:
+                if dom_baseline_active:
                     fresh_candidates = [
                         candidate
                         for candidate in candidates
@@ -1159,6 +1159,83 @@ class BrowserMediaMixin:
                     ]
                 return extracted_items
 
+            def _extract_fresh_media_from_page_scope(reason: str, quiet=True):
+                if only_audio_mode or not is_modality_enabled(modalities, "image"):
+                    return []
+                if not dom_baseline_active or effective_stop_checker():
+                    return []
+
+                fallback_selectors = image_config.get("fresh_image_fallback_selectors") or (
+                    "main",
+                    "body",
+                )
+                if isinstance(fallback_selectors, str):
+                    fallback_selectors = [fallback_selectors]
+
+                roots = []
+                seen_root_ids = set()
+                for fallback_selector in fallback_selectors:
+                    fallback_selector = str(fallback_selector or "").strip()
+                    if not fallback_selector:
+                        continue
+                    try:
+                        found_roots = finder.find_all(fallback_selector, timeout=0.5) or []
+                    except Exception as e:
+                        logger.debug(f"页面级图片回退根查找失败（忽略）: selector={fallback_selector!r}, error={e}")
+                        continue
+                    for root in found_roots:
+                        root_key = id(root)
+                        if root_key in seen_root_ids:
+                            continue
+                        seen_root_ids.add(root_key)
+                        roots.append((fallback_selector, root))
+
+                if not roots:
+                    return []
+
+                logger.debug(
+                    "窄范围未捕获本轮图片，启用页面级图片回退扫描: "
+                    f"reason={reason}, roots={len(roots)}"
+                )
+                fallback_items = []
+                for fallback_selector, root in roots:
+                    cfg = dict(image_config or {})
+                    cfg["allow_container_fallback"] = True
+                    cfg["container_selector"] = None
+                    cfg["request_baseline_token"] = str(media_dom_baseline.get("token") or "")
+                    cfg["request_baseline_property"] = str(media_dom_baseline.get("property") or "")
+                    if quiet:
+                        cfg["quiet"] = True
+                    try:
+                        extracted_items = media_extractor.extract(
+                            root,
+                            config=cfg,
+                            container_selector_fallback="",
+                        )
+                    except Exception as e:
+                        logger.debug(
+                            "页面级图片回退扫描失败（忽略）: "
+                            f"selector={fallback_selector!r}, error={e}"
+                        )
+                        continue
+                    extracted_items = list(extracted_items or [])
+                    ready_items = self._filter_ready_media_items(extracted_items, image_config)
+                    image_count = sum(
+                        1
+                        for item in ready_items
+                        if str(item.get("media_type") or "").strip().lower() == "image"
+                    )
+                    if image_count:
+                        logger.debug(
+                            "页面级图片回退扫描捕获本轮新图: "
+                            f"selector={fallback_selector!r}, images={image_count}"
+                        )
+                        fallback_items.extend(ready_items)
+                        break
+
+                return self._dedupe_media_items(fallback_items)
+
+            request_likely_image = self._looks_like_image_generation_request(request_text_hint)
             media_items = [] if only_audio_mode else _extract_media_once(last_element)
             ready_media_items = _apply_stream_media_fallback(
                 self._filter_ready_media_items(media_items, image_config)
@@ -1171,6 +1248,21 @@ class BrowserMediaMixin:
             image_items = [item for item in ready_media_items if item.get("media_type") == "image"]
             audio_items = [item for item in ready_media_items if item.get("media_type") == "audio"]
             video_items = [item for item in ready_media_items if item.get("media_type") == "video"]
+
+            if (
+                request_likely_image
+                and not image_items
+                and not fallback_stream_media_items
+                and not effective_stop_checker()
+            ):
+                fresh_page_media_items = _extract_fresh_media_from_page_scope("initial_empty")
+                if fresh_page_media_items:
+                    ready_media_items = self._dedupe_media_items(
+                        list(ready_media_items) + fresh_page_media_items
+                    )
+                    image_items = [item for item in ready_media_items if item.get("media_type") == "image"]
+                    audio_items = [item for item in ready_media_items if item.get("media_type") == "audio"]
+                    video_items = [item for item in ready_media_items if item.get("media_type") == "video"]
 
             placeholder_text = ""
             if not only_audio_mode:
@@ -1186,7 +1278,6 @@ class BrowserMediaMixin:
 
             placeholder_text_lower = placeholder_text.lower()
             response_text_hint_lower = str(response_text_hint or "").strip().lower()
-            request_likely_image = self._looks_like_image_generation_request(request_text_hint)
             media_state = dict(media_generation_state or {})
             media_state_pending = bool(media_state.get("pending"))
             media_state_type = str(media_state.get("media_type") or "").strip().lower()
@@ -1327,6 +1418,25 @@ class BrowserMediaMixin:
                     audio_items = [item for item in ready_media_items if item.get("media_type") == "audio"]
                     video_items = [item for item in ready_media_items if item.get("media_type") == "video"]
 
+                    if "image" in pending_kinds and not image_items and not fallback_stream_media_items:
+                        fresh_page_media_items = _extract_fresh_media_from_page_scope(
+                            "pending_wait_empty",
+                            quiet=True,
+                        )
+                        if fresh_page_media_items:
+                            ready_media_items = self._dedupe_media_items(
+                                list(ready_media_items) + fresh_page_media_items
+                            )
+                            image_items = [
+                                item for item in ready_media_items if item.get("media_type") == "image"
+                            ]
+                            audio_items = [
+                                item for item in ready_media_items if item.get("media_type") == "audio"
+                            ]
+                            video_items = [
+                                item for item in ready_media_items if item.get("media_type") == "video"
+                            ]
+
                     satisfied = True
                     if "image" in pending_kinds and not image_items:
                         satisfied = False
@@ -1400,6 +1510,25 @@ class BrowserMediaMixin:
                     image_items = [item for item in ready_media_items if item.get("media_type") == "image"]
                     audio_items = [item for item in ready_media_items if item.get("media_type") == "audio"]
                     video_items = [item for item in ready_media_items if item.get("media_type") == "video"]
+
+                    if not image_items and not fallback_stream_media_items:
+                        fresh_page_media_items = _extract_fresh_media_from_page_scope(
+                            "blind_wait_empty",
+                            quiet=True,
+                        )
+                        if fresh_page_media_items:
+                            ready_media_items = self._dedupe_media_items(
+                                list(ready_media_items) + fresh_page_media_items
+                            )
+                            image_items = [
+                                item for item in ready_media_items if item.get("media_type") == "image"
+                            ]
+                            audio_items = [
+                                item for item in ready_media_items if item.get("media_type") == "audio"
+                            ]
+                            video_items = [
+                                item for item in ready_media_items if item.get("media_type") == "video"
+                            ]
 
                     if image_items:
                         logger.debug(
@@ -1925,6 +2054,98 @@ class BrowserMediaMixin:
 
         return result
 
+    @staticmethod
+    def _remote_image_urls_match(left: str, right: str) -> bool:
+        left_url = str(left or "").strip()
+        right_url = str(right or "").strip()
+        if not left_url or not right_url:
+            return False
+        if left_url == right_url or left_url in right_url or right_url in left_url:
+            return True
+
+        try:
+            left_parsed = urlparse(left_url)
+            right_parsed = urlparse(right_url)
+        except Exception:
+            return False
+        return bool(
+            left_parsed.path
+            and right_parsed.path
+            and left_parsed.path == right_parsed.path
+        )
+
+    def _wait_for_image_element_ready(
+        self,
+        img_ele,
+        target_url: str,
+        *,
+        timeout_seconds: float,
+        poll_seconds: float = 0.2,
+    ) -> tuple[bool, Dict[str, Any]]:
+        """Wait until the matched DOM image has decoded dimensions before screenshotting it."""
+        try:
+            timeout = max(0.0, float(timeout_seconds or 0.0))
+        except (TypeError, ValueError):
+            timeout = 0.0
+        try:
+            poll = max(0.05, float(poll_seconds or 0.2))
+        except (TypeError, ValueError):
+            poll = 0.2
+
+        deadline = time.monotonic() + timeout
+        last_state: Dict[str, Any] = {}
+        while True:
+            try:
+                raw_state = img_ele.run_js(
+                    """
+                    return (() => {
+                        const src = String(
+                            this.currentSrc
+                            || this.getAttribute('src')
+                            || this.src
+                            || ''
+                        ).trim();
+                        return {
+                            src,
+                            complete: Boolean(this.complete),
+                            natural_width: Number(this.naturalWidth || 0),
+                            natural_height: Number(this.naturalHeight || 0),
+                        };
+                    })();
+                    """
+                )
+                last_state = dict(raw_state) if isinstance(raw_state, dict) else {}
+            except Exception as exc:
+                last_state = {"error": str(exc)[:120]}
+
+            source_matches = self._remote_image_urls_match(
+                target_url,
+                str(last_state.get("src") or ""),
+            )
+            try:
+                natural_width = max(0, int(float(last_state.get("natural_width") or 0)))
+            except (TypeError, ValueError):
+                natural_width = 0
+            try:
+                natural_height = max(0, int(float(last_state.get("natural_height") or 0)))
+            except (TypeError, ValueError):
+                natural_height = 0
+            last_state["natural_width"] = natural_width
+            last_state["natural_height"] = natural_height
+            last_state["source_matches"] = source_matches
+            if (
+                source_matches
+                and bool(last_state.get("complete"))
+                and natural_width > 0
+                and natural_height > 0
+            ):
+                return True, last_state
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False, last_state
+            time.sleep(min(poll, remaining))
+
     def _try_screenshot_images_to_local(self, tab, last_element, images: List[Dict], image_config: Dict = None) -> List[Dict]:
         """
         优先下载图片（更精准），下载失败才截图。
@@ -1992,6 +2213,24 @@ class BrowserMediaMixin:
             max_image_bytes = max(1, int(image_config.get("max_size_mb") or 10)) * 1024 * 1024
         except (TypeError, ValueError):
             max_image_bytes = 10 * 1024 * 1024
+        try:
+            screenshot_ready_wait_seconds = max(
+                0.0,
+                float(
+                    image_config.get("screenshot_ready_wait_seconds")
+                    if image_config.get("screenshot_ready_wait_seconds") is not None
+                    else image_config.get("load_timeout_seconds", 5.0)
+                ),
+            )
+        except (TypeError, ValueError):
+            screenshot_ready_wait_seconds = 5.0
+        try:
+            screenshot_ready_poll_seconds = max(
+                0.05,
+                float(image_config.get("screenshot_ready_poll_seconds") or 0.2),
+            )
+        except (TypeError, ValueError):
+            screenshot_ready_poll_seconds = 0.2
 
         new_images = self._localize_images_with_background_cache(
             images,
@@ -2024,32 +2263,12 @@ class BrowserMediaMixin:
             })
 
         def _claim_image_element(target_url: str):
-            normalized_target = str(target_url or "").strip()
-            if normalized_target:
-                for entry in reversed(img_ele_entries):
-                    if entry["used"]:
-                        continue
-                    src = entry["src"]
-                    if src and src == normalized_target:
-                        entry["used"] = True
-                        return entry["element"]
-
-                for entry in reversed(img_ele_entries):
-                    if entry["used"]:
-                        continue
-                    src = entry["src"]
-                    if src and (normalized_target in src or src in normalized_target):
-                        entry["used"] = True
-                        return entry["element"]
-
-                target_path = urlparse(normalized_target).path or ""
-                for entry in reversed(img_ele_entries):
-                    if entry["used"]:
-                        continue
-                    src_path = urlparse(entry["src"]).path if entry["src"] else ""
-                    if src_path and target_path and src_path == target_path:
-                        entry["used"] = True
-                        return entry["element"]
+            for entry in reversed(img_ele_entries):
+                if entry["used"]:
+                    continue
+                if self._remote_image_urls_match(target_url, entry["src"]):
+                    entry["used"] = True
+                    return entry["element"]
 
             return None
         localized_count = 0
@@ -2143,23 +2362,50 @@ class BrowserMediaMixin:
                         pass
 
             if not saved and img_ele is not None:
-                logger.debug(f"图片[{target_index}] 回退到截图方式")
-                try:
-                    img_ele.get_screenshot(str(out_path))
-                    if out_path.exists() and out_path.stat().st_size > 0:
-                        saved = True
-                        background_image_downloader.register_downloaded_file(
+                image_ready, ready_state = self._wait_for_image_element_ready(
+                    img_ele,
+                    target_url,
+                    timeout_seconds=screenshot_ready_wait_seconds,
+                    poll_seconds=screenshot_ready_poll_seconds,
+                )
+                if not image_ready:
+                    logger.warning(
+                        f"图片[{target_index}] DOM 仍处于加载状态，跳过截图回退并保留远程链接："
+                        f"complete={bool(ready_state.get('complete'))}, "
+                        f"natural={int(ready_state.get('natural_width') or 0)}x"
+                        f"{int(ready_state.get('natural_height') or 0)}, "
+                        f"source_matches={bool(ready_state.get('source_matches'))}"
+                    )
+                else:
+                    logger.debug(f"图片[{target_index}] 已确认加载完成，回退到截图方式")
+                    try:
+                        img_ele.get_screenshot(str(out_path))
+                        still_ready, _ = self._wait_for_image_element_ready(
+                            img_ele,
                             target_url,
-                            local_path=out_path,
-                            accessible_url=f"/download_images/{out_path.name}",
-                            mime=None,
-                            byte_size=int(out_path.stat().st_size),
-                            source="screenshot_fallback",
-                            partition_key=partition_key,
+                            timeout_seconds=0.0,
                         )
-                        logger.debug(f"✅ 截图成功: {filename} ({out_path.stat().st_size} bytes)")
-                except Exception as e:
-                    logger.warning(f"截图失败: {e}")
+                        if not still_ready:
+                            if out_path.exists():
+                                out_path.unlink()
+                            logger.warning(
+                                f"图片[{target_index}] 截图期间 DOM 图片状态发生变化，已丢弃截图"
+                            )
+                        elif out_path.exists() and out_path.stat().st_size > 0:
+                            saved = True
+                            saved_mime = "image/png"
+                            background_image_downloader.register_downloaded_file(
+                                target_url,
+                                local_path=out_path,
+                                accessible_url=f"/download_images/{out_path.name}",
+                                mime=saved_mime,
+                                byte_size=int(out_path.stat().st_size),
+                                source="screenshot_fallback",
+                                partition_key=partition_key,
+                            )
+                            logger.debug(f"✅ 截图成功: {filename} ({out_path.stat().st_size} bytes)")
+                    except Exception as e:
+                        logger.warning(f"截图失败: {e}")
             elif not saved:
                 logger.warning(
                     f"图片[{target_index}] 未找到与目标 URL 匹配的 DOM 节点，跳过截图回退"

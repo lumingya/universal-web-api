@@ -289,11 +289,14 @@
 .dark .uwa-token-kpis article.is-calls .uwa-token-kpi-icon { background: #5b7048; }
 
 .dark .uwa-token-legend i { background: #c2d0b0; }
-.dark .uwa-token-legend i.is-input { background: #9bb48b; }
-.dark .uwa-token-legend i.is-output { background: #d9a26f; }
+.dark .uwa-token-legend i.is-input { background: #8ed29a; }
+.dark .uwa-token-legend i.is-output { background: #f0a35e; }
 
-.dark .uwa-token-line-chart polyline.is-input { stroke: #9cb883; }
-.dark .uwa-daily-token-chart polyline { stroke: #c2d0b0; }
+.dark .uwa-token-line-chart path.is-input { stroke: #8ed29a; }
+.dark .uwa-token-line-chart path.is-output { stroke: #f0a35e; }
+.dark .uwa-daily-token-chart rect.is-input { fill: #8ed29a; }
+.dark .uwa-daily-token-chart rect.is-output { fill: #f0a35e; }
+.dark .uwa-daily-token-chart path { stroke: #c2d0b0; }
 
 .dark .uwa-donut-track { stroke: #2c362d; }
 .dark .uwa-model-usage-list b { background: #2c362d; }

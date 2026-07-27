@@ -393,11 +393,20 @@ window.RequestMonitorTab = {
         hourlyTokenMax() {
             return Math.max(1, ...this.hourlyTokenBuckets.map(bucket => Math.max(bucket.prompt, bucket.response)))
         },
-        hourlyPromptPoints() {
-            return this.linePoints(this.hourlyTokenBuckets, 'prompt', this.hourlyTokenMax)
+        hourlyYAxisLabels() {
+            return this.chartYAxisLabels(this.hourlyTokenMax)
         },
-        hourlyResponsePoints() {
-            return this.linePoints(this.hourlyTokenBuckets, 'response', this.hourlyTokenMax)
+        hourlyValueLabels() {
+            return [
+                this.chartPeakLabel(this.hourlyTokenBuckets, 'prompt', this.hourlyTokenMax, '输入'),
+                this.chartPeakLabel(this.hourlyTokenBuckets, 'response', this.hourlyTokenMax, '输出')
+            ].filter(Boolean)
+        },
+        hourlyPromptPath() {
+            return this.linePath(this.hourlyTokenBuckets, 'prompt', this.hourlyTokenMax)
+        },
+        hourlyResponsePath() {
+            return this.linePath(this.hourlyTokenBuckets, 'response', this.hourlyTokenMax)
         },
         dailyTokenBuckets() {
             const totals = new Map()
@@ -429,28 +438,47 @@ window.RequestMonitorTab = {
         dailyTokenMax() {
             return Math.max(1, ...this.dailyTokenBuckets.map(bucket => bucket.total))
         },
+        dailyYAxisLabels() {
+            return this.chartYAxisLabels(this.dailyTokenMax)
+        },
         dailyChartBars() {
             const count = Math.max(1, this.dailyTokenBuckets.length)
-            const slot = 760 / count
-            const width = Math.max(3, Math.min(26, slot * 0.58))
+            const slot = 718 / count
+            const width = Math.max(5, Math.min(22, slot * 0.44))
+            const gap = Math.max(2, Math.min(6, width * 0.28))
+            const stackWidth = (width - gap) / 2
             return this.dailyTokenBuckets.map((bucket, index) => {
                 const promptHeight = (bucket.prompt / this.dailyTokenMax) * 145
                 const responseHeight = (bucket.response / this.dailyTokenMax) * 145
                 return {
                     ...bucket,
-                    x: 20 + slot * index + (slot - width) / 2,
-                    width,
+                    x: 62 + slot * index + (slot - width) / 2,
+                    promptX: 62 + slot * index + (slot - width) / 2,
+                    responseX: 62 + slot * index + (slot - width) / 2 + stackWidth + gap,
+                    barWidth: stackWidth,
                     promptHeight,
                     responseHeight,
                     promptY: 190 - promptHeight,
-                    responseY: 190 - promptHeight - responseHeight,
-                    pointX: 20 + slot * index + slot / 2,
+                    responseY: 190 - responseHeight,
+                    pointX: 62 + slot * index + slot / 2,
                     pointY: 190 - (bucket.total / this.dailyTokenMax) * 145
                 }
             })
         },
-        dailyTotalPoints() {
-            return this.dailyChartBars.map(bar => bar.pointX.toFixed(1) + ',' + bar.pointY.toFixed(1)).join(' ')
+        dailyValueLabels() {
+            return this.dailyChartBars
+                .filter(bar => Number(bar.total || 0) > 0)
+                .sort((a, b) => b.total - a.total)
+                .slice(0, 3)
+                .map(bar => ({
+                    key: bar.key,
+                    x: bar.pointX,
+                    y: Math.max(34, bar.pointY - 12),
+                    text: this.formatTokenNumber(bar.total)
+                }))
+        },
+        dailyTotalPath() {
+            return this.smoothLinePath(this.dailyChartBars.map(bar => ({ x: bar.pointX, y: bar.pointY })))
         },
         dailyChartLabels() {
             const buckets = this.dailyTokenBuckets
@@ -983,13 +1011,69 @@ window.RequestMonitorTab = {
         shortDate(date) {
             return String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0')
         },
-        linePoints(buckets, field, maximum) {
+        chartYAxisLabels(maximum) {
+            const max = Math.max(1, Number(maximum || 0))
+            return [1, 0.66, 0.31, 0].map((ratio, index) => {
+                const y = [45, 95, 145, 190][index]
+                return {
+                    key: index,
+                    y,
+                    text: this.formatTokenNumber(Math.round(max * ratio))
+                }
+            })
+        },
+        chartPeakLabel(buckets, field, maximum, name) {
+            if (!Array.isArray(buckets) || !buckets.length) return null
+            let bestIndex = -1
+            let bestValue = 0
+            buckets.forEach((bucket, index) => {
+                const value = Number(bucket && bucket[field] || 0)
+                if (Number.isFinite(value) && value > bestValue) {
+                    bestValue = value
+                    bestIndex = index
+                }
+            })
+            if (bestIndex < 0 || bestValue <= 0) return null
             const count = Math.max(1, buckets.length - 1)
-            return buckets.map((bucket, index) => {
-                const x = 20 + index * (760 / count)
+            const x = 62 + bestIndex * (718 / count)
+            const y = 190 - (bestValue / Math.max(1, maximum)) * 145
+            return {
+                key: field,
+                x,
+                y: Math.max(34, y - 12),
+                text: name + ' ' + this.formatTokenNumber(bestValue)
+            }
+        },
+        chartLabelStyle(x, y) {
+            return {
+                left: (Number(x || 0) / 800 * 100).toFixed(3) + '%',
+                top: (Number(y || 0) / 220 * 100).toFixed(3) + '%'
+            }
+        },
+        linePath(buckets, field, maximum) {
+            const count = Math.max(1, buckets.length - 1)
+            const points = buckets.map((bucket, index) => {
+                const x = 62 + index * (718 / count)
                 const y = 190 - (Number(bucket[field] || 0) / Math.max(1, maximum)) * 145
-                return x.toFixed(1) + ',' + y.toFixed(1)
-            }).join(' ')
+                return { x, y }
+            })
+            return this.smoothLinePath(points)
+        },
+        smoothLinePath(points) {
+            if (!Array.isArray(points) || !points.length) return ''
+            const format = value => Number(value || 0).toFixed(1)
+            const first = points[0]
+            if (points.length === 1) {
+                return 'M ' + format(first.x) + ' ' + format(first.y)
+            }
+            return points.slice(1).reduce((path, point, index) => {
+                const previous = points[index]
+                const controlOffset = Math.min(Math.abs(point.x - previous.x) * 0.42, 44)
+                return path
+                    + ' C ' + format(previous.x + controlOffset) + ' ' + format(previous.y)
+                    + ' ' + format(point.x - controlOffset) + ' ' + format(point.y)
+                    + ' ' + format(point.x) + ' ' + format(point.y)
+            }, 'M ' + format(first.x) + ' ' + format(first.y))
         },
         modelColor(index) {
             return ['#5d6b4d', '#8fbc8f', '#c8b89e', '#d4e4c1', '#3e4a32', '#a8b89a', '#b18f5e', '#7f8c78'][index % 8]
@@ -1062,10 +1146,16 @@ window.RequestMonitorTab = {
                     </div>
                     <div class="uwa-token-line-chart">
                         <svg viewBox="0 0 800 220" role="img" aria-label="当天每小时 Token 用量" preserveAspectRatio="none">
-                            <line x1="20" y1="45" x2="780" y2="45"></line><line x1="20" y1="95" x2="780" y2="95"></line><line x1="20" y1="145" x2="780" y2="145"></line><line x1="20" y1="190" x2="780" y2="190"></line>
-                            <polyline class="is-input" :points="hourlyPromptPoints"></polyline>
-                            <polyline class="is-output" :points="hourlyResponsePoints"></polyline>
+                            <line x1="62" y1="45" x2="780" y2="45"></line><line x1="62" y1="95" x2="780" y2="95"></line><line x1="62" y1="145" x2="780" y2="145"></line><line x1="62" y1="190" x2="780" y2="190"></line>
+                            <path class="is-input" :d="hourlyPromptPath"></path>
+                            <path class="is-output" :d="hourlyResponsePath"></path>
                         </svg>
+                        <div class="uwa-chart-y-axis" aria-hidden="true">
+                            <span v-for="label in hourlyYAxisLabels" :key="label.key" :style="chartLabelStyle(48, label.y)">{{ label.text }}</span>
+                        </div>
+                        <div class="uwa-chart-value-labels" aria-hidden="true">
+                            <span v-for="label in hourlyValueLabels" :key="label.key" :style="chartLabelStyle(label.x, label.y)">{{ label.text }}</span>
+                        </div>
                         <div class="uwa-chart-axis"><span>00:00</span><span>06:00</span><span>12:00</span><span>18:00</span><span>23:00</span></div>
                     </div>
                 </section>
@@ -1078,13 +1168,19 @@ window.RequestMonitorTab = {
                         </div>
                         <div v-if="dailyTokenBuckets.length" class="uwa-daily-token-chart">
                             <svg viewBox="0 0 800 220" role="img" aria-label="每日 Token 趋势" preserveAspectRatio="none">
-                                <line x1="20" y1="45" x2="780" y2="45"></line><line x1="20" y1="95" x2="780" y2="95"></line><line x1="20" y1="145" x2="780" y2="145"></line><line x1="20" y1="190" x2="780" y2="190"></line>
+                                <line x1="62" y1="45" x2="780" y2="45"></line><line x1="62" y1="95" x2="780" y2="95"></line><line x1="62" y1="145" x2="780" y2="145"></line><line x1="62" y1="190" x2="780" y2="190"></line>
                                 <g v-for="bar in dailyChartBars" :key="bar.key">
-                                    <rect class="is-input" :x="bar.x" :y="bar.promptY" :width="bar.width" :height="bar.promptHeight"></rect>
-                                    <rect class="is-output" :x="bar.x" :y="bar.responseY" :width="bar.width" :height="bar.responseHeight"></rect>
+                                    <rect class="is-input" :x="bar.promptX" :y="bar.promptY" :width="bar.barWidth" :height="bar.promptHeight" rx="2.5" ry="2.5"></rect>
+                                    <rect class="is-output" :x="bar.responseX" :y="bar.responseY" :width="bar.barWidth" :height="bar.responseHeight" rx="2.5" ry="2.5"></rect>
                                 </g>
-                                <polyline :points="dailyTotalPoints"></polyline>
+                                <path :d="dailyTotalPath"></path>
                             </svg>
+                            <div class="uwa-chart-y-axis" aria-hidden="true">
+                                <span v-for="label in dailyYAxisLabels" :key="label.key" :style="chartLabelStyle(48, label.y)">{{ label.text }}</span>
+                            </div>
+                            <div class="uwa-chart-value-labels" aria-hidden="true">
+                                <span v-for="label in dailyValueLabels" :key="label.key" :style="chartLabelStyle(label.x, label.y)">{{ label.text }}</span>
+                            </div>
                             <div class="uwa-chart-axis"><span v-for="item in dailyChartLabels" :key="item.index">{{ item.label }}</span></div>
                         </div>
                         <div v-else class="uwa-analytics-empty">当前范围暂无 Token 数据</div>

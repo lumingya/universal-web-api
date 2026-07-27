@@ -1646,23 +1646,81 @@ select {
 .uwa-token-legend i.is-output { background: #d9a26f; }
 
 .uwa-token-line-chart,
-.uwa-daily-token-chart { margin-top: 18px; }
+.uwa-daily-token-chart {
+    position: relative;
+    margin-top: 18px;
+}
 
 .uwa-token-line-chart svg,
-.uwa-daily-token-chart svg { display: block; width: 100%; height: 210px; }
+.uwa-daily-token-chart svg {
+    display: block;
+    overflow: visible;
+    width: 100%;
+    height: 210px;
+    shape-rendering: geometricPrecision;
+}
 .uwa-token-line-chart line,
-.uwa-daily-token-chart line { stroke: var(--uwa-line-soft); stroke-width: 1; }
-.uwa-token-line-chart polyline,
-.uwa-daily-token-chart polyline { fill: none; stroke-linecap: round; stroke-linejoin: round; }
-.uwa-token-line-chart polyline.is-input { stroke: #5d6b4d; stroke-width: 4; }
-.uwa-token-line-chart polyline.is-output { stroke: #8fbc8f; stroke-width: 3; }
+.uwa-daily-token-chart line {
+    stroke: var(--uwa-line-soft);
+    stroke-width: 1;
+    vector-effect: non-scaling-stroke;
+}
+.uwa-token-line-chart path,
+.uwa-daily-token-chart path {
+    fill: none;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    vector-effect: non-scaling-stroke;
+}
+.uwa-token-line-chart path.is-input { stroke: #5d6b4d; stroke-width: 4; }
+.uwa-token-line-chart path.is-output { stroke: #d9a26f; stroke-width: 3; }
+.uwa-daily-token-chart rect {
+    shape-rendering: geometricPrecision;
+}
 .uwa-daily-token-chart rect.is-input { fill: #9bb48b; }
 .uwa-daily-token-chart rect.is-output { fill: #d9a26f; }
-.uwa-daily-token-chart polyline { stroke: #3e4a32; stroke-width: 3; }
+.uwa-daily-token-chart path { stroke: #3e4a32; stroke-width: 3; }
+
+.uwa-chart-y-axis,
+.uwa-chart-value-labels {
+    position: absolute;
+    top: 0;
+    right: 0;
+    left: 0;
+    height: 210px;
+    pointer-events: none;
+}
+
+.uwa-chart-y-axis span,
+.uwa-chart-value-labels span {
+    position: absolute;
+    z-index: 1;
+    font-family: Consolas, monospace;
+    white-space: nowrap;
+}
+
+.uwa-chart-y-axis span {
+    color: var(--uwa-muted-soft);
+    font-size: 9px;
+    transform: translate(-100%, -50%);
+}
+
+.uwa-chart-value-labels span {
+    padding: 2px 6px;
+    border: 1px solid color-mix(in srgb, var(--uwa-line) 72%, transparent);
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--uwa-panel) 88%, transparent);
+    color: var(--uwa-ink-strong);
+    font-size: 10px;
+    font-weight: 700;
+    transform: translate(-50%, -100%);
+}
 
 .uwa-chart-axis {
     display: flex;
     justify-content: space-between;
+    padding-left: 7.75%;
+    padding-right: 2.5%;
     color: var(--uwa-muted-soft);
     font-family: Consolas, monospace;
     font-size: 9px;

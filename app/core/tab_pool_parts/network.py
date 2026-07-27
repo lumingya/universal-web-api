@@ -754,7 +754,7 @@ class _GlobalNetworkInterceptionManager:
                 stop_event=stop_event,
             )
             thread.start()
-            logger.debug(f"[GlobalNet] 启动监听: {session.id} pattern={self._listen_pattern!r}")
+            # logger.debug(f"[GlobalNet] 启动监听: {session.id} pattern={self._listen_pattern!r}")
             return True
 
     def stop_for_session(self, session_id: str, reason: str = "", join: bool = False) -> bool:
@@ -787,10 +787,6 @@ class _GlobalNetworkInterceptionManager:
         if not worker.thread.is_alive():
             self._forget_worker_if_current(worker)
 
-        if reason:
-            logger.debug(f"[GlobalNet] 停止监听: {session_id} ({reason})")
-        else:
-            logger.debug(f"[GlobalNet] 停止监听: {session_id}")
         return True
 
     def request_stop_for_session(
@@ -809,10 +805,6 @@ class _GlobalNetworkInterceptionManager:
             return True
 
         worker.stop_event.set()
-        if reason:
-            logger.debug(f"[GlobalNet] 请求停止监听: {session_id} ({reason})")
-        else:
-            logger.debug(f"[GlobalNet] 请求停止监听: {session_id}")
         return True
 
     def shutdown(self):

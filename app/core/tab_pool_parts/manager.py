@@ -1076,7 +1076,7 @@ class TabPoolManager:
                     if session is None or session.status != TabStatus.IDLE:
                         return
                 if self._start_global_monitor_for_session(session):
-                    logger.debug(f"[GlobalNet] rebound listener restarted: {session_key} ({reason})")
+                    # logger.debug(f"[GlobalNet] rebound listener restarted: {session_key} ({reason})")
                     return
                 if time.monotonic() >= deadline:
                     logger.warning(f"[GlobalNet] rebound listener restart failed: {session_key} ({reason})")

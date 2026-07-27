@@ -488,6 +488,82 @@ def test_global_chat_routes_plain_catalog_model_to_arena(monkeypatch):
     assert "'arena.ai'" not in matched_log
 
 
+def test_global_chat_catalog_route_skips_excluded_tab(monkeypatch):
+    excluded_url = "https://arena.ai/c/excluded"
+
+    class _TabPool:
+        @staticmethod
+        def get_tabs_with_index():
+            return [
+                {
+                    "persistent_index": 7,
+                    "status": "idle",
+                    "url": excluded_url,
+                    "preset_name": "direct",
+                    "current_domain": "arena.ai",
+                    "route_domain": "arena.ai",
+                },
+                {
+                    "persistent_index": 8,
+                    "status": "idle",
+                    "url": "https://arena.ai/c/allowed",
+                    "preset_name": "direct",
+                    "current_domain": "arena.ai",
+                    "route_domain": "arena.ai",
+                },
+            ]
+
+        @staticmethod
+        def is_url_excluded(url):
+            return url == excluded_url
+
+    class _Browser:
+        tab_pool = _TabPool()
+
+    monkeypatch.setattr(chat_api, "get_browser", lambda auto_connect=False: _Browser())
+    catalog_tabs = []
+
+    def _get_catalog(_config_engine, tab, preset_name=None):
+        catalog_tabs.append(tab["persistent_index"])
+        return {"catalog": {"enabled": True}}
+
+    monkeypatch.setattr(chat_api, "get_arena_direct_catalog_for_tab", _get_catalog)
+    monkeypatch.setattr(
+        chat_api,
+        "list_arena_direct_models",
+        lambda _browser, catalog_config=None: [
+            {
+                "name": "jaguar",
+                "search_name": "mistral-large-3",
+                "aliases": ["jaguar", "mistral-large-3"],
+            }
+        ],
+    )
+
+    routed = {}
+
+    async def _route(**kwargs):
+        routed.update(kwargs)
+        return {"route_domain": kwargs["route_domain"], "model": kwargs["body"].model}
+
+    monkeypatch.setattr(tab_routes_api, "chat_with_route_domain", _route)
+
+    result = asyncio.run(
+        chat_api.chat_completions(
+            request=SimpleNamespace(),
+            body=chat_api.ChatRequest(
+                model="mistral-large-3",
+                messages=[{"role": "user", "content": "hello"}],
+            ),
+            authenticated=True,
+        )
+    )
+
+    assert result == {"route_domain": "arena.ai", "model": "mistral-large-3"}
+    assert catalog_tabs == [8]
+    assert routed["tab_index"] == 8
+
+
 def test_exposed_model_route_ignores_tabs_excluded_from_dynamic_routing():
     class _TabPool:
         excluded_urls = [

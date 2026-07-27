@@ -1463,10 +1463,10 @@ class WorkflowExecutorActionMixin:
             if dialog_opened:
                 self._close_arena_model_dialog()
 
-    def _execute_click(self, selector: str, target_key: str, optional: bool):
+    def _execute_click(self, selector: str, target_key: str, optional: bool) -> bool:
         """执行点击操作（v5.7 隐身模式人类化点击）"""
         if self._check_cancelled():
-            return
+            return False
 
         last_error = None
         found_element = False
@@ -1476,7 +1476,7 @@ class WorkflowExecutorActionMixin:
             try:
                 with self._page_interaction_slot("CLICK", target_key) as acquired:
                     if not acquired or self._check_cancelled():
-                        return
+                        return False
 
                     ele = self.finder.find_with_fallback(selector, target_key)
                     if not ele:
@@ -1543,7 +1543,7 @@ class WorkflowExecutorActionMixin:
                         }
                 if target_key == "send_btn":
                     self._confirm_send_click_response_or_raise(before_len)
-                return
+                return True
 
             except Exception as click_err:
                 if isinstance(click_err, WorkflowError) and str(click_err) in {"send_unconfirmed"}:
@@ -1566,18 +1566,22 @@ class WorkflowExecutorActionMixin:
             if target_key == "send_btn":
                 logger.warning(f"[CLICK] 发送按钮点击失败，降级到 Enter 键: {last_error}")
                 self._execute_keypress("Enter")
+                return True
             elif last_error is not None and (
                 self.stealth_mode or self._get_step_click_mode() != "inherit"
             ):
                 raise last_error
+            return False
         elif target_key == "send_btn":
             if bool(getattr(self.finder, "_last_send_btn_blocked_by_stop", False)):
                 logger.warning("[CLICK] send_btn 当前处于停止态，跳过 Enter 降级以避免重复提交/中断")
-                return
+                return False
             self._execute_keypress("Enter")
+            return True
         
         elif not optional:
             raise ElementNotFoundError(f"点击目标未找到: {selector}")
+        return False
 
     def _execute_coord_click(self, value: Any, optional: bool):
         """执行坐标点击动作。"""

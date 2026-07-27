@@ -434,12 +434,132 @@ def test_image_screenshot_fallback_matches_stream_url_across_battle_sides(tmp_pa
     assert localized[0]["source"] == "local_file"
 
 
+def test_image_screenshot_fallback_waits_for_matching_dom_image_to_finish_loading(tmp_path, monkeypatch):
+    target_url = "https://cdn.example/generated.png?signature=stream"
+    image = _FakeDomImage(
+        "https://cdn.example/generated.png?signature=dom",
+        ready_states=[False, True, True],
+    )
+    last_element = SimpleNamespace(eles=lambda *_args, **_kwargs: [image])
+    tab = SimpleNamespace(eles=lambda *_args, **_kwargs: [])
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(browser_media_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        browser_media_module,
+        "build_image_download_request_context",
+        lambda _tab: ({}, {}),
+    )
+    monkeypatch.setattr(
+        browser_media_module,
+        "build_image_download_partition",
+        lambda *_args: "test",
+    )
+    monkeypatch.setattr(
+        browser_media_module.background_image_downloader,
+        "get_download_result",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        browser_media_module.background_image_downloader,
+        "register_downloaded_file",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        browser_media_module,
+        "get_public_remote_resource",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("download failed")),
+    )
+
+    localized = BrowserMediaMixin()._try_screenshot_images_to_local(
+        tab,
+        last_element,
+        [{"kind": "url", "url": target_url, "media_type": "image"}],
+        {
+            "selector": "img",
+            "background_download_wait_seconds": 0,
+            "screenshot_ready_wait_seconds": 1,
+            "screenshot_ready_poll_seconds": 0.05,
+        },
+    )
+
+    assert len(image.screenshot_paths) == 1
+    assert localized[0]["source"] == "local_file"
+
+
+def test_image_screenshot_fallback_preserves_remote_url_when_dom_image_never_loads(tmp_path, monkeypatch):
+    target_url = "https://cdn.example/generated.png?signature=stream"
+    image = _FakeDomImage(
+        "https://cdn.example/generated.png?signature=dom",
+        ready_states=[False],
+    )
+    last_element = SimpleNamespace(eles=lambda *_args, **_kwargs: [image])
+    tab = SimpleNamespace(eles=lambda *_args, **_kwargs: [])
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        browser_media_module,
+        "build_image_download_request_context",
+        lambda _tab: ({}, {}),
+    )
+    monkeypatch.setattr(
+        browser_media_module,
+        "build_image_download_partition",
+        lambda *_args: "test",
+    )
+    monkeypatch.setattr(
+        browser_media_module.background_image_downloader,
+        "get_download_result",
+        lambda *_args, **_kwargs: None,
+    )
+    register_calls = []
+    monkeypatch.setattr(
+        browser_media_module.background_image_downloader,
+        "register_downloaded_file",
+        lambda *args, **kwargs: register_calls.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        browser_media_module,
+        "get_public_remote_resource",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("download failed")),
+    )
+
+    localized = BrowserMediaMixin()._try_screenshot_images_to_local(
+        tab,
+        last_element,
+        [{"kind": "url", "url": target_url, "media_type": "image"}],
+        {
+            "selector": "img",
+            "background_download_wait_seconds": 0,
+            "screenshot_ready_wait_seconds": 0,
+        },
+    )
+
+    assert image.screenshot_paths == []
+    assert register_calls == []
+    assert localized[0]["url"] == target_url
+    assert localized[0].get("source") != "local_file"
+    assert list((tmp_path / "download_images").iterdir()) == []
+
+
 class _FakeDomImage:
-    def __init__(self, src):
+    def __init__(self, src, ready_states=None):
         self.src = src
         self.screenshot_paths = []
+        self.ready_states = list(ready_states or [True])
+        self.ready_probe_count = 0
 
-    def run_js(self, _script):
+    def run_js(self, script):
+        if "natural_width" in script and "natural_height" in script:
+            state_index = min(self.ready_probe_count, len(self.ready_states) - 1)
+            ready = bool(self.ready_states[state_index])
+            self.ready_probe_count += 1
+            return {
+                "src": self.src,
+                "complete": ready,
+                "natural_width": 1024 if ready else 0,
+                "natural_height": 1024 if ready else 0,
+            }
         return self.src
 
     def attr(self, _name):
