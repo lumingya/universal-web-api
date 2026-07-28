@@ -57,6 +57,7 @@ window.ConfigTab = {
             compareMainPresetName: '',
             compareMainMatchMode: '',
             compareMainPath: '',
+            compareMainSource: {},
             compareLocalOriginalText: '',
             compareLocalDraft: '',
             compareMainOriginalText: '',
@@ -714,6 +715,7 @@ window.ConfigTab = {
             this.compareMainPresetName = '';
             this.compareMainMatchMode = '';
             this.compareMainPath = '';
+            this.compareMainSource = {};
             this.compareLocalOriginalText = '';
             this.compareLocalDraft = '';
             this.compareMainOriginalText = '';
@@ -743,6 +745,7 @@ window.ConfigTab = {
             this.compareMainPresetName = '';
             this.compareMainMatchMode = '';
             this.compareMainPath = '';
+            this.compareMainSource = {};
             this.compareMainOriginalText = '';
             this.compareMainDraft = '';
             this.syncConfigCompareLocalDraft(true);
@@ -773,7 +776,15 @@ window.ConfigTab = {
                 return window.formatGitCompareErrorText(error);
             }
             const raw = String((error && error.message) || error || '').trim();
-            return raw || '读取 main 分支失败';
+            return raw || '读取官方配置失败';
+        },
+
+        formatOfficialConfigSourceTime(value) {
+            const raw = String(value || '').trim();
+            if (!raw) return '';
+            const timestamp = new Date(raw);
+            if (Number.isNaN(timestamp.getTime())) return raw;
+            return timestamp.toLocaleString('zh-CN', { hour12: false });
         },
 
         async loadMainBranchCompareConfig() {
@@ -788,7 +799,7 @@ window.ConfigTab = {
                 const data = await this.fetchJson(
                     '/api/sites/' + encodeURIComponent(domain) + '/main-branch-config?preset_name=' + queryPreset,
                     { headers: this.buildAuthHeaders() },
-                    { timeoutMs: 10000 }
+                    { timeoutMs: 22000 }
                 );
 
                 if (domain !== this.currentDomain || preset !== (this.selectedPreset || '')) return;
@@ -796,6 +807,7 @@ window.ConfigTab = {
                 this.compareMainPresetName = String(data.preset_name || '').trim() || '主预设';
                 this.compareMainMatchMode = String(data.match_mode || '').trim();
                 this.compareMainPath = String(data.path || 'config/sites.json').trim() || 'config/sites.json';
+                this.compareMainSource = { ...(data.source || {}) };
                 this.compareMainOriginalText = formatted;
                 this.compareMainDraft = formatted;
             } catch (error) {
@@ -805,6 +817,7 @@ window.ConfigTab = {
                 this.compareMainPresetName = '';
                 this.compareMainMatchMode = '';
                 this.compareMainPath = '';
+                this.compareMainSource = {};
                 this.compareMainOriginalText = '';
                 this.compareMainDraft = '';
             } finally {
@@ -2154,7 +2167,7 @@ window.ConfigTab = {
                                     <button @click="loadMainBranchCompareConfig"
                                             :disabled="compareMainLoading"
                                             class="rounded-xl border border-slate-700 bg-slate-800/80 px-3 py-1.5 text-xs font-medium text-slate-200 transition hover:bg-slate-700 hover:text-white disabled:cursor-not-allowed disabled:opacity-50">
-                                        {{ compareMainLoading ? '读取中...' : '刷新 main' }}
+                                        {{ compareMainLoading ? '读取中...' : '刷新官方配置' }}
                                     </button>
                                     <button @click="closeConfigCompareDialog"
                                             class="rounded-xl border border-rose-500/20 bg-rose-500/10 px-3 py-1.5 text-xs font-medium text-rose-300 transition hover:bg-rose-500/20 hover:text-rose-200">
@@ -2172,7 +2185,17 @@ window.ConfigTab = {
                                         当前预设: {{ selectedPreset || defaultPreset || '主预设' }}
                                     </span>
                                     <span class="rounded-full border border-slate-700 bg-slate-800 px-2.5 py-1 text-slate-300">
-                                        main 来源: {{ compareMainPath || 'config/sites.json' }}
+                                        官方来源: {{ compareMainSource.repository || '官方仓库' }}/{{ compareMainSource.branch || 'main' }} · {{ compareMainPath || 'config/sites.json' }}
+                                    </span>
+                                    <span v-if="compareMainSource.status"
+                                          :class="compareMainSource.stale
+                                              ? 'border-amber-500/30 bg-amber-500/10 text-amber-300'
+                                              : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'"
+                                          class="rounded-full border px-2.5 py-1">
+                                        {{ compareMainSource.stale ? '缓存回退' : (compareMainSource.status === 'validated_cache' ? '已确认最新' : '刚刚获取') }}
+                                        <template v-if="compareMainSource.stale ? compareMainSource.fetched_at : compareMainSource.checked_at">
+                                            · {{ formatOfficialConfigSourceTime(compareMainSource.stale ? compareMainSource.fetched_at : compareMainSource.checked_at) }}
+                                        </template>
                                     </span>
                                     <span v-if="compareMainPresetName"
                                           class="rounded-full border border-blue-500/30 bg-blue-500/10 px-2.5 py-1 text-blue-300">
@@ -2200,6 +2223,11 @@ window.ConfigTab = {
                                           :class="['rounded-full border px-2 py-0.5 text-[11px]', getConfigCompareDiffClass(item.status)]">
                                         {{ item.label }} · {{ getConfigCompareDiffText(item.status) }}
                                     </span>
+                                </div>
+
+                                <div v-if="compareMainSource.warning"
+                                     class="mt-2 border-l-2 border-amber-400 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                                    {{ compareMainSource.warning }}
                                 </div>
                             </div>
 

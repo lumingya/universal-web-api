@@ -2043,7 +2043,7 @@ class TextInputHandler:
         configured = str(
             self._file_paste_config.get("temp_file_type", DEFAULT_TEMP_FILE_TYPE)
         ).strip().lower().lstrip(".")
-        if configured == "error":
+        if configured in {"error", "chunk"}:
             return configured
         return normalize_temp_file_type(configured)
 
@@ -2103,6 +2103,8 @@ class TextInputHandler:
                 "returning configured error"
             )
             raise WorkflowError(f"file_paste_length_error:{message}")
+        if temp_file_type == "chunk":
+            raise WorkflowError("input_chunking_failed:超长内容未经过分块规划")
 
         logger.info(
             f"[FILE_PASTE] text length {len(text)} exceeds threshold {threshold}, "

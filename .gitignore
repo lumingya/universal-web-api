@@ -91,6 +91,7 @@ tests/*
 !tests/test_command_engine_scheduler_lifecycle.py
 !tests/test_commands_tab_result_races.py
 !tests/test_config_manager_safety.py
+!tests/test_config_compare_remote.py
 !tests/test_config_tab_save_queue.py
 !tests/test_core_review_regressions.py
 !tests/test_workflow_click_verification.py
@@ -105,3 +106,4 @@ tests/*
 !tests/test_tab_route_group_api.py
 !tests/test_arena_direct_models.py
 !tests/test_tool_calling_repairs.py
+!tests/test_input_chunking.py

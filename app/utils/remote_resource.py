@@ -16,6 +16,7 @@ _PROXY_FAKE_IP_NETWORKS = (ipaddress.ip_network("198.18.0.0/15"),)
 _PROXY_FAKE_IP_HTTPS_SUFFIXES = (
     "r2.cloudflarestorage.com",
     "contribution.usercontent.google.com",
+    "raw.githubusercontent.com",
 )
 
 

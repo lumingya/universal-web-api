@@ -532,12 +532,29 @@
                 <div class="space-y-3 overflow-auto px-4 py-3">
                     <div class="flex flex-wrap items-center gap-2 text-xs">
                         <span class="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-slate-600 dark:border-slate-700 dark:bg-slate-800/80 dark:text-slate-300">
-                            官方来源: {{ mainCompareSummaryPath }}
+                            官方来源: {{ mainCompareSummarySource.repository || '官方仓库' }}/{{ mainCompareSummarySource.branch || 'main' }} · {{ mainCompareSummaryPath }}
+                        </span>
+                        <span v-if="mainCompareSummarySource.status"
+                              :class="mainCompareSummarySource.stale
+                                  ? 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-200'
+                                  : 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-200'"
+                              class="rounded-full border px-2.5 py-1">
+                            {{ mainCompareSummarySource.stale
+                                ? '缓存回退'
+                                : (mainCompareSummarySource.status === 'validated_cache' ? '已确认最新' : '刚刚获取') }}
+                            <template v-if="mainCompareSummarySource.stale ? mainCompareSummarySource.fetched_at : mainCompareSummarySource.checked_at">
+                                · {{ formatOfficialConfigSourceTime(mainCompareSummarySource.stale ? mainCompareSummarySource.fetched_at : mainCompareSummarySource.checked_at) }}
+                            </template>
                         </span>
                         <label class="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-slate-600 dark:border-slate-700 dark:bg-slate-800/80 dark:text-slate-300">
                             <input v-model="mainCompareShowSame" type="checkbox" class="rounded">
                             <span>显示一致项</span>
                         </label>
+                    </div>
+
+                    <div v-if="mainCompareSummarySource.warning"
+                         class="border-l-2 border-amber-400 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+                        {{ mainCompareSummarySource.warning }}
                     </div>
 
                     <div class="flex flex-wrap gap-2 text-xs">
@@ -679,7 +696,7 @@
     <script src="static/js/components/panels/ImageConfigPanel.js?v=2.6.13"></script>
     <script src="static/js/components/panels/StreamConfigPanel.js?v=2.6.12"></script>
     <script src="static/js/components/panels/WorkflowPanel.js?v=2.6.11"></script>
-    <script src="static/js/components/panels/FilePastePanel.js?v=2.6.12"></script>
+    <script src="static/js/components/panels/FilePastePanel.js?v=2.6.13"></script>
     <script src="static/js/components/panels/PromptPaddingPanel.js?v=2.6.26"></script>
 
     <!-- 主组件 -->

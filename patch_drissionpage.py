@@ -187,7 +187,7 @@ except Exception:
     pass
 """.lstrip("\n")
 
-STREAM_CAPTURE_SNIPPET = """
+STREAM_CAPTURE_SNIPPET = r"""
 
 # CODEX_LISTENER_STREAM_CAPTURE_V1
 try:
@@ -710,7 +710,13 @@ def apply_patch(filepath):
     content, stream_capture_added = ensure_stream_capture_patch(content)
     if stream_capture_added:
         print("🌊 已追加增量流捕获补丁 (V1)")
-    
+
+    try:
+        compile(content, str(filepath), 'exec')
+    except SyntaxError as exc:
+        print(f"❌ 生成的补丁源码语法无效，已取消写入: {exc}")
+        return False
+
     # 写入修改后的文件
     filepath.write_text(content, encoding='utf-8')
     print(f"✅ 补丁已应用: {filepath}")

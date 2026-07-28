@@ -1,74 +1,281 @@
-"""Git/main-branch compare helpers for config routes."""
+"""Official main-branch compare helpers for config routes."""
+
+from __future__ import annotations
 
 import json
 import os
-import subprocess
+import re
+import tempfile
+import threading
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional, Dict, Any
+from urllib.parse import quote
+
+import requests
 
 from fastapi import HTTPException
 
 from app.api.config_route_models import _normalize_preset_config_payload
 from app.services.config_engine import config_engine, ConfigConstants
+from app.utils.remote_resource import (
+    UnsafeRemoteResourceError,
+    get_public_remote_resource,
+)
 
-def _load_git_branch_sites_config(branch_name: str = "main") -> Dict[str, Any]:
-    """从 Git 分支中读取 config/sites.json 的已提交版本。"""
+
+DEFAULT_OFFICIAL_REPO = "lumingya/universal-web-api"
+OFFICIAL_CONFIG_CACHE_DIR = (
+    Path(getattr(ConfigConstants, "_PROJECT_ROOT", "") or os.getcwd())
+    / "temp"
+    / "official_config_cache"
+)
+OFFICIAL_CONFIG_CACHE_FILE = "sites-main.json"
+OFFICIAL_CONFIG_META_FILE = "sites-main.meta.json"
+MAX_OFFICIAL_CONFIG_BYTES = 16 * 1024 * 1024
+_OFFICIAL_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+_OFFICIAL_CONFIG_CACHE_LOCK = threading.Lock()
+
+
+def _utc_now_text() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _official_config_relative_path() -> str:
     project_root = getattr(ConfigConstants, "_PROJECT_ROOT", "") or os.getcwd()
-    relative_config_path = os.path.relpath(
-        ConfigConstants.CONFIG_FILE,
-        project_root
-    ).replace("\\", "/")
+    return os.path.relpath(ConfigConstants.CONFIG_FILE, project_root).replace("\\", "/")
 
+
+def _resolve_official_repo() -> str:
+    repo = str(os.getenv("GITHUB_REPO", DEFAULT_OFFICIAL_REPO) or "").strip()
+    if not _OFFICIAL_REPO_PATTERN.fullmatch(repo):
+        raise ValueError("GITHUB_REPO 格式无效，应为 owner/repo")
+    return repo
+
+
+def _official_config_url(repo: str, branch_name: str, relative_path: str) -> str:
+    encoded_branch = quote(str(branch_name or "main").strip() or "main", safe="")
+    encoded_path = quote(relative_path, safe="/")
+    return f"https://raw.githubusercontent.com/{repo}/{encoded_branch}/{encoded_path}"
+
+
+def _cache_paths() -> tuple[Path, Path]:
+    return (
+        OFFICIAL_CONFIG_CACHE_DIR / OFFICIAL_CONFIG_CACHE_FILE,
+        OFFICIAL_CONFIG_CACHE_DIR / OFFICIAL_CONFIG_META_FILE,
+    )
+
+
+def _read_json_object(path: Path) -> Optional[Dict[str, Any]]:
     try:
-        result = subprocess.run(
-            ["git", "show", f"{branch_name}:{relative_config_path}"],
-            cwd=project_root,
-            check=True,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-        )
-    except subprocess.CalledProcessError as exc:
-        stderr = str(exc.stderr or "").strip()
-        lowered = stderr.lower()
-        if "not a git repository" in lowered:
-            detail = "当前程序目录不是 Git 仓库（例如压缩包解压安装），读不到 main 分支的已提交配置。这不影响其它功能的使用。"
-        elif (
-            "unknown revision" in lowered
-            or "bad revision" in lowered
-            or "invalid object name" in lowered
-            or "ambiguous argument" in lowered
-        ):
-            detail = f"本地仓库里找不到 {branch_name} 分支：可以先执行 git fetch，或确认默认分支名称。"
-        else:
-            detail = stderr or f"无法读取分支 {branch_name} 中的 {relative_config_path}"
-        raise HTTPException(status_code=404, detail=detail)
-    except FileNotFoundError:
-        raise HTTPException(
-            status_code=500,
-            detail="未检测到 Git：对比 main 需要本机安装 Git，且程序目录是 git clone 出来的仓库。这不影响其它功能的使用。"
-        )
-    except OSError as exc:
-        raise HTTPException(status_code=500, detail=f"调用 git 失败: {exc}")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
 
+
+def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    temp_path = Path(temp_name)
     try:
-        payload = json.loads(result.stdout or "{}")
-    except json.JSONDecodeError as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"{branch_name} 分支中的 {relative_config_path} 不是合法 JSON: {exc}"
-        )
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            fd = -1
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
+
+def _read_official_config_cache(
+    repo: str,
+    branch_name: str,
+    relative_path: str,
+) -> Optional[Dict[str, Any]]:
+    config_path, meta_path = _cache_paths()
+    payload = _read_json_object(config_path)
+    metadata = _read_json_object(meta_path)
+    if payload is None or metadata is None:
+        return None
+    if (
+        metadata.get("repository") != repo
+        or metadata.get("branch") != branch_name
+        or metadata.get("path") != relative_path
+    ):
+        return None
+    return {"payload": payload, "metadata": metadata}
+
+
+def _parse_official_config_bytes(content: bytes, relative_path: str) -> Dict[str, Any]:
+    if len(content) > MAX_OFFICIAL_CONFIG_BYTES:
+        raise ValueError("官方配置文件超过大小限制")
+    try:
+        payload = json.loads(content.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"官方 {relative_path} 不是合法 UTF-8 JSON: {exc}") from exc
     if not isinstance(payload, dict):
-        raise HTTPException(status_code=500, detail=f"{relative_config_path} 顶层必须是对象")
+        raise ValueError(f"官方 {relative_path} 顶层必须是对象")
+    return payload
 
+
+def _read_limited_response(response: requests.Response) -> bytes:
+    content_length = str(response.headers.get("Content-Length") or "").strip()
+    if content_length:
+        try:
+            declared_length = int(content_length)
+        except ValueError:
+            declared_length = 0
+        if declared_length > MAX_OFFICIAL_CONFIG_BYTES:
+            raise ValueError("官方配置文件超过大小限制")
+
+    chunks = []
+    total = 0
+    for chunk in response.iter_content(chunk_size=64 * 1024):
+        if not chunk:
+            continue
+        total += len(chunk)
+        if total > MAX_OFFICIAL_CONFIG_BYTES:
+            raise ValueError("官方配置文件超过大小限制")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _source_payload(
+    metadata: Dict[str, Any],
+    *,
+    status: str,
+    stale: bool,
+    warning: str = "",
+) -> Dict[str, Any]:
     return {
-        "path": relative_config_path,
+        "repository": str(metadata.get("repository") or ""),
+        "branch": str(metadata.get("branch") or "main"),
+        "path": str(metadata.get("path") or "config/sites.json"),
+        "url": str(metadata.get("url") or ""),
+        "status": status,
+        "stale": bool(stale),
+        "fetched_at": str(metadata.get("fetched_at") or ""),
+        "checked_at": str(metadata.get("checked_at") or ""),
+        "warning": warning,
+    }
+
+
+def _build_sites_payload(payload: Dict[str, Any], source: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "path": source["path"],
         "sites": {
             key: value
             for key, value in payload.items()
             if not str(key).startswith("_")
-        }
+        },
+        "source": source,
     }
+
+
+def _fetch_failure_text(exc: Exception) -> str:
+    if isinstance(exc, requests.Timeout):
+        return "连接官方仓库超时"
+    if isinstance(exc, requests.HTTPError) and exc.response is not None:
+        return f"官方仓库返回 HTTP {exc.response.status_code}"
+    if isinstance(exc, UnsafeRemoteResourceError):
+        return "官方仓库地址未通过网络安全校验"
+    return str(exc).strip() or exc.__class__.__name__
+
+
+def _load_official_sites_config(branch_name: str = "main") -> Dict[str, Any]:
+    """实时校验并读取官方分支配置，网络失败时回退到最近一次有效缓存。"""
+    branch = str(branch_name or "main").strip() or "main"
+    relative_path = _official_config_relative_path()
+    checked_at = _utc_now_text()
+
+    try:
+        repo = _resolve_official_repo()
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    url = _official_config_url(repo, branch, relative_path)
+
+    with _OFFICIAL_CONFIG_CACHE_LOCK:
+        cached = _read_official_config_cache(repo, branch, relative_path)
+        cached_meta = dict(cached["metadata"]) if cached else {}
+        headers = {
+            "Accept": "application/json",
+            "User-Agent": "Universal-Web-API-Config-Compare/1.0",
+        }
+        if cached_meta.get("etag"):
+            headers["If-None-Match"] = str(cached_meta["etag"])
+        if cached_meta.get("last_modified"):
+            headers["If-Modified-Since"] = str(cached_meta["last_modified"])
+
+        response = None
+        try:
+            response = get_public_remote_resource(
+                url,
+                headers=headers,
+                timeout=(5, 15),
+                stream=True,
+            )
+
+            if response.status_code == 304 and cached:
+                cached_meta["checked_at"] = checked_at
+                _, meta_path = _cache_paths()
+                _atomic_write_json(meta_path, cached_meta)
+                source = _source_payload(
+                    cached_meta,
+                    status="validated_cache",
+                    stale=False,
+                )
+                return _build_sites_payload(cached["payload"], source)
+
+            response.raise_for_status()
+            content = _read_limited_response(response)
+            payload = _parse_official_config_bytes(content, relative_path)
+            metadata = {
+                "repository": repo,
+                "branch": branch,
+                "path": relative_path,
+                "url": url,
+                "etag": str(response.headers.get("ETag") or ""),
+                "last_modified": str(response.headers.get("Last-Modified") or ""),
+                "fetched_at": checked_at,
+                "checked_at": checked_at,
+            }
+            config_path, meta_path = _cache_paths()
+            _atomic_write_json(config_path, payload)
+            _atomic_write_json(meta_path, metadata)
+            source = _source_payload(metadata, status="remote", stale=False)
+            return _build_sites_payload(payload, source)
+        except (
+            OSError,
+            ValueError,
+            requests.RequestException,
+            UnsafeRemoteResourceError,
+        ) as exc:
+            failure = _fetch_failure_text(exc)
+            if cached:
+                cached_meta["checked_at"] = checked_at
+                source = _source_payload(
+                    cached_meta,
+                    status="cache_fallback",
+                    stale=True,
+                    warning=f"获取官方最新配置失败，当前使用本地缓存：{failure}",
+                )
+                return _build_sites_payload(cached["payload"], source)
+            raise HTTPException(
+                status_code=503,
+                detail=f"无法获取官方配置，且本地没有可用缓存：{failure}",
+            ) from exc
+        finally:
+            if response is not None:
+                response.close()
 
 
 def _resolve_branch_preset_config(
@@ -200,7 +407,7 @@ def _collect_preset_different_fields(local_config: Dict[str, Any], main_config: 
 
 def _build_main_branch_compare_summary() -> Dict[str, Any]:
     config_engine.refresh_if_changed()
-    branch_payload = _load_git_branch_sites_config("main")
+    branch_payload = _load_official_sites_config("main")
     local_sites = {
         key: value
         for key, value in config_engine.sites.items()
@@ -309,6 +516,7 @@ def _build_main_branch_compare_summary() -> Dict[str, Any]:
     return {
         "branch": "main",
         "path": branch_payload["path"],
+        "source": branch_payload["source"],
         "counts": counts,
         "items": items,
     }
@@ -317,7 +525,7 @@ def _build_main_branch_compare_summary() -> Dict[str, Any]:
 # ================= 认证依赖 =================
 
 __all__ = [
-    '_load_git_branch_sites_config',
+    '_load_official_sites_config',
     '_resolve_branch_preset_config',
     '_build_main_branch_compare_summary',
 ]

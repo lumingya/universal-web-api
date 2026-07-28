@@ -18,6 +18,7 @@ from app.utils.site_url import extract_remote_site_domain, tab_url_matches
 from app.utils.image_handler import extract_images_from_messages
 from app.core.page_lifecycle import BACKGROUND_WAKE_CDP_TIMEOUT
 from app.core.workflow import WorkflowExecutor
+from app.core.workflow.input_chunking import PromptChunk, plan_prompt_chunks
 from app.core.tab_pool import TabSession
 from app.models.schemas import get_modality_run_policy, is_modality_enabled
 from app.services.arena_direct_models import (
@@ -931,6 +932,65 @@ class BrowserWorkflowMixin:
         except Exception as e:
             logger.debug(f"[{session.id}] 绑定请求标签页失败（忽略）: {e}")
 
+    def _plan_workflow_input_chunks(
+        self,
+        session: TabSession,
+        messages: List[Dict],
+        *,
+        preset_name: Optional[str],
+        requested_model: Optional[str],
+    ) -> List[PromptChunk]:
+        """Build a chunk plan from the same final prompt used by the workflow."""
+        try:
+            tab = session.tab
+            domain = extract_remote_site_domain(tab.url)
+            if not domain:
+                return []
+
+            config_engine = self._get_config_engine()
+            effective_preset_name = preset_name if preset_name is not None else session.preset_name
+            if preset_name is None:
+                catalog_preset = get_model_catalog_preset(config_engine, domain)
+                if catalog_preset and resolve_arena_direct_model(
+                    tab,
+                    requested_model,
+                    catalog_config=catalog_preset["catalog"],
+                ):
+                    effective_preset_name = catalog_preset["preset_name"]
+
+            site_config = config_engine.get_site_config(
+                domain,
+                tab.html,
+                preset_name=effective_preset_name,
+            )
+            if not isinstance(site_config, dict):
+                return []
+
+            file_paste_config = site_config.get("file_paste", {}) or {}
+            strategy = str(file_paste_config.get("temp_file_type") or "").strip().lower().lstrip(".")
+            if not file_paste_config.get("enabled", False) or strategy != "chunk":
+                return []
+
+            threshold = int(file_paste_config.get("threshold", 50000) or 50000)
+            prompt_text = self._build_prompt_from_messages(messages)
+            prompt_text = self._apply_prompt_padding(
+                prompt_text,
+                site_config.get("prompt_padding", {}) or {},
+            )
+            if len(prompt_text) <= threshold:
+                return []
+
+            chunks = plan_prompt_chunks(prompt_text, threshold)
+            logger.info(
+                f"[{session.id}] 输入超过分块阈值: total={len(prompt_text)}, "
+                f"limit={threshold}, chunks={len(chunks)}, "
+                f"lengths={[len(chunk.prompt) for chunk in chunks]}"
+            )
+            return chunks
+        except Exception as exc:
+            logger.warning(f"[{session.id}] 分块规划失败，将交由标准工作流处理: {exc}")
+            return []
+
     def _execute_workflow_stream(
         self,
         session: TabSession,
@@ -940,7 +1000,59 @@ class BrowserWorkflowMixin:
         workflow_priority: Optional[int] = None,
         allow_media_postprocess: bool = True,
         requested_model: Optional[str] = None,
+        _prepared_prompt: Optional[str] = None,
+        _skip_chunk_planning: bool = False,
+        _chunk_continuation: bool = False,
+        _include_message_images: bool = True,
     ) -> Generator[str, None, None]:
+        if not _skip_chunk_planning and _prepared_prompt is None:
+            chunk_plan = self._plan_workflow_input_chunks(
+                session,
+                messages,
+                preset_name=preset_name,
+                requested_model=requested_model,
+            )
+            if len(chunk_plan) > 1:
+                for chunk in chunk_plan:
+                    is_final_chunk = chunk.index == chunk.total
+                    part_stream = self._execute_workflow_stream(
+                        session,
+                        messages,
+                        preset_name=preset_name,
+                        stop_checker=stop_checker,
+                        workflow_priority=workflow_priority,
+                        allow_media_postprocess=(allow_media_postprocess if is_final_chunk else False),
+                        requested_model=requested_model,
+                        _prepared_prompt=chunk.prompt,
+                        _skip_chunk_planning=True,
+                        _chunk_continuation=chunk.index > 1,
+                        _include_message_images=chunk.index == 1,
+                    )
+                    if is_final_chunk:
+                        yield from part_stream
+                        return
+
+                    intermediate_error = None
+                    try:
+                        for response_chunk in part_stream:
+                            if self._extract_stream_error_payload(response_chunk):
+                                intermediate_error = response_chunk
+                                break
+                    finally:
+                        with contextlib.suppress(Exception):
+                            part_stream.close()
+
+                    if intermediate_error is not None:
+                        yield intermediate_error
+                        yield self.formatter.pack_finish()
+                        return
+
+                    logger.info(
+                        f"[{session.id}] 已完成第 {chunk.index}/{chunk.total} 个输入分块，"
+                        "中间回复未返回客户端"
+                    )
+                return
+
         max_terminal_retries = 1
         attempt = 0
         retry_origin_chunk = None
@@ -956,6 +1068,9 @@ class BrowserWorkflowMixin:
                     workflow_priority=workflow_priority,
                     allow_media_postprocess=allow_media_postprocess,
                     requested_model=requested_model,
+                    _prepared_prompt=_prepared_prompt,
+                    _chunk_continuation=_chunk_continuation,
+                    _include_message_images=_include_message_images,
                 )
                 saw_content = False
                 retry_requested = False
@@ -1290,6 +1405,9 @@ class BrowserWorkflowMixin:
         workflow_priority: Optional[int] = None,
         allow_media_postprocess: bool = True,
         requested_model: Optional[str] = None,
+        _prepared_prompt: Optional[str] = None,
+        _chunk_continuation: bool = False,
+        _include_message_images: bool = True,
     ) -> Generator[str, None, None]:
         """流式工作流执行（v2.0）"""
         tab = session.tab
@@ -1420,6 +1538,13 @@ class BrowserWorkflowMixin:
                 f"attempt={workflow_attempt}, domain={domain}, preset={resolved_preset_name}"
             )
 
+        if _chunk_continuation:
+            skip_new_chat = True
+            logger.info(
+                f"[{session.id}] 分块续传复用当前对话: "
+                f"domain={domain}, preset={resolved_preset_name}"
+            )
+
         if retry_skip_new_chat:
             logger.debug(f"[{session.id}] 重试轮跳过新建对话优先于本轮新建判定")
         elif force_new_conversation:
@@ -1538,7 +1663,11 @@ class BrowserWorkflowMixin:
 
         upload_history = self._get_upload_history_images_flag(default=True)
         logger.debug(f"图片历史上传: {upload_history}")
-        image_source_messages = self._select_image_source_messages(messages, upload_history)
+        image_source_messages = (
+            self._select_image_source_messages(messages, upload_history)
+            if _include_message_images
+            else []
+        )
 
         logger.debug(f"图片源消息数: {len(image_source_messages)}/{len(messages)}")
         user_images = extract_images_from_messages(image_source_messages)
@@ -1575,8 +1704,11 @@ class BrowserWorkflowMixin:
                 "已自动忽略图片并继续执行纯文本对话。"
             )
         
-        prompt_text = self._build_prompt_from_messages(messages)
-        prompt_text = self._apply_prompt_padding(prompt_text, prompt_padding_config)
+        if _prepared_prompt is None:
+            prompt_text = self._build_prompt_from_messages(messages)
+            prompt_text = self._apply_prompt_padding(prompt_text, prompt_padding_config)
+        else:
+            prompt_text = _prepared_prompt
 
         # 预先检查字数超限且为 ERROR 策略的情况，实现毫秒级拒绝
         if file_paste_config.get("enabled", False):
@@ -1594,6 +1726,13 @@ class BrowserWorkflowMixin:
                     yield self.formatter.pack_error(
                         error_msg,
                         code="file_paste_length_error"
+                    )
+                    yield self.formatter.pack_finish()
+                    return
+                if temp_file_type == "chunk":
+                    yield self.formatter.pack_error(
+                        "输入分块规划失败，未发送超长内容",
+                        code="input_chunking_failed",
                     )
                     yield self.formatter.pack_finish()
                     return

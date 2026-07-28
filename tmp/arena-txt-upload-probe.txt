@@ -1,0 +1,2 @@
+Arena TXT upload capability probe.
+This file contains only harmless ASCII text.

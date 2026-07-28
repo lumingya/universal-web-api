@@ -22,7 +22,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.config_compare_support import (
     _build_main_branch_compare_summary,
-    _load_git_branch_sites_config,
+    _load_official_sites_config,
     _resolve_branch_preset_config,
 )
 from app.api.config_route_models import (
@@ -246,8 +246,8 @@ async def delete_site_config(
 async def get_main_branch_compare_summary(
     authenticated: bool = Depends(verify_auth)
 ):
-    """汇总本地配置与 Git main 分支配置的差异。"""
-    return _build_main_branch_compare_summary()
+    """汇总本地配置与官方 main 分支配置的差异。"""
+    return await asyncio.to_thread(_build_main_branch_compare_summary)
 
 
 @router.get("/api/config/{domain}")
@@ -345,8 +345,8 @@ async def get_site_main_branch_config(
     preset_name: Optional[str] = None,
     authenticated: bool = Depends(verify_auth)
 ):
-    """读取 Git main 分支中 config/sites.json 的站点预设配置。"""
-    branch_payload = _load_git_branch_sites_config("main")
+    """读取官方 main 分支中 config/sites.json 的站点预设配置。"""
+    branch_payload = await asyncio.to_thread(_load_official_sites_config, "main")
     sites = branch_payload["sites"]
 
     if domain not in sites:
@@ -364,6 +364,7 @@ async def get_site_main_branch_config(
     return {
         "branch": "main",
         "path": branch_payload["path"],
+        "source": branch_payload["source"],
         "domain": domain,
         "requested_preset_name": requested_preset,
         "preset_name": resolved["preset_name"],

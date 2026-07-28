@@ -8,18 +8,7 @@
 
     function formatGitCompareErrorText(error) {
         const raw = String((error && error.message) || error || '').trim()
-        const lowered = raw.toLowerCase()
-        if (raw.includes('未找到 git') || raw.includes('未检测到 Git') || lowered.includes('git 命令')) {
-            return '未检测到 Git：对比 main 需要本机安装 Git，且程序目录是 git clone 出来的仓库。这不影响其它功能的使用。'
-        }
-        if (lowered.includes('not a git repository') || raw.includes('不是 Git 仓库')) {
-            return '当前程序目录不是 Git 仓库（例如压缩包解压安装），读不到 main 分支的已提交配置。这不影响其它功能的使用。'
-        }
-        if (lowered.includes('unknown revision') || lowered.includes('bad revision')
-            || lowered.includes('invalid object name') || lowered.includes('ambiguous argument')) {
-            return '本地仓库里找不到 main 分支：可以先执行 git fetch，或确认默认分支名称。'
-        }
-        return raw || '读取 main 分支失败'
+        return raw || '读取官方配置失败'
     }
     window.formatGitCompareErrorText = formatGitCompareErrorText
 
@@ -851,6 +840,14 @@
             this.showMainCompareSummaryDialog = false;
         },
 
+        formatOfficialConfigSourceTime(value) {
+            const raw = String(value || '').trim();
+            if (!raw) return '';
+            const timestamp = new Date(raw);
+            if (Number.isNaN(timestamp.getTime())) return raw;
+            return timestamp.toLocaleString('zh-CN', { hour12: false });
+        },
+
         async loadMainCompareSummary() {
             this.mainCompareSummaryLoading = true;
             this.mainCompareSummaryError = '';
@@ -867,9 +864,28 @@
                     ...(data.counts || {})
                 };
                 this.mainCompareSummaryPath = String(data.path || 'config/sites.json').trim() || 'config/sites.json';
+                this.mainCompareSummarySource = {
+                    repository: '',
+                    branch: 'main',
+                    status: '',
+                    stale: false,
+                    fetched_at: '',
+                    checked_at: '',
+                    warning: '',
+                    ...(data.source || {})
+                };
                 return true;
             } catch (error) {
                 this.mainCompareSummaryItems = [];
+                this.mainCompareSummarySource = {
+                    repository: '',
+                    branch: 'main',
+                    status: '',
+                    stale: false,
+                    fetched_at: '',
+                    checked_at: '',
+                    warning: ''
+                };
                 this.mainCompareSummaryError = formatGitCompareErrorText(error);
                 return false;
             } finally {

@@ -38,6 +38,7 @@ window.FilePastePanel = {
             tempFileTypeOptions: [
                 { value: 'txt', label: 'TXT' },
                 { value: 'pdf', label: 'PDF' },
+                { value: 'chunk', label: '分块' },
                 { value: 'error', label: 'ERROR' }
             ],
             // 修复：补齐后端 get_default_send_confirmation_config() 的 7 个缺失键，
@@ -178,7 +179,7 @@ window.FilePastePanel = {
 
         updateTempFileType(value) {
             const normalized = String(value || '').trim().toLowerCase();
-            this.getMutableFilePaste().temp_file_type = ['txt', 'pdf', 'error'].includes(normalized) ? normalized : 'txt';
+            this.getMutableFilePaste().temp_file_type = ['txt', 'pdf', 'chunk', 'error'].includes(normalized) ? normalized : 'txt';
         },
 
         updateHintText(value) {
@@ -260,10 +261,10 @@ window.FilePastePanel = {
                         <div>
                             <div class="flex items-center gap-2 text-sm font-medium text-gray-800 dark:text-gray-100">
                                 <span class="w-4 inline-flex justify-center text-gray-400 dark:text-gray-500" v-html="sectionCollapsed.pasteMode ? $icons.chevronDown : $icons.chevronUp"></span>
-                                <span>文件粘贴模式</span>
+                                <span>超长输入处理</span>
                             </div>
                             <p v-show="!sectionCollapsed.pasteMode" class="mt-1 text-xs text-gray-500 dark:text-gray-400 leading-5">
-                                当文本长度超过阈值时，将文本写入所选临时文件并走附件上传；选择 ERROR 时会直接返回错误，并使用下方错误信息。
+                                超过阈值后可转为附件、分块连续发送或直接报错。分块会等待每一轮完成，但只把最后一轮回复返回客户端。
                             </p>
                         </div>
                         <label class="toggle-label scale-90 flex-shrink-0" @click.stop>
@@ -287,7 +288,7 @@ window.FilePastePanel = {
                             </div>
                         </div>
                         <div>
-                            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">临时文件类型</label>
+                            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">超长处理方式</label>
                             <select :value="resolvedFilePaste.temp_file_type"
                                     @change="updateTempFileType($event.target.value)"
                                     class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent">
@@ -299,14 +300,18 @@ window.FilePastePanel = {
                             </select>
                         </div>
                         <div>
-                            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                            <label v-if="resolvedFilePaste.temp_file_type !== 'chunk'" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                                 {{ resolvedFilePaste.temp_file_type === 'error' ? '错误信息' : '引导文本' }}
                             </label>
-                            <input type="text"
+                            <input v-if="resolvedFilePaste.temp_file_type !== 'chunk'"
+                                   type="text"
                                    :value="resolvedFilePaste.temp_file_type === 'txt' ? resolvedFilePaste.txt_hint_text : (resolvedFilePaste.temp_file_type === 'pdf' ? resolvedFilePaste.pdf_hint_text : resolvedFilePaste.error_hint_text)"
                                    @input="updateHintText($event.target.value)"
                                    :placeholder="resolvedFilePaste.temp_file_type === 'error' ? '超过阈值时返回给客户端的错误信息' : '粘贴文件后追加的文字，留空则不追加'"
                                    class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent">
+                            <div v-else class="min-h-[38px] flex items-center rounded-md border border-blue-200 dark:border-blue-800 bg-blue-50/70 dark:bg-blue-900/20 px-3 py-2 text-xs leading-5 text-blue-700 dark:text-blue-300">
+                                自动使用最少块数，并把分块说明计入阈值。
+                            </div>
                         </div>
                     </div>
 

@@ -92,6 +92,15 @@ function saveStoredSitesCache(sites, currentDomain) {
                 main_only_site: 0
             },
             mainCompareSummaryPath: 'config/sites.json',
+            mainCompareSummarySource: {
+                repository: '',
+                branch: 'main',
+                status: '',
+                stale: false,
+                fetched_at: '',
+                checked_at: '',
+                warning: ''
+            },
             mainCompareShowSame: false,
 
             // Tab 切换（新增 settings）
