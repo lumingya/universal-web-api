@@ -218,6 +218,16 @@ def _set_worker_future_result(
     future.set_result(result)
 
 
+def _consume_worker_future_exception(future: "asyncio.Future[Any]") -> None:
+    """Retrieve late worker failures after the awaiting request has been cancelled."""
+    if future.cancelled():
+        return
+    try:
+        future.exception()
+    except (asyncio.CancelledError, Exception):
+        pass
+
+
 def _get_cancel_reason(ctx: RequestContext, fallback: str = "worker_cancelled") -> str:
     reason = str(getattr(ctx, "cancel_reason", "") or "").strip()
     return reason or fallback
@@ -268,7 +278,11 @@ async def run_tracked_blocking_call(
             worker_state["thread"] = None
             worker_state["label"] = None
 
-    result_future.add_done_callback(lambda _future: _clear_finished_worker_state())
+    def _handle_finished_worker(future: "asyncio.Future[Any]") -> None:
+        _clear_finished_worker_state()
+        _consume_worker_future_exception(future)
+
+    result_future.add_done_callback(_handle_finished_worker)
     worker_thread.start()
 
     try:

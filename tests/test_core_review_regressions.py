@@ -4,6 +4,7 @@ import io
 import json
 import subprocess
 import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,6 +14,8 @@ from app.core import background_image_downloader as downloader_module
 from app.core.background_image_downloader import BackgroundImageDownloader, normalize_remote_image_url
 from app.core.browser import media as browser_media_module
 from app.core.browser.media import BrowserMediaMixin
+from app.core.network_monitor import NetworkMonitor
+from app.core.parsers.lmarena_parser import LmarenaParser
 from app.core.parsers.lmarena_battle_side_parser import (
     LmarenaBattleSideLeftParser,
     LmarenaBattleWinnerParser,
@@ -24,6 +27,12 @@ from app.core.tab_pool_parts.network import (
     _GlobalNetworkWorker,
 )
 from app.core.tab_pool_parts.manager import TabPoolManager
+from app.services import request_lifecycle
+from app.services.request_lifecycle import (
+    TrackedWorkerExecutionCancelled,
+    run_tracked_blocking_call,
+)
+from app.services.request_manager import RequestContext
 from app.utils import image_handler
 from app.utils.image_handler import extract_images_from_messages
 from app.utils.remote_resource import UnsafeRemoteResourceError, validate_public_remote_url
@@ -35,6 +44,97 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def _arena_text(prefix: str, text: str) -> str:
     return f"{prefix}:{json.dumps(text)}"
+
+
+def test_cancelled_tracked_worker_consumes_late_exception(monkeypatch):
+    release_worker = threading.Event()
+    consumed = []
+    original_consumer = request_lifecycle._consume_worker_future_exception
+
+    def recording_consumer(future):
+        consumed.append(future)
+        original_consumer(future)
+
+    monkeypatch.setattr(
+        request_lifecycle,
+        "_consume_worker_future_exception",
+        recording_consumer,
+    )
+
+    async def exercise():
+        ctx = RequestContext(request_id="req-test-cancelled-worker")
+        ctx.mark_running("arena_1")
+        worker_state = {}
+
+        def worker():
+            release_worker.wait(timeout=2.0)
+            raise RuntimeError("请求已取消")
+
+        task = asyncio.create_task(
+            run_tracked_blocking_call(
+                worker,
+                ctx=ctx,
+                worker_state=worker_state,
+                label="cancelled-worker-test",
+                poll_timeout=0.01,
+            )
+        )
+        while worker_state.get("thread") is None:
+            await asyncio.sleep(0)
+
+        ctx.request_cancel("client_disconnected")
+        with pytest.raises(TrackedWorkerExecutionCancelled):
+            await task
+
+        release_worker.set()
+        deadline = time.monotonic() + 1.0
+        while not consumed and time.monotonic() < deadline:
+            await asyncio.sleep(0.01)
+
+        assert len(consumed) == 1
+        assert isinstance(consumed[0].exception(), RuntimeError)
+        assert worker_state.get("thread") is None
+
+    asyncio.run(exercise())
+
+
+def test_lmarena_incomplete_empty_capture_falls_back_to_dom():
+    parser = LmarenaParser()
+    result = parser.parse_chunk(
+        'a2:[{"type":"routed_model","organization":"openai"}]\n'
+        'a2:[{"type":"heartbeat"}]\n'
+    )
+    monitor = NetworkMonitor.__new__(NetworkMonitor)
+    monitor.parser = parser
+    monitor._total_chunks = 0
+    monitor._last_stream_media_items = []
+
+    assert result["done"] is False
+    assert result["images"] == []
+    assert monitor._should_fallback_on_incomplete_empty_capture() is True
+
+
+def test_lmarena_incomplete_capture_keeps_network_media_result():
+    monitor = NetworkMonitor.__new__(NetworkMonitor)
+    monitor.parser = LmarenaParser()
+    monitor._total_chunks = 0
+    monitor._last_stream_media_items = [
+        {"url": "https://example.test/generated.png"}
+    ]
+
+    assert monitor._should_fallback_on_incomplete_empty_capture() is False
+
+
+def test_lmarena_extracts_generated_image_directly_from_network_stream():
+    parser = LmarenaParser()
+    image_url = "https://messages-prod.example.r2.cloudflarestorage.com/result.png"
+    result = parser.parse_chunk(
+        "a2:" + json.dumps([{"type": "image", "image": image_url, "mimeType": "image/png"}]) + "\n"
+        'ad:{"finishReason":"stop"}\n'
+    )
+
+    assert result["done"] is True
+    assert [item["url"] for item in result["images"]] == [image_url]
 
 
 def test_arena_side_parsers_merge_rolling_overlap_without_duplicates():

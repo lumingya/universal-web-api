@@ -84,7 +84,7 @@
             <i data-lucide="info" style="width:18px;height:18px"></i>
             <div class="co-bd">
               <span class="co-t">先搞清一件事：脚本运行后会有两个浏览器</span>
-              <p><strong>受控浏览器</strong>由脚本自动启动，用来登录 AI 网站并真正收发消息；你自己的普通浏览器只负责看文档、日常上网。脚本运行时<strong>请不要手动操作受控浏览器</strong>——窗口可以最小化，但不要缩小边框、折叠页面元素或切换标签页。</p>
+              <p><strong>受控浏览器</strong>由脚本自动启动，用来登录 AI 网站并真正收发消息；你自己的普通浏览器只负责看文档、日常上网。脚本运行时，<strong>你可以切换标签页进行查看</strong>，或者将窗口最小化，但请尽量避免随意修改正在执行请求的页面元素。</p>
             </div>
           </div>
 
@@ -235,44 +235,78 @@
         <section class="doc-section" id="quickstart" data-reveal>
           <div class="sec-kicker"><span class="sec-num">03</span><span class="sec-tag">上手指南</span></div>
           <h2><span class="h-ic"><i data-lucide="rocket" style="width:20px;height:20px"></i></span>快速开始<a class="h-anchor" href="#quickstart"><i data-lucide="link" style="width:16px;height:16px"></i></a></h2>
-          <p>第一次使用，按下面四步走即可跑通整条链路。</p>
+          <div class="quickstart-welcome">
+            <div class="quickstart-welcome-icon"><i data-lucide="hand" style="width:22px;height:22px"></i></div>
+            <div>
+              <strong>欢迎使用 Universal Web-to-API</strong>
+              <p>本项目仅用于体验不同模型的效果，请合理控制使用频率，不要给目标网站带来额外负担。</p>
+            </div>
+          </div>
+
+          <div class="quickstart-links" aria-label="开始方式">
+            <a href="#overview">
+              <span class="quickstart-link-icon"><i data-lucide="book-open" style="width:17px;height:17px"></i></span>
+              <span><strong>先了解项目基本原理</strong><small>花几分钟了解请求如何流转，以及某些操作为什么必不可少。</small></span>
+              <i data-lucide="arrow-right" style="width:17px;height:17px"></i>
+            </a>
+            <a href="#quickstart-browser">
+              <span class="quickstart-link-icon"><i data-lucide="zap" style="width:17px;height:17px"></i></span>
+              <span><strong>我已经了解，直接开始</strong><small>从识别受控浏览器开始，完成第一次连接。</small></span>
+              <i data-lucide="arrow-down" style="width:17px;height:17px"></i>
+            </a>
+          </div>
+
+          <h3 id="quickstart-browser">先区分受控浏览器和普通浏览器</h3>
+          <p>双击运行 <code>start.bat</code> 后，脚本会自动启动一个<strong>受控浏览器</strong>。打开 Windows 任务栏，你应该能看到它已经运行；接下来的登录和站点配置都要在这个浏览器里完成。</p>
+          <div class="browser-compare">
+            <div class="browser-kind is-controlled">
+              <span class="browser-kind-icon"><i data-lucide="scan-eye" style="width:18px;height:18px"></i></span>
+              <div><strong>受控浏览器</strong><p>由脚本启动并执行网页操作。请在这里打开 AI 站点、登录账号；API 请求执行期间，你可以正常操作或切换标签页查看内容。</p></div>
+            </div>
+            <div class="browser-kind">
+              <span class="browser-kind-icon"><i data-lucide="monitor" style="width:18px;height:18px"></i></span>
+              <div><strong>普通浏览器</strong><p>你日常使用、正在查看本教程的浏览器，不受脚本控制，也不能代替受控浏览器执行任务。</p></div>
+            </div>
+          </div>
+
+          <h3>选择一个已适配的站点</h3>
+          <p>受控浏览器的基础引导会列出若干已经适配的站点。列表中存在的网站代表已经完成适配，你可以任选一个使用；本教程以 <strong>Gemini</strong> 为例。点击下方卡片复制网址，再粘贴到<strong>受控浏览器</strong>的地址栏中打开。</p>
+          <div class="site-grid" id="siteGrid"></div>
+          <div class="co co-info">
+            <i data-lucide="puzzle" style="width:18px;height:18px"></i>
+            <div class="co-bd">
+              <span class="co-t">想适配新的站点？不需要等待项目更新</span>
+              <p>你可以自行添加新站点，步骤并不复杂。请查看<a href="#addsite">「新增站点 · AI 识别」</a>，其中介绍了自动识别与手动配置两种方法。</p>
+            </div>
+          </div>
+
+          <h3 id="quickstart-gemini">以 Gemini 为例完成首次配置</h3>
           <ol class="steps">
-            <li><strong>启动脚本。</strong>双击运行 <code>start.bat</code>，脚本会自动打开受控浏览器，默认使用项目内的 <code>chrome_profile/</code> 目录；第一次启动通常是空白、未登录状态。</li>
-            <li><strong>登录目标站点。</strong>在受控浏览器中打开目标 AI 网站并完成登录，直到进入真正可以对话的页面。以 Gemini 为例，建议打开 <code>https://gemini.google.com/</code>，并保持左侧侧边栏处于展开状态。</li>
-            <li><strong>清理无关标签页。</strong>正式发请求前，确认受控浏览器里只保留目标 AI 网站——搜索页、邮箱、教程页等无关标签页都可能干扰脚本自动操作。</li>
-            <li><strong>连接客户端。</strong>按「连接 API」章节的参数填写地址、密钥与模型名；随后打开控制面板 <code>http://127.0.0.1:8199/</code> 即可查看日志与配置。</li>
+            <li><strong>访问 Gemini。</strong>在受控浏览器中打开 <code>https://gemini.google.com/</code>，等待页面完整加载。</li>
+            <li><strong>登录个人账号。</strong>完成登录并进入真正可以发送消息的对话页面。</li>
+            <li><strong>整理页面状态。</strong>将页面语言设置为中文，并确保左侧聊天侧边栏处于展开状态；这是脚本稳定识别和操作页面的必要条件。</li>
+            <li><strong>确认标签页已被接管。</strong>打开「控制面板 → 标签页池」，此时应当能看到刚才打开的 Gemini 页面已经处于标签页池的控制之中。</li>
           </ol>
 
-          <div class="hero-cta" style="margin:20px 0">
-            <a class="btn btn-pri" href="http://127.0.0.1:8199/" target="_blank" rel="noopener"><i data-lucide="layout-dashboard" style="width:15px;height:15px"></i>打开控制面板&nbsp;127.0.0.1:8199</a>
+          <div class="hero-cta quickstart-actions">
+            <a class="btn btn-pri" href="http://127.0.0.1:8199/" target="_blank" rel="noopener"><i data-lucide="layout-dashboard" style="width:15px;height:15px"></i>打开控制面板</a>
+            <a class="btn btn-gh" href="#tabpool"><i data-lucide="layers" style="width:15px;height:15px"></i>了解标签页池</a>
+          </div>
+
+          <h3>连接你的客户端</h3>
+          <p>标签页进入控制后，选择合适的路由地址，填入任意支持 <strong>OpenAI 兼容接口</strong>的前端即可使用，例如 Chatbox、SillyTavern、Cherry Studio 等。</p>
+          <div class="quickstart-reference-links">
+            <a href="#routing-methods"><i data-lucide="route" style="width:16px;height:16px"></i><span>了解不同路由方式的区别</span><i data-lucide="arrow-right" style="width:15px;height:15px"></i></a>
+            <a href="#api-key-config"><i data-lucide="key-round" style="width:16px;height:16px"></i><span>配置 API 密钥</span><i data-lucide="arrow-right" style="width:15px;height:15px"></i></a>
           </div>
 
           <div class="co co-tip">
-            <i data-lucide="lightbulb" style="width:18px;height:18px"></i>
+            <i data-lucide="folder-sync" style="width:18px;height:18px"></i>
             <div class="co-bd">
-              <span class="co-t">想跳过重新登录？这属于高级选项</span>
-              <p>普通使用更推荐继续使用项目自带的 <code>chrome_profile/</code>，把登录态留在这个独立目录里，隔离性最好。<strong>只有明确理解浏览器用户目录结构和会话数据风险时</strong>，才建议复用现有登录态副本——且只复制你自己的本地目录副本，不要共享、分发或混用他人登录态。详细步骤见「系统设置 → 浏览器登录态复用」。</p>
+              <span class="co-t">不想重新收藏网页或逐个登录？</span>
+              <p>你可以关闭浏览器后，复制一份自己现有的 Chrome 用户配置到项目专用的浏览器配置目录中，以复用书签、历史记录和登录状态。请不要直接使用正在运行的系统默认配置目录，也不要分享包含 Cookie 的配置副本。完整操作步骤与目录示例见<a href="#browser-profile-reuse">「浏览器登录态复用」</a>。</p>
             </div>
           </div>
-
-          <h3>已适配的站点</h3>
-          <p>以下站点已经做好适配，可以直接在受控浏览器中打开并连接 API。<strong>点击卡片复制网址</strong>，粘贴到<strong>受控浏览器</strong>的地址栏打开（不要在教程页所在的普通浏览器里测试）。</p>
-          <div class="site-grid" id="siteGrid"></div>
-          <div class="co co-info">
-            <i data-lucide="info" style="width:18px;height:18px"></i>
-            <div class="co-bd">
-              <span class="co-t">文档重点覆盖的站点</span>
-              <p>ChatGPT、DeepSeek、Gemini、Claude、Kimi、通义千问、Grok、豆包、AI Studio、Arena AI。下面的站点卡片列出的是文档内置的默认域名；若你在本地改过站点域名或启动地址，请以控制面板里的实际站点列表为准。</p>
-            </div>
-          </div>
-          <div class="co co-warn">
-            <i data-lucide="alert-triangle" style="width:18px;height:18px"></i>
-            <div class="co-bd">
-              <span class="co-t">关于 arena.ai</span>
-              <p>该站点对访问环境与交互频率较敏感，普通使用也可能频繁触发 Cloudflare 人机验证——这是站点自身策略，不应视为稳定的长时间连续测试目标。更稳妥的做法是降低频率，并把异常优先当作站点侧限制排查。<span style="color:var(--tx3)">（感谢测试者 @喵团子爱摸鱼 的反馈）</span></p>
-            </div>
-          </div>
-          <p><strong>网站不在列表里？</strong>系统支持通过辅助 AI 自动分析网页结构来适配新站点，入口在控制台的「设置 → AI 元素识别」，详见「新增站点 · AI 识别」一章。</p>
         </section>
 
         <!-- ============ 04 连接 API ============ -->
@@ -281,13 +315,14 @@
           <h2><span class="h-ic"><i data-lucide="plug" style="width:20px;height:20px"></i></span>连接 API<a class="h-anchor" href="#connect"><i data-lucide="link" style="width:16px;height:16px"></i></a></h2>
           <p>本项目提供兼容 <strong>OpenAI 格式</strong> 的接口，绝大多数支持"自定义 OpenAI 端点"的客户端都能直接使用。</p>
 
+          <h3 id="routing-methods">选择路由并填写连接信息</h3>
           <div class="grid2">
             <div class="q-card">
               <div class="qc-ic"><i data-lucide="server" style="width:17px;height:17px"></i></div>
               <h5>服务提供商 Provider</h5>
               <p>选择 <code>OpenAI</code> / <code>OpenAI 兼容</code> / <code>自定义</code>。不同客户端叫法不同，选那个能填写自定义地址的即可。</p>
             </div>
-            <div class="q-card">
+            <div class="q-card" id="api-key-config">
               <div class="qc-ic"><i data-lucide="key-round" style="width:17px;height:17px"></i></div>
               <h5>API 密钥</h5>
               <p>未启用认证（<code>AUTH_ENABLED=false</code>）时填占位值如 <code>sk-local</code> 即可。启用后必须与 <code>.env</code> 的 <code>AUTH_TOKEN</code> 一致；控制面板密钥 <code>DASHBOARD_AUTH_TOKEN</code> 是另一套，不要提供给 API 使用者。</p>
@@ -1130,7 +1165,7 @@ curl http://127.0.0.1:8199/tab-url/abc123def456/pro/v1/chat/completions -d "..."
             </tbody>
           </table></div>
 
-          <h3>浏览器登录态复用（高级）</h3>
+          <h3 id="browser-profile-reuse">浏览器登录态复用（高级）</h3>
           <p>希望脚本启动后直接继承你平时浏览器里的登录状态、Cookie 和扩展？请使用<strong>独立复制出来的用户数据目录</strong>，不要直接把脚本指向日常正在使用的系统默认目录。</p>
           <div class="co co-danger">
             <i data-lucide="alert-octagon" style="width:18px;height:18px"></i>
@@ -1142,14 +1177,21 @@ curl http://127.0.0.1:8199/tab-url/abc123def456/pro/v1/chat/completions -d "..."
             </div>
           </div>
           <ol class="steps">
-            <li>先完全关闭所有 Chrome 窗口。</li>
-            <li>新建专用目录，如 <code>C:\Users\你的用户名\AppData\Local\UniversalWebApiProfile</code>。</li>
-            <li>从原始 <code>...\Google\Chrome\User Data</code> 中至少复制 <code>Local State</code> 和要使用的配置子目录（如 <code>Default</code>、<code>Profile 1</code>）到新目录。</li>
-            <li>在 <code>.env</code> 指向这份副本，重新运行 <code>start.bat</code>。</li>
+            <li><strong>确认原配置位置。</strong>在日常 Chrome 地址栏打开 <code>chrome://version</code>，记下「个人资料路径」；它通常类似 <code>...\Google\Chrome\User Data\Default</code>。</li>
+            <li><strong>完全退出浏览器和脚本。</strong>关闭所有 Chrome 窗口，并确认任务栏中没有仍在运行的 Chrome；复制使用中的配置容易得到不完整文件。</li>
+            <li><strong>复制必要内容。</strong>从原始 <code>...\Google\Chrome\User Data</code> 根目录复制 <code>Local State</code>，再复制刚才确认的配置子目录（如 <code>Default</code>、<code>Profile 1</code>）。</li>
+            <li><strong>放入项目专用目录。</strong>把上一步的内容粘贴到项目根目录的 <code>chrome_profile/</code> 中。完成后应能看到 <code>chrome_profile\Local State</code> 和 <code>chrome_profile\Default</code>（或对应的 <code>Profile N</code>）。</li>
+            <li><strong>选择对应配置并重启。</strong>在 <code>.env</code> 中保持 <code>BROWSER_PROFILE_DIR</code> 为空，并把 <code>BROWSER_PROFILE_NAME</code> 写成复制过来的子目录名称；然后重新运行 <code>start.bat</code>。</li>
           </ol>
           <div class="cb" data-lang="bash"><div class="cb-top"><span class="cb-dots"><i></i><i></i><i></i></span><span class="cb-lang">.env</span><button class="cb-copy"><i data-lucide="copy" style="width:12px;height:12px"></i><span>复制</span></button></div><pre><code>BROWSER_PATH=C:\Program Files\Google\Chrome\Application\chrome.exe
-BROWSER_PROFILE_DIR=C:\Users\你的用户名\AppData\Local\UniversalWebApiProfile
+# 留空时使用项目根目录的 chrome_profile/
+BROWSER_PROFILE_DIR=
+# 必须与复制进 chrome_profile/ 的子目录名一致
 BROWSER_PROFILE_NAME=Default</code></pre></div>
+          <div class="co co-info">
+            <i data-lucide="folder-cog" style="width:18px;height:18px"></i>
+            <div class="co-bd"><span class="co-t">也可以把副本放在项目外</span><p>如果不想占用项目目录，可新建 <code>C:\Users\你的用户名\AppData\Local\UniversalWebApiProfile</code>，放入相同的 <code>Local State</code> 与配置子目录，再将 <code>BROWSER_PROFILE_DIR</code> 指向这个根目录。不要把它写到 <code>...\Default</code> 这一层。</p></div>
+          </div>
           <div class="co co-warn">
             <i data-lucide="alert-triangle" style="width:18px;height:18px"></i>
             <div class="co-bd"><span class="co-t">容易写错的地方</span><p><code>BROWSER_PROFILE_DIR</code> <strong>不要</strong>写成 <code>...\User Data\Default</code>——它应该指向 <code>User Data</code> 这一层的"根目录"；具体用哪个子配置文件夹，写在 <code>BROWSER_PROFILE_NAME</code>（常见值 <code>Default</code>、<code>Profile 1</code>、<code>Profile 2</code>）。</p></div>

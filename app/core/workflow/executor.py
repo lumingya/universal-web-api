@@ -597,6 +597,41 @@ class WorkflowExecutor(
             )
         return kwargs
 
+    def _stop_stalled_image_generation(self) -> bool:
+        selector = str((self._selectors or {}).get("stop_btn") or "").strip()
+        if not selector:
+            return False
+        try:
+            stopped = bool(self._execute_click(selector, "stop_btn", optional=True))
+            if stopped:
+                logger.info("[Image Recovery] 已主动停止卡住的图片生成")
+            return stopped
+        except Exception as exc:
+            logger.warning(f"[Image Recovery] 停止卡住的图片生成失败: {exc}")
+            return False
+
+    def _restart_stalled_image_generation(self) -> bool:
+        self._stop_stalled_image_generation()
+        time.sleep(0.8)
+
+        selectors = self._selectors or {}
+        target_key = "retry_send_btn" if selectors.get("retry_send_btn") else "retry button"
+        selector = str(selectors.get(target_key) or "").strip()
+        if not selector:
+            logger.warning("[Image Recovery] 当前预设未配置重新运行按钮，无法自动重试")
+            return False
+
+        try:
+            restarted = bool(self._execute_click(selector, target_key, optional=True))
+        except Exception as exc:
+            logger.warning(f"[Image Recovery] 自动重新运行图片生成失败: {exc}")
+            return False
+        if restarted:
+            logger.info("[Image Recovery] 已重新运行本轮图片生成")
+        else:
+            logger.warning("[Image Recovery] 未找到可用的重新运行按钮")
+        return restarted
+
     def _focus_last_input_for_attachment_paste(self) -> bool:
         """Re-focus the active composer before Ctrl+V image paste."""
         ele = getattr(self, "_last_input_element", None)
@@ -861,6 +896,7 @@ class WorkflowExecutor(
                         raise WorkflowError(f"stream_terminal_error:{e}")
                     
                     except NetworkMonitorTimeout as e:
+                        fallback_reason = str(e)
                         logger.warning(
                             f"[Executor] 网络监听超时，回退到 DOM 模式: {e}"
                         )
@@ -870,8 +906,29 @@ class WorkflowExecutor(
                             selector=selector,
                             user_input=user_input,
                             completion_id=self._completion_id,
+                            fallback_reason=fallback_reason,
                             **dom_fallback_kwargs,
                         )
+                        if self._stream_monitor.image_recovery_exhausted():
+                            retry_baseline = self._stream_monitor.capture_send_baseline(
+                                selector,
+                                user_input=user_input,
+                            )
+                            self._stream_monitor.consume_send_baseline()
+                            if self._restart_stalled_image_generation():
+                                yield from self._stream_monitor.monitor(
+                                    selector=selector,
+                                    user_input=user_input,
+                                    completion_id=self._completion_id,
+                                    baseline_snapshot=retry_baseline,
+                                    sent_content_length=0,
+                                    fallback_reason="image_generation_retry",
+                                )
+                                if self._stream_monitor.image_recovery_exhausted():
+                                    logger.error(
+                                        "[Image Recovery] 自动重试后仍未产出图片，停止本轮生成"
+                                    )
+                                    self._stop_stalled_image_generation()
                         if self._stream_monitor is not None:
                             self._stream_monitor.clear_send_baseline()
                         self._last_stream_media_state = {}

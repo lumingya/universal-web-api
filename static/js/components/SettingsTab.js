@@ -44,7 +44,9 @@ window.SettingsTab = {
         return {
             selectorDefsCollapsed: true,
             updatePreserveCollapsed: true,
-            versionCollapsed: false
+            versionCollapsed: false,
+            releasePage: 1,
+            releasePageSize: 5
         };
     },
     computed: {
@@ -56,6 +58,20 @@ window.SettingsTab = {
                 groups[key].push(item)
             }
             return groups
+        },
+        releaseTotalPages() {
+            return Math.max(1, Math.ceil(this.releases.length / this.releasePageSize))
+        },
+        paginatedReleases() {
+            const start = (this.releasePage - 1) * this.releasePageSize
+            return this.releases.slice(start, start + this.releasePageSize)
+        }
+    },
+    watch: {
+        releases() {
+            if (this.releasePage > this.releaseTotalPages) {
+                this.releasePage = this.releaseTotalPages
+            }
         }
     },
     methods: {
@@ -83,6 +99,9 @@ window.SettingsTab = {
             } catch (e) {
                 return isoStr;
             }
+        },
+        goToReleasePage(page) {
+            this.releasePage = Math.min(this.releaseTotalPages, Math.max(1, Number(page) || 1))
         }
     },
     template: `
@@ -281,7 +300,7 @@ window.SettingsTab = {
 
                             <!-- 列表 -->
                             <div class="divide-y divide-gray-100 dark:divide-gray-700">
-                                <div v-for="rel in releases" :key="rel.tag" 
+                                <div v-for="rel in paginatedReleases" :key="rel.tag"
                                      class="grid grid-cols-12 gap-4 px-6 py-3.5 items-center hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-colors">
                                     <div class="col-span-3 flex items-center gap-2">
                                         <span class="font-mono font-bold text-gray-900 dark:text-white">{{ rel.tag }}</span>
@@ -312,6 +331,37 @@ window.SettingsTab = {
                                             切换到此版本
                                         </button>
                                     </div>
+                                </div>
+                            </div>
+
+                            <div v-if="releaseTotalPages > 1"
+                                 class="flex flex-wrap items-center justify-between gap-3 border-t border-gray-200 px-6 py-3 text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400">
+                                <span>共 {{ releases.length }} 条 · 第 {{ releasePage }} / {{ releaseTotalPages }} 页</span>
+                                <div class="flex items-center gap-1" aria-label="版本列表分页">
+                                    <button type="button"
+                                            @click="goToReleasePage(releasePage - 1)"
+                                            :disabled="releasePage <= 1"
+                                            title="上一页" aria-label="上一页"
+                                            class="flex h-8 w-8 items-center justify-center rounded-lg border border-gray-200 text-gray-600 transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700">
+                                        <span class="h-4 w-4 rotate-180" v-html="$icons.arrowRight"></span>
+                                    </button>
+                                    <button v-for="page in releaseTotalPages" :key="page"
+                                            type="button"
+                                            @click="goToReleasePage(page)"
+                                            :aria-current="page === releasePage ? 'page' : null"
+                                            :class="['h-8 min-w-8 rounded-lg border px-2 text-xs font-medium transition-colors',
+                                                     page === releasePage
+                                                        ? 'border-blue-600 bg-blue-600 text-white'
+                                                        : 'border-gray-200 text-gray-600 hover:bg-gray-100 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700']">
+                                        {{ page }}
+                                    </button>
+                                    <button type="button"
+                                            @click="goToReleasePage(releasePage + 1)"
+                                            :disabled="releasePage >= releaseTotalPages"
+                                            title="下一页" aria-label="下一页"
+                                            class="flex h-8 w-8 items-center justify-center rounded-lg border border-gray-200 text-gray-600 transition-colors hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700">
+                                        <span class="h-4 w-4" v-html="$icons.arrowRight"></span>
+                                    </button>
                                 </div>
                             </div>
                         </div>

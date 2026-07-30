@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from app.core.browser.media import BrowserMediaMixin
+from app.core.browser.workflow import BrowserWorkflowMixin
 from app.core.extractors.image_extractor import ImageExtractor
 
 
@@ -112,6 +113,9 @@ def test_capture_media_dom_baseline_marks_existing_images() -> None:
                 "node_count": 3,
                 "marked_count": 3,
                 "url_count": 2,
+                "references": [
+                    "https://example.test/upload.png?signature=before-send",
+                ],
                 "page_url": "https://arena.test/direct",
             }
 
@@ -122,6 +126,59 @@ def test_capture_media_dom_baseline_marks_existing_images() -> None:
     assert baseline["marked_count"] == 3
     assert baseline["url_count"] == 2
     assert baseline["token"]
+    assert baseline["references"] == [
+        "https://example.test/upload.png?signature=before-send"
+    ]
+
+
+def test_arena_baseline_excludes_preexisting_nodes_after_source_changes() -> None:
+    assert BrowserWorkflowMixin._should_exclude_preexisting_media_nodes(
+        {"page_url": "https://arena.ai/c/request"}
+    ) is True
+    assert BrowserWorkflowMixin._should_exclude_preexisting_media_nodes(
+        {"page_url": "https://example.test/chat"}
+    ) is False
+
+
+def test_recreated_upload_preview_is_filtered_by_stable_url_path() -> None:
+    upload_before_send = _item(
+        "image",
+        "https://messages-prod.example.r2.cloudflarestorage.com/request/upload.png?X-Amz-Signature=before-send",
+        "dom",
+    )
+    generated = _item(
+        "image",
+        "https://messages-prod.example.r2.cloudflarestorage.com/result/generated.png?X-Amz-Signature=result",
+        "dom",
+    )
+    baseline = {
+        "references": [
+            "https://messages-prod.example.r2.cloudflarestorage.com/request/upload.png?X-Amz-Signature=original"
+        ]
+    }
+
+    filtered = _MediaHarness._filter_media_items_against_dom_baseline(
+        [upload_before_send, generated],
+        baseline,
+    )
+
+    assert [item["url"] for item in filtered] == [generated["url"]]
+
+
+def test_unsigned_query_urls_remain_distinct_during_baseline_filtering() -> None:
+    candidate = _item(
+        "image",
+        "https://example.test/image?id=generated",
+        "dom",
+    )
+    baseline = {"references": ["https://example.test/image?id=upload"]}
+
+    filtered = _MediaHarness._filter_media_items_against_dom_baseline(
+        [candidate],
+        baseline,
+    )
+
+    assert filtered == [candidate]
 
 
 def test_image_extractor_receives_request_baseline_options() -> None:
@@ -130,6 +187,7 @@ def test_image_extractor_receives_request_baseline_options() -> None:
 
         def run_js(self, script, options):
             assert "requestBaselineToken" in script
+            assert "requestBaselineExcludeExistingNodes" in script
             self.options = options
             return {"images": [], "warnings": [], "scope": "primary", "nodeCount": 0}
 
@@ -142,11 +200,32 @@ def test_image_extractor_receives_request_baseline_options() -> None:
             "wait_for_load": False,
             "request_baseline_token": "request-token",
             "request_baseline_property": "__requestBaseline",
+            "request_baseline_exclude_existing_nodes": True,
         },
     )
 
     assert element.options["requestBaselineToken"] == "request-token"
     assert element.options["requestBaselineProperty"] == "__requestBaseline"
+    assert element.options["requestBaselineExcludeExistingNodes"] is True
+
+
+def test_pre_submit_node_source_change_is_not_fresh_dom_output() -> None:
+    class _ExistingNodeCandidate:
+        def run_js(self, script, selector, token, property_name, exclude_existing_nodes):
+            assert selector == "img"
+            assert token == "request-token"
+            assert property_name == "__requestBaseline"
+            assert exclude_existing_nodes is True
+            return False
+
+    assert _MediaHarness._candidate_has_fresh_dom_image(
+        _ExistingNodeCandidate(),
+        {
+            **_image_config(),
+            "request_baseline_exclude_existing_nodes": True,
+        },
+        _baseline(),
+    ) is False
 
 
 class _Candidate:

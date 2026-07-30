@@ -11,6 +11,7 @@ v5.5 修改：
 import re
 import time
 from typing import Generator, Optional, Callable, Tuple, Dict, List, Any
+from urllib.parse import urlparse
 
 from app.core.config import logger, BrowserConstants, SSEFormatter
 from app.core.background_image_downloader import (
@@ -26,6 +27,20 @@ from app.models.schemas import get_modality_run_policy, is_modality_enabled
 _GEMINI_IMAGE_PLACEHOLDER_RE = re.compile(
     r"^\s*https?://(?:[\w.-]+\.)?googleusercontent\.com/image_generation_content/\d+\s*$",
     re.IGNORECASE | re.MULTILINE,
+)
+
+_IMAGE_PENDING_STATUS_MARKERS = (
+    "generating image",
+    "generating images",
+    "creating image",
+    "creating your image",
+    "image is being generated",
+    "images are being generated",
+    "正在生成图片",
+    "正在生成图像",
+    "正在创建您的图片",
+    "图片正在生成",
+    "图像正在生成",
 )
 
 
@@ -88,6 +103,13 @@ def _looks_like_image_generation_request(text: str) -> bool:
     )
 
 
+def _is_pending_image_status_text(text: str) -> bool:
+    normalized = re.sub(r"\s+", " ", str(text or "")).strip().lower()
+    if not normalized or len(normalized) > 160:
+        return False
+    return any(marker in normalized for marker in _IMAGE_PENDING_STATUS_MARKERS)
+
+
 def _normalize_snapshot_image_urls(raw_urls: Any) -> List[str]:
     urls: List[str] = []
     seen = set()
@@ -101,6 +123,49 @@ def _normalize_snapshot_image_urls(raw_urls: Any) -> List[str]:
         seen.add(normalized)
         urls.append(normalized)
     return urls
+
+
+def _snapshot_image_reference_key(raw_reference: Any) -> str:
+    reference = str(raw_reference or "").strip()
+    if not reference:
+        return ""
+    if reference.lower().startswith(("blob:", "data:image/")):
+        return reference
+
+    normalized = normalize_remote_image_url(reference)
+    if not normalized:
+        return ""
+    try:
+        parsed = urlparse(normalized)
+    except Exception:
+        return normalized
+    if parsed.scheme.lower() not in {"http", "https"}:
+        return normalized
+
+    host = str(parsed.hostname or "").strip().lower()
+    query = str(parsed.query or "")
+    if host.endswith(".r2.cloudflarestorage.com") or "x-amz-signature=" in query.lower():
+        return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}{parsed.path}"
+    return normalized
+
+
+def _snapshot_image_reference_keys(snapshot: Optional[Dict[str, Any]]) -> set[str]:
+    snapshot = snapshot or {}
+    raw_references: List[Any] = []
+    for key in ("image_references", "page_image_references"):
+        values = snapshot.get(key)
+        if isinstance(values, list):
+            raw_references.extend(values)
+    if not raw_references:
+        for key in ("image_urls", "page_image_urls"):
+            values = snapshot.get(key)
+            if isinstance(values, list):
+                raw_references.extend(values)
+    return {
+        key
+        for key in (_snapshot_image_reference_key(value) for value in raw_references)
+        if key
+    }
 
 
 class StreamContext:
@@ -130,7 +195,9 @@ class StreamContext:
         
         # v5.5 新增：图片追踪
         self.baseline_image_count = 0
+        self.baseline_image_references: set[str] = set()
         self.images_detected = False
+        self.pending_image_status_seen = False
 
         # 状态标记
         self.content_ever_changed = False
@@ -368,6 +435,8 @@ class StreamMonitor:
         self._prefetched_image_urls: set[str] = set()
         self._last_visual_reply_log_info = None
         self._pending_send_baseline: Optional[Dict[str, Any]] = None
+        self._network_fallback_reason = ""
+        self._image_recovery_exhausted = False
 
     def _looks_like_expected_image_output(self, user_input: str = "") -> bool:
         modalities = self._image_config.get("modalities") or {}
@@ -386,6 +455,59 @@ class StreamMonitor:
         return bool(
             self._image_extraction_enabled
             and is_modality_enabled(modalities, "image")
+        )
+
+    def _classify_image_wait_state(
+        self,
+        ctx: StreamContext,
+        current_text: str,
+        *,
+        has_output: bool,
+        current_has_new_image: bool,
+    ) -> Tuple[bool, bool]:
+        image_mode_enabled = bool(self._expect_image_output)
+        pending_image_status = (
+            image_mode_enabled
+            and not current_has_new_image
+            and _is_pending_image_status_text(current_text)
+        )
+        if pending_image_status:
+            ctx.pending_image_status_seen = True
+        pending_image_wait = pending_image_status or (
+            image_mode_enabled
+            and ctx.pending_image_status_seen
+            and not str(current_text or "").strip()
+        )
+        no_visible_progress = (
+            image_mode_enabled
+            and not ctx.images_detected
+            and not current_has_new_image
+            and (
+                pending_image_wait
+                or (
+                    not has_output
+                    and ctx.sent_content_length <= 0
+                    and len(current_text or "") <= int(ctx.active_turn_baseline_len or 0) + 2
+                )
+            )
+        )
+        return no_visible_progress, pending_image_status
+
+    def _uses_interrupted_image_recovery(self) -> bool:
+        if not self._expect_image_output:
+            return False
+        reason = str(self._network_fallback_reason or "").strip().lower()
+        return any(
+            marker in reason
+            for marker in (
+                "目标流提前关闭",
+                "连接已关闭",
+                "未产出有效正文",
+                "响应正文未就绪",
+                "网络监听超过最大时间",
+                "connection closed",
+                "image_generation_retry",
+            )
         )
 
     def _sanitize_stream_text(self, text: str) -> str:
@@ -513,6 +635,7 @@ class StreamMonitor:
         completion_id: Optional[str] = None,
         baseline_snapshot: Optional[Dict[str, Any]] = None,
         sent_content_length: int = 0,
+        fallback_reason: str = "",
     ) -> Generator[str, None, None]:
         self._last_visual_reply_log_info = None
         logger.debug("流式监听启动")
@@ -529,6 +652,8 @@ class StreamMonitor:
         self._generating_checker = GeneratingStatusCache(self.tab)
         self._prefetched_image_urls = set()
         self._expect_image_output = self._looks_like_expected_image_output(user_input)
+        self._network_fallback_reason = str(fallback_reason or "").strip()
+        self._image_recovery_exhausted = False
         logger.debug(
             f"[MONITOR] expect_image_output={self._expect_image_output}, "
             f"user_input_len={len(str(user_input or ''))}"
@@ -549,9 +674,25 @@ class StreamMonitor:
             )
         else:
             ctx.instant_baseline = self._get_latest_message_snapshot(selector)
+        request_baseline_references = self._image_config.get("request_baseline_references") or []
+        if (
+            self._network_fallback_reason != "image_generation_retry"
+            and isinstance(request_baseline_references, list)
+            and request_baseline_references
+        ):
+            ctx.instant_baseline["image_references"] = [
+                key
+                for key in (
+                    _snapshot_image_reference_key(value)
+                    for value in request_baseline_references
+                )
+                if key
+            ]
+            ctx.instant_baseline["page_image_references"] = []
         ctx.baseline_snapshot = ctx.instant_baseline
         ctx.instant_last_node_len = ctx.instant_baseline.get('text_len', 0)
         ctx.baseline_image_count = ctx.instant_baseline.get('image_count', 0)  # 🆕
+        ctx.baseline_image_references = _snapshot_image_reference_keys(ctx.instant_baseline)
         
         logger.debug(
             f"[Instant] count={ctx.instant_baseline['groups_count']}, "
@@ -613,8 +754,11 @@ class StreamMonitor:
 
             elif current_count == instant_count:
                 # 🆕 检测图片出现
-                if current_image_count > ctx.baseline_image_count:
-                    logger.info(f"[Image Detected] 检测到新图片 ({ctx.baseline_image_count} -> {current_image_count})")
+                if self._snapshot_has_new_image(ctx.instant_baseline, current_snapshot):
+                    logger.info(
+                        "[Image Detected] 检测到新图片 "
+                        f"(count={ctx.baseline_image_count}->{current_image_count})"
+                    )
                     ctx.user_baseline = current_snapshot
                     ctx.user_msg_confirmed = True
                     ctx.active_turn_started = True
@@ -701,6 +845,9 @@ class StreamMonitor:
             'image_count': 0,      # 🆕
             'has_images': False,   # 🆕
             'image_urls': [],      # 🆕
+            'image_references': [],
+            'page_image_urls': [],
+            'page_image_references': [],
         }
         try:
             eles = self.finder.find_all(selector, timeout=0.5)
@@ -723,8 +870,14 @@ class StreamMonitor:
                     result['image_count'] = int(image_info.get('count', 0) or 0)
                     result['has_images'] = bool(result['image_count'] > 0)
                     result['image_urls'] = list(image_info.get('urls') or [])
+                    result['image_references'] = list(image_info.get('references') or [])
                 except Exception as e:
                     logger.debug(f"图片计数失败: {e}")
+
+            if self._expect_image_output:
+                page_image_info = self._extract_page_image_info()
+                result['page_image_urls'] = list(page_image_info.get('urls') or [])
+                result['page_image_references'] = list(page_image_info.get('references') or [])
 
             if self._generating_checker is None:
                 self._generating_checker = GeneratingStatusCache(self.tab)
@@ -745,6 +898,9 @@ class StreamMonitor:
             'image_count': 0,      # 🆕
             'has_images': False,   # 🆕
             'image_urls': [],      # 🆕
+            'image_references': [],
+            'page_image_urls': [],
+            'page_image_references': [],
         }
         try:
             eles = self.finder.find_all(selector, timeout=0.5)
@@ -774,8 +930,14 @@ class StreamMonitor:
                     result['image_count'] = int(image_info.get('count', 0) or 0)
                     result['has_images'] = bool(result['image_count'] > 0)
                     result['image_urls'] = list(image_info.get('urls') or [])
+                    result['image_references'] = list(image_info.get('references') or [])
                 except Exception:
                     pass
+
+            if self._expect_image_output:
+                page_image_info = self._extract_page_image_info()
+                result['page_image_urls'] = list(page_image_info.get('urls') or [])
+                result['page_image_references'] = list(page_image_info.get('references') or [])
 
             if self._generating_checker is None:
                 self._generating_checker = GeneratingStatusCache(self.tab)
@@ -788,26 +950,122 @@ class StreamMonitor:
 
     def _extract_image_info(self, element) -> Dict[str, Any]:
         script = """
+        const baselineToken = String(arguments[0] || '');
+        const baselineProperty = String(arguments[1] || '');
+        const excludeExistingNodes = Boolean(arguments[2]);
         const nodes = Array.from(this.querySelectorAll('img') || []);
         const sources = new Set();
         const urls = [];
+        const references = [];
         for (const img of nodes) {
             try {
+                const baseline = baselineProperty ? img[baselineProperty] : null;
+                if (excludeExistingNodes && baselineToken && baseline
+                    && String(baseline.token || '') === baselineToken) continue;
                 const src = String(img.currentSrc || img.getAttribute('src') || img.src || '').trim();
                 if (!src || sources.has(src)) continue;
                 if (!/^(?:https?:\\/\\/|blob:|data:image\\/)/i.test(src)) continue;
                 sources.add(src);
+                if (src.length <= 8192) references.push(src);
                 if (/^https?:\\/\\//i.test(src)) urls.push(src);
             } catch {}
         }
-        return { count: sources.size, urls };
+        return { count: sources.size, urls, references };
         """
-        info = element.run_js(script) or {}
+        image_config = getattr(self, "_image_config", {}) or {}
+        info = element.run_js(
+            script,
+            str(image_config.get("request_baseline_token") or ""),
+            str(image_config.get("request_baseline_property") or ""),
+            bool(image_config.get("request_baseline_exclude_existing_nodes")),
+        ) or {}
         urls = _normalize_snapshot_image_urls(info.get("urls") or [])
+        references = sorted(
+            {
+                key
+                for key in (
+                    _snapshot_image_reference_key(value)
+                    for value in (info.get("references") or info.get("urls") or [])
+                )
+                if key
+            }
+        )
         return {
             "count": max(int(info.get("count", 0) or 0), len(urls)),
             "urls": urls,
+            "references": references,
         }
+
+    def _extract_page_image_info(self) -> Dict[str, Any]:
+        selector = str(self._image_config.get("selector") or "img").strip() or "img"
+        try:
+            info = self.tab.run_js(
+                """
+                const selector = String(arguments[0] || "img");
+                const baselineToken = String(arguments[1] || "");
+                const baselineProperty = String(arguments[2] || "");
+                const excludeExistingNodes = Boolean(arguments[3]);
+                const root = document.querySelector("main") || document;
+                let nodes = [];
+                try { nodes = Array.from(root.querySelectorAll(selector)); } catch {}
+                const sources = new Set();
+                const urls = [];
+                const references = [];
+                for (const node of nodes) {
+                    try {
+                        const baseline = baselineProperty ? node[baselineProperty] : null;
+                        if (excludeExistingNodes && baselineToken && baseline
+                            && String(baseline.token || "") === baselineToken) continue;
+                        const src = String(node.currentSrc || node.getAttribute("src") || node.src || "").trim();
+                        if (!src || sources.has(src)) continue;
+                        if (!/^(?:https?:\\/\\/|blob:|data:image\\/)/i.test(src)) continue;
+                        sources.add(src);
+                        if (src.length <= 8192) references.push(src);
+                        if (/^https?:\\/\\//i.test(src)) urls.push(src);
+                    } catch {}
+                }
+                return {
+                    urls: Array.from(new Set(urls)).slice(-256),
+                    references: Array.from(new Set(references)).slice(-256),
+                };
+                """,
+                selector,
+                str(self._image_config.get("request_baseline_token") or ""),
+                str(self._image_config.get("request_baseline_property") or ""),
+                bool(self._image_config.get("request_baseline_exclude_existing_nodes")),
+            ) or {}
+        except Exception:
+            return {"urls": [], "references": []}
+
+        return {
+            "urls": _normalize_snapshot_image_urls(info.get("urls") or []),
+            "references": sorted(
+                {
+                    key
+                    for key in (
+                        _snapshot_image_reference_key(value)
+                        for value in (info.get("references") or info.get("urls") or [])
+                    )
+                    if key
+                }
+            ),
+        }
+
+    @staticmethod
+    def _snapshot_has_new_image(
+        baseline: Optional[Dict[str, Any]],
+        current: Optional[Dict[str, Any]],
+    ) -> bool:
+        current = current or {}
+        baseline = baseline or {}
+        current_count = max(0, int(current.get("image_count", 0) or 0))
+        baseline_count = max(0, int(baseline.get("image_count", 0) or 0))
+        if current_count > baseline_count:
+            return True
+
+        current_references = _snapshot_image_reference_keys(current)
+        baseline_references = _snapshot_image_reference_keys(baseline)
+        return bool(current_references - baseline_references)
 
     def _prefetch_snapshot_image_urls(self, snap: Dict[str, Any]) -> int:
         urls = [
@@ -838,6 +1096,25 @@ class StreamMonitor:
         if started:
             logger.debug(f"[DOM Prefetch] 已提交后台图片下载: {started} 个")
         return started
+
+    def _refresh_stalled_image_page(self) -> bool:
+        try:
+            self.tab.refresh(ignore_cache=True)
+            logger.info("[Image Recovery] 图片结果长时间未渲染，已刷新页面重新同步服务端结果")
+            return True
+        except Exception as exc:
+            logger.warning(f"[Image Recovery] 图片停滞恢复刷新失败（继续等待）: {exc}")
+            return False
+
+    def _uses_arena_image_recovery_defaults(self) -> bool:
+        page_url = str(getattr(self.tab, "url", "") or "").strip().lower()
+        try:
+            host = str(urlparse(page_url).hostname or "").strip().lower()
+        except Exception:
+            return False
+        return host in {"arena.ai", "lmarena.ai"} or host.endswith(
+            (".arena.ai", ".lmarena.ai")
+        )
 
     def _get_active_turn_text(self, selector: str) -> str:
         """回退：取最后一个元素的文本"""
@@ -878,7 +1155,7 @@ class StreamMonitor:
         # 🆕 图片检测：即使没有文本增长，有图片出现也认为开始回复
         current_img = current.get('image_count', 0)
         baseline_img = baseline.get('image_count', 0)
-        if current_img > baseline_img:
+        if self._snapshot_has_new_image(baseline, current):
             ctx.images_detected = True
             self._prefetch_snapshot_image_urls(current)
             return True, f"检测到新图片 ({baseline_img} -> {current_img})"
@@ -908,9 +1185,14 @@ class StreamMonitor:
         ctx.output_target_anchor = initial_snap['anchor']
         last_text_len = int(initial_snap.get('text_len', 0) or 0)
         last_image_count = int(initial_snap.get('image_count', ctx.baseline_image_count) or 0)
+        last_image_references = _snapshot_image_reference_keys(initial_snap)
 
         peak_text_len = 0
         content_shrink_count = 0
+        image_stall_refresh_attempted = False
+        image_recovery_refresh_attempts = 0
+        image_recovery_last_refresh_at = phase_start
+        interrupted_image_recovery = self._uses_interrupted_image_recovery()
 
         while True:
             if time.time() - phase_start > self._hard_timeout:
@@ -936,15 +1218,35 @@ class StreamMonitor:
             still_generating = snap['is_generating']
             current_text_len = len(current_text)
             current_image_count = snap.get('image_count', 0)  # 🆕
-            
+            current_image_references = _snapshot_image_reference_keys(snap)
+            current_has_new_image = self._snapshot_has_new_image(ctx.baseline_snapshot, snap)
+            no_visible_progress, pending_image_status = self._classify_image_wait_state(
+                ctx,
+                current_text,
+                has_output=has_output,
+                current_has_new_image=current_has_new_image,
+            )
+
             # 🆕 检测图片变化
-            if current_image_count > last_image_count:
-                logger.debug(f"[Image Change] 图片数量变化: {last_image_count} -> {current_image_count}")
+            image_snapshot_changed = (
+                current_image_count != last_image_count
+                or current_image_references != last_image_references
+            )
+            if current_has_new_image and not ctx.images_detected:
+                logger.debug(
+                    "[Image Change] 检测到相对发送基线的新图片: "
+                    f"count={ctx.baseline_image_count}->{current_image_count}, "
+                    f"new_refs={len(current_image_references - ctx.baseline_image_references)}"
+                )
                 ctx.images_detected = True
                 ctx.content_ever_changed = True
                 self._prefetch_snapshot_image_urls(snap)
                 silence_start = time.time()  # 重置静默计时
-                last_image_count = current_image_count
+            elif current_has_new_image and image_snapshot_changed:
+                self._prefetch_snapshot_image_urls(snap)
+                silence_start = time.time()
+            last_image_count = current_image_count
+            last_image_references = current_image_references
 
             # 检测内容折叠
             if current_text_len > peak_text_len:
@@ -985,6 +1287,7 @@ class StreamMonitor:
                         has_output = False
                         last_text_len = current_text_len
                         last_image_count = current_image_count
+                        last_image_references = current_image_references
                         if ctx.network_sent_content_length > 0:
                             if ctx.apply_network_sent_offset(
                                 ctx.network_sent_content_length,
@@ -1006,9 +1309,13 @@ class StreamMonitor:
             # 空文本处理
             if not current_text:
                 # 🆕 如果有图片，标记内容变化并继续检查退出条件
-                if snap.get('has_images'):
-                    ctx.content_ever_changed = True
+                if snap.get('has_images') or current_has_new_image or ctx.images_detected:
+                    if current_has_new_image or ctx.images_detected:
+                        ctx.content_ever_changed = True
                     # 不 continue，继续执行后面的退出判定逻辑
+                elif no_visible_progress:
+                    # 图片请求在刷新后可能短暂变成完全空白，仍需进入恢复计时与刷新逻辑。
+                    pass
                 else:
                     if ctx.sent_content_length > 0:
                         element_missing_count += 1
@@ -1052,7 +1359,9 @@ class StreamMonitor:
                 ctx.update_after_send(diff, current_text)
                 current_interval = min_interval
                 visible_diff = self._sanitize_stream_text(diff)
-                if visible_diff.strip():
+                if pending_image_status:
+                    logger.debug("[STREAM] 已抑制图片生成占位文本，继续等待最终图片")
+                elif visible_diff.strip():
                     silence_start = time.time()
                     has_output = True
                     ctx.content_ever_changed = True
@@ -1089,23 +1398,97 @@ class StreamMonitor:
                 silence_threshold = min(float(silence_threshold), 1.2)
                 silence_threshold_fallback = min(float(silence_threshold_fallback), 2.0)
                 stable_count_threshold = min(int(stable_count_threshold), 2)
-            image_mode_enabled = self._expect_image_output
-            no_visible_progress = (
-                image_mode_enabled
-                and not ctx.images_detected
-                and not has_output
-                and ctx.sent_content_length <= 0
-                and current_image_count <= max(int(ctx.baseline_image_count or 0), 0)
-                and current_text_len <= int(ctx.active_turn_baseline_len or 0) + 2
+            image_mode_enabled = bool(self._expect_image_output)
+            arena_image_recovery = image_mode_enabled and self._uses_arena_image_recovery_defaults()
+            image_stall_refresh_seconds = float(
+                self._image_config.get("dom_image_stall_refresh_seconds")
+                or (90.0 if arena_image_recovery else 0.0)
+            )
+            interrupted_refresh_interval = float(
+                self._image_config.get("dom_image_interrupted_refresh_interval_seconds")
+                or 20.0
+            )
+            interrupted_recovery_timeout = float(
+                self._image_config.get("dom_image_interrupted_recovery_timeout_seconds")
+                or 75.0
+            )
+            interrupted_max_refreshes = max(
+                0,
+                int(self._image_config.get("dom_image_interrupted_max_refreshes") or 3),
             )
             no_progress_wait_limit = float(
                 self._image_config.get("dom_image_no_output_timeout_seconds")
-                or max(45.0, float(silence_threshold_fallback) * 4.0)
+                or max(
+                    180.0 if arena_image_recovery else 45.0,
+                    float(silence_threshold_fallback) * 4.0,
+                )
             )
             no_progress_hard_limit = float(
-                self._image_config.get("dom_image_no_output_hard_timeout_seconds") or 0.0
+                self._image_config.get("dom_image_no_output_hard_timeout_seconds")
+                or (240.0 if arena_image_recovery else 0.0)
             )
             elapsed_since_phase_start = time.time() - phase_start
+            if (
+                interrupted_image_recovery
+                and no_visible_progress
+                and elapsed_since_phase_start >= interrupted_recovery_timeout
+            ):
+                self._image_recovery_exhausted = True
+                logger.warning(
+                    "[Image Recovery] 断流后的图片恢复窗口已耗尽，准备中止并重试 "
+                    f"(elapsed={elapsed_since_phase_start:.1f}s, "
+                    f"refreshes={image_recovery_refresh_attempts})"
+                )
+                break
+            if (
+                interrupted_image_recovery
+                and no_visible_progress
+                and interrupted_refresh_interval > 0
+                and image_recovery_refresh_attempts < interrupted_max_refreshes
+                and time.time() - image_recovery_last_refresh_at >= interrupted_refresh_interval
+            ):
+                image_recovery_refresh_attempts += 1
+                image_recovery_last_refresh_at = time.time()
+                logger.info(
+                    "[Image Recovery] 断流后仍未同步到图片，刷新页面继续等待 "
+                    f"(attempt={image_recovery_refresh_attempts}/{interrupted_max_refreshes})"
+                )
+                if self._refresh_stalled_image_page():
+                    self._generating_checker = GeneratingStatusCache(self.tab)
+                    ctx.output_target_anchor = None
+                    ctx.output_target_count = 0
+                    ctx.pending_new_anchor = None
+                    ctx.pending_new_anchor_seen = 0
+                    last_text_len = 0
+                    last_image_count = max(int(ctx.baseline_image_count or 0), 0)
+                    last_image_references = set(ctx.baseline_image_references)
+                    silence_start = time.time()
+                    time.sleep(1.0)
+                    continue
+            if (
+                not interrupted_image_recovery
+                and no_visible_progress
+                and image_stall_refresh_seconds > 0
+                and not image_stall_refresh_attempted
+                and elapsed_since_phase_start >= image_stall_refresh_seconds
+            ):
+                image_stall_refresh_attempted = True
+                if pending_image_status:
+                    logger.info(
+                        "[Image Recovery] 图片生成占位状态持续未产出图片，准备刷新页面"
+                    )
+                if self._refresh_stalled_image_page():
+                    self._generating_checker = GeneratingStatusCache(self.tab)
+                    ctx.output_target_anchor = None
+                    ctx.output_target_count = 0
+                    ctx.pending_new_anchor = None
+                    ctx.pending_new_anchor_seen = 0
+                    last_text_len = 0
+                    last_image_count = max(int(ctx.baseline_image_count or 0), 0)
+                    last_image_references = set(ctx.baseline_image_references)
+                    silence_start = time.time()
+                    time.sleep(1.0)
+                    continue
             suppress_fast_exit = False
             if no_visible_progress and elapsed_since_phase_start < no_progress_wait_limit:
                 suppress_fast_exit = True
@@ -1251,8 +1634,17 @@ class StreamMonitor:
 
         final_snap = self._get_snapshot_prefer_anchor(selector, ctx.output_target_anchor)
         final_text = final_snap.get('text', "") or ""
-        final_image_urls = _normalize_snapshot_image_urls(final_snap.get('image_urls') or [])
-        if final_snap.get('has_images'):
+        final_image_urls = [
+            url
+            for url in _normalize_snapshot_image_urls(
+                list(final_snap.get('image_urls') or [])
+                + list(final_snap.get('page_image_urls') or [])
+            )
+            if _snapshot_image_reference_key(url) not in ctx.baseline_image_references
+        ]
+        final_has_new_image = self._snapshot_has_new_image(ctx.baseline_snapshot, final_snap)
+        if final_has_new_image:
+            self._image_recovery_exhausted = False
             ctx.images_detected = True
             self._prefetch_snapshot_image_urls(final_snap)
         self._final_image_urls = final_image_urls
@@ -1297,7 +1689,7 @@ class StreamMonitor:
                 )
 
         # 🆕 ===== 最终图片提取 =====
-        if self._image_extraction_enabled and (ctx.images_detected or final_snap.get('has_images')):
+        if self._image_extraction_enabled and (ctx.images_detected or final_has_new_image):
             images = self._extract_final_images(selector, ctx)
             if images:
                 self._final_images = images
@@ -1385,6 +1777,9 @@ class StreamMonitor:
         """获取最终 settle 快照中识别到的远程图片 URL。"""
         return list(self._final_image_urls)
 
+    def image_recovery_exhausted(self) -> bool:
+        return bool(self._image_recovery_exhausted)
+
     def cleanup(self) -> None:
         self._final_complete_text = ""
         self._final_images = []
@@ -1395,6 +1790,8 @@ class StreamMonitor:
         self._generating_checker = None
         self._expect_image_output = False
         self._last_visual_reply_log_info = None
+        self._network_fallback_reason = ""
+        self._image_recovery_exhausted = False
         logger.debug("[StreamMonitor] large cached stream results cleared")
 
 

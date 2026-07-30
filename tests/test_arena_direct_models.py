@@ -226,6 +226,28 @@ def test_plain_mapping_name_resolves_to_private_arena_uuid(monkeypatch):
     assert resolved["name"] == "glm-5.2"
 
 
+def test_catalog_identity_wins_over_stale_alias_from_earlier_model():
+    models = [
+        {
+            "arena_model_id": "glm-52-id",
+            "name": "glm-5.2",
+            "search_name": "glm-5.2 (max)",
+            "aliases": ["glm-5.1", "glm-5.2", "glm-5.2 (max)"],
+        },
+        {
+            "arena_model_id": "glm-51-id",
+            "name": "glm-5.1",
+            "search_name": "glm-5.1",
+            "aliases": ["glm-5.1"],
+        },
+    ]
+
+    resolved = match_arena_direct_model(models, "glm-5.1")
+
+    assert resolved["arena_model_id"] == "glm-51-id"
+    assert resolved["name"] == "glm-5.1"
+
+
 def test_visible_search_name_is_exported_while_internal_name_remains_compatible(monkeypatch):
     models = [
         {
@@ -600,8 +622,9 @@ def test_sillytavern_models_aliases_are_registered():
 
 
 class _Element:
-    def __init__(self, text="", data_value=""):
+    def __init__(self, text="", data_value="", raw_text=""):
         self.text = text
+        self.raw_text = raw_text
         self._data_value = data_value
 
     def attr(self, name):
@@ -703,6 +726,19 @@ class _DuplicateTriggerHarness(_ActionHarness):
         return super()._get_element_viewport_pos(element)
 
 
+class _ProviderIconTriggerHarness(_ActionHarness):
+    def __init__(self, current_label):
+        super().__init__(current_label=current_label)
+        self.trigger.text = f"Anthropic{current_label}"
+        self.trigger.raw_text = current_label
+
+    def _stealth_click_element(self, element, **_kwargs):
+        self.clicks.append(element)
+        if element is self.option:
+            self.trigger.text = "Anthropicclaude-sonnet-4-6"
+            self.trigger.raw_text = "claude-sonnet-4-6"
+
+
 @pytest.fixture
 def resolved_model(monkeypatch):
     model = {
@@ -733,8 +769,36 @@ def test_select_model_is_zero_interaction_when_already_selected(resolved_model):
     assert harness._text_handler.calls == []
 
 
+def test_page_model_check_rejects_stale_alias_of_different_model():
+    target_model = {
+        "name": "glm-5.2",
+        "public_name": "glm-5.2 (max)",
+        "display_name": "glm-5.2 (max)",
+        "search_name": "glm-5.2 (max)",
+        "aliases": ["glm-5.1", "glm-5.2", "glm-5.2 (max)"],
+    }
+
+    assert not WorkflowExecutorActionMixin._model_label_matches("glm-5.1", target_model)
+    assert WorkflowExecutorActionMixin._model_label_matches("glm-5.2 (max)", target_model)
+
+
 def test_select_model_ignores_stale_duplicate_before_current_model_check(resolved_model):
     harness = _DuplicateTriggerHarness()
+
+    harness._execute_select_model(
+        selector=MODEL_TRIGGER_SELECTOR,
+        target_key="model_select_btn",
+        value={"timeout": 1},
+        context={"model": "claude-sonnet-4-6-vertex"},
+        optional=False,
+    )
+
+    assert harness.clicks == []
+    assert harness._text_handler.calls == []
+
+
+def test_select_model_uses_visible_text_without_provider_icon_title(resolved_model):
+    harness = _ProviderIconTriggerHarness(current_label="claude-sonnet-4-6")
 
     harness._execute_select_model(
         selector=MODEL_TRIGGER_SELECTOR,
@@ -763,6 +827,20 @@ def test_select_model_uses_one_menu_click_and_one_exact_option_click(resolved_mo
     assert harness._text_handler.calls == [
         (harness.search, "claude-sonnet-4-6")
     ]
+
+
+def test_select_model_confirms_switch_with_provider_icon_title(resolved_model):
+    harness = _ProviderIconTriggerHarness(current_label="Max")
+
+    harness._execute_select_model(
+        selector=MODEL_TRIGGER_SELECTOR,
+        target_key="model_select_btn",
+        value={"timeout": 1},
+        context={"model": "claude-sonnet-4-6-vertex"},
+        optional=False,
+    )
+
+    assert harness.clicks == [harness.trigger, harness.option]
 
 
 def test_select_model_switches_battle_to_direct_before_selecting(resolved_model):

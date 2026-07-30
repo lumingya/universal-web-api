@@ -1081,6 +1081,7 @@ def _build_tab_resolution_headers(
     selector: str = "",
     preset_name: str = "",
     route_group: str = "",
+    route_group_live_member_count: Optional[int] = None,
 ) -> Dict[str, str]:
     headers: Dict[str, str] = {}
     requested_route_domain = str(route_domain or "").strip()
@@ -1091,6 +1092,10 @@ def _build_tab_resolution_headers(
     if requested_route_group:
         headers["X-Requested-Route-Group"] = requested_route_group
         headers["X-Resolved-Route-Group"] = requested_route_group
+        if route_group_live_member_count is not None:
+            headers["X-Route-Group-Live-Member-Count"] = str(
+                max(int(route_group_live_member_count), 0)
+            )
         if requested_route_domain:
             headers["X-Resolved-Route-Domain"] = (
                 normalize_route_domain(requested_route_domain) or requested_route_domain
@@ -1151,6 +1156,18 @@ def _resolve_route_group(browser: Any, group_id: str) -> Dict[str, Any]:
     group = route_groups_by_id(groups).get(normalized_id)
     if not group:
         raise HTTPException(status_code=404, detail=f"标签页路由组 '{normalized_id}' 不存在")
+
+    runtime_group = next((
+        item
+        for item in groups
+        if isinstance(item, dict)
+        and normalize_route_group_id(item.get("id") or item.get("group_id"))
+        == normalized_id
+    ), None)
+    if runtime_group:
+        for key in ("live_member_count", "idle_member_count", "live_tab_indices"):
+            if key in runtime_group:
+                group[key] = runtime_group[key]
     return group
 
 
@@ -1923,6 +1940,7 @@ async def list_models_with_route_group(
         route_domain=group.get("route_domain") or "",
         selector=group.get("allocation_mode") or "round_robin",
         route_group=group["id"],
+        route_group_live_member_count=group.get("live_member_count"),
     ))
     return response
 
@@ -1956,6 +1974,7 @@ async def list_models_with_route_group_and_preset(
         selector=group.get("allocation_mode") or "round_robin",
         preset_name=preset_resolution["preset_name"],
         route_group=group["id"],
+        route_group_live_member_count=group.get("live_member_count"),
     ))
     return response
 
@@ -2433,6 +2452,7 @@ async def chat_with_route_group(
         selector=group.get("allocation_mode") or "round_robin",
         preset_name=resolved_preset_name or "",
         route_group=group["id"],
+        route_group_live_member_count=group.get("live_member_count"),
     )
     with logger.context(ctx.request_id):
         logger.info(

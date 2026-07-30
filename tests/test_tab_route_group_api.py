@@ -79,6 +79,7 @@ def test_tab_pool_config_persists_and_hot_reloads_route_groups(monkeypatch):
 def test_route_group_chat_forces_configured_preset_and_uses_group_execution(monkeypatch):
     captured = {}
     group = _group_payload()
+    group["live_member_count"] = 4
 
     class _Pool:
         @staticmethod
@@ -137,6 +138,12 @@ def test_route_group_chat_forces_configured_preset_and_uses_group_execution(monk
     assert captured["body"].preset_name == "image-preset"
     assert captured["kwargs"]["route_group_id"] == "arena-image"
     assert captured["kwargs"]["route_domain"] == "arena.ai"
+    assert (
+        captured["kwargs"]["resolved_headers"][
+            "X-Route-Group-Live-Member-Count"
+        ]
+        == "4"
+    )
     assert captured["metadata"]["route_group"] == "arena-image"
 
 
@@ -146,11 +153,13 @@ def test_route_group_headers_include_group_and_resolved_domain():
         route_domain="arena.ai",
         route_group="arena-image",
         selector="round_robin",
+        route_group_live_member_count=4,
     )
 
     assert headers["X-Requested-Route-Group"] == "arena-image"
     assert headers["X-Resolved-Route-Group"] == "arena-image"
     assert headers["X-Resolved-Route-Domain"] == "arena.ai"
+    assert headers["X-Route-Group-Live-Member-Count"] == "4"
 
 
 def test_browser_workflow_route_group_binds_and_releases_selected_member():

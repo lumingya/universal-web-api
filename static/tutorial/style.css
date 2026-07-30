@@ -148,6 +148,31 @@ p code,li code,td code,h3 code,h4 code{font-family:var(--mono);font-size:.83em;b
 .steps li::before{content:counter(st,decimal-leading-zero);position:absolute;left:0;top:1px;width:30px;height:30px;border-radius:10px;background:var(--panel);border:1px solid rgba(92,200,255,.28);color:var(--acc);font-family:var(--mono);font-size:11.5px;font-weight:600;display:flex;align-items:center;justify-content:center}
 .steps li::after{content:"";position:absolute;left:15px;top:34px;bottom:4px;width:1px;background:linear-gradient(180deg,rgba(92,200,255,.3),transparent)}
 .steps li:last-child::after{display:none}
+.quickstart-welcome{display:flex;gap:14px;align-items:flex-start;margin:18px 0 12px;padding:18px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.quickstart-welcome-icon{width:42px;height:42px;border-radius:12px;display:flex;align-items:center;justify-content:center;flex-shrink:0;color:var(--acc);background:var(--acc-dim);border:1px solid rgba(92,200,255,.24)}
+.quickstart-welcome strong{display:block;font-size:17px;margin:1px 0 4px}
+.quickstart-welcome p{margin:0;max-width:680px;font-size:14px}
+.quickstart-links{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));border-top:1px solid var(--line2);border-bottom:1px solid var(--line2);margin:12px 0 30px}
+.quickstart-links>a{display:grid;grid-template-columns:34px minmax(0,1fr) 18px;align-items:center;gap:11px;padding:15px 16px;color:var(--tx);transition:.2s}
+.quickstart-links>a+a{border-left:1px solid var(--line2)}
+.quickstart-links>a:hover{background:var(--acc-dim);text-decoration:none}
+.quickstart-links>a>svg:last-child{color:var(--tx3)}
+.quickstart-link-icon{width:34px;height:34px;border-radius:9px;display:flex;align-items:center;justify-content:center;color:var(--acc);background:var(--panel);border:1px solid var(--line)}
+.quickstart-links strong{display:block;font-size:13.5px}
+.quickstart-links small{display:block;color:var(--tx3);font-size:11.5px;line-height:1.55;margin-top:2px}
+.browser-compare{margin:18px 0 8px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.browser-kind{display:grid;grid-template-columns:38px minmax(0,1fr);gap:12px;padding:15px 4px}
+.browser-kind+.browser-kind{border-top:1px solid var(--line2)}
+.browser-kind-icon{width:34px;height:34px;border-radius:10px;display:flex;align-items:center;justify-content:center;color:var(--tx3);background:var(--panel);border:1px solid var(--line)}
+.browser-kind.is-controlled .browser-kind-icon{color:var(--tip);background:rgba(52,211,153,.08);border-color:rgba(52,211,153,.25)}
+.browser-kind strong{font-size:14px}
+.browser-kind p{font-size:13px;margin:3px 0 0;line-height:1.7}
+.quickstart-actions{margin:18px 0 30px}
+.quickstart-reference-links{display:flex;flex-wrap:wrap;gap:9px;margin:16px 0 22px}
+.quickstart-reference-links a{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border:1px solid var(--line);border-radius:9px;background:var(--panel);color:var(--tx2);font-size:13px;font-weight:700;transition:.2s}
+.quickstart-reference-links a:hover{color:var(--acc);border-color:rgba(92,200,255,.35);text-decoration:none;transform:translateY(-1px)}
+.quickstart-reference-links a>svg:last-child{color:var(--tx3)}
+#api-key-config,#routing-methods,#browser-profile-reuse,#quickstart-browser,#quickstart-gemini{scroll-margin-top:calc(var(--hd-h) + 18px)}
 .grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin:18px 0}
 .grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin:18px 0}
 .q-card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:18px;transition:.25s;position:relative;overflow:hidden}
@@ -277,7 +302,9 @@ p code,li code,td code,h3 code,h4 code{font-family:var(--mono);font-size:.83em;b
 }
 @media(max-width:640px){.hide-sm{display:none}}
 @media(max-width:760px){
-  .grid2,.grid3{grid-template-columns:1fr}
+  .grid2,.grid3,.quickstart-links{grid-template-columns:1fr}
+  .quickstart-links>a+a{border-left:none;border-top:1px solid var(--line2)}
+  p code,li code{white-space:normal;overflow-wrap:anywhere;word-break:break-word}
   .mock-body{grid-template-columns:1fr}
   .mock-side{display:flex;gap:8px;overflow:hidden;border-right:none;border-bottom:1px solid var(--line);padding:9px}
   .mock-side .mi{width:60px;margin:0}

@@ -95,7 +95,7 @@ class BrowserMediaMixin:
                             markedCount += 1;
                         } catch {}
                     }
-                    if (reference) urls.push(reference);
+                    if (reference && reference.length <= 8192) urls.push(reference);
                 }
 
                 return {
@@ -103,6 +103,7 @@ class BrowserMediaMixin:
                     node_count: nodes.length,
                     marked_count: markedCount,
                     url_count: new Set(urls).size,
+                    references: Array.from(new Set(urls)).slice(-256),
                     page_url: String(location.href || ""),
                 };
                 """,
@@ -128,6 +129,11 @@ class BrowserMediaMixin:
             "node_count": int(result.get("node_count") or 0),
             "marked_count": int(result.get("marked_count") or 0),
             "url_count": int(result.get("url_count") or 0),
+            "references": [
+                str(reference or "").strip()
+                for reference in (result.get("references") or [])
+                if str(reference or "").strip()
+            ],
             "page_url": str(result.get("page_url") or ""),
         }
         logger.debug(
@@ -136,6 +142,62 @@ class BrowserMediaMixin:
             f"urls={baseline['url_count']}"
         )
         return baseline
+
+    @staticmethod
+    def _media_reference_key(reference: Any) -> str:
+        text = str(reference or "").strip()
+        if not text:
+            return ""
+        if text.lower().startswith(("data:", "blob:")):
+            return text
+
+        normalized = normalize_remote_image_url(text)
+        if not normalized:
+            return text
+        try:
+            parsed = urlparse(normalized)
+        except Exception:
+            return normalized
+        if parsed.scheme.lower() not in {"http", "https"}:
+            return normalized
+        host = str(parsed.hostname or "").strip().lower()
+        signed_query = "x-amz-signature=" in str(parsed.query or "").lower()
+        if host.endswith(".r2.cloudflarestorage.com") or signed_query:
+            return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}{parsed.path}"
+        return normalized
+
+    @classmethod
+    def _filter_media_items_against_dom_baseline(
+        cls,
+        media_items: List[Dict],
+        media_dom_baseline: Optional[Dict[str, Any]],
+    ) -> List[Dict]:
+        baseline_keys = {
+            cls._media_reference_key(reference)
+            for reference in ((media_dom_baseline or {}).get("references") or [])
+        }
+        baseline_keys.discard("")
+        if not baseline_keys:
+            return list(media_items or [])
+
+        filtered_items = []
+        removed_images = 0
+        for item in media_items or []:
+            if not isinstance(item, dict):
+                continue
+            media_type = str(item.get("media_type") or "image").strip().lower() or "image"
+            reference = item.get("url") or item.get("data_uri") or ""
+            if media_type == "image" and cls._media_reference_key(reference) in baseline_keys:
+                removed_images += 1
+                continue
+            filtered_items.append(item)
+
+        if removed_images:
+            logger.debug(
+                "发送前已存在的图片 URL 已从本轮结果剔除: "
+                f"count={removed_images}"
+            )
+        return filtered_items
 
     @staticmethod
     def _candidate_has_fresh_dom_image(
@@ -149,6 +211,9 @@ class BrowserMediaMixin:
         selector = str((image_config or {}).get("selector") or "img").strip() or "img"
         token = str(media_dom_baseline.get("token") or "")
         property_name = str(media_dom_baseline.get("property") or "")
+        exclude_existing_nodes = bool(
+            (image_config or {}).get("request_baseline_exclude_existing_nodes")
+        )
         if not token or not property_name:
             return False
 
@@ -159,6 +224,7 @@ class BrowserMediaMixin:
                     const selector = String(arguments[0] || "img");
                     const baselineToken = String(arguments[1] || "");
                     const propertyName = String(arguments[2] || "");
+                    const excludeExistingNodes = Boolean(arguments[3]);
                     const nodes = [];
                     try {
                         if (this instanceof Element && this.matches(selector)) nodes.push(this);
@@ -170,6 +236,7 @@ class BrowserMediaMixin:
                     return nodes.some((node) => {
                         const baseline = node[propertyName];
                         if (!baseline || String(baseline.token || "") !== baselineToken) return true;
+                        if (excludeExistingNodes) return false;
                         let currentReference = "";
                         try {
                             currentReference = String(
@@ -185,6 +252,7 @@ class BrowserMediaMixin:
                     selector,
                     token,
                     property_name,
+                    exclude_existing_nodes,
                 )
             )
         except Exception as exc:
@@ -1137,6 +1205,10 @@ class BrowserMediaMixin:
                     )
 
                 extracted_items = list(extracted_items or [])
+                extracted_items = self._filter_media_items_against_dom_baseline(
+                    extracted_items,
+                    media_dom_baseline,
+                )
                 if media_dom_baseline and not self._candidate_has_fresh_dom_image(
                     target_element,
                     image_config,
@@ -1219,6 +1291,10 @@ class BrowserMediaMixin:
                         )
                         continue
                     extracted_items = list(extracted_items or [])
+                    extracted_items = self._filter_media_items_against_dom_baseline(
+                        extracted_items,
+                        media_dom_baseline,
+                    )
                     ready_items = self._filter_ready_media_items(extracted_items, image_config)
                     image_count = sum(
                         1

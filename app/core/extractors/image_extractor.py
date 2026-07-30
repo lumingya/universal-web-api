@@ -105,7 +105,8 @@ class ImageExtractor:
             canvasExportMime = "image/jpeg",
             canvasExportQuality = 0.88,
             requestBaselineToken = "",
-            requestBaselineProperty = ""
+            requestBaselineProperty = "",
+            requestBaselineExcludeExistingNodes = false
         } = opts || {};
 
         // ===== 1. 确定根元素 =====
@@ -191,14 +192,16 @@ class ImageExtractor:
             return "";
         }
 
-        // A request baseline is attached to every image that existed immediately before
-        // submit. Keep only new nodes or existing nodes whose resolved source changed.
+        // A request baseline is attached to every image node that existed immediately
+        // before submit. Upload previews often fill or replace their src asynchronously
+        // after the click, so a changed src does not make a pre-submit node generated output.
         if (requestBaselineToken && requestBaselineProperty) {
             nodes = nodes.filter((img) => {
                 const baseline = img[requestBaselineProperty];
                 if (!baseline || String(baseline.token || "") !== String(requestBaselineToken)) {
                     return true;
                 }
+                if (requestBaselineExcludeExistingNodes) return false;
                 return pickSrc(img) !== String(baseline.reference || "");
             });
             if (nodes.length === 0) {
@@ -526,6 +529,9 @@ class ImageExtractor:
             "canvasExportQuality": float(final_config.get("canvas_export_quality", 0.88) or 0.88),
             "requestBaselineToken": str(final_config.get("request_baseline_token") or ""),
             "requestBaselineProperty": str(final_config.get("request_baseline_property") or ""),
+            "requestBaselineExcludeExistingNodes": bool(
+                final_config.get("request_baseline_exclude_existing_nodes")
+            ),
         }
         
         try:

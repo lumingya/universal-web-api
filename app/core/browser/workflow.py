@@ -34,6 +34,14 @@ class BrowserWorkflowMixin:
     """工作流执行、流式/非流式响应、中断处理相关的混入类"""
 
     @staticmethod
+    def _should_exclude_preexisting_media_nodes(
+        media_dom_baseline: Optional[Dict[str, Any]],
+    ) -> bool:
+        page_url = str((media_dom_baseline or {}).get("page_url") or "").strip()
+        domain = str(extract_remote_site_domain(page_url) or "").strip().lower()
+        return domain.removeprefix("www.") == "arena.ai"
+
+    @staticmethod
     def _format_log_counts(counts: Dict[str, int]) -> str:
         if not counts:
             return "-"
@@ -1979,13 +1987,20 @@ class BrowserWorkflowMixin:
                         and not media_dom_baseline_captured
                     ):
                         media_dom_baseline_captured = True
+                        image_config.pop("request_baseline_references", None)
                         media_dom_baseline = self._capture_media_dom_baseline(tab, image_config)
                         if media_dom_baseline:
+                            image_config["request_baseline_exclude_existing_nodes"] = (
+                                self._should_exclude_preexisting_media_nodes(media_dom_baseline)
+                            )
                             image_config["request_baseline_token"] = str(
                                 media_dom_baseline.get("token") or ""
                             )
                             image_config["request_baseline_property"] = str(
                                 media_dom_baseline.get("property") or ""
+                            )
+                            image_config["request_baseline_references"] = list(
+                                media_dom_baseline.get("references") or []
                             )
 
                     try:

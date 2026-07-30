@@ -110,6 +110,18 @@ def test_route_group_concurrent_requests_acquire_distinct_idle_members():
     assert acquired_first.id != acquired_second.id
 
 
+def test_route_group_snapshot_live_count_includes_busy_members():
+    idle = _session("arena-idle", 1, "https://arena.ai/c/image-1")
+    busy = _session("arena-busy", 2, "https://arena.ai/c/image-2")
+    manager = _manager([idle, busy])
+    assert busy.acquire("req-busy") is True
+
+    group = manager.get_route_groups_snapshot()[0]
+
+    assert group["live_member_count"] == 2
+    assert group["idle_member_count"] == 1
+
+
 def test_route_group_waiter_acquires_member_after_release():
     only = _session("arena-1", 1, "https://arena.ai/c/image-1")
     manager = _manager([only])

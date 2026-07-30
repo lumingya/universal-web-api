@@ -339,6 +339,10 @@ class LmarenaParser(ResponseParser):
         self._last_debug_summary = {}
         self._last_debug_raw_signature = ""
 
+    def should_fallback_to_dom_when_no_visible_content(self) -> bool:
+        """Arena 的心跳流可能因网络波动提前关闭，空结果必须交给 DOM 接管。"""
+        return True
+
     def export_debug_data(self, raw_response: str = "") -> Dict[str, Any]:
         """Return a compact parser-side protocol summary for network_parser_debug."""
         summary = dict(self._last_debug_summary or {})

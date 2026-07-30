@@ -472,6 +472,7 @@ class ImageExtractionConfig(TypedDict, total=False):
     final_target_strategy: Literal["container", "latest_reply", "latest_visual_reply"] # 最终提取时锁定整容器或当前回复节点
     latest_visual_column: Literal["left", "right"] # latest_visual_reply 同一行内优先左栏或右栏
     allow_container_fallback: bool   # 当前回复内无媒体时是否回退到容器/整页
+    request_baseline_exclude_existing_nodes: bool # 发送前已存在的图片节点即使换源也视为输入/历史图片
     force_postprocess: bool          # 是否强制执行收尾多模态后处理（由配置显式声明）
     direct_postprocess_modalities: List[Literal["image", "audio", "video"]] # 允许无额外信号直接执行 DOM 收尾提取的模态
     debounce_seconds: float          # 文本稳定后等待时间

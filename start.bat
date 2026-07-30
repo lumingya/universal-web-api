@@ -15,6 +15,17 @@ for %%I in ("!SCRIPT_DIR!.") do cd /d "%%~fI"
 set "PROJECT_DIR=%cd%"
 set "SCRIPT_DIR="
 
+REM Prefer the Python launcher when an interpreter is already available.
+REM This avoids CMD argument parsing differences while keeping the legacy bootstrap
+REM below as a fallback for machines that still need Python discovery or install.
+if exist "start.py" (
+    python -c "import sys" >nul 2>&1
+    if not errorlevel 1 (
+        python start.py %*
+        exit /b !errorlevel!
+    )
+)
+
 echo.
 echo ========================================
 echo   Universal Web-to-API 启动脚本
@@ -218,7 +229,9 @@ if /I "%AUTO_UPDATE_ENABLED%"=="true" (
         echo [INFO] 检查 GitHub 最新版本...
         "!PYTHON_CMD!" updater.py
         if !errorlevel! equ 0 (
-            echo [INFO] 自动更新已应用，继续启动服务...
+            echo [INFO] 自动更新已应用，正在重新启动新版启动脚本...
+            start "" "%~f0" %*
+            exit /b 0
         ) else (
             echo [WARN] 本次未应用更新，继续启动服务
         )

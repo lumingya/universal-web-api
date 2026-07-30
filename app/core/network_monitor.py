@@ -342,6 +342,13 @@ class NetworkMonitor:
             and self._should_fallback_to_dom_on_empty_stream()
         )
 
+    def _should_fallback_on_incomplete_empty_capture(self) -> bool:
+        return bool(
+            self._total_chunks == 0
+            and not self._last_stream_media_items
+            and self._should_fallback_to_dom_on_empty_stream()
+        )
+
     @staticmethod
     def _extract_http_status(event: Dict[str, Any]) -> int:
         try:
@@ -2206,6 +2213,30 @@ class NetworkMonitor:
                             },
                         )
                         raise NetworkMonitorTimeout("目标流缺少明确结束事件")
+
+                    if (
+                        active_stream_response is not None
+                        and capture_complete_now
+                        and not completed_by_done
+                        and self._should_fallback_on_incomplete_empty_capture()
+                    ):
+                        logger.warning(
+                            "[NetworkMonitor] 目标流连接已关闭但没有完成事件、正文或媒体，"
+                            "判定为断流并回退到 DOM 接管"
+                        )
+                        self._append_network_debug_trace(
+                            "fallback_incomplete_empty_capture",
+                            active_stream_response,
+                            active_stream_body,
+                            active_stream_body_source,
+                            is_event_stream=True,
+                            extra_payload={
+                                "capture_complete": True,
+                                "total_chunks": self._total_chunks,
+                                "media_count": len(self._last_stream_media_items or []),
+                            },
+                        )
+                        raise NetworkMonitorTimeout("目标流提前关闭且未产出有效结果")
 
                 silence_duration = time.time() - last_activity_time
                 effective_silence_threshold = float(self._silence_threshold)

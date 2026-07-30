@@ -1249,10 +1249,23 @@ class WorkflowExecutorActionMixin:
             return False
         expected = {
             str(model.get(key) or "").strip().casefold()
-            for key in ("display_name", "public_name", "name")
+            for key in ("display_name", "public_name", "search_name", "name")
             if str(model.get(key) or "").strip()
         }
         return normalized in expected
+
+    @staticmethod
+    def _model_element_label(ele: Any) -> str:
+        if ele is None:
+            return ""
+        for attr_name in ("raw_text", "text"):
+            try:
+                value = str(getattr(ele, attr_name, "") or "").strip()
+            except Exception:
+                value = ""
+            if value:
+                return value
+        return ""
 
     def _close_arena_model_dialog(self) -> None:
         try:
@@ -1318,7 +1331,7 @@ class WorkflowExecutorActionMixin:
                 triggers = self._find_visible_elements(trigger_selector)
                 trigger = self._first_positioned_element(
                     triggers,
-                    lambda ele: bool(str(getattr(ele, "text", "") or "").strip()),
+                    lambda ele: bool(self._model_element_label(ele)),
                 )
                 if trigger is None:
                     mode_buttons = self._find_visible_elements('button[role="combobox"]')
@@ -1367,7 +1380,7 @@ class WorkflowExecutorActionMixin:
                         triggers = self._find_visible_elements(trigger_selector)
                         trigger = self._first_positioned_element(
                             triggers,
-                            lambda ele: bool(str(getattr(ele, "text", "") or "").strip()),
+                            lambda ele: bool(self._model_element_label(ele)),
                         )
                         if trigger is not None:
                             break
@@ -1375,7 +1388,7 @@ class WorkflowExecutorActionMixin:
                 if trigger is None:
                     raise ElementNotFoundError("Arena Direct 模型选择按钮未找到")
 
-                current_label = str(getattr(trigger, "text", "") or "").strip()
+                current_label = self._model_element_label(trigger)
                 if self._model_label_matches(current_label, model):
                     logger.info(
                         "[SELECT_MODEL] 页面已是目标模型，跳过切换: "
@@ -1444,7 +1457,10 @@ class WorkflowExecutorActionMixin:
                     selected_triggers = self._find_visible_elements(trigger_selector)
                     selected = self._first_positioned_element(
                         selected_triggers,
-                        lambda ele: self._model_label_matches(getattr(ele, "text", ""), model),
+                        lambda ele: self._model_label_matches(
+                            self._model_element_label(ele),
+                            model,
+                        ),
                     )
                     if selected is not None:
                         logger.info(

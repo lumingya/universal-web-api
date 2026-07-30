@@ -145,18 +145,27 @@ def match_arena_direct_model(
     arena_model_id = parse_arena_direct_model_id(requested_value)
     expected = requested_value.casefold()
 
-    for model in models or []:
-        if not isinstance(model, dict):
-            continue
-        if arena_model_id:
+    if arena_model_id:
+        for model in models or []:
+            if not isinstance(model, dict):
+                continue
             if str(model.get("arena_model_id") or "").strip().casefold() == arena_model_id.casefold():
                 return model
+        return None
+
+    # A stale alias must never shadow another model's real catalog identity.
+    for model in models or []:
+        if not isinstance(model, dict):
             continue
         if any(
             str(model.get(key) or "").strip().casefold() == expected
             for key in ("name", "public_name", "display_name", "search_name")
         ):
             return model
+
+    for model in models or []:
+        if not isinstance(model, dict):
+            continue
         if any(
             str(alias or "").strip().casefold() == expected
             for alias in (model.get("aliases") or [])
