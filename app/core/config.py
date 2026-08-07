@@ -3440,7 +3440,18 @@ class SSEFormatter:
     
     @staticmethod
     def pack_error(message: str, error_type: str = "execution_error",
-                   code: str = "workflow_failed") -> str:
+                   code: str = "workflow_failed", *,
+                   status_code: Optional[int] = None,
+                   retryable: Optional[bool] = None) -> str:
+        error = {
+            "message": message,
+            "type": error_type,
+            "code": code,
+        }
+        if status_code is not None:
+            error["status_code"] = int(status_code)
+        if retryable is not None:
+            error["retryable"] = bool(retryable)
         data = {
             "id": f"chatcmpl-error-{int(time.time() * 1000)}",
             "object": "chat.completion.chunk",
@@ -3451,11 +3462,7 @@ class SSEFormatter:
                 "delta": {"content": f"[错误] {message}"},
                 "finish_reason": None
             }],
-            "error": {
-                "message": message,
-                "type": error_type,
-                "code": code
-            }
+            "error": error
         }
         return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
     

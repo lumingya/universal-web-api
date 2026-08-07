@@ -528,8 +528,19 @@ def has_recovery_patch(content):
 
 
 def has_stream_capture_patch(content):
-    """检查流式抓包补丁是否存在"""
-    return STREAM_CAPTURE_GUARD_MARKER in content
+    """检查流式抓包补丁是否存在且包含当前增量事件能力。"""
+    if STREAM_CAPTURE_GUARD_MARKER not in content:
+        return False
+
+    # V1 只监听 Network.dataReceived。旧安装会因此漏掉部分 SSE 事件，
+    # 而新版片段还必须带有终态/分块诊断，不能仅凭 marker 判定已更新。
+    return all(
+        required in content
+        for required in (
+            "Network.eventSourceMessageReceived",
+            "def _listener_stream_debug_v1",
+        )
+    )
 
 
 def check_already_patched(content):
@@ -551,9 +562,15 @@ def ensure_recovery_patch(content):
 
 
 def ensure_stream_capture_patch(content):
-    """确保 V1 流式抓包补丁存在"""
+    """确保当前流式抓包补丁存在，升级时替换旧补丁而非重复包装。"""
     if has_stream_capture_patch(content):
         return content, False
+
+    if STREAM_CAPTURE_GUARD_MARKER in content:
+        # 流捕获片段始终由本脚本追加在文件末尾。旧版本也使用 V1 marker，
+        # 必须先裁掉旧片段；直接再追加会覆盖其全局原函数引用并产生递归。
+        content = content.split(STREAM_CAPTURE_GUARD_MARKER, 1)[0].rstrip()
+
     if not content.endswith('\n'):
         content += '\n'
     return content + '\n' + STREAM_CAPTURE_SNIPPET, True

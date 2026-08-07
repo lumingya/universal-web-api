@@ -19,11 +19,18 @@ import json
 import threading
 import time
 import urllib.request
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from app.core.config import AppConfig, logger
+
+
+# DrissionPage/CDP 调用可能在底层连接断开时永久阻塞。超时后 daemon
+# 线程无法被强制终止，因此限制同时存活的超时调用数量，避免每次异常
+# 都累积一个永不退出的线程。
+_RECOVERY_CALL_SLOTS = threading.BoundedSemaphore(4)
 
 
 @dataclass
@@ -50,6 +57,7 @@ class TabRecoveryService:
     SCREENSHOT_TIMEOUT_SEC = 30.0
     REFRESH_TIMEOUT_SEC = 30.0
     POST_REFRESH_SETTLE_SEC = 3.0
+    MAX_ATTEMPT_CACHE_ENTRIES = 4096
 
     def __init__(
         self,
@@ -59,7 +67,7 @@ class TabRecoveryService:
     ):
         self._resolve_quarantine = resolve_quarantine
         self._get_quarantine_entry = get_quarantine_entry
-        self._attempts: Dict[str, int] = {}
+        self._attempts: OrderedDict[str, int] = OrderedDict()
         self._attempts_lock = threading.Lock()
         self._shutdown = False
         self._executor = ThreadPoolExecutor(
@@ -90,6 +98,8 @@ class TabRecoveryService:
 
     def shutdown(self) -> None:
         self._shutdown = True
+        with self._attempts_lock:
+            self._attempts.clear()
         try:
             self._executor.shutdown(wait=False, cancel_futures=True)
         except Exception as e:
@@ -133,6 +143,9 @@ class TabRecoveryService:
         # 2. 次数检查：解除隔离后再次错误 → 不再调 API，直接永久隔离。
         with self._attempts_lock:
             attempts = int(self._attempts.get(raw_id, 0))
+            if raw_id in self._attempts:
+                # 最近使用的 raw id 保留在缓存尾部，便于后续按上限淘汰。
+                self._attempts.move_to_end(raw_id)
         entry.attempts = attempts
         max_attempts = AppConfig.get_tab_recovery_max_attempts()
         if attempts >= max_attempts:
@@ -376,7 +389,10 @@ class TabRecoveryService:
 
         with self._attempts_lock:
             self._attempts[raw_id] = int(self._attempts.get(raw_id, 0)) + 1
+            self._attempts.move_to_end(raw_id)
             entry.attempts = self._attempts[raw_id]
+            while len(self._attempts) > self.MAX_ATTEMPT_CACHE_ENTRIES:
+                self._attempts.popitem(last=False)
         self._resolve(entry, release=True, reason=refresh_reason)
         logger.info(
             f"[TabRecovery] 标签页已恢复并重新入池 "
@@ -417,6 +433,10 @@ class TabRecoveryService:
     @staticmethod
     def _call_with_timeout(fn: Callable[[], Any], timeout_sec: float, label: str) -> Any:
         """在守护线程中执行阻塞调用并限时等待，防止 CDP 调用无限挂起。"""
+        wait_timeout = max(0.1, float(timeout_sec))
+        if not _RECOVERY_CALL_SLOTS.acquire(timeout=wait_timeout):
+            raise TimeoutError(f"{label} call slots exhausted")
+
         result: Dict[str, Any] = {}
         done = threading.Event()
 
@@ -427,14 +447,19 @@ class TabRecoveryService:
                 result["error"] = e
             finally:
                 done.set()
+                _RECOVERY_CALL_SLOTS.release()
 
         thread = threading.Thread(
             target=_runner,
             name=f"tab-recovery-{label}",
             daemon=True,
         )
-        thread.start()
-        if not done.wait(max(0.1, float(timeout_sec))):
+        try:
+            thread.start()
+        except BaseException:
+            _RECOVERY_CALL_SLOTS.release()
+            raise
+        if not done.wait(wait_timeout):
             raise TimeoutError(f"{label} timed out after {timeout_sec}s")
         if "error" in result:
             raise result["error"]

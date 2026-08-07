@@ -38,6 +38,47 @@ def test_response_chunk_refreshes_idle_activity_without_hard_timeout(monkeypatch
     assert ctx.started_at_monotonic == original_timeout_start
 
 
+def test_arena_prompt_rejection_is_structured_as_non_retryable_422():
+    import json
+
+    from app.api.chat import _arena_prompt_rejection_response, _pack_error
+
+    response = _arena_prompt_rejection_response()
+    assert response.status_code == 422
+    assert response.headers["x-should-retry"] == "false"
+    assert json.loads(response.body)["error"]["code"] == "arena_prompt_rejected"
+
+    payload = json.loads(
+        _pack_error(
+            "Arena 拒绝了该提示词",
+            "arena_prompt_rejected",
+            error_type="invalid_request_error",
+            status_code=422,
+            retryable=False,
+        ).split("data: ", 1)[1]
+    )
+    assert payload["error"]["status_code"] == 422
+    assert payload["error"]["retryable"] is False
+
+
+def test_arena_image_generation_error_is_structured_as_non_retryable_422():
+    import json
+
+    from app.api.chat import _arena_non_retryable_response
+
+    response = _arena_non_retryable_response(
+        "Arena 图片生成失败",
+        "arena_image_generation_failed",
+    )
+
+    assert response.status_code == 422
+    assert response.headers["x-should-retry"] == "false"
+    error = json.loads(response.body)["error"]
+    assert error["code"] == "arena_image_generation_failed"
+    assert error["status_code"] == 422
+    assert error["retryable"] is False
+
+
 def test_result_event_dedupe_is_atomic_and_bounded(monkeypatch):
     appended = []
     append_lock = threading.Lock()

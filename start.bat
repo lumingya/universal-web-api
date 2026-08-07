@@ -60,7 +60,35 @@ if not defined PROXY_BYPASS set "PROXY_BYPASS=localhost,127.0.0.1"
 if not defined PIP_MIRROR_URL set "PIP_MIRROR_URL=https://pypi.tuna.tsinghua.edu.cn/simple"
 if not defined BROWSER_PROFILE_DIR set "BROWSER_PROFILE_DIR="
 if not defined BROWSER_PROFILE_NAME set "BROWSER_PROFILE_NAME="
+if not defined BROWSER_MEMORY_SAVER set "BROWSER_MEMORY_SAVER=false"
 if not defined PROFILE_CLEAN_ENABLED set "PROFILE_CLEAN_ENABLED=false"
+
+REM 让 Python requests 与浏览器复用代理。socks5h 让代理负责 DNS，避免 R2
+REM 域名在本地 fake-DNS / 直连 DNS 下解析失败。
+if /I "!PROXY_ENABLED!"=="true" (
+    if defined PROXY_ADDRESS (
+        set "PYTHON_PROXY_ADDRESS=!PROXY_ADDRESS!"
+        set "PYTHON_PROXY_HAS_SCHEME=0"
+        if /I "!PYTHON_PROXY_ADDRESS:~0,7!"=="http://" set "PYTHON_PROXY_HAS_SCHEME=1"
+        if /I "!PYTHON_PROXY_ADDRESS:~0,8!"=="https://" set "PYTHON_PROXY_HAS_SCHEME=1"
+        if /I "!PYTHON_PROXY_ADDRESS:~0,9!"=="socks4://" set "PYTHON_PROXY_HAS_SCHEME=1"
+        if /I "!PYTHON_PROXY_ADDRESS:~0,10!"=="socks4a://" set "PYTHON_PROXY_HAS_SCHEME=1"
+        if /I "!PYTHON_PROXY_ADDRESS:~0,9!"=="socks5://" set "PYTHON_PROXY_HAS_SCHEME=1"
+        if /I "!PYTHON_PROXY_ADDRESS:~0,10!"=="socks5h://" set "PYTHON_PROXY_HAS_SCHEME=1"
+        if "!PYTHON_PROXY_HAS_SCHEME!"=="0" set "PYTHON_PROXY_ADDRESS=http://!PYTHON_PROXY_ADDRESS!"
+        if /I "!PYTHON_PROXY_ADDRESS:~0,9!"=="socks5://" set "PYTHON_PROXY_ADDRESS=socks5h://!PYTHON_PROXY_ADDRESS:~9!"
+        set "HTTP_PROXY=!PYTHON_PROXY_ADDRESS!"
+        set "HTTPS_PROXY=!PYTHON_PROXY_ADDRESS!"
+        if defined PROXY_BYPASS (
+            if defined NO_PROXY (
+                set "NO_PROXY=!NO_PROXY!,!PROXY_BYPASS!"
+            ) else (
+                set "NO_PROXY=!PROXY_BYPASS!"
+            )
+        )
+        echo [INFO] Python 下载代理已同步: !PYTHON_PROXY_ADDRESS!
+    )
+)
 
 echo.
 echo    当前配置:
@@ -77,8 +105,9 @@ if defined BROWSER_PROFILE_NAME (
     echo         PROFILE_NAME  : %BROWSER_PROFILE_NAME%
 )
 echo         PROFILE_CLEAN : %PROFILE_CLEAN_ENABLED%
+echo         MEMORY_SAVER  : %BROWSER_MEMORY_SAVER%
 if /I "%PROXY_ENABLED%"=="true" (
-    echo         PROXY        : %PROXY_ADDRESS%
+    echo         PROXY        : %PROXY_ADDRESS% ^(浏览器 / Python 下载^)
 ) else (
     echo         PROXY        : 已禁用
 )
@@ -489,8 +518,7 @@ REM Reuse an existing debugging browser when the port is already ready.
 call :check_debug_port
 if "!DEBUG_PORT_OK!"=="1" (
     echo [WARN] Debug port already in use, reuse existing browser instance.
-    echo [WARN] If background tabs are slow, close browser and restart this script.
-    echo [WARN] Restart lets script launch browser with anti-throttle flags.
+    echo [WARN] Browser launch flags only apply to a new process; close the existing browser to apply memory saver mode.
     echo [OK] Debug port ready - !BROWSER_PORT!
     goto :BROWSER_READY
 )
@@ -561,7 +589,14 @@ exit /b 1
 echo [OK] 检测到 !BROWSER_NAME!
 echo [INFO] 路径: !BROWSER_EXE!
 
-set "BROWSER_ARGS=--remote-debugging-port=!BROWSER_PORT! --user-data-dir=!PROFILE_DIR! --no-first-run --no-default-browser-check --disable-backgrounding-occluded-windows --disable-background-timer-throttling --disable-renderer-backgrounding --disable-features=CalculateNativeWinOcclusion,AutomaticTabDiscarding,TabFreeze,IntensiveWakeUpThrottling"
+set "BROWSER_ARGS=--remote-debugging-port=!BROWSER_PORT! --user-data-dir=!PROFILE_DIR! --no-first-run --no-default-browser-check"
+if /I "!BROWSER_MEMORY_SAVER!"=="true" (
+    set "BROWSER_ARGS=!BROWSER_ARGS! --enable-features=CalculateNativeWinOcclusion,AutomaticTabDiscarding,TabFreeze,IntensiveWakeUpThrottling"
+    echo [INFO] Chromium memory saver enabled: background tabs may be throttled, frozen, or discarded.
+) else (
+    set "BROWSER_ARGS=!BROWSER_ARGS! --disable-backgrounding-occluded-windows --disable-background-timer-throttling --disable-renderer-backgrounding --disable-features=CalculateNativeWinOcclusion,AutomaticTabDiscarding,TabFreeze,IntensiveWakeUpThrottling"
+    echo [INFO] Chromium always-awake background mode enabled (BROWSER_MEMORY_SAVER=false).
+)
 if defined BROWSER_PROFILE_NAME (
     set "BROWSER_ARGS=!BROWSER_ARGS! --profile-directory=!BROWSER_PROFILE_NAME!"
 )

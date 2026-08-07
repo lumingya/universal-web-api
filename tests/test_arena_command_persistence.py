@@ -74,6 +74,52 @@ class ArenaCommandPersistenceTests(unittest.TestCase):
 
         self.assertTrue(local_commands["cmd_19f7ae6f"]["enabled"])
 
+    def test_arena_prompt_rejection_command_aborts_workflow_with_http_422_message(self):
+        command = self.commands["cmd_arena_prompt_rejected_422"]
+        trigger = command["trigger"]
+
+        self.assertTrue(command["enabled"])
+        self.assertEqual(trigger["type"], "page_check")
+        self.assertEqual(trigger["scope"], "domain")
+        self.assertEqual(trigger["domain"], "arena.ai")
+        self.assertTrue(trigger["check_while_busy_workflow"])
+        self.assertTrue(trigger["allow_during_workflow"])
+        self.assertEqual(trigger["interrupt_policy"], "abort")
+        self.assertIn("this content violates our terms of use", trigger["probe_js"].lower())
+        self.assertIn("HTTP 422", trigger["interrupt_message"])
+        self.assertEqual(
+            [action["type"] for action in command["actions"]],
+            ["abort_task"],
+        )
+        self.assertEqual(
+            command["actions"][0]["reason"],
+            "arena_prompt_rejected",
+        )
+
+    def test_arena_response_error_command_is_enabled_in_local_overrides(self):
+        payload = json.loads(
+            (PROJECT_ROOT / "config" / "commands.local.json").read_text(encoding="utf-8")
+        )
+        local_commands = {item.get("id"): item for item in payload.get("commands", [])}
+
+        self.assertTrue(local_commands["cmd_arena_response_error_500"]["enabled"])
+        self.assertTrue(local_commands["cmd_arena_prompt_rejected_422"]["enabled"])
+
+    def test_standalone_arena_ip_rotation_command_is_enabled_in_local_overrides(self):
+        command = self.commands["cmd_arena_rotate_ip_standalone"]
+        self.assertEqual(command["name"], "ARENA手动切换IP（复用自动盲测IP池）")
+        self.assertIn(
+            "app.services.arena_proxy_rotation import rotate_arena_proxy",
+            command["script"],
+        )
+
+        payload = json.loads(
+            (PROJECT_ROOT / "config" / "commands.local.json").read_text(encoding="utf-8")
+        )
+        local_commands = {item.get("id"): item for item in payload.get("commands", [])}
+
+        self.assertTrue(local_commands["cmd_arena_rotate_ip_standalone"]["enabled"])
+
 
 if __name__ == "__main__":
     unittest.main()

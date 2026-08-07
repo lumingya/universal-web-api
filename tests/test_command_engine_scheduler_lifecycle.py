@@ -136,3 +136,45 @@ def test_empty_keyword_set_cleans_stale_page_observer(monkeypatch):
         assert session._pc_observer_empty_cleanup_done is True
     finally:
         engine.shutdown()
+
+
+def test_page_refresh_errors_do_not_trigger_page_check_backoff(monkeypatch):
+    monkeypatch.delenv("CMD_ENGINE_AUTO_START", raising=False)
+    engine = CommandEngine()
+    session = SimpleNamespace(id="tab-1")
+    engine._observer_keywords_by_session[session.id] = {"resource error"}
+
+    try:
+        refresh_error = (
+            "页面被刷新，请操作前尝试等待页面刷新或加载完成。\n"
+            "版本: 4.1.1.2"
+        )
+        engine._record_page_check_js_failure(session, refresh_error, "observer_install")
+
+        assert session._pc_js_failures == 0
+        assert session._pc_js_backoff_until == 0.0
+        assert session._pc_refresh_grace_until > 0.0
+        assert session.id not in engine._observer_keywords_by_session
+    finally:
+        engine.shutdown()
+
+
+def test_page_check_observer_waits_for_document_after_refresh(monkeypatch):
+    monkeypatch.delenv("CMD_ENGINE_AUTO_START", raising=False)
+    engine = CommandEngine()
+    session = SimpleNamespace(id="tab-1")
+    refresh_error = RuntimeError("页面被刷新，请操作前尝试等待页面刷新或加载完成。")
+
+    try:
+        with mock.patch.object(
+            engine,
+            "_run_page_check_js",
+            side_effect=refresh_error,
+        ) as run_js:
+            engine._ensure_page_check_observer(session, {"resource error"})
+            engine._ensure_page_check_observer(session, {"resource error"})
+
+        run_js.assert_called_once()
+        assert session._pc_js_failures == 0
+    finally:
+        engine.shutdown()

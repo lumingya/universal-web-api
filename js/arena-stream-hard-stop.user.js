@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Arena.ai Native Stop Repair
 // @namespace    local.codex.arena-hard-stop
-// @version      2.10.1
+// @version      2.12.1
 // @description  Repairs Arena.ai's lost active stream state and hard-aborts active stream fetches.
 // @match        https://arena.ai/*
 // @run-at       document-start
@@ -13,12 +13,19 @@
 (function () {
   'use strict';
 
-  const VERSION = '2.10.1';
+  const VERSION = '2.12.1';
   const ENABLE_STORE_CONTROLLER_REPAIR = false;
   const ENABLE_STALE_CONTROLLER_CLEANUP = true;
   const ENABLE_SYNTHETIC_CONTROLLER_REPAIR = false;
   const ENABLE_FAILED_RERUN_HEAL = false;
+  // Page-level userscript code has no reliable knowledge of whether the local
+  // workflow owns this tab. Keep automatic reloads disabled; workflow-scoped
+  // recovery is handled by StreamMonitor, which owns the tab lifecycle.
+  const ENABLE_BACKGROUND_RECOVERY_RELOAD = false;
   const REPAIR_INTERVAL_MS = 1000;
+  const STALE_PENDING_CONTROLLER_GRACE_MS = 30_000;
+  const RECOVERY_RELOAD_DELAY_MS = 20_000;
+  const RECOVERY_MAX_ATTEMPTS = 12;
   const LOG_PREFIX = '[Arena Hard Stop]';
   const ID_RE = /\b019[a-z0-9-]{20,}\b/ig;
   const STREAM_RE = /\/nextjs-api\/stream\/(create-evaluation|post-to-evaluation|retry-evaluation-session-message|rerun|resample|resume-webdev|resume-video-workflow|skip-direct-battle)\b/;
@@ -52,6 +59,9 @@
   let repairTimer = 0;
   let installed = false;
   let staleControllerSince = 0;
+  let lastFinishedStreamAt = 0;
+  let lastFinishedStreamReason = '';
+  let recoveryReloadTimer = 0;
 
   const existingInstance = window.__arenaHardStop;
   if (existingInstance) {
@@ -805,6 +815,9 @@
       stopRequestedAt: 0,
       trace: makeStreamTrace(input, init, meta),
     };
+    // A newly tracked stream supersedes the previous completion marker.
+    lastFinishedStreamAt = 0;
+    lastFinishedStreamReason = '';
     rememberStreamTrace(record);
 
     const originalSignal = (init && init.signal) || (input && input.signal);
@@ -996,6 +1009,8 @@
     record.done = true;
     record.finishedAt = Date.now();
     record.finishReason = reason;
+    lastFinishedStreamAt = record.finishedAt;
+    lastFinishedStreamReason = reason || '';
     setTimeout(() => {
       liveStreams.delete(id);
       scheduleStateRepair();
@@ -1189,13 +1204,18 @@
     const activeCount = activeRecords().length;
     const info = pendingMessageInfo();
     const pendingCount = info && Array.isArray(info.pendingIds) ? info.pendingIds.length : 0;
+    const now = Date.now();
+    scheduleRecoveryReload(info, activeCount);
+    const recentlyFinishedStream = (
+      lastFinishedStreamAt > 0
+      && now - lastFinishedStreamAt <= STALE_PENDING_CONTROLLER_GRACE_MS
+    );
 
-    if (!hasController || activeCount > 0 || pendingCount > 0) {
+    if (!hasController || activeCount > 0 || (pendingCount > 0 && !recentlyFinishedStream)) {
       staleControllerSince = 0;
       return false;
     }
 
-    const now = Date.now();
     if (!staleControllerSince) {
       staleControllerSince = now;
       return false;
@@ -1209,10 +1229,57 @@
         ok: true,
         kind: 'cleanup-stale-controller',
         staleMs: now - staleControllerSince,
+        pendingCount,
+        recentlyFinishedStream,
       });
       staleControllerSince = 0;
     }
     return cleared;
+  }
+
+  function scheduleRecoveryReload(info, activeCount) {
+    if (!ENABLE_BACKGROUND_RECOVERY_RELOAD) return false;
+    if (!info || activeCount > 0 || recoveryReloadTimer) return false;
+    // A pending assistant is normal while a request is running. It is not an
+    // error signal. Only an explicit response-body read failure may qualify;
+    // a normal `finished` stream must never schedule a page reload.
+    if (lastFinishedStreamReason !== 'body-error') return false;
+    const pendingIds = (info.pendingIds || []).filter(Boolean);
+    if (!pendingIds.length) return false;
+
+    const sessionKey = String(info.sessionId || getSessionIdFromLocation() || location.pathname || 'unknown');
+    const messageKey = pendingIds.join(',');
+    const markerKey = `arenaHardStop:recoveryReload:${sessionKey}:${messageKey}`;
+    let marker = null;
+    try {
+      marker = JSON.parse(sessionStorage.getItem(markerKey) || 'null');
+    } catch (_) {}
+
+    const recentBodyError = lastFinishedStreamAt > 0
+      && Date.now() - lastFinishedStreamAt <= STALE_PENDING_CONTROLLER_GRACE_MS;
+    if (!recentBodyError && !marker) return false;
+    const attempt = marker && Number.isFinite(marker.attempt) ? marker.attempt : 0;
+    if (attempt >= RECOVERY_MAX_ATTEMPTS) return false;
+
+    try {
+      sessionStorage.setItem(markerKey, JSON.stringify({
+        attempt: attempt + 1,
+        at: Date.now(),
+      }));
+    } catch (_) {}
+    recoveryReloadTimer = setTimeout(() => {
+      recoveryReloadTimer = 0;
+      rememberRepair({
+        at: new Date().toISOString(),
+        ok: true,
+        kind: 'reload-after-finished-pending',
+        finishReason: lastFinishedStreamReason,
+        pendingIds,
+        attempt: attempt + 1,
+      });
+      location.reload();
+    }, RECOVERY_RELOAD_DELAY_MS);
+    return true;
   }
 
   function scheduleStateRepair() {
@@ -1570,6 +1637,7 @@
           recentStreamTraces: recentStreamTraces.slice(),
           recentObservedStopRequests: recentObservedStopRequests.slice(),
           recentBlockedStreamRequests: recentBlockedStreamRequests.slice(),
+          recoveryReloadPending: !!recoveryReloadTimer,
           stoppedGuardIds: Array.from(stoppedMessageGuards.keys()),
           idDiagnostics: info ? {
             sessionId: info.sessionId || '',

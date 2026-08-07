@@ -775,19 +775,19 @@ const ENV_CONFIG_SCHEMA = {
         items: {
             PROXY_ENABLED: {
                 label: '启用代理',
-                desc: '开启后浏览器将通过代理服务器访问网络',
+                desc: '开启后浏览器和 Python 后端的远程资源下载将共用该代理',
                 type: 'switch',
                 default: false
             },
             PROXY_ADDRESS: {
                 label: '代理地址',
-                desc: '支持 socks5:// 或 http:// 协议',
+                desc: '支持 socks5://、http:// 或 https://；Python 下载会通过 SOCKS 代理解析域名',
                 type: 'text',
                 default: 'socks5://127.0.0.1:1080'
             },
             PROXY_BYPASS: {
                 label: '绕过代理',
-                desc: '不走代理的地址，多个用逗号分隔',
+                desc: '浏览器和 Python 下载均不走代理的地址，多个用逗号分隔',
                 type: 'text',
                 default: 'localhost,127.0.0.1'
             }

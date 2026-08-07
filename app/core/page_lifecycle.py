@@ -16,6 +16,18 @@ BACKGROUND_WAKE_JS_TIMEOUT = 0.5
 _BACKGROUND_WAKE_TIMING_LOG_THRESHOLD = 0.25
 
 
+def is_page_refresh_error(error: Any) -> bool:
+    """Return True for the transient exception raised while a document navigates."""
+    text = str(error or "").lower()
+    return (
+        "页面被刷新" in text
+        or "page was refreshed" in text
+        or "page is refreshing" in text
+        or "page refreshed" in text
+        or "try waiting for page refresh" in text
+    )
+
+
 def _log_wake_timing(reason: str, phase: str, elapsed: float) -> None:
     if elapsed < _BACKGROUND_WAKE_TIMING_LOG_THRESHOLD:
         return
@@ -132,11 +144,12 @@ def install_visibility_emulation(tab: Any, owner: Any = None, *, reason: str = "
             if script_id:
                 setattr(state_owner, script_id_attr, str(script_id))
         except Exception as e:
-            logger.debug_throttled(
-                "page_wake.visibility.install",
-                f"[PAGE_WAKE] 预注入可见性模拟失败（忽略）: reason={reason or '-'}, error={e}",
-                interval_sec=10.0,
-            )
+            if not is_page_refresh_error(e):
+                logger.debug_throttled(
+                    "page_wake.visibility.install",
+                    f"[PAGE_WAKE] 预注入可见性模拟失败（忽略）: reason={reason or '-'}, error={e}",
+                    interval_sec=10.0,
+                )
 
     try:
         phase_started = time.perf_counter()
@@ -149,11 +162,12 @@ def install_visibility_emulation(tab: Any, owner: Any = None, *, reason: str = "
                 time.perf_counter() - phase_started,
             )
     except Exception as e:
-        logger.debug_throttled(
-            "page_wake.visibility.apply",
-            f"[PAGE_WAKE] 当前页可见性模拟失败（忽略）: reason={reason or '-'}, error={e}",
-            interval_sec=10.0,
-        )
+        if not is_page_refresh_error(e):
+            logger.debug_throttled(
+                "page_wake.visibility.apply",
+                f"[PAGE_WAKE] 当前页可见性模拟失败（忽略）: reason={reason or '-'}, error={e}",
+                interval_sec=10.0,
+            )
         return False
 
     try:
@@ -250,9 +264,10 @@ def restore_visibility_emulation(tab: Any, owner: Any = None, *, reason: str = "
             )
         return True
     except Exception as e:
-        logger.debug_throttled(
-            "page_wake.visibility.restore",
-            f"[PAGE_WAKE] 可见性模拟恢复失败（忽略）: reason={reason or '-'}, error={e}",
-            interval_sec=10.0,
-        )
+        if not is_page_refresh_error(e):
+            logger.debug_throttled(
+                "page_wake.visibility.restore",
+                f"[PAGE_WAKE] 可见性模拟恢复失败（忽略）: reason={reason or '-'}, error={e}",
+                interval_sec=10.0,
+            )
         return False

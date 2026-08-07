@@ -27,6 +27,7 @@ from app.core.tab_pool_parts.network import (
     _GlobalNetworkWorker,
 )
 from app.core.tab_pool_parts.manager import TabPoolManager
+from app.core.tab_pool_parts.session import TabSession
 from app.services import request_lifecycle
 from app.services.request_lifecycle import (
     TrackedWorkerExecutionCancelled,
@@ -936,3 +937,202 @@ def test_selector_test_reports_per_tab_mismatch_instead_of_random_zero(monkeypat
     assert [item["count"] for item in result["tabs"]] == [0, 1]
     assert result["skipped_busy_tabs"] == 1
     assert any("不同页面命中数量不一致" in item for item in result["diagnosis"]["warnings"])
+
+
+def _minimal_tab_pool_manager() -> TabPoolManager:
+    manager = TabPoolManager.__new__(TabPoolManager)
+    manager._lock = threading.RLock()
+    manager._shutdown = False
+    manager._tabs = {}
+    manager._context_recovery_lock = threading.Lock()
+    manager._context_recovery_pending = set()
+    manager._context_recovery_requested_at = {}
+    manager._idle_memory_purge_interval_sec = 60.0
+    return manager
+
+
+def test_tab_pool_idle_memory_purge_uses_heap_profiler_and_cleans_up():
+    class CdpTab:
+        tab_id = "raw-1"
+        url = "https://example.com/"
+
+        def __init__(self):
+            self.calls = []
+
+        def run_cdp(self, method, **kwargs):
+            self.calls.append((method, kwargs))
+            return {}
+
+    tab = CdpTab()
+    manager = _minimal_tab_pool_manager()
+    manager._purge_idle_session_memory(TabSession("s1", tab))
+
+    assert [method for method, _kwargs in tab.calls] == [
+        "HeapProfiler.enable",
+        "HeapProfiler.collectGarbage",
+        "HeapProfiler.disable",
+    ]
+    assert all(kwargs.get("_timeout") == 1.0 for _method, kwargs in tab.calls)
+
+
+def test_tab_pool_idle_memory_purge_supports_legacy_without_heap_profiler_enable():
+    class LegacyCdpTab:
+        tab_id = "raw-1"
+        url = "https://example.com/"
+
+        def __init__(self):
+            self.calls = []
+
+        def run_cdp(self, method, **kwargs):
+            self.calls.append((method, kwargs))
+            if method == "HeapProfiler.enable":
+                raise RuntimeError("unknown method")
+            return {}
+
+    tab = LegacyCdpTab()
+    manager = _minimal_tab_pool_manager()
+    manager._purge_idle_session_memory(TabSession("s1", tab))
+
+    assert [method for method, _kwargs in tab.calls] == [
+        "HeapProfiler.enable",
+        "HeapProfiler.collectGarbage",
+    ]
+
+
+def test_tab_pool_idle_memory_purge_disables_heap_profiler_after_collect_failure():
+    class FailingCdpTab:
+        tab_id = "raw-1"
+        url = "https://example.com/"
+
+        def __init__(self):
+            self.calls = []
+
+        def run_cdp(self, method, **kwargs):
+            self.calls.append((method, kwargs))
+            if method == "HeapProfiler.collectGarbage":
+                raise RuntimeError("collect failed")
+            return {}
+
+    tab = FailingCdpTab()
+    manager = _minimal_tab_pool_manager()
+    manager._purge_idle_session_memory(TabSession("s1", tab))
+
+    assert [method for method, _kwargs in tab.calls] == [
+        "HeapProfiler.enable",
+        "HeapProfiler.collectGarbage",
+        "HeapProfiler.disable",
+    ]
+
+
+def test_tab_pool_force_reload_detaches_nested_session_on_failure():
+    class Browser:
+        def __init__(self):
+            self.calls = []
+
+        def _run_cdp(self, method, **kwargs):
+            self.calls.append((method, kwargs))
+            if method == "Target.attachToTarget":
+                return {"sessionId": "nested-1"}
+            if method == "Target.sendMessageToTarget":
+                raise RuntimeError("temporary CDP failure")
+            return {}
+
+    browser = Browser()
+    manager = _minimal_tab_pool_manager()
+    manager.page = browser
+
+    assert manager._force_reload_tab_via_cdp("raw-1") is False
+    assert [method for method, _kwargs in browser.calls] == [
+        "Target.attachToTarget",
+        "Target.sendMessageToTarget",
+        "Target.detachFromTarget",
+    ]
+
+
+def test_tab_pool_force_reload_accepts_public_browser_cdp_runner():
+    class Browser:
+        def __init__(self):
+            self.calls = []
+
+        def run_cdp(self, method, **kwargs):
+            self.calls.append((method, kwargs))
+            if method == "Target.attachToTarget":
+                return {"sessionId": "nested-1"}
+            return {}
+
+    browser = Browser()
+    manager = _minimal_tab_pool_manager()
+    manager.page = browser
+
+    assert manager._force_reload_tab_via_cdp("raw-1") is True
+    assert [method for method, _kwargs in browser.calls] == [
+        "Target.attachToTarget",
+        "Target.sendMessageToTarget",
+        "Target.detachFromTarget",
+    ]
+
+
+def test_tab_pool_force_reload_falls_back_to_flat_driver():
+    class Driver:
+        def __init__(self):
+            self.calls = []
+
+        def _send(self, message, timeout=None):
+            self.calls.append((message, timeout))
+            return {"id": 1, "result": {}}
+
+    class Browser:
+        def __init__(self):
+            self.calls = []
+            self._driver = Driver()
+
+        def _run_cdp(self, method, **kwargs):
+            self.calls.append((method, kwargs))
+            if method == "Target.attachToTarget":
+                return {"sessionId": "flat-1" if kwargs.get("flatten") else "nested-1"}
+            if method == "Target.sendMessageToTarget":
+                raise RuntimeError("Target.sendMessageToTarget method not found")
+            return {}
+
+    browser = Browser()
+    manager = _minimal_tab_pool_manager()
+    manager.page = browser
+
+    assert manager._force_reload_tab_via_cdp("raw-1") is True
+    attach_calls = [
+        {key: value for key, value in kwargs.items() if key != "_timeout"}
+        for method, kwargs in browser.calls
+        if method == "Target.attachToTarget"
+    ]
+    assert attach_calls == [{"targetId": "raw-1"}, {"targetId": "raw-1", "flatten": True}]
+    assert browser._driver.calls[0][0]["sessionId"] == "flat-1"
+
+
+def test_tab_pool_resolve_context_error_schedules_recovery():
+    class Browser:
+        def get_tab(self, _raw_id):
+            raise RuntimeError("Cannot find default execution context")
+
+    manager = _minimal_tab_pool_manager()
+    manager.page = Browser()
+    scheduled = []
+    manager._schedule_context_recovery = lambda raw_id: scheduled.append(raw_id) or True
+
+    assert manager._resolve_tab_from_ref("raw-1") is None
+    assert scheduled == ["raw-1"]
+
+
+def test_tab_pool_context_recovery_scheduler_applies_per_target_cooldown():
+    class Executor:
+        def __init__(self):
+            self.submitted = []
+
+        def submit(self, fn, *args):
+            self.submitted.append((fn, args))
+
+    manager = _minimal_tab_pool_manager()
+    manager._maintenance_executor = Executor()
+
+    assert manager._schedule_context_recovery("raw-1") is True
+    assert manager._schedule_context_recovery("raw-1") is False
+    assert len(manager._maintenance_executor.submitted) == 1

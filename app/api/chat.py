@@ -12,6 +12,7 @@ import codecs
 import contextlib  # 修复(7)：用于 aclosing 确保内部异步生成器及时清理
 import copy
 import os
+import random
 import re
 import time
 import asyncio
@@ -75,6 +76,10 @@ from app.services.arena_direct_models import (
     list_arena_direct_models,
     match_arena_direct_model,
 )
+from app.services.arena_image_generation import (
+    ARENA_NON_RETRYABLE_CODES,
+    ARENA_PROMPT_REJECTED_CODE,
+)
 from app.utils.model_routing import collect_route_domain_models, inspect_model_route
 from app.utils.site_url import route_domain_matches
 
@@ -86,6 +91,41 @@ STREAM_QUEUE_POLL_TIMEOUT = 0.5
 SSE_HEARTBEAT_INTERVAL = 15.0
 RESPONSES_STATE_MAX_ENTRIES = 1024
 RESPONSES_STATE_TTL_SEC = 3600.0
+
+
+def _select_arena_catalog_tab(
+    browser: Any,
+    candidates: List[Dict[str, Any]],
+    preset_name: Any = None,
+) -> Optional[Dict[str, Any]]:
+    """Select an Arena Direct tab without bypassing the pool allocation policy."""
+    if not candidates:
+        return None
+
+    idle_candidates = [
+        item
+        for item in candidates
+        if str(item.get("status") or "").strip().lower() == "idle"
+    ]
+    pool = idle_candidates or candidates
+
+    try:
+        allocation_mode = str(
+            getattr(browser.tab_pool, "allocation_mode", "") or ""
+        ).strip().lower()
+    except Exception:
+        allocation_mode = ""
+    if allocation_mode not in {"first_idle", "round_robin", "random"}:
+        allocation_mode = "first_idle"
+
+    if allocation_mode == "round_robin":
+        from app.api import tab_routes as tab_routes_api
+
+        cursor_key = f"arena_catalog::{str(preset_name or '').strip().casefold()}"
+        return tab_routes_api._select_round_robin_tab(pool, cursor_key)
+    if allocation_mode == "random":
+        return random.choice(pool)
+    return min(pool, key=lambda item: int(item.get("persistent_index") or 0))
 
 _responses_state_lock = threading.RLock()
 # 修复(4)：会话历史改存 json.dumps 序列化字符串（不可变），
@@ -101,6 +141,8 @@ _MANUAL_TERMINATE_REASONS = frozenset({
     "manual_terminate",
     "manual_terminate_from_tab_pool",
 })
+_ARENA_PROMPT_REJECTION_REASONS = frozenset({ARENA_PROMPT_REJECTED_CODE})
+_ARENA_NON_RETRYABLE_REASONS = ARENA_NON_RETRYABLE_CODES
 
 
 def _get_tool_calling_cancel_reason(ctx: RequestContext) -> str:
@@ -110,6 +152,56 @@ def _get_tool_calling_cancel_reason(ctx: RequestContext) -> str:
 
 def _is_manual_terminate(ctx: RequestContext) -> bool:
     return str(ctx.cancel_reason or "").strip() in _MANUAL_TERMINATE_REASONS
+
+
+def _is_arena_prompt_rejection(ctx: RequestContext) -> bool:
+    return str(ctx.cancel_reason or "").strip() in _ARENA_PROMPT_REJECTION_REASONS
+
+
+def _is_arena_non_retryable(ctx: RequestContext) -> bool:
+    return str(ctx.cancel_reason or "").strip() in _ARENA_NON_RETRYABLE_REASONS
+
+
+def _is_arena_prompt_rejection_payload(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    error = payload.get("error")
+    return (
+        isinstance(error, dict)
+        and str(error.get("code") or "").strip() in _ARENA_PROMPT_REJECTION_REASONS
+    )
+
+
+def _is_arena_non_retryable_payload(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    error = payload.get("error")
+    return (
+        isinstance(error, dict)
+        and str(error.get("code") or "").strip() in _ARENA_NON_RETRYABLE_REASONS
+    )
+
+
+def _arena_prompt_rejection_response(
+    message: str = "Arena 拒绝了该提示词：内容违反 Terms of Use",
+) -> JSONResponse:
+    return _arena_non_retryable_response(message, ARENA_PROMPT_REJECTED_CODE)
+
+
+def _arena_non_retryable_response(message: str, code: str) -> JSONResponse:
+    return JSONResponse(
+        content={
+            "error": {
+                "message": message,
+                "type": "invalid_request_error",
+                "code": code,
+                "status_code": 422,
+                "retryable": False,
+            }
+        },
+        status_code=422,
+        headers={"x-should-retry": "false"},
+    )
 
 
 def _manual_terminate_response() -> JSONResponse:
@@ -2054,27 +2146,27 @@ async def chat_completions(
         if route_info.get("match_type") == "none":
             from app.services.config_engine import config_engine
 
-            catalog_tab = None
+            catalog_candidates = []
             catalog_preset = None
             is_url_excluded = getattr(browser.tab_pool, "is_url_excluded", None)
-            # 优先选择处于空闲 (idle) 状态的标签页，若无空闲标签页再选择繁忙 (busy) 标签页，避免请求被无故锁定排队
-            for target_status in ("idle", "busy"):
-                for tab in tabs:
-                    if str(tab.get("status") or "").strip().lower() == target_status:
-                        tab_url = str(tab.get("url") or "").strip()
-                        if callable(is_url_excluded) and is_url_excluded(tab_url):
-                            continue
-                        candidate = get_arena_direct_catalog_for_tab(
-                            config_engine,
-                            tab,
-                            preset_name=body.preset_name,
-                        )
-                        if candidate:
-                            catalog_tab = tab
-                            catalog_preset = candidate
-                            break
-                if catalog_tab:
-                    break
+            for tab in tabs:
+                tab_url = str(tab.get("url") or "").strip()
+                if callable(is_url_excluded) and is_url_excluded(tab_url):
+                    continue
+                candidate = get_arena_direct_catalog_for_tab(
+                    config_engine,
+                    tab,
+                    preset_name=body.preset_name,
+                )
+                if candidate:
+                    catalog_candidates.append(tab)
+                    if catalog_preset is None:
+                        catalog_preset = candidate
+            catalog_tab = _select_arena_catalog_tab(
+                browser,
+                catalog_candidates,
+                preset_name=body.preset_name,
+            )
             requested_key = str(body.model or "").strip().casefold()
             catalog_models = list_arena_direct_models(
                 browser,
@@ -2483,8 +2575,31 @@ async def _stream_with_lifecycle(
         ):
             if cancelled_midway:
                 # 明确告知客户端响应因取消而不完整，避免半截回复被当成完整响应
-                cancel_code = "manual_terminate" if _is_manual_terminate(ctx) else "request_cancelled"
-                cancel_chunk = _pack_error("请求已被取消，响应不完整", cancel_code)
+                prompt_rejected = _is_arena_prompt_rejection(ctx)
+                arena_non_retryable = _is_arena_non_retryable(ctx)
+                cancel_code = (
+                    str(ctx.cancel_reason or "").strip()
+                    if arena_non_retryable
+                    else ("manual_terminate" if _is_manual_terminate(ctx) else "request_cancelled")
+                )
+                cancel_message = (
+                    "Arena 拒绝了该提示词：内容违反 Terms of Use"
+                    if prompt_rejected
+                    else (
+                        "Arena 图片生成失败，响应不可重试"
+                        if arena_non_retryable
+                        else "请求已被取消，响应不完整"
+                    )
+                )
+                if arena_non_retryable:
+                    request_manager.capture_error(ctx, cancel_message, code=cancel_code)
+                cancel_chunk = _pack_error(
+                    cancel_message,
+                    cancel_code,
+                    error_type="invalid_request_error" if arena_non_retryable else "execution_error",
+                    status_code=422 if arena_non_retryable else None,
+                    retryable=False if arena_non_retryable else None,
+                )
                 request_manager.capture_response_chunk(ctx, cancel_chunk)
                 yield cancel_chunk
                 done_chunk = _pack_done()
@@ -2610,6 +2725,19 @@ async def _non_stream_with_lifecycle(
         for data in _flush_buffered_stream_payloads():
             if not _consume_stream_payload(data):
                 break
+
+    if _is_arena_non_retryable(ctx) or _is_arena_non_retryable_payload(error_data):
+        message = "Arena 拒绝了该提示词：内容违反 Terms of Use"
+        code = ARENA_PROMPT_REJECTED_CODE
+        if isinstance(error_data, dict):
+            error = error_data.get("error")
+            if isinstance(error, dict):
+                if str(error.get("message") or "").strip():
+                    message = str(error["message"]).strip()
+                candidate_code = str(error.get("code") or "").strip()
+                if candidate_code in _ARENA_NON_RETRYABLE_REASONS:
+                    code = candidate_code
+        return _arena_non_retryable_response(message, code)
 
     if _is_manual_terminate(ctx):
         return _manual_terminate_response()
@@ -2899,7 +3027,14 @@ async def _stream_tool_calling_with_lifecycle(
         yield _pack_done()
 
 
-def _pack_error(message: str, code: str = "error") -> str:
+def _pack_error(
+    message: str,
+    code: str = "error",
+    *,
+    error_type: str = "execution_error",
+    status_code: Optional[int] = None,
+    retryable: Optional[bool] = None,
+) -> str:
     """打包 SSE 错误"""
     data = {
         "id": f"chatcmpl-error-{int(time.time() * 1000)}",
@@ -2913,8 +3048,10 @@ def _pack_error(message: str, code: str = "error") -> str:
         }],
         "error": {
             "message": message,
-            "type": "execution_error",
-            "code": code
+            "type": error_type,
+            "code": code,
+            **({"status_code": status_code} if status_code is not None else {}),
+            **({"retryable": retryable} if retryable is not None else {}),
         }
     }
     return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"

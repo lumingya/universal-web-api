@@ -25,6 +25,12 @@ from app.services.arena_direct_models import (
     get_model_catalog_preset,
     resolve_arena_direct_model,
 )
+from app.services.arena_image_generation import (
+    ArenaImageGenerationError,
+    ArenaImageGenerationGuard,
+    is_arena_image_generation_request,
+    validate_generated_images,
+)
 
 if TYPE_CHECKING:
     from .main import BrowserCore
@@ -1718,6 +1724,19 @@ class BrowserWorkflowMixin:
         else:
             prompt_text = _prepared_prompt
 
+        arena_image_generation_active = is_arena_image_generation_request(
+            str(getattr(tab, "url", "") or ""),
+            prompt_text,
+            image_config,
+            user_images,
+            preset_name=resolved_preset_name,
+        )
+        if arena_image_generation_active:
+            # Runtime-only flags: the Arena guard needs the uploaded originals,
+            # while site configuration remains reusable by every other domain.
+            image_config["_arena_image_generation_active"] = True
+            image_config["uploaded_image_paths"] = list(user_images)
+
         # 预先检查字数超限且为 ERROR 策略的情况，实现毫秒级拒绝
         if file_paste_config.get("enabled", False):
             from app.utils.file_paste import DEFAULT_TEMP_FILE_TYPE
@@ -1848,8 +1867,13 @@ class BrowserWorkflowMixin:
                         if interrupt_result.get("handled"):
                             logger.info(f"[{session.id}] 工作流恢复执行")
                             try:
+                                current_action = str(
+                                    (workflow[step_index] or {}).get("action") or ""
+                                ).strip().upper()
                                 executor.rebuild_network_listener_after_external_interruption(
-                                    "workflow_interrupt_resume"
+                                    "workflow_interrupt_resume",
+                                    allow_dom_image_resume=current_action
+                                    in {"STREAM_WAIT", "STREAM_OUTPUT"},
                                 )
                             except Exception:
                                 pass
@@ -2088,6 +2112,22 @@ class BrowserWorkflowMixin:
                             conversation_activity_marked = True
                         step_index += 1
 
+                    except ArenaImageGenerationError as e:
+                        step_elapsed = time.perf_counter() - step_started_at
+                        workflow_aborted = True
+                        logger.warning(
+                            f"{step_tag} Arena 图片生成终止: "
+                            f"action={action_upper or action or '-'}, "
+                            f"elapsed={step_elapsed:.2f}s, code={e.code}"
+                        )
+                        yield self.formatter.pack_error(
+                            e.message,
+                            error_type="invalid_request_error",
+                            code=e.code,
+                            status_code=e.status_code,
+                            retryable=e.retryable,
+                        )
+                        break
                     except (ElementNotFoundError, WorkflowError) as e:
                         step_elapsed = time.perf_counter() - step_started_at
                         logger.warning(
@@ -2186,6 +2226,11 @@ class BrowserWorkflowMixin:
                     dom_image_detected=dom_image_detected,
                     dom_final_image_urls=dom_final_image_urls,
                 )
+                if arena_image_generation_active and not should_run_media_postprocess:
+                    # The Arena DOM gate has already confirmed a new result;
+                    # extraction is mandatory so the uploaded-image check runs.
+                    logger.debug("[Arena Image] 强制执行媒体提取和上传图比对")
+                    should_run_media_postprocess = True
                 if not should_run_media_postprocess:
                     logger.debug(
                         "[WORKFLOW] 跳过多模态提取分支："
@@ -2197,6 +2242,16 @@ class BrowserWorkflowMixin:
                         f"{json.dumps(media_postprocess_diag, ensure_ascii=False)}"
                     )
                 try:
+                    if arena_image_generation_active:
+                        arena_observation = ArenaImageGenerationGuard(
+                            tab,
+                            result_selector=result_container_selector,
+                        ).observe(False)
+                        if (
+                            arena_observation.is_complete
+                            and arena_observation.terminal_error is not None
+                        ):
+                            raise arena_observation.terminal_error
                     media_items = []
                     if should_run_media_postprocess:
                         if dom_stream_media_items:
@@ -2247,6 +2302,12 @@ class BrowserWorkflowMixin:
                                 media_dom_baseline=media_dom_baseline,
                             )
                     
+                    if arena_image_generation_active and not media_items:
+                        raise ArenaImageGenerationError(
+                            "arena_image_generation_failed",
+                            "Arena 图片生成失败：未能提取新的生成图片",
+                        )
+
                     if media_items:
                         download_urls = image_config.get("download_urls", False)
                         if download_urls:
@@ -2260,7 +2321,25 @@ class BrowserWorkflowMixin:
                             tab=tab,
                             max_size_mb=int(image_config.get("max_size_mb", 10) or 10),
                         )
-                        
+                        if arena_image_generation_active:
+                            generated_images = [
+                                item
+                                for item in media_items
+                                if isinstance(item, dict)
+                                and str(item.get("media_type") or item.get("type") or "image").lower()
+                                in {"image", "image_url", "input_image"}
+                            ]
+                            if not generated_images:
+                                raise ArenaImageGenerationError(
+                                    "arena_image_generation_failed",
+                                    "Arena 图片生成失败：未能提取新的生成图片",
+                                )
+                            validate_generated_images(
+                                user_images,
+                                generated_images,
+                                tab=tab,
+                            )
+
                         logger.debug(f"[PROBE] 即将发送多模态资源（Markdown），数量={len(media_items)}")
 
                         try:
@@ -2282,6 +2361,18 @@ class BrowserWorkflowMixin:
                                 logger.debug(f"[MD_MEDIA] 已发送纯结构化多模态资源，共 {len(media_items)} 项")
                         except Exception as e:
                             logger.warning(f"[MD_MEDIA] 发送 Markdown 媒体链接失败: {e}")
+                except ArenaImageGenerationError as e:
+                    workflow_aborted = True
+                    logger.warning(
+                        f"[{session.id}] Arena 图片媒体校验失败: code={e.code}, error={e.message}"
+                    )
+                    yield self.formatter.pack_error(
+                        e.message,
+                        error_type="invalid_request_error",
+                        code=e.code,
+                        status_code=e.status_code,
+                        retryable=e.retryable,
+                    )
                 except Exception as e:
                     logger.warning(f"[{session.id}] 多模态提取失败: {e}")
         

@@ -185,6 +185,10 @@ class QwenParser(ResponseParser):
     def get_description(cls) -> str:
         return "Parse Qwen SSE streams and keep only answer-phase text"
 
+    def should_fallback_to_dom_when_no_visible_content(self) -> bool:
+        """Use the rendered reply when Qwen's captured SSE stalls in its thinking phase."""
+        return True
+
     @classmethod
     def get_supported_patterns(cls) -> List[str]:
         return ["**/api/v2/chat/completions**"]

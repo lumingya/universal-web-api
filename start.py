@@ -22,6 +22,7 @@ import time
 import urllib.request
 import venv
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 
 PROJECT_DIR = Path(__file__).resolve().parent
@@ -31,6 +32,14 @@ REQUIREMENTS_FILE = PROJECT_DIR / "requirements.txt"
 DEFAULT_PIP_MIRROR = "https://pypi.tuna.tsinghua.edu.cn/simple"
 DEFAULT_GITHUB_REPO = "lumingya/universal-web-api"
 DEFAULT_PYTHON_INSTALL_VERSION = "3.13.6"
+_PYTHON_PROXY_SCHEMES = frozenset({
+    "http",
+    "https",
+    "socks4",
+    "socks4a",
+    "socks5",
+    "socks5h",
+})
 
 ENV_DEFAULTS = {
     "APP_HOST": "127.0.0.1",
@@ -45,6 +54,9 @@ ENV_DEFAULTS = {
     "PIP_MIRROR_URL": DEFAULT_PIP_MIRROR,
     "BROWSER_PROFILE_DIR": "",
     "BROWSER_PROFILE_NAME": "",
+    # Opt-in because background freezing can delay site-specific periodic commands.
+    # Set BROWSER_MEMORY_SAVER=true after validating the target sites.
+    "BROWSER_MEMORY_SAVER": "false",
     "PROFILE_CLEAN_ENABLED": "false",
 }
 
@@ -95,6 +107,78 @@ def _apply_env_defaults() -> None:
         os.environ.setdefault(key, value)
 
 
+def _normalize_python_proxy_url(value: str) -> str:
+    """Convert a browser proxy value into a requests-compatible proxy URL."""
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if "://" not in raw:
+        raw = f"http://{raw}"
+
+    try:
+        parsed = urlsplit(raw)
+        scheme = str(parsed.scheme or "").lower()
+        if scheme not in _PYTHON_PROXY_SCHEMES or not parsed.hostname:
+            return ""
+        # Accessing .port validates malformed values such as :not-a-port.
+        _ = parsed.port
+    except (TypeError, ValueError):
+        return ""
+
+    # requests must resolve R2 hostnames through the SOCKS proxy.  `socks5`
+    # resolves them locally, which reintroduces the fake-DNS/direct-DNS issue.
+    if scheme == "socks5":
+        scheme = "socks5h"
+
+    return urlunsplit((scheme, parsed.netloc, parsed.path, parsed.query, ""))
+
+
+def _merged_no_proxy(*values: str) -> str:
+    entries = []
+    seen = set()
+    for raw_value in values:
+        for entry in str(raw_value or "").split(","):
+            normalized = entry.strip()
+            key = normalized.lower()
+            if normalized and key not in seen:
+                seen.add(key)
+                entries.append(normalized)
+    return ",".join(entries)
+
+
+def _replace_env_value(env: dict[str, str], key: str, value: str) -> None:
+    """Replace an environment key irrespective of its original casing."""
+    for existing_key in tuple(env):
+        if existing_key.lower() == key.lower():
+            env.pop(existing_key, None)
+    env[key] = value
+
+
+def _build_service_env() -> dict[str, str]:
+    """Build the child service environment without mutating the launcher shell."""
+    env = os.environ.copy()
+    if not _env_flag("PROXY_ENABLED"):
+        return env
+
+    proxy_url = _normalize_python_proxy_url(os.getenv("PROXY_ADDRESS", ""))
+    if not proxy_url:
+        return env
+
+    _replace_env_value(env, "HTTP_PROXY", proxy_url)
+    _replace_env_value(env, "HTTPS_PROXY", proxy_url)
+
+    existing_no_proxy = ",".join(
+        str(value or "")
+        for key, value in env.items()
+        if key.lower() == "no_proxy"
+    )
+    bypass = _merged_no_proxy(existing_no_proxy, os.getenv("PROXY_BYPASS", ""))
+    if bypass:
+        _replace_env_value(env, "NO_PROXY", bypass)
+
+    return env
+
+
 def _display_current_config() -> None:
     _log()
     _log("   当前配置:")
@@ -109,8 +193,9 @@ def _display_current_config() -> None:
     if profile_name:
         _log(f"        PROFILE_NAME : {profile_name}")
     _log(f"        PROFILE_CLEAN: {os.getenv('PROFILE_CLEAN_ENABLED')}")
+    _log(f"        MEMORY_SAVER : {os.getenv('BROWSER_MEMORY_SAVER', 'false')}")
     if _env_flag("PROXY_ENABLED"):
-        _log(f"        PROXY        : {os.getenv('PROXY_ADDRESS', '')}")
+        _log(f"        PROXY        : {os.getenv('PROXY_ADDRESS', '')} (browser / Python downloads)")
     else:
         _log("        PROXY        : 已禁用")
     _log()
@@ -143,7 +228,12 @@ def _run(
 
 
 def _run_project_python(args: list[str], *, check: bool = True, capture: bool = False) -> subprocess.CompletedProcess:
-    return _run([str(_venv_python()), *args], check=check, capture=capture)
+    return _run(
+        [str(_venv_python()), *args],
+        check=check,
+        capture=capture,
+        env=_build_service_env(),
+    )
 
 
 def _python_install_version() -> str:
@@ -636,7 +726,7 @@ def _launch_browser_if_needed() -> None:
 
     if _debug_port_ready(browser_port):
         _log("[WARN] Debug 端口已被占用，将复用现有浏览器实例")
-        _log("[WARN] 如果后台标签页变慢，请关闭浏览器后重新运行启动脚本")
+        _log("[WARN] 浏览器启动参数只在新进程生效；如需应用内存节省模式，请先关闭现有浏览器")
         if _focus_browser_window_for_port(browser_port):
             _log("[INFO] 已唤起现有浏览器窗口")
         _log(f"[OK] Debug 端口就绪: {browser_port}")
@@ -653,12 +743,26 @@ def _launch_browser_if_needed() -> None:
         f"--user-data-dir={profile_dir}",
         "--no-first-run",
         "--no-default-browser-check",
-        "--disable-backgrounding-occluded-windows",
-        "--disable-background-timer-throttling",
-        "--disable-renderer-backgrounding",
-        "--disable-features=CalculateNativeWinOcclusion,AutomaticTabDiscarding,TabFreeze,IntensiveWakeUpThrottling",
         "about:blank",
     ]
+
+    # The previous launcher explicitly disabled Chromium's background memory
+    # controls. Keep that behavior as the default for compatibility, while
+    # allowing a validated opt-in memory saver mode.
+    if _env_flag("BROWSER_MEMORY_SAVER", False):
+        browser_args.insert(
+            -1,
+            "--enable-features=CalculateNativeWinOcclusion,AutomaticTabDiscarding,TabFreeze,IntensiveWakeUpThrottling",
+        )
+        _log("[INFO] Chromium 内存节省模式已启用（后台标签页允许降频/冻结/回收）")
+    else:
+        browser_args[4:4] = [
+            "--disable-backgrounding-occluded-windows",
+            "--disable-background-timer-throttling",
+            "--disable-renderer-backgrounding",
+            "--disable-features=CalculateNativeWinOcclusion,AutomaticTabDiscarding,TabFreeze,IntensiveWakeUpThrottling",
+        ]
+        _log("[INFO] Chromium 常驻后台模式已启用（BROWSER_MEMORY_SAVER=false）")
 
     profile_name = str(os.getenv("BROWSER_PROFILE_NAME", "") or "").strip()
     if profile_name:

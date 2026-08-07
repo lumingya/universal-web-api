@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import random
 import threading
@@ -61,6 +62,10 @@ class TabPoolManager:
     ROUTE_CURSOR_LIMIT = 1000
     MAINTENANCE_WORKER_LIMIT = 4
     TERMINATION_RELEASE_WAIT_SEC = 5.0
+    IDLE_MEMORY_PURGE_MIN_SEC = 60.0
+    CONTEXT_RECOVERY_CDP_TIMEOUT_SEC = 2.0
+    CONTEXT_RECOVERY_COOLDOWN_SEC = 30.0
+    CONTEXT_RECOVERY_CACHE_LIMIT = 2048
 
     @staticmethod
     def _to_bool(value: Any, default: bool = False) -> bool:
@@ -123,6 +128,9 @@ class TabPoolManager:
         self._last_scan_time: float = 0
         self._get_tabs_retry_after: float = 0.0
         self._last_get_tabs_warning_at: float = 0.0
+        self._context_recovery_lock = threading.Lock()
+        self._context_recovery_pending: set[str] = set()
+        self._context_recovery_requested_at: Dict[str, float] = {}
 
         # 记录已知的标签页底层 ID（用于检测新标签页）
         self._known_tab_ids: set = set()
@@ -183,6 +191,21 @@ class TabPoolManager:
         self._global_network_retry_delay = max(
             0.2,
             self._to_float(BrowserConstants.get("GLOBAL_NETWORK_INTERCEPTION_RETRY_DELAY"), 1.0),
+        )
+        # A JavaScript heap purge does not freeze or discard a page. Run it
+        # only for sessions that have been idle for a while, so DOM clicks and
+        # active workflows keep their existing timing behavior.
+        self._idle_memory_purge_enabled = self._to_bool(
+            os.getenv("BROWSER_IDLE_MEMORY_PURGE_ENABLED"),
+            True,
+        )
+        self._idle_memory_purge_after_sec = max(
+            self.IDLE_MEMORY_PURGE_MIN_SEC,
+            self._to_float(os.getenv("BROWSER_IDLE_MEMORY_PURGE_AFTER_SEC"), 300.0),
+        )
+        self._idle_memory_purge_interval_sec = max(
+            self.IDLE_MEMORY_PURGE_MIN_SEC,
+            self._to_float(os.getenv("BROWSER_IDLE_MEMORY_PURGE_INTERVAL_SEC"), 180.0),
         )
         self._global_network_monitor: Optional[_GlobalNetworkInterceptionManager] = None
         if self._global_network_enabled:
@@ -610,6 +633,277 @@ class TabPoolManager:
         if browser is not None:
             return browser
         return self.page
+
+    @staticmethod
+    def _run_cdp_compat(target: Any, method: str, *, timeout: float = 2.0, **params):
+        """Call DrissionPage CDP APIs across minor 4.x signature differences."""
+        runner = getattr(target, "run_cdp", None)
+        if not callable(runner):
+            runner = getattr(target, "_run_cdp", None)
+        if not callable(runner):
+            raise AttributeError(f"CDP runner unavailable for {method}")
+
+        timeout_value = max(0.1, float(timeout))
+        try:
+            return runner(method, _timeout=timeout_value, **params)
+        except TypeError as exc:
+            # A few older wrappers do not expose DrissionPage's private timeout
+            # keyword. Retry only when the exception clearly concerns that kwarg.
+            error_text = str(exc).lower()
+            if "timeout" not in error_text:
+                raise
+            return runner(method, **params)
+
+    @staticmethod
+    def _is_execution_context_error(error: Any) -> bool:
+        text = str(error or "").strip().lower()
+        if not text:
+            return False
+        return any(
+            marker in text
+            for marker in (
+                "cannot find default execution context",
+                "execution context was destroyed",
+                "execution context is not available",
+                "context was destroyed",
+            )
+        )
+
+    @staticmethod
+    def _is_unsupported_cdp_method(error: Any) -> bool:
+        text = str(error or "").strip().lower()
+        return any(
+            marker in text
+            for marker in (
+                "unknown method",
+                "method not found",
+                "not supported",
+                "unsupported command",
+            )
+        )
+
+    def _find_idle_tab_by_raw_id(self, raw_tab_id: str) -> Optional[Any]:
+        """Find an existing idle wrapper before opening another CDP session."""
+        raw_id = str(raw_tab_id or "").strip()
+        if not raw_id:
+            return None
+
+        with self._lock:
+            sessions = list(getattr(self, "_tabs", {}).values())
+        for session in sessions:
+            try:
+                with session._lock:
+                    if session.status != TabStatus.IDLE or session._termination_in_progress:
+                        continue
+                    tab = getattr(session, "tab", None)
+                if self._get_tab_ref_id(tab) == raw_id:
+                    return tab
+            except Exception:
+                continue
+        return None
+
+    def _force_reload_flat_via_cdp(self, browser: Any, target_id: str) -> bool:
+        """Fallback for protocol versions where nested Target messaging is unavailable."""
+        driver = getattr(browser, "_driver", None)
+        send = getattr(driver, "_send", None)
+        if not callable(send):
+            return False
+
+        session_id = None
+        try:
+            result = self._run_cdp_compat(
+                browser,
+                "Target.attachToTarget",
+                timeout=self.CONTEXT_RECOVERY_CDP_TIMEOUT_SEC,
+                targetId=target_id,
+                flatten=True,
+            ) or {}
+            session_id = result.get("sessionId") if isinstance(result, dict) else None
+            if not session_id:
+                return False
+
+            message = {
+                "method": "Page.reload",
+                "params": {},
+                "sessionId": session_id,
+            }
+            try:
+                response = send(message, timeout=self.CONTEXT_RECOVERY_CDP_TIMEOUT_SEC)
+            except TypeError as exc:
+                if "timeout" not in str(exc).lower():
+                    raise
+                response = send(message)
+            return isinstance(response, dict) and "error" not in response
+        except Exception as exc:
+            logger.debug(f"[TabPool] flat CDP 刷新唤醒失败 (target={target_id}): {exc}")
+            return False
+        finally:
+            if session_id:
+                try:
+                    self._run_cdp_compat(
+                        browser,
+                        "Target.detachFromTarget",
+                        timeout=self.CONTEXT_RECOVERY_CDP_TIMEOUT_SEC,
+                        sessionId=session_id,
+                    )
+                except Exception as exc:
+                    logger.debug(
+                        f"[TabPool] flat CDP session detach 失败 "
+                        f"(target={target_id}, session={session_id}): {exc}"
+                    )
+
+    def _force_reload_tab_via_cdp(self, target_id: str) -> bool:
+        """Best-effort reload that works with old nested and newer flat CDP sessions."""
+        raw_id = str(target_id or "").strip()
+        if not raw_id or self._shutdown:
+            return False
+
+        existing_tab = self._find_idle_tab_by_raw_id(raw_id)
+        if existing_tab is not None:
+            try:
+                reload_result = self._run_cdp_compat(
+                    existing_tab,
+                    "Page.reload",
+                    timeout=self.CONTEXT_RECOVERY_CDP_TIMEOUT_SEC,
+                )
+                if isinstance(reload_result, dict) and reload_result.get("error"):
+                    raise RuntimeError(str(reload_result.get("error")))
+                return True
+            except Exception as exc:
+                logger.debug(
+                    f"[TabPool] 复用现有 tab wrapper 刷新失败，改用 browser CDP "
+                    f"(target={raw_id}): {exc}"
+                )
+
+        try:
+            browser = self._get_browser_handle()
+            if browser is None:
+                return False
+            run_cdp = getattr(browser, "_run_cdp", None)
+            if not callable(run_cdp):
+                # Some older/public wrappers expose only run_cdp().
+                run_cdp = getattr(browser, "run_cdp", None)
+            if not callable(run_cdp):
+                return False
+        except Exception:
+            return False
+
+        session_id = None
+        use_flat_fallback = False
+        try:
+            # Omitting flatten keeps the legacy nested-session path compatible
+            # with older Chromium versions. Current Chrome accepts this too.
+            result = self._run_cdp_compat(
+                browser,
+                "Target.attachToTarget",
+                timeout=self.CONTEXT_RECOVERY_CDP_TIMEOUT_SEC,
+                targetId=raw_id,
+            ) or {}
+            session_id = result.get("sessionId") if isinstance(result, dict) else None
+            if not session_id:
+                return False
+
+            message = json.dumps(
+                {"id": 1001, "method": "Page.reload", "params": {}},
+                separators=(",", ":"),
+            )
+            try:
+                nested_result = self._run_cdp_compat(
+                    browser,
+                    "Target.sendMessageToTarget",
+                    timeout=self.CONTEXT_RECOVERY_CDP_TIMEOUT_SEC,
+                    message=message,
+                    sessionId=session_id,
+                )
+                if isinstance(nested_result, dict) and nested_result.get("error"):
+                    raise RuntimeError(str(nested_result.get("error")))
+                return True
+            except Exception as exc:
+                use_flat_fallback = self._is_unsupported_cdp_method(exc)
+                if not use_flat_fallback:
+                    logger.debug(
+                        f"[TabPool] 嵌套 CDP 刷新唤醒失败 "
+                        f"(target={raw_id}): {exc}"
+                    )
+                    return False
+        except Exception as exc:
+            logger.debug(f"[TabPool] CDP attach 刷新唤醒失败 (target={raw_id}): {exc}")
+            return False
+        finally:
+            if session_id:
+                try:
+                    self._run_cdp_compat(
+                        browser,
+                        "Target.detachFromTarget",
+                        timeout=self.CONTEXT_RECOVERY_CDP_TIMEOUT_SEC,
+                        sessionId=session_id,
+                    )
+                except Exception as exc:
+                    logger.debug(
+                        f"[TabPool] CDP session detach 失败 "
+                        f"(target={raw_id}, session={session_id}): {exc}"
+                    )
+
+        return use_flat_fallback and self._force_reload_flat_via_cdp(browser, raw_id)
+
+    def _run_context_recovery(self, raw_tab_id: str) -> None:
+        try:
+            self._force_reload_tab_via_cdp(raw_tab_id)
+        except Exception as exc:
+            logger.debug(f"[TabPool] 上下文恢复任务失败 (target={raw_tab_id}): {exc}")
+        finally:
+            recovery_lock = getattr(self, "_context_recovery_lock", None)
+            if recovery_lock is not None:
+                with recovery_lock:
+                    getattr(self, "_context_recovery_pending", set()).discard(raw_tab_id)
+
+    def _schedule_context_recovery(self, raw_tab_id: str) -> bool:
+        """Schedule one reload per target cooldown without holding the pool lock."""
+        raw_id = str(raw_tab_id or "").strip()
+        if not raw_id or self._shutdown:
+            return False
+
+        recovery_lock = getattr(self, "_context_recovery_lock", None)
+        if recovery_lock is None:
+            recovery_lock = threading.Lock()
+            self._context_recovery_lock = recovery_lock
+        pending = getattr(self, "_context_recovery_pending", None)
+        requested_at = getattr(self, "_context_recovery_requested_at", None)
+        if pending is None:
+            pending = set()
+            self._context_recovery_pending = pending
+        if requested_at is None:
+            requested_at = {}
+            self._context_recovery_requested_at = requested_at
+
+        now = time.monotonic()
+        with recovery_lock:
+            last_requested = float(requested_at.get(raw_id, 0.0) or 0.0)
+            if raw_id in pending or (
+                last_requested
+                and now - last_requested < self.CONTEXT_RECOVERY_COOLDOWN_SEC
+            ):
+                return False
+
+            requested_at[raw_id] = now
+            pending.add(raw_id)
+            if len(requested_at) > self.CONTEXT_RECOVERY_CACHE_LIMIT:
+                oldest_id = min(requested_at, key=requested_at.get)
+                requested_at.pop(oldest_id, None)
+
+        executor = getattr(self, "_maintenance_executor", None)
+        if executor is None:
+            with recovery_lock:
+                pending.discard(raw_id)
+            return False
+        try:
+            executor.submit(self._run_context_recovery, raw_id)
+            return True
+        except RuntimeError as exc:
+            with recovery_lock:
+                pending.discard(raw_id)
+            logger.debug(f"[TabPool] 上下文恢复任务提交失败 (target={raw_id}): {exc}")
+            return False
 
     def _list_current_tab_ids_via_cdp(self) -> List[str]:
         return [
@@ -1344,7 +1638,12 @@ class TabPoolManager:
         try:
             browser = self._get_browser_handle()
             return browser.get_tab(raw_tab_id)
-        except Exception:
+        except Exception as exc:
+            if self._is_execution_context_error(exc) and self._schedule_context_recovery(raw_tab_id):
+                logger.warning(
+                    f"[TabPool] 标签页 {raw_tab_id} 丢失 JS 执行上下文，"
+                    "已异步请求 CDP 刷新唤醒"
+                )
             return None
 
     def _wrap_tab(
@@ -1478,25 +1777,74 @@ class TabPoolManager:
 
     # ================= 错误标签页隔离与恢复 =================
 
+    def _close_quarantined_tab(self, tab: Any, raw_tab_id: str) -> bool:
+        """Close a permanently quarantined browser target outside the pool lock."""
+        close = getattr(tab, "close", None)
+        if callable(close):
+            try:
+                close_result = close()
+                if close_result is not False:
+                    return True
+                logger.debug(
+                    f"[TabRecovery] 标签页对象 close() 返回失败，尝试 CDP 兜底 "
+                    f"(raw={raw_tab_id})"
+                )
+            except Exception as exc:
+                logger.debug(
+                    f"[TabRecovery] 关闭隔离标签页对象失败，尝试 CDP 兜底 "
+                    f"(raw={raw_tab_id}, error={exc})"
+                )
+
+        try:
+            browser = self._get_browser_handle()
+            run_cdp = getattr(browser, "_run_cdp", None)
+            if callable(run_cdp):
+                result = run_cdp("Target.closeTarget", targetId=str(raw_tab_id))
+                if not isinstance(result, dict) or result.get("success", True):
+                    return True
+        except Exception as exc:
+            logger.warning(
+                f"[TabRecovery] 关闭永久隔离标签页失败 "
+                f"(raw={raw_tab_id}, error={exc})"
+            )
+        return False
+
     def resolve_quarantine(self, raw_tab_id: str, release: bool) -> bool:
         """解除或永久化一个隔离条目（供 TabRecoveryService 回调）。
 
         release=True：从隔离集合移除，下一次 _scan_new_tabs 自然重新入池；
-        release=False：置 entry.permanent=True 永久隔离，扫描永远跳过该 raw id。
+        release=False：关闭浏览器标签页并释放强引用；关闭失败时保留不带
+        tab 引用的轻量永久隔离记录，避免扫描期间重新入池。
         """
         raw_id = str(raw_tab_id or "").strip()
         if not raw_id:
             return False
+
+        tab_to_close = None
+        entry = None
         with self._condition:
             entry = self._quarantined_raw_ids.get(raw_id)
             if entry is None:
                 return False
             if release:
                 self._quarantined_raw_ids.pop(raw_id, None)
+                # 恢复任务结束后不再需要保留 DrissionPage tab wrapper。
+                entry.tab = None
                 self._condition.notify_all()
-            else:
-                entry.permanent = True
-            return True
+                return True
+
+            entry.permanent = True
+            tab_to_close = getattr(entry, "tab", None)
+            # 先在锁内摘掉强引用；真实 CDP 调用必须在锁外执行。
+            entry.tab = None
+
+        closed = self._close_quarantined_tab(tab_to_close, raw_id)
+        with self._condition:
+            if self._quarantined_raw_ids.get(raw_id) is entry:
+                if closed:
+                    self._quarantined_raw_ids.pop(raw_id, None)
+                self._condition.notify_all()
+        return True
 
     def get_quarantine_entry(self, raw_tab_id: str) -> Optional[TabQuarantineEntry]:
         with self._condition:
@@ -1583,6 +1931,16 @@ class TabPoolManager:
                 return
 
             current_tab_set = set(current_tab_ids)
+            # 物理关闭成功后，Target.getTargets 可能要到下一轮才反映结果；
+            # 这里清理已永久隔离且不再持有 tab 引用的陈旧元数据，避免隔离
+            # 字典只增不减。
+            for raw_id, entry in list(self._quarantined_raw_ids.items()):
+                if (
+                    getattr(entry, "permanent", False)
+                    and getattr(entry, "tab", None) is None
+                    and raw_id not in current_tab_set
+                ):
+                    self._quarantined_raw_ids.pop(raw_id, None)
             self._cleanup_orphaned_isolated_contexts(list(current_context_by_raw.values()))
             changed = False
 
@@ -1994,7 +2352,109 @@ class TabPoolManager:
                 return False
             changed = bool(self._check_stuck_tabs())
             self._cleanup_unhealthy_tabs()
-            return changed
+
+        self._schedule_idle_memory_purge()
+        return changed
+
+    def _schedule_idle_memory_purge(self) -> bool:
+        """Request best-effort JS GC for long-idle tabs without holding pool locks."""
+        if not self._idle_memory_purge_enabled:
+            return False
+
+        now_wall = time.time()
+        now_mono = time.monotonic()
+        with self._lock:
+            if self._shutdown:
+                return False
+            sessions = list(self._tabs.values())
+
+        candidates: List[TabSession] = []
+        for session in sessions:
+            try:
+                with session._lock:
+                    if session.status != TabStatus.IDLE or session._termination_in_progress:
+                        continue
+                    idle_for = now_wall - float(session.last_used_at or now_wall)
+                    last_requested = float(
+                        getattr(session, "_last_memory_purge_requested_at", 0.0) or 0.0
+                    )
+                    if idle_for < self._idle_memory_purge_after_sec:
+                        continue
+                    if last_requested and (now_mono - last_requested) < self._idle_memory_purge_interval_sec:
+                        continue
+                    setattr(session, "_last_memory_purge_requested_at", now_mono)
+                candidates.append(session)
+            except Exception:
+                continue
+
+        if not candidates:
+            return False
+
+        executor = self._maintenance_executor
+        if executor is None:
+            return False
+
+        scheduled = False
+        for session in candidates:
+            try:
+                executor.submit(self._purge_idle_session_memory, session)
+                scheduled = True
+            except RuntimeError:
+                break
+        return scheduled
+
+    def _purge_idle_session_memory(self, session: TabSession) -> None:
+        """Force renderer GC for one idle session; never changes page lifecycle."""
+        if self._shutdown:
+            return
+        heap_profiler_enabled = False
+        try:
+            with session._lock:
+                if session.status != TabStatus.IDLE or session._termination_in_progress:
+                    return
+
+            try:
+                self._run_cdp_compat(
+                    session.tab,
+                    "HeapProfiler.enable",
+                    timeout=1.0,
+                )
+                heap_profiler_enabled = True
+            except Exception:
+                # collectGarbage is available without enabling the domain on
+                # some older Chromium/DrissionPage combinations.
+                pass
+
+            self._run_cdp_compat(
+                session.tab,
+                "HeapProfiler.collectGarbage",
+                timeout=1.0,
+            )
+            logger.debug_throttled(
+                f"tab_pool.memory_purge.{session.id}",
+                f"[{session.id}] 空闲标签页已执行 JavaScript 内存回收",
+                interval_sec=self._idle_memory_purge_interval_sec,
+            )
+        except Exception as e:
+            logger.debug_throttled(
+                f"tab_pool.memory_purge_error.{session.id}",
+                f"[{session.id}] 空闲标签页内存回收失败（忽略）: {e}",
+                interval_sec=self._idle_memory_purge_interval_sec,
+            )
+        finally:
+            if heap_profiler_enabled:
+                try:
+                    self._run_cdp_compat(
+                        session.tab,
+                        "HeapProfiler.disable",
+                        timeout=1.0,
+                    )
+                except Exception as e:
+                    logger.debug_throttled(
+                        f"tab_pool.memory_purge_disable_error.{session.id}",
+                        f"[{session.id}] HeapProfiler 关闭失败（忽略）: {e}",
+                        interval_sec=self._idle_memory_purge_interval_sec,
+                    )
 
     def _cancel_active_request_for_session(
         self,
@@ -3813,6 +4273,11 @@ class TabPoolManager:
             self._known_tab_ids.clear()
             self._quarantined_raw_ids.clear()
             self._active_session_id = None  # 🆕 重置活动标签页记录
+            recovery_lock = getattr(self, "_context_recovery_lock", None)
+            if recovery_lock is not None:
+                with recovery_lock:
+                    getattr(self, "_context_recovery_pending", set()).clear()
+                    getattr(self, "_context_recovery_requested_at", {}).clear()
             # 🆕 清理编号映射
             self._raw_id_to_persistent.clear()
             self._persistent_to_session_id.clear()

@@ -25,6 +25,7 @@ from app.core.request_transport import (
     normalize_request_transport_config,
 )
 from app.core.stream_monitor import StreamMonitor
+from app.services.arena_image_generation import ArenaImageGenerationError
 from app.core.network_monitor import (
     create_network_monitor,
     NetworkMonitorTimeout,
@@ -81,6 +82,7 @@ class WorkflowExecutor(
         self._last_input_target_key = ""
         self._last_stream_media_state = {}
         self._last_stream_media_items: list[Dict[str, Any]] = []
+        self._pending_interrupted_image_dom_resume: Optional[Dict[str, Any]] = None
         self._request_transport = normalize_request_transport_config(
             (stream_config or {}).get("request_transport")
         )
@@ -218,7 +220,28 @@ class WorkflowExecutor(
         if self.stealth_mode:
             logger.debug("[STEALTH] 低熵模式已启用")
 
-    def rebuild_network_listener_after_external_interruption(self, reason: str = "external_interrupt") -> None:
+    def rebuild_network_listener_after_external_interruption(
+        self,
+        reason: str = "external_interrupt",
+        *,
+        allow_dom_image_resume: bool = False,
+    ) -> None:
+        self._pending_interrupted_image_dom_resume = None
+        stream_monitor = getattr(self, "_stream_monitor", None)
+        if allow_dom_image_resume and stream_monitor is not None:
+            try:
+                resume_state = stream_monitor.capture_interrupted_image_resume_state()
+            except Exception as e:
+                logger.debug(f"[Executor] 读取插队前图片恢复状态失败（忽略）: {e}")
+                resume_state = None
+            if resume_state:
+                self._pending_interrupted_image_dom_resume = resume_state
+                logger.info(
+                    "[Executor] 检测到插队前已生成图片，保留原发送基线并改用 DOM 收尾 "
+                    f"(urls={len(resume_state.get('image_urls') or [])})"
+                )
+                return
+
         monitor = getattr(self, "_network_monitor", None)
         if monitor is None:
             return
@@ -230,6 +253,11 @@ class WorkflowExecutor(
             logger.debug(f"[Executor] 外部中断后已确认网络监听: {reason}")
         except Exception as e:
             logger.debug(f"[Executor] 外部中断后重建网络监听失败（忽略）: {e}")
+
+    def _consume_interrupted_image_dom_resume(self) -> Optional[Dict[str, Any]]:
+        state = getattr(self, "_pending_interrupted_image_dom_resume", None)
+        self._pending_interrupted_image_dom_resume = None
+        return state if isinstance(state, dict) and state else None
 
     def page_looks_generating(self, send_selector: str = "") -> bool:
         try:
@@ -379,6 +407,7 @@ class WorkflowExecutor(
             logger.debug(f"[Executor] DOM 流式监听器清理失败（忽略）: {e}")
         self._last_stream_media_state = {}
         self._last_stream_media_items = []
+        self._pending_interrupted_image_dom_resume = None
 
     @staticmethod
     def _coerce_bool(value: Any, default: bool = False) -> bool:
@@ -834,6 +863,7 @@ class WorkflowExecutor(
                 self._current_result_prompt = str(user_input or "")
                 self._last_stream_media_state = {}
                 self._last_stream_media_items = []
+                interrupted_image_resume = self._consume_interrupted_image_dom_resume()
 
                 # 网络流式输出与网络异常拦截解耦：
                 # - mode=network: 走网络流式（可回退 DOM）
@@ -845,7 +875,27 @@ class WorkflowExecutor(
                     and self._stream_mode == "network"
                 )
 
-                if use_network_stream:
+                if interrupted_image_resume is not None:
+                    logger.info("[Executor] 从插队前原始基线继续 DOM 图片收尾")
+                    yield from self._stream_monitor.monitor(
+                        selector=selector,
+                        user_input=user_input,
+                        completion_id=self._completion_id,
+                        baseline_snapshot=interrupted_image_resume.get("baseline_snapshot"),
+                        sent_content_length=int(
+                            interrupted_image_resume.get("sent_content_length") or 0
+                        ),
+                        fallback_reason="workflow_interrupt_dom_resume",
+                        recovery_mode="workflow_dom_resume",
+                        resume_image_urls=list(
+                            interrupted_image_resume.get("image_urls") or []
+                        ),
+                    )
+                    if self._stream_monitor is not None:
+                        self._stream_monitor.clear_send_baseline()
+                    monitor_used = "dom_interrupt_resume"
+
+                elif use_network_stream:
                     try:
                         if self._page_fetch_capture is not None:
                             logger.debug(
@@ -909,6 +959,11 @@ class WorkflowExecutor(
                             fallback_reason=fallback_reason,
                             **dom_fallback_kwargs,
                         )
+                        if self._stream_monitor.stream_recovery_exhausted():
+                            logger.error(
+                                "[Executor] 断流恢复未确认最终结果，终止本轮而不释放为成功"
+                            )
+                            raise WorkflowError("stream_recovery_exhausted")
                         if self._stream_monitor.image_recovery_exhausted():
                             retry_baseline = self._stream_monitor.capture_send_baseline(
                                 selector,
@@ -936,6 +991,7 @@ class WorkflowExecutor(
                         monitor_used = "dom_fallback"
                     
                     except NetworkMonitorError as e:
+                        fallback_reason = str(e)
                         logger.error(
                             f"[Executor] 网络监听错误，回退到 DOM 模式: {e}"
                         )
@@ -945,8 +1001,14 @@ class WorkflowExecutor(
                             selector=selector,
                             user_input=user_input,
                             completion_id=self._completion_id,
+                            fallback_reason=fallback_reason,
                             **dom_fallback_kwargs,
                         )
+                        if self._stream_monitor.stream_recovery_exhausted():
+                            logger.error(
+                                "[Executor] 断流恢复未确认最终结果，终止本轮而不释放为成功"
+                            )
+                            raise WorkflowError("stream_recovery_exhausted")
                         if self._stream_monitor is not None:
                             self._stream_monitor.clear_send_baseline()
                         self._last_stream_media_state = {}
@@ -979,13 +1041,22 @@ class WorkflowExecutor(
                 yield self.formatter.pack_error(f"元素未找到: {str(e)}")
                 raise
 
+        except ArenaImageGenerationError:
+            # The browser workflow converts this Arena-only terminal state into
+            # a 422 / non-retryable API error exactly once.
+            raise
+
         except WorkflowError as e:
             if self._check_cancelled():
                 logger.info(f"[Executor] step cancelled; suppressing workflow exception [{action}]: {e}")
                 return
             error_code = str(e)
             logger.error(f"步骤执行失败 [{action}]: {error_code}")
-            if error_code in {"new_chat_transition_timeout", "send_unconfirmed"}:
+            if error_code in {
+                "new_chat_transition_timeout",
+                "send_unconfirmed",
+                "stream_recovery_exhausted",
+            }:
                 raise
             if error_code.startswith("file_paste_length_error:"):
                 message = error_code.split(":", 1)[1].strip() or "输入文本超过站点配置的长度限制"

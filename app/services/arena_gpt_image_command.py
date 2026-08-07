@@ -2,18 +2,18 @@
 
 from __future__ import annotations
 
-import base64
-import hashlib
 import os
 import random
 import time
-from io import BytesIO
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-import requests
-from PIL import Image
+from app.services.arena_image_generation import (
+    image_signatures as _image_signatures,
+    read_image_bytes as _read_image_bytes,
+    same_image as _same_image,
+)
 
 
 GPT_IMAGE_MARKERS = (
@@ -137,92 +137,12 @@ def _visible_image_sources(tab: Any) -> list[str]:
         return []
 
 
-def _image_signatures(payload: bytes) -> dict[str, Any]:
-    data = bytes(payload or b"")
-    signatures: dict[str, Any] = {
-        "sha256": hashlib.sha256(data).hexdigest(),
-        "dhash": None,
-    }
-    try:
-        with Image.open(BytesIO(data)) as image:
-            grayscale = image.convert("L").resize((17, 16), Image.Resampling.LANCZOS)
-            pixels = list(grayscale.getdata())
-        bits = 0
-        for row in range(16):
-            offset = row * 17
-            for column in range(16):
-                bits = (bits << 1) | int(
-                    pixels[offset + column] > pixels[offset + column + 1]
-                )
-        signatures["dhash"] = bits
-    except Exception:
-        pass
-    return signatures
-
-
-def _same_image(
-    candidate: dict[str, Any], reference: dict[str, Any] | None
-) -> bool:
-    if not reference:
-        return False
-    if candidate.get("sha256") == reference.get("sha256"):
-        return True
-    candidate_dhash = candidate.get("dhash")
-    reference_dhash = reference.get("dhash")
-    return (
-        isinstance(candidate_dhash, int)
-        and isinstance(reference_dhash, int)
-        and (candidate_dhash ^ reference_dhash).bit_count() <= 4
-    )
-
-
 def _log_image_url(url: str) -> str:
     try:
         parsed = urlsplit(str(url or ""))
         return f"{parsed.scheme}://{parsed.netloc}{parsed.path}"[:200]
     except Exception:
         return str(url or "").split("?", 1)[0][:200]
-
-
-def _read_image_bytes(tab: Any, url: str, timeout: float = 20.0) -> bytes:
-    if url.startswith("data:"):
-        try:
-            return base64.b64decode(url.split(",", 1)[1])
-        except Exception:
-            return b""
-
-    if url.startswith(("http://", "https://")):
-        try:
-            response = requests.get(
-                url,
-                headers={"Referer": _current_url(tab), "User-Agent": "Mozilla/5.0"},
-                timeout=timeout,
-            )
-            response.raise_for_status()
-            return response.content
-        except Exception:
-            pass
-
-    try:
-        result = tab.run_js(
-            """
-            return fetch(arguments[0], { credentials: 'include' })
-                .then((response) => response.arrayBuffer())
-                .then((buffer) => {
-                    const bytes = new Uint8Array(buffer);
-                    let binary = '';
-                    const step = 0x8000;
-                    for (let i = 0; i < bytes.length; i += step) {
-                        binary += String.fromCharCode(...bytes.subarray(i, i + step));
-                    }
-                    return btoa(binary);
-                });
-            """,
-            url,
-        )
-        return base64.b64decode(str(result or ""))
-    except Exception:
-        return b""
 
 
 def _find(tab: Any, selector: str, timeout: float = 1.0) -> Any:

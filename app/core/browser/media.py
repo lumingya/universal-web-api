@@ -2222,6 +2222,80 @@ class BrowserMediaMixin:
                 return False, last_state
             time.sleep(min(poll, remaining))
 
+    @staticmethod
+    def _expand_image_element_for_screenshot(img_ele) -> bool:
+        """Temporarily render an image at its decoded dimensions for screenshot fallback."""
+        try:
+            return bool(img_ele.run_js(
+                """
+                return (() => {
+                    const image = this;
+                    const width = Number(image.naturalWidth || 0);
+                    const height = Number(image.naturalHeight || 0);
+                    if (!(width > 0 && height > 0)) return false;
+
+                    const marker = '__universalProxyScreenshotStyle';
+                    if (!Object.prototype.hasOwnProperty.call(image, marker)) {
+                        Object.defineProperty(image, marker, {
+                            configurable: true,
+                            value: {
+                                hadStyle: image.hasAttribute('style'),
+                                style: image.getAttribute('style') || '',
+                            },
+                        });
+                    }
+
+                    image.style.setProperty('display', 'block', 'important');
+                    image.style.setProperty('box-sizing', 'content-box', 'important');
+                    image.style.setProperty('width', `${width}px`, 'important');
+                    image.style.setProperty('height', `${height}px`, 'important');
+                    image.style.setProperty('min-width', '0', 'important');
+                    image.style.setProperty('min-height', '0', 'important');
+                    image.style.setProperty('max-width', 'none', 'important');
+                    image.style.setProperty('max-height', 'none', 'important');
+                    image.style.setProperty('object-fit', 'fill', 'important');
+                    image.style.setProperty('position', 'fixed', 'important');
+                    image.style.setProperty('left', '0', 'important');
+                    image.style.setProperty('top', '0', 'important');
+                    image.style.setProperty('right', 'auto', 'important');
+                    image.style.setProperty('bottom', 'auto', 'important');
+                    image.style.setProperty('z-index', '2147483647', 'important');
+                    image.style.setProperty('transform', 'none', 'important');
+                    image.style.setProperty('clip-path', 'none', 'important');
+                    return true;
+                })();
+                """
+            ))
+        except Exception as exc:
+            logger.debug(f"展开图片以供完整截图失败（忽略）: {exc}")
+            return False
+
+    @staticmethod
+    def _restore_image_element_after_screenshot(img_ele) -> None:
+        try:
+            img_ele.run_js(
+                """
+                (() => {
+                    const image = this;
+                    const marker = '__universalProxyScreenshotStyle';
+                    const snapshot = image[marker];
+                    if (!snapshot) return;
+                    if (snapshot.hadStyle) {
+                        image.setAttribute('style', snapshot.style);
+                    } else {
+                        image.removeAttribute('style');
+                    }
+                    try {
+                        delete image[marker];
+                    } catch {
+                        image[marker] = undefined;
+                    }
+                })();
+                """
+            )
+        except Exception as exc:
+            logger.debug(f"恢复图片截图样式失败（忽略）: {exc}")
+
     def _try_screenshot_images_to_local(self, tab, last_element, images: List[Dict], image_config: Dict = None) -> List[Dict]:
         """
         优先下载图片（更精准），下载失败才截图。
@@ -2454,8 +2528,17 @@ class BrowserMediaMixin:
                     )
                 else:
                     logger.debug(f"图片[{target_index}] 已确认加载完成，回退到截图方式")
+                    expanded_for_screenshot = False
                     try:
-                        img_ele.get_screenshot(str(out_path))
+                        expanded_for_screenshot = self._expand_image_element_for_screenshot(img_ele)
+                        if expanded_for_screenshot:
+                            logger.debug(f"图片[{target_index}] 已临时展开为自然尺寸后截图")
+                        try:
+                            img_ele.get_screenshot(str(out_path))
+                        finally:
+                            if expanded_for_screenshot:
+                                self._restore_image_element_after_screenshot(img_ele)
+
                         still_ready, _ = self._wait_for_image_element_ready(
                             img_ele,
                             target_url,

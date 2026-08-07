@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Dict
 
 from app.core.config import logger
+from app.core.page_lifecycle import is_page_refresh_error
 
 from .session import TabSession
 
@@ -617,11 +618,12 @@ class _GlobalNetworkInterceptionManager:
                 try:
                     snapshot = tab.run_js(_ARENA_STORE_SNAPSHOT_JS)
                 except Exception as e:
-                    logger.debug_throttled(
-                        f"global_net.arena_reveal_snapshot.{session_id}",
-                        f"[GlobalNet] 读取 Arena 翻牌快照失败（忽略）: {e}",
-                        interval_sec=10.0,
-                    )
+                    if not is_page_refresh_error(e):
+                        logger.debug_throttled(
+                            f"global_net.arena_reveal_snapshot.{session_id}",
+                            f"[GlobalNet] 读取 Arena 翻牌快照失败（忽略）: {e}",
+                            interval_sec=10.0,
+                        )
                     time.sleep(self.ARENA_REVEAL_POLL_INTERVAL_SEC)
                     continue
 

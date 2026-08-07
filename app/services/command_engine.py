@@ -33,6 +33,7 @@ from app.core.page_lifecycle import (
     BACKGROUND_WAKE_CDP_TIMEOUT,
     BACKGROUND_WAKE_JS_TIMEOUT,
     install_visibility_emulation,
+    is_page_refresh_error,
     restore_visibility_emulation,
 )
 from app.services.command_defs import ACTION_TYPES, TRIGGER_TYPES, CommandFlowAbort, _new_command_id, get_default_command
@@ -137,8 +138,14 @@ class CommandEngine(CommandEngineRuntimeMixin, CommandEngineResultsMixin, Comman
             _refresh_interval = 5.0
         self._tab_pool_refresh_interval_sec = max(1.0, _refresh_interval)
         self._last_tab_pool_refresh_at = 0.0
+        # In memory saver mode, do not wake every idle tab on a fixed cadence.
+        # A page_check or real workflow still wakes its target tab on demand.
+        memory_saver_enabled = str(
+            os.getenv("BROWSER_MEMORY_SAVER", "false")
+        ).strip().lower() in {"1", "true", "yes", "y", "on"}
+        keepalive_default = "false" if memory_saver_enabled else "true"
         self._periodic_keepalive_enabled = str(
-            os.getenv("CMD_PERIODIC_KEEPALIVE_ENABLED", "true")
+            os.getenv("CMD_PERIODIC_KEEPALIVE_ENABLED", keepalive_default)
         ).strip().lower() in {"1", "true", "yes", "y", "on"}
         try:
             _keepalive_interval = float(os.getenv("CMD_PERIODIC_KEEPALIVE_INTERVAL_SEC", "20"))
@@ -155,6 +162,13 @@ class CommandEngine(CommandEngineRuntimeMixin, CommandEngineResultsMixin, Comman
         except Exception:
             _page_check_failure_backoff = 30.0
         self._page_check_failure_backoff_sec = max(1.0, _page_check_failure_backoff)
+        try:
+            _page_check_refresh_grace = float(
+                os.getenv("CMD_PAGE_CHECK_REFRESH_GRACE_SEC", "2")
+            )
+        except Exception:
+            _page_check_refresh_grace = 2.0
+        self._page_check_refresh_grace_sec = max(0.2, min(10.0, _page_check_refresh_grace))
         self._last_keepalive_by_session: Dict[str, float] = {}
         self._last_tab_pool_wait_log_at = 0.0
         self._last_periodic_summary_log_at = 0.0
@@ -339,6 +353,10 @@ class CommandEngine(CommandEngineRuntimeMixin, CommandEngineResultsMixin, Comman
             or "websocket" in text and "closed" in text
         )
 
+    @staticmethod
+    def _looks_like_page_refresh_error(error: Any) -> bool:
+        return is_page_refresh_error(error)
+
     def _mark_session_closed_if_disconnected(self, session: 'TabSession', error: Any, reason: str) -> bool:
         if not self._looks_like_page_disconnected_error(error):
             return False
@@ -466,14 +484,41 @@ class CommandEngine(CommandEngineRuntimeMixin, CommandEngineResultsMixin, Comman
         until = float(getattr(session, "_pc_js_backoff_until", 0.0) or 0.0)
         return until > time.time()
 
+    def _is_page_check_refreshing(self, session: 'TabSession') -> bool:
+        until = float(getattr(session, "_pc_refresh_grace_until", 0.0) or 0.0)
+        return until > time.time()
+
+    def _mark_page_check_refreshing(self, session: 'TabSession') -> None:
+        """Pause page checks briefly while navigation replaces the document."""
+        self._invalidate_wake_throttle(session)
+        sid = str(getattr(session, "id", "") or "")
+        if sid:
+            with self._lock:
+                self._observer_keywords_by_session.pop(sid, None)
+        try:
+            setattr(
+                session,
+                "_pc_refresh_grace_until",
+                time.time() + self._page_check_refresh_grace_sec,
+            )
+            setattr(session, "_pc_js_failures", 0)
+            setattr(session, "_pc_js_backoff_until", 0.0)
+            setattr(session, "_pc_snapshot_cached", None)
+        except Exception:
+            pass
+
     def _record_page_check_js_success(self, session: 'TabSession') -> None:
         try:
             setattr(session, "_pc_js_failures", 0)
             setattr(session, "_pc_js_backoff_until", 0.0)
+            setattr(session, "_pc_refresh_grace_until", 0.0)
         except Exception:
             pass
 
     def _record_page_check_js_failure(self, session: 'TabSession', error: Any, context: str) -> None:
+        if self._looks_like_page_refresh_error(error):
+            self._mark_page_check_refreshing(session)
+            return
         # JS 执行失败通常意味着页面被冻结/丢弃或已导航，
         # 清掉唤醒限频，让下一轮立刻重新唤醒，不受最小间隔限制。
         self._invalidate_wake_throttle(session)
@@ -870,6 +915,8 @@ return (function() {
             return
         if self._is_page_check_backing_off(session):
             return
+        if self._is_page_check_refreshing(session):
+            return
         setattr(session, "_pc_observer_empty_cleanup_done", False)
         # Skip if already installed with the same keywords AND observer is still alive
         with self._lock:
@@ -891,6 +938,8 @@ return (function() {
                     return
                 self._record_page_check_js_failure(session, e, "observer_alive")
                 if self._mark_session_closed_if_disconnected(session, e, "page_check_observer_alive"):
+                    return
+                if self._is_page_check_refreshing(session):
                     return
                 pass
             # Observer lost — clear cache, re-inject below
@@ -3156,6 +3205,8 @@ return (function() {
     def _get_page_check_snapshot_text(self, session: 'TabSession') -> str:
         if self._is_session_closed(session):
             return ""
+        if self._is_page_check_refreshing(session):
+            return ""
         now = time.time()
         cached = getattr(session, "_pc_snapshot_cached", None)
         if isinstance(cached, tuple) and len(cached) == 2:
@@ -3189,6 +3240,8 @@ return (function() {
             self._record_page_check_js_failure(session, e, "snapshot_observer")
             if self._mark_session_closed_if_disconnected(session, e, "page_check_snapshot_observer"):
                 return ""
+            if self._is_page_check_refreshing(session):
+                return ""
             pass
 
         try:
@@ -3202,6 +3255,8 @@ return (function() {
                 return ""
             self._record_page_check_js_failure(session, e, "snapshot_body")
             if self._mark_session_closed_if_disconnected(session, e, "page_check_snapshot_body"):
+                return ""
+            if self._is_page_check_refreshing(session):
                 return ""
             pass
 

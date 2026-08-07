@@ -510,6 +510,23 @@ def test_global_chat_routes_plain_catalog_model_to_arena(monkeypatch):
     assert "'arena.ai'" not in matched_log
 
 
+def test_arena_catalog_tab_selection_uses_pool_round_robin():
+    class _TabPool:
+        allocation_mode = "round_robin"
+
+    browser = SimpleNamespace(tab_pool=_TabPool())
+    candidates = [
+        {"persistent_index": 7, "status": "idle"},
+        {"persistent_index": 8, "status": "idle"},
+    ]
+
+    first = chat_api._select_arena_catalog_tab(browser, candidates, preset_name="direct")
+    second = chat_api._select_arena_catalog_tab(browser, candidates, preset_name="direct")
+
+    assert first["persistent_index"] == 7
+    assert second["persistent_index"] == 8
+
+
 def test_global_chat_catalog_route_skips_excluded_tab(monkeypatch):
     excluded_url = "https://arena.ai/c/excluded"
 

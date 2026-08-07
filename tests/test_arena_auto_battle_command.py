@@ -7,6 +7,12 @@ from pathlib import Path
 
 import pytest
 
+from app.services.arena_proxy_rotation import (
+    ARENA_CLASH_SELECTOR,
+    ARENA_PROXY_POOL,
+    rotate_arena_proxy,
+)
+
 
 COMMANDS_PATH = Path(__file__).parents[1] / "config" / "commands.json"
 
@@ -316,6 +322,51 @@ def test_arena_proxy_rotation_uses_configured_clash_region_groups():
     assert result["to"] == "KR自动选择"
     assert requests.puts[0][1]["json"] == {"name": "KR自动选择"}
     assert requests.deletes[0][0].endswith("/connections")
+    assert refreshes == [True]
+
+
+def test_standalone_arena_proxy_command_reuses_auto_battle_pool():
+    command = _command_by_id("cmd_arena_rotate_ip_standalone")
+    script = command["script"]
+
+    assert "from app.services.arena_proxy_rotation import rotate_arena_proxy" in script
+    assert "raise_if_cancelled=raise_if_cancelled" in script
+    assert command["trigger"]["domain"] == "arena.ai"
+    assert command["trigger"]["periodic_enabled"] is False
+
+    module = ast.parse(script)
+    assert any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "dumps"
+        for node in ast.walk(module)
+    )
+
+
+def test_shared_arena_proxy_rotation_uses_the_auto_battle_pool():
+    requests = _Requests()
+    refreshes = []
+    result = rotate_arena_proxy(
+        tab=type("Tab", (), {"refresh": lambda self: refreshes.append(True)})(),
+        logger=_Logger(),
+        requests_module=requests,
+        sleep=lambda _seconds: None,
+    )
+
+    assert ARENA_CLASH_SELECTOR == "主代理"
+    assert ARENA_PROXY_POOL == (
+        "HK自动选择",
+        "JP自动选择",
+        "KR自动选择",
+        "SG自动选择",
+        "TW自动选择",
+        "US自动选择",
+    )
+    assert result["ok"] is True
+    assert result["from"] == "JP自动选择"
+    assert result["to"] == "KR自动选择"
+    assert result["pool_size"] == len(ARENA_PROXY_POOL)
+    assert requests.puts[0][1]["json"] == {"name": "KR自动选择"}
     assert refreshes == [True]
 
 
