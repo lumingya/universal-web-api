@@ -3003,6 +3003,7 @@
         },
         "image_extraction": {
           "enabled": true,
+          "arena_image_generation": false,
           "modalities": {
             "image": {
               "enabled": true,
@@ -3326,9 +3327,9 @@
               },
               "verification": {
                 "enabled": true,
-                "match": "any",
-                "timeout": 1.5,
-                "poll_interval": 0.1,
+                "match": "all",
+                "timeout": 5.0,
+                "poll_interval": 0.03,
                 "conditions": [
                   {
                     "target": "retry button",
@@ -3346,7 +3347,22 @@
             "action": "CLICK",
             "target": "stop_btn",
             "optional": true,
-            "value": null
+            "value": null,
+            "execution": {
+              "click_mode": "dom_safe",
+              "verification": {
+                "enabled": true,
+                "match": "all",
+                "timeout": 0.3,
+                "poll_interval": 0.03,
+                "conditions": [
+                  {
+                    "target": "stop_btn",
+                    "state": "hidden"
+                  }
+                ]
+              }
+            }
           },
           {
             "action": "WAIT",
@@ -3397,21 +3413,21 @@
             "image": {
               "enabled": true,
               "run_policy": "on_signal",
-              "quick_probe_timeout_seconds": 1,
-              "late_wait_timeout_seconds": 45,
-              "blind_wait_timeout_seconds": 1
+              "quick_probe_timeout_seconds": 1.0,
+              "late_wait_timeout_seconds": 45.0,
+              "blind_wait_timeout_seconds": 1.0
             },
             "audio": {
               "enabled": false,
               "run_policy": "disabled",
-              "quick_probe_timeout_seconds": 1,
-              "capture_timeout_seconds": 12
+              "quick_probe_timeout_seconds": 1.0,
+              "capture_timeout_seconds": 12.0
             },
             "video": {
               "enabled": false,
               "run_policy": "disabled",
-              "quick_probe_timeout_seconds": 1,
-              "late_wait_timeout_seconds": 90
+              "quick_probe_timeout_seconds": 1.0,
+              "late_wait_timeout_seconds": 90.0
             }
           },
           "selector": "img",
@@ -3419,9 +3435,9 @@
           "video_selector": "video, video source",
           "container_selector": null,
           "force_postprocess": false,
-          "debounce_seconds": 2,
+          "debounce_seconds": 2.0,
           "wait_for_load": true,
-          "load_timeout_seconds": 5,
+          "load_timeout_seconds": 5.0,
           "download_blobs": true,
           "max_size_mb": 20,
           "canvas_export_mime": "image/jpeg",
@@ -3444,9 +3460,9 @@
             "tts",
             "voice"
           ],
-          "audio_capture_max_wait_seconds": 12,
-          "audio_capture_min_wait_seconds": 2,
-          "audio_capture_hard_max_wait_seconds": 45,
+          "audio_capture_max_wait_seconds": 12.0,
+          "audio_capture_min_wait_seconds": 2.0,
+          "audio_capture_hard_max_wait_seconds": 45.0,
           "audio_capture_estimated_chars_per_second": 4.8,
           "audio_capture_wait_padding_seconds": 1.2,
           "audio_network_capture": {
@@ -3470,7 +3486,7 @@
             "speech_rate": 0,
             "pitch": 0,
             "format": "aac",
-            "timeout_seconds": 30,
+            "timeout_seconds": 30.0,
             "pc_version": "3.20.2",
             "aid": "497858",
             "real_aid": "497858",
@@ -3488,7 +3504,8 @@
           "audio_capture_activity_silence_seconds": 0.65,
           "final_target_strategy": "latest_visual_reply",
           "latest_visual_column": "left",
-          "allow_container_fallback": false
+          "allow_container_fallback": false,
+          "arena_image_generation": true
         },
         "file_paste": {
           "enabled": true,
@@ -3582,21 +3599,21 @@
             "image": {
               "enabled": true,
               "run_policy": "on_signal",
-              "quick_probe_timeout_seconds": 1,
-              "late_wait_timeout_seconds": 45,
-              "blind_wait_timeout_seconds": 1
+              "quick_probe_timeout_seconds": 1.0,
+              "late_wait_timeout_seconds": 45.0,
+              "blind_wait_timeout_seconds": 1.0
             },
             "audio": {
               "enabled": false,
               "run_policy": "disabled",
-              "quick_probe_timeout_seconds": 1,
-              "capture_timeout_seconds": 12
+              "quick_probe_timeout_seconds": 1.0,
+              "capture_timeout_seconds": 12.0
             },
             "video": {
               "enabled": false,
               "run_policy": "disabled",
-              "quick_probe_timeout_seconds": 1,
-              "late_wait_timeout_seconds": 90
+              "quick_probe_timeout_seconds": 1.0,
+              "late_wait_timeout_seconds": 90.0
             }
           },
           "selector": "img.transition-opacity.duration-500.opacity-100.aspect-square.object-cover",
@@ -3604,9 +3621,9 @@
           "video_selector": "video, video source",
           "container_selector": null,
           "force_postprocess": true,
-          "debounce_seconds": 2,
+          "debounce_seconds": 2.0,
           "wait_for_load": true,
-          "load_timeout_seconds": 5,
+          "load_timeout_seconds": 5.0,
           "download_blobs": true,
           "max_size_mb": 10,
           "canvas_export_mime": "image/jpeg",
@@ -3629,9 +3646,9 @@
             "tts",
             "voice"
           ],
-          "audio_capture_max_wait_seconds": 12,
-          "audio_capture_min_wait_seconds": 2,
-          "audio_capture_hard_max_wait_seconds": 45,
+          "audio_capture_max_wait_seconds": 12.0,
+          "audio_capture_min_wait_seconds": 2.0,
+          "audio_capture_hard_max_wait_seconds": 45.0,
           "audio_capture_estimated_chars_per_second": 4.8,
           "audio_capture_wait_padding_seconds": 1.2,
           "audio_network_capture": {
@@ -3655,7 +3672,7 @@
             "speech_rate": 0,
             "pitch": 0,
             "format": "aac",
-            "timeout_seconds": 30,
+            "timeout_seconds": 30.0,
             "pc_version": "3.20.2",
             "aid": "497858",
             "real_aid": "497858",
@@ -3672,7 +3689,8 @@
           "audio_capture_activity_threshold": 0.006,
           "audio_capture_activity_silence_seconds": 0.65,
           "final_target_strategy": "latest_visual_reply",
-          "allow_container_fallback": false
+          "allow_container_fallback": false,
+          "arena_image_generation": false
         },
         "file_paste": {
           "enabled": false,
@@ -3726,9 +3744,9 @@
               },
               "verification": {
                 "enabled": true,
-                "match": "any",
-                "timeout": 1.5,
-                "poll_interval": 0.1,
+                "match": "all",
+                "timeout": 5.0,
+                "poll_interval": 0.03,
                 "conditions": [
                   {
                     "target": "retry button",
@@ -3746,7 +3764,22 @@
             "action": "CLICK",
             "target": "stop_btn",
             "optional": true,
-            "value": null
+            "value": null,
+            "execution": {
+              "click_mode": "dom_safe",
+              "verification": {
+                "enabled": true,
+                "match": "all",
+                "timeout": 0.3,
+                "poll_interval": 0.03,
+                "conditions": [
+                  {
+                    "target": "stop_btn",
+                    "state": "hidden"
+                  }
+                ]
+              }
+            }
           },
           {
             "action": "WAIT",
@@ -3793,21 +3826,21 @@
             "image": {
               "enabled": true,
               "run_policy": "on_signal",
-              "quick_probe_timeout_seconds": 1,
-              "late_wait_timeout_seconds": 45,
-              "blind_wait_timeout_seconds": 1
+              "quick_probe_timeout_seconds": 1.0,
+              "late_wait_timeout_seconds": 45.0,
+              "blind_wait_timeout_seconds": 1.0
             },
             "audio": {
               "enabled": false,
               "run_policy": "disabled",
-              "quick_probe_timeout_seconds": 1,
-              "capture_timeout_seconds": 12
+              "quick_probe_timeout_seconds": 1.0,
+              "capture_timeout_seconds": 12.0
             },
             "video": {
               "enabled": false,
               "run_policy": "disabled",
-              "quick_probe_timeout_seconds": 1,
-              "late_wait_timeout_seconds": 90
+              "quick_probe_timeout_seconds": 1.0,
+              "late_wait_timeout_seconds": 90.0
             }
           },
           "selector": "img.transition-opacity.duration-500.opacity-100.aspect-square.object-cover",
@@ -3815,9 +3848,9 @@
           "video_selector": "video, video source",
           "container_selector": null,
           "force_postprocess": true,
-          "debounce_seconds": 2,
+          "debounce_seconds": 2.0,
           "wait_for_load": true,
-          "load_timeout_seconds": 5,
+          "load_timeout_seconds": 5.0,
           "download_blobs": true,
           "max_size_mb": 10,
           "canvas_export_mime": "image/jpeg",
@@ -3840,9 +3873,9 @@
             "tts",
             "voice"
           ],
-          "audio_capture_max_wait_seconds": 12,
-          "audio_capture_min_wait_seconds": 2,
-          "audio_capture_hard_max_wait_seconds": 45,
+          "audio_capture_max_wait_seconds": 12.0,
+          "audio_capture_min_wait_seconds": 2.0,
+          "audio_capture_hard_max_wait_seconds": 45.0,
           "audio_capture_estimated_chars_per_second": 4.8,
           "audio_capture_wait_padding_seconds": 1.2,
           "audio_network_capture": {
@@ -3866,7 +3899,7 @@
             "speech_rate": 0,
             "pitch": 0,
             "format": "aac",
-            "timeout_seconds": 30,
+            "timeout_seconds": 30.0,
             "pc_version": "3.20.2",
             "aid": "497858",
             "real_aid": "497858",
@@ -3884,7 +3917,8 @@
           "audio_capture_activity_silence_seconds": 0.65,
           "final_target_strategy": "latest_visual_reply",
           "latest_visual_column": "left",
-          "allow_container_fallback": false
+          "allow_container_fallback": false,
+          "arena_image_generation": true
         },
         "file_paste": {
           "enabled": false,
@@ -3908,8 +3942,8 @@
           "enabled": false,
           "marker_text": "测试号，无实际意义",
           "segments_per_side": 12,
-          "random_insert_enabled": false,
-          "random_insert_chars": ""
+          "random_insert_enabled": true,
+          "random_insert_chars": "，。、；、’"
         }
       },
       "Battle-左侧": {
@@ -3928,13 +3962,52 @@
             "action": "CLICK",
             "target": "retry_send_btn",
             "optional": true,
-            "value": null
+            "value": null,
+            "execution": {
+              "retry": {
+                "enabled": true,
+                "max_attempts": 2,
+                "interval": 0.3
+              },
+              "verification": {
+                "enabled": true,
+                "match": "all",
+                "timeout": 5.0,
+                "poll_interval": 0.03,
+                "conditions": [
+                  {
+                    "target": "retry_send_btn",
+                    "state": "hidden"
+                  },
+                  {
+                    "target": "stop_btn",
+                    "state": "visible"
+                  }
+                ]
+              },
+              "click_mode": "dom_safe"
+            }
           },
           {
             "action": "CLICK",
             "target": "stop_btn",
             "optional": true,
-            "value": null
+            "value": null,
+            "execution": {
+              "click_mode": "dom_safe",
+              "verification": {
+                "enabled": true,
+                "match": "all",
+                "timeout": 0.3,
+                "poll_interval": 0.03,
+                "conditions": [
+                  {
+                    "target": "stop_btn",
+                    "state": "hidden"
+                  }
+                ]
+              }
+            }
           },
           {
             "action": "WAIT",
@@ -4123,8 +4196,8 @@
           "enabled": false,
           "marker_text": "测试号，无实际意义",
           "segments_per_side": 12,
-          "random_insert_enabled": false,
-          "random_insert_chars": ""
+          "random_insert_enabled": true,
+          "random_insert_chars": "，。、、’"
         }
       },
       "Battle-右侧": {
@@ -4143,13 +4216,52 @@
             "action": "CLICK",
             "target": "retry_send_btn",
             "optional": true,
-            "value": null
+            "value": null,
+            "execution": {
+              "retry": {
+                "enabled": true,
+                "max_attempts": 2,
+                "interval": 0.3
+              },
+              "verification": {
+                "enabled": true,
+                "match": "all",
+                "timeout": 5.0,
+                "poll_interval": 0.03,
+                "conditions": [
+                  {
+                    "target": "retry_send_btn",
+                    "state": "hidden"
+                  },
+                  {
+                    "target": "stop_btn",
+                    "state": "visible"
+                  }
+                ]
+              },
+              "click_mode": "dom_safe"
+            }
           },
           {
             "action": "CLICK",
             "target": "stop_btn",
             "optional": true,
-            "value": null
+            "value": null,
+            "execution": {
+              "click_mode": "dom_safe",
+              "verification": {
+                "enabled": true,
+                "match": "all",
+                "timeout": 0.3,
+                "poll_interval": 0.03,
+                "conditions": [
+                  {
+                    "target": "stop_btn",
+                    "state": "hidden"
+                  }
+                ]
+              }
+            }
           },
           {
             "action": "WAIT",
@@ -4338,8 +4450,8 @@
           "enabled": false,
           "marker_text": "测试号，无实际意义",
           "segments_per_side": 12,
-          "random_insert_enabled": false,
-          "random_insert_chars": ""
+          "random_insert_enabled": true,
+          "random_insert_chars": "，。、；‘、’"
         }
       },
       "Battle-赢家优先（非流式）": {
@@ -4370,13 +4482,52 @@
             "action": "CLICK",
             "target": "retry_send_btn",
             "optional": true,
-            "value": null
+            "value": null,
+            "execution": {
+              "retry": {
+                "enabled": true,
+                "max_attempts": 2,
+                "interval": 0.3
+              },
+              "verification": {
+                "enabled": true,
+                "match": "all",
+                "timeout": 5.0,
+                "poll_interval": 0.03,
+                "conditions": [
+                  {
+                    "target": "retry_send_btn",
+                    "state": "hidden"
+                  },
+                  {
+                    "target": "stop_btn",
+                    "state": "visible"
+                  }
+                ]
+              },
+              "click_mode": "dom_safe"
+            }
           },
           {
             "action": "CLICK",
             "target": "stop_btn",
             "optional": true,
-            "value": null
+            "value": null,
+            "execution": {
+              "click_mode": "dom_safe",
+              "verification": {
+                "enabled": true,
+                "match": "all",
+                "timeout": 0.3,
+                "poll_interval": 0.03,
+                "conditions": [
+                  {
+                    "target": "stop_btn",
+                    "state": "hidden"
+                  }
+                ]
+              }
+            }
           },
           {
             "action": "WAIT",
@@ -4588,9 +4739,9 @@
               },
               "verification": {
                 "enabled": true,
-                "match": "any",
-                "timeout": 1.5,
-                "poll_interval": 0.1,
+                "match": "all",
+                "timeout": 5.0,
+                "poll_interval": 0.03,
                 "conditions": [
                   {
                     "target": "retry button",
@@ -4608,7 +4759,22 @@
             "action": "CLICK",
             "target": "stop_btn",
             "optional": true,
-            "value": null
+            "value": null,
+            "execution": {
+              "click_mode": "dom_safe",
+              "verification": {
+                "enabled": true,
+                "match": "all",
+                "timeout": 0.3,
+                "poll_interval": 0.03,
+                "conditions": [
+                  {
+                    "target": "stop_btn",
+                    "state": "hidden"
+                  }
+                ]
+              }
+            }
           },
           {
             "action": "WAIT",
@@ -4662,52 +4828,38 @@
             "image": {
               "enabled": true,
               "run_policy": "on_signal",
-              "quick_probe_timeout_seconds": 1,
-              "late_wait_timeout_seconds": 45,
-              "blind_wait_timeout_seconds": 1
+              "quick_probe_timeout_seconds": 1.0,
+              "late_wait_timeout_seconds": 45.0,
+              "blind_wait_timeout_seconds": 1.0
             },
             "audio": {
               "enabled": false,
               "run_policy": "disabled",
-              "quick_probe_timeout_seconds": 1,
-              "capture_timeout_seconds": 12
+              "quick_probe_timeout_seconds": 1.0,
+              "capture_timeout_seconds": 12.0
             },
             "video": {
               "enabled": false,
               "run_policy": "disabled",
-              "quick_probe_timeout_seconds": 1,
-              "late_wait_timeout_seconds": 90
+              "quick_probe_timeout_seconds": 1.0,
+              "late_wait_timeout_seconds": 90.0
             }
           },
           "selector": "img.transition-opacity.duration-500.opacity-100.aspect-square.object-cover",
           "audio_selector": "audio, audio source",
           "video_selector": "video, video source",
           "container_selector": null,
-          "debounce_seconds": 2,
+          "force_postprocess": true,
+          "debounce_seconds": 2.0,
           "wait_for_load": true,
-          "load_timeout_seconds": 5,
+          "load_timeout_seconds": 5.0,
           "download_blobs": true,
-          "audio_capture_enabled": true,
-          "src_allow_patterns": [],
           "max_size_mb": 20,
           "canvas_export_mime": "image/jpeg",
           "canvas_export_quality": 0.88,
-          "audio_network_capture": {
-            "enabled": false,
-            "timeout_seconds": 2.5,
-            "transport": "page_websocket_probe",
-            "url_patterns": [
-              "voicegenie",
-              "speech",
-              "audio",
-              "tts"
-            ],
-            "extractor": "voicegenie_ogg_pages",
-            "settle_seconds": 0.35,
-            "max_payload_bytes": 10485760
-          },
+          "src_allow_patterns": [],
           "mode": "first",
-          "force_postprocess": true,
+          "audio_capture_enabled": true,
           "audio_capture_mute_playback": true,
           "audio_capture_preload_enabled": true,
           "audio_capture_reload_before_workflow": false,
@@ -4723,11 +4875,25 @@
             "tts",
             "voice"
           ],
-          "audio_capture_max_wait_seconds": 12,
-          "audio_capture_min_wait_seconds": 2,
-          "audio_capture_hard_max_wait_seconds": 45,
+          "audio_capture_max_wait_seconds": 12.0,
+          "audio_capture_min_wait_seconds": 2.0,
+          "audio_capture_hard_max_wait_seconds": 45.0,
           "audio_capture_estimated_chars_per_second": 4.8,
           "audio_capture_wait_padding_seconds": 1.2,
+          "audio_network_capture": {
+            "enabled": false,
+            "timeout_seconds": 2.5,
+            "transport": "page_websocket_probe",
+            "url_patterns": [
+              "voicegenie",
+              "speech",
+              "audio",
+              "tts"
+            ],
+            "extractor": "voicegenie_ogg_pages",
+            "settle_seconds": 0.35,
+            "max_payload_bytes": 10485760
+          },
           "audio_browser_tts_fallback": {
             "enabled": false,
             "provider": "doubao_samantha",
@@ -4735,7 +4901,7 @@
             "speech_rate": 0,
             "pitch": 0,
             "format": "aac",
-            "timeout_seconds": 30,
+            "timeout_seconds": 30.0,
             "pc_version": "3.20.2",
             "aid": "497858",
             "real_aid": "497858",
@@ -4753,7 +4919,8 @@
           "audio_capture_activity_silence_seconds": 0.65,
           "final_target_strategy": "latest_visual_reply",
           "latest_visual_column": "right",
-          "allow_container_fallback": false
+          "allow_container_fallback": false,
+          "arena_image_generation": true
         },
         "file_paste": {
           "enabled": false,
@@ -4798,8 +4965,8 @@
           "enabled": false,
           "marker_text": "测试号，无实际意义",
           "segments_per_side": 12,
-          "random_insert_enabled": false,
-          "random_insert_chars": ""
+          "random_insert_enabled": true,
+          "random_insert_chars": "，。、；、‘’"
         }
       }
     },

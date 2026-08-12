@@ -28,6 +28,7 @@ from app.services.arena_direct_models import (
 from app.services.arena_image_generation import (
     ArenaImageGenerationError,
     ArenaImageGenerationGuard,
+    capture_arena_result_baseline,
     is_arena_image_generation_request,
     validate_generated_images,
 )
@@ -1580,6 +1581,22 @@ class BrowserWorkflowMixin:
             is_modality_enabled(modalities, key) for key in ("image", "audio", "video")
         )
         stream_config = site_config.get("stream_config", {}) or {}
+        network_config = stream_config.get("network", {}) if isinstance(stream_config, dict) else {}
+        parser_id = str((network_config or {}).get("parser") or "").strip().lower()
+        target_side = ""
+        if parser_id != "lmarena":
+            if "right" in parser_id:
+                target_side = "right"
+            elif "left" in parser_id:
+                target_side = "left"
+        setattr(session, "_workflow_parser_id", parser_id)
+        setattr(session, "_workflow_target_side", target_side)
+        # The parser owns the Arena battle side.  Carry it into every monitor
+        # and final media extraction path so DOM geometry cannot select the
+        # other model's response when it finishes first.
+        if target_side:
+            image_config["_parser_id"] = parser_id
+            image_config["_parser_target_side"] = target_side
         file_paste_config = site_config.get("file_paste", {}) or {}
         prompt_padding_config = site_config.get("prompt_padding", {}) or {}
         request_blocks: set[int] = set()
@@ -1831,6 +1848,7 @@ class BrowserWorkflowMixin:
         conversation_activity_marked = False
         media_dom_baseline: Optional[Dict[str, Any]] = None
         media_dom_baseline_captured = False
+        arena_result_baseline_captured = False
         
         try:
             with executor.workflow_execution_scope():
@@ -2005,6 +2023,23 @@ class BrowserWorkflowMixin:
                         self._step_submits_conversation_request(action, target_key, param_value)
                         or action_upper == "PAGE_FETCH"
                     )
+                    if (
+                        submits_request
+                        and arena_image_generation_active
+                        and not arena_result_baseline_captured
+                    ):
+                        arena_result_baseline_captured = True
+                        arena_result_baseline = capture_arena_result_baseline(
+                            tab,
+                            selectors.get("result_container", ""),
+                        )
+                        if arena_result_baseline:
+                            image_config["arena_result_baseline_token"] = str(
+                                arena_result_baseline.get("token") or ""
+                            )
+                            image_config["arena_result_baseline_property"] = str(
+                                arena_result_baseline.get("property") or ""
+                            )
                     if (
                         submits_request
                         and image_extraction_enabled
@@ -2246,6 +2281,8 @@ class BrowserWorkflowMixin:
                         arena_observation = ArenaImageGenerationGuard(
                             tab,
                             result_selector=result_container_selector,
+                            baseline_token=image_config.get("arena_result_baseline_token", ""),
+                            baseline_property=image_config.get("arena_result_baseline_property", ""),
                         ).observe(False)
                         if (
                             arena_observation.is_complete

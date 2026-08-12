@@ -112,12 +112,12 @@ def test_auto_battle_captcha_redirect_continues_later_rounds():
 
     assert "_check_captcha_guard()" in script
     assert "arena_captcha_redirected" in script
-    assert "will recheck for up to 10 seconds" in script
+    assert "will recheck for up to 20 seconds" in script
     assert "if str(e) == \"arena_captcha_redirected\":" in script
     assert "人机验证跳转 {redirect_url}，继续后续轮次" in script
 
 
-def test_auto_battle_captcha_guard_redirects_after_ten_seconds():
+def test_auto_battle_captcha_guard_redirects_after_twenty_seconds():
     module = ast.parse(_arena_auto_battle_script())
     selected_nodes = []
     for node in module.body:
@@ -132,7 +132,7 @@ def test_auto_battle_captcha_guard_redirects_after_ten_seconds():
 
     harness = ast.Module(body=selected_nodes, type_ignores=[])
     ast.fix_missing_locations(harness)
-    ticks = iter([100.0, 111.0])
+    ticks = iter([100.0, 121.0])
     navigations = []
 
     class Clock:

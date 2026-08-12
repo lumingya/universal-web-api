@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import uuid
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -22,6 +23,7 @@ ARENA_NATIVE_STOP_SELECTOR = 'css:button[aria-label="Stop generation"]'
 ARENA_PROMPT_REJECTED_CODE = "arena_prompt_rejected"
 ARENA_IMAGE_GENERATION_FAILED_CODE = "arena_image_generation_failed"
 ARENA_IMAGE_UNCHANGED_CODE = "arena_image_unchanged"
+ARENA_RESULT_BASELINE_PROPERTY = "__universalProxyArenaResultBaseline"
 ARENA_NON_RETRYABLE_CODES = frozenset(
     {
         ARENA_PROMPT_REJECTED_CODE,
@@ -162,30 +164,14 @@ def is_arena_image_generation_request(
     *,
     preset_name: str = "",
 ) -> bool:
-    """Enable the special rules only for Arena image-generation requests."""
+    """Enable Arena image-generation rules only for marked templates."""
     config = image_config or {}
     if not is_arena_page_url(page_url) or not _image_modality_enabled(config):
         return False
-    explicit = config.get("_arena_image_generation_active")
-    if explicit is not None:
-        return bool(explicit)
-    if bool(config.get("arena_image_generation", False)):
-        return True
-    normalized_preset = str(preset_name or "").strip().lower()
-    if "图片模式" in normalized_preset or "image mode" in normalized_preset:
-        return True
-    try:
-        page_path = str(urlsplit(str(page_url or "")).path or "").lower()
-    except Exception:
-        page_path = ""
-    # Arena's dedicated image route makes a terse instruction unambiguous. On
-    # ordinary chat routes, keep uploaded-image understanding requests outside
-    # this specialized generation state machine.
-    if any(uploaded_images or []) and (
-        page_path == "/image" or page_path.startswith("/image/")
-    ):
-        return True
-    return looks_like_image_generation_request(prompt)
+    marker = config.get("_arena_image_generation_active")
+    if marker is None:
+        marker = config.get("arena_image_generation", False)
+    return bool(marker)
 
 
 def is_interrupted_stream_reason(reason: str) -> bool:
@@ -193,20 +179,121 @@ def is_interrupted_stream_reason(reason: str) -> bool:
     return bool(normalized) and any(marker in normalized for marker in _INTERRUPTED_STREAM_MARKERS)
 
 
+def is_visible_arena_stop(tab: Any, selector: str = ARENA_NATIVE_STOP_SELECTOR) -> bool:
+    """Return whether Arena's native Stop control is visibly rendered."""
+    script = r"""
+        const selector = String(arguments[0] || '').trim().replace(/^css:/i, '');
+        if (!selector) return false;
+        const visible = (element) => {
+            if (!(element instanceof Element) || !element.isConnected) return false;
+            if (element.hidden || element.closest('[hidden], [inert], [aria-hidden="true"]')) {
+                return false;
+            }
+            const style = getComputedStyle(element);
+            if (style.display === 'none' || style.visibility === 'hidden'
+                || style.visibility === 'collapse' || Number(style.opacity) === 0) {
+                return false;
+            }
+            const rect = element.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+        };
+        try {
+            return Array.from(document.querySelectorAll(selector)).some(visible);
+        } catch (_) {
+            return false;
+        }
+    """
+    try:
+        return bool(tab.run_js(script, selector))
+    except Exception:
+        return False
+
+
+def capture_arena_result_baseline(
+    tab: Any,
+    result_selector: str,
+) -> Optional[dict[str, Any]]:
+    """Mark response nodes that existed immediately before request submission."""
+    token = uuid.uuid4().hex
+    script = r"""
+        return ((resultSelector, baselineToken, baselineProperty) => {
+            const selector = String(resultSelector || '').trim().replace(/^css:/i, '');
+            const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+            let candidates = [];
+            if (selector) {
+                try {
+                    candidates = Array.from(document.querySelectorAll(selector));
+                } catch (_) {
+                    candidates = [];
+                }
+            }
+            if (!candidates.length) {
+                candidates = Array.from(document.querySelectorAll(
+                    '[role="alert"], [role="status"]'
+                ));
+            }
+            let markedCount = 0;
+            for (const element of candidates) {
+                const marker = {
+                    token: String(baselineToken || ''),
+                    text: normalize(element.innerText || element.textContent || ''),
+                };
+                try {
+                    Object.defineProperty(element, baselineProperty, {
+                        configurable: true,
+                        writable: true,
+                        value: marker,
+                    });
+                    markedCount += 1;
+                } catch (_) {
+                    try {
+                        element[baselineProperty] = marker;
+                        markedCount += 1;
+                    } catch (_) {}
+                }
+            }
+            return {ok: true, node_count: candidates.length, marked_count: markedCount};
+        })(arguments[0], arguments[1], arguments[2]);
+    """
+    try:
+        result = tab.run_js(
+            script,
+            result_selector,
+            token,
+            ARENA_RESULT_BASELINE_PROPERTY,
+        ) or {}
+    except Exception:
+        return None
+    if not isinstance(result, dict) or not bool(result.get("ok")):
+        return None
+    return {
+        "token": token,
+        "property": ARENA_RESULT_BASELINE_PROPERTY,
+        "node_count": int(result.get("node_count") or 0),
+        "marked_count": int(result.get("marked_count") or 0),
+    }
+
+
 class ArenaImageGenerationGuard:
     """Arena-specific terminal-state and interrupted-stream recovery policy."""
 
     DEFAULT_REFRESH_INTERVAL_SECONDS = 10.0
 
-    def __init__(self, tab: Any, *, result_selector: str = ""):
+    def __init__(
+        self,
+        tab: Any,
+        *,
+        result_selector: str = "",
+        baseline_token: str = "",
+        baseline_property: str = "",
+    ):
         self.tab = tab
         self.result_selector = str(result_selector or "")
+        self.baseline_token = str(baseline_token or "")
+        self.baseline_property = str(baseline_property or "")
 
     def native_stop_present(self) -> bool:
-        try:
-            return bool(self.tab.ele(ARENA_NATIVE_STOP_SELECTOR, timeout=0.1))
-        except Exception:
-            return False
+        return is_visible_arena_stop(self.tab)
 
     def detect_terminal_error(self) -> Optional[ArenaImageGenerationError]:
         """Map the current Arena result/error node to a terminal failure.
@@ -215,7 +302,9 @@ class ArenaImageGenerationGuard:
         contain the same error text and must not poison the current request.
         """
         script = r"""
-            return ((resultSelector) => {
+            return ((resultSelector, baselineToken, baselineProperty) => {
+                const normalize = (value) => String(value || '')
+                    .replace(/\s+/g, ' ').trim();
                 const visible = (element) => {
                     if (!(element instanceof Element) || !element.isConnected) return false;
                     const rect = element.getBoundingClientRect();
@@ -237,9 +326,28 @@ class ArenaImageGenerationGuard:
                         '[role="alert"], [role="status"]'
                     )).filter(visible);
                 }
-                const current = candidates.length ? [candidates[candidates.length - 1]] : [];
-                const text = current.map((element) => element.innerText || element.textContent || '')
-                    .join(' ').replace(/\s+/g, ' ').trim();
+                if (baselineToken && baselineProperty) {
+                    candidates = candidates.filter((element) => {
+                        const marker = element[baselineProperty];
+                        if (!marker || marker.token !== baselineToken) return true;
+                        return normalize(element.innerText || element.textContent || '')
+                            !== normalize(marker.text);
+                    });
+                }
+                // Arena renders its conversation with flex-col-reverse, so the
+                // newest response is first in DOM order. Select by visual
+                // position instead: the current response is closest to the
+                // composer at the bottom of the conversation.
+                const current = candidates.reduce((lowest, element) => {
+                    if (!lowest) return element;
+                    return element.getBoundingClientRect().bottom
+                        > lowest.getBoundingClientRect().bottom
+                        ? element : lowest;
+                }, null);
+                const text = current
+                    ? (current.innerText || current.textContent || '')
+                        .replace(/\s+/g, ' ').trim()
+                    : '';
                 const normalized = text.toLowerCase();
                 if (normalized.includes('this content violates our terms of use')) {
                     return {code: 'arena_prompt_rejected', text};
@@ -248,11 +356,16 @@ class ArenaImageGenerationGuard:
                     return {code: 'arena_image_generation_failed', text};
                 }
                 return null;
-            })(arguments[0]);
+            })(arguments[0], arguments[1], arguments[2]);
         """
         try:
-            if self.result_selector:
-                result = self.tab.run_js(script, self.result_selector)
+            if self.result_selector or self.baseline_token or self.baseline_property:
+                result = self.tab.run_js(
+                    script,
+                    self.result_selector,
+                    self.baseline_token,
+                    self.baseline_property,
+                )
             else:
                 # Preserve compatibility with lightweight tab doubles and
                 # older wrappers whose run_js accepts only the script.
@@ -498,14 +611,17 @@ __all__ = [
     "ARENA_NATIVE_STOP_SELECTOR",
     "ARENA_NON_RETRYABLE_CODES",
     "ARENA_PROMPT_REJECTED_CODE",
+    "ARENA_RESULT_BASELINE_PROPERTY",
     "ArenaImageGenerationError",
     "ArenaImageGenerationGuard",
     "ArenaImageGenerationObservation",
     "current_page_url",
+    "capture_arena_result_baseline",
     "image_signatures",
     "is_arena_image_generation_request",
     "is_arena_page_url",
     "is_interrupted_stream_reason",
+    "is_visible_arena_stop",
     "looks_like_image_generation_request",
     "read_image_bytes",
     "same_image",

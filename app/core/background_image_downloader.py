@@ -154,6 +154,25 @@ def build_image_download_partition(cookies: Any, headers: Optional[Dict[str, str
     return hashlib.sha256(material.encode("utf-8", errors="replace")).hexdigest()[:24]
 
 
+def get_image_download_partition(
+    url: Any,
+    cookies: Any,
+    headers: Optional[Dict[str, str]] = None,
+) -> str:
+    """Use one cache entry for signed public object-store URLs across browser views."""
+    normalized = normalize_remote_image_url(url)
+    try:
+        parsed = urlsplit(normalized)
+        host = str(parsed.hostname or "").lower().rstrip(".")
+        query = str(parsed.query or "").lower()
+    except Exception:
+        host = ""
+        query = ""
+    if host.endswith(".r2.cloudflarestorage.com") and "x-amz-signature=" in query:
+        return "signed-public"
+    return build_image_download_partition(cookies, headers)
+
+
 class BackgroundImageDownloader:
     """线程安全的后台图片下载器。"""
 
@@ -198,7 +217,9 @@ class BackgroundImageDownloader:
         normalized = normalize_remote_image_url(url)
         if not normalized:
             return {}
-        partition = str(partition_key or build_image_download_partition(cookies, headers)).strip() or "public"
+        partition = str(
+            partition_key or get_image_download_partition(normalized, cookies, headers)
+        ).strip() or "public"
         cache_key = self._cache_key(normalized, partition)
         effective_max_bytes = self._max_bytes
         if max_bytes is not None:
@@ -377,6 +398,8 @@ class BackgroundImageDownloader:
         response = None
         temp_path: Optional[Path] = None
         final_path: Optional[Path] = None
+        started_at = time.monotonic()
+        download_id = hashlib.sha256(cache_key.encode("utf-8", errors="replace")).hexdigest()[:12]
 
         self._update_entry(cache_key, url, status="downloading", error=None)
 
@@ -389,6 +412,7 @@ class BackgroundImageDownloader:
 
         try:
             self._save_dir.mkdir(parents=True, exist_ok=True)
+            logger.debug(f"[IMG_DOWNLOAD] start id={download_id}")
             response = get_public_remote_resource(
                 url,
                 cookies=cookies,
@@ -397,6 +421,7 @@ class BackgroundImageDownloader:
                 timeout=(8, 20),
                 stream=True,
             )
+            response_at = time.monotonic()
             if response.status_code != 200:
                 raise ValueError(f"http_{response.status_code}")
 
@@ -415,22 +440,33 @@ class BackgroundImageDownloader:
                 if expected_size > max_bytes:
                     raise ValueError(f"image_too_large:{expected_size}")
 
+            logger.debug(
+                f"[IMG_DOWNLOAD] headers id={download_id}, status={response.status_code}, "
+                f"content_length={content_length or 'unknown'}, "
+                f"response_wait={response_at - started_at:.3f}s"
+            )
+
             ext = self._pick_extension(content_type, url)
             filename = f"{int(time.time())}_{uuid.uuid4().hex[:8]}{ext}"
             temp_path = self._save_dir / f"{filename}.part"
             final_path = self._save_dir / filename
 
             written = 0
+            first_chunk_at: Optional[float] = None
             with temp_path.open("wb") as handle:
                 for chunk in response.iter_content(chunk_size=1024 * 64):
                     if self._is_shutdown():
                         raise RuntimeError("downloader_shutdown")
                     if not chunk:
                         continue
+                    if first_chunk_at is None:
+                        first_chunk_at = time.monotonic()
                     written += len(chunk)
                     if written > max_bytes:
                         raise ValueError(f"image_too_large:{written}")
                     handle.write(chunk)
+
+            read_finished_at = time.monotonic()
 
             if self._is_shutdown():
                 raise RuntimeError("downloader_shutdown")
@@ -464,7 +500,17 @@ class BackgroundImageDownloader:
                 source="background_download",
             )
             if not self._is_shutdown():
-                logger.debug(f"后台图片下载完成: {filename} ({written} bytes)")
+                first_byte_wait = (
+                    f"{first_chunk_at - response_at:.3f}s"
+                    if first_chunk_at is not None
+                    else "none"
+                )
+                logger.debug(
+                    f"后台图片下载完成: {filename} ({written} bytes), "
+                    f"id={download_id}, first_byte_wait={first_byte_wait}, "
+                    f"read={read_finished_at - response_at:.3f}s, "
+                    f"total={read_finished_at - started_at:.3f}s"
+                )
         except Exception as exc:
             try:
                 if temp_path is not None and temp_path.exists():
@@ -474,7 +520,10 @@ class BackgroundImageDownloader:
             _close_response()
             self._update_entry(cache_key, url, status="failed", error=str(exc))
             if not self._is_shutdown():
-                logger.debug(f"后台图片下载失败（忽略）: {str(exc)[:160]}")
+                logger.debug(
+                    f"后台图片下载失败（忽略）: id={download_id}, "
+                    f"elapsed={time.monotonic() - started_at:.3f}s, error={str(exc)[:160]}"
+                )
         finally:
             _close_response()
 
@@ -690,6 +739,7 @@ __all__ = [
     "DEFAULT_IMAGE_ACCEPT",
     "background_image_downloader",
     "build_image_download_partition",
+    "get_image_download_partition",
     "build_image_download_request_context",
     "build_image_request_headers",
     "extract_tab_cookies",

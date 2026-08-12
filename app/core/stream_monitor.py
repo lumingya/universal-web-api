@@ -17,12 +17,13 @@ from app.core.config import logger, BrowserConstants, SSEFormatter
 from app.core.background_image_downloader import (
     background_image_downloader,
     build_image_download_request_context,
+    get_image_download_partition,
     normalize_remote_image_url,
 )
 from app.core.elements import ElementFinder
 from app.core.extractors.base import BaseExtractor
 from app.core.extractors.deep_mode import DeepBrowserExtractor
-from app.models.schemas import get_modality_run_policy, is_modality_enabled
+from app.models.schemas import is_modality_enabled
 from app.services.arena_image_generation import (
     ARENA_NATIVE_STOP_SELECTOR as ARENA_IMAGE_NATIVE_STOP_SELECTOR,
     ArenaImageGenerationError,
@@ -30,7 +31,7 @@ from app.services.arena_image_generation import (
     is_arena_image_generation_request,
     is_arena_page_url,
     is_interrupted_stream_reason,
-    looks_like_image_generation_request,
+    is_visible_arena_stop,
 )
 
 _GEMINI_IMAGE_PLACEHOLDER_RE = re.compile(
@@ -51,10 +52,6 @@ _IMAGE_PENDING_STATUS_MARKERS = (
     "图片正在生成",
     "图像正在生成",
 )
-
-
-def _looks_like_image_generation_request(text: str) -> bool:
-    return looks_like_image_generation_request(text)
 
 
 def _is_pending_image_status_text(text: str) -> bool:
@@ -411,21 +408,10 @@ class StreamMonitor:
         self._arena_image_guard: Optional[ArenaImageGenerationGuard] = None
 
     def _looks_like_expected_image_output(self, user_input: str = "") -> bool:
-        if bool(self._image_config.get("_arena_image_generation_active")):
-            # Image-to-image edits often use terse instructions such as
-            # "make it brighter". The Arena workflow has already identified
-            # the uploaded reference, so do not require a text prompt marker.
-            return bool(self._image_extraction_enabled)
-        modalities = self._image_config.get("modalities") or {}
-        if not is_modality_enabled(modalities, "image"):
-            return False
-        image_run_policy = get_modality_run_policy(modalities, "image")
-        if image_run_policy == "always_probe":
-            return bool(self._image_extraction_enabled)
-        return bool(
-            self._image_extraction_enabled
-            and _looks_like_image_generation_request(user_input)
-        )
+        marker = self._image_config.get("_arena_image_generation_active")
+        if marker is None:
+            marker = self._image_config.get("arena_image_generation", False)
+        return bool(marker and self._image_extraction_enabled)
 
     def _should_probe_dom_images(self) -> bool:
         modalities = self._image_config.get("modalities") or {}
@@ -584,6 +570,14 @@ class StreamMonitor:
         ).strip().lower()
 
     def _get_latest_visual_column(self) -> str:
+        parser_id = str(self._image_config.get("_parser_id", "") or "").strip().lower()
+        if "right" in parser_id:
+            return "right"
+        if "left" in parser_id:
+            return "left"
+        parser_side = str(self._image_config.get("_parser_target_side", "") or "").strip().lower()
+        if parser_side in {"left", "right"}:
+            return parser_side
         value = str(self._image_config.get("latest_visual_column", "left") or "left").strip().lower()
         return value if value in {"left", "right"} else "left"
 
@@ -631,6 +625,24 @@ class StreamMonitor:
                 area = 0.0
             horizontal_score = left if column == "right" else -left
             scored.append((bottom, horizontal_score, area, -index, index, left, ele))
+
+        # Column is a hard boundary for side-by-side visual replies.  The
+        # previous sort treated it as a secondary tie-breaker, so a lower
+        # reply from the opposite side could win.  Split candidates around
+        # the midpoint of their observed horizontal extent, then select the
+        # newest reply within the parser-configured side.  On a single-column
+        # or narrow/mobile layout, retain the full candidate set as a fallback.
+        if len(scored) > 1:
+            left_edges = [item[5] for item in scored]
+            horizontal_span = max(left_edges) - min(left_edges)
+            if horizontal_span >= 80.0:
+                midpoint = min(left_edges) + horizontal_span / 2.0
+                side_candidates = [
+                    item for item in scored
+                    if (item[5] >= midpoint if column == "right" else item[5] <= midpoint)
+                ]
+                if side_candidates:
+                    scored = side_candidates
 
         scored.sort(key=lambda item: item[:4], reverse=True)
         best = scored[0]
@@ -729,6 +741,8 @@ class StreamMonitor:
             self._arena_image_guard = ArenaImageGenerationGuard(
                 self.tab,
                 result_selector=selector,
+                baseline_token=self._image_config.get("arena_result_baseline_token", ""),
+                baseline_property=self._image_config.get("arena_result_baseline_property", ""),
             )
         logger.debug(
             f"[MONITOR] expect_image_output={self._expect_image_output}, "
@@ -1185,6 +1199,7 @@ class StreamMonitor:
                 url,
                 cookies=cookies_dict,
                 headers=headers,
+                partition_key=get_image_download_partition(url, cookies_dict, headers),
                 max_bytes=max(
                     1,
                     int(self._image_config.get("max_size_mb") or 10),
@@ -1239,16 +1254,10 @@ class StreamMonitor:
         return is_arena_page_url(str(getattr(self.tab, "url", "") or ""))
 
     def _arena_native_stop_present(self) -> bool:
-        """Use Arena's native Stop button as the interrupted-stream state."""
+        """Return whether Arena's native Stop button is currently visible."""
         if not self._is_arena_page():
             return False
-        try:
-            return bool(
-                self.tab.ele(self.ARENA_NATIVE_STOP_SELECTOR, timeout=0.1)
-            )
-        except Exception as exc:
-            logger.debug(f"[Stream Recovery] 检查原生停止按钮失败（按不存在处理）: {exc}")
-            return False
+        return is_visible_arena_stop(self.tab, self.ARENA_NATIVE_STOP_SELECTOR)
 
     def _uses_arena_image_recovery_defaults(self) -> bool:
         return self._is_arena_page()
@@ -2219,20 +2228,36 @@ class StreamMonitor:
     def capture_interrupted_image_resume_state(self) -> Optional[Dict[str, Any]]:
         """Capture enough state to finish an interrupted image turn from DOM.
 
-        Command-engine interruptions can arrive after the generated image has
-        already rendered and been prefetched. Restarting the network listener at
-        that point cannot observe the completed request again, so preserve the
-        original send baseline and continue through the DOM monitor instead.
+        Command-engine interruptions can arrive before or after the generated
+        image renders. Restarting the network listener cannot observe the
+        original response again, so preserve the original send baseline and
+        continue through the DOM monitor instead. The DOM recovery path is also
+        responsible for refreshing while the image is still generating.
         """
         ctx = self._stream_ctx
-        if ctx is None or not self._expect_image_output:
+        if ctx is None:
+            # A command interrupt can arrive while the network monitor owns
+            # the request, before this DOM monitor has created StreamContext.
+            # The send click still captured a DOM baseline, so image tasks can
+            # safely resume from that baseline and wait/refresh in the DOM
+            # path instead of rebuilding a network listener that cannot see
+            # the already-open response again.
+            if not self._looks_like_expected_image_output():
+                return None
+            baseline_snapshot = self._pending_send_baseline
+            if not isinstance(baseline_snapshot, dict) or not baseline_snapshot:
+                return None
+            return {
+                "baseline_snapshot": dict(baseline_snapshot),
+                "sent_content_length": 0,
+                "image_urls": [],
+            }
+        if not self._expect_image_output:
             return None
 
         known_image_urls = _normalize_snapshot_image_urls(
             list(self._prefetched_image_urls) + list(self._final_image_urls)
         )
-        if not ctx.images_detected and not known_image_urls:
-            return None
 
         baseline_snapshot = ctx.baseline_snapshot or ctx.instant_baseline
         if not isinstance(baseline_snapshot, dict) or not baseline_snapshot:

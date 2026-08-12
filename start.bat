@@ -62,6 +62,10 @@ if not defined BROWSER_PROFILE_DIR set "BROWSER_PROFILE_DIR="
 if not defined BROWSER_PROFILE_NAME set "BROWSER_PROFILE_NAME="
 if not defined BROWSER_MEMORY_SAVER set "BROWSER_MEMORY_SAVER=false"
 if not defined PROFILE_CLEAN_ENABLED set "PROFILE_CLEAN_ENABLED=false"
+if not defined SCHEDULED_RESTART_ENABLED set "SCHEDULED_RESTART_ENABLED=false"
+if not defined SCHEDULED_RESTART_INTERVAL_SECONDS set "SCHEDULED_RESTART_INTERVAL_SECONDS=10800"
+if not defined SCHEDULED_RESTART_DRAIN_TIMEOUT_SECONDS set "SCHEDULED_RESTART_DRAIN_TIMEOUT_SECONDS=1800"
+if not defined SCHEDULED_RESTART_TAB_STATE_POLICY set "SCHEDULED_RESTART_TAB_STATE_POLICY=preserve"
 
 REM 让 Python requests 与浏览器复用代理。socks5h 让代理负责 DNS，避免 R2
 REM 域名在本地 fake-DNS / 直连 DNS 下解析失败。
@@ -649,6 +653,14 @@ if exist "VERSION" (
 )
 
 REM ---------- 9) 启动服务 ----------
+if /I "%SCHEDULED_RESTART_ENABLED%"=="true" (
+    REM The Python launcher owns the handoff proxy required to keep requests
+    REM pending while the child backend process is replaced.
+    echo [INFO] 定时重启守护已启用，交给 start.py 启动代理服务
+    venv\Scripts\python.exe start.py
+    exit /b !errorlevel!
+)
+
 echo ========================================
 echo    服务启动中...
 echo ========================================
@@ -675,6 +687,13 @@ echo.
 REM ========== 循环重启机制 ==========
 :SERVICE_LOOP
 
+if /I "%SCHEDULED_RESTART_ENABLED%"=="true" (
+    REM The restarted service must now be launched through start.py so it can
+    REM keep the public port alive during future scheduled handoffs.
+    venv\Scripts\python.exe start.py
+    exit /b !errorlevel!
+)
+
 venv\Scripts\python.exe main.py
 set "EXIT_CODE=!errorlevel!"
 
@@ -693,6 +712,12 @@ if !EXIT_CODE! equ 3 (
     echo    检测到配置更新，正在重启服务...
     echo ========================================
     timeout /t 2 /nobreak >nul
+    findstr /r /i "^[ ]*SCHEDULED_RESTART_ENABLED[ ]*=[ ]*true[ ]*$" ".env" >nul 2>&1
+    if !errorlevel! equ 0 (
+        REM 此轮配置刚开启守护时，切换到 start.py 以接管重启期间的端口代理。
+        venv\Scripts\python.exe start.py
+        exit /b !errorlevel!
+    )
     goto :SERVICE_LOOP
 )
 

@@ -25,6 +25,7 @@ from app.core.config import (
 from app.core.background_image_downloader import (
     background_image_downloader,
     build_image_download_request_context,
+    get_image_download_partition,
     normalize_remote_image_url,
 )
 from app.core.parsers import ParserRegistry, ResponseParser
@@ -2145,7 +2146,10 @@ class NetworkMonitor:
                             last_activity_time = time.time()
                             logger.info("[NetworkMonitor] GLM 中间流已完成，继续等待自动确认后的后续流")
                             continue
-                        if self._total_chunks == 0 and self._should_fallback_to_dom_on_empty_stream():
+                        # A completed image-only stream has no text chunks by design. Reuse
+                        # the media-aware empty-result check so captured images are treated
+                        # as a valid network result instead of triggering a DOM fallback.
+                        if self._should_fallback_on_empty_done(self._last_stream_parse_result):
                             logger.warning(
                                 "[NetworkMonitor] 流响应已结束但仍无有效正文，回退到 DOM 监听 "
                                 f"(source={active_stream_body_source}, body_len={len(active_stream_body or '')})"
@@ -2706,6 +2710,7 @@ class NetworkMonitor:
             normalized,
             cookies=cookies_dict,
             headers=headers,
+            partition_key=get_image_download_partition(normalized, cookies_dict, headers),
             max_bytes=max(
                 1,
                 int(self._image_config.get("max_size_mb") or 10),

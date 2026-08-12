@@ -810,6 +810,45 @@ const ENV_CONFIG_SCHEMA = {
             }
         }
     },
+    restartGuard: {
+        apply: 'launcher',
+        label: '服务守护',
+        icon: '🛡️',
+        desc: '定时重启只替换后端服务进程。受控浏览器、登录态和已有标签页默认保留；重启前会等待正在运行和排队的工作流完成。',
+        items: {
+            SCHEDULED_RESTART_ENABLED: {
+                label: '启用定时后端重启',
+                desc: '开启后由启动器保持对外端口；后端重启期间进入的新请求会等待新实例就绪后继续执行。',
+                type: 'switch',
+                default: false
+            },
+            SCHEDULED_RESTART_INTERVAL_SECONDS: {
+                label: '重启间隔',
+                unit: '秒',
+                desc: '默认 10800 秒（3 小时）。每次成功重启后重新计时。',
+                type: 'number',
+                min: 300,
+                step: 300,
+                default: 10800
+            },
+            SCHEDULED_RESTART_DRAIN_TIMEOUT_SECONDS: {
+                label: '最长排空等待',
+                unit: '秒',
+                desc: '到期后仍有工作流时的最大等待时间。超时后本轮不重启，以免中断工作流，并在下一周期重试。',
+                type: 'number',
+                min: 0,
+                step: 60,
+                default: 1800
+            },
+            SCHEDULED_RESTART_TAB_STATE_POLICY: {
+                label: '标签页状态策略',
+                desc: '当前仅支持 preserve：不关闭浏览器，也不清理标签页。该独立设置为后续加入标签页状态清理策略预留。',
+                type: 'select',
+                options: ['preserve'],
+                default: 'preserve'
+            }
+        }
+    },
     update: {
         apply: 'launcher',
         label: '更新配置',

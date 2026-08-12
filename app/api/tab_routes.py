@@ -24,7 +24,7 @@ from fastapi.params import Param
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from app.core.config import atomic_write_json, get_logger, SSEFormatter
+from app.core.config import _request_context, atomic_write_json, get_logger, SSEFormatter
 from app.core import get_browser
 from app.services.request_manager import (
     request_manager,
@@ -38,6 +38,7 @@ from app.services.request_lifecycle import (
     get_max_request_execute_time_sec,
     mark_request_hard_timeout,
     put_worker_queue_item,
+    run_in_request_context,
     run_tracked_blocking_call,
     wait_worker_queue_item,
 )
@@ -86,6 +87,21 @@ logger = get_logger("API.TAB")
 
 router = APIRouter()
 MODEL_LIST_CREATED = int(time.time())
+
+
+def _reset_stream_request_context(request_context_token: Any) -> None:
+    """Reset request logging context when the streaming generator owns its Context.
+
+    Starlette can finalize a disconnected streaming response from a separate
+    Context. ContextVar tokens cannot be reset there, but that Context has no
+    request value to restore.
+    """
+    try:
+        _request_context.reset(request_context_token)
+    except ValueError as exc:
+        if "different Context" not in str(exc):
+            raise
+        logger.debug("流式请求上下文已在其他 Context 中结束，跳过重置")
 
 
 def _format_rfc3339_timestamp(value: Any) -> str:
@@ -1082,6 +1098,8 @@ def _build_tab_resolution_headers(
     preset_name: str = "",
     route_group: str = "",
     route_group_live_member_count: Optional[int] = None,
+    route_group_idle_member_count: Optional[int] = None,
+    route_group_busy_member_count: Optional[int] = None,
 ) -> Dict[str, str]:
     headers: Dict[str, str] = {}
     requested_route_domain = str(route_domain or "").strip()
@@ -1095,6 +1113,14 @@ def _build_tab_resolution_headers(
         if route_group_live_member_count is not None:
             headers["X-Route-Group-Live-Member-Count"] = str(
                 max(int(route_group_live_member_count), 0)
+            )
+        if route_group_idle_member_count is not None:
+            headers["X-Route-Group-Idle-Member-Count"] = str(
+                max(int(route_group_idle_member_count), 0)
+            )
+        if route_group_busy_member_count is not None:
+            headers["X-Route-Group-Busy-Member-Count"] = str(
+                max(int(route_group_busy_member_count), 0)
             )
         if requested_route_domain:
             headers["X-Resolved-Route-Domain"] = (
@@ -1165,7 +1191,12 @@ def _resolve_route_group(browser: Any, group_id: str) -> Dict[str, Any]:
         == normalized_id
     ), None)
     if runtime_group:
-        for key in ("live_member_count", "idle_member_count", "live_tab_indices"):
+        for key in (
+            "live_member_count",
+            "idle_member_count",
+            "busy_member_count",
+            "live_tab_indices",
+        ):
             if key in runtime_group:
                 group[key] = runtime_group[key]
     return group
@@ -1941,6 +1972,8 @@ async def list_models_with_route_group(
         selector=group.get("allocation_mode") or "round_robin",
         route_group=group["id"],
         route_group_live_member_count=group.get("live_member_count"),
+        route_group_idle_member_count=group.get("idle_member_count"),
+        route_group_busy_member_count=group.get("busy_member_count"),
     ))
     return response
 
@@ -1975,6 +2008,8 @@ async def list_models_with_route_group_and_preset(
         preset_name=preset_resolution["preset_name"],
         route_group=group["id"],
         route_group_live_member_count=group.get("live_member_count"),
+        route_group_idle_member_count=group.get("idle_member_count"),
+        route_group_busy_member_count=group.get("busy_member_count"),
     ))
     return response
 
@@ -2453,6 +2488,8 @@ async def chat_with_route_group(
         preset_name=resolved_preset_name or "",
         route_group=group["id"],
         route_group_live_member_count=group.get("live_member_count"),
+        route_group_idle_member_count=group.get("idle_member_count"),
+        route_group_busy_member_count=group.get("busy_member_count"),
     )
     with logger.context(ctx.request_id):
         logger.info(
@@ -2627,6 +2664,7 @@ async def _stream_with_tab_index(
     tab_index: int
 ):
     """使用指定标签页的流式响应"""
+    request_context_token = _request_context.set(ctx.request_id)
     disconnect_task = None
     worker_thread = None
     chunk_queue = None
@@ -2682,7 +2720,11 @@ async def _stream_with_tab_index(
                         logger.debug(f"关闭工作流生成器失败（忽略）: {e}")
                 _put_route_worker_queue_item(chunk_queue, ctx, None, final=True)
 
-        worker_thread = threading.Thread(target=worker, daemon=True)
+        worker_thread = threading.Thread(
+            target=run_in_request_context,
+            args=(ctx, worker),
+            daemon=True,
+        )
         # 供 TabRecovery 判定旧 worker 是否退出（setattr 规避 dataclass 字段限制）
         setattr(ctx, "worker_thread", worker_thread)
         worker_thread.start()
@@ -2850,6 +2892,7 @@ async def _stream_with_tab_index(
                 pass
 
         request_manager.finish_request(ctx, success=(ctx.status == RequestStatus.COMPLETED))
+        _reset_stream_request_context(request_context_token)
 
 
 async def _non_stream_with_tab_index(
@@ -2921,6 +2964,7 @@ async def _stream_with_route_domain(
     allocation_mode: Optional[str] = None,
 ):
     """使用指定域名路由的流式响应"""
+    request_context_token = _request_context.set(ctx.request_id)
     disconnect_task = None
     worker_thread = None
     chunk_queue = None
@@ -2992,7 +3036,11 @@ async def _stream_with_route_domain(
                         logger.debug(f"关闭工作流生成器失败（忽略）: {e}")
                 _put_route_worker_queue_item(chunk_queue, ctx, None, final=True)
 
-        worker_thread = threading.Thread(target=worker, daemon=True)
+        worker_thread = threading.Thread(
+            target=run_in_request_context,
+            args=(ctx, worker),
+            daemon=True,
+        )
         # 供 TabRecovery 判定旧 worker 是否退出（setattr 规避 dataclass 字段限制）
         setattr(ctx, "worker_thread", worker_thread)
         worker_thread.start()
@@ -3162,6 +3210,7 @@ async def _stream_with_route_domain(
                 pass
 
         request_manager.finish_request(ctx, success=(ctx.status == RequestStatus.COMPLETED))
+        _reset_stream_request_context(request_context_token)
 
 
 async def _non_stream_with_route_domain(
@@ -3241,6 +3290,7 @@ async def _stream_with_exact_url(
     resolved_tab_index: Optional[int] = None,
 ):
     """使用精确 URL 路由的流式响应"""
+    request_context_token = _request_context.set(ctx.request_id)
     disconnect_task = None
     worker_thread = None
     chunk_queue = None
@@ -3294,7 +3344,11 @@ async def _stream_with_exact_url(
                         logger.debug(f"关闭工作流生成器失败（忽略）: {e}")
                 _put_route_worker_queue_item(chunk_queue, ctx, None, final=True)
 
-        worker_thread = threading.Thread(target=worker, daemon=True)
+        worker_thread = threading.Thread(
+            target=run_in_request_context,
+            args=(ctx, worker),
+            daemon=True,
+        )
         # 供 TabRecovery 判定旧 worker 是否退出（setattr 规避 dataclass 字段限制）
         setattr(ctx, "worker_thread", worker_thread)
         worker_thread.start()
@@ -3462,6 +3516,7 @@ async def _stream_with_exact_url(
                 pass
 
         request_manager.finish_request(ctx, success=(ctx.status == RequestStatus.COMPLETED))
+        _reset_stream_request_context(request_context_token)
 
 
 async def _non_stream_with_exact_url(

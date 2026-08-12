@@ -11,7 +11,11 @@ from types import SimpleNamespace
 import pytest
 
 from app.core import background_image_downloader as downloader_module
-from app.core.background_image_downloader import BackgroundImageDownloader, normalize_remote_image_url
+from app.core.background_image_downloader import (
+    BackgroundImageDownloader,
+    get_image_download_partition,
+    normalize_remote_image_url,
+)
 from app.core.browser import media as browser_media_module
 from app.core.browser.media import BrowserMediaMixin
 from app.core.network_monitor import NetworkMonitor
@@ -20,6 +24,7 @@ from app.core.parsers.lmarena_battle_side_parser import (
     LmarenaBattleSideLeftParser,
     LmarenaBattleWinnerParser,
 )
+from app.core.parsers.lmarena_image_side_left_parser import LmarenaImageSideLeftParser
 from app.core.parsers.lmarena_image_side_right_parser import LmarenaImageSideRightParser
 from app.core.parsers.lmarena_side_left_parser import LmarenaSideLeftParser
 from app.core.tab_pool_parts.network import (
@@ -136,6 +141,23 @@ def test_lmarena_extracts_generated_image_directly_from_network_stream():
 
     assert result["done"] is True
     assert [item["url"] for item in result["images"]] == [image_url]
+
+
+def test_lmarena_image_side_parsers_keep_image_only_completed_results():
+    cases = [
+        (LmarenaImageSideLeftParser(), "a2", "ad"),
+        (LmarenaImageSideRightParser(), "b2", "bd"),
+    ]
+
+    for parser, image_prefix, done_prefix in cases:
+        result = parser.parse_chunk(
+            f'{image_prefix}:[{{"type":"image","image":"https://example.test/result.png"}}]\n'
+            f'{done_prefix}:{{"finishReason":"stop"}}\n'
+        )
+
+        assert result["content"] == ""
+        assert result["done"] is True
+        assert len(result["images"]) == 1
 
 
 def test_arena_side_parsers_merge_rolling_overlap_without_duplicates():
@@ -643,6 +665,48 @@ def test_image_screenshot_fallback_preserves_remote_url_when_dom_image_never_loa
     assert list((tmp_path / "download_images").iterdir()) == []
 
 
+def test_image_localization_does_not_wait_or_duplicate_pending_background_download(
+    tmp_path,
+    monkeypatch,
+):
+    target_url = "https://cdn.example/generated.png?signature=stream"
+    last_element = SimpleNamespace(eles=lambda *_args, **_kwargs: [])
+    tab = SimpleNamespace(eles=lambda *_args, **_kwargs: [])
+    foreground_calls = []
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        browser_media_module,
+        "build_image_download_request_context",
+        lambda _tab: ({}, {}),
+    )
+    monkeypatch.setattr(
+        browser_media_module,
+        "build_image_download_partition",
+        lambda *_args: "test",
+    )
+    monkeypatch.setattr(
+        browser_media_module.background_image_downloader,
+        "get_download_result",
+        lambda *_args, **_kwargs: {"status": "downloading"},
+    )
+    monkeypatch.setattr(
+        browser_media_module,
+        "get_public_remote_resource",
+        lambda *_args, **_kwargs: foreground_calls.append(True),
+    )
+
+    localized = BrowserMediaMixin()._try_screenshot_images_to_local(
+        tab,
+        last_element,
+        [{"kind": "url", "url": target_url, "media_type": "image"}],
+        {"selector": "img", "background_download_wait_seconds": 1},
+    )
+
+    assert localized[0]["url"] == target_url
+    assert foreground_calls == []
+
+
 class _FakeDomImage:
     def __init__(self, src, ready_states=None):
         self.src = src
@@ -720,6 +784,26 @@ def test_background_cache_is_partitioned_by_browser_identity(tmp_path):
         assert downloader.get_download_result("https://example.com/image.png") is None
     finally:
         downloader.shutdown()
+
+
+def test_signed_r2_images_share_a_download_partition_across_browser_contexts():
+    url = (
+        "https://bucket.r2.cloudflarestorage.com/result.png?"
+        "X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=signature"
+    )
+
+    assert get_image_download_partition(url, {"one": "a"}, {"Referer": "https://first.example"}) == "signed-public"
+    assert get_image_download_partition(url, {"two": "b"}, {"Referer": "https://second.example"}) == "signed-public"
+
+
+def test_non_public_image_downloads_remain_partitioned_by_browser_identity():
+    url = "https://example.com/image.png"
+
+    assert get_image_download_partition(url, {"one": "a"}, {"Referer": "https://first.example"}) != get_image_download_partition(
+        url,
+        {"two": "b"},
+        {"Referer": "https://second.example"},
+    )
 
 
 def test_cross_origin_media_fetch_drops_cookies_and_referer(monkeypatch):

@@ -65,6 +65,8 @@ class CommandEngineRuntimeMixin:
             "runtime_id": uuid.uuid4().hex,
             "task_id": str(task_id or "").strip(),
             "preset_name": str(preset_name or "").strip(),
+            "parser_id": str(getattr(session, "_workflow_parser_id", "") or "").strip().lower(),
+            "target_side": str(getattr(session, "_workflow_target_side", "") or "").strip().lower(),
             "priority": self._normalize_priority(priority, self._get_request_priority_baseline()),
             "current_step_index": -1,
             "current_step_action": "",
@@ -79,6 +81,8 @@ class CommandEngineRuntimeMixin:
             stack = list(getattr(session, "_workflow_runtime_stack", None) or [])
             stack.append(runtime)
             setattr(session, "_workflow_runtime_stack", stack)
+            setattr(session, "_workflow_runtime_id", runtime["runtime_id"])
+            setattr(session, "_workflow_target_side", runtime["target_side"])
         return runtime
 
     def update_workflow_runtime_step(
@@ -92,6 +96,17 @@ class CommandEngineRuntimeMixin:
             return
         runtime["current_step_index"] = int(step_index)
         runtime["current_step_action"] = str((step or {}).get("action", "") or "")
+
+    def update_workflow_target_side(self, session: 'TabSession', side: str) -> bool:
+        normalized = str(side or "").strip().lower()
+        if normalized not in {"left", "right"}:
+            return False
+        runtime = self._get_active_workflow_runtime(session)
+        if not runtime:
+            return False
+        runtime["target_side"] = normalized
+        setattr(session, "_workflow_target_side", normalized)
+        return True
 
     def finish_workflow_runtime(
         self,
@@ -177,6 +192,16 @@ class CommandEngineRuntimeMixin:
             setattr(session, "_pending_post_workflow_commands", merged)
         else:
             setattr(session, "_pending_post_workflow_commands", [])
+
+        parent = stack[-1] if stack else None
+        if parent:
+            setattr(session, "_workflow_runtime_id", str(parent.get("runtime_id") or ""))
+            setattr(session, "_workflow_parser_id", str(parent.get("parser_id") or ""))
+            setattr(session, "_workflow_target_side", str(parent.get("target_side") or ""))
+        else:
+            setattr(session, "_workflow_runtime_id", "")
+            setattr(session, "_workflow_parser_id", "")
+            setattr(session, "_workflow_target_side", "")
 
         return runtime
 

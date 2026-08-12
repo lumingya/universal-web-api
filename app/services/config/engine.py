@@ -2146,6 +2146,11 @@ class ConfigEngine:
         if "force_postprocess" in config:
             result["force_postprocess"] = _coerce_bool(config.get("force_postprocess"), False)
 
+        if "arena_image_generation" in config:
+            result["arena_image_generation"] = _coerce_bool(
+                config.get("arena_image_generation"), False
+            )
+
         if "direct_postprocess_modalities" in config:
             raw_direct_modalities = config.get("direct_postprocess_modalities")
             if isinstance(raw_direct_modalities, (list, tuple, set)):

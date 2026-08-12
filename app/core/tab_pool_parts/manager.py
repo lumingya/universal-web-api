@@ -3217,6 +3217,9 @@ class TabPoolManager:
                 item["idle_member_count"] = sum(
                     1 for session in sessions if session.status == TabStatus.IDLE
                 )
+                item["busy_member_count"] = sum(
+                    1 for session in sessions if session.status == TabStatus.BUSY
+                )
                 item["live_tab_indices"] = [
                     int(session.persistent_index or 0) for session in sessions
                 ]
@@ -3809,6 +3812,15 @@ class TabPoolManager:
                         continue
 
                     matching_sessions = self._get_sessions_for_route_group(target)
+                    # 空组没有任何可能在后续释放的成员。立即返回，让上游的
+                    # 多 URL 轮询跳到下一个 URL，而不是按默认 60 秒超时等待。
+                    if not matching_sessions:
+                        logger.info(
+                            f"Route group '{target}' has no live members; skip immediately "
+                            f"(task={task_id})"
+                        )
+                        return None
+
                     mode = allocation_mode or group.get("allocation_mode") or self.allocation_mode
                     session = self._try_acquire_session_for_request(
                         matching_sessions,
@@ -3957,6 +3969,27 @@ class TabPoolManager:
             was_busy = session.status == TabStatus.BUSY
             termination_state = session.begin_termination(expected_task)
             if not termination_state.get("ok"):
+                # A second terminate request can race with the first one while
+                # the old owner is still unwinding.  That is an idempotent
+                # in-progress result, not a failed termination.
+                if termination_state.get("error") == "termination_in_progress":
+                    return {
+                        "ok": True,
+                        "tab_index": persistent_index,
+                        "tab_id": session.id,
+                        "was_busy": was_busy,
+                        "task_id": str(
+                            termination_state.get("current_task_id") or current_task
+                        ).strip(),
+                        "cancelled": False,
+                        "status": session.status.value,
+                        "pending": True,
+                        "released": False,
+                        "interrupt_success": False,
+                        "already_in_progress": True,
+                        "reason": reason,
+                        "scope": normalized_scope,
+                    }
                 return {
                     "ok": False,
                     **termination_state,

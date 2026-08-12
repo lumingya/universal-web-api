@@ -25,6 +25,7 @@ GPT_IMAGE_MARKERS = (
 ARENA_RESULT_IMAGE_SELECTOR = (
     "img.transition-opacity.duration-500.opacity-100.aspect-square.object-cover"
 )
+ARENA_AGENT_PAGE_PATH = "/agent"
 
 
 def inspect_gpt_image2_png(payload: bytes) -> dict[str, Any]:
@@ -76,6 +77,9 @@ def _sleep(ctx: dict[str, Any], seconds: float, step: float = 0.2) -> None:
     while time.time() < deadline:
         ctx["raise_if_cancelled"]()
         ctx["raise_if_command_loop_cancelled"]()
+        agent_guard = ctx.get("_arena_agent_guard")
+        if agent_guard and agent_guard():
+            raise RuntimeError("arena_agent_redirected")
         ctx["reset_timeout"]()
         time.sleep(min(step, max(0.0, deadline - time.time())))
 
@@ -85,6 +89,42 @@ def _current_url(tab: Any) -> str:
         return str(tab.run_js("return location.href") or "").strip()
     except Exception:
         return str(getattr(tab, "url", "") or "").strip()
+
+
+def _is_agent_page_url(url: str) -> bool:
+    """Return whether Arena has landed on its agent page, which is abnormal for this runner."""
+    try:
+        parsed = urlsplit(str(url or "").strip())
+        return (
+            parsed.scheme.lower() == "https"
+            and parsed.netloc.lower() == "arena.ai"
+            and parsed.path.rstrip("/") == ARENA_AGENT_PAGE_PATH
+        )
+    except Exception:
+        return False
+
+
+def _redirect_if_agent_page(ctx: dict[str, Any], redirect_url: str) -> bool:
+    """Redirect an unexpected /agent page and report whether the guard fired."""
+    tab = ctx["tab"]
+    current_url = _current_url(tab)
+    if not _is_agent_page_url(current_url):
+        return False
+
+    logger = ctx["logger"]
+    logger.warning(
+        f"[GPT-IMAGE-2] unexpected Arena agent page: {current_url}; "
+        f"navigating to {redirect_url}"
+    )
+    try:
+        tab.get(redirect_url)
+    except Exception as navigate_error:
+        logger.warning(
+            "[GPT-IMAGE-2] agent-page redirect tab.get() failed, "
+            f"falling back to location.replace(): {navigate_error}"
+        )
+        tab.run_js("location.replace(arguments[0])", redirect_url)
+    return True
 
 
 def _same_page_url(current_url: str, target_url: str) -> bool:
@@ -705,6 +745,7 @@ def run(ctx: dict[str, Any], *, single_mode: bool = False) -> str:
         max(1.0, float(_value(values, "wait_reply_timeout_sec", 100))),
     )
     redirect_url = str(_value(values, "redirect_url", "https://arena.ai/image")).strip()
+    ctx["_arena_agent_guard"] = lambda: _redirect_if_agent_page(ctx, redirect_url)
     hit_urls: list[str] = []
     consecutive_send_failures = 0
 
@@ -716,6 +757,8 @@ def run(ctx: dict[str, Any], *, single_mode: bool = False) -> str:
         status = "completed"
         ctx["begin_command_loop"](index + 1, total_runs, "Arena GPT Image 2")
         try:
+            if _redirect_if_agent_page(ctx, redirect_url):
+                raise RuntimeError("arena_agent_redirected")
             if not single_mode:
                 logger.stream(
                     f"[GPT-IMAGE-2] round {index + 1}/{total_runs}: creating a new image chat"
@@ -817,6 +860,11 @@ def run(ctx: dict[str, Any], *, single_mode: bool = False) -> str:
                 status = "cancelled"
                 if str(error) == "python_script_cancelled":
                     break
+            elif str(error) == "arena_agent_redirected":
+                status = "failed"
+                logger.warning(
+                    f"[GPT-IMAGE-2] round {index + 1} treated as abnormal because the page was /agent"
+                )
             else:
                 status = "failed"
                 logger.error(f"[GPT-IMAGE-2] round {index + 1} failed: {error}")

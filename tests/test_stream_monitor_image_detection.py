@@ -13,11 +13,14 @@ from app.core.network_monitor import NetworkMonitorError
 from app.core.config import WorkflowError
 from app.core.workflow.executor import WorkflowExecutor
 from app.services.arena_image_generation import (
+    ARENA_NATIVE_STOP_SELECTOR,
     ARENA_IMAGE_GENERATION_FAILED_CODE,
     ARENA_IMAGE_UNCHANGED_CODE,
     ARENA_PROMPT_REJECTED_CODE,
+    ARENA_RESULT_BASELINE_PROPERTY,
     ArenaImageGenerationError,
     ArenaImageGenerationGuard,
+    capture_arena_result_baseline,
     is_arena_image_generation_request,
     is_arena_page_url,
     validate_generated_images,
@@ -93,6 +96,43 @@ def test_same_image_count_with_new_url_is_detected_as_fresh_output():
     assert started is True
     assert "检测到新图片" in reason
     assert ctx.images_detected is True
+
+
+def test_latest_visual_reply_uses_the_parser_target_side_when_other_side_is_lower():
+    class _Element:
+        def __init__(self, anchor, *, bottom, left):
+            self.anchor = anchor
+            self.rect = {
+                "top": max(0, bottom - 200),
+                "bottom": bottom,
+                "left": left,
+                "width": 400,
+                "height": 200,
+            }
+
+        def run_js(self, _script):
+            return self.rect
+
+    class _Extractor:
+        @staticmethod
+        def get_anchor(element):
+            return element.anchor
+
+    left_reply = _Element("left", bottom=18_727, left=285)
+    right_reply = _Element("right", bottom=473, left=789)
+    monitor = StreamMonitor.__new__(StreamMonitor)
+    monitor._image_config = {
+        "final_target_strategy": "latest_visual_reply",
+        "latest_visual_column": "left",
+        "_parser_id": "lmarena_image_side_right",
+    }
+    monitor._last_visual_reply_log_info = None
+    monitor.extractor = _Extractor()
+
+    selected, anchor = monitor._select_candidate_element([left_reply, right_reply])
+
+    assert selected is right_reply
+    assert anchor == "right"
 
 
 def test_signed_url_refresh_for_same_r2_object_is_not_a_new_image():
@@ -328,26 +368,42 @@ def test_recovery_observation_does_not_advance_sent_offset():
     assert ctx.max_seen_text == "already sent plus held tail"
 
 
-def test_arena_recovery_checks_only_native_stop_button():
+def test_arena_recovery_checks_visible_native_stop_button():
     class _Tab:
         url = "https://arena.ai/c/example"
 
         def __init__(self):
-            self.selectors = []
+            self.script = ""
+            self.selector = ""
 
-        def ele(self, selector, timeout=0):
-            self.selectors.append((selector, timeout))
-            return object()
+        def run_js(self, script, selector):
+            self.script = script
+            self.selector = selector
+            return True
 
     monitor = StreamMonitor.__new__(StreamMonitor)
     monitor.tab = _Tab()
 
     assert monitor._arena_native_stop_present() is True
-    assert monitor.tab.selectors == [
-        (StreamMonitor.ARENA_NATIVE_STOP_SELECTOR, 0.1)
-    ]
+    assert monitor.tab.selector == StreamMonitor.ARENA_NATIVE_STOP_SELECTOR
+    assert "getBoundingClientRect" in monitor.tab.script
+    assert "getComputedStyle" in monitor.tab.script
     assert 'button[aria-label="Stop generation"]' in StreamMonitor.ARENA_NATIVE_STOP_SELECTOR
     assert 'data-arena-hard-stop-overlay="true"' in StreamMonitor.ARENA_NATIVE_STOP_SELECTOR
+
+
+def test_arena_recovery_ignores_hidden_native_stop_button():
+    class _Tab:
+        url = "https://arena.ai/c/example"
+
+        @staticmethod
+        def run_js(_script, _selector):
+            return False
+
+    monitor = StreamMonitor.__new__(StreamMonitor)
+    monitor.tab = _Tab()
+
+    assert monitor._arena_native_stop_present() is False
 
 
 def test_final_settle_uses_last_complete_snapshot_after_refresh_collapse(monkeypatch):
@@ -418,8 +474,8 @@ def test_interrupted_arena_stream_holds_deltas_and_stops_after_one_completed_ref
             self.native_stop_states = [True, False]
             self.refresh_calls = []
 
-        def ele(self, _selector, timeout=0):
-            return object() if self.native_stop_states.pop(0) else None
+        def run_js(self, _script, _selector):
+            return self.native_stop_states.pop(0)
 
         def refresh(self, **kwargs):
             self.refresh_calls.append(kwargs)
@@ -623,6 +679,57 @@ def test_interrupted_image_resume_preserves_original_baseline_and_prefetched_url
     assert state["baseline_snapshot"] is not ctx.baseline_snapshot
 
 
+def test_interrupted_image_resume_starts_dom_recovery_before_image_is_rendered():
+    monitor = StreamMonitor.__new__(StreamMonitor)
+    monitor._expect_image_output = True
+    monitor._prefetched_image_urls = set()
+    monitor._final_image_urls = []
+    ctx = StreamContext()
+    ctx.baseline_snapshot = {
+        "groups_count": 2,
+        "text_len": 0,
+        "image_count": 0,
+        "image_urls": [],
+    }
+    ctx.images_detected = False
+    ctx.sent_content_length = 0
+    ctx.network_sent_content_length = 0
+    monitor._stream_ctx = ctx
+
+    state = monitor.capture_interrupted_image_resume_state()
+
+    assert state == {
+        "baseline_snapshot": ctx.baseline_snapshot,
+        "sent_content_length": 0,
+        "image_urls": [],
+    }
+
+
+def test_interrupted_network_image_resume_uses_pending_send_baseline_without_stream_context():
+    monitor = StreamMonitor.__new__(StreamMonitor)
+    monitor._image_config = {
+        "enabled": True,
+        "arena_image_generation": True,
+    }
+    monitor._image_extraction_enabled = True
+    monitor._stream_ctx = None
+    monitor._pending_send_baseline = {
+        "groups_count": 3,
+        "text_len": 0,
+        "image_count": 0,
+        "_captured_after_send": True,
+    }
+
+    state = monitor.capture_interrupted_image_resume_state()
+
+    assert state == {
+        "baseline_snapshot": monitor._pending_send_baseline,
+        "sent_content_length": 0,
+        "image_urls": [],
+    }
+    assert state["baseline_snapshot"] is not monitor._pending_send_baseline
+
+
 def test_executor_resumes_prefetched_image_from_dom_without_rebuilding_network():
     class _RecoverableStreamMonitor:
         def __init__(self):
@@ -750,14 +857,34 @@ class _ArenaImageGuardTab:
     def __init__(self, *, stop_present=False, terminal_error=None):
         self.stop_present = stop_present
         self.terminal_error = terminal_error
+        self.run_js_script = ""
         self.run_js_args = None
 
     def ele(self, _selector, timeout=0):
         return object() if self.stop_present else None
 
     def run_js(self, _script, *_args):
+        self.run_js_script = _script
         self.run_js_args = _args
+        if _args and _args[0] == ARENA_NATIVE_STOP_SELECTOR:
+            return self.stop_present
         return self.terminal_error
+
+
+class _ArenaImageVisibleStopTab:
+    url = "https://arena.ai/image"
+
+    def __init__(self, stop_visible):
+        self.stop_visible = stop_visible
+        self.stop_script = ""
+        self.stop_selector = ""
+
+    def run_js(self, script, *args):
+        if args:
+            self.stop_script = script
+            self.stop_selector = args[0]
+            return self.stop_visible
+        return None
 
 
 def _arena_png_bytes(color):
@@ -774,6 +901,23 @@ def test_arena_image_guard_requires_native_stop_absent_and_terminal_result():
     tab.stop_present = False
     assert guard.observe(has_new_image=False).is_complete is False
     assert guard.observe(has_new_image=True).is_complete is True
+
+
+def test_arena_image_guard_does_not_complete_while_native_stop_is_visible():
+    tab = _ArenaImageVisibleStopTab(stop_visible=True)
+    observation = ArenaImageGenerationGuard(tab).observe(has_new_image=True)
+
+    assert observation.is_complete is False
+    assert tab.stop_selector == ARENA_NATIVE_STOP_SELECTOR
+    assert "getBoundingClientRect" in tab.stop_script
+    assert "getComputedStyle" in tab.stop_script
+
+
+def test_arena_image_guard_allows_completion_after_native_stop_is_hidden():
+    tab = _ArenaImageVisibleStopTab(stop_visible=False)
+    observation = ArenaImageGenerationGuard(tab).observe(has_new_image=True)
+
+    assert observation.is_complete is True
 
 
 @pytest.mark.parametrize(
@@ -794,7 +938,64 @@ def test_arena_image_guard_maps_terminal_errors_to_non_retryable_422(payload, co
     assert observation.terminal_error.code == code
     assert observation.terminal_error.status_code == 422
     assert observation.terminal_error.retryable is False
-    assert tab.run_js_args == ("main .result",)
+    assert tab.run_js_args == ("main .result", "", "")
+
+
+def test_arena_image_guard_selects_latest_result_by_visual_position():
+    tab = _ArenaImageGuardTab(stop_present=False, terminal_error=None)
+
+    ArenaImageGenerationGuard(
+        tab,
+        result_selector="main .result",
+    ).detect_terminal_error()
+
+    assert "candidates[candidates.length - 1]" not in tab.run_js_script
+    assert "getBoundingClientRect().bottom" in tab.run_js_script
+
+
+def test_arena_result_baseline_marks_existing_response_nodes():
+    class _Tab:
+        def __init__(self):
+            self.script = ""
+            self.args = ()
+
+        def run_js(self, script, *args):
+            self.script = script
+            self.args = args
+            return {"ok": True, "node_count": 4, "marked_count": 4}
+
+    tab = _Tab()
+    baseline = capture_arena_result_baseline(tab, "main .result")
+
+    assert baseline["node_count"] == 4
+    assert baseline["marked_count"] == 4
+    assert baseline["property"] == ARENA_RESULT_BASELINE_PROPERTY
+    assert tab.args == (
+        "main .result",
+        baseline["token"],
+        ARENA_RESULT_BASELINE_PROPERTY,
+    )
+    assert "marker.text" not in tab.script
+    assert "text: normalize" in tab.script
+
+
+def test_arena_image_guard_filters_unchanged_baseline_results():
+    tab = _ArenaImageGuardTab(stop_present=False, terminal_error=None)
+
+    ArenaImageGenerationGuard(
+        tab,
+        result_selector="main .result",
+        baseline_token="request-token",
+        baseline_property=ARENA_RESULT_BASELINE_PROPERTY,
+    ).detect_terminal_error()
+
+    assert tab.run_js_args == (
+        "main .result",
+        "request-token",
+        ARENA_RESULT_BASELINE_PROPERTY,
+    )
+    assert "marker.token !== baselineToken" in tab.run_js_script
+    assert "normalize(marker.text)" in tab.run_js_script
 
 
 def test_arena_image_guard_uses_ten_second_refresh_default():
@@ -812,7 +1013,7 @@ def test_arena_image_guard_scope_excludes_normal_uploaded_image_chat():
 
     assert is_arena_image_generation_request(
         "https://arena.ai/image", "edit this", image_config, ["reference.png"]
-    ) is True
+    ) is False
     assert is_arena_image_generation_request(
         "https://arena.ai/c/example", "describe this", image_config, ["reference.png"]
     ) is False
@@ -820,6 +1021,21 @@ def test_arena_image_guard_scope_excludes_normal_uploaded_image_chat():
         "https://example.test/image", "generate image", image_config, []
     ) is False
     assert is_arena_page_url("https://notarena.ai.example.test/image") is False
+
+
+def test_arena_image_guard_requires_explicit_template_marker():
+    image_config = {
+        "enabled": True,
+        "arena_image_generation": True,
+        "modalities": {"image": {"enabled": True}},
+    }
+
+    assert is_arena_image_generation_request(
+        "https://arena.ai/c/example", "describe this", image_config, []
+    ) is True
+    assert is_arena_image_generation_request(
+        "https://example.test/image", "generate image", image_config, []
+    ) is False
 
 
 def test_arena_image_to_image_runtime_flag_does_not_require_prompt_marker():
@@ -831,6 +1047,20 @@ def test_arena_image_to_image_runtime_flag_does_not_require_prompt_marker():
     monitor._image_extraction_enabled = True
 
     assert monitor._looks_like_expected_image_output("make it brighter") is True
+
+
+def test_stream_monitor_requires_explicit_image_template_marker():
+    monitor = StreamMonitor.__new__(StreamMonitor)
+    monitor._image_config = {
+        "enabled": True,
+        "modalities": {"image": {"enabled": True}},
+    }
+    monitor._image_extraction_enabled = True
+
+    assert monitor._looks_like_expected_image_output("generate an image") is False
+
+    monitor._image_config["arena_image_generation"] = True
+    assert monitor._looks_like_expected_image_output("ordinary text request") is True
 
 
 def test_arena_reused_uploaded_image_is_non_retryable(monkeypatch):
@@ -955,6 +1185,7 @@ def test_text_recovery_avoids_premature_exit_with_historical_bubbles(monkeypatch
     monitor._image_config = {
         "enabled": False,
         "modalities": {"image": {"enabled": False}},
+        "dom_image_interrupted_refresh_interval_seconds": 1,
     }
     monitor._expect_image_output = False
     monitor._network_fallback_reason = "workflow_interrupt_dom_resume"

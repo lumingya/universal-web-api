@@ -9,7 +9,7 @@ import threading
 import time
 from typing import Any, Callable, Dict, Optional
 
-from app.core.config import BrowserConstants, get_logger
+from app.core.config import BrowserConstants, _request_context, get_logger
 from app.services.request_manager import RequestContext
 
 
@@ -233,6 +233,15 @@ def _get_cancel_reason(ctx: RequestContext, fallback: str = "worker_cancelled") 
     return reason or fallback
 
 
+def run_in_request_context(ctx: RequestContext, worker_fn: Callable[[], Any]) -> Any:
+    """Run a callable with the request id attached to all logs it emits."""
+    token = _request_context.set(str(getattr(ctx, "request_id", "") or "SYSTEM"))
+    try:
+        return worker_fn()
+    finally:
+        _request_context.reset(token)
+
+
 async def run_tracked_blocking_call(
     worker_fn: Callable[[], Any],
     *,
@@ -249,7 +258,7 @@ async def run_tracked_blocking_call(
 
     def worker() -> None:
         try:
-            result = worker_fn()
+            result = run_in_request_context(ctx, worker_fn)
         except Exception as exc:
             try:
                 loop.call_soon_threadsafe(

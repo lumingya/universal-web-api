@@ -80,6 +80,8 @@ def test_route_group_chat_forces_configured_preset_and_uses_group_execution(monk
     captured = {}
     group = _group_payload()
     group["live_member_count"] = 4
+    group["idle_member_count"] = 1
+    group["busy_member_count"] = 3
 
     class _Pool:
         @staticmethod
@@ -144,6 +146,12 @@ def test_route_group_chat_forces_configured_preset_and_uses_group_execution(monk
         ]
         == "4"
     )
+    assert captured["kwargs"]["resolved_headers"][
+        "X-Route-Group-Idle-Member-Count"
+    ] == "1"
+    assert captured["kwargs"]["resolved_headers"][
+        "X-Route-Group-Busy-Member-Count"
+    ] == "3"
     assert captured["metadata"]["route_group"] == "arena-image"
 
 
@@ -154,12 +162,43 @@ def test_route_group_headers_include_group_and_resolved_domain():
         route_group="arena-image",
         selector="round_robin",
         route_group_live_member_count=4,
+        route_group_idle_member_count=1,
+        route_group_busy_member_count=3,
     )
 
     assert headers["X-Requested-Route-Group"] == "arena-image"
     assert headers["X-Resolved-Route-Group"] == "arena-image"
     assert headers["X-Resolved-Route-Domain"] == "arena.ai"
     assert headers["X-Route-Group-Live-Member-Count"] == "4"
+    assert headers["X-Route-Group-Idle-Member-Count"] == "1"
+    assert headers["X-Route-Group-Busy-Member-Count"] == "3"
+
+
+def test_route_group_models_exposes_current_member_counts(monkeypatch):
+    group = _group_payload()
+    group["live_member_count"] = 4
+    group["idle_member_count"] = 1
+    group["busy_member_count"] = 3
+
+    class _Pool:
+        @staticmethod
+        def get_route_groups_snapshot():
+            return [group]
+
+    monkeypatch.setattr(
+        tab_routes,
+        "get_browser",
+        lambda auto_connect=False: SimpleNamespace(tab_pool=_Pool()),
+    )
+
+    response = asyncio.run(tab_routes.list_models_with_route_group(
+        group_id="arena-image",
+        authenticated=True,
+    ))
+
+    assert response.headers["X-Route-Group-Live-Member-Count"] == "4"
+    assert response.headers["X-Route-Group-Idle-Member-Count"] == "1"
+    assert response.headers["X-Route-Group-Busy-Member-Count"] == "3"
 
 
 def test_browser_workflow_route_group_binds_and_releases_selected_member():

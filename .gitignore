@@ -99,6 +99,7 @@ tests/*
 !tests/test_arena_auto_battle_command.py
 !tests/test_arena_command_persistence.py
 !tests/test_media_transcode_cache.py
+!tests/test_proxy_media_fallback.py
 !tests/test_stream_monitor_image_detection.py
 !tests/test_media_stream_image_precedence.py
 !tests/test_updater_safe_extract.py

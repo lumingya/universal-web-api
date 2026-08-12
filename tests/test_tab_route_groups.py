@@ -120,6 +120,7 @@ def test_route_group_snapshot_live_count_includes_busy_members():
 
     assert group["live_member_count"] == 2
     assert group["idle_member_count"] == 1
+    assert group["busy_member_count"] == 1
 
 
 def test_route_group_waiter_acquires_member_after_release():
@@ -180,6 +181,23 @@ def test_route_group_never_falls_back_to_idle_session_outside_group():
     assert acquired is None
     assert outsider.status == TabStatus.IDLE
     assert outsider.current_task_id is None
+
+
+def test_empty_route_group_returns_immediately_without_waiting_for_timeout():
+    member = _session("arena-member", 1, "https://arena.ai/c/image")
+    manager = _manager([member])
+    manager.route_groups = normalize_route_groups([{
+        "id": "arena-image",
+        "route_domain": "arena.ai",
+        "members": [{"url": "https://arena.ai/c/closed"}],
+    }])
+
+    started = time.monotonic()
+    acquired = manager.acquire_by_route_group("arena-image", "req-empty", timeout=1.0)
+    elapsed = time.monotonic() - started
+
+    assert acquired is None
+    assert elapsed < 0.5
 
 
 def test_route_group_waiters_are_served_in_fifo_order():
@@ -270,6 +288,17 @@ def test_terminate_quarantines_only_target_member_until_owner_releases(monkeypat
     assert second.status == TabStatus.BUSY
     assert second.current_task_id == "req-2"
     assert first.acquire("req-3") is False
+
+    duplicate = manager.terminate_by_index(
+        1,
+        clear_page=False,
+        expected_session_id=first.id,
+        expected_task_id="req-1",
+    )
+    assert duplicate["ok"] is True
+    assert duplicate["already_in_progress"] is True
+    assert duplicate["pending"] is True
+    assert duplicate["released"] is False
 
     assert manager.release(
         first.id,

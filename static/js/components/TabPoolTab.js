@@ -735,11 +735,13 @@ window.TabPoolTabComponent = {
         },
 
         getTabRouteGroupIds(tab) {
-            const direct = Array.isArray(tab && tab.route_groups) ? tab.route_groups : [];
-            if (direct.length) return direct;
-            return (this.routeGroups || [])
+            const configuredGroups = Array.isArray(this.routeGroups) ? this.routeGroups : [];
+            // 标签对象中的 route_groups 可能来自切换 URL 前的绑定快照；显示层按
+            // 当前 URL 与当前组成员重算，避免旧会话关联继续污染新 URL 的徽章。
+            return Array.from(new Set(configuredGroups
                 .filter(group => (group.members || []).some(member => this.routeGroupMemberMatchesTab(member, tab)))
-                .map(group => group.id);
+                .map(group => String(group && group.id || '').trim())
+                .filter(Boolean)));
         },
 
         selectAllTabs() {
@@ -1126,6 +1128,7 @@ window.TabPoolTabComponent = {
         },
 
         openTerminateModal(tab) {
+            if (!tab || tab.terminating) return;
             this.terminateModal = {
                 visible: true,
                 submitting: false,
@@ -1549,7 +1552,7 @@ window.TabPoolTabComponent = {
                                     <p v-if="tab.current_task" class="tab-task-line">任务: {{ tab.current_task }}</p>
                                     <div class="tab-card-actions">
                                         <button v-if="tab.url" type="button" @click="toggleTabExcluded(tab)" :disabled="excludedUrlsUpdating || !configLoaded">{{ tab.route_excluded ? '解除排除' : '排除域名路由' }}</button>
-                                        <button v-if="tab.status === 'busy' || tab.current_task || tab.command_task || tab.current_command" type="button" class="danger" @click="openTerminateModal(tab)">终止并解锁</button>
+                                        <button v-if="!tab.terminating && (tab.status === 'busy' || tab.current_task || tab.command_task || tab.current_command)" type="button" class="danger" @click="openTerminateModal(tab)">终止并解锁</button>
                                     </div>
                                 </aside>
                             </article>
@@ -1565,7 +1568,7 @@ window.TabPoolTabComponent = {
                 <div class="tab-pool-modal">
                     <div class="tab-pool-modal-head"><span><strong>终止标签页任务</strong><small>标签页 #{{ terminateModal.tab && terminateModal.tab.persistent_index }}</small></span><button type="button" @click="closeTerminateModal()" :disabled="terminateModal.submitting" v-html="$icons.xMark" title="关闭"></button></div>
                     <div class="tab-pool-modal-body"><p>当前任务: {{ (terminateModal.tab && (terminateModal.tab.current_task || terminateModal.tab.command_task)) || '无 task_id' }}</p><small>终止本次循环只发送单轮取消信号；终止整个任务会取消请求并释放标签页。</small></div>
-                    <div class="tab-pool-modal-actions"><button type="button" @click="closeTerminateModal()" :disabled="terminateModal.submitting">取消</button><button type="button" class="warning" @click="terminateTask(terminateModal.tab, 'loop')" :disabled="terminateModal.submitting || !(terminateModal.tab && terminateModal.tab.command_loop && terminateModal.tab.command_loop.active)">终止本次循环</button><button type="button" class="danger" @click="terminateTask(terminateModal.tab, 'task')" :disabled="terminateModal.submitting">终止整个任务</button></div>
+                    <div class="tab-pool-modal-actions"><button type="button" @click="closeTerminateModal()" :disabled="terminateModal.submitting">取消</button><button type="button" class="warning" @click="terminateTask(terminateModal.tab, 'loop')" :disabled="terminateModal.submitting || (terminateModal.tab && terminateModal.tab.terminating) || !(terminateModal.tab && terminateModal.tab.command_loop && terminateModal.tab.command_loop.active)">终止本次循环</button><button type="button" class="danger" @click="terminateTask(terminateModal.tab, 'task')" :disabled="terminateModal.submitting || (terminateModal.tab && terminateModal.tab.terminating)">终止整个任务</button></div>
                 </div>
             </div>
 

@@ -26,7 +26,7 @@ from fastapi import APIRouter, Request, HTTPException, Header, Depends
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from app.core.config import get_logger, SSEFormatter
+from app.core.config import _request_context, get_logger, SSEFormatter
 from app.core import get_browser
 from app.services.request_manager import (
     request_manager, 
@@ -40,6 +40,7 @@ from app.services.request_lifecycle import (
     cleanup_worker_thread_after_request,
     mark_request_hard_timeout,
     put_worker_queue_item,
+    run_in_request_context,
     run_tracked_blocking_call,
     wait_worker_queue_item,
 )
@@ -2395,6 +2396,7 @@ async def _stream_with_lifecycle(
     ctx: RequestContext
 ):
     """流式响应 + 完整生命周期管理"""
+    request_context_token = _request_context.set(ctx.request_id)
     disconnect_task = None
     worker_thread = None
     chunk_queue: Optional[queue.Queue] = None
@@ -2448,7 +2450,11 @@ async def _stream_with_lifecycle(
                 _put_worker_queue_item(chunk_queue, ctx, None, final=True)
                 logger.debug("工作线程结束")
 
-        worker_thread = threading.Thread(target=worker, daemon=True)
+        worker_thread = threading.Thread(
+            target=run_in_request_context,
+            args=(ctx, worker),
+            daemon=True,
+        )
         # 供 TabRecovery 判定旧 worker 是否退出（setattr 规避 dataclass 字段限制）
         setattr(ctx, "worker_thread", worker_thread)
         worker_thread.start()
@@ -2659,6 +2665,7 @@ async def _stream_with_lifecycle(
                 pass
 
         request_manager.finish_request(ctx, success=(ctx.status == RequestStatus.COMPLETED))
+        _request_context.reset(request_context_token)
 
 
 async def _non_stream_with_lifecycle(

@@ -474,6 +474,7 @@ class ImageExtractionConfig(TypedDict, total=False):
     allow_container_fallback: bool   # 当前回复内无媒体时是否回退到容器/整页
     request_baseline_exclude_existing_nodes: bool # 发送前已存在的图片节点即使换源也视为输入/历史图片
     force_postprocess: bool          # 是否强制执行收尾多模态后处理（由配置显式声明）
+    arena_image_generation: bool     # 启用 Arena 生图的严格完成条件
     direct_postprocess_modalities: List[Literal["image", "audio", "video"]] # 允许无额外信号直接执行 DOM 收尾提取的模态
     debounce_seconds: float          # 文本稳定后等待时间
     wait_for_load: bool              # 是否等待媒体加载完成

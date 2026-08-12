@@ -92,7 +92,7 @@
             if (
                 interval <= 0
                 || !this.getBrowserConstantBool('LOG_WEB_COLLECTOR_ENABLED', true)
-                || this.getBrowserConstantNumber('LOG_WEB_MAX_RECORDS', 500) <= 0
+                || this.getBrowserConstantNumber('LOG_WEB_MAX_RECORDS', 5000) <= 0
             ) {
                 this.stopLogPollingTimer()
                 this.logs = []
@@ -349,7 +349,7 @@
 
             if (
                 !this.getBrowserConstantBool('LOG_WEB_COLLECTOR_ENABLED', true)
-                || this.getBrowserConstantNumber('LOG_WEB_MAX_RECORDS', 500, { min: 0 }) <= 0
+                || this.getBrowserConstantNumber('LOG_WEB_MAX_RECORDS', 5000, { min: 0 }) <= 0
                 || this.getDashboardPollInterval('DASHBOARD_LOG_POLL_INTERVAL_MS', 1000) <= 0
             ) {
                 this.logs = []
@@ -949,7 +949,7 @@
             if (this.pauseLogs || document.visibilityState === 'hidden') return;
             if (
                 !this.getBrowserConstantBool('LOG_WEB_COLLECTOR_ENABLED', true)
-                || this.getBrowserConstantNumber('LOG_WEB_MAX_RECORDS', 500, { min: 0 }) <= 0
+                || this.getBrowserConstantNumber('LOG_WEB_MAX_RECORDS', 5000, { min: 0 }) <= 0
             ) {
                 this.logs = [];
                 this.lastLogSeq = 0;
@@ -980,7 +980,7 @@
                 }
                 if (
                     !this.getBrowserConstantBool('LOG_WEB_COLLECTOR_ENABLED', true)
-                    || this.getBrowserConstantNumber('LOG_WEB_MAX_RECORDS', 500, { min: 0 }) <= 0
+                    || this.getBrowserConstantNumber('LOG_WEB_MAX_RECORDS', 5000, { min: 0 }) <= 0
                 ) {
                     this.logs = [];
                     this.lastLogSeq = 0;
@@ -1016,7 +1016,7 @@
                             messageAlias: log.message_alias || ''
                         }
                     });
-                    const maxLogs = Math.floor(this.getBrowserConstantNumber('LOG_WEB_MAX_RECORDS', 500, { min: 0, max: 10000 }));
+                    const maxLogs = Math.floor(this.getBrowserConstantNumber('LOG_WEB_MAX_RECORDS', 5000, { min: 0, max: 10000 }));
                     this.logs = maxLogs > 0 ? this.logs.concat(nextLogs).slice(-maxLogs) : [];
                 }
                 this.lastLogSeq = Number(result.next_seq || this.lastLogSeq || 0);
@@ -1605,9 +1605,11 @@
                 const launcherKeys = changedKeys.filter((key) => {
                     return (this.getEnvFieldMeta(key)?.apply || 'service') === 'launcher';
                 });
+                const scheduledRestartKeys = launcherKeys.filter((key) => String(key || '').startsWith('SCHEDULED_RESTART_'));
+                const browserRestartKeys = launcherKeys.filter((key) => !String(key || '').startsWith('SCHEDULED_RESTART_'));
 
-                if (launcherKeys.length > 0) {
-                    const launcherLabels = launcherKeys.map((key) => {
+                if (browserRestartKeys.length > 0) {
+                    const launcherLabels = browserRestartKeys.map((key) => {
                         return this.getEnvFieldMeta(key)?.label || key;
                     }).join(', ');
 
@@ -1615,6 +1617,8 @@
                         '环境配置已保存。服务会自动重启，但以下启动型配置要完全生效，请关闭当前浏览器和脚本后重新运行 start.bat：' + launcherLabels,
                         'warning'
                     );
+                } else if (scheduledRestartKeys.length > 0) {
+                    this.notify('服务守护配置已保存，后端会自动重启；浏览器和现有标签页保持不变', 'success');
                 } else {
                     this.notify('环境配置已保存，服务将自动重启后生效', 'success');
                 }

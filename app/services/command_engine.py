@@ -3004,7 +3004,8 @@ return (function() {
                 }
             )
             current_hit = bool(match_info.get("hit"))
-            if probe_js and current_hit:
+            probe_always = bool(trigger.get("probe_always", False))
+            if probe_js and (current_hit or probe_always):
                 probe_info = self._evaluate_page_check_probe(session, probe_js)
                 match_info["probe_hit"] = bool(probe_info.get("hit"))
                 match_info["probe_result"] = probe_info.get("result")
@@ -3350,7 +3351,19 @@ return (function() {
         code: str,
     ) -> Dict[str, Any]:
         self._try_wake_tab(session, reason="page_check_probe")
+        context = {
+            "parser_id": str(getattr(session, "_workflow_parser_id", "") or "").strip().lower(),
+            "target_side": str(getattr(session, "_workflow_target_side", "") or "").strip().lower(),
+            "runtime_id": str(getattr(session, "_workflow_runtime_id", "") or "").strip(),
+        }
         try:
+            try:
+                session.tab.run_js(
+                    "return (() => { window.__codexWorkflowContext = arguments[0] || {}; return true; })()",
+                    context,
+                )
+            except Exception as context_error:
+                logger.debug(f"[CMD] 页面检查上下文注入失败（继续探测）: {context_error}")
             result = self._run_command_js(session.tab, code)
         except Exception as e:
             message = f"probe_js_failed: {e}"

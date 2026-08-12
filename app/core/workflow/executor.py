@@ -516,10 +516,38 @@ class WorkflowExecutor(
     def _create_result_event_handler(self):
         try:
             from app.services.result_event_bridge import create_result_event_handler
-            return create_result_event_handler(self._get_result_event_context)
+            bridge_handler = create_result_event_handler(self._get_result_event_context)
+
+            def handle_result(payload):
+                self._update_workflow_target_side(payload)
+                return bridge_handler(payload)
+
+            return handle_result
         except Exception as e:
             logger.debug(f"[Executor] 结果事件桥接初始化失败（忽略）: {e}")
             return None
+
+    def _update_workflow_target_side(self, payload: Dict[str, Any]) -> None:
+        if self.session is None or not isinstance(payload, dict):
+            return
+        parser_id = str(payload.get("parser_id") or "").strip().lower()
+        if "winner" not in parser_id:
+            return
+        parse_result = payload.get("parse_result")
+        if not isinstance(parse_result, dict):
+            return
+        side = str(
+            parse_result.get("winner_side")
+            or parse_result.get("completion_side")
+            or ""
+        ).strip().lower()
+        if side not in {"left", "right"}:
+            return
+        try:
+            from app.services.command_engine import command_engine
+            command_engine.update_workflow_target_side(self.session, side)
+        except Exception as e:
+            logger.debug(f"[Executor] 更新 Arena winner 目标侧失败（忽略）: {e}")
 
     def _get_result_event_context(self) -> Dict[str, Any]:
         session_id = ""

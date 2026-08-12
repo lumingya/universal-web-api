@@ -28,6 +28,7 @@ from fastapi.responses import JSONResponse, FileResponse, Response
 # ================= 导入配置 =================
 
 from app.core.config import AppConfig, get_logger, get_shared_file_log_handler
+from app.services.restart_guard import RestartGuard
 
 # ================= 日志配置 =================
 
@@ -51,6 +52,24 @@ logger.debug(f"[startup] Python executable: {sys.executable}")
 
 
 _STARTUP_EMPTY_URLS = ("", "about:blank", "chrome://newtab/", "chrome://new-tab-page/")
+restart_guard: Optional[RestartGuard] = None
+
+
+def _get_scheduled_restart_active_work() -> int:
+    """Count workflow work separately from ordinary HTTP requests."""
+    try:
+        from app.services.request_manager import request_manager
+
+        status = request_manager.get_status() or {}
+        counts = status.get("status_counts") or {}
+        return int(status.get("running_count", 0) or 0) + int(counts.get("queued", 0) or 0)
+    except Exception:
+        return 0
+
+
+def _exit_for_scheduled_restart() -> None:
+    logger.warning("定时守护已排空工作流，服务将重启（浏览器和标签页保持不变）")
+    os._exit(3)
 
 def _setup_windows_event_loop_policy():
     """
@@ -371,6 +390,7 @@ def _dashboard_info_response():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
+    global restart_guard
     _install_asyncio_exception_filter()
     logger.info("=" * 60)
     logger.info("Universal Web-to-API 服务启动中...")       
@@ -446,6 +466,20 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"[startup] 命令调度器初始化失败: {e}")
 
+    restart_guard = RestartGuard(
+        enabled=AppConfig.is_scheduled_restart_enabled(),
+        interval_seconds=AppConfig.get_scheduled_restart_interval_seconds(),
+        drain_timeout_seconds=AppConfig.get_scheduled_restart_drain_timeout_seconds(),
+        activity_probe=_get_scheduled_restart_active_work,
+        restart_callback=_exit_for_scheduled_restart,
+    )
+    await restart_guard.start()
+    if restart_guard.is_enabled:
+        logger.info(
+            f"[restart-guard] 已启用：每 {AppConfig.get_scheduled_restart_interval_seconds()}s 检查，"
+            f"排空上限 {AppConfig.get_scheduled_restart_drain_timeout_seconds()}s"
+        )
+
     logger.info("")
     logger.info("🚀 服务已就绪！")
     if AppConfig.is_dashboard_enabled():
@@ -458,6 +492,9 @@ async def lifespan(app: FastAPI):
     yield
 
     logger.info("服务正在关闭...")
+    if restart_guard is not None:
+        await restart_guard.stop()
+        restart_guard = None
     try:
         from app.services.command_engine import command_engine
         command_engine.shutdown()
@@ -513,6 +550,18 @@ if AppConfig.is_cors_enabled():
 
 @app.middleware("http")
 async def disable_dashboard_cache(request, call_next):
+    guard = restart_guard
+    if guard is not None:
+        async with guard.track_request() as admitted:
+            if not admitted:
+                # Do not reject arrivals during a handoff.  The launcher proxy
+                # retries this request when the new backend instance is ready.
+                await guard.wait_for_handoff()
+            return await _call_next_without_dashboard_cache(request, call_next)
+    return await _call_next_without_dashboard_cache(request, call_next)
+
+
+async def _call_next_without_dashboard_cache(request, call_next):
     try:
         response = await call_next(request)
     except RuntimeError as e:

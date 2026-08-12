@@ -19,8 +19,8 @@
       "group_name": "arena"
     },
     {
-      "id": "cmd_8c7f95ba",
-      "name": "ARENA自动盲测不翻牌 - 副本",
+      "id": "cmd_6998c7a8",
+      "name": "ARENA自动盲测不翻牌 - 副本 2",
       "enabled": true,
       "group_name": "arena"
     },
@@ -87,6 +87,12 @@
     {
       "id": "cmd_arena_stop_fix_runtime",
       "name": "ARENA_STOP_FIX_RUNTIME",
+      "enabled": true,
+      "group_name": "arena"
+    },
+    {
+      "id": "cmd_arena_image_failure_guard",
+      "name": "ARENA_IMAGE_FAILURE_GUARD",
       "enabled": true,
       "group_name": "arena"
     },

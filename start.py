@@ -15,9 +15,11 @@ import hashlib
 import os
 import shutil
 import socket
+import socketserver
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.request
 import venv
@@ -58,6 +60,10 @@ ENV_DEFAULTS = {
     # Set BROWSER_MEMORY_SAVER=true after validating the target sites.
     "BROWSER_MEMORY_SAVER": "false",
     "PROFILE_CLEAN_ENABLED": "false",
+    "SCHEDULED_RESTART_ENABLED": "false",
+    "SCHEDULED_RESTART_INTERVAL_SECONDS": "10800",
+    "SCHEDULED_RESTART_DRAIN_TIMEOUT_SECONDS": "1800",
+    "SCHEDULED_RESTART_TAB_STATE_POLICY": "preserve",
 }
 
 REQUIRED_PROJECT_FILES = [
@@ -587,6 +593,96 @@ def _debug_port_ready(port: int) -> bool:
         return False
 
 
+class _RestartHandoffProxy(socketserver.ThreadingTCPServer):
+    """Small TCP relay which buffers a request while the child service restarts."""
+
+    allow_reuse_address = True
+    daemon_threads = True
+
+    def __init__(self, host: str, port: int, backend_port: int):
+        self.backend_port = int(backend_port)
+        super().__init__((host, int(port)), _RestartHandoffProxyHandler)
+
+
+class _RestartHandoffProxyHandler(socketserver.BaseRequestHandler):
+    _BUFFER_SIZE = 64 * 1024
+    _MAX_REQUEST_BYTES = 64 * 1024 * 1024
+
+    def handle(self) -> None:
+        try:
+            payload = self._read_request()
+            if payload:
+                self._forward_when_backend_ready(payload)
+        except Exception:
+            return
+
+    def _read_request(self) -> bytes:
+        self.request.settimeout(60.0)
+        payload = bytearray()
+        while b"\r\n\r\n" not in payload:
+            chunk = self.request.recv(self._BUFFER_SIZE)
+            if not chunk:
+                return b""
+            payload.extend(chunk)
+            if len(payload) > self._MAX_REQUEST_BYTES:
+                return b""
+
+        header_end = payload.find(b"\r\n\r\n") + 4
+        headers = bytes(payload[:header_end]).decode("iso-8859-1", errors="replace")
+        content_length = 0
+        for line in headers.split("\r\n")[1:]:
+            if line.lower().startswith("content-length:"):
+                content_length = max(0, int(line.split(":", 1)[1].strip()))
+                break
+        target_size = header_end + content_length
+        if target_size > self._MAX_REQUEST_BYTES:
+            return b""
+        while len(payload) < target_size:
+            chunk = self.request.recv(min(self._BUFFER_SIZE, target_size - len(payload)))
+            if not chunk:
+                return b""
+            payload.extend(chunk)
+        # One request per client connection makes the restart boundary explicit
+        # and lets us safely replay a request that arrived while draining.
+        header_lines = [
+            line for line in headers.split("\r\n")
+            if not line.lower().startswith("connection:")
+        ]
+        rewritten_headers = "\r\n".join(header_lines).rstrip("\r\n") + "\r\nConnection: close\r\n\r\n"
+        return rewritten_headers.encode("iso-8859-1") + bytes(payload[header_end:])
+
+    def _forward_when_backend_ready(self, payload: bytes) -> None:
+        deadline = time.monotonic() + 120.0
+        while time.monotonic() < deadline:
+            try:
+                with socket.create_connection(("127.0.0.1", self.server.backend_port), timeout=1.0) as backend:
+                    backend.settimeout(300.0)
+                    backend.sendall(payload)
+                    if self._relay_response(backend):
+                        return
+            except (ConnectionError, OSError, socket.timeout):
+                time.sleep(0.15)
+
+    def _relay_response(self, backend: socket.socket) -> bool:
+        sent_response = False
+        while True:
+            chunk = backend.recv(self._BUFFER_SIZE)
+            if not chunk:
+                return sent_response
+            self.request.sendall(chunk)
+            sent_response = True
+
+
+def _start_restart_handoff_proxy(host: str, public_port: int, backend_port: int):
+    try:
+        proxy = _RestartHandoffProxy(host, public_port, backend_port)
+    except OSError as exc:
+        raise RuntimeError(f"无法启动重启守护代理（端口 {public_port}）：{exc}") from exc
+    threading.Thread(target=proxy.serve_forever, daemon=True, name="restart-handoff-proxy").start()
+    _log(f"[OK] 重启守护代理已监听 {host}:{public_port}（后端内部端口 {backend_port}）")
+    return proxy
+
+
 def _focus_browser_window_for_port(port: int) -> bool:
     """Best-effort Windows foreground restore for an already-running browser."""
     if not sys.platform.startswith("win"):
@@ -837,10 +933,36 @@ def _display_start_summary() -> None:
     _log()
 
 
-def _run_service_loop() -> int:
+def _find_backend_port(public_port: int) -> int:
+    preferred = int(public_port) + 1
+    candidates = [preferred] if preferred <= 65535 else []
+    for candidate in candidates:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                probe.bind(("127.0.0.1", candidate))
+            return candidate
+        except OSError:
+            pass
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        return int(probe.getsockname()[1])
+
+
+def _run_service_loop(*, public_port: int | None = None, backend_port: int | None = None) -> int:
     while True:
         _load_env_file(PROJECT_DIR / ".env")
-        completed = _run_project_python(["main.py"], check=False)
+        child_env = _build_service_env()
+        if backend_port is not None:
+            child_env["APP_HOST"] = "127.0.0.1"
+            child_env["APP_PORT"] = str(backend_port)
+            # main.py loads .env during import.  Keep the launcher-selected
+            # private port authoritative over the public APP_PORT value.
+            child_env["UWAPI_DOTENV_OVERRIDE"] = "0"
+        completed = _run(
+            [str(_venv_python()), "main.py"],
+            check=False,
+            env=child_env,
+        )
         if completed.returncode == 0:
             _log()
             _log("[INFO] 服务已停止")
@@ -884,6 +1006,11 @@ def main() -> int:
     _launch_browser_if_needed()
     _display_version_info()
     _display_start_summary()
+    public_port = int(os.getenv("APP_PORT", "8199") or "8199")
+    if _env_flag("SCHEDULED_RESTART_ENABLED", False):
+        backend_port = _find_backend_port(public_port)
+        _start_restart_handoff_proxy(os.getenv("APP_HOST", "127.0.0.1"), public_port, backend_port)
+        return _run_service_loop(public_port=public_port, backend_port=backend_port)
     return _run_service_loop()
 
 

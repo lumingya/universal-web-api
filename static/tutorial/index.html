@@ -1331,6 +1331,13 @@ BROWSER_PROFILE_NAME=Default</code></pre></div>
             </div>
           </details>
           <details class="acc">
+            <summary><i data-lucide="alert-triangle" class="ac-ic" style="width:16px;height:16px"></i>浏览器能正常输入和点击发送，但提取出来的回复始终为空？<i data-lucide="chevron-right" class="chev" style="width:15px;height:15px"></i></summary>
+            <div class="acc-bd">
+              <p>这通常是因为<strong>受控浏览器的 Chrome 内核版本过低</strong>导致的。以 ChatGPT 网页版为例，旧版 Chrome 内核会触发服务端的安全风控策略，使其在返回完会话初始元数据后瞬间发送 DONE 信号切断数据流（网络流仅 900+ 字节且完全不包含 AI 文本数据）。</p>
+              <p><strong>解决方法：</strong>请升级运行脚本环境中的 Google Chrome 浏览器版本至最新版（建议至少 150+ 或更高），等自动更新并重启浏览器后再重新测试即可。</p>
+            </div>
+          </details>
+          <details class="acc">
             <summary><i data-lucide="mail" class="ac-ic" style="width:16px;height:16px"></i>反馈渠道在哪里？<i data-lucide="chevron-right" class="chev" style="width:15px;height:15px"></i></summary>
             <div class="acc-bd">
               <ul>

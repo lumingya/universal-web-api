@@ -232,6 +232,24 @@ class AppConfig:
     @staticmethod
     def get_dashboard_file() -> str:
         return os.getenv("DASHBOARD_FILE", "static/index.html")
+
+    # ===== 定时服务重启守护 =====
+    @staticmethod
+    def is_scheduled_restart_enabled() -> bool:
+        return AppConfig._env_bool("SCHEDULED_RESTART_ENABLED", False)
+
+    @staticmethod
+    def get_scheduled_restart_interval_seconds() -> int:
+        return max(60, AppConfig._env_int("SCHEDULED_RESTART_INTERVAL_SECONDS", 10800))
+
+    @staticmethod
+    def get_scheduled_restart_drain_timeout_seconds() -> int:
+        return max(0, AppConfig._env_int("SCHEDULED_RESTART_DRAIN_TIMEOUT_SECONDS", 1800))
+
+    @staticmethod
+    def get_scheduled_restart_tab_state_policy() -> str:
+        """Reserved for future tab-state cleanup; preserve is currently the only policy."""
+        return os.getenv("SCHEDULED_RESTART_TAB_STATE_POLICY", "preserve").strip().lower() or "preserve"
     
     # ===== AI 分析配置 =====
     @staticmethod
@@ -403,7 +421,7 @@ class BrowserConstants:
         'LOG_CONSOLE_ENABLED': True,
         'LOG_FILE_ENABLED': True,
         'LOG_WEB_COLLECTOR_ENABLED': True,
-        'LOG_WEB_MAX_RECORDS': 500,
+        'LOG_WEB_MAX_RECORDS': 5000,
         'STREAM_CHECK_INTERVAL_MIN': 0.1,
         'STREAM_CHECK_INTERVAL_MAX': 1.0,
         'STREAM_CHECK_INTERVAL_DEFAULT': 0.3,
@@ -490,7 +508,7 @@ class BrowserConstants:
     LOG_CONSOLE_ENABLED = True
     LOG_FILE_ENABLED = True
     LOG_WEB_COLLECTOR_ENABLED = True
-    LOG_WEB_MAX_RECORDS = 500
+    LOG_WEB_MAX_RECORDS = 5000
     
     # 流式监控
     STREAM_CHECK_INTERVAL_MIN = 0.1
@@ -648,7 +666,7 @@ class _BrowserConstantEnabledFilter:
 class LogCollector:
     """收集日志用于前端展示"""
 
-    def __init__(self, max_logs: int = 500):
+    def __init__(self, max_logs: int = 5000):
         self.logs: deque = deque(maxlen=max_logs)
         self.lock = threading.Lock()
         self._next_seq = 1
@@ -658,7 +676,7 @@ class LogCollector:
         return _browser_constant_bool("LOG_WEB_COLLECTOR_ENABLED", True)
 
     def _target_max_logs(self) -> int:
-        return _browser_constant_int("LOG_WEB_MAX_RECORDS", 500, min_value=0, max_value=10000)
+        return _browser_constant_int("LOG_WEB_MAX_RECORDS", 5000, min_value=0, max_value=10000)
 
     def _sync_limits_unlocked(self) -> None:
         target_max_logs = self._target_max_logs()

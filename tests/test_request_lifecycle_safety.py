@@ -1,12 +1,38 @@
 import asyncio
+import contextvars
 import threading
 import time
 
 from starlette.responses import StreamingResponse
 
 from app.api.anthropic_routes import _anthropic_stream_from_openai
+from app.api import tab_routes
 from app.services.request_manager import RequestContext
+from app.services.request_lifecycle import run_tracked_blocking_call
+from app.core.config import _request_context
 from app.services import result_event_bridge
+
+
+def test_stream_context_reset_ignores_generator_finalization_in_another_context():
+    """断连时 async generator 可能在不同的 Context 中执行 finally。"""
+    request_id = contextvars.ContextVar("stream_request_id", default=None)
+    origin_context = contextvars.copy_context()
+    token = origin_context.run(request_id.set, "req-stream-close")
+
+    try:
+        cleanup_context = contextvars.copy_context()
+        cleanup_context.run(tab_routes._reset_stream_request_context, token)
+        assert origin_context.run(request_id.get) == "req-stream-close"
+    finally:
+        origin_context.run(request_id.reset, token)
+
+
+def test_stream_context_reset_restores_current_context():
+    token = _request_context.set("req-stream-normal-close")
+
+    tab_routes._reset_stream_request_context(token)
+
+    assert _request_context.get() is None
 
 
 class _TrackingAsyncIterator:
@@ -36,6 +62,28 @@ def test_response_chunk_refreshes_idle_activity_without_hard_timeout(monkeypatch
 
     assert ctx.last_activity_at > 1.0
     assert ctx.started_at_monotonic == original_timeout_start
+
+
+def test_tracked_worker_inherits_request_log_context():
+    observed = []
+    ctx = RequestContext(request_id="req-context-probe")
+
+    def worker():
+        observed.append(_request_context.get())
+        return "done"
+
+    async def exercise():
+        return await run_tracked_blocking_call(
+            worker,
+            ctx=ctx,
+            worker_state={},
+            label="context-probe",
+            poll_timeout=0.01,
+        )
+
+    assert asyncio.run(exercise()) == "done"
+    assert observed == [ctx.request_id]
+    assert _request_context.get() is None
 
 
 def test_arena_prompt_rejection_is_structured_as_non_retryable_422():
@@ -137,5 +185,59 @@ def test_anthropic_stream_closes_upstream_after_initial_event():
 
         await translated.aclose()
         assert upstream.closed is True
+
+    asyncio.run(exercise())
+
+
+def test_scheduled_restart_guard_waits_for_http_and_workflow_drain(monkeypatch):
+    from app.core.config import AppConfig
+    from app.services.restart_guard import RestartGuard
+
+    monkeypatch.delenv("SCHEDULED_RESTART_INTERVAL_SECONDS", raising=False)
+    assert AppConfig.get_scheduled_restart_interval_seconds() == 10800
+
+    async def exercise():
+        active_work = {"count": 1}
+        restart_calls = []
+        guard = RestartGuard(
+            enabled=True,
+            interval_seconds=10800,
+            drain_timeout_seconds=1,
+            activity_probe=lambda: active_work["count"],
+            restart_callback=lambda: restart_calls.append("restart"),
+        )
+
+        assert await guard.admit_request()
+        drain_task = asyncio.create_task(guard._drain_and_restart())
+        await asyncio.sleep(0)
+        assert guard.is_draining
+        assert restart_calls == []
+        assert not await guard.admit_request()
+
+        await guard.release_request()
+        await asyncio.sleep(0.05)
+        assert restart_calls == []
+
+        active_work["count"] = 0
+        assert await drain_task is True
+        assert restart_calls == ["restart"]
+
+    asyncio.run(exercise())
+
+
+def test_scheduled_restart_guard_skips_cycle_when_drain_timeout_expires():
+    from app.services.restart_guard import RestartGuard
+
+    async def exercise():
+        guard = RestartGuard(
+            enabled=True,
+            interval_seconds=10800,
+            drain_timeout_seconds=0.01,
+            activity_probe=lambda: 1,
+            restart_callback=lambda: (_ for _ in ()).throw(AssertionError("must not restart")),
+        )
+
+        assert await guard._drain_and_restart() is False
+        assert not guard.is_draining
 
     asyncio.run(exercise())

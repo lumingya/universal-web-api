@@ -61,6 +61,9 @@ class TabSession:
     _termination_in_progress: bool = field(default=False, repr=False)
     _termination_task_id: Optional[str] = field(default=None, repr=False)
     _termination_interrupt_done: bool = field(default=False, repr=False)
+    _workflow_parser_id: str = field(default="", repr=False)
+    _workflow_target_side: str = field(default="", repr=False)
+    _workflow_runtime_id: str = field(default="", repr=False)
 
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
@@ -252,6 +255,9 @@ class TabSession:
             self.current_task_id = task_id
             self._clear_health_cache_unlocked()
             self._clear_command_loop_unlocked()
+            self._workflow_parser_id = ""
+            self._workflow_target_side = ""
+            self._workflow_runtime_id = ""
             setattr(self, "_last_cancel_request_task_id", None)
             setattr(self, "_last_cancel_request_reason", None)
             self.last_used_at = time.time()
@@ -275,6 +281,9 @@ class TabSession:
             self.current_task_id = task_id
             self._clear_health_cache_unlocked()
             self._clear_command_loop_unlocked()
+            self._workflow_parser_id = ""
+            self._workflow_target_side = ""
+            self._workflow_runtime_id = ""
             setattr(self, "_last_cancel_request_task_id", None)
             setattr(self, "_last_cancel_request_reason", None)
             self.last_used_at = time.time()
@@ -345,6 +354,9 @@ class TabSession:
             setattr(self, "_command_request_id", None)
             setattr(self, "_command_loop_request_id", None)
             setattr(self, "_command_vars", {})
+            self._workflow_parser_id = ""
+            self._workflow_target_side = ""
+            self._workflow_runtime_id = ""
             self.last_used_at = time.time()
 
             return {
