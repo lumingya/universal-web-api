@@ -65,6 +65,13 @@ def parse_tool_response(
         )
         return json_payload
 
+    # Some upstream models echo the adapter's internal history wrapper instead
+    # of returning the bare OpenAI-compatible payload. Treat it as protocol
+    # metadata, never as user-visible assistant text.
+    assistant_tool_calls = _try_parse_assistant_tool_calls_wrapper(raw, allowed)
+    if assistant_tool_calls is not None:
+        return assistant_tool_calls
+
     xml_payload = _try_parse_xml_tool_calls(raw, allowed)
     if xml_payload is not None:
         logger.debug(
@@ -201,6 +208,53 @@ def _legacy_function_call_from_tool_call(tool_call: Any) -> Dict[str, str]:
         "name": str(function_data.get("name") or "").strip(),
         "arguments": arguments,
     }
+
+
+def _try_parse_assistant_tool_calls_wrapper(
+    text: str,
+    allowed_tools: Dict[str, Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    marker = "[Assistant Tool Calls]"
+    raw = str(text or "")
+    marker_index = raw.find(marker)
+    if marker_index < 0:
+        return None
+    payload_text = raw[marker_index + len(marker):].strip()
+    candidates = _extract_json_candidates(payload_text)
+    for candidate in candidates:
+        try:
+            payload = json.loads(candidate)
+        except Exception:
+            repaired = _repair_json_like_argument_string(candidate)
+            if repaired == candidate:
+                continue
+            try:
+                payload = json.loads(repaired)
+            except Exception:
+                continue
+        if not isinstance(payload, list):
+            continue
+        known_tool = False
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            function_data = item.get("function") if isinstance(item.get("function"), dict) else {}
+            raw_name = item.get("name") or item.get("tool_name") or function_data.get("name") or ""
+            if _resolve_tool_name(str(raw_name), allowed_tools):
+                known_tool = True
+                break
+        if not known_tool:
+            continue
+        tool_calls = _normalize_tool_calls(payload, allowed_tools)
+        if not tool_calls:
+            continue
+        visible_prefix = raw[:marker_index].strip()
+        return {
+            "mode": "tool_calls",
+            "content": visible_prefix or None,
+            "tool_calls": tool_calls,
+        }
+    return None
 
 _TOOL_CALLING_PLACEHOLDER_URL_RE = re.compile(
     r"^\s*https?://(?:[\w.-]+\.)?googleusercontent\.com/"

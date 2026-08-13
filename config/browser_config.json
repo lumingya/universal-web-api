@@ -49,7 +49,7 @@
     "send_btn"
   ],
   "GLOBAL_NETWORK_INTERCEPTION_ENABLED": true,
-  "GLOBAL_NETWORK_INTERCEPTION_LISTEN_PATTERN": "http",
+  "GLOBAL_NETWORK_INTERCEPTION_LISTEN_PATTERN": "arena.ai",
   "GLOBAL_NETWORK_INTERCEPTION_WAIT_TIMEOUT": 0.5,
   "GLOBAL_NETWORK_INTERCEPTION_RETRY_DELAY": 1,
   "COMMAND_PERIODIC_CHECK_ENABLED": true,
@@ -141,7 +141,11 @@
       "https://arena.ai/c/019fea80-a523-7944-ae36-90e0d12c8d0c",
       "https://arena.ai/c/019fea03-383d-74e2-a7ea-8416fd51c422",
       "https://arena.ai/c/019ff07f-d9c2-7d1c-9d23-254bef41209e",
-      "https://arena.ai/c/019ff4d3-c8be-79ad-ada5-1fdad247588c"
+      "https://arena.ai/c/019ff4d3-c8be-79ad-ada5-1fdad247588c",
+      "https://arena.ai/c/019ff8f4-c94b-7d93-9cd2-8e1b27576378",
+      "https://arena.ai/c/019ff9c7-2671-7f25-8368-bf7643efc8e9",
+      "https://arena.ai/c/019ff9c7-8086-73b3-8599-e5e80a6d4fcf",
+      "https://arena.ai/c/019ff9d9-0458-7fa3-9e7a-c11783210eab"
     ],
     "preserve_error_tabs": true,
     "route_groups": [
@@ -176,6 +180,16 @@
             "url": "https://arena.ai/c/019ff4d3-c8be-79ad-ada5-1fdad247588c",
             "url_token": "2355b01af96b",
             "tab_index": 1
+          },
+          {
+            "url": "https://arena.ai/c/019ff8f4-c94b-7d93-9cd2-8e1b27576378",
+            "url_token": "014eae0e84c7",
+            "tab_index": 4
+          },
+          {
+            "url": "https://arena.ai/c/019ff9d9-0458-7fa3-9e7a-c11783210eab",
+            "url_token": "2b2c75b57e31",
+            "tab_index": 9
           }
         ]
       },
@@ -195,6 +209,11 @@
             "url": "https://arena.ai/c/019fe9fe-ef5d-77a5-af94-d1da8b376406",
             "url_token": "271f95c9ede2",
             "tab_index": 8
+          },
+          {
+            "url": "https://arena.ai/c/019ff9c7-2671-7f25-8368-bf7643efc8e9",
+            "url_token": "46c3b21cd748",
+            "tab_index": 6
           }
         ]
       },
@@ -224,6 +243,11 @@
             "url": "https://arena.ai/c/019fea11-18a3-7916-993f-7ca5f2f9eb09",
             "url_token": "5927ac0a7975",
             "tab_index": 10
+          },
+          {
+            "url": "https://arena.ai/c/019ff9c7-8086-73b3-8599-e5e80a6d4fcf",
+            "url_token": "51c9098e6ee5",
+            "tab_index": 8
           }
         ]
       }
@@ -241,7 +265,7 @@
   "LOG_WEB_COLLECTOR_ENABLED": true,
   "LOG_WEB_MAX_RECORDS": 5000,
   "REQUEST_MONITOR_ENABLED": true,
-  "REQUEST_MONITOR_MAX_RECORDS": 2000,
+  "REQUEST_MONITOR_MAX_RECORDS": 500,
   "REQUEST_MONITOR_DETAIL_ENABLED": true,
   "REQUEST_MONITOR_SAVE_TO_FILE": true,
   "REQUEST_MONITOR_MAX_CAPTURED_RESPONSE_CHARS": 30000,

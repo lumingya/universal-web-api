@@ -555,6 +555,83 @@ def test_interrupted_arena_stream_holds_deltas_and_stops_after_one_completed_ref
     }
 
 
+def test_interrupted_text_stream_skips_refresh_after_native_stop_disappears(monkeypatch):
+    clock = [0.0]
+
+    def fake_time():
+        clock[0] += 1.0
+        return clock[0]
+
+    class _Tab:
+        url = "https://arena.ai/c/example"
+
+        def __init__(self):
+            self.refresh_calls = []
+
+        @staticmethod
+        def run_js(_script, _selector):
+            return False
+
+        def refresh(self, **kwargs):
+            self.refresh_calls.append(kwargs)
+
+    def snapshot(text, *, groups_count=1, anchor="reply"):
+        return {
+            "groups_count": groups_count,
+            "anchor": anchor,
+            "text": text,
+            "text_len": len(text),
+            "is_generating": False,
+            "image_count": 0,
+            "has_images": False,
+            "image_urls": [],
+            "image_references": [],
+            "page_image_urls": [],
+            "page_image_references": [],
+        }
+
+    monitor = StreamMonitor.__new__(StreamMonitor)
+    monitor.tab = _Tab()
+    monitor._should_stop = lambda: False
+    monitor._hard_timeout = 300
+    monitor._image_config = {"dom_image_interrupted_refresh_interval_seconds": 0.1}
+    monitor._expect_image_output = False
+    monitor._network_fallback_reason = "目标流未产出有效正文（25.0s）"
+    monitor._stream_recovery_exhausted = False
+    monitor._image_recovery_exhausted = False
+    monitor._generating_checker = None
+    snapshots = iter(
+        [
+            snapshot("already-sent-held-tail"),
+            snapshot("already-sent-held-tail"),
+            snapshot("already-sent-held-tail"),
+        ]
+    )
+    monitor._get_snapshot_prefer_anchor = lambda *_args: next(snapshots)
+    monitor._final_settle_and_output = lambda _selector, _ctx, completion_id=None: iter(
+        [f"{completion_id}:final-tail"]
+    )
+    monkeypatch.setattr("app.core.stream_monitor.time.time", fake_time)
+    monkeypatch.setattr("app.core.stream_monitor.time.sleep", lambda _seconds: None)
+
+    ctx = StreamContext()
+    ctx.baseline_snapshot = snapshot("")
+    ctx.sent_content_length = len("already-")
+    ctx.network_sent_content_length = len("already-")
+
+    chunks = list(
+        monitor._stream_output_phase(
+            "main .result",
+            ctx,
+            completion_id="completion-test",
+        )
+    )
+
+    assert chunks == ["completion-test:final-tail"]
+    assert monitor.tab.refresh_calls == []
+    assert ctx.max_seen_text == "already-sent-held-tail"
+
+
 def test_interrupted_recovery_holds_for_reference_without_rendered_image():
     assert StreamMonitor._should_hold_interrupted_image_recovery(
         True,

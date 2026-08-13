@@ -338,11 +338,30 @@ def _build_event(payload: Dict[str, Any], context: Dict[str, Any]) -> Optional[D
     return event
 
 
+def _rotate_event_file_unlocked(path: Path) -> None:
+    max_bytes = max(1024 * 1024, _env_int("ARENA_EVENT_BRIDGE_MAX_BYTES", 50 * 1024 * 1024))
+    backups = max(1, _env_int("ARENA_EVENT_BRIDGE_BACKUPS", 2))
+    try:
+        if not path.exists() or path.stat().st_size < max_bytes:
+            return
+        for index in range(backups, 0, -1):
+            source = path.with_name(f"{path.stem}.{index}{path.suffix}")
+            target = path.with_name(f"{path.stem}.{index + 1}{path.suffix}")
+            if index == backups:
+                source.unlink(missing_ok=True)
+            elif source.exists():
+                source.replace(target)
+        path.replace(path.with_name(f"{path.stem}.1{path.suffix}"))
+    except Exception as exc:
+        logger.debug(f"[RESULT_EVENT_BRIDGE] event file rotate failed: {exc}")
+
+
 def _append_event(event: Dict[str, Any]) -> None:
     path = _get_event_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     line = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
     with _WRITE_LOCK:
+        _rotate_event_file_unlocked(path)
         with path.open("a", encoding="utf-8", newline="\n") as f:
             f.write(line + "\n")
 

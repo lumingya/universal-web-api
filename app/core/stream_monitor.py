@@ -529,6 +529,21 @@ class StreamMonitor:
         )
 
     @staticmethod
+    def _text_recovery_complete_before_refresh(
+        interrupted: bool,
+        expect_image_output: bool,
+        still_generating: bool,
+        recovery_output_seen: bool,
+    ) -> bool:
+        """Accept a completed text reply without a redundant recovery reload."""
+        return bool(
+            interrupted
+            and not expect_image_output
+            and not still_generating
+            and recovery_output_seen
+        )
+
+    @staticmethod
     def _remember_recovery_output(
         previously_seen: bool,
         current_text_len: int,
@@ -1494,6 +1509,15 @@ class StreamMonitor:
                         stream_recovery_page_ready,
                     ),
                 )
+                recovery_confirmed = bool(
+                    recovery_confirmed
+                    or self._text_recovery_complete_before_refresh(
+                        interrupted_stream_recovery,
+                        self._expect_image_output,
+                        still_generating,
+                        recovery_output_seen,
+                    )
+                )
             if interrupted_stream_recovery and not recovery_confirmed:
                 # A disconnected stream is never complete before a reload has
                 # reattached the page to the persisted conversation state.
@@ -1723,6 +1747,15 @@ class StreamMonitor:
                             stream_recovery_page_ready,
                         ),
                     )
+                    recovery_confirmed = bool(
+                        recovery_confirmed
+                        or self._text_recovery_complete_before_refresh(
+                            interrupted_stream_recovery,
+                            self._expect_image_output,
+                            still_generating,
+                            recovery_output_seen,
+                        )
+                    )
 
             silence_duration = time.time() - silence_start
 
@@ -1809,9 +1842,14 @@ class StreamMonitor:
                     )
                     break
             if interrupted_stream_recovery and recovery_confirmed:
-                logger.info(
-                    "[Stream Recovery] 刷新后原生停止按钮已消失，准备一次性补发未发送内容"
-                )
+                if stream_recovery_refresh_done:
+                    logger.info(
+                        "[Stream Recovery] 刷新后原生停止按钮已消失，准备一次性补发未发送内容"
+                    )
+                else:
+                    logger.info(
+                        "[Stream Recovery] 原生停止按钮已消失且文本输出已确认，跳过刷新并一次性补发未发送内容"
+                    )
                 break
             if (
                 interrupted_stream_recovery

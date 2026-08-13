@@ -9,7 +9,8 @@ from pathlib import Path
 from datetime import datetime
 
 RECOVERY_GUARD_MARKER = "# CODEX_LISTENER_RECOVERY_GUARD_V2"
-STREAM_CAPTURE_GUARD_MARKER = "# CODEX_LISTENER_STREAM_CAPTURE_V1"
+STREAM_CAPTURE_GUARD_MARKER = "# CODEX_LISTENER_STREAM_CAPTURE_V2"
+LEGACY_STREAM_CAPTURE_GUARD_MARKER = "# CODEX_LISTENER_STREAM_CAPTURE_V1"
 RECOVERY_GUARD_SNIPPET = """
 
 # CODEX_LISTENER_RECOVERY_GUARD_V2
@@ -189,10 +190,11 @@ except Exception:
 
 STREAM_CAPTURE_SNIPPET = r"""
 
-# CODEX_LISTENER_STREAM_CAPTURE_V1
+# CODEX_LISTENER_STREAM_CAPTURE_V2
 try:
     _codecs_v1 = __import__('codecs')
     _copy_v1 = __import__('copy')
+    _os_v1 = __import__('os')
     _orig_listener_set_callback_v1 = Listener._set_callback
     _orig_listener_pause_v1 = Listener.pause
     _orig_listener_stop_v1 = Listener.stop
@@ -204,7 +206,13 @@ try:
 
     def _data_packet_init_stream_v1(self, tab_id, target):
         _orig_data_packet_init_v1(self, tab_id, target)
-        self._stream = {'chunks': [], 'fullText': '', 'complete': False}
+        self._stream = {
+            'chunks': [],
+            'chunk_count': 0,
+            'fullText': '',
+            'complete': False,
+            'truncated': False,
+        }
         self._stream_enabled = False
         self._stream_emitted = False
         self._stream_decoder = _codecs_v1.getincrementaldecoder('utf-8')('ignore')
@@ -212,14 +220,76 @@ try:
     def _listener_stream_dict_v1(packet):
         stream = getattr(packet, '_stream', None)
         if not isinstance(stream, dict):
-            stream = {'chunks': [], 'fullText': '', 'complete': False}
+            stream = {
+                'chunks': [],
+                'chunk_count': 0,
+                'fullText': '',
+                'complete': False,
+                'truncated': False,
+            }
             packet._stream = stream
         stream.setdefault('chunks', [])
+        stream.setdefault('chunk_count', len(stream['chunks']))
         stream.setdefault('fullText', '')
         stream.setdefault('complete', False)
+        stream.setdefault('truncated', False)
         return stream
 
+    def _listener_stream_int_v1(name, default, minimum, maximum):
+        try:
+            value = int(str(_os_v1.getenv(name, default) or default).strip())
+        except Exception:
+            value = default
+        return max(minimum, min(maximum, value))
+
+    def _listener_stream_debug_enabled_v1():
+        return str(_os_v1.getenv('DRISSION_STREAM_DEBUG_ENABLED', '') or '').strip().lower() in {
+            '1', 'true', 'yes', 'on'
+        }
+
+    def _listener_trim_stream_debug_dir_v1(path):
+        max_total = _listener_stream_int_v1(
+            'DRISSION_STREAM_DEBUG_MAX_TOTAL_BYTES', 100 * 1024 * 1024,
+            5 * 1024 * 1024, 2 * 1024 * 1024 * 1024,
+        )
+        try:
+            files = [item for item in path.parent.iterdir() if item.is_file()]
+            files.sort(key=lambda item: item.stat().st_mtime)
+            total = sum(item.stat().st_size for item in files)
+            for item in files:
+                if total <= max_total:
+                    break
+                if item == path:
+                    continue
+                size = item.stat().st_size
+                item.unlink(missing_ok=True)
+                total -= size
+        except Exception:
+            pass
+
+    def _listener_rotate_stream_debug_v1(path):
+        max_bytes = _listener_stream_int_v1(
+            'DRISSION_STREAM_DEBUG_MAX_BYTES', 10 * 1024 * 1024,
+            1024 * 1024, 100 * 1024 * 1024,
+        )
+        backups = _listener_stream_int_v1('DRISSION_STREAM_DEBUG_BACKUPS', 4, 1, 20)
+        try:
+            if not path.exists() or path.stat().st_size < max_bytes:
+                return
+            for index in range(backups, 0, -1):
+                source = path.with_name(f'{path.stem}.{index}{path.suffix}')
+                target = path.with_name(f'{path.stem}.{index + 1}{path.suffix}')
+                if index == backups:
+                    source.unlink(missing_ok=True)
+                elif source.exists():
+                    source.replace(target)
+            path.replace(path.with_name(f'{path.stem}.1{path.suffix}'))
+        except Exception:
+            pass
+
     def _listener_stream_debug_v1(packet, phase, **details):
+        if not _listener_stream_debug_enabled_v1():
+            return
         try:
             import json as _json_v1
             from pathlib import Path as _Path_v1
@@ -227,6 +297,13 @@ try:
             request = raw_request.get('request', {}) if isinstance(raw_request, dict) else {}
             raw_response = getattr(packet, '_raw_response', {}) or {}
             stream = _listener_stream_dict_v1(packet)
+            max_events = _listener_stream_int_v1(
+                'DRISSION_STREAM_DEBUG_MAX_EVENTS_PER_REQUEST', 8, 2, 100,
+            )
+            debug_events = int(getattr(packet, '_stream_debug_events', 0) or 0)
+            if debug_events >= max_events:
+                return
+            packet._stream_debug_events = debug_events + 1
             payload = {
                 'captured_at': __import__('time').time(),
                 'phase': phase,
@@ -237,12 +314,16 @@ try:
                 'stream_complete': bool(stream.get('complete', False)),
                 'full_text_len': len(str(stream.get('fullText', '') or '')),
                 'chunks_len': len(stream.get('chunks', [])) if isinstance(stream.get('chunks'), list) else 0,
+                'chunk_count': int(stream.get('chunk_count', 0) or 0),
+                'truncated': bool(stream.get('truncated', False)),
             }
             payload.update(details)
             path = _Path_v1('logs') / 'network_parser_debug' / 'drission_stream_events.jsonl'
             path.parent.mkdir(parents=True, exist_ok=True)
+            _listener_rotate_stream_debug_v1(path)
             with path.open('a', encoding='utf-8', newline='\n') as handle:
                 handle.write(_json_v1.dumps(payload, ensure_ascii=False) + '\n')
+            _listener_trim_stream_debug_dir_v1(path)
         except Exception:
             pass
 
@@ -276,8 +357,16 @@ try:
         if not text:
             return ''
         stream = _listener_stream_dict_v1(packet)
-        stream['chunks'].append({'data': text, 'source': source})
-        stream['fullText'] = f"{stream.get('fullText', '')}{text}"
+        stream['chunk_count'] = int(stream.get('chunk_count', 0) or 0) + 1
+        chunks = stream['chunks']
+        chunks.append({'data': text, 'source': source})
+        max_chunks = _listener_stream_int_v1(
+            'DRISSION_STREAM_CAPTURE_MAX_RECENT_CHUNKS', 32, 1, 1024,
+        )
+        if len(chunks) > max_chunks:
+            del chunks[:-max_chunks]
+        current = str(stream.get('fullText', '') or '')
+        stream['fullText'] = current + text
         packet._raw_body = stream['fullText']
         packet._base64_body = False
         return text
@@ -354,8 +443,7 @@ try:
                 tail = ''
             if tail:
                 stream = _listener_stream_dict_v1(packet)
-                stream['chunks'].append({'data': tail, 'source': 'decoder_tail'})
-                stream['fullText'] = f"{stream.get('fullText', '')}{tail}"
+                _listener_append_stream_v1(packet, tail, 'decoder_tail')
 
         stream = _listener_stream_dict_v1(packet)
         packet._raw_body = stream.get('fullText', '')
@@ -539,8 +627,11 @@ def has_stream_capture_patch(content):
         for required in (
             "Network.eventSourceMessageReceived",
             "def _listener_stream_debug_v1",
+            "DRISSION_STREAM_DEBUG_ENABLED",
+            "DRISSION_STREAM_CAPTURE_MAX_RECENT_CHUNKS",
+            "stream['fullText'] = current + text",
         )
-    )
+    ) and "DRISSION_STREAM_CAPTURE_MAX_CHARS" not in content
 
 
 def check_already_patched(content):
@@ -566,10 +657,22 @@ def ensure_stream_capture_patch(content):
     if has_stream_capture_patch(content):
         return content, False
 
-    if STREAM_CAPTURE_GUARD_MARKER in content:
+    if (
+        STREAM_CAPTURE_GUARD_MARKER in content
+        or LEGACY_STREAM_CAPTURE_GUARD_MARKER in content
+    ):
         # 流捕获片段始终由本脚本追加在文件末尾。旧版本也使用 V1 marker，
         # 必须先裁掉旧片段；直接再追加会覆盖其全局原函数引用并产生递归。
-        content = content.split(STREAM_CAPTURE_GUARD_MARKER, 1)[0].rstrip()
+        markers = [
+            marker
+            for marker in (
+                STREAM_CAPTURE_GUARD_MARKER,
+                LEGACY_STREAM_CAPTURE_GUARD_MARKER,
+            )
+            if marker in content
+        ]
+        first_marker = min(markers, key=content.index)
+        content = content.split(first_marker, 1)[0].rstrip()
 
     if not content.endswith('\n'):
         content += '\n'
@@ -726,7 +829,7 @@ def apply_patch(filepath):
         print("🩹 已追加监听恢复补丁 (V2)")
     content, stream_capture_added = ensure_stream_capture_patch(content)
     if stream_capture_added:
-        print("🌊 已追加增量流捕获补丁 (V1)")
+        print("🌊 已追加增量流捕获补丁 (V2)")
 
     try:
         compile(content, str(filepath), 'exec')
