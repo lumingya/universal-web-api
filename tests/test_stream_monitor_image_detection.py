@@ -281,25 +281,54 @@ def test_interrupted_recovery_requires_reload_and_final_content():
         refresh_done=False,
         still_generating=False,
         has_output=True,
+        post_refresh_settled=True,
     ) is False
     assert StreamMonitor._interrupted_recovery_confirmed(
         True,
         refresh_done=True,
         still_generating=True,
         has_output=True,
+        post_refresh_settled=True,
     ) is False
     assert StreamMonitor._interrupted_recovery_confirmed(
         True,
         refresh_done=True,
         still_generating=False,
         has_output=True,
+        post_refresh_settled=False,
+    ) is False
+    assert StreamMonitor._interrupted_recovery_confirmed(
+        True,
+        refresh_done=True,
+        still_generating=False,
+        has_output=True,
+        post_refresh_settled=True,
     ) is True
     assert StreamMonitor._interrupted_recovery_confirmed(
         False,
         refresh_done=False,
         still_generating=True,
         has_output=False,
+        post_refresh_settled=False,
     ) is True
+
+
+def test_text_recovery_complete_before_refresh_behavior():
+    assert StreamMonitor._text_recovery_complete_before_refresh(
+        interrupted=True,
+        expect_image_output=False,
+        still_generating=False,
+        recovery_output_seen=True,
+        refresh_done=False,
+    ) is True
+    # 页面刷新后，绝不能走 before_refresh 早退分支，必须由 post_refresh_settled 把关
+    assert StreamMonitor._text_recovery_complete_before_refresh(
+        interrupted=True,
+        expect_image_output=False,
+        still_generating=False,
+        recovery_output_seen=True,
+        refresh_done=True,
+    ) is False
 
 
 def test_text_recovery_can_confirm_without_new_output_after_reload():
@@ -406,6 +435,28 @@ def test_arena_recovery_ignores_hidden_native_stop_button():
     assert monitor._arena_native_stop_present() is False
 
 
+def test_arena_stop_present_recognizes_hard_stop_runtime_and_overlay_buttons():
+    captured = {}
+
+    class _Tab:
+        url = "https://arena.ai/c/example"
+
+        def run_js(self, script, selector):
+            captured["script"] = script
+            captured["selector"] = selector
+            return True
+
+    monitor = StreamMonitor.__new__(StreamMonitor)
+    monitor.tab = _Tab()
+
+    assert monitor._arena_native_stop_present() is True
+    assert "__arenaHardStop" in captured["script"]
+    assert "hasOverlayStopButton" in captured["script"]
+    assert "pendingAssistantCount" in captured["script"]
+    assert "data-arena-hard-stop-overlay" in captured["script"]
+
+
+
 def test_final_settle_uses_last_complete_snapshot_after_refresh_collapse(monkeypatch):
     clock = [0.0]
 
@@ -509,6 +560,7 @@ def test_interrupted_arena_stream_holds_deltas_and_stops_after_one_completed_ref
     monitor._should_stop = lambda: False
     monitor._hard_timeout = 300
     monitor._image_config = {"dom_image_interrupted_refresh_interval_seconds": 0.1}
+    monitor._stream_config = {"stream_recovery_post_refresh_settle_seconds": 0.0}
     monitor._expect_image_output = False
     monitor._network_fallback_reason = "目标流未收到完成标志"
     monitor._stream_recovery_exhausted = False
@@ -518,7 +570,7 @@ def test_interrupted_arena_stream_holds_deltas_and_stops_after_one_completed_ref
         [
             snapshot("already-sent-held-tail"),
             snapshot("already-sent-held-tail"),
-            snapshot(""),
+            snapshot("already-sent-held-tail"),
         ]
     )
     monitor._get_snapshot_prefer_anchor = lambda *_args: next(snapshots)

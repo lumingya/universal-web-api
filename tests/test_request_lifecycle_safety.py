@@ -1,5 +1,6 @@
 import asyncio
 import contextvars
+import json
 import threading
 import time
 
@@ -62,6 +63,90 @@ def test_response_chunk_refreshes_idle_activity_without_hard_timeout(monkeypatch
 
     assert ctx.last_activity_at > 1.0
     assert ctx.started_at_monotonic == original_timeout_start
+
+
+def test_tab_stream_headers_disable_proxy_transformations():
+    from app.api.tab_routes import _build_stream_headers
+
+    headers = _build_stream_headers()
+
+    assert headers["Cache-Control"] == "no-cache, no-transform"
+    assert headers["Connection"] == "keep-alive"
+    assert headers["X-Accel-Buffering"] == "no"
+
+
+def test_tab_stream_emits_initial_keepalive_before_browser_result(monkeypatch):
+    """A slow tab acquisition must not make an upstream client retry forever."""
+    from app.api import tab_routes
+    from app.core.config import SSEFormatter
+
+    class _Request:
+        async def is_disconnected(self):
+            return False
+
+    class _Browser:
+        def execute_workflow_for_tab_index(self, *args, **kwargs):
+            def _workflow():
+                time.sleep(0.05)
+                yield 'data: {"choices": [{"delta": {"content": "ok"}}]}\n\n'
+                yield "data: [DONE]\n\n"
+
+            return _workflow()
+
+    monkeypatch.setattr(tab_routes, "get_browser", lambda auto_connect=False: _Browser())
+
+    async def exercise():
+        ctx = RequestContext(request_id="req-initial-keepalive")
+        body = tab_routes.ChatRequest(
+            model="gemini.com",
+            messages=[{"role": "user", "content": "hello"}],
+            stream=True,
+        )
+        stream = tab_routes._stream_with_tab_index(_Request(), body, ctx, 3)
+        first = await anext(stream)
+        payload = json.loads(first.removeprefix("data: ").strip())
+        assert payload["object"] == "chat.completion.chunk"
+        assert payload["model"] == body.model
+        assert payload["choices"][0]["delta"] == {"content": ""}
+        assert payload["choices"][0]["finish_reason"] is None
+        await stream.aclose()
+
+    asyncio.run(exercise())
+
+
+def test_tool_stream_emits_periodic_keepalive_while_waiting(monkeypatch):
+    from app.api import chat
+
+    class _Request:
+        async def is_disconnected(self):
+            return False
+
+    async def _slow_tool_call(*args, **kwargs):
+        await asyncio.sleep(0.05)
+        return {"choices": [{"message": {"content": "ok"}}]}
+
+    monkeypatch.setattr(chat, "_complete_tool_calling_with_lifecycle", _slow_tool_call)
+    monkeypatch.setattr(chat, "SSE_HEARTBEAT_INTERVAL", 0.01)
+
+    async def exercise():
+        ctx = RequestContext(request_id="req-tool-keepalive")
+        body = chat.ChatRequest(
+            model="glm-5.3(max)",
+            messages=[{"role": "user", "content": "hello"}],
+            stream=True,
+            tools=[{"type": "function", "function": {"name": "noop"}}],
+        )
+        stream = chat._stream_tool_calling_with_lifecycle(_Request(), body, ctx)
+        first = await anext(stream)
+        second = await anext(stream)
+        first_payload = json.loads(first.removeprefix("data: ").strip())
+        second_payload = json.loads(second.removeprefix("data: ").strip())
+        assert first_payload["choices"][0]["delta"] == {"content": ""}
+        assert second_payload["choices"][0]["delta"] == {"content": ""}
+        assert first_payload["id"] == second_payload["id"]
+        await stream.aclose()
+
+    asyncio.run(exercise())
 
 
 def test_tracked_worker_inherits_request_log_context():

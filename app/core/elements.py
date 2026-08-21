@@ -136,7 +136,7 @@ class ElementFinder:
 
         ele = cached.element
         try:
-            if not (hasattr(ele, 'states') and ele.states.is_displayed):
+            if not self._is_visible_enabled(ele):
                 return False
 
             current_hash = self._compute_element_hash(ele)
@@ -175,9 +175,11 @@ class ElementFinder:
             return False
 
         try:
-            if str(ele.attr("disabled") or "").strip():
+            disabled_val = ele.attr("disabled")
+            if disabled_val is not None and str(disabled_val).strip().lower() != "false":
                 return False
-            if str(ele.attr("aria-disabled") or "").strip().lower() == "true":
+            aria_disabled = ele.attr("aria-disabled")
+            if aria_disabled is not None and str(aria_disabled).strip().lower() == "true":
                 return False
         except Exception:
             pass
@@ -186,6 +188,14 @@ class ElementFinder:
 
     @staticmethod
     def _split_css_selector_groups(selector: str) -> List[str]:
+        if not selector or not isinstance(selector, str):
+            return []
+        raw = selector.strip()
+        if raw.startswith("css:"):
+            raw = raw[4:].strip()
+        if raw.startswith(('tag:', '@', 'xpath:')) or '@@' in raw:
+            return [raw] if raw else []
+
         groups: List[str] = []
         current: List[str] = []
         quote = ""
@@ -193,7 +203,7 @@ class ElementFinder:
         paren_depth = 0
         escape = False
 
-        for ch in selector:
+        for ch in raw:
             current.append(ch)
 
             if escape:
@@ -234,26 +244,47 @@ class ElementFinder:
         return groups
 
     def _find_css_groups_in_order(self, selector: str, timeout: float) -> Optional[Any]:
-        if not selector or selector.startswith(('tag:', '@', 'xpath:', 'css:')) or '@@' in selector:
+        if not selector:
+            return None
+        raw = str(selector).strip()
+        if raw.startswith("css:"):
+            raw = raw[4:].strip()
+        if not raw or raw.startswith(('tag:', '@', 'xpath:')) or '@@' in raw:
             return None
 
-        groups = self._split_css_selector_groups(selector)
+        groups = self._split_css_selector_groups(raw)
         if len(groups) <= 1:
             return None
 
-        per_group_timeout = max(0.02, min(float(timeout or 0), 0.25))
-        for group in groups:
-            started_at = time.perf_counter()
-            ele = self._find_with_syntax(group, per_group_timeout)
-            self._log_find_timing(
-                target_key="input_box" if "textarea" in group or "contenteditable" in group else "",
-                stage="primary_group",
-                selector=group,
-                elapsed=time.perf_counter() - started_at,
-                found=bool(ele and self._is_visible_enabled(ele)),
-            )
-            if ele and self._is_visible_enabled(ele):
-                return ele
+        total_timeout = max(0.02, float(timeout or 0.0))
+        deadline = time.perf_counter() + total_timeout
+        is_first_round = True
+
+        while True:
+            for group in groups:
+                if time.perf_counter() >= deadline:
+                    break
+                rem = max(0.01, deadline - time.perf_counter())
+                per_group_timeout = 0.02 if is_first_round else max(0.02, min(rem / len(groups), 0.15))
+
+                started_at = time.perf_counter()
+                ele = self._find_with_syntax(group, per_group_timeout)
+                is_valid = bool(ele and self._is_visible_enabled(ele))
+                self._log_find_timing(
+                    target_key="input_box" if "textarea" in group or "contenteditable" in group else "",
+                    stage="primary_group",
+                    selector=group,
+                    elapsed=time.perf_counter() - started_at,
+                    found=is_valid,
+                )
+                if is_valid:
+                    return ele
+
+            is_first_round = False
+            if time.perf_counter() >= deadline:
+                break
+            time.sleep(0.05)
+
         return None
 
     @staticmethod
@@ -266,13 +297,12 @@ class ElementFinder:
                 value = ""
             if value:
                 parts.append(str(value))
-        for prop in ("text", "html"):
-            try:
-                value = getattr(ele, prop, "")
-            except Exception:
-                value = ""
+        try:
+            value = getattr(ele, "text", "")
             if value:
                 parts.append(str(value))
+        except Exception:
+            pass
         return " ".join(parts).lower()
 
     @classmethod
@@ -294,22 +324,6 @@ class ElementFinder:
             )
         )
 
-    @classmethod
-    def _looks_like_send_button(cls, ele: Any) -> bool:
-        signature = cls._element_text_signature(ele)
-        if not signature:
-            return False
-        return any(
-            token in signature
-            for token in (
-                "send message",
-                "send",
-                "submit",
-                "发送",
-                "提交",
-            )
-        )
-
     def _find_send_button_safely(self, selector: str, timeout: float) -> Optional[Any]:
         self._last_send_btn_blocked_by_stop = False
         candidates: List[Any] = []
@@ -318,26 +332,35 @@ class ElementFinder:
         if not groups and selector:
             groups = [selector]
 
-        per_group_timeout = max(0.02, min(float(timeout or 0), 0.25))
-        for group in groups:
-            ele = self._find_with_syntax(group, per_group_timeout)
-            if not ele or not self._is_visible_enabled(ele):
-                continue
-            candidates.append(ele)
-            if not self._looks_like_stop_button(ele):
-                return ele
+        total_timeout = max(0.02, float(timeout or 0.0))
+        deadline = time.perf_counter() + total_timeout
+        is_first_round = True
+
+        while True:
+            for group in groups:
+                if time.perf_counter() >= deadline:
+                    break
+                rem = max(0.01, deadline - time.perf_counter())
+                per_group_timeout = 0.02 if is_first_round else max(0.02, min(rem / len(groups), 0.15))
+                ele = self._find_with_syntax(group, per_group_timeout)
+                if not ele or not self._is_visible_enabled(ele):
+                    continue
+                if not self._looks_like_stop_button(ele):
+                    return ele
+                candidates.append(ele)
+
+            is_first_round = False
+            if candidates or time.perf_counter() >= deadline:
+                break
+            time.sleep(0.05)
 
         for fb_selector in self.FALLBACK_SELECTORS.get("send_btn", []):
             ele = self._find_with_syntax(fb_selector, BrowserConstants.FALLBACK_ELEMENT_TIMEOUT)
             if not ele or not self._is_visible_enabled(ele):
                 continue
+            if not self._looks_like_stop_button(ele):
+                return ele
             candidates.append(ele)
-            if not self._looks_like_stop_button(ele):
-                return ele
-
-        for ele in candidates:
-            if not self._looks_like_stop_button(ele):
-                return ele
 
         if candidates:
             self._last_send_btn_blocked_by_stop = True
@@ -368,17 +391,22 @@ class ElementFinder:
                 # 缓存失效，删除
                 del self._cache[cache_key]
         
+        raw_selector = selector.strip() if isinstance(selector, str) else ""
+        if raw_selector.startswith("css:"):
+            raw_selector = raw_selector[4:].strip()
         grouped_selector = (
-            bool(selector)
-            and not selector.startswith(('tag:', '@', 'xpath:', 'css:'))
-            and '@@' not in selector
-            and len(self._split_css_selector_groups(selector)) > 1
+            bool(raw_selector)
+            and not raw_selector.startswith(('tag:', '@', 'xpath:'))
+            and '@@' not in raw_selector
+            and len(self._split_css_selector_groups(raw_selector)) > 1
         )
 
         # 查找元素
         ele = self._find_css_groups_in_order(selector, timeout)
         if not ele and not grouped_selector:
             ele = self._find_with_syntax(selector, timeout)
+        elif not ele and grouped_selector:
+            ele = self._find_with_syntax(selector, 0.05)
         if ele and not self._is_visible_enabled(ele):
             ele = None
         

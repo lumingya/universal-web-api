@@ -18,6 +18,22 @@ from app.utils.site_url import extract_remote_site_domain, tab_url_matches
 from app.utils.image_handler import extract_images_from_messages
 from app.core.page_lifecycle import BACKGROUND_WAKE_CDP_TIMEOUT
 from app.core.workflow import WorkflowExecutor
+from app.core.workflow.arena_send_watchdog import (
+    ARENA_SEND_NO_TARGET_AFTER_RETRY,
+    ArenaSendRetryRefreshError,
+    ArenaSendWatchdogCancelled,
+    refresh_arena_page_for_retry,
+)
+from app.core.workflow.arena_direct_guard import (
+    ARENA_DIRECT_UNEXPECTED_BATTLE_REDIRECT,
+    ArenaDirectRecoveryError,
+    ArenaUnexpectedBattleRedirectError,
+    is_arena_direct_preset,
+    is_arena_unexpected_battle_url,
+    recover_arena_direct_page,
+    resolve_arena_direct_recovery_url,
+    workflow_has_new_chat_step,
+)
 from app.core.workflow.input_chunking import PromptChunk, plan_prompt_chunks
 from app.core.tab_pool import TabSession
 from app.models.schemas import get_modality_run_policy, is_modality_enabled
@@ -975,7 +991,7 @@ class BrowserWorkflowMixin:
 
             site_config = config_engine.get_site_config(
                 domain,
-                tab.html,
+                html_content=lambda: getattr(tab, "html", ""),
                 preset_name=effective_preset_name,
             )
             if not isinstance(site_config, dict):
@@ -1118,10 +1134,27 @@ class BrowserWorkflowMixin:
 
                         if is_terminal_error:
                             if retry_origin_chunk and attempt > 0 and not saw_content:
-                                chunk = self._build_retry_failure_error_chunk(
-                                    retry_origin_chunk,
-                                    chunk,
-                                )
+                                first_detail = self._get_stream_terminal_error_detail(
+                                    retry_origin_chunk
+                                ).strip().lower()
+                                final_detail = self._get_stream_terminal_error_detail(
+                                    chunk
+                                ).strip().lower()
+                                if (
+                                    first_detail == "arena_send_no_target"
+                                    or final_detail == "arena_send_no_target"
+                                ):
+                                    chunk = self.formatter.pack_error(
+                                        f"stream_terminal_error:{ARENA_SEND_NO_TARGET_AFTER_RETRY}",
+                                        code=ARENA_SEND_NO_TARGET_AFTER_RETRY,
+                                        status_code=422,
+                                        retryable=False,
+                                    )
+                                else:
+                                    chunk = self._build_retry_failure_error_chunk(
+                                        retry_origin_chunk,
+                                        chunk,
+                                    )
                             logger.error(
                                 self._build_stream_terminal_alert_message(
                                     session.id,
@@ -1144,6 +1177,83 @@ class BrowserWorkflowMixin:
                 if not retry_requested:
                     return
 
+                retry_detail = self._get_stream_terminal_error_detail(
+                    retry_origin_chunk or ""
+                ).strip().lower()
+                if retry_detail == "arena_direct_unexpected_battle_redirect":
+                    try:
+                        recovery_url = str(
+                            getattr(session, "_arena_direct_recovery_url", "") or ""
+                        ).strip()
+                        recovery_input_selector = str(
+                            getattr(session, "_arena_direct_input_selector", "") or ""
+                        ).strip()
+                        recover_arena_direct_page(
+                            session.tab,
+                            target_url=recovery_url,
+                            input_selector=recovery_input_selector,
+                            should_stop=stop_checker or self._should_stop_checker,
+                        )
+                        setattr(session, "_arena_direct_recovered_retry", True)
+                    except ArenaDirectRecoveryError as exc:
+                        logger.error(
+                            f"[{session.id}] Arena direct recovery failed: {exc}"
+                        )
+                        yield self.formatter.pack_error(
+                            f"stream_terminal_error:{exc}",
+                            code="arena_direct_recovery_failed",
+                        )
+                        yield self.formatter.pack_finish()
+                        return
+                    except Exception as exc:
+                        logger.error(
+                            f"[{session.id}] Arena direct recovery unexpected error: {exc}"
+                        )
+                        yield self.formatter.pack_error(
+                            f"stream_terminal_error:{exc}",
+                            code="arena_direct_recovery_failed",
+                        )
+                        yield self.formatter.pack_finish()
+                        return
+                elif retry_detail == "arena_send_no_target":
+                    try:
+                        input_selector = str(
+                            getattr(session, "_arena_watchdog_input_selector", "")
+                            or getattr(session, "_arena_direct_input_selector", "")
+                            or "textarea, [contenteditable=\"true\"]"
+                        ).strip()
+                        refresh_arena_page_for_retry(
+                            session.tab,
+                            input_selector=input_selector,
+                            should_stop=stop_checker or self._should_stop_checker,
+                        )
+                    except ArenaSendWatchdogCancelled:
+                        return
+                    except ArenaSendRetryRefreshError as exc:
+                        logger.error(
+                            f"[{session.id}] Arena watchdog retry refresh failed: {exc}"
+                        )
+                        yield self.formatter.pack_error(
+                            f"stream_terminal_error:{ARENA_SEND_NO_TARGET_AFTER_RETRY}",
+                            code=ARENA_SEND_NO_TARGET_AFTER_RETRY,
+                            status_code=422,
+                            retryable=False,
+                        )
+                        yield self.formatter.pack_finish()
+                        return
+                    except Exception as exc:
+                        logger.error(
+                            f"[{session.id}] Arena watchdog retry refresh unexpected error: {exc}"
+                        )
+                        yield self.formatter.pack_error(
+                            f"stream_terminal_error:{ARENA_SEND_NO_TARGET_AFTER_RETRY}",
+                            code=ARENA_SEND_NO_TARGET_AFTER_RETRY,
+                            status_code=422,
+                            retryable=False,
+                        )
+                        yield self.formatter.pack_finish()
+                        return
+
                 attempt += 1
                 setattr(session, "_workflow_stop_reason", None)
                 setattr(session, "_workflow_user_stop_logged", False)
@@ -1151,6 +1261,11 @@ class BrowserWorkflowMixin:
         finally:
             with contextlib.suppress(Exception):
                 setattr(session, "_workflow_attempt", 0)
+                setattr(session, "_arena_direct_recovery_url", "")
+                setattr(session, "_arena_direct_input_selector", "")
+                setattr(session, "_arena_watchdog_input_selector", "")
+                setattr(session, "_arena_direct_initial_url", None)
+                setattr(session, "_arena_direct_recovered_retry", False)
 
     @staticmethod
     def _extract_stream_error_payload(chunk: str) -> Optional[Dict]:
@@ -1194,7 +1309,12 @@ class BrowserWorkflowMixin:
             return False
 
         detail_lower = detail.lower()
-        if detail_lower in {"send_unconfirmed", "new_chat_transition_timeout"}:
+        if detail_lower in {
+            "send_unconfirmed",
+            "new_chat_transition_timeout",
+            "arena_direct_unexpected_battle_redirect",
+            "arena_send_no_target",
+        }:
             return True
 
         status_code = cls._extract_stream_terminal_http_status(detail)
@@ -1520,7 +1640,11 @@ class BrowserWorkflowMixin:
             ):
                 effective_preset_name = catalog_preset["preset_name"]
         resolved_preset_name = effective_preset_name or config_engine.get_default_preset(domain) or "主预设"
-        site_config = config_engine.get_site_config(domain, tab.html, preset_name=effective_preset_name)
+        site_config = config_engine.get_site_config(
+            domain,
+            html_content=lambda: getattr(tab, "html", ""),
+            preset_name=effective_preset_name,
+        )
         if not site_config:
             yield self.formatter.pack_error(
                 "配置加载失败",
@@ -1530,6 +1654,11 @@ class BrowserWorkflowMixin:
             return
         
         selectors = site_config.get("selectors", {})
+        setattr(
+            session,
+            "_arena_watchdog_input_selector",
+            str(selectors.get("input_box", "") or ""),
+        )
         workflow = site_config.get("workflow", [])
         stealth_mode = site_config.get("stealth", False)
         force_new_conversation = bool(BrowserConstants.get("FORCE_NEW_CONVERSATION"))
@@ -1540,9 +1669,10 @@ class BrowserWorkflowMixin:
             threshold_seconds=conversation_threshold,
             force_new=force_new_conversation,
         )
-        advanced_config = site_config.get("advanced", {}) if isinstance(site_config, dict) else {}
-        if not isinstance(advanced_config, dict):
-            advanced_config = {}
+        advanced_config = config_engine.get_site_advanced_config(
+            domain,
+            preset_name=resolved_preset_name,
+        )
         workflow_attempt = int(getattr(session, "_workflow_attempt", 0) or 0)
         skip_new_chat_on_retry = bool(advanced_config.get("skip_new_chat_on_retry", False))
         retry_skip_new_chat = workflow_attempt > 0 and skip_new_chat_on_retry
@@ -1559,6 +1689,32 @@ class BrowserWorkflowMixin:
                 f"[{session.id}] 分块续传复用当前对话: "
                 f"domain={domain}, preset={resolved_preset_name}"
             )
+
+        arena_direct_active = is_arena_direct_preset(domain, resolved_preset_name, site_config)
+        arena_has_new_chat = workflow_has_new_chat_step(workflow)
+        arena_recovery_url = ""
+        if arena_direct_active:
+            current_tab_url = str(getattr(tab, "url", "") or "").strip()
+            if workflow_attempt == 0 or not getattr(session, "_arena_direct_initial_url", None):
+                setattr(session, "_arena_direct_initial_url", current_tab_url)
+            initial_recorded_url = str(getattr(session, "_arena_direct_initial_url", "") or current_tab_url)
+            arena_recovery_url = resolve_arena_direct_recovery_url(
+                workflow,
+                initial_url=initial_recorded_url,
+                skip_new_chat=skip_new_chat or _chunk_continuation,
+            )
+            setattr(session, "_arena_direct_recovery_url", arena_recovery_url)
+            setattr(session, "_arena_direct_input_selector", str(selectors.get("input_box", "") or ""))
+
+        is_direct_recovered_retry = bool(getattr(session, "_arena_direct_recovered_retry", False))
+        if is_direct_recovered_retry:
+            setattr(session, "_arena_direct_recovered_retry", False)
+            if arena_has_new_chat and not _chunk_continuation and not skip_new_chat:
+                skip_new_chat = False
+                retry_skip_new_chat = False
+                logger.info(
+                    f"[{session.id}] Arena direct 意外跳转恢复后重试，恢复执行新建对话步骤"
+                )
 
         if retry_skip_new_chat:
             logger.debug(f"[{session.id}] 重试轮跳过新建对话优先于本轮新建判定")
@@ -1855,6 +2011,21 @@ class BrowserWorkflowMixin:
                 step_index = 0
                 workflow_total = len(workflow)
                 while step_index < len(workflow):
+                    if arena_direct_active:
+                        current_loop_url = str(getattr(tab, "url", "") or "").strip()
+                        if is_arena_unexpected_battle_url(current_loop_url):
+                            logger.warning(
+                                f"[{session.id}] [ArenaDirectGuard] 工作流执行中检测到页面意外处于/跳转至 Battle 页面: "
+                                f"current_url={current_loop_url}, recovery_url={arena_recovery_url}, "
+                                f"step={step_index + 1}/{workflow_total}"
+                            )
+                            workflow_aborted = True
+                            yield self.formatter.pack_error(
+                                "stream_terminal_error:arena_direct_unexpected_battle_redirect",
+                                code="arena_direct_unexpected_battle_redirect",
+                            )
+                            break
+
                     step = workflow[step_index]
                     if command_engine is not None:
                         command_engine.update_workflow_runtime_step(session, step_index, step)
@@ -2171,9 +2342,25 @@ class BrowserWorkflowMixin:
                             f"target={target_key or '-'}, elapsed={step_elapsed:.2f}s, "
                             f"error={self._compact_log_value(e, 180)}"
                         )
+                        if arena_direct_active:
+                            current_err_url = str(getattr(tab, "url", "") or "").strip()
+                            if is_arena_unexpected_battle_url(current_err_url):
+                                logger.warning(
+                                    f"[{session.id}] [ArenaDirectGuard] 步骤失败时检测到页面处于意外 Battle 页面: "
+                                    f"current_url={current_err_url}, recovery_url={arena_recovery_url}"
+                                )
+                                workflow_aborted = True
+                                yield self.formatter.pack_error(
+                                    "stream_terminal_error:arena_direct_unexpected_battle_redirect",
+                                    code="arena_direct_unexpected_battle_redirect",
+                                )
+                                break
+
                         if isinstance(e, WorkflowError) and str(e) in {
                             "new_chat_transition_timeout",
                             "send_unconfirmed",
+                            "arena_direct_unexpected_battle_redirect",
+                            "arena_send_no_target",
                         }:
                             error_code = str(e)
                             workflow_aborted = True
@@ -2193,6 +2380,19 @@ class BrowserWorkflowMixin:
                             f"target={target_key or '-'}, elapsed={step_elapsed:.2f}s, "
                             f"optional={bool(optional)}, error={self._compact_log_value(e, 180)}"
                         )
+                        if arena_direct_active:
+                            current_err_url = str(getattr(tab, "url", "") or "").strip()
+                            if is_arena_unexpected_battle_url(current_err_url):
+                                logger.warning(
+                                    f"[{session.id}] [ArenaDirectGuard] 通用异常时检测到页面处于意外 Battle 页面: "
+                                    f"current_url={current_err_url}, recovery_url={arena_recovery_url}"
+                                )
+                                workflow_aborted = True
+                                yield self.formatter.pack_error(
+                                    "stream_terminal_error:arena_direct_unexpected_battle_redirect",
+                                    code="arena_direct_unexpected_battle_redirect",
+                                )
+                                break
                         if not optional:
                             yield self.formatter.pack_error(f"执行中断: {str(e)}")
                             break
@@ -2338,6 +2538,24 @@ class BrowserWorkflowMixin:
                                 direct_modalities=direct_modalities,
                                 media_dom_baseline=media_dom_baseline,
                             )
+
+                            if not media_items and stream_media_items:
+                                valid_stream_images = [
+                                    item
+                                    for item in stream_media_items
+                                    if isinstance(item, dict)
+                                    and str(item.get("media_type") or "image").strip().lower() == "image"
+                                    and (item.get("url") or item.get("data_uri"))
+                                ]
+                                if valid_stream_images:
+                                    logger.info(
+                                        f"[{session.id}] DOM 媒体提取为空，安全激活网络流图片候选 ({len(valid_stream_images)} 张) 进行本地化"
+                                    )
+                                    media_items = self._merge_dom_and_stream_media_items(
+                                        [],
+                                        valid_stream_images,
+                                        image_config,
+                                    )
                     
                     if arena_image_generation_active and not media_items:
                         raise ArenaImageGenerationError(
@@ -2357,6 +2575,7 @@ class BrowserWorkflowMixin:
                             media_items,
                             tab=tab,
                             max_size_mb=int(image_config.get("max_size_mb", 10) or 10),
+                            image_config=image_config,
                         )
                         if arena_image_generation_active:
                             generated_images = [

@@ -112,22 +112,5 @@
       "mode": "all"
     },
     "notes": "Grok 的响应容器使用 response-content-markdown"
-  },
-  
-  "lmarena.ai": {
-    "name": "LMArena",
-    "description": "Language Model Arena",
-    "image_extraction": {
-      "enabled": true,
-      "selector": "img",
-      "container_selector": ".no-scrollbar",
-      "debounce_seconds": 2.5,
-      "wait_for_load": true,
-      "load_timeout_seconds": 6.0,
-      "download_blobs": true,
-      "max_size_mb": 10,
-      "mode": "all"
-    },
-    "notes": "LMArena 可能有多个模型同时输出，使用 prose 容器"
   }
 }

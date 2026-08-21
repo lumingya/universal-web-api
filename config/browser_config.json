@@ -145,7 +145,17 @@
       "https://arena.ai/c/019ff8f4-c94b-7d93-9cd2-8e1b27576378",
       "https://arena.ai/c/019ff9c7-2671-7f25-8368-bf7643efc8e9",
       "https://arena.ai/c/019ff9c7-8086-73b3-8599-e5e80a6d4fcf",
-      "https://arena.ai/c/019ff9d9-0458-7fa3-9e7a-c11783210eab"
+      "https://arena.ai/c/019ff9d9-0458-7fa3-9e7a-c11783210eab",
+      "https://arena.ai/c/01a000d1-4f95-7135-ba92-932b97f7f7db",
+      "https://arena.ai/c/01a00442-e0e6-7c18-b5a4-94249ab2452b",
+      "https://arena.ai/c/01a0046f-4413-7684-9fdd-079995af4852",
+      "https://arena.ai/c/01a004c0-c72c-7f35-b031-bd40a1d1c177",
+      "https://arena.ai/c/01a00510-8ee8-7478-b7e1-0fdc07750409",
+      "https://arena.ai/c/01a008dd-750b-7252-993e-a743b07ca994",
+      "https://arena.ai/c/01a01086-c3ba-71c7-ab49-19d50f18aae5",
+      "https://arena.ai/c/01a0050b-bc42-79fb-a4ef-0cccff99b1b8",
+      "https://arena.ai/c/01a01eac-8142-700c-9ed7-2b0a122b0385",
+      "https://arena.ai/c/01a004cc-dc8a-70c0-9a98-e8a90fca666f"
     ],
     "preserve_error_tabs": true,
     "route_groups": [
@@ -157,39 +167,24 @@
         "allocation_mode": "round_robin",
         "members": [
           {
-            "url": "https://arena.ai/c/019fea7f-d8d0-73cb-abf1-b11b1d01ceca",
-            "url_token": "f87a31f14acc",
+            "url": "https://arena.ai/c/01a0046f-4413-7684-9fdd-079995af4852",
+            "url_token": "440bdacf3095",
             "tab_index": 2
           },
           {
-            "url": "https://arena.ai/c/019fea7f-e119-7c5f-a9e3-469166d84a83",
-            "url_token": "f2b14ebaf6cb",
-            "tab_index": 4
+            "url": "https://arena.ai/c/01a008dd-750b-7252-993e-a743b07ca994",
+            "url_token": "e504c35d3e12",
+            "tab_index": 3
           },
           {
-            "url": "https://arena.ai/c/019fea80-a523-7944-ae36-90e0d12c8d0c",
-            "url_token": "c4acd4b6b761",
-            "tab_index": 7
+            "url": "https://arena.ai/c/01a01086-c3ba-71c7-ab49-19d50f18aae5",
+            "url_token": "f835d9708a33",
+            "tab_index": 8
           },
           {
-            "url": "https://arena.ai/c/019ff07f-d9c2-7d1c-9d23-254bef41209e",
-            "url_token": "91d548f9cc30",
-            "tab_index": 7
-          },
-          {
-            "url": "https://arena.ai/c/019ff4d3-c8be-79ad-ada5-1fdad247588c",
-            "url_token": "2355b01af96b",
-            "tab_index": 1
-          },
-          {
-            "url": "https://arena.ai/c/019ff8f4-c94b-7d93-9cd2-8e1b27576378",
-            "url_token": "014eae0e84c7",
-            "tab_index": 4
-          },
-          {
-            "url": "https://arena.ai/c/019ff9d9-0458-7fa3-9e7a-c11783210eab",
-            "url_token": "2b2c75b57e31",
-            "tab_index": 9
+            "url": "https://arena.ai/c/01a01eac-8142-700c-9ed7-2b0a122b0385",
+            "url_token": "9d88624f8e73",
+            "tab_index": 2
           }
         ]
       },
@@ -214,6 +209,16 @@
             "url": "https://arena.ai/c/019ff9c7-2671-7f25-8368-bf7643efc8e9",
             "url_token": "46c3b21cd748",
             "tab_index": 6
+          },
+          {
+            "url": "https://arena.ai/c/01a004c0-c72c-7f35-b031-bd40a1d1c177",
+            "url_token": "f61455ed9c62",
+            "tab_index": 16
+          },
+          {
+            "url": "https://arena.ai/c/01a004cc-dc8a-70c0-9a98-e8a90fca666f",
+            "url_token": "aed210740750",
+            "tab_index": 4
           }
         ]
       },
@@ -248,10 +253,60 @@
             "url": "https://arena.ai/c/019ff9c7-8086-73b3-8599-e5e80a6d4fcf",
             "url_token": "51c9098e6ee5",
             "tab_index": 8
+          },
+          {
+            "url": "https://arena.ai/c/01a00510-8ee8-7478-b7e1-0fdc07750409",
+            "url_token": "eef0033dc3c0",
+            "tab_index": 12
+          },
+          {
+            "url": "https://arena.ai/c/01a0050b-bc42-79fb-a4ef-0cccff99b1b8",
+            "url_token": "f1cc978d4749",
+            "tab_index": 3
+          }
+        ]
+      },
+      {
+        "id": "tit",
+        "name": "文生图",
+        "route_domain": "arena.ai",
+        "preset_name": "direct-图片模式-文生图",
+        "allocation_mode": "round_robin",
+        "members": [
+          {
+            "url": "https://arena.ai/c/019ff9d9-0458-7fa3-9e7a-c11783210eab",
+            "url_token": "2b2c75b57e31",
+            "tab_index": 1
+          },
+          {
+            "url": "https://arena.ai/c/01a000d1-4f95-7135-ba92-932b97f7f7db",
+            "url_token": "7e5046b5489f",
+            "tab_index": 2
+          },
+          {
+            "url": "https://arena.ai/c/01a0046f-4413-7684-9fdd-079995af4852",
+            "url_token": "440bdacf3095",
+            "tab_index": 17
+          },
+          {
+            "url": "https://arena.ai/c/01a008dd-750b-7252-993e-a743b07ca994",
+            "url_token": "e504c35d3e12",
+            "tab_index": 3
+          },
+          {
+            "url": "https://arena.ai/c/01a01086-c3ba-71c7-ab49-19d50f18aae5",
+            "url_token": "f835d9708a33",
+            "tab_index": 8
+          },
+          {
+            "url": "https://arena.ai/c/01a01eac-8142-700c-9ed7-2b0a122b0385",
+            "url_token": "9d88624f8e73",
+            "tab_index": 2
           }
         ]
       }
-    ]
+    ],
+    "auto_remember_url_presets": true
   },
   "UPLOAD_HISTORY_IMAGES": false,
   "NETWORK_DEBUG_CAPTURE_ENABLED": true,

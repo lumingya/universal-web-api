@@ -121,6 +121,75 @@ def test_release_asset_requires_exact_name_repo_and_sha256():
     assert get_release_zip_asset(release, "lumingya/universal-web-api") is None
 
 
+def test_release_asset_name_supports_tag_without_v_and_asset_with_v():
+    digest = "b" * 64
+    # Tag 是 2.9.7（无 v），Asset 是 universal-web-api-release-v2.9.7.zip（有 v）
+    release = {
+        "tag_name": "2.9.7",
+        "assets": [{
+            "name": "universal-web-api-release-v2.9.7.zip",
+            "size": 2048,
+            "digest": f"sha256:{digest}",
+            "browser_download_url": (
+                "https://github.com/lumingya/universal-web-api/"
+                "releases/download/2.9.7/universal-web-api-release-v2.9.7.zip"
+            ),
+        }],
+    }
+    assert get_release_zip_asset(release, "lumingya/universal-web-api") == release["assets"][0]
+
+    # Tag 是 v2.9.7（有 v），Asset 是 universal-web-api-release-2.9.7.zip（无 v）
+    release_v_tag = {
+        "tag_name": "v2.9.7",
+        "assets": [{
+            "name": "universal-web-api-release-2.9.7.zip",
+            "size": 2048,
+            "digest": f"sha256:{digest}",
+            "browser_download_url": (
+                "https://github.com/lumingya/universal-web-api/"
+                "releases/download/v2.9.7/universal-web-api-release-2.9.7.zip"
+            ),
+        }],
+    }
+    assert get_release_zip_asset(release_v_tag, "lumingya/universal-web-api") == release_v_tag["assets"][0]
+
+    # 不匹配的文件名
+    release_mismatch = {
+        "tag_name": "2.9.7",
+        "assets": [{
+            "name": "other-release-v2.9.7.zip",
+            "size": 2048,
+            "digest": f"sha256:{digest}",
+            "browser_download_url": (
+                "https://github.com/lumingya/universal-web-api/"
+                "releases/download/2.9.7/other-release-v2.9.7.zip"
+            ),
+        }],
+    }
+    assert get_release_zip_asset(release_mismatch, "lumingya/universal-web-api") is None
+
+    # 路径穿越攻击防御测试
+    release_traversal = {
+        "tag_name": "2.9.7",
+        "assets": [{
+            "name": "universal-web-api-release-v2.9.7.zip",
+            "size": 2048,
+            "digest": f"sha256:{digest}",
+            "browser_download_url": (
+                "https://github.com/lumingya/universal-web-api/"
+                "releases/download/../../attacker/repo/releases/download/2.9.7/universal-web-api-release-v2.9.7.zip"
+            ),
+        }],
+    }
+    assert get_release_zip_asset(release_traversal, "lumingya/universal-web-api") is None
+
+    # 无效 tag 或入参测试
+    assert get_release_zip_asset({"tag_name": "", "assets": []}, "lumingya/universal-web-api") is None
+    assert get_release_zip_asset({"tag_name": "v", "assets": []}, "lumingya/universal-web-api") is None
+    assert get_release_zip_asset(None, "lumingya/universal-web-api") is None
+    assert get_release_zip_asset({}, "") is None
+
+
 def test_safe_extract_zip_rejects_excessive_compression_ratio(tmp_path):
     archive_path = tmp_path / "bomb.zip"
     destination = tmp_path / "extract"

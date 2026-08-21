@@ -14,9 +14,40 @@ ALLOWED_REMOTE_SCHEMES = frozenset({"http", "https"})
 MAX_REMOTE_REDIRECTS = 4
 _PROXY_FAKE_IP_NETWORKS = (ipaddress.ip_network("198.18.0.0/15"),)
 _PROXY_FAKE_IP_HTTPS_SUFFIXES = (
+    # Google & Gemini CDN / Media
+    "googleusercontent.com",
+    "usercontent.google.com",
+    "gstatic.com",
+    "googleapis.com",
+    "google.com",
+    # Cloudflare R2 & CDN
     "r2.cloudflarestorage.com",
-    "contribution.usercontent.google.com",
+    "cloudflare.com",
+    "cloudflareinsights.com",
+    # GitHub CDN
+    "githubusercontent.com",
     "raw.githubusercontent.com",
+    "github.com",
+    # OpenAI CDN
+    "oaistatic.com",
+    "oaiusercontent.com",
+    "openai.com",
+    # Anthropic & Claude CDN
+    "anthropic.com",
+    "claude.ai",
+    # Microsoft & Bing CDN
+    "bing.com",
+    "msn.com",
+    "microsoft.com",
+    "azureedge.net",
+    "windows.net",
+    # Other mainstream AI & media hosting CDNs
+    "deepseek.com",
+    "grok.com",
+    "x.ai",
+    "together.ai",
+    "together.xyz",
+    "replicate.delivery",
 )
 
 
@@ -167,12 +198,8 @@ def _headers_for_target(
 ) -> Dict[str, str]:
     result = dict(headers or {})
     if not credential_origin or remote_url_origin(target_url) != credential_origin:
-        result.pop("Authorization", None)
-        result.pop("authorization", None)
-        result.pop("Cookie", None)
-        result.pop("cookie", None)
-        result.pop("Referer", None)
-        result.pop("referer", None)
+        sensitive = {"authorization", "cookie", "referer"}
+        result = {k: v for k, v in result.items() if str(k).strip().lower() not in sensitive}
     return result
 
 

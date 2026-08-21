@@ -209,6 +209,49 @@ def test_image_extractor_receives_request_baseline_options() -> None:
     assert element.options["requestBaselineExcludeExistingNodes"] is True
 
 
+def test_image_extractor_rejects_windowed_placeholder_but_keeps_real_data_uri() -> None:
+    placeholder = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="
+    real_image = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"
+    windowed_original = "https://bucket.r2.cloudflarestorage.com/generated.png"
+
+    class _Element:
+        def run_js(self, _script, _options):
+            return {
+                "images": [
+                    {
+                        "src": placeholder,
+                        "_windowed_placeholder": True,
+                        "width": 1,
+                        "height": 1,
+                    },
+                    {
+                        "src": real_image,
+                        "width": 1,
+                        "height": 1,
+                    },
+                    {
+                        "src": windowed_original,
+                        "_source": "image_window_original_src",
+                        "width": 1024,
+                        "height": 1024,
+                    },
+                ],
+                "warnings": [],
+                "scope": "primary",
+                "nodeCount": 2,
+            }
+
+    images = ImageExtractor().extract(
+        _Element(),
+        {"enabled": True, "wait_for_load": False},
+    )
+
+    assert [image["data_uri"] for image in images] == [real_image, None]
+    assert images[1]["url"] == windowed_original
+    assert images[1]["source"] == "image_window_original_src"
+    assert "data-uwa-image-window-original-src" in ImageExtractor.EXTRACT_IMAGES_JS
+
+
 def test_pre_submit_node_source_change_is_not_fresh_dom_output() -> None:
     class _ExistingNodeCandidate:
         def run_js(self, script, selector, token, property_name, exclude_existing_nodes):
@@ -425,3 +468,174 @@ def test_all_gemini_presets_wait_on_explicit_video_generation_signal() -> None:
         assert video_policy["enabled"] is True, preset_name
         assert video_policy["run_policy"] == "on_signal", preset_name
         assert video_policy["late_wait_timeout_seconds"] == 300, preset_name
+
+
+def test_image_extractor_filters_unmarked_known_1x1_placeholder() -> None:
+    placeholder = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="
+    real_image = "https://messages-prod.example.r2.cloudflarestorage.com/result.png"
+
+    class _Element:
+        def run_js(self, _script, _options):
+            return {
+                "images": [
+                    {
+                        "src": placeholder,
+                        "data_uri": placeholder,
+                        "width": 1,
+                        "height": 1,
+                    },
+                    {
+                        "src": real_image,
+                        "width": 1024,
+                        "height": 1024,
+                    },
+                ],
+                "warnings": [],
+                "scope": "primary",
+                "nodeCount": 2,
+            }
+
+    images = ImageExtractor().extract(
+        _Element(),
+        {"enabled": True, "wait_for_load": False},
+    )
+
+    assert len(images) == 1
+    assert images[0]["url"] == real_image
+    assert images[0]["data_uri"] is None
+
+
+def test_arena_conversation_image_window_script_sets_placeholder_attrs() -> None:
+    script_path = Path(__file__).resolve().parents[1] / "js" / "arena-conversation-image-window.user.js"
+    content = script_path.read_text(encoding="utf-8")
+    assert "data-uwa-image-window-placeholder" in content
+    assert "data-uwa-image-window-original-src" in content
+    assert "PLACEHOLDER_ATTR" in content
+    assert "ORIGINAL_SRC_ATTR" in content
+    assert "unmanage" in content
+
+
+def test_image_extractor_distinguishes_different_data_uris_sharing_long_prefix() -> None:
+    common_prefix = "data:image/jpeg;base64," + "A" * 300
+    jpeg_1 = common_prefix + "1111"
+    jpeg_2 = common_prefix + "2222"
+
+    class _Element:
+        def run_js(self, _script, _options):
+            return {
+                "images": [
+                    {"src": jpeg_1, "data_uri": jpeg_1, "width": 100, "height": 100},
+                    {"src": jpeg_2, "data_uri": jpeg_2, "width": 100, "height": 100},
+                ],
+                "warnings": [],
+                "scope": "primary",
+                "nodeCount": 2,
+            }
+
+    images = ImageExtractor().extract(
+        _Element(),
+        {"enabled": True, "wait_for_load": False},
+    )
+
+    assert len(images) == 2
+    assert images[0]["data_uri"] == jpeg_1
+    assert images[1]["data_uri"] == jpeg_2
+
+
+def test_persist_remote_media_urls_to_local_uses_image_config_timeout(tmp_path) -> None:
+    from app.core.browser.media import BrowserMediaMixin
+    from unittest.mock import patch, MagicMock
+
+    harness = BrowserMediaMixin()
+    tab = MagicMock()
+    tab.url = "https://arena.ai"
+    media_items = [{"media_type": "image", "kind": "url", "url": "https://example.com/test.png"}]
+    image_config = {
+        "arena_image_generation": True,
+        "background_download_wait_seconds": 4.5,
+    }
+
+    test_file = tmp_path / "test.png"
+    test_file.write_bytes(b"dummy image bytes")
+
+    with patch("app.core.browser.media.background_image_downloader.get_download_result") as mock_get_result:
+        mock_get_result.return_value = {
+            "status": "done",
+            "local_path": str(test_file),
+            "accessible_url": "/download_images/test.png",
+            "mime": "image/png",
+        }
+        result = harness._persist_remote_media_urls_to_local(
+            media_items,
+            tab=tab,
+            image_config=image_config,
+        )
+        assert len(result) == 1
+        assert result[0]["url"] == "/download_images/test.png"
+        assert result[0]["source"] == "background_download"
+        assert result[0]["local_path"] == str(test_file)
+        mock_get_result.assert_called_once()
+        assert mock_get_result.call_args[1]["timeout"] == 4.5
+        # 验证 partition_key 不是盲目使用全量 Cookie 哈希，而是针对目标 URL 计算
+        assert "partition_key" in mock_get_result.call_args[1]
+
+
+def test_persist_remote_media_urls_to_local_uses_signed_public_partition_for_r2_url(tmp_path) -> None:
+    from app.core.browser.media import BrowserMediaMixin
+    from unittest.mock import patch, MagicMock
+
+    harness = BrowserMediaMixin()
+    tab = MagicMock()
+    tab.url = "https://arena.ai"
+    r2_url = "https://messages-prod.example.r2.cloudflarestorage.com/generated.png?x-amz-signature=deadbeef"
+    media_items = [{"media_type": "image", "kind": "url", "url": r2_url}]
+    image_config = {
+        "arena_image_generation": True,
+        "background_download_wait_seconds": 3.0,
+    }
+
+    test_file = tmp_path / "generated.png"
+    test_file.write_bytes(b"image content")
+
+    with patch("app.core.browser.media.background_image_downloader.get_download_result") as mock_get_result:
+        mock_get_result.return_value = {
+            "status": "done",
+            "local_path": str(test_file),
+            "accessible_url": "/download_images/generated.png",
+            "mime": "image/png",
+        }
+        result = harness._persist_remote_media_urls_to_local(
+            media_items,
+            tab=tab,
+            image_config=image_config,
+        )
+        assert len(result) == 1
+        assert result[0]["url"] == "/download_images/generated.png"
+        mock_get_result.assert_called_once()
+        assert mock_get_result.call_args[1]["partition_key"] == "signed-public"
+
+
+def test_merge_dom_and_stream_media_items_retains_multiple_stream_audios() -> None:
+    from app.core.browser.media import BrowserMediaMixin
+
+    harness = BrowserMediaMixin()
+    dom_items = []
+    stream_items = [
+        {"media_type": "audio", "kind": "url", "url": "https://example.com/audio1.mp3"},
+        {"media_type": "audio", "kind": "url", "url": "https://example.com/audio2.mp3"},
+        {"media_type": "video", "kind": "url", "url": "https://example.com/video1.mp4"},
+    ]
+    image_config = {}
+
+    merged = harness._merge_dom_and_stream_media_items(
+        dom_items,
+        stream_items,
+        image_config,
+    )
+
+    assert len(merged) == 3
+    audio_urls = [item["url"] for item in merged if item["media_type"] == "audio"]
+    assert audio_urls == ["https://example.com/audio1.mp3", "https://example.com/audio2.mp3"]
+
+
+

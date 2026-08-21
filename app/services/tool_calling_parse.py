@@ -8,10 +8,10 @@ import html
 import json
 import re
 import time
+import xml.etree.ElementTree as ET
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-import json_repair
-from bs4 import BeautifulSoup, NavigableString, Tag
+from bs4 import NavigableString, Tag
 
 from app.services.sse_utils import sse_frame_data_text
 
@@ -23,9 +23,11 @@ from app.services.tool_calling_common import (
     _PREFERRED_XML_CALL_TAG,
     _PREFERRED_XML_WRAPPER_TAG,
     _debug_preview,
+    _contains_unicode_surrogate,
     _new_completion_id,
     _new_tool_call_id,
     _pack_sse_chunk,
+    _replace_unicode_surrogates,
     _resolve_tool_name,
     _serialize_content,
     get_tool_calling_sanitize_assistant_content_enabled,
@@ -41,6 +43,14 @@ def parse_tool_response(
         f"[tool_calling] raw assistant text len={len(raw)} "
         f"preview={_debug_preview(raw)}"
     )
+    if _is_echoed_assistant_tool_history(raw):
+        logger.warning("[tool_calling] rejected echoed assistant tool-call history")
+        return {
+            "mode": "final",
+            "content": "",
+            "tool_calls": [],
+            "parse_error": "assistant_tool_history_echo",
+        }
     allowed = {
         str(item.get("function", {}).get("name", "") or "").strip(): item
         for item in tools or []
@@ -65,13 +75,6 @@ def parse_tool_response(
         )
         return json_payload
 
-    # Some upstream models echo the adapter's internal history wrapper instead
-    # of returning the bare OpenAI-compatible payload. Treat it as protocol
-    # metadata, never as user-visible assistant text.
-    assistant_tool_calls = _try_parse_assistant_tool_calls_wrapper(raw, allowed)
-    if assistant_tool_calls is not None:
-        return assistant_tool_calls
-
     xml_payload = _try_parse_xml_tool_calls(raw, allowed)
     if xml_payload is not None:
         logger.debug(
@@ -83,9 +86,31 @@ def parse_tool_response(
     logger.debug(f"[tool_calling] falling back to final-text mode (len={len(raw)})")
     return {
         "mode": "final",
-        "content": raw.strip(),
+        "content": _replace_unicode_surrogates(raw.strip()),
         "tool_calls": [],
     }
+
+
+def _is_echoed_assistant_tool_history(raw: str) -> bool:
+    marker = "[Assistant Tool Calls]\n"
+    _, separator, payload_text = str(raw or "").partition(marker)
+    if not separator:
+        return False
+
+    try:
+        payload = json.loads(payload_text.strip())
+    except Exception:
+        return False
+    if not isinstance(payload, list) or not payload:
+        return False
+
+    for item in payload:
+        if not isinstance(item, dict):
+            return False
+        function_data = item.get("function")
+        if not isinstance(function_data, dict) or "arguments" not in function_data:
+            return False
+    return True
 
 
 def build_tool_completion_response(
@@ -209,52 +234,6 @@ def _legacy_function_call_from_tool_call(tool_call: Any) -> Dict[str, str]:
         "arguments": arguments,
     }
 
-
-def _try_parse_assistant_tool_calls_wrapper(
-    text: str,
-    allowed_tools: Dict[str, Dict[str, Any]],
-) -> Optional[Dict[str, Any]]:
-    marker = "[Assistant Tool Calls]"
-    raw = str(text or "")
-    marker_index = raw.find(marker)
-    if marker_index < 0:
-        return None
-    payload_text = raw[marker_index + len(marker):].strip()
-    candidates = _extract_json_candidates(payload_text)
-    for candidate in candidates:
-        try:
-            payload = json.loads(candidate)
-        except Exception:
-            repaired = _repair_json_like_argument_string(candidate)
-            if repaired == candidate:
-                continue
-            try:
-                payload = json.loads(repaired)
-            except Exception:
-                continue
-        if not isinstance(payload, list):
-            continue
-        known_tool = False
-        for item in payload:
-            if not isinstance(item, dict):
-                continue
-            function_data = item.get("function") if isinstance(item.get("function"), dict) else {}
-            raw_name = item.get("name") or item.get("tool_name") or function_data.get("name") or ""
-            if _resolve_tool_name(str(raw_name), allowed_tools):
-                known_tool = True
-                break
-        if not known_tool:
-            continue
-        tool_calls = _normalize_tool_calls(payload, allowed_tools)
-        if not tool_calls:
-            continue
-        visible_prefix = raw[:marker_index].strip()
-        return {
-            "mode": "tool_calls",
-            "content": visible_prefix or None,
-            "tool_calls": tool_calls,
-        }
-    return None
 
 _TOOL_CALLING_PLACEHOLDER_URL_RE = re.compile(
     r"^\s*https?://(?:[\w.-]+\.)?googleusercontent\.com/"
@@ -396,24 +375,14 @@ def _extract_sse_json_payloads(text: str) -> List[str]:
 
 
 def _try_parse_json_payload(text: str, allowed_tools: Dict[str, Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    candidates = _extract_json_candidates(text)
-    for candidate in candidates:
-        try:
-            payload = json.loads(candidate)
-        except Exception:
-            repaired = _repair_json_like_argument_string(candidate)
-            if repaired == candidate:
-                continue
-            try:
-                payload = json.loads(repaired)
-            except Exception:
-                continue
-
-        normalized = _normalize_parsed_payload(payload, allowed_tools)
-        if normalized is not None:
-            return normalized
-
-    return None
+    candidate = str(text or "").strip()
+    if not candidate.startswith("{"):
+        return None
+    try:
+        payload = json.loads(candidate)
+    except Exception:
+        return None
+    return _normalize_parsed_payload(payload, allowed_tools)
 
 
 def _extract_json_candidates(text: str) -> List[str]:
@@ -583,11 +552,18 @@ def _normalize_tool_calls(
         name = _resolve_tool_name(raw_name_text, allowed_tools) or raw_name_text
 
         args = item.get("arguments", function_data.get("arguments"))
-        args_obj = _coerce_arguments_object(args)
-        if args_obj is None:
-            arguments_payload = args if isinstance(args, str) else json.dumps(args, ensure_ascii=False)
+        if _contains_unicode_surrogate(args):
+            continue
+        if isinstance(args, str):
+            try:
+                decoded_args = json.loads(args)
+            except Exception:
+                decoded_args = None
+            if _contains_unicode_surrogate(decoded_args):
+                continue
+            arguments_payload = args
         else:
-            arguments_payload = json.dumps(args_obj, ensure_ascii=False)
+            arguments_payload = json.dumps(args if args is not None else {}, ensure_ascii=False)
 
         result.append(
             {
@@ -615,16 +591,8 @@ def _coerce_arguments_object(args: Any) -> Optional[Dict[str, Any]]:
         try:
             parsed = json.loads(stripped)
             if isinstance(parsed, dict):
-                return parsed
+                return None if _contains_unicode_surrogate(parsed) else parsed
         except Exception:
-            repaired = _repair_json_like_argument_string(stripped)
-            if repaired != stripped:
-                try:
-                    parsed = json.loads(repaired)
-                    if isinstance(parsed, dict):
-                        return parsed
-                except Exception:
-                    pass
             return None
     return None
 
@@ -641,31 +609,15 @@ def _decode_tool_arguments(tool_call: Dict[str, Any]) -> Optional[Dict[str, Any]
         try:
             parsed = json.loads(stripped)
         except Exception:
-            repaired = _repair_json_like_argument_string(stripped)
-            if repaired == stripped:
-                return None
-            try:
-                parsed = json.loads(repaired)
-            except Exception:
-                return None
-        if isinstance(parsed, dict):
+            return None
+        if isinstance(parsed, dict) and not _contains_unicode_surrogate(parsed):
             return parsed
     return None
 
 
 def _repair_json_like_argument_string(raw: str) -> str:
-    """Return canonical JSON repaired by json-repair, or the original text."""
-    text = str(raw or "")
-    stripped = text.lstrip()
-    if not stripped or stripped[0] not in "{[":
-        return text
-    try:
-        repaired = json_repair.loads(text)
-    except Exception:
-        return text
-    if not isinstance(repaired, (dict, list)):
-        return text
-    return json.dumps(repaired, ensure_ascii=False)
+    """Compatibility no-op; malformed arguments must be repaired by the model."""
+    return str(raw or "")
 
 
 _TOOL_XML_WRAPPER_OPEN_RE = re.compile(
@@ -738,9 +690,9 @@ def _mask_ignored_tool_markup_regions(text: str) -> str:
     return "".join(chars)
 
 
-def _find_tool_xml_wrapper_blocks(text: str) -> List[str]:
+def _find_tool_xml_wrapper_spans(text: str) -> List[Tuple[int, int, str]]:
     masked = _mask_ignored_tool_markup_regions(text)
-    blocks: List[str] = []
+    spans: List[Tuple[int, int, str]] = []
     search_from = 0
     while True:
         match = _TOOL_XML_WRAPPER_OPEN_RE.search(masked, search_from)
@@ -748,11 +700,44 @@ def _find_tool_xml_wrapper_blocks(text: str) -> List[str]:
             break
         block_end = _find_tool_xml_wrapper_end(masked, match.end())
         if block_end == -1:
-            blocks.append(text[match.start() :])
+            spans.append((match.start(), len(text), text[match.start() :]))
             break
-        blocks.append(text[match.start() : block_end])
+        spans.append((match.start(), block_end, text[match.start() : block_end]))
         search_from = block_end
-    return blocks
+    return spans
+
+
+def _find_tool_xml_wrapper_blocks(text: str) -> List[str]:
+    return [item[2] for item in _find_tool_xml_wrapper_spans(text)]
+
+
+def _extract_text_excluding_spans(text: str, spans: List[Tuple[int, int]]) -> str:
+    if not spans:
+        return text
+    sorted_spans = sorted(spans, key=lambda s: s[0])
+    merged: List[Tuple[int, int]] = []
+    for start, end in sorted_spans:
+        if start < 0 or end <= start:
+            continue
+        if not merged:
+            merged.append((start, end))
+        else:
+            prev_start, prev_end = merged[-1]
+            if start <= prev_end:
+                merged[-1] = (prev_start, max(prev_end, end))
+            else:
+                merged.append((start, end))
+
+    parts: List[str] = []
+    last_idx = 0
+    for start, end in merged:
+        if start > last_idx:
+            parts.append(text[last_idx:start])
+        last_idx = max(last_idx, end)
+    if last_idx < len(text):
+        parts.append(text[last_idx:])
+
+    return "".join(parts)
 
 
 def _find_tool_xml_wrapper_end(masked: str, start: int) -> int:
@@ -862,21 +847,22 @@ def _normalize_tool_xml_markup(text: str) -> str:
     return str(text or "")
 
 
-def _safe_xml_fromstring(text: str) -> Tag:
-    """Parse an LLM tool block with HTML recovery semantics."""
+def _safe_xml_fromstring(text: str) -> ET.Element:
+    """Parse a complete tool envelope without HTML recovery."""
     value = str(text or "")
     if len(value) > _TOOL_XML_MAX_CHARS:
         raise ValueError("tool XML block exceeds maximum length")
     if _TOOL_XML_FORBIDDEN_DECL_RE.search(value):
         raise ValueError("DTD and entity declarations are not allowed in tool XML")
 
-    soup = BeautifulSoup(value, "html.parser")
-    root = soup.find(
-        lambda tag: isinstance(tag, Tag)
-        and _xml_local_name(tag.name).lower()
-        in {_PREFERRED_XML_WRAPPER_TAG, _LEGACY_XML_WRAPPER_TAG}
-    )
-    if not isinstance(root, Tag):
+    try:
+        root = ET.fromstring(value)
+    except ET.ParseError as exc:
+        raise ValueError("tool XML must be complete and well-formed") from exc
+    if _xml_local_name(root.tag).lower() not in {
+        _PREFERRED_XML_WRAPPER_TAG,
+        _LEGACY_XML_WRAPPER_TAG,
+    }:
         raise ValueError("tool XML wrapper not found")
     return root
 
@@ -901,13 +887,46 @@ def _append_xml_value(target: Dict[str, Any], key: str, value: Any) -> None:
 
 def _schema_prefers_string(schema: Any) -> bool:
     if not isinstance(schema, dict):
-        return False
+        return True
     schema_type = schema.get("type")
     if isinstance(schema_type, str):
         return schema_type.strip().lower() == "string"
     if isinstance(schema_type, list):
         return any(str(item).strip().lower() == "string" for item in schema_type)
-    return False
+
+    enum_values = schema.get("enum")
+    if isinstance(enum_values, list) and enum_values:
+        return any(isinstance(item, str) for item in enum_values)
+    if "const" in schema:
+        return isinstance(schema.get("const"), str)
+
+    for keyword in ("anyOf", "oneOf", "allOf"):
+        variants = schema.get(keyword)
+        if isinstance(variants, list):
+            return any(_schema_prefers_string(variant) for variant in variants)
+
+    # XML has no native scalar type. Preserve lexical values unless the schema
+    # explicitly declares a non-string type that needs JSON scalar decoding.
+    return True
+
+
+def _empty_xml_value_for_schema(schema: Any) -> Any:
+    if not isinstance(schema, dict):
+        return None
+    schema_type = schema.get("type")
+    if isinstance(schema_type, str):
+        normalized_type = schema_type.strip().lower()
+        if normalized_type == "array":
+            return []
+        if normalized_type == "object":
+            return {}
+    if isinstance(schema_type, list):
+        normalized_types = {str(item).strip().lower() for item in schema_type}
+        if "array" in normalized_types and "string" not in normalized_types:
+            return []
+        if "object" in normalized_types and "string" not in normalized_types:
+            return {}
+    return None
 
 
 def _schema_property_name(schema: Any, field_name: str) -> str:
@@ -986,6 +1005,10 @@ def _parse_xml_element_value(
 ) -> Any:
     children = element.find_all(recursive=False)
     normalized_name = str(field_name or "").strip().lower()
+    if not children and not element.get_text(strip=True):
+        empty_value = _empty_xml_value_for_schema(param_schema)
+        if empty_value is not None:
+            return empty_value
     if _schema_prefers_string(param_schema) or normalized_name in _TOOL_XML_STRING_PARAM_NAMES:
         # 修复(6)：NavigableString 已被 BS4 解码一次，直接取值；嵌套 Tag 用 formatter=None
         # 序列化避免输出时再转义，配合 _parse_xml_scalar_value 去掉二次 unescape 后语义一致。
@@ -1027,56 +1050,30 @@ def _parse_xml_element_value(
 
 
 def _parse_xml_invoke_arguments(
-    invoke: Tag,
+    invoke: ET.Element,
     tool_def: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
-    children = invoke.find_all(recursive=False)
-    if not children:
-        inner_text = invoke.get_text().strip()
-        if not inner_text:
-            return {}
-        try:
-            payload = json_repair.loads(inner_text)
-        except Exception:
-            return None
-        if isinstance(payload, dict):
-            if isinstance(payload.get("input"), dict):
-                return payload.get("input")
-            if isinstance(payload.get("parameters"), dict):
-                return payload.get("parameters")
-            return payload
+    if str(invoke.text or "").strip():
         return None
-
-    arguments: Dict[str, Any] = {}
-    parameters_schema = _tool_parameters_schema(tool_def)
-    for child in children:
-        child_tag = _xml_local_name(child.name)
-        is_named_arg = child_tag.lower() in {
-            _PREFERRED_XML_ARG_TAG,
-            _LEGACY_XML_ARG_TAG,
-            "argument",
-        }
-        if is_named_arg:
-            param_name = str(child.attrs.get("name", "") or "").strip()
-        else:
-            param_name = _schema_property_name(parameters_schema, child_tag)
-        if not param_name:
-            continue
-        schema_properties = (
-            parameters_schema.get("properties")
-            if isinstance(parameters_schema.get("properties"), dict)
-            else {}
-        )
-        if not is_named_arg and param_name not in schema_properties:
-            continue
-        param_name = _schema_property_name(parameters_schema, param_name)
-        param_schema = _schema_property_schema(parameters_schema, param_name)
-        _append_xml_value(
-            arguments,
-            param_name,
-            _parse_xml_element_value(child, param_name, param_schema),
-        )
-    return arguments
+    children = list(invoke)
+    if len(children) != 1:
+        return None
+    arguments_element = children[0]
+    if _xml_local_name(arguments_element.tag).lower() != "arguments":
+        return None
+    if set(arguments_element.attrib) != {"encoding"}:
+        return None
+    if str(arguments_element.attrib.get("encoding") or "").strip().lower() != "json":
+        return None
+    if list(arguments_element) or str(arguments_element.tail or "").strip():
+        return None
+    try:
+        payload = json.loads(arguments_element.text or "")
+    except Exception:
+        return None
+    if not isinstance(payload, dict) or _contains_unicode_surrogate(payload):
+        return None
+    return payload
 
 
 def _parse_wrapped_xml_tool_calls(
@@ -1089,27 +1086,31 @@ def _parse_wrapped_xml_tool_calls(
     except ValueError:
         return []
 
-    if _xml_local_name(root.name).lower() not in {
+    if _xml_local_name(root.tag).lower() not in {
         _PREFERRED_XML_WRAPPER_TAG,
         _LEGACY_XML_WRAPPER_TAG,
     }:
         return []
+    if root.attrib or str(root.text or "").strip():
+        return []
 
     tool_calls: List[Dict[str, Any]] = []
-    for child in root.find_all(recursive=False):
-        if _xml_local_name(child.name).lower() not in {
+    for child in list(root):
+        if _xml_local_name(child.tag).lower() not in {
             _PREFERRED_XML_CALL_TAG,
             _LEGACY_XML_CALL_TAG,
             "tool_call",
         }:
-            continue
-        raw_name = str(child.attrs.get("name", "") or "").strip()
+            return []
+        if set(child.attrib) != {"name"} or str(child.tail or "").strip():
+            return []
+        raw_name = str(child.attrib.get("name", "") or "").strip()
         name = _resolve_tool_name(raw_name, allowed_tools)
         if not name:
-            continue
+            return []
         arguments = _parse_xml_invoke_arguments(child, allowed_tools.get(name))
         if arguments is None:
-            continue
+            return []
         tool_calls.append(
             {
                 "id": _new_tool_call_id(),
@@ -1128,51 +1129,21 @@ def _try_parse_xml_tool_calls(
     allowed_tools: Dict[str, Dict[str, Any]],
 ) -> Optional[Dict[str, Any]]:
     raw = str(text or "")
-    tool_calls: List[Dict[str, Any]] = []
-    for block in _find_tool_xml_wrapper_blocks(raw):
-        tool_calls.extend(_parse_wrapped_xml_tool_calls(block, allowed_tools))
-
-    if not tool_calls:
-        repaired = _repair_missing_tool_xml_wrapper(raw)
-        if repaired != raw:
-            for block in _find_tool_xml_wrapper_blocks(repaired):
-                tool_calls.extend(_parse_wrapped_xml_tool_calls(block, allowed_tools))
-
-    if not tool_calls:
-        # 注意：不要在这里使用 r"<(name)\s*([^<>]*?)\s*/>" 这类写法——
-        # 相邻的 \s* 与惰性 [^<>]*? 都能匹配空白，会产生灾难性回溯
-        # （实测 3KB 的 "<a" + 大量空格输入即可阻塞事件循环 10 秒以上）。
-        # 改用单个贪婪字符类，属性两端空白在下面 strip 处理，语义不变。
-        # 修复(5)：回退扫描改在掩码文本上进行——掩码函数已验证保长（忽略区替换为等长空白），
-        # span 与原文对齐；这样模型在 ``` 代码块或行内代码里举例写的
-        # `<get_weather city="X"/>` 不会再被当成真实调用。属性值直接取掩码文本同 span 内容。
-        pattern = re.compile(r"<([A-Za-z0-9_.:-]+)([^<>]*)/>")
-        masked_raw = _mask_ignored_tool_markup_regions(raw)
-        matches = list(pattern.finditer(masked_raw))
-        for match in matches:
-            raw_name = str(match.group(1) or "").strip()
-            name = _resolve_tool_name(raw_name, allowed_tools)
-            if not name:
-                continue
-
-            attrs = _parse_xml_attrs((match.group(2) or "").strip())
-            tool_calls.append(
-                {
-                    "id": _new_tool_call_id(),
-                    "type": "function",
-                    "function": {
-                        "name": name,
-                        "arguments": json.dumps(attrs, ensure_ascii=False),
-                    },
-                }
-            )
-
+    wrapper_spans = _find_tool_xml_wrapper_spans(raw)
+    if len(wrapper_spans) != 1:
+        return None
+    start, end, block = wrapper_spans[0]
+    tool_calls = _parse_wrapped_xml_tool_calls(block, allowed_tools)
     if not tool_calls:
         return None
 
+    visible_text = _replace_unicode_surrogates(
+        _extract_text_excluding_spans(raw, [(start, end)]).strip()
+    )
+
     return {
         "mode": "tool_calls",
-        "content": None,
+        "content": visible_text or None,
         "tool_calls": tool_calls,
     }
 

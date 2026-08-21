@@ -66,6 +66,10 @@ class TabPoolManager:
     CONTEXT_RECOVERY_CDP_TIMEOUT_SEC = 2.0
     CONTEXT_RECOVERY_COOLDOWN_SEC = 30.0
     CONTEXT_RECOVERY_CACHE_LIMIT = 2048
+    # A cancelled HTTP request must not leave its worker blocked in a 60s
+    # acquire.  Polling this frequently keeps cancellation cleanup bounded
+    # without adding a second notification channel from RequestManager.
+    ACQUIRE_CANCEL_POLL_SEC = 0.25
 
     @staticmethod
     def _to_bool(value: Any, default: bool = False) -> bool:
@@ -100,7 +104,9 @@ class TabPoolManager:
         allocation_mode: str = "first_idle",
         excluded_urls: Optional[List[str]] = None,
         preserve_error_tabs: bool = False,
+        auto_remember_url_presets: bool = False,
         model_name_overrides: Optional[Dict[str, Any]] = None,
+        preset_overrides: Optional[Dict[str, Any]] = None,
         route_groups: Optional[List[Dict[str, Any]]] = None,
     ):
         self.page = browser_page
@@ -112,7 +118,9 @@ class TabPoolManager:
         self.allocation_mode = self._normalize_allocation_mode(allocation_mode)
         self.excluded_urls = self._normalize_excluded_urls(excluded_urls)
         self.preserve_error_tabs = self._to_bool(preserve_error_tabs, False)
+        self.auto_remember_url_presets = self._to_bool(auto_remember_url_presets, False)
         self.model_name_overrides = self._normalize_model_name_overrides(model_name_overrides)
+        self.preset_overrides = self._normalize_preset_overrides(preset_overrides)
         self.route_groups = normalize_route_groups(route_groups)
 
         self._tabs: Dict[str, TabSession] = {}
@@ -265,6 +273,50 @@ class TabPoolManager:
 
         return normalized
 
+    @classmethod
+    def _normalize_preset_overrides(cls, value: Any) -> Dict[str, Dict[str, str]]:
+        payload = value if isinstance(value, dict) else {}
+        normalized = {"urls": {}}
+
+        urls = payload.get("urls") if isinstance(payload, dict) else {}
+        if isinstance(urls, dict):
+            for key, preset_name in urls.items():
+                url_key = normalize_exact_tab_url(str(key or "").strip())
+                display_preset = str(preset_name or "").strip()
+                if url_key and display_preset:
+                    normalized["urls"][url_key] = display_preset
+
+        return normalized
+
+    def _apply_preset_overrides(self, session: TabSession, info: Optional[Dict[str, Any]] = None) -> None:
+        """如果开启了自动按 URL 记忆预设，自动为标签页恢复该 URL 上次保存的预设"""
+        if not getattr(self, "auto_remember_url_presets", False):
+            return
+
+        current_url = str((info.get("url") if info else None) or session.last_known_url or "").strip()
+        if not current_url:
+            try:
+                current_url = str(session.tab.url or "").strip()
+            except Exception:
+                pass
+        normalized_url = normalize_exact_tab_url(current_url)
+        if not normalized_url:
+            return
+
+        overrides = self._normalize_preset_overrides(
+            getattr(self, "preset_overrides", None)
+        )
+        saved_preset = overrides["urls"].get(normalized_url)
+        if saved_preset:
+            applied = False
+            with session._lock:
+                if session.preset_name is None or session.preset_name == saved_preset:
+                    session.set_preset(saved_preset, source="url")
+                    applied = True
+            if applied and info is not None:
+                info["preset_name"] = saved_preset
+                info["preset_override_source"] = "url"
+
     @staticmethod
     def _default_model_name_for_info(info: Dict[str, Any]) -> str:
         route_domain = str(info.get("route_domain") or "").strip()
@@ -343,7 +395,9 @@ class TabPoolManager:
         allocation_mode: Optional[str] = None,
         excluded_urls: Optional[List[str]] = None,
         preserve_error_tabs: Optional[bool] = None,
+        auto_remember_url_presets: Optional[bool] = None,
         model_name_overrides: Optional[Dict[str, Any]] = None,
+        preset_overrides: Optional[Dict[str, Any]] = None,
         route_groups: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """同步更新运行中的标签页池参数。"""
@@ -368,8 +422,12 @@ class TabPoolManager:
                 self.excluded_urls = self._normalize_excluded_urls(excluded_urls)
             if preserve_error_tabs is not None:
                 self.preserve_error_tabs = self._to_bool(preserve_error_tabs, False)
+            if auto_remember_url_presets is not None:
+                self.auto_remember_url_presets = self._to_bool(auto_remember_url_presets, False)
             if model_name_overrides is not None:
                 self.model_name_overrides = self._normalize_model_name_overrides(model_name_overrides)
+            if preset_overrides is not None:
+                self.preset_overrides = self._normalize_preset_overrides(preset_overrides)
             if route_groups is not None:
                 self.route_groups = normalize_route_groups(route_groups)
                 valid_groups = route_groups_by_id(self.route_groups)
@@ -389,9 +447,13 @@ class TabPoolManager:
                 "allocation_mode": self.allocation_mode,
                 "excluded_urls": list(self.excluded_urls),
                 "preserve_error_tabs": self.preserve_error_tabs,
+                "auto_remember_url_presets": self.auto_remember_url_presets,
                 "model_name_overrides": {
                     "sites": dict(getattr(self, "model_name_overrides", {}).get("sites", {})),
                     "urls": dict(getattr(self, "model_name_overrides", {}).get("urls", {})),
+                },
+                "preset_overrides": {
+                    "urls": dict(getattr(self, "preset_overrides", {}).get("urls", {})),
                 },
                 "route_groups": normalize_route_groups(self.route_groups),
             }
@@ -403,9 +465,11 @@ class TabPoolManager:
                 f"stuck_timeout={self.stuck_timeout}, allocation_mode={self.allocation_mode}, "
                 f"excluded_urls={len(self.excluded_urls)}, "
                 f"preserve_error_tabs={self.preserve_error_tabs}, "
+                f"auto_remember_url_presets={self.auto_remember_url_presets}, "
                 f"model_name_overrides="
                 f"{len(updated['model_name_overrides']['sites'])}/"
-                f"{len(updated['model_name_overrides']['urls'])}"
+                f"{len(updated['model_name_overrides']['urls'])}, "
+                f"preset_overrides={len(updated['preset_overrides']['urls'])}"
                 f", route_groups={len(updated['route_groups'])}"
             )
             return updated
@@ -1698,6 +1762,7 @@ class TabPoolManager:
             self._persistent_to_session_id[persistent_idx] = session.id
             logger.debug(f"标签页 {session.id} 分配编号 #{persistent_idx}")
 
+        self._apply_preset_overrides(session)
         return session
 
     def _on_session_removed(self, session_id: str):
@@ -2666,6 +2731,22 @@ class TabPoolManager:
         except (TypeError, ValueError):
             return float(self.acquire_timeout)
 
+    @staticmethod
+    def _request_should_stop(task_id: str) -> bool:
+        """Return whether the request owning a blocking acquire was cancelled."""
+        request_id = str(task_id or "").strip()
+        if not request_id:
+            return False
+        try:
+            from app.services.request_manager import request_manager
+
+            context = request_manager.get_request(request_id)
+            return bool(context is not None and context.should_stop())
+        except Exception:
+            # Pool acquisition is also used by command/internal callers that do
+            # not have a RequestContext; cancellation lookup must stay best effort.
+            return False
+
     def _next_waiter_token(self, task_id: str) -> str:
         self._waiter_counter += 1
         base = str(task_id or "task").strip() or "task"
@@ -3015,6 +3096,9 @@ class TabPoolManager:
             while True:
                 if self._shutdown:
                     return None
+                if self._request_should_stop(task_id):
+                    logger.debug(f"Raw tab acquire cancelled (task={task_id})")
+                    return None
 
                 if self._should_scan():
                     self._scan_new_tabs()
@@ -3089,7 +3173,9 @@ class TabPoolManager:
                     f"等待底层标签页 {raw_tab_id} 释放...",
                     interval_sec=5.0,
                 )
-                self._condition.wait(timeout=min(remaining, 1.0))
+                self._condition.wait(
+                    timeout=min(remaining, self.ACQUIRE_CANCEL_POLL_SEC)
+                )
 
 
     async def acquire_by_index_async(self, persistent_index: int, task_id: str, timeout: float = None) -> Optional[TabSession]:
@@ -3307,6 +3393,9 @@ class TabPoolManager:
                 while True:
                     if self._shutdown:
                         return None
+                    if self._request_should_stop(task_id):
+                        logger.debug(f"Acquire cancelled (task={task_id})")
+                        return None
 
                     if first_iteration or self._should_scan():
                         self._scan_new_tabs()
@@ -3342,7 +3431,9 @@ class TabPoolManager:
                                 logger.debug(f"Waiting in queue (ahead: {ahead})")
                             logged_waiting = True
 
-                        self._condition.wait(timeout=min(remaining, 1.0))
+                        self._condition.wait(
+                            timeout=min(remaining, self.ACQUIRE_CANCEL_POLL_SEC)
+                        )
                         continue
 
                     dynamic_sessions = self._get_sessions_for_dynamic_routing()
@@ -3403,7 +3494,9 @@ class TabPoolManager:
                             logger.debug(f"Waiting for tab (busy: {', '.join(busy_tabs)})")
                         logged_waiting = True
 
-                    self._condition.wait(timeout=min(remaining, 1.0))
+                    self._condition.wait(
+                        timeout=min(remaining, self.ACQUIRE_CANCEL_POLL_SEC)
+                    )
             finally:
                 self._unregister_waiter(self._acquire_waiters, waiter_token)
 
@@ -3444,6 +3537,9 @@ class TabPoolManager:
                 while True:
                     if self._shutdown:
                         return None
+                    if self._request_should_stop(task_id):
+                        logger.debug(f"Exact URL acquire cancelled (task={task_id})")
+                        return None
 
                     if self._should_scan():
                         self._scan_new_tabs()
@@ -3463,7 +3559,9 @@ class TabPoolManager:
                             f"Waiting for exact URL '{target}' release...",
                             interval_sec=5.0,
                         )
-                        self._condition.wait(timeout=min(remaining, 1.0))
+                        self._condition.wait(
+                            timeout=min(remaining, self.ACQUIRE_CANCEL_POLL_SEC)
+                        )
                         continue
 
                     self._refresh_route_snapshots_unlocked_once()
@@ -3514,7 +3612,9 @@ class TabPoolManager:
                         f"Waiting for exact URL '{target}' release...",
                         interval_sec=5.0,
                     )
-                    self._condition.wait(timeout=min(remaining, 1.0))
+                    self._condition.wait(
+                        timeout=min(remaining, self.ACQUIRE_CANCEL_POLL_SEC)
+                    )
             finally:
                 self._unregister_waiter(
                     waiters,
@@ -3535,6 +3635,9 @@ class TabPoolManager:
             try:
                 while True:
                     if self._shutdown:
+                        return None
+                    if self._request_should_stop(task_id):
+                        logger.debug(f"Index acquire cancelled (task={task_id})")
                         return None
 
                     if self._should_scan():
@@ -3564,7 +3667,9 @@ class TabPoolManager:
                             f"({self._describe_index_wait_state(persistent_index, waiters, waiter_token)})",
                             interval_sec=5.0,
                         )
-                        self._condition.wait(timeout=min(remaining, 1.0))
+                        self._condition.wait(
+                            timeout=min(remaining, self.ACQUIRE_CANCEL_POLL_SEC)
+                        )
                         continue
 
                     session_id = self._persistent_to_session_id.get(persistent_index)
@@ -3632,7 +3737,9 @@ class TabPoolManager:
                         f"({self._describe_index_wait_state(persistent_index, waiters, waiter_token)})",
                         interval_sec=5.0,
                     )
-                    self._condition.wait(timeout=min(remaining, 1.0))
+                    self._condition.wait(
+                        timeout=min(remaining, self.ACQUIRE_CANCEL_POLL_SEC)
+                    )
             finally:
                 self._unregister_waiter(
                     waiters,
@@ -3665,6 +3772,9 @@ class TabPoolManager:
                 while True:
                     if self._shutdown:
                         return None
+                    if self._request_should_stop(task_id):
+                        logger.debug(f"Route domain acquire cancelled (task={task_id})")
+                        return None
 
                     if self._should_scan():
                         self._scan_new_tabs()
@@ -3684,7 +3794,9 @@ class TabPoolManager:
                             f"Waiting for route domain '{target}' release...",
                             interval_sec=5.0,
                         )
-                        self._condition.wait(timeout=min(remaining, 1.0))
+                        self._condition.wait(
+                            timeout=min(remaining, self.ACQUIRE_CANCEL_POLL_SEC)
+                        )
                         continue
 
                     self._refresh_route_snapshots_unlocked_once()
@@ -3740,7 +3852,9 @@ class TabPoolManager:
                         f"Waiting for route domain '{target}' release...",
                         interval_sec=5.0,
                     )
-                    self._condition.wait(timeout=min(remaining, 1.0))
+                    self._condition.wait(
+                        timeout=min(remaining, self.ACQUIRE_CANCEL_POLL_SEC)
+                    )
             finally:
                 self._unregister_waiter(
                     waiters,
@@ -3778,6 +3892,9 @@ class TabPoolManager:
                 while True:
                     if self._shutdown:
                         return None
+                    if self._request_should_stop(task_id):
+                        logger.debug(f"Route group acquire cancelled (task={task_id})")
+                        return None
 
                     # 组配置每轮重新读取：apply_runtime_config 可能在等待期间
                     # 删除/改名该组或改掉分配模式。用循环外的旧快照会让等待者既不
@@ -3808,7 +3925,9 @@ class TabPoolManager:
                             f"Waiting in route group '{target}' queue...",
                             interval_sec=5.0,
                         )
-                        self._condition.wait(timeout=min(remaining, 1.0))
+                        self._condition.wait(
+                            timeout=min(remaining, self.ACQUIRE_CANCEL_POLL_SEC)
+                        )
                         continue
 
                     matching_sessions = self._get_sessions_for_route_group(target)
@@ -3872,7 +3991,9 @@ class TabPoolManager:
                         f"Waiting for route group '{target}' member release...",
                         interval_sec=5.0,
                     )
-                    self._condition.wait(timeout=min(remaining, 1.0))
+                    self._condition.wait(
+                        timeout=min(remaining, self.ACQUIRE_CANCEL_POLL_SEC)
+                    )
             finally:
                 self._unregister_waiter(
                     waiters,
@@ -4100,6 +4221,7 @@ class TabPoolManager:
             info["exact_url_route_prefix"] = exact_url_route_prefix
             info["route_prefix"] = domain_route_prefix or tab_route_prefix
             info["route_groups"] = groups_by_session.get(session.id, [])
+            self._apply_preset_overrides(session, info)
             self._apply_exposed_model_name(info)
             result.append(info)
 
@@ -4132,9 +4254,7 @@ class TabPoolManager:
                 return False
 
             old_preset = session.preset_name
-            session.preset_name = preset_name if preset_name else None
-            if old_preset != session.preset_name:
-                session.reset_conversation_state()
+            session.set_preset(preset_name, source="tab" if preset_name else None)
 
             logger.debug(
                 f"[{session.id}] 预设切换: "

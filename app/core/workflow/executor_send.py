@@ -52,7 +52,7 @@ class WorkflowExecutorSendMixin:
                     "attachment_present": False,
                     "ready": True,
                 }
-        selector_json = json.dumps((send_selector or "").strip(), ensure_ascii=False)
+        selector_json = json.dumps(self._to_query_selector(send_selector), ensure_ascii=False)
         js = f"""
         return (function() {{
             try {{
@@ -473,7 +473,11 @@ class WorkflowExecutorSendMixin:
     def _is_send_post_click_confirmed(state: Optional[Dict[str, Any]]) -> bool:
         if not isinstance(state, dict):
             return False
-        return bool(state.get("generating") or state.get("sendLooksLikeStop"))
+        return bool(
+            state.get("generating")
+            or state.get("sendLooksLikeStop")
+            or state.get("stopBtnFound")
+        )
 
     def _wait_for_send_idle_before_action(self, send_selector: str) -> bool:
         """Wait out generation owned by an earlier action before submitting this prompt."""
@@ -669,11 +673,12 @@ class WorkflowExecutorSendMixin:
 
         groups = ElementFinder._split_css_selector_groups(value)
         if len(groups) > 1:
+            valid_groups = []
             for group in groups:
                 css_group = WorkflowExecutorSendMixin._to_query_selector(group)
                 if css_group:
-                    return css_group
-            return ""
+                    valid_groups.append(css_group)
+            return ", ".join(valid_groups)
 
         lowered = value.lower()
         if lowered.startswith("css:"):
@@ -688,18 +693,26 @@ class WorkflowExecutorSendMixin:
         """Passively inspect whether the page has transitioned into generating state."""
         selector_json = json.dumps(self._to_query_selector(send_selector), ensure_ascii=False)
         generating_selector = ""
-        if isinstance(self._selectors, dict):
+        stop_btn_selector = ""
+        selectors = getattr(self, "_selectors", None)
+        if isinstance(selectors, dict):
             generating_selector = self._to_query_selector(
-                self._selectors.get("generating_indicator", "")
+                selectors.get("generating_indicator", "")
+            )
+            stop_btn_selector = self._to_query_selector(
+                selectors.get("stop_btn", "")
             )
         generating_selector_json = json.dumps(generating_selector, ensure_ascii=False)
+        stop_btn_selector_json = json.dumps(stop_btn_selector, ensure_ascii=False)
         js = f"""
         return (function() {{
             try {{
                 const sendSelector = {selector_json};
                 const configuredGeneratingSelector = {generating_selector_json};
+                const configuredStopSelector = {stop_btn_selector_json};
                 const indicators = [
                     configuredGeneratingSelector,
+                    configuredStopSelector,
                     'button[aria-label*="Stop"]',
                     'button[aria-label*="stop"]',
                     'button[aria-label*="停止"]',
@@ -709,6 +722,13 @@ class WorkflowExecutorSendMixin:
 
                 function lowered(value) {{
                     return String(value || '').toLowerCase();
+                }}
+
+                function getNodeClassName(node) {{
+                    if (!node) return '';
+                    if (typeof node.className === 'string') return node.className;
+                    if (node.className && typeof node.className.baseVal === 'string') return node.className.baseVal;
+                    return '';
                 }}
 
                 function isVisible(node) {{
@@ -721,48 +741,133 @@ class WorkflowExecutorSendMixin:
                     return !rect || (rect.width > 0 && rect.height > 0);
                 }}
 
+                function extractNodeInfo(node, label) {{
+                    if (!node) return null;
+                    const visible = isVisible(node);
+                    return {{
+                        label: label || '',
+                        tag: node.tagName || '',
+                        type: node.getAttribute ? (node.getAttribute('type') || '') : '',
+                        id: node.id || '',
+                        className: getNodeClassName(node).slice(0, 100),
+                        ariaLabel: node.getAttribute ? (node.getAttribute('aria-label') || '') : '',
+                        title: node.getAttribute ? (node.getAttribute('title') || '') : '',
+                        dataTestid: node.getAttribute ? (node.getAttribute('data-testid') || '') : '',
+                        disabled: !!node.disabled || (node.getAttribute ? node.getAttribute('aria-disabled') === 'true' : false),
+                        text: (node.innerText || node.textContent || '').trim().slice(0, 50),
+                        visible: visible
+                    }};
+                }}
+
+                const details = [];
+
                 let sendBtn = null;
                 if (sendSelector) {{
                     try {{
                         sendBtn = document.querySelector(sendSelector);
+                        if (sendBtn) {{
+                            details.push(extractNodeInfo(sendBtn, 'send_btn'));
+                        }}
+                    }} catch (e) {{}}
+                }}
+
+                let stopBtnNode = null;
+                let stopBtnFound = false;
+                if (configuredStopSelector) {{
+                    try {{
+                        const nodes = document.querySelectorAll(configuredStopSelector);
+                        for (const n of nodes) {{
+                            const info = extractNodeInfo(n, 'configured_stop_btn');
+                            if (info) details.push(info);
+                            if (info && info.visible) {{
+                                stopBtnNode = n;
+                                stopBtnFound = true;
+                                break;
+                            }}
+                        }}
+                    }} catch (e) {{}}
+                }}
+
+                let configuredGenFound = false;
+                if (configuredGeneratingSelector) {{
+                    try {{
+                        const nodes = document.querySelectorAll(configuredGeneratingSelector);
+                        for (const n of nodes) {{
+                            const info = extractNodeInfo(n, 'configured_generating_indicator');
+                            if (info) details.push(info);
+                            if (info && info.visible) {{
+                                configuredGenFound = true;
+                                break;
+                            }}
+                        }}
                     }} catch (e) {{}}
                 }}
 
                 const sendMeta = sendBtn ? [
-                    sendBtn.getAttribute('aria-label'),
-                    sendBtn.getAttribute('title'),
-                    sendBtn.getAttribute('data-testid'),
-                    sendBtn.className,
+                    sendBtn.getAttribute ? sendBtn.getAttribute('aria-label') : '',
+                    sendBtn.getAttribute ? sendBtn.getAttribute('title') : '',
+                    sendBtn.getAttribute ? sendBtn.getAttribute('data-testid') : '',
+                    getNodeClassName(sendBtn),
                     sendBtn.innerText,
                     sendBtn.textContent
                 ].map(lowered).join(' ') : '';
 
+                let matchedIndicatorSelector = '';
                 const generatingIndicator = indicators.some(selector => {{
                     try {{
-                        const node = document.querySelector(selector);
-                        return isVisible(node);
+                        const nodes = document.querySelectorAll(selector);
+                        for (const node of nodes) {{
+                            if (isVisible(node)) {{
+                                matchedIndicatorSelector = selector;
+                                const info = extractNodeInfo(node, 'matched_indicator:' + selector);
+                                if (info) details.push(info);
+                                return true;
+                            }}
+                        }}
+                        return false;
                     }} catch (e) {{
                         return false;
                     }}
                 }});
 
                 const sendLooksLikeStop = !!sendMeta && (
-                    /\\bstop\\b|\\bstopping\\b|\\bcancel\\b|\\babort\\b/.test(sendMeta)
+                    /\bstop\b|\bstopping\b|\bcancel\b|\babort\b/.test(sendMeta)
                     || /停止|中止|取消/.test(sendMeta)
                 );
 
                 const sendDisabled = !!sendBtn && (
                     !!sendBtn.disabled
-                    || sendBtn.getAttribute('aria-disabled') === 'true'
+                    || (sendBtn.getAttribute ? sendBtn.getAttribute('aria-disabled') === 'true' : false)
                     || /disable(?:d)?|loading|uploading|sending/.test(sendMeta)
                 );
+
+                // 搜集页面上可见的相关按钮快照（最多 8 个），用于详细日志排查
+                const visibleButtons = [];
+                try {{
+                    const allBtns = document.querySelectorAll('button, [role="button"]');
+                    let count = 0;
+                    for (const btn of allBtns) {{
+                        if (isVisible(btn)) {{
+                            visibleButtons.push(extractNodeInfo(btn, 'page_button'));
+                            count++;
+                            if (count >= 8) break;
+                        }}
+                    }}
+                }} catch (e) {{}}
+
+                const isGenerating = stopBtnFound || configuredGenFound || generatingIndicator || sendLooksLikeStop;
 
                 return {{
                     ok: true,
                     sendFound: !!sendBtn,
                     sendDisabled,
                     sendLooksLikeStop,
-                    generating: generatingIndicator || sendLooksLikeStop
+                    stopBtnFound,
+                    configuredGenFound,
+                    matchedIndicatorSelector,
+                    generating: isGenerating,
+                    details: details,
+                    visibleButtons: visibleButtons
                 }};
             }} catch (error) {{
                 return {{
@@ -770,15 +875,27 @@ class WorkflowExecutorSendMixin:
                     sendFound: false,
                     sendDisabled: false,
                     sendLooksLikeStop: false,
+                    stopBtnFound: false,
+                    configuredGenFound: false,
                     generating: false,
-                    error: String(error && error.message ? error.message : error)
+                    error: String(error && error.message ? error.message : error),
+                    details: [],
+                    visibleButtons: []
                 }};
             }}
         }})();
         """
 
         try:
-            return self.tab.run_js(js) or {}
+            res = self.tab.run_js(js) or {}
+            logger.debug(
+                f"[SEND] 探测页面状态: generating={res.get('generating')}, "
+                f"stopBtnFound={res.get('stopBtnFound')}, "
+                f"sendLooksLikeStop={res.get('sendLooksLikeStop')}, "
+                f"sendFound={res.get('sendFound')}, "
+                f"matchedIndicator={res.get('matchedIndicatorSelector')!r}"
+            )
+            return res
         except Exception as e:
             logger.debug(f"[SEND] 发送后状态探测失败: {e}")
             return {
@@ -786,7 +903,10 @@ class WorkflowExecutorSendMixin:
                 "sendFound": False,
                 "sendDisabled": False,
                 "sendLooksLikeStop": False,
+                "stopBtnFound": False,
                 "generating": False,
+                "details": [],
+                "visibleButtons": [],
             }
 
     def _observe_send_without_retry(
@@ -910,13 +1030,19 @@ class WorkflowExecutorSendMixin:
     ) -> Dict[str, Any]:
         base_attachment_state = dict(baseline_attachment_state or {})
         current_attachment_state = dict(attachment_state or {})
+        def _to_int(v: Any) -> int:
+            try:
+                return int(v or 0)
+            except (TypeError, ValueError):
+                return 0
+
         attachment_delta = {
-            "attachmentCount": int(current_attachment_state.get("attachmentCount", 0) or 0)
-            - int(base_attachment_state.get("attachmentCount", 0) or 0),
-            "previewCount": int(current_attachment_state.get("previewCount", 0) or 0)
-            - int(base_attachment_state.get("previewCount", 0) or 0),
-            "fileInputCount": int(current_attachment_state.get("fileInputCount", 0) or 0)
-            - int(base_attachment_state.get("fileInputCount", 0) or 0),
+            "attachmentCount": _to_int(current_attachment_state.get("attachmentCount", 0))
+            - _to_int(base_attachment_state.get("attachmentCount", 0)),
+            "previewCount": _to_int(current_attachment_state.get("previewCount", 0))
+            - _to_int(base_attachment_state.get("previewCount", 0)),
+            "fileInputCount": _to_int(current_attachment_state.get("fileInputCount", 0))
+            - _to_int(base_attachment_state.get("fileInputCount", 0)),
         }
         attachment_changed = bool(
             current_attachment_state.get("attachmentFingerprint")
@@ -948,6 +1074,8 @@ class WorkflowExecutorSendMixin:
             accepted_signals.append("network_activity")
         if bool((state["post_click"] or {}).get("generating")):
             accepted_signals.append("generating")
+        if bool((state["post_click"] or {}).get("stopBtnFound")):
+            accepted_signals.append("stop_btn_found")
         if bool((state["post_click"] or {}).get("sendLooksLikeStop")):
             accepted_signals.append("send_became_stop")
         if bool((state["post_click"] or {}).get("sendDisabled")) and state["input_shrunk"]:

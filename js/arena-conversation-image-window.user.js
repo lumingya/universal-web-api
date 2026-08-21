@@ -16,6 +16,8 @@
   const VERSION = '1.0.0';
   const MAX_IMAGES = 4;
   const PLACEHOLDER_SRC = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==';
+  const PLACEHOLDER_ATTR = 'data-uwa-image-window-placeholder';
+  const ORIGINAL_SRC_ATTR = 'data-uwa-image-window-original-src';
   const MEDIA_HOST_SUFFIX = '.r2.cloudflarestorage.com';
   const INSTANCE_KEY = '__arenaConversationImageWindow';
 
@@ -123,12 +125,16 @@
     allowedImages.delete(image);
     nativeSet(image, 'loading', 'lazy');
     if (record.srcset) nativeRemove(image, 'srcset');
+    nativeSet(image, PLACEHOLDER_ATTR, 'true');
+    if (record.src) nativeSet(image, ORIGINAL_SRC_ATTR, record.src);
     nativeSet(image, 'src', PLACEHOLDER_SRC);
     return true;
   }
 
   function restore(image, record) {
     if (!record || (!record.src && !record.srcset)) return;
+    nativeRemove(image, PLACEHOLDER_ATTR);
+    nativeRemove(image, ORIGINAL_SRC_ATTR);
     nativeSet(image, 'loading', 'eager');
     if (record.srcset) {
       nativeSet(image, 'srcset', record.srcset);
@@ -145,7 +151,22 @@
     if (!record || (!record.src && !record.srcset)) return;
     nativeSet(image, 'loading', 'lazy');
     if (record.srcset) nativeRemove(image, 'srcset');
+    nativeSet(image, PLACEHOLDER_ATTR, 'true');
+    if (record.src) nativeSet(image, ORIGINAL_SRC_ATTR, record.src);
     nativeSet(image, 'src', PLACEHOLDER_SRC);
+  }
+
+  function unmanage(image) {
+    if (!image) return;
+    const record = records.get(image);
+    if (record) {
+      restore(image, record);
+      records.delete(image);
+      trackedImages.delete(image);
+      allowedImages.delete(image);
+      nativeRemove(image, PLACEHOLDER_ATTR);
+      nativeRemove(image, ORIGINAL_SRC_ATTR);
+    }
   }
 
   function nearestViewportBottomDistance(image) {
@@ -345,7 +366,7 @@
     window.addEventListener('scroll', scheduleRefresh, true);
     window.addEventListener('resize', scheduleRefresh);
     document.addEventListener('load', scheduleRefresh, true);
-    window[INSTANCE_KEY] = { version: VERSION, status, configure, uninstall };
+    window[INSTANCE_KEY] = { version: VERSION, status, configure, uninstall, unmanage };
     scheduleRefresh();
   }
 

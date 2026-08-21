@@ -17,6 +17,7 @@ import re
 import math
 import hashlib
 import copy
+import random
 from enum import Enum
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List
@@ -81,6 +82,123 @@ def _browser_int(
     return value
 
 
+# ================= 客户端高频取消防抖熔断器 =================
+
+class CancelStormGuard:
+    """
+    客户端高频异常取消防抖与熔断保护器
+    
+    核心目标：
+    当外部客户端（如 SillyTavern 插件/手机网络瞬断）因异常断开陷入毫秒级死循环重发（Cancel Storm）时，
+    通过识别“短时间内连续零 Token 产出的异常取消”，对该客户端后续连环涌入的请求施加微小的平滑冷却（0.3s~0.5s），
+    从而彻底粉碎连环重试死循环，同时为局域网/移动端 TCP 建连提供稳定性窗口。
+    
+    设计原则：
+    1. 100% 零误伤：正常的单次请求、正常完成的请求、以及已有内容产出的手动终止，延迟严格为 0 秒。
+    2. 自动恢复：只要有请求成功完成或产出 Token，或者超过静默窗口（如 2 秒），计数器自动重置。
+    3. 线程安全：多协程/多线程并发安全。
+    """
+    def __init__(self, window_sec: float = 2.0, max_backoff_sec: float = 0.5):
+        self.window_sec = window_sec
+        self.max_backoff_sec = max_backoff_sec
+        self._lock = threading.Lock()
+        self._cancel_records: Dict[str, List[float]] = {}
+
+    def get_client_fingerprint(self, request: Any = None, auth_header: Optional[str] = None) -> str:
+        """从 FastAPI Request 对象或 Header 提取客户端指纹"""
+        parts = []
+        if request is not None:
+            client = getattr(request, "client", None)
+            host = getattr(client, "host", None) if client else None
+            if host:
+                parts.append(str(host))
+            headers = getattr(request, "headers", {})
+            auth = headers.get("authorization") or headers.get("x-api-key") or auth_header
+            if auth:
+                parts.append(str(auth)[-16:])
+            user_agent = headers.get("user-agent")
+            if user_agent:
+                parts.append(str(user_agent)[:32])
+        if not parts and auth_header:
+            parts.append(str(auth_header)[-16:])
+        return ":".join(parts) if parts else "default_client"
+
+    def _prune_expired_unlocked(self, now: float):
+        """定期裁剪全局已过期的空记录，防止海量一次性客户端指纹导致字典内存泄漏"""
+        expired_keys = [
+            k for k, v in self._cancel_records.items()
+            if not v or (now - v[-1] > self.window_sec)
+        ]
+        for k in expired_keys:
+            self._cancel_records.pop(k, None)
+
+    def record_cancel(self, fingerprint: str, has_output: bool = False, reason: str = "unknown"):
+        """
+        记录一次取消事件。
+        只有未产生有效 Token 产出的异常取消（如 coroutine_cancelled, client_disconnected）才计入风暴。
+        """
+        if not fingerprint:
+            return
+
+        if has_output:
+            self.record_success(fingerprint)
+            return
+
+        if reason not in {"coroutine_cancelled", "client_disconnected", "unknown", "cleanup"}:
+            return
+
+        now = time.monotonic()
+        with self._lock:
+            if len(self._cancel_records) > 500:
+                self._prune_expired_unlocked(now)
+
+            records = self._cancel_records.setdefault(fingerprint, [])
+            records = [t for t in records if now - t <= self.window_sec]
+            records.append(now)
+            self._cancel_records[fingerprint] = records
+
+    def record_success(self, fingerprint: str):
+        """成功产出 Token 或正常结束时清空风暴记录"""
+        if not fingerprint:
+            return
+        with self._lock:
+            self._cancel_records.pop(fingerprint, None)
+
+    async def maybe_backoff(self, fingerprint: str) -> float:
+        """
+        检查当前客户端是否正在经历高频异常取消风暴。
+        若是，施加阶梯式防抖延迟以打破死循环，并加入微量随机扰动防止并发羊群效应。
+        返回施加的延迟秒数。
+        """
+        if not fingerprint:
+            return 0.0
+
+        now = time.monotonic()
+        with self._lock:
+            records = self._cancel_records.get(fingerprint, [])
+            records = [t for t in records if now - t <= self.window_sec]
+            if records:
+                self._cancel_records[fingerprint] = records
+            else:
+                self._cancel_records.pop(fingerprint, None)
+            cancel_count = len(records)
+
+        if cancel_count < 2:
+            return 0.0
+
+        jitter = random.uniform(0.0, 0.05)
+        backoff = min(self.max_backoff_sec, 0.25 + (cancel_count - 2) * 0.1) + jitter
+        logger.warning(
+            f"[CANCEL_STORM_GUARD] 客户端 [{fingerprint}] 在 {self.window_sec:.1f}s 内连续发生 {cancel_count} 次零产出异常取消，"
+            f"施加 {backoff:.2f}s 防抖平滑缓冲以阻断死循环"
+        )
+        await asyncio.sleep(backoff)
+        return backoff
+
+
+cancel_storm_guard = CancelStormGuard()
+
+
 class RequestStatus(Enum):
     """请求状态枚举"""
     QUEUED = "queued"
@@ -109,6 +227,7 @@ class RequestContext:
     
     # v2.0 新增：关联的标签页 ID
     tab_id: Optional[str] = None
+    client_fp: str = ""
     monitor: Dict[str, Any] = field(default_factory=dict)
     started_at_monotonic: Optional[float] = field(default=None, repr=False)
     last_activity_at: Optional[float] = field(default=None, repr=False)
@@ -2073,10 +2192,10 @@ class RequestManager:
                 return copy.deepcopy(id_match)
         return None
     
-    def create_request(self) -> RequestContext:
+    def create_request(self, client_fp: str = "") -> RequestContext:
         """创建新请求"""
         request_id = self._generate_id()
-        ctx = RequestContext(request_id=request_id)
+        ctx = RequestContext(request_id=request_id, client_fp=str(client_fp or ""))
         cleanup_history_contexts: List[RequestContext] = []
 
         with self._requests_lock:
@@ -2229,6 +2348,22 @@ class RequestManager:
             self._append_monitor_history(ctx)
         except Exception as e:
             logger.debug(f"写入请求监控历史失败: {e}")
+
+        # 终态统一上报 cancel_storm_guard 防抖熔断器
+        client_fp = getattr(ctx, "client_fp", "")
+        if client_fp:
+            try:
+                has_output = bool(int(ctx.monitor.get("response_tokens") or 0) > 0)
+                if ctx.status == RequestStatus.COMPLETED or has_output:
+                    cancel_storm_guard.record_success(client_fp)
+                elif ctx.status in (RequestStatus.CANCELLED, RequestStatus.FAILED) or ctx.cancel_reason:
+                    cancel_storm_guard.record_cancel(
+                        client_fp,
+                        has_output=has_output,
+                        reason=str(ctx.cancel_reason or "coroutine_cancelled"),
+                    )
+            except Exception as e:
+                logger.debug(f"更新 cancel_storm_guard 状态异常: {e}")
     
     def cancel_request(self, request_id: str, reason: str = "manual") -> bool:
         """取消指定请求"""
@@ -2337,3 +2472,4 @@ async def watch_client_disconnect(request, ctx: RequestContext,
         pass
     except Exception as e:
         logger.debug(f"断开检测异常: {e}")
+

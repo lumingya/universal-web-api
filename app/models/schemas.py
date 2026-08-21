@@ -1009,6 +1009,7 @@ def validate_site_config(config: Dict[str, Any]) -> bool:
                 "parser",
             ]
             numeric_fields = [
+                "first_response_timeout",
                 "silence_threshold",
                 "response_interval",
             ]

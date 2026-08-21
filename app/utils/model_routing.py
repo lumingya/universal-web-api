@@ -202,12 +202,20 @@ def collect_route_domain_models(tabs: List[Dict[str, Any]]) -> List[Dict[str, An
     return result
 
 
-def inspect_model_route(model: Any, tabs: List[Dict[str, Any]]) -> Dict[str, Any]:
+def inspect_model_route(
+    model: Any,
+    tabs: List[Dict[str, Any]],
+    *,
+    allow_prefix: bool = True,
+    allow_generic: bool = True,
+    models: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
     """
     Return detailed model-route resolution information for logging/debugging.
     """
     normalized_model = _normalize_model_id(model)
-    models = collect_route_domain_models(tabs)
+    if models is None:
+        models = collect_route_domain_models(tabs)
     available_model_ids = [str(item.get("id") or "") for item in models]
 
     info: Dict[str, Any] = {
@@ -220,7 +228,7 @@ def inspect_model_route(model: Any, tabs: List[Dict[str, Any]]) -> Dict[str, Any
         "available_model_ids": available_model_ids,
     }
 
-    # 修复#8：先做精确匹配并直接返回，避免暴露名恰为通用 id（如 gpt-4o）的
+    # 优先级 1：先做标签页完全精确匹配并直接返回，避免暴露名恰为通用 id（如 gpt-4o）的
     # 标签页被 generic 判定抢先、永远无法被精确路由
     for item in models:
         if normalized_model == _normalize_model_id(item["id"]):
@@ -231,19 +239,28 @@ def inspect_model_route(model: Any, tabs: List[Dict[str, Any]]) -> Dict[str, Any
             info["match_type"] = "exact"
             return info
 
-    # 修复#8：精确匹配未命中时，通用模型 id 才落回 generic 默认分配流程
-    if normalized_model in _GENERIC_MODEL_IDS:
+    # 优先级 2：通用模型 id 落回 generic 默认分配流程（若启用 allow_generic）
+    if allow_generic and normalized_model in _GENERIC_MODEL_IDS:
         info["match_type"] = "generic"
         return info
 
-    for item in models:
-        if item.get("allow_prefix") and _matches_model_alias(normalized_model, _normalize_model_id(item["id"])):
-            info["route_domain"] = str(item.get("route_domain") or "")
-            info["route_type"] = str(item.get("route_type") or "model_name")
-            info["model_name"] = str(item.get("model_name") or item.get("id") or "")
-            info["matched_id"] = str(item.get("id") or "")
-            info["match_type"] = "prefix"
-            return info
+    if not allow_prefix:
+        return info
+
+    # 优先级 3：标签页前缀模糊匹配（按最长前缀优先匹配，避免短前缀遮蔽更具体的长前缀别名）
+    prefix_matches = [
+        item
+        for item in models
+        if item.get("allow_prefix") and _matches_model_alias(normalized_model, _normalize_model_id(item["id"]))
+    ]
+    if prefix_matches:
+        best_match = max(prefix_matches, key=lambda x: len(str(x.get("id") or "")))
+        info["route_domain"] = str(best_match.get("route_domain") or "")
+        info["route_type"] = str(best_match.get("route_type") or "model_name")
+        info["model_name"] = str(best_match.get("model_name") or best_match.get("id") or "")
+        info["matched_id"] = str(best_match.get("id") or "")
+        info["match_type"] = "prefix"
+        return info
 
     return info
 

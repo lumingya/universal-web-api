@@ -86,6 +86,7 @@ start_cpolar.py
 
 # Tests
 tests/*
+!tests/test_arena_stream_hard_stop_page_lock.py
 !tests/test_browser_profile_identity.py
 !tests/test_command_result_store.py
 !tests/test_command_engine_scheduler_lifecycle.py
@@ -108,3 +109,7 @@ tests/*
 !tests/test_arena_direct_models.py
 !tests/test_tool_calling_repairs.py
 !tests/test_input_chunking.py
+
+# JS 脚本与用户脚本（UserScripts）
+js/
+*.user.js

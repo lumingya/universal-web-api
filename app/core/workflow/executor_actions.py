@@ -602,9 +602,11 @@ class WorkflowExecutorActionMixin:
 
         for attempt in range(1, max_attempts + 1):
             if click_fn is None:
-                self._execute_click(selector, target_key, optional)
+                clicked = self._execute_click(selector, target_key, optional)
             else:
-                click_fn()
+                clicked = click_fn()
+            if optional and clicked is False:
+                return
             if self._wait_for_click_verification(verification):
                 return
             if attempt < max_attempts:
@@ -619,7 +621,13 @@ class WorkflowExecutorActionMixin:
                         return
                     time.sleep(min(0.05, deadline - time.perf_counter()))
 
-        raise WorkflowError("click_verification_failed")
+        if not optional:
+            raise WorkflowError("click_verification_failed")
+        else:
+            logger.warning(
+                "[CLICK_VERIFY] 可选步骤验证未通过，已跳过硬失败并继续工作流: "
+                f"target={target_key or '-'}"
+            )
 
     def _smart_delay(self, min_sec: float = None, max_sec: float = None):
         """

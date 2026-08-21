@@ -135,6 +135,10 @@ class LmarenaSideLeftParser(ResponseParser):
         self._accumulated_reasoning = ""
         self._seen_image_refs.clear()
 
+    def should_fallback_to_dom_when_no_visible_content(self) -> bool:
+        """Arena 的心跳流可能因网络波动提前关闭，空结果必须交给 DOM 接管。"""
+        return True
+
     def should_abort_on_error(self) -> bool:
         # Side-by-side left mode only trusts the left stream. If the left channel
         # itself reports an error, we should fail fast instead of silently

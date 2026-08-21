@@ -242,6 +242,7 @@ class NetworkMonitor:
             f"[NetworkMonitor] 初始化完成 "
             f"(pattern={self._listen_pattern!r}, "
             f"parser={parser.get_id()}, "
+            f"first_response_timeout={self._first_response_timeout}, "
             f"first_content_timeout={self._first_content_timeout})"
         )
 
@@ -1869,6 +1870,11 @@ class NetworkMonitor:
         except Exception:
             hard_timeout = float(self.DEFAULT_HARD_TIMEOUT)
         hard_timeout_message = f"网络监听超过最大时间（{hard_timeout:.1f}s）"
+        try:
+            first_target_timeout = max(0.01, float(self._first_response_timeout))
+        except Exception:
+            first_target_timeout = hard_timeout
+        first_target_deadline = phase_start + min(first_target_timeout, hard_timeout)
         has_received_response = False
         has_seen_stream_target = False
         last_activity_time = time.time()
@@ -1894,6 +1900,13 @@ class NetworkMonitor:
                 logger.error(f"[NetworkMonitor] 超过最大监听时间 {hard_timeout:.1f}s，触发回退")
                 raise NetworkMonitorTimeout(hard_timeout_message)
 
+            if not has_seen_stream_target and now >= first_target_deadline:
+                logger.warning(
+                    "[NetworkMonitor] 目标流首次响应超时 "
+                    f"({elapsed:.1f}s, limit={first_target_timeout:.1f}s)"
+                )
+                raise NetworkMonitorTimeout(f"目标流响应超时（{elapsed:.1f}s）")
+
             # 检查取消信号
             if self._should_stop():
                 logger.debug("[NetworkMonitor] 监听被取消")
@@ -1912,7 +1925,14 @@ class NetworkMonitor:
             if active_stream_response is not None:
                 timeout = self.ACTIVE_STREAM_RESPONSE_POLL_TIMEOUT
             else:
-                timeout = self._first_response_timeout if not has_seen_stream_target else self._response_interval
+                timeout = (
+                    min(
+                        first_target_timeout,
+                        max(0.01, first_target_deadline - now),
+                    )
+                    if not has_seen_stream_target
+                    else self._response_interval
+                )
             try:
                 timeout = float(timeout)
             except Exception:

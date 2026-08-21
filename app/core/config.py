@@ -3455,6 +3455,19 @@ class SSEFormatter:
         """打包 SSE 注释帧，用于长连接保活。"""
         safe_comment = " ".join(str(comment or "keepalive").splitlines()).strip() or "keepalive"
         return f": {safe_comment}\n\n"
+
+    @classmethod
+    def pack_keepalive(
+        cls,
+        model: str = "web-browser",
+        completion_id: Optional[str] = None,
+    ) -> str:
+        """打包客户端可解析的空 OpenAI chunk 作为长连接保活。"""
+        return cls.pack_chunk(
+            content="",
+            model=model,
+            completion_id=completion_id,
+        )
     
     @staticmethod
     def pack_error(message: str, error_type: str = "execution_error",

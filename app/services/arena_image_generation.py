@@ -180,12 +180,14 @@ def is_interrupted_stream_reason(reason: str) -> bool:
 
 
 def is_visible_arena_stop(tab: Any, selector: str = ARENA_NATIVE_STOP_SELECTOR) -> bool:
-    """Return whether Arena's native Stop control is visibly rendered."""
+    """Return whether Arena's stop control is visibly rendered or actively generating."""
     script = r"""
         const selector = String(arguments[0] || '').trim().replace(/^css:/i, '');
-        if (!selector) return false;
         const visible = (element) => {
             if (!(element instanceof Element) || !element.isConnected) return false;
+            if (element.disabled || element.getAttribute('aria-disabled') === 'true' || element.getAttribute('data-disabled') === 'true') {
+                return false;
+            }
             if (element.hidden || element.closest('[hidden], [inert], [aria-hidden="true"]')) {
                 return false;
             }
@@ -198,10 +200,34 @@ def is_visible_arena_stop(tab: Any, selector: str = ARENA_NATIVE_STOP_SELECTOR) 
             return rect.width > 0 && rect.height > 0;
         };
         try {
-            return Array.from(document.querySelectorAll(selector)).some(visible);
-        } catch (_) {
-            return false;
+            if (window.__arenaHardStop && typeof window.__arenaHardStop.status === 'function') {
+                const st = window.__arenaHardStop.status();
+                if (st) {
+                    if (st.hasNativeStopButton || st.hasOverlayStopButton) return true;
+                    if (Array.isArray(st.active) && st.active.length > 0) return true;
+                    if (st.store && typeof st.store.pendingAssistantCount === 'number' && st.store.pendingAssistantCount > 0) return true;
+                }
+            }
+        } catch (_) {}
+        if (selector) {
+            try {
+                if (Array.from(document.querySelectorAll(selector)).some(visible)) {
+                    return true;
+                }
+            } catch (_) {}
         }
+        try {
+            const overlaySelectors = [
+                '[data-arena-hard-stop-overlay="true"]',
+                'button[aria-label="Hard stop Arena stream"]',
+            ];
+            for (const sel of overlaySelectors) {
+                if (Array.from(document.querySelectorAll(sel)).some(visible)) {
+                    return true;
+                }
+            }
+        } catch (_) {}
+        return false;
     """
     try:
         return bool(tab.run_js(script, selector))
@@ -438,7 +464,11 @@ def current_page_url(tab: Any) -> str:
         return str(getattr(tab, "url", "") or "").strip()
 
 
-def read_image_bytes(tab: Any, url: str, timeout: float = 20.0) -> bytes:
+def read_image_bytes(
+    tab: Any,
+    url: str,
+    timeout: Any = (3.0, 15.0),
+) -> bytes:
     """Read an image through the browser session when direct HTTP is blocked."""
     source = str(url or "")
     if source.startswith("data:"):
@@ -447,24 +477,47 @@ def read_image_bytes(tab: Any, url: str, timeout: float = 20.0) -> bytes:
         except Exception:
             return b""
 
+    # Normalize timeout to (connect_timeout, read_timeout) tuple
+    if isinstance(timeout, (int, float)):
+        eff_timeout: Any = (min(3.0, float(timeout)), float(timeout)) if float(timeout) > 5.0 else float(timeout)
+    elif isinstance(timeout, (tuple, list)) and len(timeout) >= 2:
+        try:
+            c_to = float(timeout[0]) if timeout[0] is not None else None
+            r_to = float(timeout[1]) if timeout[1] is not None else None
+            eff_timeout = (c_to, r_to)
+        except (TypeError, ValueError):
+            eff_timeout = (3.0, 15.0)
+    else:
+        eff_timeout = (3.0, 15.0)
+
     if source.startswith(("http://", "https://")):
         try:
             response = requests.get(
                 source,
                 headers={"Referer": current_page_url(tab), "User-Agent": "Mozilla/5.0"},
-                timeout=timeout,
+                timeout=eff_timeout,
             )
             response.raise_for_status()
             return response.content
         except Exception:
             pass
 
+    if tab is None:
+        return b""
+
     try:
         result = tab.run_js(
             """
-            return fetch(arguments[0], { credentials: 'include' })
-                .then((response) => response.arrayBuffer())
-                .then((buffer) => {
+            return (async function(url) {
+                let timer = null;
+                try {
+                    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+                    timer = controller ? setTimeout(() => controller.abort(), 6000) : null;
+                    const response = await fetch(url, {
+                        signal: controller ? controller.signal : undefined
+                    });
+                    if (!response.ok) return '';
+                    const buffer = await response.arrayBuffer();
                     const bytes = new Uint8Array(buffer);
                     let binary = '';
                     const step = 0x8000;
@@ -472,7 +525,12 @@ def read_image_bytes(tab: Any, url: str, timeout: float = 20.0) -> bytes:
                         binary += String.fromCharCode(...bytes.subarray(index, index + step));
                     }
                     return btoa(binary);
-                });
+                } catch (e) {
+                    return '';
+                } finally {
+                    if (timer) clearTimeout(timer);
+                }
+            })(arguments[0]);
             """,
             source,
         )
@@ -564,7 +622,7 @@ def _media_item_image_bytes(tab: Any, item: dict[str, Any]) -> bytes:
     for key in ("data_uri", "url", "src"):
         value = str(item.get(key) or "")
         if value:
-            payload = read_image_bytes(tab, value) if tab is not None else b""
+            payload = read_image_bytes(tab, value)
             if payload:
                 return payload
     return b""

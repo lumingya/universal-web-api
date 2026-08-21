@@ -15,9 +15,6 @@ from typing import Any, Dict, List, Optional
 from jsonschema.validators import validator_for
 
 from app.services.tool_calling_common import (
-    _LEGACY_XML_ARG_TAG,
-    _LEGACY_XML_CALL_TAG,
-    _LEGACY_XML_WRAPPER_TAG,
     _PREFERRED_XML_ARG_TAG,
     _PREFERRED_XML_CALL_TAG,
     _PREFERRED_XML_WRAPPER_TAG,
@@ -26,12 +23,14 @@ from app.services.tool_calling_common import (
     _get_max_tool_argument_chars,
     _get_max_tool_argument_depth,
     _get_max_tool_argument_nodes,
+    _contains_unicode_surrogate,
+    _json_dumps_safe,
     _serialize_content,
     logger,
 )
 from app.services.tool_calling_parse import (
+    _coerce_arguments_object,
     _decode_tool_arguments,
-    _repair_json_like_argument_string,
 )
 from app.services.tool_calling_prompts import _generate_tool_few_shot_examples
 
@@ -89,7 +88,6 @@ def _inspect_tool_response(
     accepted_tool_calls: List[Dict[str, Any]] = []
     rejected_tool_calls: List[Dict[str, Any]] = []
     seen_tool_call_ids = set()
-    seen_tool_call_signatures = set()
     allowed_tools = {
         str(item.get("function", {}).get("name", "") or "").strip(): item
         for item in tools or []
@@ -102,6 +100,19 @@ def _inspect_tool_response(
     }
     tool_calls = parsed.get("tool_calls") or []
     required_tool_name = _get_required_tool_name(tool_choice)
+    parse_error = str(parsed.get("parse_error") or "").strip()
+    if parse_error:
+        errors.append(
+            {
+                "code": parse_error,
+                "message": "The reply echoed internal tool-call history instead of returning a new response.",
+            }
+        )
+        return {
+            "errors": errors,
+            "accepted_tool_calls": accepted_tool_calls,
+            "rejected_tool_calls": rejected_tool_calls,
+        }
 
     if tool_choice == "none" and tool_calls:
         errors.append(
@@ -272,17 +283,6 @@ def _inspect_tool_response(
                 )
             else:
                 seen_tool_call_ids.add(tool_call_id)
-
-        signature = f"{tool_name}\u0000{_canonicalize_tool_args(args)}"
-        if signature in seen_tool_call_signatures:
-            # 修复(3)：OpenAI 协议不禁止对同一工具用相同参数并行调用；
-            # 相同签名的重复调用改为静默去重保留第一个（不记 error、不触发重试）。
-            logger.debug(
-                "[tool_calling] 忽略相同参数的重复工具调用 "
-                f'tool="{tool_name}" index={index} tool_call_id="{tool_call_id}"'
-            )
-            continue
-        seen_tool_call_signatures.add(signature)
 
         if tool_call_errors:
             errors.extend(tool_call_errors)
@@ -479,19 +479,12 @@ _TOOL_XML_PAYLOAD_PATTERNS = (
 
 def _looks_like_tool_xml_payload(text: str, allowed_tool_names: Optional[set[str]] = None) -> bool:
     value = str(text or "").strip()
-    if not value.startswith("<"):
-        return False
     if any(pattern.search(value) for pattern in _TOOL_XML_PAYLOAD_PATTERNS):
         return True
 
     if not allowed_tool_names:
         return False
 
-    short_tag_pattern = re.compile(r"<\s*([A-Za-z0-9_.:-]+)\b[^<>]*/>", re.IGNORECASE)
-    for match in short_tag_pattern.finditer(value):
-        raw_name = str(match.group(1) or "").strip()
-        if raw_name.lower() in allowed_tool_names:
-            return True
     return False
 
 
@@ -507,14 +500,8 @@ def _decode_tool_arguments(tool_call: Dict[str, Any]) -> Optional[Dict[str, Any]
         try:
             parsed = json.loads(stripped)
         except Exception:
-            repaired = _repair_json_like_argument_string(stripped)
-            if repaired == stripped:
-                return None
-            try:
-                parsed = json.loads(repaired)
-            except Exception:
-                return None
-        if isinstance(parsed, dict):
+            return None
+        if isinstance(parsed, dict) and not _contains_unicode_surrogate(parsed):
             return parsed
     return None
 
@@ -664,13 +651,6 @@ def _validate_tool_argument_shape_limits(args: Dict[str, Any]) -> List[str]:
     return errors
 
 
-def _canonicalize_tool_args(args: Dict[str, Any]) -> str:
-    try:
-        return json.dumps(args, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    except Exception:
-        return repr(args)
-
-
 def _build_tool_retry_messages(
     raw_text: str,
     parsed: Dict[str, Any],
@@ -732,11 +712,9 @@ def _build_rejected_assistant_message(
     tool_calls = parsed.get("tool_calls") or []
     if tool_calls:
         content = parsed.get("content")
-        return {
-            "role": "assistant",
-            "content": content if content not in ("", None) else None,
-            "tool_calls": [_truncate_rejected_tool_call_payload(item) for item in tool_calls if isinstance(item, dict)],
-        }
+        if content not in ("", None):
+            return {"role": "assistant", "content": content}
+        return None
 
     preview = str(raw_text or "").strip()
     if preview:
@@ -779,8 +757,8 @@ def _format_tool_retry_feedback(
 
     lines.extend(
         [
-            "Return only the corrected tool-call output now.",
-            "Prefer the XML tool-call block for tool use. JSON assistant payloads are still accepted.",
+            "Return the corrected response, preserving valid assistant text outside any tool-call block.",
+            "Use the XML tool-call format for tool use.",
             "Prefer repairing the rejected response instead of rewriting from scratch.",
             "Do not repeat the same invalid tool call unchanged.",
         ]
@@ -799,7 +777,7 @@ def _build_tool_repair_system_prompt(
         if parallel_tool_calls is not False
         else "Return at most one tool call in a single response."
     )
-    tool_defs = json.dumps(tools or [], ensure_ascii=False, indent=2)
+    tool_defs = _json_dumps_safe(tools or [], indent=2)
     examples = _generate_tool_few_shot_examples(tools)
     return (
         "You are repairing a previously rejected assistant response for an OpenAI-compatible tool-calling adapter.\n"
@@ -807,21 +785,19 @@ def _build_tool_repair_system_prompt(
         "Preserve the original intent and make the smallest valid correction.\n"
         "Typical fixes include: wrong tool name, missing required tool, invalid argument JSON, schema mismatch, "
         "tool-choice violation, or too many tool calls.\n"
-        "If tools are needed, prefer returning only one standalone XML tool-call block and nothing else.\n"
-        "Preferred XML tool-call format:\n"
+        "Use the following XML format whenever the corrected response needs a tool.\n"
+        "Tool-call format:\n"
         f"<{_PREFERRED_XML_WRAPPER_TAG}>\n"
         f"  <{_PREFERRED_XML_CALL_TAG} name=\"tool_name\">\n"
-        f"    <{_PREFERRED_XML_ARG_TAG} name=\"arg_name\"><![CDATA[value]]></{_PREFERRED_XML_ARG_TAG}>\n"
+        "    <arguments encoding=\"json\"><![CDATA[{\"arg_name\":\"value\"}]]></arguments>\n"
         f"  </{_PREFERRED_XML_CALL_TAG}>\n"
         f"</{_PREFERRED_XML_WRAPPER_TAG}>\n"
-        f"Legacy XML compatibility is still accepted: <{_LEGACY_XML_WRAPPER_TAG}> / <{_LEGACY_XML_CALL_TAG}> / <{_LEGACY_XML_ARG_TAG}>.\n"
-        "Compatibility JSON tool-call schema is still accepted:\n"
-        '{"role":"assistant","content":null,"tool_calls":[{"type":"function","function":{"name":"tool_name","arguments":{"arg":"value"}}}]}\n'
+        "Return exactly one complete tool-call XML root when a tool is needed.\n"
+        "You may retain a brief user-visible progress message before or after that XML root; when progress is required, put it before the XML root. Do not put it inside the XML.\n"
         "If no tool is needed, answer normally in plain text.\n"
         "Rules:\n"
         "- Never use markdown code fences.\n"
         "- Only use tools declared in AVAILABLE_TOOLS.\n"
-        "- If you use the JSON schema, arguments must be a JSON object, not a string.\n"
         f"- {choice_instruction}\n"
         f"- {parallel_instruction}\n"
         f"{examples}"
@@ -973,13 +949,15 @@ def _format_message_for_retry_context(msg: Any) -> str:
             if not isinstance(item, dict):
                 continue
             function_data = item.get("function") if isinstance(item.get("function"), dict) else {}
+            raw_args = function_data.get("arguments")
+            coerced_args = _coerce_arguments_object(raw_args)
             tool_calls_payload.append(
                 {
                     "id": item.get("id"),
                     "type": item.get("type", "function"),
                     "function": {
                         "name": function_data.get("name"),
-                        "arguments": function_data.get("arguments"),
+                        "arguments": coerced_args if coerced_args is not None else raw_args,
                     },
                 }
             )

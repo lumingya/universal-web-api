@@ -14,7 +14,7 @@ import copy
 import re
 import threading
 from app.core.config import get_logger
-from typing import Dict, Optional, List, Any, Set
+from typing import Dict, Optional, List, Any, Set, Union, Callable
 from urllib.parse import urljoin
 from app.core.parsers import ParserRegistry
 from app.models.schemas import (
@@ -134,6 +134,7 @@ def get_default_network_config() -> Dict[str, Any]:
         "stream_match_mode": "keyword", # 流目标匹配模式（keyword / regex）
         "stream_match_pattern": "",     # 流目标匹配表达式（为空时回退到 listen_pattern）
         "parser": "",                   # 解析器 ID（必填）
+        "first_response_timeout": 300.0, # 等待首个匹配目标流量的最大时间
         "silence_threshold": 3.0,       # 静默超时（秒）
         "response_interval": 0.5        # 轮询间隔（秒）
     }
@@ -1555,7 +1556,10 @@ class ConfigEngine:
                 if not replacement or replacement == current_preset:
                     continue
 
-                session.preset_name = replacement
+                if hasattr(session, "set_preset"):
+                    session.set_preset(replacement, source=getattr(session, "preset_override_source", None))
+                else:
+                    session.preset_name = replacement
                 updated += 1
 
             return updated
@@ -1599,12 +1603,68 @@ class ConfigEngine:
                 if current_preset not in targets:
                     continue
 
-                session.preset_name = None
+                if hasattr(session, "set_preset"):
+                    session.set_preset(None, source=None)
+                else:
+                    session.preset_name = None
                 cleared += 1
 
             return cleared
         except Exception as e:
             logger.debug(f"清理活动标签页预设引用失败（忽略）: {e}")
+            return 0
+
+    def _sync_preset_overrides_file(self, domain: str, old_preset: str, new_preset: Optional[str] = None) -> int:
+        """当预设重命名或删除时，同步清理/更新 preset_overrides.local.json"""
+        target = str(old_preset or "").strip()
+        if not target:
+            return 0
+        from pathlib import Path
+        config_path = Path("config/preset_overrides.local.json")
+        if not config_path.exists():
+            return 0
+        from app.utils.site_url import extract_remote_site_domain
+        import json
+        try:
+            with open(config_path, "r", encoding="utf-8-sig") as f:
+                payload = json.load(f)
+            if not isinstance(payload, dict):
+                return 0
+            urls = payload.get("urls", {})
+            if not isinstance(urls, dict):
+                return 0
+            
+            domain_norm = str(domain or "").strip().lower()
+            changed = 0
+            keys_to_delete = []
+            for url_key, p_name in list(urls.items()):
+                url_domain = str(extract_remote_site_domain(url_key) or "").strip().lower()
+                if domain_norm and url_domain != domain_norm:
+                    continue
+                if p_name == target or p_name == f"预设_{target}" or (target.startswith("预设_") and p_name == target[3:]):
+                    if new_preset:
+                        urls[url_key] = new_preset
+                        changed += 1
+                    else:
+                        keys_to_delete.append(url_key)
+                        changed += 1
+            for k in keys_to_delete:
+                urls.pop(k, None)
+            
+            if changed > 0:
+                from app.core.config import atomic_write_json
+                atomic_write_json(config_path, payload)
+                try:
+                    from app.core import browser as browser_module
+                    instance = getattr(browser_module, "_browser_instance", None)
+                    pool = getattr(instance, "_tab_pool", None)
+                    if pool is not None and hasattr(pool, "apply_runtime_config"):
+                        pool.apply_runtime_config(preset_overrides=payload)
+                except Exception:
+                    pass
+            return changed
+        except Exception as e:
+            logger.debug(f"同步预设本地配置失败: {e}")
             return 0
 
     def delete_preset(self, domain: str, preset_name: str) -> bool:
@@ -1659,8 +1719,13 @@ class ConfigEngine:
         try:
             cleared_tab_refs = self._clear_preset_references_in_active_tabs(domain, resolved_preset_name)
         except Exception as e:
-            # 浏览器可能未连接：清理失败只告警，绝不让删除预设这个操作本身失败
             logger.warning(f"清理活动标签页预设引用失败（忽略）: {e}")
+
+        # 同步清理持久化 preset_overrides.local.json
+        try:
+            self._sync_preset_overrides_file(domain, resolved_preset_name, new_preset=None)
+        except Exception as e:
+            logger.warning(f"清理本地预设记忆文件失败（忽略）: {e}")
 
         logger.info(
             f"✅ 站点 {domain} 删除预设: '{resolved_preset_name}' "
@@ -1724,6 +1789,10 @@ class ConfigEngine:
 
         updated_command_refs = self._rename_preset_references_in_commands(domain, rename_map)
         updated_tab_refs = self._rename_preset_references_in_active_tabs(domain, rename_map)
+        try:
+            self._sync_preset_overrides_file(domain, resolved_old_name, new_preset=new_name)
+        except Exception as e:
+            logger.warning(f"同步本地预设记忆文件失败（忽略）: {e}")
 
         logger.info(
             f"站点 {domain} 重命名预设: '{resolved_old_name}' → '{new_name}' "
@@ -1779,14 +1848,14 @@ class ConfigEngine:
                 if not domain.startswith('_')
             })
 
-    def get_site_config(self, domain: str, html_content: str,
+    def get_site_config(self, domain: str, html_content: Optional[Union[str, Callable[[], str]]] = None,
                         preset_name: str = None) -> Optional[SiteConfig]:
         """
         获取站点配置（缓存 + AI 分析）
 
         Args:
             domain: 站点域名
-            html_content: 页面 HTML（用于 AI 分析未知站点）
+            html_content: 页面 HTML 或用于延迟获取 HTML 的可调用对象（用于 AI 分析未知站点）
             preset_name: 预设名称，None 则使用默认预设
         """
         self.refresh_if_changed()
@@ -1868,37 +1937,50 @@ class ConfigEngine:
             self._cache.set(cache_key, result)
             return copy.deepcopy(result)
 
-        logger.info(f"🔍 未知域名 {domain}，启动 AI 识别...")
+        resolved_html = ""
+        if callable(html_content):
+            try:
+                resolved_html = str(html_content() or "")
+            except Exception as e:
+                logger.warning(f"获取页面 HTML 失败: {e}")
+                resolved_html = ""
+        elif html_content is not None:
+            resolved_html = str(html_content or "")
 
-        clean_html = self.html_cleaner.clean(html_content)
-        selectors = self.ai_analyzer.analyze(clean_html)
+        if resolved_html.strip():
+            logger.info(f"🔍 未知域名 {domain}，启动 AI 识别...")
+            clean_html = self.html_cleaner.clean(resolved_html)
+            selectors = self.ai_analyzer.analyze(clean_html)
 
-        if selectors:
-            selectors = self.validator.validate(selectors)
+            if selectors:
+                selectors = self.validator.validate(selectors)
 
-            new_preset: SiteConfig = {
-                "selectors": selectors,
-                "workflow": DEFAULT_WORKFLOW,
-                "stealth": self._guess_stealth(domain),
-                "stream_config": copy.deepcopy(get_default_stream_config()),
-                "image_extraction": get_default_image_extraction_config(),
-                "file_paste": get_default_file_paste_config(),
-                "prompt_padding": get_default_prompt_padding_config(),
-            }
-
-            self.sites[domain] = {
-                "default_preset": DEFAULT_PRESET_NAME,
-                "presets": {
-                    DEFAULT_PRESET_NAME: new_preset
+                new_preset: SiteConfig = {
+                    "selectors": selectors,
+                    "workflow": DEFAULT_WORKFLOW,
+                    "stealth": self._guess_stealth(domain),
+                    "stream_config": copy.deepcopy(get_default_stream_config()),
+                    "image_extraction": get_default_image_extraction_config(),
+                    "file_paste": get_default_file_paste_config(),
+                    "prompt_padding": get_default_prompt_padding_config(),
                 }
-            }
-            if self._save_config():
-                logger.info(f"✅ 配置已生成并保存: {domain}")
-            else:
-                logger.warning(f"⚠️ 配置已生成但保存失败，仅保留在当前运行内存: {domain}")
-            return copy.deepcopy(new_preset)
 
-        logger.warning(f"⚠️  AI 分析失败，使用通用回退配置: {domain}")
+                self.sites[domain] = {
+                    "default_preset": DEFAULT_PRESET_NAME,
+                    "presets": {
+                        DEFAULT_PRESET_NAME: new_preset
+                    }
+                }
+                if self._save_config():
+                    logger.info(f"✅ 配置已生成并保存: {domain}")
+                else:
+                    logger.warning(f"⚠️ 配置已生成但保存失败，仅保留在当前运行内存: {domain}")
+                return copy.deepcopy(new_preset)
+
+            logger.warning(f"⚠️  AI 分析失败，使用通用回退配置: {domain}")
+        else:
+            logger.warning(f"⚠️  未知域名 {domain} 且未提供网页 HTML，使用通用回退配置")
+
         fallback_selectors = self.global_config.get_fallback_selectors()
 
         fallback_preset: SiteConfig = {
@@ -1963,7 +2045,7 @@ class ConfigEngine:
             "rerender_wait",
             "content_shrink_tolerance",
         }
-        obsolete_network_keys = {"first_response_timeout"}
+        obsolete_network_keys = set()
 
         for domain, site_config in self.sites.items():
             if domain.startswith("_"):
@@ -3158,11 +3240,13 @@ class ConfigEngine:
                     result["parser"] = parser_id
 
         # 验证数值字段
-        for key in ["silence_threshold", "response_interval"]:
+        for key in ["first_response_timeout", "silence_threshold", "response_interval"]:
             if key in config:
                 try:
                     val = float(config[key])
-                    if key == "silence_threshold":
+                    if key == "first_response_timeout":
+                        result[key] = max(0.5, min(val, 300))
+                    elif key == "silence_threshold":
                         result[key] = max(0.5, min(val, 30))
                     elif key == "response_interval":
                         result[key] = max(0.1, min(val, 5))

@@ -792,8 +792,8 @@ async def inject_workflow_editor(
         try:
             site_config = config_engine.get_site_config(
                 config_domain,
-                tab.html,
-                preset_name=preset_name
+                html_content=lambda: getattr(tab, "html", ""),
+                preset_name=preset_name,
             )
         except Exception as e:
             logger.debug(f"获取站点配置失败: {e}")

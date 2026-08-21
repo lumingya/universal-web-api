@@ -7,7 +7,12 @@ import pytest
 from fastapi import HTTPException
 
 from app.api import config_routes
-from app.services.config.engine import ConfigEngine
+from app.services.config.engine import (
+    ConfigEngine,
+    get_default_file_paste_config,
+    get_default_image_extraction_config,
+    get_default_prompt_padding_config,
+)
 from app.services.config.managers import ImagePresetsManager
 
 
@@ -59,3 +64,29 @@ def test_workflow_editor_mutations_require_dashboard_auth():
     ):
         parameter = inspect.signature(endpoint).parameters["authenticated"]
         assert parameter.default.dependency is config_routes.verify_auth
+
+
+def test_config_migration_keeps_first_target_deadline_settings():
+    engine = ConfigEngine.__new__(ConfigEngine)
+    network = {
+        "listen_pattern": "/nextjs-api/stream/",
+        "parser": "lmarena",
+        "first_response_timeout": 12,
+    }
+    engine.sites = {
+        "arena.ai": {
+            "presets": {
+                "test": {
+                    "stream_config": {"network": network},
+                    "image_extraction": get_default_image_extraction_config(),
+                    "file_paste": get_default_file_paste_config(),
+                    "prompt_padding": get_default_prompt_padding_config(),
+                }
+            }
+        }
+    }
+    engine._save_config = lambda: True
+
+    engine.migrate_site_configs()
+
+    assert network["first_response_timeout"] == 12

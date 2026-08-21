@@ -59,6 +59,8 @@ window.TabPoolTabComponent = {
             excludedUrlsUpdating: false,
             preserveErrorTabs: false,
             preserveErrorTabsUpdating: false,
+            autoRememberUrlPresets: false,
+            autoRememberUrlPresetsUpdating: false,
             showRouteSettings: false,
             // 修复：标记持久化配置是否真正加载成功，未成功时禁止任何写回操作
             configLoaded: false,
@@ -332,7 +334,8 @@ window.TabPoolTabComponent = {
                     route_method_options: data && data.route_method_options || [],
                     route_groups: data && data.route_groups || [],
                     excluded_urls: data && data.excluded_urls || [],
-                    preserve_error_tabs: !!(data && data.preserve_error_tabs)
+                    preserve_error_tabs: !!(data && data.preserve_error_tabs),
+                    auto_remember_url_presets: !!(data && data.auto_remember_url_presets)
                 });
             } catch (e) {
                 return '';
@@ -427,6 +430,7 @@ window.TabPoolTabComponent = {
                     this.routeGroups = Array.isArray(data.route_groups) ? data.route_groups : [];
                     this.applyExcludedUrlsFromServer(data.excluded_urls || []);
                     this.preserveErrorTabs = !!data.preserve_error_tabs;
+                    this.autoRememberUrlPresets = !!data.auto_remember_url_presets;
                     this.tabsResponseSignature = signature;
                     this.lastUpdate = new Date().toLocaleTimeString();
                 }
@@ -467,7 +471,8 @@ window.TabPoolTabComponent = {
                     body: JSON.stringify({
                         allocation_mode: nextMode,
                         enabled_route_methods: this.enabledRouteMethods,
-                        preserve_error_tabs: this.preserveErrorTabs
+                        preserve_error_tabs: this.preserveErrorTabs,
+                        auto_remember_url_presets: this.autoRememberUrlPresets
                     })
                 });
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -477,6 +482,7 @@ window.TabPoolTabComponent = {
                 this.allocationModeOptions = data.allocation_mode_options || this.allocationModeOptions;
                 this.applyExcludedUrlsFromServer(data.excluded_urls || this.excludedUrls);
                 this.preserveErrorTabs = !!data.preserve_error_tabs;
+                this.autoRememberUrlPresets = !!data.auto_remember_url_presets;
                 this.$emit('notify', { type: 'success', message: '标签页池分配模式已切换' });
                 await this.fetchTabs({ force: true });
             } catch (e) {
@@ -511,7 +517,8 @@ window.TabPoolTabComponent = {
                     body: JSON.stringify({
                         allocation_mode: this.allocationMode,
                         enabled_route_methods: this.enabledRouteMethods,
-                        preserve_error_tabs: this.preserveErrorTabs
+                        preserve_error_tabs: this.preserveErrorTabs,
+                        auto_remember_url_presets: this.autoRememberUrlPresets
                     })
                 });
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -521,6 +528,7 @@ window.TabPoolTabComponent = {
                 this.routeMethodOptions = data.route_method_options || this.routeMethodOptions;
                 this.applyExcludedUrlsFromServer(data.excluded_urls || this.excludedUrls);
                 this.preserveErrorTabs = !!data.preserve_error_tabs;
+                this.autoRememberUrlPresets = !!data.auto_remember_url_presets;
                 this.$emit('notify', { type: 'success', message: '路由显示设置已保存' });
             } catch (e) {
                 this.$emit('notify', { type: 'error', message: '保存路由显示设置失败: ' + e.message });
@@ -569,7 +577,8 @@ window.TabPoolTabComponent = {
                         allocation_mode: this.allocationMode,
                         enabled_route_methods: this.enabledRouteMethods,
                         excluded_urls: nextUrls,
-                        preserve_error_tabs: this.preserveErrorTabs
+                        preserve_error_tabs: this.preserveErrorTabs,
+                        auto_remember_url_presets: this.autoRememberUrlPresets
                     })
                 });
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -578,6 +587,7 @@ window.TabPoolTabComponent = {
                 this.allocationMode = data.allocation_mode || this.allocationMode;
                 this.enabledRouteMethods = data.enabled_route_methods || this.enabledRouteMethods;
                 this.preserveErrorTabs = !!data.preserve_error_tabs;
+                this.autoRememberUrlPresets = !!data.auto_remember_url_presets;
                 this.excludedUrlsDraftDirty = false;
                 this.applyExcludedUrlsFromServer(data.excluded_urls || nextUrls);
                 this.$emit('notify', { type: 'success', message: 'URL 排除列表已保存' });
@@ -607,7 +617,8 @@ window.TabPoolTabComponent = {
                         allocation_mode: this.allocationMode,
                         enabled_route_methods: this.enabledRouteMethods,
                         excluded_urls: this.excludedUrls,
-                        preserve_error_tabs: nextValue
+                        preserve_error_tabs: nextValue,
+                        auto_remember_url_presets: this.autoRememberUrlPresets
                     })
                 });
                 if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -619,6 +630,9 @@ window.TabPoolTabComponent = {
                 this.preserveErrorTabs = Object.prototype.hasOwnProperty.call(data, 'preserve_error_tabs')
                     ? !!data.preserve_error_tabs
                     : nextValue;
+                this.autoRememberUrlPresets = Object.prototype.hasOwnProperty.call(data, 'auto_remember_url_presets')
+                    ? !!data.auto_remember_url_presets
+                    : this.autoRememberUrlPresets;
                 this.$emit('notify', {
                     type: 'success',
                     message: this.preserveErrorTabs ? '错误/超时标签页将保留' : '错误/超时标签页将按原策略清理'
@@ -628,6 +642,51 @@ window.TabPoolTabComponent = {
                 this.$emit('notify', { type: 'error', message: '保存错误处理设置失败: ' + e.message });
             } finally {
                 this.preserveErrorTabsUpdating = false;
+            }
+        },
+
+        async updateAutoRememberUrlPresets(enabled) {
+            if (!this.ensureConfigLoaded()) return;
+            const previous = !!this.autoRememberUrlPresets;
+            const nextValue = !!enabled;
+            this.autoRememberUrlPresets = nextValue;
+            this.autoRememberUrlPresetsUpdating = true;
+            try {
+                const token = window.getDashboardAuthToken ? window.getDashboardAuthToken() : '';
+                const headers = { 'Content-Type': 'application/json' };
+                if (token) headers['Authorization'] = `Bearer ${token}`;
+
+                const response = await fetch('/api/tab-pool/config', {
+                    method: 'PUT',
+                    headers,
+                    body: JSON.stringify({
+                        allocation_mode: this.allocationMode,
+                        enabled_route_methods: this.enabledRouteMethods,
+                        excluded_urls: this.excludedUrls,
+                        preserve_error_tabs: this.preserveErrorTabs,
+                        auto_remember_url_presets: nextValue
+                    })
+                });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+                const data = await response.json();
+                this.allocationMode = data.allocation_mode || this.allocationMode;
+                this.enabledRouteMethods = data.enabled_route_methods || this.enabledRouteMethods;
+                this.applyExcludedUrlsFromServer(data.excluded_urls || this.excludedUrls);
+                this.preserveErrorTabs = !!data.preserve_error_tabs;
+                this.autoRememberUrlPresets = Object.prototype.hasOwnProperty.call(data, 'auto_remember_url_presets')
+                    ? !!data.auto_remember_url_presets
+                    : nextValue;
+                this.$emit('notify', {
+                    type: 'success',
+                    message: this.autoRememberUrlPresets ? '已开启按 URL 记忆预设' : '已关闭按 URL 记忆预设'
+                });
+                await this.fetchTabs({ force: true });
+            } catch (e) {
+                this.autoRememberUrlPresets = previous;
+                this.$emit('notify', { type: 'error', message: '保存预设记忆设置失败: ' + e.message });
+            } finally {
+                this.autoRememberUrlPresetsUpdating = false;
             }
         },
 
@@ -876,12 +935,14 @@ window.TabPoolTabComponent = {
                     allocation_mode: this.allocationMode,
                     enabled_route_methods: this.enabledRouteMethods,
                     preserve_error_tabs: this.preserveErrorTabs,
+                    auto_remember_url_presets: this.autoRememberUrlPresets,
                     route_groups: nextGroups
                 })
             });
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const data = await response.json();
             this.routeGroups = Array.isArray(data.route_groups) ? data.route_groups : nextGroups;
+            this.autoRememberUrlPresets = !!data.auto_remember_url_presets;
             this.$emit('notify', { type: 'success', message: successMessage });
             await this.fetchTabs({ force: true });
         },
@@ -1100,7 +1161,17 @@ window.TabPoolTabComponent = {
             if (tab.is_using_default_preset) {
                 return '当前生效: ' + this.getDisplayedPreset(tab) + '（跟随站点默认）';
             }
+            if (tab.preset_override_source === 'url') {
+                return '当前生效: ' + this.getDisplayedPreset(tab) + '（URL 记忆）';
+            }
             return '当前生效: ' + this.getDisplayedPreset(tab) + '（手动指定）';
+        },
+
+        getPresetSourceText(tab) {
+            if (!tab) return '';
+            if (tab.preset_override_source === 'url') return 'URL 记忆';
+            if (tab.preset_override_source === 'tab') return '临时指定';
+            return '';
         },
 
         getCommandLoopText(tab) {
@@ -1398,6 +1469,10 @@ window.TabPoolTabComponent = {
                                     <span><strong>错误/超时保留标签页</strong><small>异常时只记录错误，不自动关闭浏览器标签页。</small></span>
                                     <input type="checkbox" :checked="preserveErrorTabs" :disabled="preserveErrorTabsUpdating || !configLoaded" @change="updatePreserveErrorTabs($event.target.checked)">
                                 </label>
+                                <label class="tab-pool-preserve-setting">
+                                    <span><strong>按 URL 记忆预设</strong><small>切换标签页预设时自动记住该网页配置，再次打开该 URL 时自动恢复预设。</small></span>
+                                    <input type="checkbox" :checked="autoRememberUrlPresets" :disabled="autoRememberUrlPresetsUpdating || !configLoaded" @change="updateAutoRememberUrlPresets($event.target.checked)">
+                                </label>
                             </div>
                         </div>
                         <button type="button" class="tab-pool-refresh" @click="fetchTabs" :disabled="loading" title="立即刷新">
@@ -1541,13 +1616,13 @@ window.TabPoolTabComponent = {
                                         <span>模型名称</span><strong>{{ truncateModelName(getExposedModelName(tab)) }}</strong><small>{{ getModelNameSourceText(tab) }}</small>
                                     </button>
                                     <label v-if="tab.available_presets && tab.available_presets.length > 0" class="tab-preset-control">
-                                        <span>标签页预设</span>
+                                        <span>标签页预设 <small v-if="getPresetSourceText(tab)" class="preset-source-badge">{{ getPresetSourceText(tab) }}</small></span>
                                         <select :value="getCurrentPreset(tab)" @change="changePreset(tab, $event.target.value)" :disabled="presetUpdating[tab.persistent_index]">
                                             <option :value="getDefaultPresetOptionValue()">{{ getDefaultPresetLabel(tab) }}</option>
                                             <option v-for="preset in tab.available_presets" :key="preset" :value="preset">{{ preset }}</option>
                                         </select>
                                     </label>
-                                    <div v-else class="tab-single-preset"><span>标签页预设</span><strong>{{ getDisplayedPreset(tab) }}</strong></div>
+                                    <div v-else class="tab-single-preset"><span>标签页预设 <small v-if="getPresetSourceText(tab)" class="preset-source-badge">{{ getPresetSourceText(tab) }}</small></span><strong>{{ getDisplayedPreset(tab) }}</strong></div>
                                     <p v-if="getCommandLoopText(tab)" class="tab-task-line">{{ getCommandLoopText(tab) }}</p>
                                     <p v-if="tab.current_task" class="tab-task-line">任务: {{ tab.current_task }}</p>
                                     <div class="tab-card-actions">

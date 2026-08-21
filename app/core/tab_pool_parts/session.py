@@ -38,6 +38,7 @@ class TabSession:
     error_count: int = 0
     persistent_index: int = 0  # 🆕 持久化编号（重启前不变）
     preset_name: Optional[str] = None  # 🆕 当前显式指定的预设名称（None = 跟随站点默认预设）
+    preset_override_source: Optional[str] = None  # 预设来源（url: 来自 URL 记忆, tab: 标签页临时指定, None: 默认）
     model_name_override: Optional[str] = None  # 当前标签页临时暴露模型名（关闭标签页后失效）
     browser_context_id: Optional[str] = None
     is_isolated_context: bool = False
@@ -65,7 +66,7 @@ class TabSession:
     _workflow_target_side: str = field(default="", repr=False)
     _workflow_runtime_id: str = field(default="", repr=False)
 
-    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
 
     def is_available(self) -> bool:
         with self._lock:
@@ -83,6 +84,16 @@ class TabSession:
         with self._lock:
             self.transient_disconnect_until = 0.0
             self.transient_disconnect_reason = None
+
+    def set_preset(self, preset_name: Optional[str], source: Optional[str] = None) -> bool:
+        """线程安全地设置预设及来源"""
+        with self._lock:
+            old_preset = self.preset_name
+            self.preset_name = str(preset_name).strip() if preset_name else None
+            self.preset_override_source = str(source).strip() if (source and self.preset_name) else None
+            if old_preset != self.preset_name:
+                self._reset_conversation_state_unlocked()
+            return True
 
     def _clear_health_cache_unlocked(self):
         self._health_cache_until = 0.0
@@ -486,6 +497,8 @@ class TabSession:
                 with self._lock:
                     self.current_domain = None
                     self.last_known_url = None
+                    self.preset_name = None
+                    self.preset_override_source = None
                     self._clear_health_cache_unlocked()
                     self.last_conversation_activity_at = 0.0
                     self.last_conversation_domain = None
@@ -644,11 +657,14 @@ class TabSession:
             self._clear_health_cache_unlocked()
             logger.debug(f"[{self.id}] 标记为关闭: {reason or '-'}")
 
+    def _reset_conversation_state_unlocked(self):
+        self.last_conversation_activity_at = 0.0
+        self.last_conversation_domain = None
+        self.last_conversation_preset_name = None
+
     def reset_conversation_state(self):
         with self._lock:
-            self.last_conversation_activity_at = 0.0
-            self.last_conversation_domain = None
-            self.last_conversation_preset_name = None
+            self._reset_conversation_state_unlocked()
 
     def mark_conversation_activity(self, domain: str = "", preset_name: str = ""):
         normalized_domain = str(domain or "").strip().lower() or None
@@ -754,6 +770,7 @@ class TabSession:
             cached_url = str(self.last_known_url or "").strip()
             request_count = self.request_count
             preset_name = self.preset_name
+            preset_override_source = self.preset_override_source
             model_name_override = self.model_name_override
             is_isolated_context = self.is_isolated_context
             browser_context_id = self.browser_context_id
@@ -800,6 +817,7 @@ class TabSession:
             "request_count": request_count,
             "busy_duration": busy_duration,
             "preset_name": preset_name,  # 🆕
+            "preset_override_source": preset_override_source,
             "model_name_override": model_name_override,
             "is_isolated_context": is_isolated_context,
             "browser_context_id": browser_context_id,
@@ -850,6 +868,9 @@ class TabSession:
         with self._lock:
             if str(self.last_known_url or "").strip() != normalized:
                 self._clear_health_cache_unlocked()
+                if self.preset_override_source == "url":
+                    self.preset_name = None
+                    self.preset_override_source = None
             self.last_known_url = normalized or None
         return normalized
 

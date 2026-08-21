@@ -153,6 +153,10 @@ class _LmarenaBattleSideParser(ResponseParser):
         self._completed = False
         self._completion_side = ""
 
+    def should_fallback_to_dom_when_no_visible_content(self) -> bool:
+        """Arena 的心跳流可能因网络波动/长推理首字延迟提前静默，空结果必须交给 DOM 接管。"""
+        return True
+
     def _mark_terminal(self, prefix: str) -> str:
         side = "left" if prefix.startswith("a") else "right"
         self._completed_sides.add(side)
@@ -354,10 +358,10 @@ class LmarenaBattleWinnerParser(ResponseParser):
         self._completed = False
         self._winner_side = ""
         self._emitted_winner = False
-        self._completed_sides.clear()
-        self._completed = False
-        self._winner_side = ""
-        self._emitted_winner = False
+
+    def should_fallback_to_dom_when_no_visible_content(self) -> bool:
+        """Arena 的心跳流可能因网络波动/长推理首字延迟提前静默，空结果必须交给 DOM 接管。"""
+        return True
 
     def _mark_terminal(self, prefix: str) -> str:
         side = "left" if prefix.startswith("a") else "right"

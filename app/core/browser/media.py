@@ -477,7 +477,9 @@ class BrowserMediaMixin:
         images: List[Dict],
         *,
         wait_seconds: float = 0.0,
-        partition_key: str = "public",
+        cookies: Any = None,
+        headers: Optional[Dict[str, str]] = None,
+        partition_key: Optional[str] = None,
     ) -> List[Dict]:
         if not images:
             return images
@@ -491,11 +493,16 @@ class BrowserMediaMixin:
             if not target_url:
                 continue
 
+            current_partition = (
+                str(partition_key).strip()
+                if partition_key is not None
+                else get_image_download_partition(target_url, cookies, headers)
+            )
             result = background_image_downloader.get_download_result(
                 target_url,
                 wait=wait_seconds > 0,
                 timeout=wait_seconds if wait_seconds > 0 else None,
-                partition_key=partition_key,
+                partition_key=current_partition,
             )
             new_item = self._localize_image_item_from_background_result(item, result)
             if new_item is None:
@@ -794,19 +801,18 @@ class BrowserMediaMixin:
                 )
 
         merged = list(dom_items)
-        ready_types = {
+        dom_types = {
             str(item.get("media_type") or "").strip().lower()
-            for item in merged
+            for item in dom_items
             if str(item.get("url") or item.get("data_uri") or "").strip()
         }
 
         appended = 0
         for item in stream_items:
             media_type = str(item.get("media_type") or "").strip().lower()
-            if not media_type or media_type in ready_types:
+            if not media_type or media_type in dom_types or media_type == "image":
                 continue
             merged.append(dict(item))
-            ready_types.add(media_type)
             appended += 1
 
         if appended:
@@ -1088,25 +1094,6 @@ class BrowserMediaMixin:
                     return None
 
                 strategy = str(image_config.get("final_target_strategy", "container") or "container").strip().lower()
-                if dom_baseline_active:
-                    fresh_candidates = [
-                        candidate
-                        for candidate in candidates
-                        if self._candidate_has_fresh_dom_image(
-                            candidate,
-                            image_config,
-                            media_dom_baseline,
-                        )
-                    ]
-                    if fresh_candidates:
-                        logger.debug(
-                            "结果容器已按发送前基线收敛到本轮新增图片: "
-                            f"fresh={len(fresh_candidates)}, total={len(candidates)}"
-                        )
-                        candidates = fresh_candidates
-
-                if strategy not in ("latest_reply", "latest_visual_reply"):
-                    return candidates[-1]
 
                 selector = str(image_config.get("selector") or "img").strip() or "img"
 
@@ -1169,7 +1156,7 @@ class BrowserMediaMixin:
                             left = 0.0
                             area = 0.0
                         horizontal_score = left if column == "right" else -left
-                        scored_candidates.append((bottom, horizontal_score, area, -index, index, left, has_media, candidate))
+                        scored_candidates.append((bottom, horizontal_score, area, index, index, left, has_media, candidate))
 
                     if len(scored_candidates) > 1:
                         left_edges = [item[5] for item in scored_candidates]
@@ -1188,6 +1175,23 @@ class BrowserMediaMixin:
                             if side_candidates:
                                 scored_candidates = side_candidates
 
+                    if dom_baseline_active and scored_candidates:
+                        fresh_scored = [
+                            item
+                            for item in scored_candidates
+                            if self._candidate_has_fresh_dom_image(
+                                item[7],
+                                image_config,
+                                media_dom_baseline,
+                            )
+                        ]
+                        if fresh_scored:
+                            logger.debug(
+                                f"[latest_visual_reply] 分栏 {column} 容器已按基线收敛到本轮新图: "
+                                f"fresh={len(fresh_scored)}, side_total={len(scored_candidates)}"
+                            )
+                            scored_candidates = fresh_scored
+
                     if scored_candidates:
                         scored_candidates.sort(key=lambda item: item[:4], reverse=True)
                         best = scored_candidates[0]
@@ -1197,6 +1201,26 @@ class BrowserMediaMixin:
                             f"bottom={best[0]:.1f}, left={best[5]:.1f}, total={len(candidates)}"
                         )
                         return best[7]
+
+                if dom_baseline_active:
+                    fresh_candidates = [
+                        candidate
+                        for candidate in candidates
+                        if self._candidate_has_fresh_dom_image(
+                            candidate,
+                            image_config,
+                            media_dom_baseline,
+                        )
+                    ]
+                    if fresh_candidates:
+                        logger.debug(
+                            "结果容器已按发送前基线收敛到本轮新增图片: "
+                            f"fresh={len(fresh_candidates)}, total={len(candidates)}"
+                        )
+                        candidates = fresh_candidates
+
+                if strategy not in ("latest_reply", "latest_visual_reply"):
+                    return candidates[-1]
 
                 for candidate in reversed(candidates):
                     if _has_media(candidate):
@@ -2025,6 +2049,7 @@ class BrowserMediaMixin:
         media_items: List[Dict],
         tab=None,
         max_size_mb: int = 10,
+        image_config: Optional[Dict[str, Any]] = None,
     ) -> List[Dict]:
         """Download remote audio/video URLs to local files so downstream clients get stable local URLs."""
         if not media_items or tab is None:
@@ -2054,6 +2079,16 @@ class BrowserMediaMixin:
         partition_key = build_image_download_partition(cookies_dict, headers)
 
         result = []
+        is_image_gen = bool(
+            (image_config or {}).get("arena_image_generation")
+            or (image_config or {}).get("_arena_image_generation_active")
+            or (image_config or {}).get("require_localized_images")
+        )
+        bg_timeout = float(
+            (image_config or {}).get("background_download_wait_seconds")
+            or (image_config or {}).get("download_wait_seconds")
+            or (3.5 if is_image_gen else 1.0)
+        )
         for item in media_items:
             filepath = None
             if item.get("kind") != "url":
@@ -2064,11 +2099,16 @@ class BrowserMediaMixin:
             if media_type not in {"audio", "video"}:
                 if media_type == "image":
                     target_url = normalize_remote_image_url(item.get("url"))
+                    target_partition = (
+                        get_image_download_partition(target_url, cookies_dict, headers)
+                        if target_url
+                        else partition_key
+                    )
                     background_result = background_image_downloader.get_download_result(
                         target_url,
                         wait=True,
-                        timeout=1.0,
-                        partition_key=partition_key,
+                        timeout=bg_timeout,
+                        partition_key=target_partition,
                     ) if target_url else None
                     localized_item = self._localize_image_item_from_background_result(item, background_result)
                     result.append(localized_item if localized_item is not None else item)
@@ -2397,14 +2437,17 @@ class BrowserMediaMixin:
         candidate_selectors = [scoped_selector]
         if scoped_selector != "img":
             candidate_selectors.append("img")
-        img_ele_entries = []
+        reply_ele_entries = []
+        page_ele_entries = []
         baseline_token = str(image_config.get("request_baseline_token") or "")
         baseline_property = str(image_config.get("request_baseline_property") or "")
         exclude_existing_nodes = bool(image_config.get("request_baseline_exclude_existing_nodes"))
+        effective_stop_checker = getattr(self, "_should_stop_checker", lambda: False)
 
-        def _append_image_candidates(root, scope_name: str) -> None:
+        def _append_image_candidates(root, scope_name: str, target_list: List[Dict]) -> None:
             if root is None:
                 return
+            seen_ids = {id(e["element"]) for e in target_list}
             for candidate_selector in candidate_selectors:
                 try:
                     candidates = root.eles(f"css:{candidate_selector}", timeout=0.5) or []
@@ -2420,6 +2463,9 @@ class BrowserMediaMixin:
                     f"找到 {len(candidates)} 个"
                 )
                 for ele in candidates:
+                    if id(ele) in seen_ids:
+                        continue
+                    seen_ids.add(id(ele))
                     try:
                         baseline_probe = """
                             const propertyName = String(arguments[0] || '');
@@ -2477,7 +2523,7 @@ class BrowserMediaMixin:
                         logger.debug(f"读取图片元素地址失败（忽略）: {exc}")
                         img_src = ""
                         entry_state = {}
-                    img_ele_entries.append({
+                    target_list.append({
                         "element": ele,
                         "src": img_src,
                         "is_preexisting": bool(entry_state.get("is_preexisting")),
@@ -2485,16 +2531,21 @@ class BrowserMediaMixin:
                         "used": False,
                     })
 
-        _append_image_candidates(last_element, "当前回复")
+        _append_image_candidates(last_element, "当前回复", reply_ele_entries)
         # Battle 模式下 last_element 可能指向另一侧回复。整页候选只用于后续 URL
         # 精确匹配，不能作为位置兜底，否则会截到旧回复或另一侧的图片。
-        _append_image_candidates(tab, "整页")
+        _append_image_candidates(tab, "整页", page_ele_entries)
 
         cookies_dict, headers = build_image_download_request_context(tab)
+        is_image_gen = bool(
+            image_config.get("arena_image_generation")
+            or image_config.get("_arena_image_generation_active")
+            or image_config.get("require_localized_images")
+        )
         prefetch_wait_seconds = float(
             image_config.get("background_download_wait_seconds")
             or image_config.get("download_wait_seconds")
-            or 1.0
+            or (3.5 if is_image_gen else 1.0)
         )
         try:
             max_image_bytes = max(1, int(image_config.get("max_size_mb") or 10)) * 1024 * 1024
@@ -2522,33 +2573,24 @@ class BrowserMediaMixin:
         new_images = self._localize_images_with_background_cache(
             candidates,
             wait_seconds=max(0.0, prefetch_wait_seconds),
-            partition_key=get_image_download_partition(
-                next(
-                    (
-                        item.get("url")
-                        for item in candidates
-                        if isinstance(item, dict) and normalize_remote_image_url(item.get("url"))
-                    ),
-                    "",
-                ),
-                cookies_dict,
-                headers,
-            ),
+            cookies=cookies_dict,
+            headers=headers,
         )
 
         def _claim_image_element(target_url: str):
-            for entry in reversed(img_ele_entries):
-                if entry["used"]:
-                    continue
-                if not self._remote_image_urls_match(target_url, entry["src"]):
-                    continue
-                if entry["is_preexisting"] and (
-                    exclude_existing_nodes
-                    or self._remote_image_urls_match(target_url, entry["baseline_reference"])
-                ):
-                    continue
-                entry["used"] = True
-                return entry["element"]
+            for entry_list in (reply_ele_entries, page_ele_entries):
+                for entry in reversed(entry_list):
+                    if entry["used"]:
+                        continue
+                    if not self._remote_image_urls_match(target_url, entry["src"]):
+                        continue
+                    if entry["is_preexisting"] and (
+                        exclude_existing_nodes
+                        or self._remote_image_urls_match(target_url, entry["baseline_reference"])
+                    ):
+                        continue
+                    entry["used"] = True
+                    return entry["element"]
 
             return None
 
@@ -2560,8 +2602,13 @@ class BrowserMediaMixin:
 
             deadline = time.monotonic() + screenshot_ready_wait_seconds
             while time.monotonic() < deadline:
-                _append_image_candidates(last_element, "当前回复（等待渲染）")
-                _append_image_candidates(tab, "整页（等待渲染）")
+                if effective_stop_checker():
+                    break
+                _append_image_candidates(last_element, "当前回复（等待渲染）", reply_ele_entries)
+                matched = _claim_image_element(target_url)
+                if matched is not None:
+                    return matched
+                _append_image_candidates(tab, "整页（等待渲染）", page_ele_entries)
                 matched = _claim_image_element(target_url)
                 if matched is not None:
                     return matched
@@ -2570,6 +2617,8 @@ class BrowserMediaMixin:
         localized_count = 0
 
         for target_index in reversed(remote_indexes):
+            if effective_stop_checker():
+                break
             target_image = new_images[target_index]
             target_url = normalize_remote_image_url(target_image.get("url"))
             if not target_url:
@@ -2582,6 +2631,17 @@ class BrowserMediaMixin:
                 partition_key=target_partition_key,
             )
             background_status = str((background_result or {}).get("status") or "").strip().lower()
+            if background_status in {"queued", "downloading"}:
+                if is_image_gen:
+                    # 生图模式下，若后台下载仍在进行，给予同步阻塞等待（最多 prefetch_wait_seconds），确保图片落盘
+                    background_result = background_image_downloader.get_download_result(
+                        target_url,
+                        wait=True,
+                        timeout=prefetch_wait_seconds,
+                        partition_key=target_partition_key,
+                    )
+                    background_status = str((background_result or {}).get("status") or "").strip().lower()
+
             if background_status in {"queued", "downloading"}:
                 # The prefetch worker is deliberately independent from response
                 # rendering. Waiting here made the browser sit on a spinner for up
@@ -2695,6 +2755,10 @@ class BrowserMediaMixin:
                         f"source_matches={bool(ready_state.get('source_matches'))}"
                     )
                 else:
+                    if out_path.suffix.lower() != ".png":
+                        ext = ".png"
+                        filename = f"{base_name}{ext}"
+                        out_path = out_dir / filename
                     logger.debug(f"图片[{target_index}] 已确认加载完成，回退到截图方式")
                     expanded_for_screenshot = False
                     try:
@@ -2728,10 +2792,14 @@ class BrowserMediaMixin:
                                 mime=saved_mime,
                                 byte_size=int(out_path.stat().st_size),
                                 source="screenshot_fallback",
-                                partition_key=partition_key,
+                                partition_key=target_partition_key,
                             )
-                            logger.debug(f"✅ 截图成功: {filename} ({out_path.stat().st_size} bytes)")
                     except Exception as e:
+                        if out_path.exists():
+                            try:
+                                out_path.unlink()
+                            except Exception:
+                                pass
                         logger.warning(f"截图失败: {e}")
             elif not saved:
                 logger.warning(
@@ -2896,7 +2964,7 @@ class BrowserMediaMixin:
 
             site_config = config_engine.get_site_config(
                 domain,
-                getattr(tab, "html", "") or "",
+                html_content=lambda: getattr(tab, "html", ""),
                 preset_name=effective_preset_name,
             )
             if not site_config:

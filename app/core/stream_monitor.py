@@ -405,6 +405,8 @@ class StreamMonitor:
         self._recovery_mode = ""
         self._image_recovery_exhausted = False
         self._stream_recovery_exhausted = False
+        self._stream_recovery_refresh_done = False
+        self._stream_recovery_refresh_attempts = 0
         self._arena_image_guard: Optional[ArenaImageGenerationGuard] = None
 
     def _looks_like_expected_image_output(self, user_input: str = "") -> bool:
@@ -509,11 +511,12 @@ class StreamMonitor:
         refresh_done: bool,
         still_generating: bool,
         has_output: bool,
+        post_refresh_settled: bool = True,
     ) -> bool:
         """Completion gate for a stream recovered through a page reload."""
         return bool(
             not interrupted
-            or (refresh_done and not still_generating and has_output)
+            or (refresh_done and not still_generating and has_output and post_refresh_settled)
         )
 
     @staticmethod
@@ -534,10 +537,12 @@ class StreamMonitor:
         expect_image_output: bool,
         still_generating: bool,
         recovery_output_seen: bool,
+        refresh_done: bool = False,
     ) -> bool:
         """Accept a completed text reply without a redundant recovery reload."""
         return bool(
             interrupted
+            and not refresh_done
             and not expect_image_output
             and not still_generating
             and recovery_output_seen
@@ -602,7 +607,7 @@ class StreamMonitor:
 
         strategy = self._get_final_target_strategy()
 
-        if prefer_anchor and strategy != "latest_visual_reply":
+        if prefer_anchor:
             for ele in reversed(elements):
                 try:
                     anchor = self.extractor.get_anchor(ele)
@@ -611,65 +616,129 @@ class StreamMonitor:
                 if anchor == prefer_anchor:
                     return ele, anchor
 
-        if strategy != "latest_visual_reply":
-            target = elements[-1]
-            return target, self.extractor.get_anchor(target)
+        column = self._get_latest_visual_column()
 
         scored = []
-        column = self._get_latest_visual_column()
         for index, ele in enumerate(elements):
             try:
                 score = ele.run_js(
                     """
                     const rect = this.getBoundingClientRect();
+                    const ol = this.closest('main ol, ol, [role="feed"], [data-testid*="conversation"]');
+                    let isReverse = false;
+                    let turnIndex = 0;
+                    if (ol) {
+                        const style = window.getComputedStyle(ol);
+                        isReverse = style.flexDirection.includes('reverse') || (ol.className && ol.className.includes('reverse'));
+                        const turnEl = this.closest('main ol > div, ol > li, [data-testid*="conversation-turn"], [class*="turn-container"]');
+                        const turns = Array.from(ol.children).filter(c => c.children.length > 0 || c.offsetHeight > 0);
+                        turnIndex = turnEl && turns.includes(turnEl) ? turns.indexOf(turnEl) : (ol.contains(this) ? Array.from(ol.children).indexOf(this.closest('ol > *')) : 0);
+                    }
+
+                    const col = this.closest('[class*="basis-"]');
+                    let side = 'single';
+                    if (col && col.parentElement && col.parentElement.children.length === 2) {
+                        side = col.parentElement.children[0] === col ? 'left' : 'right';
+                    }
+
+                    const sc = document.querySelector('[data-radix-scroll-area-viewport]') || document.scrollingElement || document.documentElement;
+                    const scScrollTop = sc ? (sc.scrollTop || 0) : 0;
+                    const scRect = sc ? sc.getBoundingClientRect() : { top: 0, left: 0 };
+                    const contentTop = Math.round(rect.top - scRect.top + scScrollTop);
+                    const contentBottom = Math.round(rect.bottom - scRect.top + scScrollTop);
+
                     return {
                         top: Number(rect && rect.top || 0) + Number(window.scrollY || 0),
                         bottom: Number(rect && rect.bottom || 0) + Number(window.scrollY || 0),
+                        contentTop,
+                        contentBottom,
                         left: Number(rect && rect.left || 0) + Number(window.scrollX || 0),
                         width: Number(rect && rect.width || 0),
                         height: Number(rect && rect.height || 0),
+                        turnIndex,
+                        isReverse,
+                        side
                     };
                     """
                 ) or {}
-                bottom = float(score.get("bottom") or 0)
+                bottom = float(score.get("contentBottom") or score.get("bottom") or 0)
                 left = float(score.get("left") or 0)
                 area = float(score.get("width") or 0) * float(score.get("height") or 0)
+                turn_index = int(score.get("turnIndex", 0) or 0)
+                is_reverse = bool(score.get("isReverse", False))
+                side = str(score.get("side", "single") or "single")
             except Exception:
                 bottom = 0.0
                 left = 0.0
                 area = 0.0
+                turn_index = 0
+                is_reverse = False
+                side = "single"
+
             horizontal_score = left if column == "right" else -left
-            scored.append((bottom, horizontal_score, area, -index, index, left, ele))
+            scored.append({
+                "index": index,
+                "bottom": bottom,
+                "horizontal_score": horizontal_score,
+                "area": area,
+                "left": left,
+                "turn_index": turn_index,
+                "is_reverse": is_reverse,
+                "side": side,
+                "element": ele
+            })
 
-        # Column is a hard boundary for side-by-side visual replies.  The
-        # previous sort treated it as a secondary tie-breaker, so a lower
-        # reply from the opposite side could win.  Split candidates around
-        # the midpoint of their observed horizontal extent, then select the
-        # newest reply within the parser-configured side.  On a single-column
-        # or narrow/mobile layout, retain the full candidate set as a fallback.
+        # 1. 严格过滤历史轮次，锁定最新消息轮次（Latest Turn Boundary）
         if len(scored) > 1:
-            left_edges = [item[5] for item in scored]
-            horizontal_span = max(left_edges) - min(left_edges)
-            if horizontal_span >= 80.0:
-                midpoint = min(left_edges) + horizontal_span / 2.0
-                side_candidates = [
-                    item for item in scored
-                    if (item[5] >= midpoint if column == "right" else item[5] <= midpoint)
-                ]
-                if side_candidates:
-                    scored = side_candidates
+            turn_indexes = [item["turn_index"] for item in scored if item["turn_index"] >= 0]
+            if turn_indexes:
+                is_reverse_layout = any(item["is_reverse"] for item in scored)
+                target_turn_index = min(turn_indexes) if is_reverse_layout else max(turn_indexes)
+                latest_turn_candidates = [item for item in scored if item["turn_index"] == target_turn_index]
+                if latest_turn_candidates:
+                    scored = latest_turn_candidates
 
-        scored.sort(key=lambda item: item[:4], reverse=True)
+        # 2. 在最新轮次内根据目标侧（column: left/right）匹配容器
+        if column in {"left", "right"}:
+            exact_side_matches = [item for item in scored if item["side"] == column]
+            if exact_side_matches:
+                scored = exact_side_matches
+            else:
+                # 若为明确的双栏对战布局，而目标侧在本轮中不存在（如单侧报错500），绝不可跨侧或跨轮次误取相反侧
+                opposite_side = "left" if column == "right" else "right"
+                has_opposite = any(item["side"] == opposite_side for item in scored)
+                if has_opposite:
+                    logger.debug(
+                        f"[latest_visual_reply] 本轮最新消息中未找到目标侧({column})容器，相反侧({opposite_side})存在但不可误取"
+                    )
+                    return None, None
+                # 若为单栏布局（side == 'single'），按水平中线分界备选
+                if len(scored) > 1:
+                    left_edges = [item["left"] for item in scored]
+                    horizontal_span = max(left_edges) - min(left_edges)
+                    if horizontal_span >= 80.0:
+                        midpoint = min(left_edges) + horizontal_span / 2.0
+                        side_candidates = [
+                            item for item in scored
+                            if (item["left"] >= midpoint if column == "right" else item["left"] <= midpoint)
+                        ]
+                        if side_candidates:
+                            scored = side_candidates
+
+        scored.sort(
+            key=lambda item: (item["bottom"], item["horizontal_score"], item["area"], -item["index"]),
+            reverse=True
+        )
         best = scored[0]
-        
-        current_log_info = (best[4], column, f"{best[0]:.1f}", f"{best[5]:.1f}", len(elements))
+
+        current_log_info = (best["index"], column, f"{best['bottom']:.1f}", f"{best['left']:.1f}", len(elements))
         if self._last_visual_reply_log_info != current_log_info:
             self._last_visual_reply_log_info = current_log_info
             logger.debug(
                 "[latest_visual_reply] 选中视觉最新回复容器: "
-                f"index={best[4]}, column={column}, bottom={best[0]:.1f}, left={best[5]:.1f}, total={len(elements)}"
+                f"index={best['index']}, column={column}, bottom={best['bottom']:.1f}, left={best['left']:.1f}, total={len(elements)}"
             )
-        target = best[6]
+        target = best["element"]
         return target, self.extractor.get_anchor(target)
 
     def capture_send_baseline(self, selector: str, user_input: str = "") -> Dict[str, Any]:
@@ -746,6 +815,8 @@ class StreamMonitor:
         self._recovery_mode = str(recovery_mode or "").strip().lower()
         self._image_recovery_exhausted = False
         self._stream_recovery_exhausted = False
+        self._stream_recovery_refresh_done = False
+        self._stream_recovery_refresh_attempts = 0
         self._arena_image_guard = None
         if self._expect_image_output and is_arena_image_generation_request(
             str(getattr(self.tab, "url", "") or ""),
@@ -1020,10 +1091,13 @@ class StreamMonitor:
 
             if target is None:
                 target, target_anchor = self._select_candidate_element(eles)
-                
-                last_text = self.extractor.extract_text(target)
-                if (not last_text or not last_text.strip()) and len(eles) >= 2:
-                    logger.debug(f"[Empty Last] 最后一个元素为空，共 {len(eles)} 个元素")
+
+            if target is None:
+                return result
+
+            last_text = self.extractor.extract_text(target)
+            if (not last_text or not last_text.strip()) and len(eles) >= 2:
+                logger.debug(f"[Empty Last] 目标元素为空，共 {len(eles)} 个元素")
 
             text = self.extractor.extract_text(target) or ""
 
@@ -1291,12 +1365,7 @@ class StreamMonitor:
             last_text = self.extractor.extract_text(target)
             if last_text and last_text.strip():
                 return last_text.strip()
-            
-            for i in range(len(eles) - 2, -1, -1):
-                t = self.extractor.extract_text(eles[i])
-                if t and t.strip():
-                    return t.strip()
-            
+
             return ""
         except Exception:
             return ""
@@ -1359,8 +1428,12 @@ class StreamMonitor:
         strict_arena_image_generation = isinstance(
             arena_image_guard, ArenaImageGenerationGuard
         )
-        stream_recovery_refresh_done = False
-        stream_recovery_refresh_attempts = 0
+        stream_recovery_refresh_done = bool(
+            getattr(self, "_stream_recovery_refresh_done", False)
+        )
+        stream_recovery_refresh_attempts = int(
+            getattr(self, "_stream_recovery_refresh_attempts", 0) or 0
+        )
         stream_recovery_last_refresh_at = phase_start
         stream_recovery_max_refreshes = 0
         recovery_confirmed = not interrupted_stream_recovery
@@ -1429,11 +1502,21 @@ class StreamMonitor:
                     still_generating = self._arena_native_stop_present()
                 if stream_recovery_refresh_done:
                     baseline_groups = int(ctx.baseline_snapshot.get('groups_count') or 0) if ctx.baseline_snapshot else 0
+                    baseline_anchor = ctx.baseline_snapshot.get('anchor') if ctx.baseline_snapshot else None
+                    baseline_text_len = int(ctx.baseline_snapshot.get('text_len') or 0) if ctx.baseline_snapshot else 0
+
+                    if baseline_groups > 0:
+                        has_new_target = bool(
+                            current_count > baseline_groups
+                            or (current_anchor and current_anchor != baseline_anchor)
+                            or len(current_text) > baseline_text_len + 5
+                        )
+                    else:
+                        has_new_target = bool(current_anchor or current_text)
+
                     stream_recovery_page_ready = bool(
                         stream_recovery_page_ready
-                        or current_count > baseline_groups
-                        or current_anchor
-                        or current_text
+                        or has_new_target
                         or still_generating
                     )
             current_text_len = len(current_text)
@@ -1487,6 +1570,13 @@ class StreamMonitor:
                 no_visible_progress = True
 
             recovery_has_output = recovery_output_seen
+            stream_cfg = getattr(self, "_stream_config", None) or {}
+            settle_cfg = stream_cfg.get("stream_recovery_post_refresh_settle_seconds")
+            post_refresh_settle_sec = float(settle_cfg) if settle_cfg is not None else 6.0
+            post_refresh_settled = bool(
+                not stream_recovery_refresh_done
+                or (time.time() - stream_recovery_last_refresh_at >= post_refresh_settle_sec)
+            )
             if strict_arena_image_generation and arena_observation is not None:
                 recovery_has_output = bool(
                     arena_observation.has_new_image or arena_observation.terminal_error
@@ -1495,7 +1585,7 @@ class StreamMonitor:
                     arena_observation.is_complete
                     and (
                         not interrupted_stream_recovery
-                        or stream_recovery_refresh_done
+                        or (stream_recovery_refresh_done and post_refresh_settled)
                     )
                 )
             else:
@@ -1508,6 +1598,7 @@ class StreamMonitor:
                         self._expect_image_output,
                         stream_recovery_page_ready,
                     ),
+                    post_refresh_settled=post_refresh_settled,
                 )
                 recovery_confirmed = bool(
                     recovery_confirmed
@@ -1516,6 +1607,7 @@ class StreamMonitor:
                         self._expect_image_output,
                         still_generating,
                         recovery_output_seen,
+                        refresh_done=stream_recovery_refresh_done,
                     )
                 )
             if interrupted_stream_recovery and not recovery_confirmed:
@@ -1732,9 +1824,16 @@ class StreamMonitor:
                 last_text_len = current_text_len
 
             if interrupted_stream_recovery:
+                stream_cfg = getattr(self, "_stream_config", None) or {}
+                settle_cfg = stream_cfg.get("stream_recovery_post_refresh_settle_seconds")
+                post_refresh_settle_sec = float(settle_cfg) if settle_cfg is not None else 6.0
+                post_refresh_settled = bool(
+                    not stream_recovery_refresh_done
+                    or (time.time() - stream_recovery_last_refresh_at >= post_refresh_settle_sec)
+                )
                 if strict_arena_image_generation and arena_observation is not None:
                     recovery_confirmed = bool(
-                        arena_observation.is_complete and stream_recovery_refresh_done
+                        arena_observation.is_complete and stream_recovery_refresh_done and post_refresh_settled
                     )
                 else:
                     recovery_confirmed = self._interrupted_recovery_confirmed(
@@ -1746,6 +1845,7 @@ class StreamMonitor:
                             self._expect_image_output,
                             stream_recovery_page_ready,
                         ),
+                        post_refresh_settled=post_refresh_settled,
                     )
                     recovery_confirmed = bool(
                         recovery_confirmed
@@ -1754,6 +1854,7 @@ class StreamMonitor:
                             self._expect_image_output,
                             still_generating,
                             recovery_output_seen,
+                            refresh_done=stream_recovery_refresh_done,
                         )
                     )
 
@@ -1782,7 +1883,7 @@ class StreamMonitor:
             else:
                 interrupted_refresh_interval = float(
                     self._image_config.get("dom_image_interrupted_refresh_interval_seconds")
-                    or 20.0
+                    or 15.0
                 )
             interrupted_recovery_timeout = float(
                 self._image_config.get("dom_image_interrupted_recovery_timeout_seconds")
@@ -1844,11 +1945,11 @@ class StreamMonitor:
             if interrupted_stream_recovery and recovery_confirmed:
                 if stream_recovery_refresh_done:
                     logger.info(
-                        "[Stream Recovery] 刷新后原生停止按钮已消失，准备一次性补发未发送内容"
+                        "[Stream Recovery] 刷新后停止按钮已消失，准备一次性补发未发送内容"
                     )
                 else:
                     logger.info(
-                        "[Stream Recovery] 原生停止按钮已消失且文本输出已确认，跳过刷新并一次性补发未发送内容"
+                        "[Stream Recovery] 停止按钮已消失且文本输出已确认，跳过刷新并一次性补发未发送内容"
                     )
                 break
             if (
@@ -1868,6 +1969,8 @@ class StreamMonitor:
                 )
                 if self._refresh_interrupted_stream_page():
                     stream_recovery_refresh_done = True
+                    self._stream_recovery_refresh_done = True
+                    self._stream_recovery_refresh_attempts = stream_recovery_refresh_attempts
                     stream_recovery_page_ready = False
                     stream_recovery_last_refresh_at = time.time()
                     self._generating_checker = GeneratingStatusCache(self.tab)
@@ -1881,7 +1984,7 @@ class StreamMonitor:
                     peak_text_len = 0
                     silence_start = time.time()
                     stream_recovery_needs_post_refresh_check = True
-                    time.sleep(1.0)
+                    time.sleep(2.0)
                     continue
                 if (
                     strict_arena_image_generation
@@ -2183,17 +2286,20 @@ class StreamMonitor:
 
                 logger.debug("[Final] 已提取图片，但已禁用 StreamMonitor 图片 chunk 输出（由 BrowserCore 统一发送本地图片）")
             elif final_image_urls:
-                self._final_images = [
-                    {
-                        "kind": "url",
-                        "url": url,
-                        "data_uri": None,
-                        "media_type": "image",
-                        "source": "stream_snapshot",
-                    }
-                    for url in final_image_urls
-                ]
-                logger.debug(f"[Final] 图片提取超时后回退到快照 URL: {len(self._final_images)} 张")
+                column = self._get_latest_visual_column()
+                # 在双栏对战场景下（column in {'left', 'right'}），若目标侧容器未提取到图片，绝不能使用全页级的 page_image_urls 跨侧误塞图片！
+                if column not in {"left", "right"}:
+                    self._final_images = [
+                        {
+                            "kind": "url",
+                            "url": url,
+                            "data_uri": None,
+                            "media_type": "image",
+                            "source": "stream_snapshot",
+                        }
+                        for url in final_image_urls
+                    ]
+                    logger.debug(f"[Final] 图片提取超时后回退到快照 URL: {len(self._final_images)} 张")
 
         logger.debug(f"流式监听结束: {ctx.sent_content_length}字符, {len(self._final_images)}张图片")
 
@@ -2330,6 +2436,8 @@ class StreamMonitor:
         self._recovery_mode = ""
         self._image_recovery_exhausted = False
         self._stream_recovery_exhausted = False
+        self._stream_recovery_refresh_done = False
+        self._stream_recovery_refresh_attempts = 0
         self._arena_image_guard = None
         logger.debug("[StreamMonitor] large cached stream results cleared")
 

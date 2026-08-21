@@ -25,6 +25,7 @@ from datetime import datetime
 from typing import Optional, Tuple
 from http.client import IncompleteRead
 from urllib.parse import urlparse
+import posixpath
 from update_preserve import (
     build_effective_preserve_patterns,
     get_default_update_preserve_patterns,
@@ -217,26 +218,46 @@ def fetch_latest_release(repo: str) -> Optional[dict]:
 
 def get_release_zip_asset(release: dict, repo: str) -> Optional[dict]:
     """Return the exact release ZIP asset with a GitHub-provided digest."""
+    if not isinstance(release, dict) or not repo:
+        log_error("Release 或 Repo 参数无效")
+        return None
+
     tag_name = str(release.get('tag_name') or '').strip()
-    expected_name = f"universal-web-api-release-{tag_name}.zip"
-    expected_path_prefix = f"/{str(repo or '').strip('/')}/releases/download/"
-    assets = release.get('assets', []) or []
+    tag_clean = tag_name.lstrip('vV')
+    if not tag_clean:
+        log_error(f"Release 缺少有效的 tag_name: {tag_name!r}")
+        return None
+
+    candidate_names = {
+        f"universal-web-api-release-{tag_name}.zip",
+        f"universal-web-api-release-v{tag_clean}.zip",
+        f"universal-web-api-release-{tag_clean}.zip",
+    }
+    clean_repo = str(repo).strip('/')
+    expected_path_prefix = f"/{clean_repo}/releases/download/"
+    assets = release.get('assets', [])
+    if not isinstance(assets, list):
+        assets = []
     log_info(f"Release 包含 {len(assets)} 个 Assets")
 
     for asset in assets:
-        if not isinstance(asset, dict) or str(asset.get('name') or '') != expected_name:
+        if not isinstance(asset, dict):
+            continue
+        asset_name = str(asset.get('name') or '')
+        if asset_name not in candidate_names:
             continue
         download_url = str(asset.get('browser_download_url') or '').strip()
         parsed = urlparse(download_url)
         if parsed.scheme != 'https' or parsed.hostname != 'github.com':
             log_error(f"Release Asset 下载地址不可信: {download_url}")
             return None
-        if not parsed.path.startswith(expected_path_prefix):
-            log_error(f"Release Asset 不属于目标仓库: {parsed.path}")
+        normalized_path = posixpath.normpath(parsed.path)
+        if not normalized_path.startswith(expected_path_prefix):
+            log_error(f"Release Asset 不属于目标仓库: {parsed.path} (normalized: {normalized_path})")
             return None
         digest = str(asset.get('digest') or '').strip().lower()
         if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
-            log_error(f"Release Asset 缺少有效 SHA-256 摘要: {expected_name}")
+            log_error(f"Release Asset 缺少有效 SHA-256 摘要: {asset_name}")
             return None
         try:
             size = int(asset.get('size') or 0)
@@ -247,7 +268,7 @@ def get_release_zip_asset(release: dict, repo: str) -> Optional[dict]:
             return None
         return asset
 
-    log_error(f"未找到精确匹配的 Release Asset: {expected_name}")
+    log_error(f"未找到精确匹配的 Release Asset: 期望匹配 {', '.join(sorted(candidate_names))}")
     return None
 
 

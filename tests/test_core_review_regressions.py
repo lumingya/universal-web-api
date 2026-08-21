@@ -22,6 +22,7 @@ from app.core.network_monitor import NetworkMonitor
 from app.core.parsers.lmarena_parser import LmarenaParser
 from app.core.parsers.lmarena_battle_side_parser import (
     LmarenaBattleSideLeftParser,
+    LmarenaBattleSideRightParser,
     LmarenaBattleWinnerParser,
 )
 from app.core.parsers.lmarena_image_side_left_parser import LmarenaImageSideLeftParser
@@ -242,6 +243,23 @@ def test_arena_winner_keeps_disjoint_incremental_chunks():
     parser.parse_chunk(_arena_text("a0", "hello"))
     parser.parse_chunk(_arena_text("a0", " world"))
     assert parser.parse_chunk('ad:{"finishReason":"stop"}')["content"] == "hello world"
+
+
+def test_all_arena_parsers_enable_fallback_to_dom_on_empty_stream():
+    arena_parsers = [
+        LmarenaParser(),
+        LmarenaSideLeftParser(),
+        LmarenaBattleSideLeftParser(),
+        LmarenaBattleSideRightParser(),
+        LmarenaBattleWinnerParser(),
+        LmarenaImageSideLeftParser(),
+        LmarenaImageSideRightParser(),
+    ]
+    for parser in arena_parsers:
+        assert parser.should_fallback_to_dom_when_no_visible_content() is True, (
+            f"{parser.__class__.__name__} should enable fallback to DOM on empty stream"
+        )
+
 
 
 def test_tutorial_catalog_fields_are_escaped_and_guide_restricts_navigation_scheme():
@@ -511,6 +529,38 @@ def test_remote_fetch_rejects_unsafe_fake_ip_exceptions(monkeypatch, url, addres
         remote_resource.get_public_remote_resource(url)
 
 
+def test_remote_fetch_allows_google_and_cdn_fake_ip_images(monkeypatch):
+    from app.utils import remote_resource
+
+    calls = []
+
+    class DummyResponse:
+        status_code = 200
+        headers = {"Content-Type": "image/png"}
+
+        def iter_content(self, chunk_size=65536):
+            yield b"fake-png-data"
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(
+        remote_resource,
+        "_resolve_addresses",
+        lambda _host: ("198.18.0.67",),
+    )
+    monkeypatch.setattr(
+        remote_resource.requests,
+        "get",
+        lambda url, **kwargs: calls.append((url, kwargs)) or DummyResponse(),
+    )
+
+    url = "https://lh3.googleusercontent.com/gg/ACRwjaurKW-JbmnAgKxY3MXi8QADWXu8Gk9kr0kOWJH"
+    response = remote_resource.get_public_remote_resource(url)
+    assert response.status_code == 200
+    assert calls[0][0] == url
+
+
 def test_image_screenshot_fallback_matches_stream_url_across_battle_sides(tmp_path, monkeypatch):
     target_url = "https://cdn.example/left/generated.png?signature=new"
     wrong = _FakeDomImage("https://cdn.example/right/old.png")
@@ -526,7 +576,7 @@ def test_image_screenshot_fallback_matches_stream_url_across_battle_sides(tmp_pa
     )
     monkeypatch.setattr(
         browser_media_module,
-        "build_image_download_partition",
+        "get_image_download_partition",
         lambda *_args: "test",
     )
     monkeypatch.setattr(
@@ -534,10 +584,11 @@ def test_image_screenshot_fallback_matches_stream_url_across_battle_sides(tmp_pa
         "get_download_result",
         lambda *_args, **_kwargs: None,
     )
+    registered = []
     monkeypatch.setattr(
         browser_media_module.background_image_downloader,
         "register_downloaded_file",
-        lambda *_args, **_kwargs: None,
+        lambda url, **kwargs: registered.append((url, kwargs)),
     )
     monkeypatch.setattr(
         browser_media_module,
@@ -555,6 +606,10 @@ def test_image_screenshot_fallback_matches_stream_url_across_battle_sides(tmp_pa
     assert wrong.screenshot_paths == []
     assert len(correct.screenshot_paths) == 1
     assert localized[0]["source"] == "local_file"
+    assert len(registered) == 1
+    assert registered[0][0] == target_url
+    assert registered[0][1]["source"] == "screenshot_fallback"
+    assert registered[0][1]["partition_key"] == "test"
 
 
 def test_image_screenshot_fallback_waits_for_matching_dom_image_to_finish_loading(tmp_path, monkeypatch):
@@ -980,7 +1035,7 @@ def test_selector_test_scans_every_matching_domain_tab_and_highlights_all_matche
     first_element = _SelectorTestElement()
     second_element = _SelectorTestElement()
     first = _selector_test_session(1, _SelectorTestTab("tab-a", "https://arena.ai/one", [first_element]))
-    second = _selector_test_session(2, _SelectorTestTab("tab-b", "https://lmarena.ai/two", [second_element]))
+    second = _selector_test_session(2, _SelectorTestTab("tab-b", "https://arena.ai/two", [second_element]))
     unrelated = _selector_test_session(
         3,
         _SelectorTestTab("tab-c", "https://example.com/", [_SelectorTestElement()]),

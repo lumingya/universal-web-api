@@ -79,6 +79,12 @@
       "group_name": "arena"
     },
     {
+      "id": "cmd_arena_lost_in_training_reload",
+      "name": "ARENA页面崩溃诊断保护",
+      "enabled": true,
+      "group_name": "arena"
+    },
+    {
       "id": "cmd_gemsidebar001",
       "name": "Gemini自动展开侧边栏",
       "enabled": true,
@@ -99,6 +105,12 @@
     {
       "id": "cmd_arena_context_model_lab",
       "name": "ARENA_CONTEXT_MODEL_LAB",
+      "enabled": true,
+      "group_name": "arena"
+    },
+    {
+      "id": "cmd_arena_conversation_image_window",
+      "name": "ARENA_CONVERSATION_IMAGE_WINDOW",
       "enabled": true,
       "group_name": "arena"
     }

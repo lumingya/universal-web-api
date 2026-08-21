@@ -900,6 +900,78 @@ return (function() {
                         keywords.add(kw)
         return keywords
 
+    def _sync_session_bootstrap_js_files(
+        self,
+        commands: List[Dict],
+        session: 'TabSession',
+    ) -> None:
+        """Install explicitly opted-in JS files when a managed tab becomes idle.
+
+        `run_js_file` actions normally run only after their trigger fires. Some
+        page-resilience scripts must also be registered before a later reload,
+        so they opt in with ``bootstrap_on_session_ready``. The per-session
+        mtime cache keeps this out of the hot periodic path while still
+        replacing a registered script when its source changes.
+        """
+        state = getattr(session, "_command_bootstrap_js_files", None)
+        if not isinstance(state, dict):
+            state = {}
+            setattr(session, "_command_bootstrap_js_files", state)
+
+        for command in commands:
+            if not isinstance(command, dict) or not command.get("enabled", True):
+                continue
+            if not self._matches_scope(command, session):
+                continue
+
+            command_id = str(command.get("id", "") or "").strip()
+            for action in command.get("actions", []) or []:
+                if not isinstance(action, dict):
+                    continue
+                if str(action.get("type", "")).strip().lower() != "run_js_file":
+                    continue
+                if not self._coerce_action_bool(action.get("bootstrap_on_session_ready"), False):
+                    continue
+
+                resolved_path = self._resolve_action_file_path(action.get("file_path", ""))
+                if not resolved_path or not os.path.isfile(resolved_path):
+                    logger.warning(
+                        f"[CMD] 启动 JS 文件不存在: command={command_id or '-'}, path={resolved_path or action.get('file_path', '')!r}"
+                    )
+                    continue
+
+                try:
+                    source_mtime = os.path.getmtime(resolved_path)
+                except OSError as error:
+                    logger.warning(
+                        f"[CMD] 读取启动 JS 文件时间失败: command={command_id or '-'}, path={resolved_path!r}, error={error}"
+                    )
+                    continue
+
+                action_id = str(action.get("action_id", "") or "").strip()
+                cache_key = (command_id, action_id, resolved_path.lower())
+                if state.get(cache_key) == source_mtime:
+                    continue
+
+                try:
+                    result = self._execute_action(copy.deepcopy(action), session)
+                except Exception as error:
+                    logger.warning(
+                        f"[CMD] 启动 JS 文件同步失败: command={command_id or '-'}, path={resolved_path!r}, error={error}"
+                    )
+                    continue
+
+                if self._is_action_soft_failure(result):
+                    logger.warning(
+                        f"[CMD] 启动 JS 文件同步未完成: command={command_id or '-'}, path={resolved_path!r}, result={result!r}"
+                    )
+                    continue
+
+                state[cache_key] = source_mtime
+                logger.debug(
+                    f"[CMD] 已同步启动 JS 文件: command={command_id or '-'}, path={resolved_path!r}"
+                )
+
     def _ensure_page_check_observer(
         self,
         session: 'TabSession',
@@ -1151,6 +1223,10 @@ return (function() {
                 continue
             if session_status == "idle":
                 self._maybe_periodic_keepalive(session, now)
+                try:
+                    self._sync_session_bootstrap_js_files(commands, session)
+                except Exception as error:
+                    logger.debug(f"[CMD] 启动 JS 文件同步异常（忽略）: {error}")
 
             # Inject/update MutationObserver for page_check keywords on this session
             try:

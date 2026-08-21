@@ -39,10 +39,12 @@ class ArenaCommandPersistenceTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        self.assertIn("window.__arenaHardStop.version !== '2.10.1'", command["trigger"]["probe_js"])
-        self.assertIn("const VERSION = '2.10.1';", source)
+        self.assertIn("window.__arenaHardStop.version !== '2.12.1'", command["trigger"]["probe_js"])
+        self.assertIn("const VERSION = '2.12.1';", source)
         self.assertIn("const REPAIR_INTERVAL_MS = 1000;", source)
         self.assertEqual(command["trigger"]["periodic_interval_sec"], 30)
+        self.assertEqual(command["trigger"]["interrupt_policy"], "resume")
+        self.assertFalse(command["trigger"].get("abort_on_match", False))
 
     def test_arena_clear_error_command_clicks_clear_then_aborts_workflow(self):
         command = self.commands["cmd_19f7ae6f"]

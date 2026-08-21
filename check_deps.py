@@ -11,46 +11,79 @@ from pathlib import Path
 
 
 def _marker_matches(marker: str) -> bool:
-    """仅处理当前项目用到的简单环境标记。"""
+    """处理环境标记，支持行内注释与常见平台标记"""
     normalized = str(marker or "").strip()
     if not normalized:
         return True
 
-    match = re.fullmatch(r"sys_platform\s*([=!]=)\s*['\"]([^'\"]+)['\"]", normalized)
-    if not match:
+    # 剥离行内注释
+    normalized = normalized.split("#")[0].strip()
+    if not normalized:
         return True
 
-    operator, expected = match.groups()
-    actual = sys.platform
-    if operator == "==":
-        return actual == expected
-    return actual != expected
+    # 匹配 sys_platform
+    match = re.search(r"sys_platform\s*([=!]=)\s*['\"]([^'\"]+)['\"]", normalized)
+    if match:
+        operator, expected = match.groups()
+        actual = sys.platform
+        return (actual == expected) if operator == "==" else (actual != expected)
+
+    # 匹配 platform_system
+    match = re.search(r"platform_system\s*([=!]=)\s*['\"]([^'\"]+)['\"]", normalized)
+    if match:
+        import platform
+        operator, expected = match.groups()
+        actual = platform.system()
+        return (actual == expected) if operator == "==" else (actual != expected)
+
+    return True
 
 
 def _parse_requirement_name(line: str) -> str:
-    return line.split(">=")[0].split("<=")[0].split("<")[0].split(">")[0].split("==")[0].split("[")[0].strip()
+    """提取包名：去除行内注释、版本操作符与 extras"""
+    # 1. 剥离行内注释
+    line = line.split("#")[0].strip()
+    # 2. 剥离 extras 标记 (如 uvicorn[standard])
+    line = line.split("[")[0].strip()
+    # 3. 剥离 URL / Direct Reference
+    line = line.split("@")[0].strip()
+    # 4. 正则提取标准 PEP 508 包名
+    match = re.match(r"^([A-Za-z0-9_.\-]+)", line)
+    if match:
+        return match.group(1).strip()
+    return ""
 
 
-def check_dependencies():
+def check_dependencies() -> bool:
     """检测 requirements.txt 中的包是否都已安装"""
-    
     req_file = Path(__file__).parent / "requirements.txt"
     if not req_file.exists():
         print("[ERROR] requirements.txt not found")
         return False
-    
+
+    try:
+        content = req_file.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        try:
+            content = req_file.read_text(encoding="gbk")
+        except Exception as e:
+            print(f"[ERROR] Failed to read requirements.txt: {e}")
+            return False
+    except Exception as e:
+        print(f"[ERROR] Failed to read requirements.txt: {e}")
+        return False
+
     # 读取并解析 requirements.txt
     packages = []
-    for line in req_file.read_text(encoding="utf-8").splitlines():
+    for line in content.splitlines():
         line = line.strip()
-        # 跳过空行和注释
-        if not line or line.startswith("#"):
+        # 跳过空行、注释行及 pip 参数行 (-i, --index-url, -r 等)
+        if not line or line.startswith("#") or line.startswith("-"):
             continue
         requirement, _, marker = line.partition(";")
         if marker and not _marker_matches(marker):
             continue
-        # 提取包名（去掉版本约束）
-        pkg_name = _parse_requirement_name(requirement.strip())
+        pkg_name = _parse_requirement_name(requirement)
         if pkg_name:
             packages.append(pkg_name)
     
@@ -64,6 +97,7 @@ def check_dependencies():
         "pywin32": "win32api",
         "pyyaml": "yaml",
         "drissionpage": "DrissionPage",  # 保持大小写
+        "pysocks": "socks",
     }
     
     missing = []
@@ -79,7 +113,7 @@ def check_dependencies():
         
         try:
             __import__(module_name)
-        except ImportError:
+        except Exception:
             missing.append(pkg)
     
     if missing:

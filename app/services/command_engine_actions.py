@@ -205,6 +205,13 @@ class CommandEngineActionsMixin:
         if isinstance(registry, dict) and registry_key:
             registry.pop(registry_key, None)
 
+        # A removed init script must be eligible for bootstrap again. The
+        # session cache stores source mtimes and would otherwise keep treating
+        # the removed registration as current after a command is re-enabled.
+        bootstrap_state = getattr(session, "_command_bootstrap_js_files", None)
+        if isinstance(bootstrap_state, dict):
+            bootstrap_state.clear()
+
         teardown_js = str(
             action.get("teardown_js", "")
             or action.get("cleanup_js", "")

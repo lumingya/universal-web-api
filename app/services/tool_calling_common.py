@@ -24,13 +24,29 @@ _PREFERRED_XML_ARG_TAG = "arg"
 _LEGACY_XML_WRAPPER_TAG = "tool_calls"
 _LEGACY_XML_CALL_TAG = "invoke"
 _LEGACY_XML_ARG_TAG = "parameter"
-_BASE64_RUN_CHARS = r"A-Za-z0-9+/=_-"
-_FOLDED_BASE64_RUN_RE = re.compile(
-    rf"(?<![{_BASE64_RUN_CHARS}])"
-    rf"(?:[{_BASE64_RUN_CHARS}]{{32,}}[ \t]*[\r\n]+){{2,}}"
-    rf"[{_BASE64_RUN_CHARS}]{{32,}}(?:[ \t]*[\r\n]+)?"
-    rf"(?![{_BASE64_RUN_CHARS}])"
-)
+
+def _contains_unicode_surrogate(value: Any) -> bool:
+    if isinstance(value, str):
+        return any(0xD800 <= ord(char) <= 0xDFFF for char in value)
+    if isinstance(value, dict):
+        return any(
+            _contains_unicode_surrogate(key) or _contains_unicode_surrogate(item)
+            for key, item in value.items()
+        )
+    if isinstance(value, (list, tuple)):
+        return any(_contains_unicode_surrogate(item) for item in value)
+    return False
+
+
+def _replace_unicode_surrogates(value: str) -> str:
+    return "".join(
+        "\ufffd" if 0xD800 <= ord(char) <= 0xDFFF else char
+        for char in str(value or "")
+    )
+
+
+def _json_dumps_safe(value: Any, **kwargs: Any) -> str:
+    return json.dumps(value, ensure_ascii=_contains_unicode_surrogate(value), **kwargs)
 
 def _debug_preview(value: Any, limit: int = 240) -> str:
     text = repr(value)
@@ -190,21 +206,7 @@ def _sanitize_tool_result_content(content: str) -> str:
         text,
         flags=re.IGNORECASE,
     )
-    text = re.sub(
-        r"(?<![A-Za-z0-9+/=_-])[A-Za-z0-9+/=_-]{512,}(?![A-Za-z0-9+/=_-])",
-        "[base64 omitted]",
-        text,
-    )
-    text = _FOLDED_BASE64_RUN_RE.sub(_redact_folded_base64_run, text)
     return text
-
-
-def _redact_folded_base64_run(match: re.Match[str]) -> str:
-    value = match.group(0)
-    compact = re.sub(r"\s+", "", value)
-    if len(compact) < 512:
-        return value
-    return "[base64 omitted]"
 
 
 def _serialize_content(content: Any) -> str:
@@ -349,4 +351,4 @@ def _new_completion_id() -> str:
 
 
 def _pack_sse_chunk(data: Dict[str, Any]) -> str:
-    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+    return f"data: {_json_dumps_safe(data)}\n\n"

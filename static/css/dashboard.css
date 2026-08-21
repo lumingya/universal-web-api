@@ -1684,6 +1684,7 @@ body.tab-pool-is-resizing * {
 .tab-preset-control { display: block; margin-top: 7px; }
 .tab-preset-control > span { font-size: 12px; }
 .tab-preset-control select { width: 100%; padding: 0 8px; background: var(--tp-soft); font-size: 12px; }
+.preset-source-badge { display: inline-block; margin-left: 6px; font-size: 10px; font-weight: 400; color: var(--tp-faint); }
 .tab-single-preset { display: block !important; margin-top: 7px; }
 .tab-single-preset span,
 .tab-single-preset strong { display: block; }

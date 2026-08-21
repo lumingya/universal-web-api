@@ -30,7 +30,8 @@ from app.services.request_manager import (
     request_manager,
     RequestContext,
     RequestStatus,
-    watch_client_disconnect
+    watch_client_disconnect,
+    cancel_storm_guard,
 )
 from app.services.request_lifecycle import (
     TrackedWorkerExecutionCancelled,
@@ -82,6 +83,7 @@ from app.utils.tab_route_groups import (
     normalize_route_groups,
     route_groups_by_id,
 )
+from app.core.tab_pool_parts._utils import _should_skip_pool_url
 
 logger = get_logger("API.TAB")
 
@@ -221,8 +223,13 @@ def _get_config_allocation_mode(tab_pool_config: Any) -> str:
     return mode if mode in valid_modes else "first_idle"
 
 
-def _attach_preset_info_to_tabs(tabs: List[Dict[str, Any]], config_engine: Any) -> None:
+def _attach_preset_info_to_tabs(
+    tabs: List[Dict[str, Any]],
+    config_engine: Any,
+    auto_remember_url_presets: bool = True
+) -> None:
     preset_cache: Dict[str, tuple[List[str], Optional[str]]] = {}
+    preset_overrides = _read_preset_overrides() if auto_remember_url_presets else {"urls": {}}
     for tab_info in tabs:
         domain = str(tab_info.get("current_domain") or tab_info.get("route_domain") or "").strip()
         normalized_domain = normalize_route_domain(domain) or domain
@@ -233,12 +240,19 @@ def _attach_preset_info_to_tabs(tabs: List[Dict[str, Any]], config_engine: Any) 
         ]
         candidate_domains = list(dict.fromkeys(candidate_domains))
         preset_name = tab_info.get("preset_name")
+        override_source = str(tab_info.get("preset_override_source") or "").strip()
+        current_url = str(tab_info.get("url") or "").strip()
+        url_key = normalize_exact_tab_url(current_url)
+        if auto_remember_url_presets and not override_source and url_key and url_key in preset_overrides.get("urls", {}):
+            override_source = "url"
+
         if not candidate_domains:
             tab_info["preset_route_domain"] = ""
             tab_info["preset_domain_route_prefix"] = ""
             tab_info["available_presets"] = []
             tab_info["default_preset"] = None
             tab_info["effective_preset_name"] = preset_name
+            tab_info["preset_override_source"] = override_source
             tab_info["is_using_default_preset"] = not bool(preset_name)
             continue
 
@@ -270,12 +284,13 @@ def _attach_preset_info_to_tabs(tabs: List[Dict[str, Any]], config_engine: Any) 
         tab_info["available_presets"] = available_presets
         tab_info["default_preset"] = default_preset
         tab_info["effective_preset_name"] = preset_name or default_preset
+        tab_info["preset_override_source"] = override_source
         tab_info["is_using_default_preset"] = not bool(preset_name)
 
 
 FOLLOW_DEFAULT_PRESET = "__DEFAULT__"
 STREAM_QUEUE_POLL_TIMEOUT = 0.5
-SSE_HEARTBEAT_INTERVAL = 15.0
+SSE_HEARTBEAT_INTERVAL = 5.0
 TAB_POOL_ALLOCATION_OPTIONS = [
     {"value": "first_idle", "label": "优先空闲"},
     {"value": "round_robin", "label": "轮询"},
@@ -294,7 +309,9 @@ _route_round_robin_cursor: Dict[str, int] = {}
 _route_round_robin_lock = threading.Lock()
 _browser_config_lock = threading.RLock()
 _model_name_overrides_lock = threading.RLock()
+_preset_overrides_lock = threading.RLock()
 MODEL_NAME_OVERRIDES_PATH = Path("config/model_name_overrides.local.json")
+PRESET_OVERRIDES_PATH = Path("config/preset_overrides.local.json")
 
 
 async def _cleanup_route_worker_thread(
@@ -724,6 +741,78 @@ def _sync_tab_pool_model_name_overrides(overrides: Dict[str, Dict[str, str]]) ->
     except Exception as sync_error:
         logger.warning(f"同步模型显示名称配置失败: {sync_error}")
         return False
+
+
+def _normalize_preset_overrides(value: Any) -> Dict[str, Dict[str, str]]:
+    payload = value if isinstance(value, dict) else {}
+    normalized = {"urls": {}}
+    urls = payload.get("urls") if isinstance(payload, dict) else {}
+    if isinstance(urls, dict):
+        for key, preset_name in urls.items():
+            url_key = normalize_exact_tab_url(str(key or "").strip())
+            p_name = str(preset_name or "").strip()
+            if url_key and p_name:
+                normalized["urls"][url_key] = p_name
+    return normalized
+
+
+def _get_legacy_preset_overrides_from_config(config: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, str]]:
+    payload = config if isinstance(config, dict) else _read_browser_config()
+    tab_pool_config = payload.get("tab_pool") if isinstance(payload, dict) else {}
+    if not isinstance(tab_pool_config, dict):
+        tab_pool_config = {}
+    return _normalize_preset_overrides(tab_pool_config.get("preset_overrides"))
+
+
+def _read_preset_overrides_unlocked() -> Dict[str, Dict[str, str]]:
+    if PRESET_OVERRIDES_PATH.exists():
+        try:
+            with open(PRESET_OVERRIDES_PATH, "r", encoding="utf-8-sig") as f:
+                return _normalize_preset_overrides(json.load(f))
+        except Exception as e:
+            logger.warning(f"读取预设本地配置失败: {e}")
+            return {"urls": {}}
+
+    return _get_legacy_preset_overrides_from_config()
+
+
+def _read_preset_overrides() -> Dict[str, Dict[str, str]]:
+    with _preset_overrides_lock:
+        return _read_preset_overrides_unlocked()
+
+
+def _write_preset_overrides_unlocked(overrides: Dict[str, Dict[str, str]]) -> Dict[str, Dict[str, str]]:
+    normalized = _normalize_preset_overrides(overrides)
+    atomic_write_json(PRESET_OVERRIDES_PATH, normalized)
+    return normalized
+
+
+def _sync_tab_pool_preset_overrides(overrides: Dict[str, Dict[str, str]]) -> bool:
+    try:
+        browser = get_browser(auto_connect=False)
+        browser.tab_pool.apply_runtime_config(preset_overrides=overrides)
+        return True
+    except Exception as sync_error:
+        logger.warning(f"同步预设记忆配置失败: {sync_error}")
+        return False
+
+
+def _get_auto_remember_url_presets_from_config(config: Optional[Dict[str, Any]] = None) -> bool:
+    payload = config if isinstance(config, dict) else _read_browser_config()
+    tab_pool_config = payload.get("tab_pool") if isinstance(payload, dict) else {}
+    if not isinstance(tab_pool_config, dict):
+        tab_pool_config = {}
+    return _coerce_bool(tab_pool_config.get("auto_remember_url_presets"), False)
+
+
+def _get_tab_pool_auto_remember_url_presets(tab_pool: Any, config: Optional[Dict[str, Any]] = None) -> bool:
+    try:
+        flag = getattr(tab_pool, "auto_remember_url_presets", None)
+        if flag is not None:
+            return bool(flag)
+    except Exception:
+        pass
+    return _get_auto_remember_url_presets_from_config(config)
 
 
 def _coerce_bool(value: Any, default: bool = False) -> bool:
@@ -1204,7 +1293,7 @@ def _resolve_route_group(browser: Any, group_id: str) -> Dict[str, Any]:
 
 def _build_stream_headers(extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     headers = {
-        "Cache-Control": "no-cache",
+        "Cache-Control": "no-cache, no-transform",
         "Connection": "keep-alive",
         "X-Accel-Buffering": "no",
     }
@@ -1429,6 +1518,7 @@ class TabPoolConfigRequest(BaseModel):
     enabled_route_methods: Optional[List[str]] = Field(default=None)
     excluded_urls: Optional[List[str]] = Field(default=None)
     preserve_error_tabs: Optional[bool] = Field(default=None)
+    auto_remember_url_presets: Optional[bool] = Field(default=None)
     route_groups: Optional[List[Dict[str, Any]]] = Field(default=None)
 
 
@@ -1473,6 +1563,7 @@ async def get_tab_pool_tabs(authenticated: bool = Depends(verify_auth)):
         enabled_route_methods = _get_enabled_route_methods_from_config(browser_config)
         excluded_urls = _get_tab_pool_excluded_urls(browser.tab_pool, browser_config)
         preserve_error_tabs = _get_tab_pool_preserve_error_tabs(browser.tab_pool, browser_config)
+        auto_remember_url_presets = _get_tab_pool_auto_remember_url_presets(browser.tab_pool, browser_config)
         route_groups = _get_tab_pool_route_groups(browser.tab_pool, browser_config)
         for tab_info in tabs:
             exclusion_url = _get_tab_item_exclusion_url(tab_info, excluded_urls)
@@ -1482,7 +1573,7 @@ async def get_tab_pool_tabs(authenticated: bool = Depends(verify_auth)):
         # 🆕 为每个标签页附加可用预设列表
         try:
             from app.services.config_engine import config_engine
-            _attach_preset_info_to_tabs(tabs, config_engine)
+            _attach_preset_info_to_tabs(tabs, config_engine, auto_remember_url_presets)
         except Exception as e:
             logger.debug(f"获取预设列表失败: {e}")
             for tab_info in tabs:
@@ -1500,6 +1591,7 @@ async def get_tab_pool_tabs(authenticated: bool = Depends(verify_auth)):
             "route_method_options": TAB_ROUTE_METHOD_OPTIONS,
             "excluded_urls": excluded_urls,
             "preserve_error_tabs": preserve_error_tabs,
+            "auto_remember_url_presets": auto_remember_url_presets,
             "route_groups": route_groups,
         }
     except Exception as e:
@@ -1614,6 +1706,8 @@ async def update_tab_pool_config(
     excluded_urls = _normalize_excluded_urls(body.excluded_urls)
     request_includes_preserve_error_tabs = body.preserve_error_tabs is not None
     preserve_error_tabs = _coerce_bool(body.preserve_error_tabs, False)
+    request_includes_auto_remember_url_presets = body.auto_remember_url_presets is not None
+    auto_remember_url_presets = _coerce_bool(body.auto_remember_url_presets, False)
     request_includes_route_groups = body.route_groups is not None
     route_groups = normalize_route_groups(body.route_groups)
 
@@ -1631,10 +1725,13 @@ async def update_tab_pool_config(
                 tab_pool_config["excluded_urls"] = excluded_urls
             if request_includes_preserve_error_tabs:
                 tab_pool_config["preserve_error_tabs"] = preserve_error_tabs
+            if request_includes_auto_remember_url_presets:
+                tab_pool_config["auto_remember_url_presets"] = auto_remember_url_presets
             if request_includes_route_groups:
                 tab_pool_config["route_groups"] = route_groups
             current_excluded_urls = _normalize_excluded_urls(tab_pool_config.get("excluded_urls"))
             current_preserve_error_tabs = _coerce_bool(tab_pool_config.get("preserve_error_tabs"), False)
+            current_auto_remember_url_presets = _coerce_bool(tab_pool_config.get("auto_remember_url_presets"), False)
             current_route_groups = normalize_route_groups(tab_pool_config.get("route_groups"))
             current_allocation_mode = _get_config_allocation_mode(tab_pool_config)
             current_enabled_route_methods = _normalize_enabled_route_methods(
@@ -1656,6 +1753,7 @@ async def update_tab_pool_config(
             runtime_kwargs: Dict[str, Any] = {
                 "allocation_mode": current_allocation_mode,
                 "preserve_error_tabs": current_preserve_error_tabs,
+                "auto_remember_url_presets": current_auto_remember_url_presets,
             }
             if request_includes_excluded_urls:
                 runtime_kwargs["excluded_urls"] = excluded_urls
@@ -1675,6 +1773,7 @@ async def update_tab_pool_config(
             "route_method_options": TAB_ROUTE_METHOD_OPTIONS,
             "excluded_urls": current_excluded_urls,
             "preserve_error_tabs": current_preserve_error_tabs,
+            "auto_remember_url_presets": current_auto_remember_url_presets,
             "route_groups": current_route_groups,
             "pool_synced": pool_synced,
         }
@@ -2197,6 +2296,9 @@ async def chat_with_tab(
     路径参数：
     - tab_index: 持久化标签页编号（1, 2, 3...）
     """
+    client_fp = cancel_storm_guard.get_client_fingerprint(request)
+    await cancel_storm_guard.maybe_backoff(client_fp)
+
     if tab_index < 1:
         raise HTTPException(status_code=400, detail="标签页编号必须大于 0")
 
@@ -2216,7 +2318,7 @@ async def chat_with_tab(
     if resolved_preset_name != body.preset_name:
         body = body.model_copy(update={"preset_name": resolved_preset_name})
 
-    ctx = request_manager.create_request()
+    ctx = request_manager.create_request(client_fp=client_fp)
     try:
         raw_input_len = sum(len(str(msg.get("content") or "")) for msg in body.messages if isinstance(msg, dict))
         logger.info(f"[DIAG] 接收到的原始请求 messages 总字符长度: {raw_input_len} 字符, 消息数: {len(body.messages)}")
@@ -2258,6 +2360,9 @@ async def chat_with_route_domain(
     _route_method: None = Depends(_route_method_guard("domain")),
 ):
     """使用指定域名路由匹配的标签页进行聊天。"""
+    client_fp = cancel_storm_guard.get_client_fingerprint(request)
+    await cancel_storm_guard.maybe_backoff(client_fp)
+
     tab_index = _normalize_optional_tab_index_value(tab_index)
     selector = _unwrap_fastapi_param_value(selector)
     preset_name = _unwrap_fastapi_param_value(preset_name)
@@ -2297,7 +2402,7 @@ async def chat_with_route_domain(
         selector=("tab_index" if tab_index is not None else normalized_selector),
     )
 
-    ctx = request_manager.create_request()
+    ctx = request_manager.create_request(client_fp=client_fp)
     try:
         raw_input_len = sum(len(str(msg.get("content") or "")) for msg in body.messages if isinstance(msg, dict))
         logger.info(f"[DIAG] 接收到的原始请求 messages 总字符长度: {raw_input_len} 字符, 消息数: {len(body.messages)}")
@@ -2349,6 +2454,9 @@ async def chat_with_exposed_model_name(
     authenticated: bool = True,
 ):
     """使用暴露模型名匹配同名标签页，并在同名集合中轮询。"""
+    client_fp = cancel_storm_guard.get_client_fingerprint(request)
+    await cancel_storm_guard.maybe_backoff(client_fp)
+
     model_label = _normalize_model_name(model_name)
     if not model_label:
         raise HTTPException(status_code=400, detail="模型显示名称不能为空")
@@ -2369,7 +2477,7 @@ async def chat_with_exposed_model_name(
         selector="model_name_round_robin",
     )
 
-    ctx = request_manager.create_request()
+    ctx = request_manager.create_request(client_fp=client_fp)
     try:
         raw_input_len = sum(len(str(msg.get("content") or "")) for msg in body.messages if isinstance(msg, dict))
         logger.info(f"[DIAG] 接收到的原始请求 messages 总字符长度: {raw_input_len} 字符, 消息数: {len(body.messages)}")
@@ -2436,6 +2544,9 @@ async def chat_with_route_group(
     authenticated: bool = Depends(verify_service_auth),
     _route_method: None = Depends(_route_method_guard("route_group")),
 ):
+    client_fp = cancel_storm_guard.get_client_fingerprint(request)
+    await cancel_storm_guard.maybe_backoff(client_fp)
+
     browser = get_browser(auto_connect=False)
     group = _resolve_route_group(browser, group_id)
     route_domain = str(group.get("route_domain") or "").strip()
@@ -2460,7 +2571,7 @@ async def chat_with_route_group(
     if resolved_preset_name != body.preset_name:
         body = body.model_copy(update={"preset_name": resolved_preset_name})
 
-    ctx = request_manager.create_request()
+    ctx = request_manager.create_request(client_fp=client_fp)
     try:
         raw_input_len = sum(
             len(str(msg.get("content") or ""))
@@ -2536,6 +2647,9 @@ async def chat_with_exact_tab_url(
     _route_method: None = Depends(_route_method_guard("exact_url")),
 ):
     """使用标签页完整 URL 严格路由到唯一已打开标签页。"""
+    client_fp = cancel_storm_guard.get_client_fingerprint(request)
+    await cancel_storm_guard.maybe_backoff(client_fp)
+
     route_token = str(url_token or "").strip().lower()
     if not route_token:
         raise HTTPException(status_code=400, detail="URL 路由无效")
@@ -2560,7 +2674,7 @@ async def chat_with_exact_tab_url(
         exact_url=exact_url,
         selector="exact_url",
     )
-    ctx = request_manager.create_request()
+    ctx = request_manager.create_request(client_fp=client_fp)
     try:
         raw_input_len = sum(len(str(msg.get("content") or "")) for msg in body.messages if isinstance(msg, dict))
         logger.info(f"[DIAG] 接收到的原始请求 messages 总字符长度: {raw_input_len} 字符, 消息数: {len(body.messages)}")
@@ -2729,6 +2843,17 @@ async def _stream_with_tab_index(
         setattr(ctx, "worker_thread", worker_thread)
         worker_thread.start()
 
+        # Browser workflows can spend several seconds acquiring a tab before
+        # their first result chunk. Emit a valid SSE frame immediately so an
+        # upstream short read timeout cannot turn one request into a retry loop.
+        keepalive_id = f"chatcmpl-{ctx.request_id}"
+        initial_keepalive = SSEFormatter.pack_keepalive(
+            model=body.model,
+            completion_id=keepalive_id,
+        )
+        request_manager.capture_response_chunk(ctx, initial_keepalive)
+        yield initial_keepalive
+
         last_sse_emit_at = time.monotonic()
         request_started_at = time.monotonic()
         max_execute_time_sec = get_max_request_execute_time_sec()
@@ -2769,7 +2894,10 @@ async def _stream_with_tab_index(
                     logger.warning("工作线程已退出且队列为空（结束标记疑似丢失），提前收尾流式消费")
                     break
                 if time.monotonic() - last_sse_emit_at >= SSE_HEARTBEAT_INTERVAL:
-                    yield SSEFormatter.pack_comment("keepalive")
+                    yield SSEFormatter.pack_keepalive(
+                        model=body.model,
+                        completion_id=keepalive_id,
+                    )
                     last_sse_emit_at = time.monotonic()
                 continue
 
@@ -3045,6 +3173,14 @@ async def _stream_with_route_domain(
         setattr(ctx, "worker_thread", worker_thread)
         worker_thread.start()
 
+        keepalive_id = f"chatcmpl-{ctx.request_id}"
+        initial_keepalive = SSEFormatter.pack_keepalive(
+            model=body.model,
+            completion_id=keepalive_id,
+        )
+        request_manager.capture_response_chunk(ctx, initial_keepalive)
+        yield initial_keepalive
+
         last_sse_emit_at = time.monotonic()
         request_started_at = time.monotonic()
         max_execute_time_sec = get_max_request_execute_time_sec()
@@ -3085,7 +3221,10 @@ async def _stream_with_route_domain(
                     logger.warning("工作线程已退出且队列为空（结束标记疑似丢失），提前收尾流式消费")
                     break
                 if time.monotonic() - last_sse_emit_at >= SSE_HEARTBEAT_INTERVAL:
-                    yield SSEFormatter.pack_comment("keepalive")
+                    yield SSEFormatter.pack_keepalive(
+                        model=body.model,
+                        completion_id=keepalive_id,
+                    )
                     last_sse_emit_at = time.monotonic()
                 continue
 
@@ -3353,6 +3492,14 @@ async def _stream_with_exact_url(
         setattr(ctx, "worker_thread", worker_thread)
         worker_thread.start()
 
+        keepalive_id = f"chatcmpl-{ctx.request_id}"
+        initial_keepalive = SSEFormatter.pack_keepalive(
+            model=body.model,
+            completion_id=keepalive_id,
+        )
+        request_manager.capture_response_chunk(ctx, initial_keepalive)
+        yield initial_keepalive
+
         last_sse_emit_at = time.monotonic()
         request_started_at = time.monotonic()
         max_execute_time_sec = get_max_request_execute_time_sec()
@@ -3393,7 +3540,10 @@ async def _stream_with_exact_url(
                     logger.warning("工作线程已退出且队列为空（结束标记疑似丢失），提前收尾流式消费")
                     break
                 if time.monotonic() - last_sse_emit_at >= SSE_HEARTBEAT_INTERVAL:
-                    yield SSEFormatter.pack_comment("keepalive")
+                    yield SSEFormatter.pack_keepalive(
+                        model=body.model,
+                        completion_id=keepalive_id,
+                    )
                     last_sse_emit_at = time.monotonic()
                 continue
 
@@ -4255,8 +4405,28 @@ async def _stream_tool_calling_with_tab_index(
     ctx: RequestContext,
     tab_index: int,
 ):
+    response_task = None
+    keepalive_id = f"chatcmpl-{ctx.request_id}"
     try:
-        response = await _complete_tool_calling_with_tab_index(request, body, ctx, tab_index)
+        yield SSEFormatter.pack_keepalive(
+            model=body.model,
+            completion_id=keepalive_id,
+        )
+        response_task = asyncio.create_task(
+            _complete_tool_calling_with_tab_index(request, body, ctx, tab_index)
+        )
+        while True:
+            try:
+                response = await asyncio.wait_for(
+                    asyncio.shield(response_task),
+                    timeout=SSE_HEARTBEAT_INTERVAL,
+                )
+                break
+            except asyncio.TimeoutError:
+                yield SSEFormatter.pack_keepalive(
+                    model=body.model,
+                    completion_id=keepalive_id,
+                )
         message = response.get("choices", [{}])[0].get("message", {}) or {}
         legacy_function_call = bool(body.functions) and not bool(body.tools)
         response_tool_calls = message.get("tool_calls") or []
@@ -4288,6 +4458,13 @@ async def _stream_tool_calling_with_tab_index(
         request_manager.finish_request(ctx, success=False)
         yield _pack_error(message, code)
         yield _pack_done()
+    finally:
+        if response_task is not None and not response_task.done():
+            response_task.cancel()
+            try:
+                await response_task
+            except asyncio.CancelledError:
+                pass
 
 
 async def _stream_tool_calling_with_route_domain(
@@ -4298,15 +4475,35 @@ async def _stream_tool_calling_with_route_domain(
     allocation_mode: Optional[str] = None,
     route_group_id: Optional[str] = None,
 ):
+    response_task = None
+    keepalive_id = f"chatcmpl-{ctx.request_id}"
     try:
-        response = await _complete_tool_calling_with_route_domain(
-            request,
-            body,
-            ctx,
-            route_domain,
-            allocation_mode=allocation_mode,
-            route_group_id=route_group_id,
+        yield SSEFormatter.pack_keepalive(
+            model=body.model,
+            completion_id=keepalive_id,
         )
+        response_task = asyncio.create_task(
+            _complete_tool_calling_with_route_domain(
+                request,
+                body,
+                ctx,
+                route_domain,
+                allocation_mode=allocation_mode,
+                route_group_id=route_group_id,
+            )
+        )
+        while True:
+            try:
+                response = await asyncio.wait_for(
+                    asyncio.shield(response_task),
+                    timeout=SSE_HEARTBEAT_INTERVAL,
+                )
+                break
+            except asyncio.TimeoutError:
+                yield SSEFormatter.pack_keepalive(
+                    model=body.model,
+                    completion_id=keepalive_id,
+                )
         message = response.get("choices", [{}])[0].get("message", {}) or {}
         legacy_function_call = bool(body.functions) and not bool(body.tools)
         response_tool_calls = message.get("tool_calls") or []
@@ -4338,6 +4535,13 @@ async def _stream_tool_calling_with_route_domain(
         request_manager.finish_request(ctx, success=False)
         yield _pack_error(message, code)
         yield _pack_done()
+    finally:
+        if response_task is not None and not response_task.done():
+            response_task.cancel()
+            try:
+                await response_task
+            except asyncio.CancelledError:
+                pass
 
 
 async def _stream_tool_calling_with_exact_url(
@@ -4347,14 +4551,34 @@ async def _stream_tool_calling_with_exact_url(
     exact_url: str,
     resolved_tab_index: Optional[int] = None,
 ):
+    response_task = None
+    keepalive_id = f"chatcmpl-{ctx.request_id}"
     try:
-        response = await _complete_tool_calling_with_exact_url(
-            request,
-            body,
-            ctx,
-            exact_url,
-            resolved_tab_index=resolved_tab_index,
+        yield SSEFormatter.pack_keepalive(
+            model=body.model,
+            completion_id=keepalive_id,
         )
+        response_task = asyncio.create_task(
+            _complete_tool_calling_with_exact_url(
+                request,
+                body,
+                ctx,
+                exact_url,
+                resolved_tab_index=resolved_tab_index,
+            )
+        )
+        while True:
+            try:
+                response = await asyncio.wait_for(
+                    asyncio.shield(response_task),
+                    timeout=SSE_HEARTBEAT_INTERVAL,
+                )
+                break
+            except asyncio.TimeoutError:
+                yield SSEFormatter.pack_keepalive(
+                    model=body.model,
+                    completion_id=keepalive_id,
+                )
         message = response.get("choices", [{}])[0].get("message", {}) or {}
         legacy_function_call = bool(body.functions) and not bool(body.tools)
         response_tool_calls = message.get("tool_calls") or []
@@ -4386,6 +4610,13 @@ async def _stream_tool_calling_with_exact_url(
         request_manager.finish_request(ctx, success=False)
         yield _pack_error(message, code)
         yield _pack_done()
+    finally:
+        if response_task is not None and not response_task.done():
+            response_task.cancel()
+            try:
+                await response_task
+            except asyncio.CancelledError:
+                pass
 
 
 # ================= 预设管理 API =================
@@ -4429,16 +4660,51 @@ async def set_tab_preset(
     """为指定标签页设置预设"""
     try:
         browser = get_browser(auto_connect=False)
+        tab_info = _get_tab_info_by_index(browser, tab_index)
+        if tab_info is None:
+            raise HTTPException(status_code=404, detail=f"标签页 #{tab_index} 不存在")
         
         preset_value = None if body.preset_name == FOLLOW_DEFAULT_PRESET else body.preset_name
         
+        domain = str(tab_info.get("current_domain") or tab_info.get("route_domain") or "").strip()
+        if preset_value:
+            try:
+                from app.services.config_engine import config_engine
+                available = config_engine.list_presets(domain)
+                if available and preset_value not in available:
+                    # 尝试别名容错
+                    aliased = [p for p in available if p == f"预设_{preset_value}" or (preset_value.startswith("预设_") and p == preset_value[3:])]
+                    if aliased:
+                        preset_value = aliased[0]
+                    else:
+                        raise HTTPException(status_code=400, detail=f"预设 '{preset_value}' 在站点 '{domain}' 中不存在")
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.debug(f"校验站点预设可用性异常（已忽略）: {e}")
+
         success = browser.tab_pool.set_tab_preset(tab_index, preset_value)
-        
-        if success:
-            preset_label = "跟随站点默认预设" if preset_value is None else body.preset_name
-            return {"success": True, "message": f"标签页 #{tab_index} 已切换到预设: {preset_label}"}
-        else:
+        if not success:
             raise HTTPException(status_code=404, detail=f"标签页 #{tab_index} 不存在")
+
+        # 检查是否开启了按 URL 自动记忆预设（需过滤空白页及非网页）
+        auto_remember = _get_tab_pool_auto_remember_url_presets(browser.tab_pool)
+        tab_url = str(tab_info.get("url") or "").strip()
+        url_key = normalize_exact_tab_url(tab_url)
+        is_valid_web_url = bool(url_key and not _should_skip_pool_url(tab_url) and extract_remote_site_domain(tab_url))
+
+        if auto_remember and is_valid_web_url:
+            with _preset_overrides_lock:
+                overrides = _read_preset_overrides_unlocked()
+                if preset_value:
+                    overrides["urls"][url_key] = preset_value
+                else:
+                    overrides["urls"].pop(url_key, None)
+                overrides = _write_preset_overrides_unlocked(overrides)
+            _sync_tab_pool_preset_overrides(overrides)
+
+        preset_label = "跟随站点默认预设" if preset_value is None else body.preset_name
+        return {"success": True, "message": f"标签页 #{tab_index} 已切换到预设: {preset_label}"}
     
     except HTTPException:
         raise

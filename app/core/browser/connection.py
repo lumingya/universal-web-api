@@ -43,6 +43,20 @@ def _load_model_name_overrides_config() -> Optional[Dict[str, Any]]:
         return None
 
 
+def _load_preset_overrides_config() -> Optional[Dict[str, Any]]:
+    config_path = "config/preset_overrides.local.json"
+    if not os.path.exists(config_path):
+        return None
+
+    try:
+        with open(config_path, "r", encoding="utf-8-sig") as f:
+            payload = json.load(f)
+        return payload if isinstance(payload, dict) else None
+    except Exception as e:
+        logger.debug(f"加载预设本地配置失败: {e}")
+        return None
+
+
 def _load_tab_pool_config() -> Dict:
     """从配置文件和环境变量加载标签页池配置"""
     config = {
@@ -54,7 +68,9 @@ def _load_tab_pool_config() -> Dict:
         "allocation_mode": "first_idle",
         "excluded_urls": [],
         "preserve_error_tabs": False,
+        "auto_remember_url_presets": False,
         "model_name_overrides": {"sites": {}, "urls": {}},
+        "preset_overrides": {"urls": {}},
         "route_groups": [],
     }
     
@@ -72,6 +88,10 @@ def _load_tab_pool_config() -> Dict:
     local_model_name_overrides = _load_model_name_overrides_config()
     if local_model_name_overrides is not None:
         config["model_name_overrides"] = local_model_name_overrides
+
+    local_preset_overrides = _load_preset_overrides_config()
+    if local_preset_overrides is not None:
+        config["preset_overrides"] = local_preset_overrides
     
     # 环境变量覆盖
     if os.getenv("MAX_TABS"):
@@ -88,7 +108,9 @@ def _load_tab_pool_config() -> Dict:
         "allocation_mode",
         "excluded_urls",
         "preserve_error_tabs",
+        "auto_remember_url_presets",
         "model_name_overrides",
+        "preset_overrides",
         "route_groups",
     }
     return {key: value for key, value in config.items() if key in allowed_keys}

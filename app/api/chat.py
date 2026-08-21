@@ -32,7 +32,8 @@ from app.services.request_manager import (
     request_manager, 
     RequestContext, 
     RequestStatus, 
-    watch_client_disconnect
+    watch_client_disconnect,
+    cancel_storm_guard,
 )
 from app.services.request_lifecycle import (
     TrackedWorkerExecutionCancelled,
@@ -81,6 +82,7 @@ from app.services.arena_image_generation import (
     ARENA_NON_RETRYABLE_CODES,
     ARENA_PROMPT_REJECTED_CODE,
 )
+from app.core.workflow.arena_send_watchdog import ARENA_SEND_NO_TARGET_AFTER_RETRY
 from app.utils.model_routing import collect_route_domain_models, inspect_model_route
 from app.utils.site_url import route_domain_matches
 
@@ -89,7 +91,7 @@ logger = get_logger("API.CHAT")
 router = APIRouter()
 MODEL_LIST_CREATED = int(time.time())
 STREAM_QUEUE_POLL_TIMEOUT = 0.5
-SSE_HEARTBEAT_INTERVAL = 15.0
+SSE_HEARTBEAT_INTERVAL = 5.0
 RESPONSES_STATE_MAX_ENTRIES = 1024
 RESPONSES_STATE_TTL_SEC = 3600.0
 
@@ -143,7 +145,9 @@ _MANUAL_TERMINATE_REASONS = frozenset({
     "manual_terminate_from_tab_pool",
 })
 _ARENA_PROMPT_REJECTION_REASONS = frozenset({ARENA_PROMPT_REJECTED_CODE})
-_ARENA_NON_RETRYABLE_REASONS = ARENA_NON_RETRYABLE_CODES
+_ARENA_NON_RETRYABLE_REASONS = frozenset(
+    {*ARENA_NON_RETRYABLE_CODES, ARENA_SEND_NO_TARGET_AFTER_RETRY}
+)
 
 
 def _get_tool_calling_cancel_reason(ctx: RequestContext) -> str:
@@ -2127,6 +2131,9 @@ async def chat_completions(
     """
     OpenAI 兼容的聊天补全接口
     """
+    client_fp = cancel_storm_guard.get_client_fingerprint(request)
+    await cancel_storm_guard.maybe_backoff(client_fp)
+
     _validate_image_inputs(body.messages)
 
     if isinstance(body.response_format, dict) and body.response_format:
@@ -2142,7 +2149,15 @@ async def chat_completions(
         # get_tabs_with_index 可能触发同步 CDP 扫描（阻塞网络 I/O），
         # 不能在事件循环线程直接调用，否则浏览器卡顿时全服务假死。
         tabs = await asyncio.to_thread(browser.tab_pool.get_tabs_with_index)
-        route_info = inspect_model_route(body.model, tabs)
+        tab_models = collect_route_domain_models(tabs)
+        # 阶段 1：先尝试标签页完全精确匹配（暂不检查通用 ID 和前缀模糊，以便 Arena Catalog 优先于通用 ID 和前缀）
+        route_info = inspect_model_route(
+            body.model,
+            tabs,
+            allow_prefix=False,
+            allow_generic=False,
+            models=tab_models,
+        )
         route_domain = str(route_info.get("route_domain") or "")
         if route_info.get("match_type") == "none":
             from app.services.config_engine import config_engine
@@ -2169,10 +2184,15 @@ async def chat_completions(
                 preset_name=body.preset_name,
             )
             requested_key = str(body.model or "").strip().casefold()
-            catalog_models = list_arena_direct_models(
-                browser,
-                catalog_config=(catalog_preset or {}).get("catalog"),
-            ) if catalog_preset and requested_key else []
+            catalog_models = (
+                await asyncio.to_thread(
+                    list_arena_direct_models,
+                    browser,
+                    catalog_config=(catalog_preset or {}).get("catalog"),
+                )
+                if catalog_preset and requested_key
+                else []
+            )
             catalog_match = match_arena_direct_model(catalog_models, requested_key)
             if catalog_match and catalog_tab:
                 route_domain = "arena.ai"
@@ -2193,6 +2213,19 @@ async def chat_completions(
                     "match_type": "catalog",
                     "available_model_ids": catalog_model_ids,
                 })
+
+        # 阶段 3：若 Arena Catalog 仍未命中，检查通用模型 ID（Generic）与标签页前缀模糊匹配（Prefix）兜底
+        if route_info.get("match_type") == "none":
+            fallback_info = inspect_model_route(
+                body.model,
+                tabs,
+                allow_prefix=True,
+                allow_generic=True,
+                models=tab_models,
+            )
+            if fallback_info.get("match_type") in {"generic", "prefix"}:
+                route_info = fallback_info
+                route_domain = str(route_info.get("route_domain") or "")
     except Exception as e:
         logger.debug(f"模型路由解析失败（已忽略）: {e}")
         route_info = {
@@ -2252,7 +2285,7 @@ async def chat_completions(
             f"available={route_info.get('available_model_ids')}"
         )
 
-    ctx = request_manager.create_request()
+    ctx = request_manager.create_request(client_fp=client_fp)
     try:
         raw_input_len = sum(len(str(msg.get("content") or "")) for msg in body.messages if isinstance(msg, dict))
         logger.info(f"[DIAG] 接收到的原始请求 messages 总字符长度: {raw_input_len} 字符, 消息数: {len(body.messages)}")
@@ -2299,7 +2332,7 @@ async def chat_completions(
                     _stream_tool_calling_with_lifecycle(request, body, ctx),
                     media_type="text/event-stream",
                     headers={
-                        "Cache-Control": "no-cache",
+                        "Cache-Control": "no-cache, no-transform",
                         "Connection": "keep-alive",
                         "X-Accel-Buffering": "no"
                     }
@@ -2311,7 +2344,7 @@ async def chat_completions(
                 _stream_with_lifecycle(request, body, ctx),
                 media_type="text/event-stream",
                 headers={
-                    "Cache-Control": "no-cache",
+                    "Cache-Control": "no-cache, no-transform",
                     "Connection": "keep-alive",
                     "X-Accel-Buffering": "no"
                 }
@@ -2339,7 +2372,7 @@ async def create_response(
             ),
             media_type="text/event-stream",
             headers={
-                "Cache-Control": "no-cache",
+                "Cache-Control": "no-cache, no-transform",
                 "Connection": "keep-alive",
                 "X-Accel-Buffering": "no",
             },
@@ -2459,6 +2492,16 @@ async def _stream_with_lifecycle(
         setattr(ctx, "worker_thread", worker_thread)
         worker_thread.start()
 
+        # Keep the connection alive while the browser workflow is acquiring a
+        # tab or waiting for its first upstream chunk.
+        keepalive_id = f"chatcmpl-{ctx.request_id}"
+        initial_keepalive = SSEFormatter.pack_keepalive(
+            model=body.model,
+            completion_id=keepalive_id,
+        )
+        request_manager.capture_response_chunk(ctx, initial_keepalive)
+        yield initial_keepalive
+
         last_sse_emit_at = time.monotonic()
         request_started_at = time.monotonic()
         max_execute_time_sec = get_max_request_execute_time_sec()
@@ -2503,7 +2546,10 @@ async def _stream_with_lifecycle(
                     logger.warning("工作线程已退出且队列为空（结束标记疑似丢失），提前收尾流式消费")
                     break
                 if time.monotonic() - last_sse_emit_at >= SSE_HEARTBEAT_INTERVAL:
-                    yield SSEFormatter.pack_comment("keepalive")
+                    yield SSEFormatter.pack_keepalive(
+                        model=body.model,
+                        completion_id=keepalive_id,
+                    )
                     last_sse_emit_at = time.monotonic()
                 continue
 
@@ -2971,7 +3017,6 @@ async def _non_stream_tool_calling_with_lifecycle(
         message, code = _format_tool_calling_error(e)
         ctx.mark_failed(message)
         request_manager.capture_error(ctx, message, code=code)
-        request_manager.finish_request(ctx, success=False)
         return JSONResponse(
             content={
                 "error": {
@@ -2989,8 +3034,28 @@ async def _stream_tool_calling_with_lifecycle(
     body: ChatRequest,
     ctx: RequestContext
 ):
+    response_task = None
+    keepalive_id = f"chatcmpl-{ctx.request_id}"
     try:
-        response = await _complete_tool_calling_with_lifecycle(request, body, ctx)
+        yield SSEFormatter.pack_keepalive(
+            model=body.model,
+            completion_id=keepalive_id,
+        )
+        response_task = asyncio.create_task(
+            _complete_tool_calling_with_lifecycle(request, body, ctx)
+        )
+        while True:
+            try:
+                response = await asyncio.wait_for(
+                    asyncio.shield(response_task),
+                    timeout=SSE_HEARTBEAT_INTERVAL,
+                )
+                break
+            except asyncio.TimeoutError:
+                yield SSEFormatter.pack_keepalive(
+                    model=body.model,
+                    completion_id=keepalive_id,
+                )
         message = response.get("choices", [{}])[0].get("message", {}) or {}
         legacy_function_call = bool(body.functions) and not bool(body.tools)
         response_tool_calls = message.get("tool_calls") or []
@@ -3029,9 +3094,15 @@ async def _stream_tool_calling_with_lifecycle(
         message, code = _format_tool_calling_error(e)
         ctx.mark_failed(message)
         request_manager.capture_error(ctx, message, code=code)
-        request_manager.finish_request(ctx, success=False)
         yield _pack_error(message, code)
         yield _pack_done()
+    finally:
+        if response_task is not None and not response_task.done():
+            response_task.cancel()
+            try:
+                await response_task
+            except asyncio.CancelledError:
+                pass
 
 
 def _pack_error(

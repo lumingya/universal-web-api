@@ -35,6 +35,12 @@ from app.core.network_monitor import (
 )
 
 from .attachment_monitor import AttachmentMonitor
+from .arena_send_watchdog import (
+    ArenaConfirmedSendNoTarget,
+    ArenaSendUnconfirmed,
+    ArenaSendWatchdog,
+    ArenaSendWatchdogCancelled,
+)
 from .text_input import TextInputHandler
 from .image_input import ImageInputHandler
 from .executor_actions import WorkflowExecutorActionMixin
@@ -924,6 +930,53 @@ class WorkflowExecutor(
                     monitor_used = "dom_interrupt_resume"
 
                 elif use_network_stream:
+                    if ArenaSendWatchdog.applies_to(getattr(self, "tab", None)):
+                        if self.session is not None:
+                            setattr(
+                                self.session,
+                                "_arena_watchdog_input_selector",
+                                str(self._selectors.get("input_box") or ""),
+                            )
+
+                        def _workflow_interrupt_pending() -> bool:
+                            if self.session is None:
+                                return False
+                            try:
+                                from app.services.command_engine import command_engine
+                                return bool(
+                                    command_engine.workflow_interrupt_requested(self.session)
+                                )
+                            except Exception:
+                                return False
+
+                        watchdog = ArenaSendWatchdog(
+                            tab=self.tab,
+                            network_monitor=self._network_monitor,
+                            selectors=self._selectors,
+                            should_stop=self._check_cancelled,
+                            workflow_interrupted=_workflow_interrupt_pending,
+                        )
+                        try:
+                            watchdog.wait_for_target()
+                        except ArenaSendWatchdogCancelled:
+                            return
+                        except ArenaSendUnconfirmed:
+                            raise WorkflowError("send_unconfirmed")
+                        except ArenaConfirmedSendNoTarget as exc:
+                            logger.warning(
+                                "[Executor] Arena confirmed the send but no matching "
+                                f"target stream arrived: {exc}"
+                            )
+                            for monitor in (self._network_monitor, self._stream_monitor):
+                                try:
+                                    if monitor is not None and hasattr(monitor, "cleanup"):
+                                        monitor.cleanup()
+                                except Exception as cleanup_exc:
+                                    logger.debug(
+                                        "[Executor] Arena watchdog cleanup failed: "
+                                        f"{cleanup_exc}"
+                                    )
+                            raise WorkflowError("arena_send_no_target")
                     try:
                         if self._page_fetch_capture is not None:
                             logger.debug(
@@ -972,7 +1025,7 @@ class WorkflowExecutor(
                             return
                         logger.error(f"[Executor] 目标流已确认失败，终止工作流: {e}")
                         raise WorkflowError(f"stream_terminal_error:{e}")
-                    
+
                     except NetworkMonitorTimeout as e:
                         fallback_reason = str(e)
                         logger.warning(
@@ -1083,6 +1136,7 @@ class WorkflowExecutor(
             if error_code in {
                 "new_chat_transition_timeout",
                 "send_unconfirmed",
+                "arena_send_no_target",
                 "stream_recovery_exhausted",
             }:
                 raise

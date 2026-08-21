@@ -12,6 +12,7 @@ Phase A 实现：
 - 仅记录 mime、byte_size、前缀片段
 """
 
+import hashlib
 from typing import List, Optional, Any, Dict
 from datetime import datetime, timezone
 
@@ -70,6 +71,14 @@ def get_default_image_extraction_config() -> Dict:
     }
 
 
+KNOWN_1X1_PLACEHOLDER_DATA_URIS = {
+    "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==",
+    "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==",
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
+}
+
+
 class ImageExtractor:
     """
     图片提取器
@@ -108,6 +117,18 @@ class ImageExtractor:
             requestBaselineProperty = "",
             requestBaselineExcludeExistingNodes = false
         } = opts || {};
+        const windowedPlaceholderAttribute = "data-uwa-image-window-placeholder";
+        const windowedOriginalSourceAttribute = "data-uwa-image-window-original-src";
+        const knownPlaceholders = new Set([
+            "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==",
+            "data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==",
+            "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+            "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+        ]);
+        const isKnownPlaceholderSrc = (src) => {
+            const trimmed = String(src || "").trim();
+            return knownPlaceholders.has(trimmed);
+        };
 
         // ===== 1. 确定根元素 =====
         // 优先只在传入元素（当前回复节点）内查找；只有查不到时才回退到容器/整页。
@@ -185,9 +206,10 @@ class ImageExtractor:
         
         // 获取图片源（优先 currentSrc）
         function pickSrc(img) {
-            const cs = img.currentSrc;
+            if (!img) return "";
+            const cs = typeof img.currentSrc === "string" ? img.currentSrc : "";
             if (cs && cs.trim()) return cs.trim();
-            const s = img.src;
+            const s = typeof img.src === "string" ? img.src : "";
             if (s && s.trim()) return s.trim();
             return "";
         }
@@ -298,6 +320,11 @@ class ImageExtractor:
             if (!img) {
                 throw new Error("img_missing");
             }
+            const isPlaceholderNode = isKnownPlaceholderSrc(pickSrc(img)) ||
+                img.getAttribute(windowedPlaceholderAttribute) === "1";
+            if (isPlaceholderNode) {
+                throw new Error("img_is_placeholder");
+            }
 
             if (typeof img.decode === "function") {
                 try {
@@ -331,18 +358,58 @@ class ImageExtractor:
                 throw new Error("canvas_export_failed:" + String(e).slice(0, 80));
             }
 
+            const byteSize = estimateByteSizeFromDataUri(dataUri);
+            if (maxBytes && byteSize && byteSize > maxBytes) {
+                throw new Error("blob_too_large:" + byteSize);
+            }
+
             return {
                 dataUri: dataUri,
                 mime: exportMime,
-                byteSize: estimateByteSizeFromDataUri(dataUri),
+                byteSize: byteSize,
                 source: "blob_canvas"
             };
         }
 
         const warnings = [];
 
+        const isMicroIcon = (img) => {
+            if (!img) return false;
+            try {
+                const nw = Number(img.naturalWidth || 0);
+                const nh = Number(img.naturalHeight || 0);
+                if (nw > 0 && nh > 0 && (nw < 48 && nh < 48)) {
+                    const rect = img.getBoundingClientRect();
+                    if (rect.width > 0 && rect.height > 0 && (rect.width < 48 && rect.height < 48)) {
+                        return true;
+                    }
+                }
+            } catch {}
+            return false;
+        };
+
+        const isHiddenNode = (img) => {
+            if (!img) return false;
+            try {
+                const style = window.getComputedStyle(img);
+                if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity || "1") <= 0.01) {
+                    return true;
+                }
+            } catch {}
+            return false;
+        };
+
         let items = nodes.map((img, i) => {
-            const src = pickSrc(img);
+            const rawSrc = pickSrc(img);
+            const isPlaceholderSrc = isKnownPlaceholderSrc(rawSrc);
+            const windowedPlaceholder = img.getAttribute(windowedPlaceholderAttribute) === "1" || isPlaceholderSrc;
+            const rawOriginalSource = windowedPlaceholder
+                ? String(img.getAttribute(windowedOriginalSourceAttribute) || "").trim()
+                : "";
+            const windowedOriginalSource = isKnownPlaceholderSrc(rawOriginalSource) ? "" : rawOriginalSource;
+            const src = windowedOriginalSource || rawSrc;
+            const microIcon = isMicroIcon(img);
+            const hidden = isHiddenNode(img);
             return {
                 _node: img,
                 index: i,
@@ -351,12 +418,31 @@ class ImageExtractor:
                 width: img.naturalWidth || img.width || null,
                 height: img.naturalHeight || img.height || null,
                 complete: !!img.complete,
-                naturalWidth: img.naturalWidth || 0
+                naturalWidth: img.naturalWidth || 0,
+                _windowed_placeholder: windowedPlaceholder && !windowedOriginalSource,
+                _is_micro_icon: microIcon,
+                _is_hidden: hidden,
+                _source: windowedOriginalSource ? "image_window_original_src" : ""
             };
         }).filter(x => x.src);  // 过滤无 src 的
 
+        const windowedPlaceholderCount = items.filter(item => item._windowed_placeholder).length;
+        if (windowedPlaceholderCount > 0) {
+            warnings.push("windowed_placeholders_skipped:" + windowedPlaceholderCount);
+            items = items.filter(item => !item._windowed_placeholder);
+        }
+
+        // 过滤微小图标与隐藏占位节点（若有有效大图候选时）
+        const validGenerations = items.filter(item => !item._is_micro_icon && !item._is_hidden);
+        if (validGenerations.length > 0) {
+            items = validGenerations;
+        }
+
         const beforeAllowFilterCount = items.length;
-        const beforeAllowFilterSamples = items.slice(0, 5).map((item) => String(item.src || ""));
+        const beforeAllowFilterSamples = items.slice(0, 5).map((item) => {
+            const s = String(item.src || "");
+            return s.length > 80 ? (s.slice(0, 80) + "...") : s;
+        });
 
         // ===== 4.5 可选：按 src 白名单过滤 =====
         const allowRegexes = Array.isArray(srcAllowPatterns)
@@ -401,7 +487,7 @@ class ImageExtractor:
             // 尝试补全相对路径
             try {
                 const abs = new URL(s, document.baseURI).href;
-                return { ...x, src: abs, _source: "relative" };
+                return { ...x, src: abs, _source: x._source || "relative" };
             } catch {
                 return { ...x, _bad: true };
             }
@@ -409,18 +495,14 @@ class ImageExtractor:
 
         const out = [];
 
-        // ===== 7. 处理 blob URL =====
+        // ===== 7. 处理 blob URL（保持原有 DOM 顺序） =====
         if (downloadBlobs) {
-            const blobItems = items.filter(x => x.src.startsWith("blob:"));
-            const nonBlobItems = items.filter(x => !x.src.startsWith("blob:"));
+            for (const x of items) {
+                if (!x.src.startsWith("blob:")) {
+                    out.push(stripRuntimeFields(x));
+                    continue;
+                }
 
-            // 先添加非 blob 项
-            for (const x of nonBlobItems) {
-                out.push(stripRuntimeFields(x));
-            }
-
-            // 逐个处理 blob（优先 fetch，失败时回退到 canvas）
-            for (const x of blobItems) {
                 let converted = null;
                 let fetchError = null;
 
@@ -430,10 +512,9 @@ class ImageExtractor:
                     // 校验类型
                     if (!blob.type || !blob.type.startsWith("image/")) {
                         warnings.push("blob_not_image:" + (blob.type || "unknown"));
-                        continue;
+                    } else {
+                        converted = await blobToDataUri(blob);
                     }
-                    
-                    converted = await blobToDataUri(blob);
                 } catch (e) {
                     if (String(e || "").includes("blob_too_large:")) {
                         warnings.push(String(e).replace(/^Error:\s*/, ""));
@@ -462,7 +543,6 @@ class ImageExtractor:
                 });
             }
         } else {
-            // 不下载 blob，直接返回所有项（blob URL 可能会失效）
             for (const x of items) {
                 out.push(stripRuntimeFields(x));
             }
@@ -503,7 +583,6 @@ class ImageExtractor:
         final_config = get_default_image_extraction_config()
         if config:
             final_config.update(config)
-        
         # 检查是否启用
         if not final_config.get("enabled", False):
             logger.debug(f" 图片提取未启用，跳过")
@@ -519,9 +598,9 @@ class ImageExtractor:
             "selector": final_config.get("selector", "img"),
             "containerSelector": container_selector,
             "waitForLoad": final_config.get("wait_for_load", True),
-            "loadTimeoutMs": int(final_config.get("load_timeout_seconds", 5) * 1000),
+            "loadTimeoutMs": int((final_config.get("load_timeout_seconds") or 5) * 1000),
             "downloadBlobs": final_config.get("download_blobs", True),
-            "maxBytes": final_config.get("max_size_mb", 10) * 1024 * 1024,
+            "maxBytes": int((final_config.get("max_size_mb") or 10) * 1024 * 1024),
             "srcAllowPatterns": final_config.get("src_allow_patterns", []) or [],
             "mode": final_config.get("mode", "all"),
             "allowContainerFallback": bool(final_config.get("allow_container_fallback", True)),
@@ -578,29 +657,40 @@ class ImageExtractor:
         规范化并去重
         
         处理逻辑：
-        1. 确定 kind (url/data_uri)
-        2. 提取 source 类型
-        3. 按 key 去重（url 用完整 URL，data_uri 用前 200 字符）
+        1. 过滤窗口占位图与已知 1x1 空白占位图
+        2. 确定 kind (url/data_uri)
+        3. 提取 source 类型
+        4. 按 key 去重（url 用完整 URL，data_uri 用前 200 字符）
         """
         seen_keys = set()
         result = []
         now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         
         for i, img in enumerate(raw_images):
+            if img.get("_windowed_placeholder") is True:
+                logger.debug(" 跳过图片窗口脚本替换的占位图")
+                continue
             src = img.get("src", "")
             data_uri = img.get("data_uri")
+            
+            # 过滤已知的 1x1 占位图
+            if (src and src.strip() in KNOWN_1X1_PLACEHOLDER_DATA_URIS) or (
+                data_uri and data_uri.strip() in KNOWN_1X1_PLACEHOLDER_DATA_URIS
+            ):
+                logger.debug(" 跳过已知的 1x1 空白占位图片")
+                continue
             
             # 确定 kind 和去重键
             if data_uri:
                 kind = "data_uri"
-                key = data_uri[:200]  # 前 200 字符作为去重键
+                key = f"data_uri:{hashlib.sha256(data_uri.encode('utf-8')).hexdigest()}"
             elif src.startswith("data:"):
                 kind = "data_uri"
                 data_uri = src
-                key = src[:200]
+                key = f"data_uri:{hashlib.sha256(src.encode('utf-8')).hexdigest()}"
             else:
                 kind = "url"
-                key = src
+                key = f"url:{src}"
             
             # 去重检查
             if key in seen_keys:

@@ -219,8 +219,8 @@ def _execute_workflow_editor_test_payload(
 
         resolved_site_config = config_engine.get_site_config(
             domain,
-            getattr(tab, "html", "") or "",
-            preset_name=preset_name
+            html_content=lambda: getattr(tab, "html", ""),
+            preset_name=preset_name,
         ) or {}
         site_advanced_config = config_engine.get_site_advanced_config(
             domain,

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import base64
+import hashlib
 import json
 import time
 import uuid
@@ -3200,10 +3201,10 @@ class MediaExtractor:
 
             if data_uri:
                 kind = "data_uri"
-                key = f"{media_type}:{data_uri[:200]}"
+                key = f"{media_type}:data_uri:{hashlib.sha256(data_uri.encode('utf-8')).hexdigest()}"
             elif src:
                 kind = "url"
-                key = f"{media_type}:{src}"
+                key = f"{media_type}:url:{src}"
             else:
                 continue
 

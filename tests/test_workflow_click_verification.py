@@ -3,6 +3,7 @@ from contextlib import contextmanager
 import pytest
 
 from app.core.config import WorkflowError
+from app.core.workflow.executor import WorkflowExecutor
 from app.core.workflow.executor_actions import WorkflowExecutorActionMixin
 from app.core.workflow.executor_send import WorkflowExecutorSendMixin
 from app.core.page_lifecycle import BACKGROUND_WAKE_CDP_TIMEOUT
@@ -168,3 +169,93 @@ def test_stealth_send_does_not_confirm_when_click_was_skipped():
 
     with pytest.raises(WorkflowError, match="send_action_not_dispatched"):
         executor._execute_click_send_stealth("button.send", "send_btn", optional=False)
+
+
+def test_click_verification_passes_in_battle_mode_when_other_retry_button_present():
+    """测试在 Battle 模式下，页面存在两个 retry button，点击后 stop_btn 出现，通过 match=any 成功确认"""
+    executor = WorkflowExecutorActionMixin.__new__(WorkflowExecutorActionMixin)
+    executor._check_cancelled = lambda: False
+
+    # 模拟 DOM 状态探测结果：retry button 仍然存在 (present=True, visible=True)，但 stop_btn 出现 (visible=True)
+    class _BattleDomTab:
+        @staticmethod
+        def run_js(script, argument, timeout):
+            return [
+                {
+                    "target": "retry button",
+                    "state": "absent",
+                    "present": True,
+                    "visible": True,
+                    "matched": False,
+                },
+                {
+                    "target": "stop_btn",
+                    "state": "visible",
+                    "present": True,
+                    "visible": True,
+                    "matched": True,
+                },
+            ]
+
+    executor.tab = _BattleDomTab()
+    executor._selectors = {
+        "retry button": "button.retry",
+        "stop_btn": "button.stop",
+    }
+
+    verification = {
+        "match": "any",
+        "timeout": 1.0,
+        "poll_interval": 0.05,
+        "conditions": [
+            {"target": "retry button", "state": "absent"},
+            {"target": "stop_btn", "state": "visible"},
+        ],
+    }
+
+    confirmed = executor._wait_for_click_verification(verification)
+    assert confirmed is True
+
+
+def test_optional_click_skips_verification_when_target_not_found():
+    """测试当步骤为 optional 且未找到元素时，直接跳过 verification 轮询"""
+    executor = WorkflowExecutor.__new__(WorkflowExecutor)
+    executor._current_step_execution = {
+        "retry": {"enabled": True, "max_attempts": 2, "interval": 0.1},
+        "verification": {
+            "enabled": True,
+            "match": "all",
+            "conditions": [{"target": "retry button", "state": "absent"}],
+        },
+    }
+    verification_called = False
+
+    def mock_wait_verification(_ver):
+        nonlocal verification_called
+        verification_called = True
+        return True
+
+    executor._wait_for_click_verification = mock_wait_verification
+    executor._execute_click = lambda _s, _k, _o: False  # 未找到元素返回 False
+
+    executor._execute_click_with_step_policy("button.retry", "retry button", optional=True)
+
+    assert verification_called is False
+
+
+def test_optional_click_does_not_raise_error_when_verification_fails():
+    """测试可选步骤若点击发生但 verification 超时未通过，不抛出硬异常"""
+    executor = WorkflowExecutor.__new__(WorkflowExecutor)
+    executor._current_step_execution = {
+        "retry": {"enabled": False},
+        "verification": {
+            "enabled": True,
+            "conditions": [{"target": "some_btn", "state": "absent"}],
+        },
+    }
+    executor._wait_for_click_verification = lambda _v: False
+    executor._execute_click = lambda _s, _k, _o: True
+
+    # 应该正常结束，不抛出 WorkflowError("click_verification_failed")
+    executor._execute_click_with_step_policy("button.some", "some_btn", optional=True)
+
