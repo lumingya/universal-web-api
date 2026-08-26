@@ -202,6 +202,250 @@ def is_interrupted_stream_reason(reason: str) -> bool:
     return bool(normalized) and any(marker in normalized for marker in _INTERRUPTED_STREAM_MARKERS)
 
 
+def auto_skip_arena_direct_comparison(tab: Any) -> bool:
+    """Detect and click the Skip button in Arena Direct mode's occasional image comparison prompt with debouncing."""
+    script = r"""
+        try {
+            const evalBars = Array.from(document.querySelectorAll('div')).filter(d => {
+                const text = (d.innerText || '');
+                return (text.includes('继续使用 A') || text.includes('Continue with A') || text.includes('Use A'))
+                    && (text.includes('跳过') || text.includes('Skip'));
+            });
+            const searchRoots = evalBars.length > 0 ? evalBars : [document.body];
+            for (const root of searchRoots) {
+                const buttons = Array.from(root.querySelectorAll('button:not([data-skip-triggered="true"])'));
+                const skipBtn = buttons.find(b => {
+                    const text = (b.innerText || '').trim();
+                    const hasSkipSvg = !!b.querySelector('svg path[d*="M18 7V17"]') || !!b.querySelector('svg path[d*="M18 6V18"]');
+                    const isVisible = b.offsetWidth > 0 && b.offsetHeight > 0;
+                    return isVisible && (text === '跳过' || text === 'Skip' || hasSkipSvg);
+                });
+                if (skipBtn) {
+                    skipBtn.setAttribute('data-skip-triggered', 'true');
+                    skipBtn.click();
+                    return true;
+                }
+            }
+        } catch (_) {}
+        return false;
+    """
+    try:
+        return bool(tab.run_js(script))
+    except Exception:
+        return False
+
+
+def detect_arena_render_crash(tab: Any) -> bool:
+    """Detect unstyled / FOUC layout crash where Tailwind styles failed to load."""
+    script = r"""
+        try {
+            const ol = document.querySelector('ol');
+            if (ol) {
+                const display = window.getComputedStyle(ol)?.display;
+                if (display === 'block') return true;
+            }
+            if (document.styleSheets.length === 0) return true;
+        } catch (_) {}
+        return false;
+    """
+    try:
+        return bool(tab.run_js(script))
+    except Exception:
+        return False
+
+
+def evaluate_arena_direct_generation_state(
+    tab: Any,
+    baseline_depth: int = 0,
+    current_prompt: str = "",
+    stop_selector: str = ARENA_NATIVE_STOP_SELECTOR,
+) -> Optional[dict[str, Any]]:
+    """Execute node-scoped five-state generation evaluation for Arena Direct image requests."""
+    script = r"""
+        return ((baselineDepth, currentPrompt, stopSelector) => {
+            const result = {
+                status: 'IDLE',
+                still_generating: false,
+                is_complete: false,
+                image_urls: [],
+                error_code: null,
+                error_msg: '',
+                skipped_comparison: false
+            };
+
+            // 0. Auto-skip occasional comparison bar if present (scoped & debounced)
+            try {
+                const evalBars = Array.from(document.querySelectorAll('div')).filter(d => {
+                    const text = (d.innerText || '');
+                    return (text.includes('继续使用 A') || text.includes('Continue with A') || text.includes('Use A'))
+                        && (text.includes('跳过') || text.includes('Skip'));
+                });
+                const searchRoots = evalBars.length > 0 ? evalBars : [document.body];
+                for (const root of searchRoots) {
+                    const buttons = Array.from(root.querySelectorAll('button:not([data-skip-triggered="true"])'));
+                    const skipBtn = buttons.find(b => {
+                        const text = (b.innerText || '').trim();
+                        const hasSkipSvg = !!b.querySelector('svg path[d*="M18 7V17"]') || !!b.querySelector('svg path[d*="M18 6V18"]');
+                        return b.offsetWidth > 0 && (text === '跳过' || text === 'Skip' || hasSkipSvg);
+                    });
+                    if (skipBtn) {
+                        skipBtn.setAttribute('data-skip-triggered', 'true');
+                        skipBtn.click();
+                        result.skipped_comparison = true;
+                        break;
+                    }
+                }
+            } catch (_) {}
+
+            const ol = document.querySelector('ol.flex-col-reverse') || document.querySelector('ol');
+            const textarea = document.querySelector('textarea, [contenteditable="true"]');
+            if (!ol) {
+                result.status = 'WAITING_HYDRATION';
+                result.still_generating = true;
+                return result;
+            }
+
+            const rawChildren = Array.from(ol.children);
+            const validChildren = rawChildren.filter(c => c.tagName === 'DIV' && !c.classList.contains('h-0'));
+
+            if (validChildren.length === 0) {
+                result.status = 'WAITING_HYDRATION';
+                result.still_generating = true;
+                return result;
+            }
+
+            // 1. Blocker Fix: Assistant-Only Depth Guard
+            const assistantNodes = validChildren.filter(c => !c.classList.contains('justify-end') && !c.querySelector('[data-role="user"]'));
+            if (baselineDepth > 0 && assistantNodes.length < baselineDepth + 1) {
+                result.status = 'WAITING_HYDRATION';
+                result.still_generating = true;
+                return result;
+            }
+
+            // 2. Blocker Fix: Physical Top Child Isolation
+            // In flex-col-reverse, index 0 is visually at the very bottom.
+            // If index 0 is a User node, the new Assistant node has NOT mounted yet!
+            const firstChild = validChildren[0];
+            const isFirstChildUser = firstChild.classList.contains('justify-end') || !!firstChild.querySelector('[data-role="user"]');
+            if (isFirstChildUser) {
+                result.status = 'WAITING_HYDRATION';
+                result.still_generating = true;
+                return result;
+            }
+            const latestAssistant = firstChild;
+
+            // 3. Prompt Echo Guard on the latest User node
+            if (currentPrompt && String(currentPrompt).trim()) {
+                const latestUser = validChildren.find(c => c.classList.contains('justify-end') || !!c.querySelector('[data-role="user"]'));
+                if (latestUser) {
+                    const userText = (latestUser.innerText || '').replace(/\s+/g, ' ').trim();
+                    const promptSnippet = String(currentPrompt).trim().slice(0, 15);
+                    if (promptSnippet && !userText.includes(promptSnippet)) {
+                        result.status = 'WAITING_HYDRATION';
+                        result.still_generating = true;
+                        return result;
+                    }
+                }
+            }
+
+            // 4. Stop button & active generating status
+            let hasStop = false;
+            try {
+                if (window.__arenaHardStop && typeof window.__arenaHardStop.status === 'function') {
+                    const st = window.__arenaHardStop.status();
+                    if (st && (st.hasNativeStopButton || st.hasOverlayStopButton)) hasStop = true;
+                }
+            } catch (_) {}
+
+            if (!hasStop && stopSelector) {
+                try {
+                    const sel = String(stopSelector).trim().replace(/^css:/i, '');
+                    const stopEl = document.querySelector(sel);
+                    if (stopEl && stopEl.offsetWidth > 0 && stopEl.offsetHeight > 0) hasStop = true;
+                } catch (_) {}
+            }
+
+            if (!hasStop) {
+                const stopOverlays = ['button[aria-label="Stop generation"]', '[data-arena-hard-stop-overlay="true"]'];
+                for (const s of stopOverlays) {
+                    const el = document.querySelector(s);
+                    if (el && el.offsetWidth > 0 && el.offsetHeight > 0) {
+                        hasStop = true;
+                        break;
+                    }
+                }
+            }
+
+            const hasSpinner = !!latestAssistant.querySelector('.lucide-loader.animate-spin, .animate-spin, [class*="animate-spin"]');
+            const isTextareaBusy = textarea ? (textarea.disabled || textarea.getAttribute('aria-busy') === 'true') : false;
+
+            // Priority 1: Still generating
+            if (hasStop || hasSpinner || isTextareaBusy) {
+                result.status = 'GENERATING';
+                result.still_generating = true;
+                return result;
+            }
+
+            // Priority 2: Error detection inside latest Assistant container
+            const assistantText = (latestAssistant.innerText || '').toLowerCase();
+            if (assistantText.includes('something went wrong with this response, please try again') ||
+                assistantText.includes('an error occurred while generating')) {
+                result.status = 'ERROR';
+                result.error_code = 'arena_image_generation_failed';
+                result.error_msg = 'Arena 图片生成失败：Something went wrong with this response, please try again.';
+                result.is_complete = true;
+                return result;
+            }
+
+            // Priority 3: Safety / Terms of Use violation inside latest Assistant container
+            if (assistantText.includes('this content violates our terms of use')) {
+                result.status = 'SAFETY_VIOLATION';
+                result.error_code = 'arena_prompt_rejected';
+                result.error_msg = 'Arena 拒绝了该图片请求：内容违反 Terms of Use';
+                result.is_complete = true;
+                return result;
+            }
+
+            // Priority 4: Success - image URLs resolution inside latest Assistant container
+            const imgs = Array.from(latestAssistant.querySelectorAll('img')).filter(img => {
+                const src = String(img.src || img.currentSrc || '').trim();
+                const isAvatar = img.closest('[class*="avatar"], .size-6, .rounded-full') || (img.naturalWidth > 0 && img.naturalWidth <= 96);
+                return src && !isAvatar && (src.includes('r2.cloudflarestorage.com') || src.startsWith('blob:') || src.startsWith('http'));
+            });
+
+            if (imgs.length > 0) {
+                result.status = 'SUCCESS';
+                result.is_complete = true;
+                result.still_generating = false;
+                result.image_urls = imgs.map(img => img.src || img.currentSrc);
+                return result;
+            }
+
+            // Priority 5: Empty abort fallback (Stop button gone, action bar mounted, but no image or error)
+            const hasActionBar = !!latestAssistant.querySelector('button[aria-label*="Like" i], button[aria-label*="Dislike" i]') ||
+                                 Array.from(latestAssistant.querySelectorAll('button')).some(b => b.innerText.includes('Edit'));
+            if (hasActionBar) {
+                result.status = 'EMPTY_ABORT';
+                result.error_code = 'arena_image_empty_response';
+                result.error_msg = 'Arena 图片生成结束但未产出有效图片或错误';
+                result.is_complete = true;
+                return result;
+            }
+
+            result.status = 'GENERATING';
+            result.still_generating = true;
+            return result;
+        })(arguments[0], arguments[1], arguments[2]);
+    """
+    try:
+        data = tab.run_js(script, baseline_depth, current_prompt, stop_selector)
+        if isinstance(data, dict) and data.get("status"):
+            return data
+    except Exception as exc:
+        logger.debug(f"evaluate_arena_direct_generation_state 异常: {exc}")
+    return None
+
+
 def get_arena_generation_status(
     tab: Any,
     selector: str = ARENA_NATIVE_STOP_SELECTOR,
@@ -665,6 +909,9 @@ __all__ = [
     "ArenaImageGenerationError",
     "ArenaImageGenerationGuard",
     "ArenaImageGenerationObservation",
+    "auto_skip_arena_direct_comparison",
+    "detect_arena_render_crash",
+    "evaluate_arena_direct_generation_state",
     "current_page_url",
     "capture_arena_result_baseline",
     "get_arena_generation_status",
@@ -678,3 +925,4 @@ __all__ = [
     "same_image",
     "validate_generated_images",
 ]
+

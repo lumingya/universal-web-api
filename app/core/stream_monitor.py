@@ -28,6 +28,8 @@ from app.services.arena_image_generation import (
     ARENA_NATIVE_STOP_SELECTOR as ARENA_IMAGE_NATIVE_STOP_SELECTOR,
     ArenaImageGenerationError,
     ArenaImageGenerationGuard,
+    auto_skip_arena_direct_comparison,
+    evaluate_arena_direct_generation_state,
     is_arena_image_generation_request,
     is_arena_page_url,
     is_interrupted_stream_reason,
@@ -853,7 +855,9 @@ class StreamMonitor:
         if completion_id is None:
             completion_id = SSEFormatter._generate_id()
 
+        self._prompt = str(user_input or "")
         ctx = StreamContext()
+        ctx.prompt = self._prompt
         self._stream_ctx = ctx
         self._final_complete_text = ""
         self._final_images = []
@@ -1369,6 +1373,53 @@ class StreamMonitor:
             logger.warning(f"[Image Recovery] 图片停滞恢复刷新失败（继续等待）: {exc}")
             return False
 
+    def _evaluate_direct_arena_image_state(
+        self,
+        ctx: Any,
+        strict_arena_image_generation: bool,
+        current_has_new_rendered_image: bool,
+        still_generating: bool,
+    ) -> Tuple[bool, bool, Optional[dict]]:
+        parser_id = str(self._image_config.get("_parser_id", "") or getattr(self, "_workflow_parser_id", "") or "").lower()
+        parser_side = str(self._image_config.get("_parser_target_side", "") or "").strip().lower()
+        is_battle = "battle" in parser_id or parser_side in {"left", "right"}
+        is_direct = strict_arena_image_generation and not is_battle
+        if not is_direct or not getattr(self, "tab", None):
+            return current_has_new_rendered_image, still_generating, None
+        try:
+            auto_skip_arena_direct_comparison(self.tab)
+            baseline_depth = int(ctx.baseline_snapshot.get("groups_count") or 0) if ctx.baseline_snapshot else 0
+            prompt_text = str(getattr(self, "_prompt", "") or getattr(self, "prompt", "") or getattr(ctx, "prompt", "") or "")
+            eval_data = evaluate_arena_direct_generation_state(
+                self.tab,
+                baseline_depth=baseline_depth,
+                current_prompt=prompt_text,
+                stop_selector=ARENA_IMAGE_NATIVE_STOP_SELECTOR,
+            )
+            if isinstance(eval_data, dict):
+                if eval_data.get("error_code"):
+                    raise ArenaImageGenerationError(
+                        str(eval_data.get("error_code")),
+                        str(eval_data.get("error_msg") or "Arena image generation error"),
+                    )
+                status = eval_data.get("status")
+                if status == "SUCCESS" and eval_data.get("image_urls"):
+                    urls = [u for u in eval_data.get("image_urls") or [] if isinstance(u, str) and u.strip()]
+                    if urls:
+                        self._final_image_urls = list(urls)
+                        if hasattr(self, "_prefetch_snapshot_image_urls"):
+                            self._prefetch_snapshot_image_urls({"image_urls": urls, "image_references": urls})
+                    return True, False, eval_data
+                if status in {"GENERATING", "WAITING_HYDRATION"}:
+                    return current_has_new_rendered_image, True, eval_data
+                return current_has_new_rendered_image, still_generating, eval_data
+            return current_has_new_rendered_image, still_generating, None
+        except ArenaImageGenerationError:
+            raise
+        except Exception as exc:
+            logger.debug(f"Direct generation evaluation non-fatal error: {exc}")
+            return current_has_new_rendered_image, still_generating, None
+
     def _refresh_interrupted_stream_page(self) -> bool:
         if not self._is_arena_page():
             logger.debug("[Stream Recovery] 非 Arena 页面跳过断流刷新")
@@ -1598,13 +1649,26 @@ class StreamMonitor:
             current_has_new_rendered_image = self._snapshot_has_new_rendered_image(
                 ctx.baseline_snapshot, snap
             )
+            (
+                current_has_new_rendered_image,
+                still_generating,
+                direct_eval,
+            ) = self._evaluate_direct_arena_image_state(
+                ctx,
+                strict_arena_image_generation,
+                current_has_new_rendered_image,
+                still_generating,
+            )
             arena_observation = (
                 arena_image_guard.observe(current_has_new_rendered_image)
                 if strict_arena_image_generation
                 else None
             )
             if arena_observation is not None:
-                still_generating = arena_observation.still_generating
+                if direct_eval is not None:
+                    still_generating = bool(direct_eval.get("still_generating", arena_observation.still_generating))
+                else:
+                    still_generating = arena_observation.still_generating
             recovery_output_seen = self._remember_recovery_output(
                 recovery_output_seen,
                 current_text_len,
@@ -1656,9 +1720,15 @@ class StreamMonitor:
                 # A rendered image plus no active generation indicators is already
                 # a terminal DOM observation. Do not reload a page merely because
                 # the network stream missed its completion event.
-                recovery_confirmed = bool(
-                    arena_observation.is_complete
-                )
+                if direct_eval is not None:
+                    recovery_confirmed = bool(
+                        direct_eval.get("is_complete")
+                        and (not stream_recovery_refresh_done or post_refresh_settled)
+                    )
+                else:
+                    recovery_confirmed = bool(
+                        arena_observation.is_complete
+                    )
             else:
                 recovery_confirmed = self._interrupted_recovery_confirmed(
                     interrupted_stream_recovery,
@@ -1940,9 +2010,15 @@ class StreamMonitor:
                     or (time.time() - stream_recovery_last_refresh_at >= post_refresh_settle_sec)
                 )
                 if strict_arena_image_generation and arena_observation is not None:
-                    recovery_confirmed = bool(
-                        arena_observation.is_complete
-                    )
+                    if direct_eval is not None:
+                        recovery_confirmed = bool(
+                            direct_eval.get("is_complete")
+                            and (not stream_recovery_refresh_done or post_refresh_settled)
+                        )
+                    else:
+                        recovery_confirmed = bool(
+                            arena_observation.is_complete
+                        )
                 else:
                     recovery_confirmed = self._interrupted_recovery_confirmed(
                         interrupted_stream_recovery,
