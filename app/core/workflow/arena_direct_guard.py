@@ -138,9 +138,12 @@ def workflow_has_new_chat_step(workflow: Optional[List[Dict[str, Any]]]) -> bool
         if not isinstance(step, dict):
             continue
         action = str(step.get("action", "") or "").strip().upper()
-        target = str(step.get("target", "") or "").strip().lower()
+        # 排除非选择器步骤（如 JS 执行、只读提示、等待等），防止 target 中的脚本路径意外触发新对话逻辑
+        if action in {"JS_EXEC", "READONLY_HINT", "WAIT", "PAGE_FETCH", "STREAM_WAIT", "STREAM_OUTPUT"}:
+            continue
         if action in {"NEW_CHAT", "NEW_CONVERSATION"}:
             return True
+        target = str(step.get("target", "") or "").strip().lower()
         if target in {"new_chat_btn", "new_chat", "new_conversation"} or "new_chat" in target:
             return True
     return False

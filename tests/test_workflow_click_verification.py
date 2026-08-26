@@ -259,3 +259,61 @@ def test_optional_click_does_not_raise_error_when_verification_fails():
     # 应该正常结束，不抛出 WorkflowError("click_verification_failed")
     executor._execute_click_with_step_policy("button.some", "some_btn", optional=True)
 
+def test_arena_pre_send_interrupts_existing_generation():
+    executor = WorkflowExecutorSendMixin.__new__(WorkflowExecutorSendMixin)
+    states = iter([
+        {"generating": True, "stopBtnFound": True},
+        {"generating": False, "stopBtnFound": False},
+    ])
+    executor._probe_send_post_click_state = lambda _s: next(states)
+    executor._is_arena_page = lambda: True
+    executor._get_send_confirmation_flag = lambda _k, _default, **_kw: True
+    interrupted_called = False
+    def mock_interrupt():
+        nonlocal interrupted_called
+        interrupted_called = True
+        return True
+    executor._interrupt_arena_existing_generation = mock_interrupt
+    executor._get_send_confirmation_window = lambda _k, _default, **_kw: 0.01
+    executor._check_cancelled = lambda: False
+
+    res = executor._wait_for_send_idle_before_action("button.send")
+    assert res is True
+    assert interrupted_called is True
+
+
+def test_non_arena_page_skips_pre_send_interrupt():
+    executor = WorkflowExecutorSendMixin.__new__(WorkflowExecutorSendMixin)
+    states = iter([
+        {"generating": True, "stopBtnFound": True},
+        {"generating": False, "stopBtnFound": False},
+    ])
+    executor._probe_send_post_click_state = lambda _s: next(states)
+    executor._is_arena_page = lambda: False
+    interrupted_called = False
+    def mock_interrupt():
+        nonlocal interrupted_called
+        interrupted_called = True
+        return True
+    executor._interrupt_arena_existing_generation = mock_interrupt
+    executor._get_send_confirmation_window = lambda _k, _default, **_kw: 0.01
+    executor._check_cancelled = lambda: False
+
+    res = executor._wait_for_send_idle_before_action("button.send")
+    assert res is True
+    assert interrupted_called is False
+
+def test_arena_pre_send_interrupt_aborts_when_cancelled_during_cooldown():
+    executor = WorkflowExecutorSendMixin.__new__(WorkflowExecutorSendMixin)
+    executor._probe_send_post_click_state = lambda _s: {"generating": True, "stopBtnFound": True}
+    executor._is_arena_page = lambda: True
+    executor._get_send_confirmation_flag = lambda _k, _default, **_kw: True
+    executor._interrupt_arena_existing_generation = lambda: True
+    executor._get_send_confirmation_window = lambda _k, _default, **_kw: 0.01
+    # 模拟在冷却后变为取消态
+    cancelled_states = iter([False, True])
+    executor._check_cancelled = lambda: next(cancelled_states)
+
+    res = executor._wait_for_send_idle_before_action("button.send")
+    assert res is False
+

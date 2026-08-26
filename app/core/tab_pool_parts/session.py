@@ -65,6 +65,7 @@ class TabSession:
     _workflow_parser_id: str = field(default="", repr=False)
     _workflow_target_side: str = field(default="", repr=False)
     _workflow_runtime_id: str = field(default="", repr=False)
+    _request_occupied_url: Optional[str] = field(default=None, repr=False)
 
     _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
 
@@ -269,6 +270,7 @@ class TabSession:
             self._workflow_parser_id = ""
             self._workflow_target_side = ""
             self._workflow_runtime_id = ""
+            self._request_occupied_url = None
             setattr(self, "_last_cancel_request_task_id", None)
             setattr(self, "_last_cancel_request_reason", None)
             self.last_used_at = time.time()
@@ -368,6 +370,7 @@ class TabSession:
             self._workflow_parser_id = ""
             self._workflow_target_side = ""
             self._workflow_runtime_id = ""
+            self._request_occupied_url = None
             self.last_used_at = time.time()
 
             return {
@@ -471,6 +474,7 @@ class TabSession:
             try:
                 self.tab.refresh()
                 self.reset_conversation_state()
+                self.notify_navigated(reason="termination_clear")
             except Exception as e:
                 logger.warning(f"[{self.id}] terminate refresh failed: {e}")
                 success = False
@@ -503,6 +507,7 @@ class TabSession:
                     self.last_conversation_activity_at = 0.0
                     self.last_conversation_domain = None
                     self.last_conversation_preset_name = None
+                self.notify_navigated(reason="release_clear_page")
             except Exception as e:
                 clear_page_success = False
                 logger.debug(f"clear page failed: {e}")
@@ -582,6 +587,7 @@ class TabSession:
             try:
                 self.tab.refresh()
                 self.reset_conversation_state()
+                self.notify_navigated(reason="force_release_clear")
             except Exception as e:
                 logger.warning(f"[{self.id}] force_release refresh failed: {e}")
                 reset_success = False
@@ -874,6 +880,18 @@ class TabSession:
             self.last_known_url = normalized or None
         return normalized
 
+    def get_occupied_url(self) -> Optional[str]:
+        with self._lock:
+            return self._request_occupied_url
+
+    def set_occupied_url(self, url: Optional[str]) -> None:
+        with self._lock:
+            normalized = str(url or "").strip()
+            if normalized and "challenges.cloudflare.com" not in normalized and "challenge-platform" not in normalized and normalized.startswith("http"):
+                self._request_occupied_url = normalized
+            elif not normalized:
+                self._request_occupied_url = None
+
     def _safe_get_url(self, allow_live_when_busy: bool = False) -> str:
         with self._lock:
             status = self.status
@@ -899,3 +917,14 @@ class TabSession:
             restore_visibility_emulation(self.tab, owner=self, reason=reason)
         except Exception as e:
             logger.debug(f"[{self.id}] visibility emulation cleanup failed: {e}")
+
+    def notify_navigated(self, reason: str = "page_reload") -> None:
+        """Notify command engine of page reload/navigation."""
+        try:
+            from app.services.command_engine import command_engine
+
+            if hasattr(command_engine, "notify_tab_navigated"):
+                command_engine.notify_tab_navigated(self, reason=reason)
+        except Exception as e:
+            logger.debug(f"[{self.id}] notify_navigated failed (ignored): {e}")
+

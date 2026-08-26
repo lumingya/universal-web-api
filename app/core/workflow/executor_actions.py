@@ -1250,22 +1250,57 @@ class WorkflowExecutorActionMixin:
                 continue
         return None
 
+    KNOWN_MODEL_PROVIDERS = (
+        "zhipu", "openai", "anthropic", "google", "meta", "mistral",
+        "deepseek", "cohere", "qwen", "bytedance", "baichuan", "01-ai",
+        "zai", "amazon", "microsoft", "xai", "nvidia", "alibaba",
+    )
+
     @staticmethod
     def _model_label_matches(label: Any, model: dict) -> bool:
-        normalized = str(label or "").strip().casefold()
+        raw_label = str(label or "").strip()
+        normalized = raw_label.casefold()
         if not normalized:
             return False
         expected = {
             str(model.get(key) or "").strip().casefold()
-            for key in ("display_name", "public_name", "search_name", "name")
+            for key in ("display_name", "public_name", "search_name", "name", "arena_model_id")
             if str(model.get(key) or "").strip()
         }
-        return normalized in expected
+        if normalized in expected:
+            return True
+
+        # 仅当触发器按钮上的文本物理截断（以 ...、… 或 - 结尾）时才允许前缀匹配
+        is_truncated = raw_label.endswith("...") or raw_label.endswith("…") or raw_label.endswith("-")
+        clean_label = normalized.rstrip(".… ").strip()
+
+        for exp in expected:
+            if not exp:
+                continue
+            if clean_label == exp:
+                return True
+            if clean_label.endswith(f" {exp}") or clean_label.endswith(f"\n{exp}"):
+                return True
+            if clean_label.endswith(exp):
+                prefix = clean_label[:-len(exp)].strip()
+                if not prefix or prefix in WorkflowExecutorActionMixin.KNOWN_MODEL_PROVIDERS:
+                    return True
+            if is_truncated and len(clean_label) >= 4 and exp.startswith(clean_label):
+                return True
+        return False
 
     @staticmethod
     def _model_element_label(ele: Any) -> str:
         if ele is None:
             return ""
+        try:
+            span = ele.ele('css:span.flex-1.truncate.text-left', timeout=0.02)
+            if span:
+                val = str(getattr(span, "raw_text", "") or getattr(span, "text", "") or "").strip()
+                if val:
+                    return val
+        except Exception:
+            pass
         for attr_name in ("raw_text", "text"):
             try:
                 value = str(getattr(ele, attr_name, "") or "").strip()
@@ -1425,29 +1460,117 @@ class WorkflowExecutorActionMixin:
                 # Arena filters this field by the visible label/public name;
                 # the internal name is retained for the exact data-value match.
                 search_text = str(
-                    model.get("display_name")
+                    model.get("search_name")
+                    or model.get("display_name")
                     or model.get("public_name")
                     or model.get("name")
                     or ""
                 ).strip()
                 self._text_handler.fill_via_clipboard_no_click(search_input, search_text)
 
+                exact_identifiers = {
+                    str(model.get(key) or "").strip().casefold()
+                    for key in ("arena_model_id", "name", "search_name", "display_name", "public_name")
+                    if str(model.get(key) or "").strip()
+                }
+                if requested_model:
+                    exact_identifiers.add(str(requested_model).strip().casefold())
+
+                fuzzy_targets = [
+                    str(model.get(key) or "").strip().casefold()
+                    for key in ("search_name", "display_name", "public_name", "name")
+                    if str(model.get(key) or "").strip()
+                ]
+
                 option = None
                 while time.time() < deadline and not self._check_cancelled():
-                    for candidate in self._find_visible_elements('[role="option"][data-value]'):
+                    candidates = self._find_visible_elements('[role="option"]')
+                    if not candidates:
+                        candidates = self._find_visible_elements(
+                            '[data-radix-collection-item], [cmdk-item], [role="listbox"] > *'
+                        )
+
+                    positioned_candidates = [
+                        c for c in candidates
+                        if self._get_element_viewport_pos(c) is not None
+                    ]
+
+                    # --- Pass 1: 精确标识符全等匹配 ---
+                    for candidate in positioned_candidates:
+                        cand_data_val = ""
                         try:
-                            data_value = str(candidate.attr("data-value") or "").strip()
+                            cand_data_val = str(candidate.attr("data-value") or "").strip().casefold()
                         except Exception:
-                            data_value = ""
-                        if (
-                            data_value.casefold() == model["name"].casefold()
-                            and self._get_element_viewport_pos(candidate) is not None
-                        ):
+                            pass
+
+                        cand_val = ""
+                        try:
+                            cand_val = str(candidate.attr("value") or "").strip().casefold()
+                        except Exception:
+                            pass
+
+                        cand_id = ""
+                        try:
+                            cand_id = str(candidate.attr("id") or "").strip().casefold()
+                        except Exception:
+                            pass
+
+                        cand_label = self._model_element_label(candidate).casefold()
+                        cand_raw = str(getattr(candidate, "text", "") or getattr(candidate, "raw_text", "") or "").strip().casefold()
+                        cand_first_line = cand_raw.splitlines()[0].strip() if cand_raw else ""
+
+                        cand_keys = {k for k in (cand_data_val, cand_val, cand_id, cand_label, cand_raw, cand_first_line) if k}
+                        if cand_keys.intersection(exact_identifiers):
                             option = candidate
                             break
+
+                    # --- Pass 2: 前缀及词边界匹配（仅在 Pass 1 无精确匹配时进行） ---
+                    if option is None:
+                        for candidate in positioned_candidates:
+                            cand_data_val = ""
+                            try:
+                                cand_data_val = str(candidate.attr("data-value") or "").strip().casefold()
+                            except Exception:
+                                pass
+                            cand_label = self._model_element_label(candidate).casefold()
+                            cand_raw = str(getattr(candidate, "text", "") or getattr(candidate, "raw_text", "") or "").strip().casefold()
+                            cand_first_line = cand_raw.splitlines()[0].strip() if cand_raw else ""
+
+                            for target_name in fuzzy_targets:
+                                if not target_name:
+                                    continue
+                                if (
+                                    cand_data_val == target_name
+                                    or cand_label == target_name
+                                    or cand_first_line == target_name
+                                    or cand_first_line.startswith(target_name)
+                                    or cand_label.startswith(target_name)
+                                ):
+                                    option = candidate
+                                    break
+                            if option is not None:
+                                break
+
+                    # --- Pass 3: 包含关系保底匹配（仅在 Pass 1 和 Pass 2 均未命中时进行） ---
+                    if option is None:
+                        for candidate in positioned_candidates:
+                            cand_label = self._model_element_label(candidate).casefold()
+                            cand_raw = str(getattr(candidate, "text", "") or getattr(candidate, "raw_text", "") or "").strip().casefold()
+                            cand_first_line = cand_raw.splitlines()[0].strip() if cand_raw else ""
+
+                            for target_name in fuzzy_targets:
+                                if not target_name:
+                                    continue
+                                if target_name in cand_first_line or target_name in cand_label:
+                                    option = candidate
+                                    break
+                            if option is not None:
+                                break
+
                     if option is not None:
                         break
                     time.sleep(0.05)
+
                 if option is None:
                     raise ElementNotFoundError(
                         f"Arena Direct 模型选项未找到: {model['display_name']}"
@@ -1456,7 +1579,7 @@ class WorkflowExecutorActionMixin:
                 self._stealth_click_element(
                     option,
                     target_key="arena_model_option",
-                    selector=f'[role="option"][data-value="{model["name"]}"]',
+                    selector='[role="option"]',
                 )
                 dialog_opened = False
 
@@ -1512,11 +1635,18 @@ class WorkflowExecutorActionMixin:
                     if target_key in {"new_chat_btn", "new_chat", "new_conversation"}:
                         pre_click_url = self._get_current_url_snapshot("click_new_chat_before")
                         logger.debug(f"[CLICK_NEW_CHAT] 点击新建对话前 URL: {pre_click_url}")
+                    elif target_key in {"retry_send_btn", "retry button", "retry"}:
+                        logger.info(f"[CLICK:RETRY] 准备点击重试/重新生成按钮: target={target_key!r}, selector={selector!r}")
+                    elif target_key in {"stop_btn", "stop"}:
+                        logger.info(f"[CLICK:STOP] 准备点击停止生成按钮: target={target_key!r}, selector={selector!r}")
 
                     if target_key == "send_btn":
                         send_url = self._get_current_url_snapshot("send_click_start")
                         before_len = self._safe_get_input_len_by_key("input_box")
-                        logger.debug(f"[SEND_CLICK_START] 开始点击发送按钮, 当前 URL: {send_url}, 发送前输入框长度: {before_len}")
+                        logger.info(
+                            f"[CLICK:SEND_BTN] 开始点击发送按钮, 当前 URL: {send_url}, "
+                            f"发送前输入框长度: {before_len}, selector={selector!r}"
+                        )
                         
                         expected_len = 0
                         if isinstance(getattr(self, "_context", None), dict):
@@ -1567,6 +1697,11 @@ class WorkflowExecutorActionMixin:
                         }
                 if target_key == "send_btn":
                     self._confirm_send_click_response_or_raise(before_len)
+                post_click_url = self._get_current_url_snapshot("click_after")
+                logger.info(
+                    f"[CLICK:SUCCESS] 点击步骤完成: target={target_key!r}, "
+                    f"selector={selector!r}, current_url={post_click_url!r}"
+                )
                 return True
 
             except Exception as click_err:
@@ -2495,9 +2630,12 @@ class WorkflowExecutorActionMixin:
             )
 
             current_url = self._get_current_url_snapshot("fill_input_start")
+            logger.info(
+                f"[FILL_INPUT:START] 开始填充输入框: target={target_key!r}, "
+                f"selector={selector!r}, prompt_len={len(text)}, current_url={current_url!r}"
+            )
 
             if target_key == "input_box":
-                logger.debug(f"[FILL_INPUT_START] 开始填充输入框, 当前 URL: {current_url}")
                 if fill_after_new_chat:
                     last_url = getattr(self, "_last_new_chat_clicked_url", "")
                     if last_url and current_url == last_url:
@@ -2553,6 +2691,11 @@ class WorkflowExecutorActionMixin:
 
             self._last_input_element = self._resolve_active_text_input() or ele
             self._note_fill_completion(text, after_new_chat=fill_after_new_chat)
+            actual_dom_len = self._safe_get_input_len_by_key(target_key) or len(text)
+            logger.info(
+                f"[FILL_INPUT:DONE] 填充输入框完成: target={target_key!r}, "
+                f"filled_len={len(text)}, actual_dom_len={actual_dom_len}"
+            )
         
         # ===== 隐身模式：粘贴后仅保留极短缓冲，避免节奏被故意拖慢 =====
         if self.stealth_mode and len(text) > 0:

@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional
 
 from app.core.config import BrowserConstants, WorkflowError, logger
 from app.core.elements import ElementFinder
+from app.services.arena_image_generation import is_arena_page_url
 from .attachment_monitor import AttachmentMonitor
 
 
@@ -366,6 +367,8 @@ class WorkflowExecutorSendMixin:
             "trust_network_activity": True,
             "trust_generating_indicator": True,
             "trust_send_disabled_with_input_shrink": True,
+            "pre_send_interrupt_existing_generation": True,
+            "pre_send_interrupt_cooldown": 0.4,
         }
 
         raw_config = {}
@@ -479,11 +482,106 @@ class WorkflowExecutorSendMixin:
             or state.get("stopBtnFound")
         )
 
+    def _is_arena_page(self) -> bool:
+        tab = getattr(self, "tab", None)
+        if tab is None:
+            return False
+        try:
+            url = str(getattr(tab, "url", "") or "")
+            if not url and hasattr(tab, "run_js"):
+                url = str(tab.run_js("return location.href") or "")
+        except Exception:
+            url = ""
+        return is_arena_page_url(url)
+
+    def _interrupt_arena_existing_generation(self) -> bool:
+        """Actively interrupt lingering generation on arena.ai before submitting new prompt."""
+        tab = getattr(self, "tab", None)
+        if tab is None or not hasattr(tab, "run_js"):
+            return False
+        stop_selector = ""
+        selectors = getattr(self, "_selectors", None)
+        if isinstance(selectors, dict):
+            stop_selector = self._to_query_selector(selectors.get("stop_btn", ""))
+        stop_selector_json = json.dumps(stop_selector, ensure_ascii=False)
+        script = f"""
+        return (function() {{
+            let clicked = false;
+            try {{
+                if (window.__arenaHardStop && typeof window.__arenaHardStop.stop === 'function') {{
+                    window.__arenaHardStop.stop();
+                    clicked = true;
+                }}
+            }} catch (_) {{}}
+            const configuredSelector = {stop_selector_json};
+            const selectors = [
+                configuredSelector,
+                'button[aria-label="Stop generation"]',
+                'button[aria-label*="Stop"]',
+                'button[aria-label*="stop"]',
+                'button[aria-label*="停止"]',
+                '[data-arena-hard-stop-overlay="true"]'
+            ].filter(Boolean);
+            const clickedElements = new Set();
+            for (const sel of selectors) {{
+                try {{
+                    const btns = document.querySelectorAll(sel);
+                    for (const btn of btns) {{
+                        if (clickedElements.has(btn)) continue;
+                        const style = window.getComputedStyle ? window.getComputedStyle(btn) : null;
+                        const visible = !style || (style.display !== 'none' && style.visibility !== 'hidden');
+                        const rect = btn.getBoundingClientRect ? btn.getBoundingClientRect() : null;
+                        if (visible && rect && rect.width > 0 && rect.height > 0) {{
+                            btn.click();
+                            clickedElements.add(btn);
+                            clicked = true;
+                        }}
+                    }}
+                }} catch (_) {{}}
+            }}
+            return clicked;
+        }})();
+        """
+        try:
+            return bool(tab.run_js(script))
+        except Exception as exc:
+            logger.debug(f"[SEND] Arena 主动打断执行异常: {exc}")
+            return False
+
     def _wait_for_send_idle_before_action(self, send_selector: str) -> bool:
-        """Wait out generation owned by an earlier action before submitting this prompt."""
+        """Wait out or interrupt generation owned by an earlier action before submitting this prompt."""
         state = self._probe_send_post_click_state(send_selector)
         if not self._is_send_post_click_confirmed(state):
             return True
+
+        if self._is_arena_page():
+            interrupt_enabled = self._get_send_confirmation_flag(
+                "pre_send_interrupt_existing_generation",
+                True,
+                raw_only=True,
+            )
+            if interrupt_enabled:
+                logger.warning(
+                    "[SEND] 发送前检测到 Arena 页面仍处于旧生成/停止态，"
+                    "执行主动 Stop 打断以准备本次发送"
+                )
+                interrupted = self._interrupt_arena_existing_generation()
+                if interrupted:
+                    cooldown = self._get_send_confirmation_window(
+                        "pre_send_interrupt_cooldown",
+                        0.4,
+                        min_value=0.1,
+                        max_value=3.0,
+                        raw_only=True,
+                    )
+                    time.sleep(cooldown)
+                    if self._check_cancelled():
+                        return False
+                    state = self._probe_send_post_click_state(send_selector)
+                    if not self._is_send_post_click_confirmed(state):
+                        logger.info("[SEND] Arena 旧生成态已成功打断并恢复空闲，继续提交本次消息")
+                        return True
+                    logger.debug("[SEND] Arena 主动打断后页面尚未完全就绪，继续进入常规等待流程")
 
         wait_timeout = self._get_send_confirmation_window(
             "pre_send_idle_timeout",

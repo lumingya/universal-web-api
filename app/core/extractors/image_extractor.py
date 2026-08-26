@@ -163,12 +163,26 @@ class ImageExtractor:
         }
 
         // ===== 2. 查找所有图片元素 =====
+        const isUserUploadNode = (el) => {
+            if (!el || !(el instanceof Element)) return false;
+            try {
+                return !!el.closest(
+                    'user-query, user-query-content, user-query-file-preview, user-query-file-carousel, ' +
+                    '[data-message-author="user"], [data-role="user"], [data-testid*="user-message"], ' +
+                    '.user-query-container, .query-file-preview'
+                );
+            } catch {
+                return false;
+            }
+        };
+
         const collectNodes = (roots) => {
             const scopedNodes = [];
             const seenNodes = new Set();
             const pushNode = (value) => {
                 if (!(value instanceof Element)) return;
                 if (seenNodes.has(value)) return;
+                if (isUserUploadNode(value)) return;
                 seenNodes.add(value);
                 scopedNodes.push(value);
             };

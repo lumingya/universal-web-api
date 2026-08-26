@@ -5,7 +5,7 @@ import time
 import contextlib
 import random
 import re
-from typing import Optional, List, Dict, Any, Generator, Callable, TYPE_CHECKING
+from typing import Optional, List, Dict, Any, Generator, Callable, Mapping, TYPE_CHECKING
 
 from app.core.config import (
     logger,
@@ -40,6 +40,7 @@ from app.models.schemas import get_modality_run_policy, is_modality_enabled
 from app.services.arena_direct_models import (
     get_model_catalog_preset,
     resolve_arena_direct_model,
+    resolve_model_catalog_preset_for_model,
 )
 from app.services.arena_image_generation import (
     ArenaImageGenerationError,
@@ -48,6 +49,7 @@ from app.services.arena_image_generation import (
     is_arena_image_generation_request,
     validate_generated_images,
 )
+from app.utils.image_validation import filter_reference_images
 
 if TYPE_CHECKING:
     from .main import BrowserCore
@@ -686,6 +688,15 @@ class BrowserWorkflowMixin:
                 effective_stop_checker,
             )
 
+            tab = getattr(session, "tab", None)
+            tab_url = getattr(tab, "url", "") if tab else ""
+            tab_id = getattr(tab, "tab_id", "") if tab else ""
+            logger.info(
+                f"[WORKFLOW:ROUTE_DOMAIN] 分发标签页执行工作流: route_domain={normalized_route_domain!r}, "
+                f"session_id={session.id}, tab_id={tab_id}, tab_url={tab_url!r}, "
+                f"requested_model={requested_model!r}, preset={preset_name!r}"
+            )
+
             if stream:
                 yield from self._execute_workflow_stream(
                     session,
@@ -763,6 +774,7 @@ class BrowserWorkflowMixin:
                 task_id,
                 timeout=60,
                 allocation_mode=allocation_mode,
+                requested_model=requested_model,
             )
             if session is None:
                 yield self.formatter.pack_error(
@@ -980,14 +992,15 @@ class BrowserWorkflowMixin:
 
             config_engine = self._get_config_engine()
             effective_preset_name = preset_name if preset_name is not None else session.preset_name
-            if preset_name is None:
-                catalog_preset = get_model_catalog_preset(config_engine, domain)
-                if catalog_preset and resolve_arena_direct_model(
+            if preset_name is None and requested_model:
+                matched_catalog = resolve_model_catalog_preset_for_model(
+                    config_engine,
+                    domain,
                     tab,
                     requested_model,
-                    catalog_config=catalog_preset["catalog"],
-                ):
-                    effective_preset_name = catalog_preset["preset_name"]
+                )
+                if matched_catalog:
+                    effective_preset_name = matched_catalog["preset_name"]
 
             site_config = config_engine.get_site_config(
                 domain,
@@ -1324,6 +1337,14 @@ class BrowserWorkflowMixin:
         if "too many requests" in detail_lower or "rate limit" in detail_lower:
             return False
 
+        if any(token in detail_lower for token in (
+            "not permitted",
+            "choose another model",
+            "terms of use",
+            "violates our terms",
+        )):
+            return False
+
         return False
 
     @classmethod
@@ -1375,7 +1396,14 @@ class BrowserWorkflowMixin:
     ) -> str:
         detail = cls._get_stream_terminal_error_detail(chunk) or "unknown stream terminal error"
         lowered = detail.lower()
-        category = "限流终止" if ("too many requests" in lowered or "429" in lowered) else "异常终止"
+        if "not permitted" in lowered or "choose another model" in lowered:
+            category = "模型权限限制"
+        elif "too many requests" in lowered or "rate limit" in lowered or "429" in lowered:
+            category = "限流终止"
+        elif "terms of use" in lowered:
+            category = "策略违规终止"
+        else:
+            category = "异常终止"
 
         if retrying:
             return (
@@ -1618,7 +1646,13 @@ class BrowserWorkflowMixin:
             yield self.formatter.pack_finish()
             return
     
-        logger.debug(f"[{session.id}] 域名: {domain}")
+        tab_url = getattr(tab, "url", "")
+        tab_id = getattr(tab, "tab_id", "")
+        logger.info(
+            f"[WORKFLOW:ENTRY] 进入工作流流式执行: session_id={session.id}, tab_id={tab_id}, "
+            f"domain={domain!r}, current_url={tab_url!r}, requested_model={requested_model!r}, "
+            f"preset={preset_name!r}, session_preset={session.preset_name!r}"
+        )
         
         page_status = self._check_page_status(tab)
         if not page_status["ready"]:
@@ -1631,15 +1665,36 @@ class BrowserWorkflowMixin:
         
         config_engine = self._get_config_engine()
         effective_preset_name = preset_name if preset_name is not None else session.preset_name
-        if preset_name is None:
-            catalog_preset = get_model_catalog_preset(config_engine, domain)
-            if catalog_preset and resolve_arena_direct_model(
+        if preset_name is None and requested_model:
+            matched_catalog = resolve_model_catalog_preset_for_model(
+                config_engine,
+                domain,
                 tab,
                 requested_model,
-                catalog_config=catalog_preset["catalog"],
-            ):
-                effective_preset_name = catalog_preset["preset_name"]
+            )
+            if matched_catalog:
+                effective_preset_name = matched_catalog["preset_name"]
+                matched_model = matched_catalog.get("matched_model") or {}
+                matched_uuid = str(matched_model.get("id") or matched_model.get("uuid") or "")
+                matched_public_name = str(matched_model.get("public_name") or matched_model.get("publicName") or "")
+                matched_display_name = str(matched_model.get("display_name") or matched_model.get("displayName") or matched_model.get("name") or "")
+                logger.info(
+                    f"[PRESET:RESOLVE] resolve_model_catalog_preset_for_model 成功解析: "
+                    f"requested_model={requested_model!r}, target_preset={effective_preset_name!r}, "
+                    f"uuid={matched_uuid!r}, public_name={matched_public_name!r}, "
+                    f"display_name={matched_display_name!r}"
+                )
+            else:
+                logger.debug(
+                    f"[PRESET:RESOLVE] resolve_model_catalog_preset_for_model 未匹配到专属预设: "
+                    f"requested_model={requested_model!r}, domain={domain!r}"
+                )
+
         resolved_preset_name = effective_preset_name or config_engine.get_default_preset(domain) or "主预设"
+        logger.info(
+            f"[WORKFLOW:PRESET] 最终选定预设: session_id={session.id}, preset={resolved_preset_name!r}, "
+            f"requested_model={requested_model!r}, current_url={tab_url!r}"
+        )
         site_config = config_engine.get_site_config(
             domain,
             html_content=lambda: getattr(tab, "html", ""),
@@ -1698,10 +1753,17 @@ class BrowserWorkflowMixin:
             if workflow_attempt == 0 or not getattr(session, "_arena_direct_initial_url", None):
                 setattr(session, "_arena_direct_initial_url", current_tab_url)
             initial_recorded_url = str(getattr(session, "_arena_direct_initial_url", "") or current_tab_url)
+            is_image_modality = (
+                "image" in str(resolved_preset_name or "").lower()
+                or "生图" in str(resolved_preset_name or "")
+                or (isinstance(site_config, (dict, Mapping)) and str(site_config.get("model_catalog", {}).get("modality", "")).strip().lower() == "image")
+            )
+            fallback_direct_url = "https://arena.ai/image/direct" if is_image_modality else "https://arena.ai/text/direct"
             arena_recovery_url = resolve_arena_direct_recovery_url(
                 workflow,
                 initial_url=initial_recorded_url,
                 skip_new_chat=skip_new_chat or _chunk_continuation,
+                fallback_url=fallback_direct_url,
             )
             setattr(session, "_arena_direct_recovery_url", arena_recovery_url)
             setattr(session, "_arena_direct_input_selector", str(selectors.get("input_box", "") or ""))
@@ -1974,6 +2036,10 @@ class BrowserWorkflowMixin:
                 )
             except Exception as e:
                 logger.debug(f"[{session.id}] 工作流运行时注册失败（忽略）: {e}")
+
+        initial_workflow_url = str(getattr(session, "last_known_url", "") or getattr(tab, "url", "") or "").strip()
+        if initial_workflow_url and "challenges.cloudflare.com" not in initial_workflow_url and "challenge-platform" not in initial_workflow_url and initial_workflow_url.startswith("http"):
+            setattr(session, "_request_occupied_url", initial_workflow_url)
 
         def _combined_stop_checker() -> bool:
             if effective_stop_checker():
@@ -2356,18 +2422,22 @@ class BrowserWorkflowMixin:
                                 )
                                 break
 
-                        if isinstance(e, WorkflowError) and str(e) in {
-                            "new_chat_transition_timeout",
-                            "send_unconfirmed",
-                            "arena_direct_unexpected_battle_redirect",
-                            "arena_send_no_target",
-                        }:
-                            error_code = str(e)
-                            workflow_aborted = True
-                            yield self.formatter.pack_error(
-                                f"stream_terminal_error:{error_code}",
-                                code=error_code,
-                            )
+                        if isinstance(e, WorkflowError):
+                            err_str = str(e)
+                            if err_str in {
+                                "new_chat_transition_timeout",
+                                "send_unconfirmed",
+                                "arena_direct_unexpected_battle_redirect",
+                                "arena_send_no_target",
+                            }:
+                                error_code = err_str
+                                workflow_aborted = True
+                                yield self.formatter.pack_error(
+                                    f"stream_terminal_error:{error_code}",
+                                    code=error_code,
+                                )
+                            elif err_str.startswith("stream_terminal_error:"):
+                                workflow_aborted = True
                         break
                     except Exception as e:
                         step_elapsed = time.perf_counter() - step_started_at
@@ -2557,12 +2627,6 @@ class BrowserWorkflowMixin:
                                         image_config,
                                     )
                     
-                    if arena_image_generation_active and not media_items:
-                        raise ArenaImageGenerationError(
-                            "arena_image_generation_failed",
-                            "Arena 图片生成失败：未能提取新的生成图片",
-                        )
-
                     if media_items:
                         download_urls = image_config.get("download_urls", False)
                         if download_urls:
@@ -2577,25 +2641,35 @@ class BrowserWorkflowMixin:
                             max_size_mb=int(image_config.get("max_size_mb", 10) or 10),
                             image_config=image_config,
                         )
-                        if arena_image_generation_active:
-                            generated_images = [
-                                item
-                                for item in media_items
-                                if isinstance(item, dict)
-                                and str(item.get("media_type") or item.get("type") or "image").lower()
-                                in {"image", "image_url", "input_image"}
-                            ]
-                            if not generated_images:
-                                raise ArenaImageGenerationError(
-                                    "arena_image_generation_failed",
-                                    "Arena 图片生成失败：未能提取新的生成图片",
-                                )
-                            validate_generated_images(
-                                user_images,
-                                generated_images,
-                                tab=tab,
-                            )
 
+                    if media_items and user_images:
+                        media_items = filter_reference_images(
+                            media_items,
+                            user_images,
+                            tab=tab,
+                            logger_context=f"{session.id}:workflow",
+                        )
+
+                    if arena_image_generation_active:
+                        generated_images = [
+                            item
+                            for item in media_items
+                            if isinstance(item, dict)
+                            and str(item.get("media_type") or item.get("type") or "image").lower()
+                            in {"image", "image_url", "input_image"}
+                        ]
+                        if not generated_images:
+                            raise ArenaImageGenerationError(
+                                "arena_image_generation_failed",
+                                "Arena 图片生成失败：未能提取新的生成图片",
+                            )
+                        validate_generated_images(
+                            user_images,
+                            generated_images,
+                            tab=tab,
+                        )
+
+                    if media_items:
                         logger.debug(f"[PROBE] 即将发送多模态资源（Markdown），数量={len(media_items)}")
 
                         try:

@@ -106,7 +106,7 @@ def test_route_group_chat_forces_configured_preset_and_uses_group_execution(monk
 
     class _RequestManager:
         @staticmethod
-        def create_request():
+        def create_request(*args, **kwargs):
             return context
 
         @staticmethod
@@ -185,6 +185,10 @@ def test_route_group_models_exposes_current_member_counts(monkeypatch):
         def get_route_groups_snapshot():
             return [group]
 
+        @staticmethod
+        def get_tabs_with_index():
+            return []
+
     monkeypatch.setattr(
         tab_routes,
         "get_browser",
@@ -201,14 +205,108 @@ def test_route_group_models_exposes_current_member_counts(monkeypatch):
     assert response.headers["X-Route-Group-Busy-Member-Count"] == "3"
 
 
+def test_route_group_models_exposes_catalog_and_custom_renamed_models(monkeypatch):
+    group = _group_payload()
+    group["members"] = [
+        {"url": "https://arena.ai/c/1", "url_token": "token-1", "tab_index": 1},
+        {"url": "https://arena.ai/c/2", "url_token": "token-2", "tab_index": 2},
+        {"url": "https://arena.ai/c/3", "url_token": "token-3", "tab_index": 3},
+    ]
+
+    tabs = [
+        {"persistent_index": 1, "url": "https://arena.ai/c/1", "url_route_token": "token-1", "current_domain": "arena.ai", "exposed_model_name": "arena.ai", "model_name_override_source": ""},
+        {"persistent_index": 2, "url": "https://arena.ai/c/2", "url_route_token": "token-2", "current_domain": "arena.ai", "exposed_model_name": "arena.ai", "model_name_override_source": ""},
+        {"persistent_index": 3, "url": "https://arena.ai/c/3", "url_route_token": "token-3", "current_domain": "arena.ai", "exposed_model_name": "111", "model_name_override_source": "tab"},
+    ]
+
+    class _Pool:
+        @staticmethod
+        def get_route_groups_snapshot():
+            return [group]
+
+        @staticmethod
+        def get_tabs_with_index():
+            return tabs
+
+    monkeypatch.setattr(
+        tab_routes,
+        "get_browser",
+        lambda auto_connect=False: SimpleNamespace(tab_pool=_Pool()),
+    )
+    monkeypatch.setattr(
+        tab_routes,
+        "get_arena_direct_catalog_for_tab",
+        lambda config_engine, tab, preset_name=None: {
+            "catalog": {"modality": "image", "enabled": True}
+        },
+    )
+    monkeypatch.setattr(
+        tab_routes,
+        "list_arena_direct_models",
+        lambda browser, catalog_config=None: [
+            {"arena_model_id": "m1", "name": "gpt-image-2 (medium)", "display_name": "gpt-image-2 (medium)"},
+            {"arena_model_id": "m2", "name": "mona-lisa-1", "display_name": "mona-lisa-1"},
+        ],
+    )
+
+    response = asyncio.run(tab_routes.list_models_with_route_group(
+        group_id="arena-image",
+        authenticated=True,
+    ))
+
+    import json
+    data = json.loads(response.body)
+    model_ids = [m["id"] for m in data["data"]]
+    assert "gpt-image-2 (medium)" in model_ids
+    assert "mona-lisa-1" in model_ids
+    assert "111" in model_ids
+    # 确保默认的 arena.ai 域名未被当作自定义模型暴露
+    assert "arena.ai" not in model_ids
+
+
+def test_tab_pool_manager_session_override_model_name_resolution():
+    from app.core.tab_pool_parts.manager import TabPoolManager
+    from app.core.tab_pool_parts.session import TabSession
+
+    manager = TabPoolManager.__new__(TabPoolManager)
+    manager.model_name_overrides = {
+        "urls": {"https://arena.ai/c/url-override": "url-custom-model"},
+        "sites": {"custom.site": "site-custom-model"},
+    }
+
+    # 1. 显式 TabSession.model_name_override
+    session1 = TabSession.__new__(TabSession)
+    session1.model_name_override = "111"
+    session1.get_cached_route_snapshot = lambda: ("https://arena.ai/c/1", "arena.ai")
+    assert manager._get_session_override_model_name(session1) == "111"
+
+    # 2. URL 级别 override
+    session2 = TabSession.__new__(TabSession)
+    session2.model_name_override = None
+    session2.get_cached_route_snapshot = lambda: ("https://arena.ai/c/url-override", "arena.ai")
+    assert manager._get_session_override_model_name(session2) == "url-custom-model"
+
+    # 3. Site 级别 override
+    session3 = TabSession.__new__(TabSession)
+    session3.model_name_override = None
+    session3.get_cached_route_snapshot = lambda: ("https://custom.site/chat", "custom.site")
+    assert manager._get_session_override_model_name(session3) == "site-custom-model"
+
+    # 4. 无 override
+    session4 = TabSession.__new__(TabSession)
+    session4.model_name_override = None
+    session4.get_cached_route_snapshot = lambda: ("https://arena.ai/c/normal", "arena.ai")
+    assert manager._get_session_override_model_name(session4) == ""
+
+
 def test_browser_workflow_route_group_binds_and_releases_selected_member():
     events = []
     session = SimpleNamespace(id="arena-2")
 
     class _Pool:
         @staticmethod
-        def acquire_by_route_group(group_id, task_id, timeout, allocation_mode):
-            events.append(("acquire", group_id, task_id, timeout, allocation_mode))
+        def acquire_by_route_group(group_id, task_id, timeout, allocation_mode, requested_model=None):
+            events.append(("acquire", group_id, task_id, timeout, allocation_mode, requested_model))
             return session
 
     workflow = BrowserWorkflowMixin()
@@ -226,9 +324,10 @@ def test_browser_workflow_route_group_binds_and_releases_selected_member():
         task_id="req-group",
         preset_name="image-preset",
         allocation_mode="round_robin",
+        requested_model="111",
     ))
 
     assert chunks == ["chunk"]
-    assert events[0][:3] == ("acquire", "arena-image", "req-group")
+    assert events[0] == ("acquire", "arena-image", "req-group", 60, "round_robin", "111")
     assert ("bind", "req-group", "arena-2") in events
     assert events[-1] == ("release", "arena-2")

@@ -266,6 +266,102 @@ def test_incomplete_stream_timeout_enables_generic_recovery_for_text_and_images(
     assert monitor._uses_interrupted_stream_recovery() is True
 
 
+def test_active_stop_recovery_has_a_bounded_no_progress_grace():
+    assert StreamMonitor._active_generation_refresh_allowed(
+        True, True, 29.9, 30.0
+    ) is False
+    assert StreamMonitor._active_generation_refresh_allowed(
+        True, True, 30.0, 30.0
+    ) is True
+    assert StreamMonitor._active_generation_refresh_allowed(
+        False, True, 0.0, 30.0
+    ) is True
+
+
+def test_active_text_generation_does_not_reload_during_network_silence(monkeypatch):
+    clock = [0.0]
+
+    def fake_time():
+        clock[0] += 0.5
+        return clock[0]
+
+    class FakeTab:
+        url = "https://arena.ai/c/example"
+
+        def __init__(self):
+            self.refresh_calls = []
+            self.stop_states = iter([True] * 20 + [False])
+
+        def run_js(self, _script, *args):
+            if args and str(args[0]).startswith(ARENA_NATIVE_STOP_SELECTOR):
+                return next(self.stop_states, False)
+            return None
+
+        def refresh(self, **kwargs):
+            self.refresh_calls.append(kwargs)
+
+    tab = FakeTab()
+    monitor = StreamMonitor.__new__(StreamMonitor)
+    monitor.tab = tab
+    monitor.session = type("Session", (), {"notify_navigated": lambda *_args, **_kwargs: None})()
+    monitor.formatter = type(
+        "Formatter",
+        (),
+        {"pack_chunk": lambda _self, text, completion_id=None: text},
+    )()
+    monitor._should_stop = lambda: False
+    monitor._hard_timeout = 300
+    monitor._image_config = {
+        "enabled": False,
+        "modalities": {"image": {"enabled": False}},
+        "dom_active_stop_recovery_grace_seconds": 60,
+    }
+    monitor._stream_config = {}
+    monitor._expect_image_output = False
+    monitor._network_fallback_reason = "目标流未完整结束（6.5s）"
+    monitor._recovery_mode = ""
+    monitor._stream_recovery_exhausted = False
+    monitor._image_recovery_exhausted = False
+    monitor._stream_recovery_refresh_done = False
+    monitor._stream_recovery_refresh_attempts = 0
+    monitor._generating_checker = None
+    monitor._arena_image_guard = None
+    monitor._prefetch_snapshot_image_urls = lambda _snapshot: None
+
+    def snapshot(is_generating):
+        return {
+            "groups_count": 1,
+            "anchor": "reply-1",
+            "text": "partial response",
+            "text_len": 16,
+            "is_generating": is_generating,
+            "image_count": 0,
+            "has_images": False,
+            "image_urls": [],
+            "image_references": [],
+            "page_image_urls": [],
+            "page_image_references": [],
+        }
+
+    snapshot_calls = [0]
+
+    def get_snapshot(*_args):
+        snapshot_calls[0] += 1
+        return snapshot(snapshot_calls[0] <= 20)
+
+    monitor._get_snapshot_prefer_anchor = get_snapshot
+    monitor._final_settle_and_output = lambda *_args, **_kwargs: iter(["final-text"])
+
+    ctx = StreamContext()
+    ctx.baseline_snapshot = snapshot(False)
+
+    monkeypatch.setattr("app.core.stream_monitor.time.time", fake_time)
+    monkeypatch.setattr("app.core.stream_monitor.time.sleep", lambda _seconds: None)
+
+    assert list(monitor._stream_output_phase("main", ctx)) == ["final-text"]
+    assert tab.refresh_calls == []
+
+
 def test_generic_empty_stream_timeout_does_not_enable_interrupted_recovery():
     monitor = StreamMonitor.__new__(StreamMonitor)
     monitor.tab = type("Tab", (), {"url": "https://arena.ai/c/example"})()
@@ -452,7 +548,7 @@ def test_arena_stop_present_recognizes_hard_stop_runtime_and_overlay_buttons():
     assert monitor._arena_native_stop_present() is True
     assert "__arenaHardStop" in captured["script"]
     assert "hasOverlayStopButton" in captured["script"]
-    assert "pendingAssistantCount" in captured["script"]
+    assert "pendingAssistantCount" not in captured["script"]
     assert "data-arena-hard-stop-overlay" in captured["script"]
 
 
@@ -1127,14 +1223,15 @@ def test_arena_image_guard_filters_unchanged_baseline_results():
     assert "normalize(marker.text)" in tab.run_js_script
 
 
-def test_arena_image_guard_uses_ten_second_refresh_default():
-    assert ArenaImageGenerationGuard.refresh_interval_seconds({}) == 10.0
+def test_arena_image_guard_uses_twenty_second_refresh_default():
+    assert ArenaImageGenerationGuard.refresh_interval_seconds({}) == 20.0
     assert ArenaImageGenerationGuard.refresh_interval_seconds(
-        {"dom_image_interrupted_refresh_interval_seconds": 20}
-    ) == 10.0
+        {"dom_image_interrupted_refresh_interval_seconds": 30}
+    ) == 20.0
     assert ArenaImageGenerationGuard.max_refreshes(
         {"arena_image_max_refreshes": 3}, 300
     ) == 3
+    assert ArenaImageGenerationGuard.max_refreshes({}, 300) == 16
 
 
 def test_arena_image_guard_scope_excludes_normal_uploaded_image_chat():

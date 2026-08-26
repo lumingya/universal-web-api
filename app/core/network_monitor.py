@@ -103,9 +103,14 @@ class NetworkMonitor:
     DEFAULT_RESPONSE_INTERVAL = 0.5        # 响应轮询间隔
     DEFAULT_SILENCE_THRESHOLD = 4.0        # 静默超时（无新数据）
     DEFAULT_FIRST_CONTENT_TIMEOUT = 15.0   # 命中目标流后，等待首个有效正文的宽限
+    DEFAULT_IMAGE_FIRST_CONTENT_TIMEOUT = 60.0  # 生图首字（媒体）等待宽限
+    DEFAULT_POST_CONTENT_SILENCE_THRESHOLD = 15.0  # 已有输出后的自然停顿宽限
     DEFAULT_INITIAL_TARGET_BODY_WAIT = 4.0  # 首个目标响应空 body 时的补等宽限
     MAX_LISTEN_RESTARTS = 3                # 监听状态异常后的最大重建次数
     MAX_PREFETCHED_RESPONSES = 64          # 发送后预取响应缓存上限，避免噪声网络无限堆积
+    DEFAULT_LMARENA_STREAM_EXCLUDE_PATTERNS = (
+        "/nextjs-api/stream/stop/",
+    )
     MAX_STREAM_CHUNK_MERGE_CACHE = 8       # 活跃流 chunks 合并缓存上限，避免长流重复全量 join
     MAX_RAW_BODY_SIGNATURE_EDGE = 512      # 媒体状态缓存只保留首尾签名片段，避免挂住完整 body
     CANCEL_CHECK_SLICE = 1.0              # 长等待期间的取消检查切片（秒）
@@ -154,6 +159,24 @@ class NetworkMonitor:
         self._stream_match_mode = str(
             network_config.get("stream_match_mode", "keyword") or "keyword"
         ).strip().lower()
+        try:
+            self._parser_id = str(parser.get_id() or "").strip().lower()
+        except Exception:
+            self._parser_id = parser.__class__.__name__.strip().lower()
+        configured_excludes = network_config.get("stream_exclude_patterns")
+        if configured_excludes is None:
+            configured_excludes = (
+                self.DEFAULT_LMARENA_STREAM_EXCLUDE_PATTERNS
+                if self._parser_id.startswith("lmarena")
+                else ()
+            )
+        elif isinstance(configured_excludes, str):
+            configured_excludes = (configured_excludes,)
+        self._stream_exclude_patterns = tuple(
+            str(pattern or "").strip().lower()
+            for pattern in (configured_excludes or ())
+            if str(pattern or "").strip()
+        )
         self._hard_timeout = network_config.get(
             "hard_timeout",
             top_level_hard_timeout
@@ -173,7 +196,14 @@ class NetworkMonitor:
         first_content_timeout = network_config.get(
             "first_content_timeout",
             max(
-                self.DEFAULT_FIRST_CONTENT_TIMEOUT,
+                (
+                    self.DEFAULT_IMAGE_FIRST_CONTENT_TIMEOUT
+                    if bool(
+                        (self._image_config.get("_arena_image_generation_active"))
+                        or self._image_config.get("arena_image_generation")
+                    )
+                    else self.DEFAULT_FIRST_CONTENT_TIMEOUT
+                ),
                 float(self._silence_threshold or self.DEFAULT_SILENCE_THRESHOLD) * 4.0,
             ),
         )
@@ -181,11 +211,39 @@ class NetworkMonitor:
             first_content_timeout = float(first_content_timeout)
         except Exception:
             first_content_timeout = max(
-                self.DEFAULT_FIRST_CONTENT_TIMEOUT,
+                (
+                    self.DEFAULT_IMAGE_FIRST_CONTENT_TIMEOUT
+                    if bool(
+                        (self._image_config.get("_arena_image_generation_active"))
+                        or self._image_config.get("arena_image_generation")
+                    )
+                    else self.DEFAULT_FIRST_CONTENT_TIMEOUT
+                ),
                 float(self._silence_threshold or self.DEFAULT_SILENCE_THRESHOLD) * 4.0,
             )
         self._first_content_timeout = min(
             max(first_content_timeout, float(self._silence_threshold or self.DEFAULT_SILENCE_THRESHOLD)),
+            max(float(self._hard_timeout or self.DEFAULT_HARD_TIMEOUT), 1.0),
+        )
+        post_content_silence_threshold = network_config.get(
+            "post_content_silence_threshold",
+            max(
+                self.DEFAULT_POST_CONTENT_SILENCE_THRESHOLD,
+                float(self._silence_threshold or self.DEFAULT_SILENCE_THRESHOLD) * 2.0,
+            ),
+        )
+        try:
+            post_content_silence_threshold = float(post_content_silence_threshold)
+        except Exception:
+            post_content_silence_threshold = max(
+                self.DEFAULT_POST_CONTENT_SILENCE_THRESHOLD,
+                float(self._silence_threshold or self.DEFAULT_SILENCE_THRESHOLD) * 2.0,
+            )
+        self._post_content_silence_threshold = min(
+            max(
+                post_content_silence_threshold,
+                float(self._silence_threshold or self.DEFAULT_SILENCE_THRESHOLD),
+            ),
             max(float(self._hard_timeout or self.DEFAULT_HARD_TIMEOUT), 1.0),
         )
         initial_target_body_wait = network_config.get(
@@ -350,6 +408,41 @@ class NetworkMonitor:
             and not self._last_stream_media_items
             and self._should_fallback_to_dom_on_empty_stream()
         )
+
+    def _has_stream_output(self, parse_result: Optional[Dict[str, Any]] = None) -> bool:
+        """Return whether the target stream produced text, reasoning, or media."""
+        return bool(
+            self._total_chunks > 0
+            or self._last_stream_media_items
+            or self._parse_result_has_media(parse_result or self._last_stream_parse_result)
+        )
+
+    def _effective_silence_threshold(
+        self,
+        *,
+        active_stream_response: Any = None,
+        completed_by_done: bool = False,
+        waiting_for_followup_stream: bool = False,
+    ) -> float:
+        """Choose a silence budget that distinguishes startup from post-output pauses."""
+        threshold = float(self._silence_threshold)
+        if self._has_stream_output():
+            threshold = max(threshold, float(self._post_content_silence_threshold))
+        if (
+            active_stream_response is not None
+            and self._should_require_explicit_done()
+            and not completed_by_done
+        ):
+            threshold = max(threshold, float(self._first_content_timeout))
+        if waiting_for_followup_stream:
+            threshold = max(threshold, float(self._first_content_timeout))
+        if (
+            active_stream_response is not None
+            and not self._has_stream_output()
+            and not self._stream_capture_complete(active_stream_response)
+        ):
+            threshold = max(threshold, float(self._first_content_timeout))
+        return threshold
 
     @staticmethod
     def _extract_http_status(event: Dict[str, Any]) -> int:
@@ -942,6 +1035,9 @@ class NetworkMonitor:
             return False
 
     def _matches_stream_target(self, event: Dict[str, Any]) -> bool:
+        if self._is_excluded_stream_target(event):
+            return False
+
         pattern = str(self._stream_match_pattern or "").strip()
         if not pattern:
             return True
@@ -956,6 +1052,26 @@ class NetworkMonitor:
                 )
 
         return pattern.lower() in url.lower()
+
+    def _is_excluded_stream_target(self, event: Dict[str, Any]) -> bool:
+        """Reject control responses that share the site's broad stream path."""
+        patterns = getattr(self, "_stream_exclude_patterns", ())
+        if not patterns:
+            return False
+        url = str(event.get("url", "") or "").strip().lower()
+        if not url:
+            return False
+        matched = next(
+            (pattern for pattern in patterns if pattern in url),
+            None,
+        )
+        if matched:
+            logger.debug(
+                "[NetworkMonitor] 忽略流控制接口响应 "
+                f"(pattern={matched!r}, url={url[:160]})"
+            )
+            return True
+        return False
 
     @staticmethod
     def _nested_get(container: Any, *path: str) -> Any:
@@ -2153,7 +2269,7 @@ class NetworkMonitor:
 
                     if (
                         capture_complete_now
-                        and (self._total_chunks > 0 or completed_by_done)
+                        and (self._has_stream_output() or completed_by_done)
                         and (completed_by_done or not self._should_require_explicit_done())
                     ):
                         if self._should_wait_for_followup_stream():
@@ -2176,7 +2292,7 @@ class NetworkMonitor:
                             )
                             raise NetworkMonitorTimeout("目标流未产出有效正文")
                         if (
-                            self._total_chunks > 0
+                            self._has_stream_output()
                             and not completed_by_done
                             and self._should_fallback_to_dom_on_empty_stream()
                         ):
@@ -2263,34 +2379,16 @@ class NetworkMonitor:
                         raise NetworkMonitorTimeout("目标流提前关闭且未产出有效结果")
 
                 silence_duration = time.time() - last_activity_time
-                effective_silence_threshold = float(self._silence_threshold)
-                if self._total_chunks > 0:
-                    effective_silence_threshold = max(effective_silence_threshold, 4.0)
+                effective_silence_threshold = self._effective_silence_threshold(
+                    active_stream_response=active_stream_response,
+                    completed_by_done=completed_by_done,
+                    waiting_for_followup_stream=waiting_for_followup_stream,
+                )
                 if (
                     active_stream_response is not None
-                    and self._should_require_explicit_done()
-                    and not completed_by_done
-                ):
-                    # Claude can pause while Extended Thinking is still active;
-                    # its explicit message_stop remains the completion signal.
-                    effective_silence_threshold = max(
-                        effective_silence_threshold,
-                        float(self._first_content_timeout),
-                    )
-                if waiting_for_followup_stream:
-                    effective_silence_threshold = max(
-                        float(self._first_content_timeout),
-                        effective_silence_threshold,
-                    )
-                if (
-                    active_stream_response is not None
-                    and self._total_chunks == 0
+                    and not self._has_stream_output()
                     and not self._stream_capture_complete(active_stream_response)
                 ):
-                    effective_silence_threshold = max(
-                        float(self._first_content_timeout),
-                        float(self._silence_threshold),
-                    )
                     logger.debug_throttled(
                         f"network.wait_first_content.{id(self)}",
                         "[NetworkMonitor] 等待流式文本解析产出 "
@@ -2309,7 +2407,7 @@ class NetworkMonitor:
                             f"后续流未在宽限期内到达（{silence_duration:.1f}s）"
                         )
                     if (
-                        self._total_chunks > 0
+                        self._has_stream_output()
                         and self._parse_result_has_unclosed_render_output(
                             self._last_stream_parse_result
                         )
@@ -2328,7 +2426,7 @@ class NetworkMonitor:
                         )
                     if (
                         active_stream_response is not None
-                        and self._total_chunks == 0
+                        and not self._has_stream_output()
                         and self._should_fallback_to_dom_on_empty_stream()
                     ):
                         logger.warning(
@@ -2341,7 +2439,7 @@ class NetworkMonitor:
                         )
                     if (
                         active_stream_response is not None
-                        and self._total_chunks > 0
+                        and self._has_stream_output()
                         and self._should_fallback_to_dom_on_empty_stream()
                     ):
                         if active_stream_response is not None and not completed_by_done:

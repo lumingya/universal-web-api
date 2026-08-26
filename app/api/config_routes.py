@@ -39,6 +39,8 @@ from app.api.config_workflow_support import (
     _notify_workflow_editor_action_result,
     _notify_workflow_editor_action_status,
     _save_site_workflow_payload,
+    _scan_workflow_scripts,
+    _load_workflow_script_content,
 )
 from app.api.deps import verify_auth
 from app.core import get_browser, BrowserConnectionError
@@ -122,20 +124,20 @@ async def get_config(authenticated: bool = Depends(verify_auth)):
     """获取站点配置（安全版：过滤内部键和本地地址）"""
     try:
         all_sites = config_engine.list_sites()
-        
+
         filtered_sites = {
             domain: config
             for domain, config in all_sites.items()
             if not _is_local_site_domain(domain)
         }
-        
+
         logger.debug(
             f"站点列表过滤: 总数 {len(all_sites)} -> "
             f"过滤后 {len(filtered_sites)} (移除 {len(all_sites) - len(filtered_sites)} 个)"
         )
-        
+
         return filtered_sites
-    
+
     except Exception as e:
         logger.error(f"获取配置失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -258,10 +260,10 @@ async def get_site_config(
 ):
     """
     获取单个站点配置
-    
+
     Query 参数:
         preset_name: 预设名称（可选，默认返回整个站点结构含所有预设）
-    
+
     - 不传 preset_name: 返回 { "presets": { "主预设": {...}, ... } }
     - 传 preset_name: 返回该预设的扁平配置 { "selectors": {...}, "workflow": [...], ... }
     """
@@ -563,7 +565,7 @@ async def set_site_image_config(
         payload = _unwrap_config_payload(data, "image_extraction")
 
         success = config_engine.set_site_image_config(domain, payload, preset_name=resolved_preset)
-        
+
         if success:
             return {
                 "status": "success",
@@ -619,7 +621,7 @@ async def toggle_site_image_extraction(
 async def get_image_extraction_defaults(authenticated: bool = Depends(verify_auth)):
     """获取多模态提取的默认配置"""
     from app.models.schemas import get_default_image_extraction_config
-    
+
     return {
         "defaults": get_default_image_extraction_config(),
         "limits": {
@@ -679,7 +681,7 @@ async def apply_image_preset(
             raise HTTPException(status_code=400, detail="缺少 preset_domain")
 
         success = config_engine.apply_image_preset(domain, preset_domain)
-        
+
         if success:
             return {
                 "status": "success",
@@ -692,7 +694,7 @@ async def apply_image_preset(
                 status_code=400,
                 detail=f"应用预设失败：站点不存在或预设无效"
             )
-    
+
     except HTTPException:
         raise
     except ValueError as e:
@@ -708,7 +710,7 @@ async def reload_image_presets(authenticated: bool = Depends(verify_auth)):
     try:
         config_engine.reload_presets()
         presets = config_engine.list_image_presets()
-        
+
         return {
             "status": "success",
             "message": "图片预设已重新加载",
@@ -729,7 +731,7 @@ async def inject_workflow_editor(
     """向当前活动标签页注入可视化工作流编辑器"""
     from app.core.workflow_editor import workflow_editor_injector
     from app.core.browser import get_browser
-    
+
     try:
         target_domain = None
         preset_name = None
@@ -739,15 +741,15 @@ async def inject_workflow_editor(
             preset_name = body.get("preset_name")
         except Exception:
             pass
-        
+
         browser_instance = get_browser(auto_connect=True)
-        
+
         if not browser_instance.get_browser_handle():
             return JSONResponse(
                 status_code=503,
                 content={"success": False, "message": "浏览器未连接"}
             )
-        
+
         try:
             tab = browser_instance.get_latest_tab()
         except Exception as e:
@@ -755,21 +757,21 @@ async def inject_workflow_editor(
                 status_code=503,
                 content={"success": False, "message": f"无法获取标签页: {str(e)}"}
             )
-        
+
         url = tab.url or ""
         if not url or url in ("about:blank", "chrome://newtab/", "chrome://new-tab-page/"):
             return JSONResponse(
                 status_code=400,
                 content={"success": False, "message": "请先打开目标网站"}
             )
-        
+
         actual_domain = extract_remote_site_domain(url)
         if not actual_domain:
             return JSONResponse(
                 status_code=400,
                 content={"success": False, "message": "当前页面不是可解析的网站，请先打开真实的远程站点"}
             )
-        
+
         if target_domain and target_domain != actual_domain:
             logger.warning(f"域名不匹配: 期望 {target_domain}, 实际 {actual_domain}")
             return JSONResponse(
@@ -782,7 +784,7 @@ async def inject_workflow_editor(
                     "actual_domain": actual_domain
                 }
             )
-        
+
         config_domain = target_domain or actual_domain
         requested_preset = "" if preset_name is None else str(preset_name).strip()
         if requested_preset:
@@ -797,14 +799,14 @@ async def inject_workflow_editor(
             )
         except Exception as e:
             logger.debug(f"获取站点配置失败: {e}")
-        
+
         result = workflow_editor_injector.inject(
             tab,
             site_config,
             target_domain=config_domain,
             preset_name=preset_name
         )
-        
+
         if result["success"]:
             return JSONResponse(content=result)
         else:
@@ -1030,7 +1032,7 @@ async def update_site_workflow(
             data["preset_name"] = _resolve_requested_preset_or_404(domain, requested_preset)
 
         return _save_site_workflow_payload(domain, data)
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -1038,11 +1040,28 @@ async def update_site_workflow(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/api/config/workflow/scripts")
+async def list_workflow_scripts(authenticated: bool = Depends(verify_auth)):
+    """获取所有可用工作流 JavaScript 脚本列表（扫描 custom_scripts/ 与 scripts/）"""
+    return _scan_workflow_scripts()
+
+
+@router.get("/api/config/workflow/script-content")
+async def get_workflow_script_content(
+    path: str,
+    authenticated: bool = Depends(verify_auth)
+):
+    """读取指定工作流脚本的源代码与元数据（用于前端预览）"""
+    return _load_workflow_script_content(path)
+
+
 @router.post("/api/workflow-editor/clear-cache")
 async def clear_editor_cache(authenticated: bool = Depends(verify_auth)):
     """清除编辑器脚本缓存（开发调试用）"""
     from app.core.workflow_editor import workflow_editor_injector
+    from app.core.workflow.script_loader import script_loader
     workflow_editor_injector.clear_cache()
+    script_loader.clear_cache()
     return {"success": True, "message": "缓存已清除"}
 
 
@@ -1054,7 +1073,7 @@ async def list_extractors(authenticated: bool = Depends(verify_auth)):
     try:
         extractors = extractor_manager.list_extractors()
         default_id = extractor_manager.get_default_id()
-        
+
         return {
             "extractors": extractors,
             "default": default_id,
@@ -1074,13 +1093,13 @@ async def set_default_extractor(
     try:
         data = await _read_json_object_or_400(request)
         extractor_id = data.get("extractor_id")
-        
+
         if not extractor_id:
             raise HTTPException(status_code=400, detail="缺少 extractor_id")
-        
+
         extractor_exists = extractor_manager.has_extractor(extractor_id)
         success = extractor_manager.set_default(extractor_id)
-        
+
         if success:
             return {
                 "status": "success",
@@ -1091,7 +1110,7 @@ async def set_default_extractor(
         if extractor_exists:
             raise HTTPException(status_code=500, detail="默认提取器保存失败")
         raise HTTPException(status_code=400, detail=f"提取器不存在: {extractor_id}")
-    
+
     except HTTPException:
         raise
     except Exception as e:
@@ -1126,9 +1145,9 @@ async def import_extractors(
 
         if "extractors" not in config:
             raise HTTPException(status_code=400, detail="无效的配置格式：缺少 extractors 字段")
-        
+
         success = extractor_manager.import_config(config)
-        
+
         if success:
             return {
                 "status": "success",
@@ -1137,7 +1156,7 @@ async def import_extractors(
             }
         else:
             raise HTTPException(status_code=400, detail="导入失败")
-    
+
     except HTTPException:
         raise
     except json.JSONDecodeError:
@@ -1159,15 +1178,15 @@ async def get_site_extractor(
         preset_data = config_engine._get_site_data_readonly(domain, resolved_preset)
         if preset_data is None:
             raise HTTPException(status_code=404, detail=f"预设不存在")
-        
+
         extractor_id = preset_data.get("extractor_id")
         extractor_verified = preset_data.get("extractor_verified", False)
-        
+
         if not extractor_id:
             extractor_id = extractor_manager.get_default_id()
-        
+
         extractor_config = extractor_manager.get_extractor_config(extractor_id)
-        
+
         return {
             "domain": domain,
             "extractor_id": extractor_id,
@@ -1175,7 +1194,7 @@ async def get_site_extractor(
             "verified": extractor_verified,
             "is_default": extractor_id == extractor_manager.get_default_id()
         }
-    
+
     except HTTPException:
         raise
     except Exception as e:
@@ -1243,13 +1262,13 @@ async def verify_extractor_result(
 
         if not extracted_text and not expected_text:
             raise HTTPException(status_code=400, detail="提取文本和预期文本不能同时为空")
-        
+
         passed, similarity, message = verify_extraction(
-            extracted_text, 
-            expected_text, 
+            extracted_text,
+            expected_text,
             threshold=threshold
         )
-        
+
         return {
             "similarity": round(similarity, 4),
             "passed": passed,
@@ -1258,7 +1277,7 @@ async def verify_extractor_result(
             "extracted_length": len(extracted_text),
             "expected_length": len(expected_text)
         }
-    
+
     except HTTPException:
         raise
     except ValueError as e:
@@ -1410,7 +1429,7 @@ async def set_site_file_paste_config(
         payload = _unwrap_config_payload(data, "file_paste")
 
         success = config_engine.set_site_file_paste_config(domain, payload, preset_name=resolved_preset)
-        
+
         if success:
             return {
                 "status": "success",
@@ -1469,14 +1488,14 @@ async def batch_update_file_paste_configs(
                 updated.append(domain)
             else:
                 failed.append(domain)
-        
+
         return {
             "status": "success",
             "message": f"已更新 {len(updated)} 个站点",
             "updated": updated,
             "failed": failed
         }
-    
+
     except HTTPException:
         raise
     except Exception as e:
@@ -1519,7 +1538,7 @@ async def set_site_stream_config(
         payload = _unwrap_config_payload(data, "stream_config")
 
         success = config_engine.set_site_stream_config(domain, payload, preset_name=resolved_preset)
-        
+
         if success:
             return {
                 "status": "success",
@@ -1558,7 +1577,7 @@ async def get_stream_config_defaults(authenticated: bool = Depends(verify_auth))
     """获取流式配置的默认值和限制"""
     from app.services.config.engine import get_default_stream_config, get_default_network_config
     from app.core.request_transport import get_request_transport_defaults_payload
-    
+
     return {
         "defaults": get_default_stream_config(),
         "network_defaults": get_default_network_config(),

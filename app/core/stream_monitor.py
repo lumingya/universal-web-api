@@ -224,39 +224,32 @@ class StreamContext:
 
         # 🆕 前缀一致性检查（如果已发送过内容）
         if self.sent_content_length > 0 and len(current_text) >= effective_start:
-            # 修复#7：完整前缀比对为 O(已发送长度)/轮，长回复下开销大。
-            # 降频为每 PREFIX_CHECK_INTERVAL 次调用执行一次完整比对；
-            # 但当 current_text 比历史快照变短（疑似回退/重写）时立即执行完整比对。
-            self.prefix_check_counter += 1
-            suspect_rewrite = bool(self.max_seen_text) and len(current_text) < len(self.max_seen_text)
-            if suspect_rewrite or self.prefix_check_counter >= self.PREFIX_CHECK_INTERVAL:
-                self.prefix_check_counter = 0
-                sent_prefix_end = self.active_turn_baseline_len + self.sent_content_length
+            sent_prefix_end = self.active_turn_baseline_len + self.sent_content_length
 
-                # 获取已发送部分对应的当前文本
-                current_sent_part = current_text[self.active_turn_baseline_len:sent_prefix_end]
+            # 获取已发送部分对应的当前文本
+            current_sent_part = current_text[self.active_turn_baseline_len:sent_prefix_end]
 
-                # 与历史记录比对
-                if self.max_seen_text and len(self.max_seen_text) >= sent_prefix_end:
-                    expected_sent_part = self.max_seen_text[self.active_turn_baseline_len:sent_prefix_end]
+            # 与历史记录比对（Python 原生字符串 == 比对开销极其微小，由 C 底层快速判断）
+            if self.max_seen_text and len(self.max_seen_text) >= sent_prefix_end:
+                expected_sent_part = self.max_seen_text[self.active_turn_baseline_len:sent_prefix_end]
 
-                    # 检测前缀不匹配
-                    if current_sent_part != expected_sent_part:
-                        # 容错：只有差异超过 5% 才认为是真实不匹配（容忍微小变化）
-                        mismatch_threshold = max(10, len(expected_sent_part) * 0.05)
+                # 检测前缀不匹配
+                if current_sent_part != expected_sent_part:
+                    # 容错：只有差异超过 5% 才认为是真实不匹配（容忍微小变化）
+                    mismatch_threshold = max(10, len(expected_sent_part) * 0.05)
 
-                        mismatch_count = sum(
-                            1 for i in range(min(len(current_sent_part), len(expected_sent_part)))
-                            if i < len(current_sent_part) and i < len(expected_sent_part)
-                            and current_sent_part[i] != expected_sent_part[i]
+                    mismatch_count = sum(
+                        1 for i in range(min(len(current_sent_part), len(expected_sent_part)))
+                        if current_sent_part[i] != expected_sent_part[i]
+                    )
+
+                    if mismatch_count > mismatch_threshold:
+                        logger.debug(
+                            f"[PREFIX_MISMATCH] 检测到内容重写 "
+                            f"(mismatch={mismatch_count}/{len(expected_sent_part)})"
                         )
-
-                        if mismatch_count > mismatch_threshold:
-                            logger.warning(
-                                f"[PREFIX_MISMATCH] 检测到内容重写 "
-                                f"(mismatch={mismatch_count}/{len(expected_sent_part)})"
-                            )
-                            return "", False, "prefix_mismatch"
+                        self.prefix_check_counter = 0
+                        return "", False, "prefix_mismatch"
 
         # 原有逻辑：长度增长
         if len(current_text) > effective_start:
@@ -287,13 +280,13 @@ class StreamContext:
         if len(current_text) > len(self.max_seen_text):
             self.max_seen_text = current_text
 
-    def remember_observed_text(self, current_text: str) -> None:
+    def remember_observed_text(self, current_text: str, force_update_max: bool = False) -> None:
         """Remember DOM progress without marking it as sent to the client."""
         if not current_text:
             return
         self.last_stable_text = current_text
         self.stable_text_count = 0
-        if len(current_text) > len(self.max_seen_text):
+        if force_update_max or len(current_text) > len(self.max_seen_text):
             self.max_seen_text = current_text
 
     def sync_to_current_dom_text(self, current_text: str) -> int:
@@ -302,6 +295,7 @@ class StreamContext:
         self.max_seen_text = current_text or ""
         self.last_stable_text = current_text or ""
         self.stable_text_count = 0
+        self.prefix_check_counter = 0
         self.content_ever_changed = True
         return active_len
 
@@ -374,8 +368,10 @@ class StreamMonitor:
                  stop_checker: Optional[Callable[[], bool]] = None,
                  extractor: Optional[BaseExtractor] = None,
                  image_config: Optional[Dict] = None,
-                 stream_config: Optional[Dict] = None):  # 🆕 新增流式配置
+                 stream_config: Optional[Dict] = None,
+                 session: Optional[Any] = None):  # 🆕 新增流式配置与 session 引用
         self.tab = tab
+        self.session = session
         self.finder = finder
         self.formatter = formatter
         self._should_stop = stop_checker or (lambda: False)
@@ -483,6 +479,62 @@ class StreamMonitor:
                 "connection closed",
                 "image_generation_retry",
             )
+        )
+
+    def _is_empty_stream_fallback_reason(self) -> bool:
+        """Identify a network fallback that has not observed usable stream output."""
+        reason = str(self._network_fallback_reason or "").strip().lower()
+        return any(
+            marker in reason
+            for marker in (
+                "未产出有效正文",
+                "响应正文未就绪",
+                "no valid content",
+                "response body not ready",
+            )
+        )
+
+    def _should_wait_for_active_generation_before_refresh(self) -> bool:
+        """Identify recovery reasons that deserve a bounded active-generation grace."""
+        reason = str(self._network_fallback_reason or "").strip().lower()
+        return self._is_empty_stream_fallback_reason() or any(
+            marker in reason
+            for marker in (
+                "未完整结束",
+                "提前关闭",
+                "连接已关闭",
+                "unexpected eof",
+                "eof",
+                "connection closed",
+            )
+        )
+
+    def _active_stop_recovery_grace_seconds(self, strict_arena_image_generation: bool) -> float:
+        """Return the no-progress grace before reloading an active Arena generation."""
+        key = (
+            "arena_active_stop_recovery_grace_seconds"
+            if strict_arena_image_generation
+            else "dom_active_stop_recovery_grace_seconds"
+        )
+        default = 60.0 if strict_arena_image_generation else 30.0
+        value = self._image_config.get(key, default)
+        try:
+            return max(0.0, float(value))
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _active_generation_refresh_allowed(
+        still_generating: bool,
+        should_wait: bool,
+        no_progress_seconds: float,
+        grace_seconds: float,
+    ) -> bool:
+        """Allow recovery after a bounded stall, while preserving active progress."""
+        return bool(
+            not still_generating
+            or not should_wait
+            or no_progress_seconds >= max(0.0, float(grace_seconds))
         )
 
     def _uses_interrupted_stream_recovery(self) -> bool:
@@ -1306,6 +1358,12 @@ class StreamMonitor:
         try:
             self.tab.refresh(ignore_cache=True)
             logger.info("[Image Recovery] 图片结果长时间未渲染，已刷新页面重新同步服务端结果")
+            session = getattr(self, "session", None)
+            if session is not None and hasattr(session, "notify_navigated"):
+                session.notify_navigated(reason="stalled_image_refresh")
+            else:
+                from app.core.page_lifecycle import notify_page_navigated
+                notify_page_navigated(self.tab, reason="stalled_image_refresh")
             return True
         except Exception as exc:
             logger.warning(f"[Image Recovery] 图片停滞恢复刷新失败（继续等待）: {exc}")
@@ -1320,6 +1378,12 @@ class StreamMonitor:
             logger.info(
                 "[Stream Recovery] 断流页面已刷新，重新建立 DOM 监听并同步服务端结果"
             )
+            session = getattr(self, "session", None)
+            if session is not None and hasattr(session, "notify_navigated"):
+                session.notify_navigated(reason="stream_interrupted_refresh")
+            else:
+                from app.core.page_lifecycle import notify_page_navigated
+                notify_page_navigated(self.tab, reason="stream_interrupted_refresh")
             return True
         except Exception as exc:
             logger.warning(f"[Stream Recovery] 断流恢复刷新失败（继续等待）: {exc}")
@@ -1416,6 +1480,9 @@ class StreamMonitor:
         last_text_len = int(initial_snap.get('text_len', 0) or 0)
         last_image_count = int(initial_snap.get('image_count', ctx.baseline_image_count) or 0)
         last_image_references = _snapshot_image_reference_keys(initial_snap)
+        recovery_peak_text_len = last_text_len
+        recovery_peak_image_count = last_image_count
+        recovery_seen_image_references = set(last_image_references)
 
         peak_text_len = 0
         content_shrink_count = 0
@@ -1442,6 +1509,11 @@ class StreamMonitor:
         stream_recovery_page_ready = False
         deferred_hard_timeout_logged = False
         stream_recovery_needs_post_refresh_check = False
+        recovery_last_progress_at = phase_start
+        recovery_rendered_image_seen = False
+        active_stop_recovery_grace_seconds = self._active_stop_recovery_grace_seconds(
+            strict_arena_image_generation
+        )
 
         while True:
             if time.time() - phase_start > self._hard_timeout:
@@ -1532,7 +1604,7 @@ class StreamMonitor:
                 else None
             )
             if arena_observation is not None:
-                still_generating = arena_observation.stop_present
+                still_generating = arena_observation.still_generating
             recovery_output_seen = self._remember_recovery_output(
                 recovery_output_seen,
                 current_text_len,
@@ -1581,12 +1653,11 @@ class StreamMonitor:
                 recovery_has_output = bool(
                     arena_observation.has_new_image or arena_observation.terminal_error
                 )
+                # A rendered image plus no active generation indicators is already
+                # a terminal DOM observation. Do not reload a page merely because
+                # the network stream missed its completion event.
                 recovery_confirmed = bool(
                     arena_observation.is_complete
-                    and (
-                        not interrupted_stream_recovery
-                        or (stream_recovery_refresh_done and post_refresh_settled)
-                    )
                 )
             else:
                 recovery_confirmed = self._interrupted_recovery_confirmed(
@@ -1610,6 +1681,21 @@ class StreamMonitor:
                         refresh_done=stream_recovery_refresh_done,
                     )
                 )
+            if interrupted_stream_recovery:
+                current_rec_state = (
+                    recovery_confirmed,
+                    still_generating,
+                    recovery_output_seen,
+                    stream_recovery_refresh_done,
+                    post_refresh_settled,
+                )
+                if getattr(self, "_last_logged_recovery_state", None) != current_rec_state:
+                    self._last_logged_recovery_state = current_rec_state
+                    logger.debug(
+                        f"[Stream Recovery] 状态变化: recovery_confirmed={recovery_confirmed}, "
+                        f"still_generating={still_generating}, output_seen={recovery_output_seen}, "
+                        f"refresh_done={stream_recovery_refresh_done}, post_settled={post_refresh_settled}"
+                    )
             if interrupted_stream_recovery and not recovery_confirmed:
                 # A disconnected stream is never complete before a reload has
                 # reattached the page to the persisted conversation state.
@@ -1620,6 +1706,29 @@ class StreamMonitor:
                 current_image_count != last_image_count
                 or current_image_references != last_image_references
             )
+            if interrupted_stream_recovery:
+                new_recovery_image_reference = bool(
+                    current_image_references - recovery_seen_image_references
+                )
+                new_recovery_image_count = current_image_count > recovery_peak_image_count
+                recovery_text_progressed = current_text_len > recovery_peak_text_len
+                recovery_progressed = bool(
+                    new_recovery_image_reference
+                    or new_recovery_image_count
+                    or recovery_text_progressed
+                    or (
+                        current_has_new_rendered_image
+                        and not recovery_rendered_image_seen
+                    )
+                )
+                if recovery_progressed:
+                    recovery_last_progress_at = time.time()
+                recovery_peak_text_len = max(recovery_peak_text_len, current_text_len)
+                recovery_peak_image_count = max(recovery_peak_image_count, current_image_count)
+                recovery_seen_image_references.update(current_image_references)
+                recovery_rendered_image_seen = bool(
+                    recovery_rendered_image_seen or current_has_new_rendered_image
+                )
             image_progress_signal = (
                 current_has_new_rendered_image
                 if strict_arena_image_generation
@@ -1742,26 +1851,24 @@ class StreamMonitor:
             # 🆕 处理前缀不匹配（内容被重写）
             if reason == "prefix_mismatch":
                 if interrupted_stream_recovery:
-                    ctx.remember_observed_text(current_text)
+                    ctx.remember_observed_text(current_text, force_update_max=True)
                     silence_start = time.time()
+                    time.sleep(current_interval)
                     continue
                 logger.warning(
                     "[PREFIX_MISMATCH] DOM 内容被重写；普通 delta 无法撤回已发送前缀，"
-                    "跳过整段重发以避免重复污染"
+                    "同步 DOM 快照并跳过整段重发以避免重复污染"
                 )
-                active_len = max(0, len(current_text) - int(ctx.active_turn_baseline_len or 0))
-                ctx.sent_content_length = max(ctx.sent_content_length, active_len)
-                ctx.max_seen_text = current_text
-                ctx.last_stable_text = current_text
-                ctx.stable_text_count = 0
-                ctx.content_ever_changed = True
+                ctx.sync_to_current_dom_text(current_text)
                 silence_start = time.time()
+                time.sleep(current_interval)
                 continue
 
             if reason and str(reason).startswith("内容缩短"):
                 if interrupted_stream_recovery:
                     ctx.remember_observed_text(current_text)
                     silence_start = time.time()
+                    time.sleep(current_interval)
                     continue
                 logger.warning(
                     f"[STREAM_SHRINK] {reason}；普通 delta 无法撤回已发送尾部，"
@@ -1769,6 +1876,7 @@ class StreamMonitor:
                 )
                 ctx.sync_to_current_dom_text(current_text)
                 silence_start = time.time()
+                time.sleep(current_interval)
                 continue
 
             if diff:
@@ -1833,7 +1941,7 @@ class StreamMonitor:
                 )
                 if strict_arena_image_generation and arena_observation is not None:
                     recovery_confirmed = bool(
-                        arena_observation.is_complete and stream_recovery_refresh_done and post_refresh_settled
+                        arena_observation.is_complete
                     )
                 else:
                     recovery_confirmed = self._interrupted_recovery_confirmed(
@@ -1877,13 +1985,26 @@ class StreamMonitor:
                 or (90.0 if arena_image_recovery else 0.0)
             )
             if strict_arena_image_generation:
-                interrupted_refresh_interval = ArenaImageGenerationGuard.refresh_interval_seconds(
-                    self._image_config
-                )
+                if (
+                    interrupted_image_recovery
+                    and not recovery_output_seen
+                    and self._is_empty_stream_fallback_reason()
+                ):
+                    # Queue/cold-start timeouts do not prove a broken stream.
+                    # Give the page enough time to produce its first image before
+                    # using the slower image-stall reload path.
+                    interrupted_refresh_interval = float(
+                        self._image_config.get("arena_image_no_output_refresh_interval_seconds")
+                        or 60.0
+                    )
+                else:
+                    interrupted_refresh_interval = ArenaImageGenerationGuard.refresh_interval_seconds(
+                        self._image_config
+                    )
             else:
                 interrupted_refresh_interval = float(
                     self._image_config.get("dom_image_interrupted_refresh_interval_seconds")
-                    or 15.0
+                    or 20.0
                 )
             interrupted_recovery_timeout = float(
                 self._image_config.get("dom_image_interrupted_recovery_timeout_seconds")
@@ -1893,7 +2014,17 @@ class StreamMonitor:
                 0,
                 int(
                     self._image_config.get("dom_image_interrupted_max_refreshes")
-                    or max(12, int(max(1.0, float(self._hard_timeout)) / max(1.0, interrupted_refresh_interval)) + 1)
+                    or min(
+                        16,
+                        max(
+                            12,
+                            int(
+                                max(1.0, float(self._hard_timeout))
+                                / max(1.0, interrupted_refresh_interval)
+                            )
+                            + 1,
+                        ),
+                    )
                 ),
             )
             if strict_arena_image_generation:
@@ -1907,8 +2038,18 @@ class StreamMonitor:
                     int(
                         self._image_config.get("dom_interrupted_max_refreshes")
                         or max(
-                            12,
-                            int(max(1.0, float(self._hard_timeout)) / max(1.0, interrupted_refresh_interval)) + 1,
+                            1,
+                            min(
+                                16,
+                                max(
+                                    12,
+                                    int(
+                                        max(1.0, float(self._hard_timeout))
+                                        / max(1.0, interrupted_refresh_interval)
+                                    )
+                                    + 1,
+                                ),
+                            ),
                         )
                     ),
                 )
@@ -1924,9 +2065,13 @@ class StreamMonitor:
                 or (240.0 if arena_image_recovery else 0.0)
             )
             elapsed_since_phase_start = time.time() - phase_start
+            if (
+                strict_arena_image_generation
+                and arena_observation is not None
+                and arena_observation.terminal_error is not None
+            ):
+                raise arena_observation.terminal_error
             if strict_arena_image_generation and arena_observation is not None and recovery_confirmed:
-                if arena_observation.terminal_error is not None:
-                    raise arena_observation.terminal_error
                 logger.info(
                     "[Arena Image] 原生停止按钮已消失且已确认新图片，生成完成"
                 )
@@ -1955,6 +2100,12 @@ class StreamMonitor:
             if (
                 interrupted_stream_recovery
                 and not recovery_confirmed
+                and self._active_generation_refresh_allowed(
+                    still_generating,
+                    self._should_wait_for_active_generation_before_refresh(),
+                    time.time() - recovery_last_progress_at,
+                    active_stop_recovery_grace_seconds,
+                )
                 and interrupted_refresh_interval > 0
                 and stream_recovery_refresh_attempts < stream_recovery_max_refreshes
                 and time.time() - stream_recovery_last_refresh_at >= interrupted_refresh_interval
@@ -1983,6 +2134,7 @@ class StreamMonitor:
                     last_image_references = set(ctx.baseline_image_references)
                     peak_text_len = 0
                     silence_start = time.time()
+                    recovery_last_progress_at = time.time()
                     stream_recovery_needs_post_refresh_check = True
                     time.sleep(2.0)
                     continue

@@ -109,6 +109,16 @@ tests/*
 !tests/test_arena_direct_models.py
 !tests/test_tool_calling_repairs.py
 !tests/test_input_chunking.py
+!tests/test_workflow_script_loader.py
+!tests/test_workflow_js_exec_integration.py
+!tests/test_command_navigation_dispatch.py
+
+# 自定义与本地工作流扩展脚本
+custom_scripts/*
+!custom_scripts/README.md
+!custom_scripts/examples/
+scripts/custom/
+*.custom.js
 
 # JS 脚本与用户脚本（UserScripts）
 js/

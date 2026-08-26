@@ -4,14 +4,14 @@
  */
 (function() {
   'use strict';
-  
+
   if (window.__WORKFLOW_EDITOR_INJECTED__) {
     console.log('[WorkflowEditor] 已存在，重新显示');
     window.WorkflowEditor?.show?.();
     return;
   }
   window.__WORKFLOW_EDITOR_INJECTED__ = true;
-  
+
     // ========== 配置 ==========
     const TYPES = {
         COORD_CLICK: { color: 'rgba(249, 115, 22, 0.18)', border: '#F97316', name: '坐标点击' },
@@ -74,7 +74,7 @@
           watchdogTimer: null
         }
     };
-  
+
   // ========== 样式 ==========
   function injectStyles() {
     if (document.getElementById('wfe-styles')) return;
@@ -155,7 +155,7 @@
         animation: wfe-fade 0.15s;
       }
       @keyframes wfe-fade { from { opacity: 0; transform: translateY(-4px); } }
-      
+
       .wfe-menu-header {
         padding: 12px 14px;
         border-bottom: 1px solid #f3f4f6;
@@ -163,7 +163,7 @@
       }
       .wfe-menu-title { font-weight: 600; font-size: 13px; color: #111827; }
       .wfe-menu-subtitle { font-size: 11px; color: #6b7280; margin-top: 2px; }
-      
+
       .wfe-menu-body { padding: 6px 0; }
       .wfe-menu-item {
         padding: 8px 14px;
@@ -175,7 +175,7 @@
       .wfe-menu-item:hover:not(.disabled) { background: #f9fafb; }
       .wfe-menu-item.disabled { opacity: 0.5; }
       .wfe-menu-item.clickable { cursor: pointer; }
-      
+
       .wfe-menu-label { flex: 1; font-size: 12px; color: #374151; }
       .wfe-menu-input {
         border: 1px solid #d1d5db;
@@ -199,11 +199,11 @@
         resize: vertical;
       }
       .wfe-menu-textarea:focus { outline: none; border-color: #3b82f6; }
-      
+
       .wfe-divider { height: 1px; background: #f3f4f6; margin: 4px 0; }
       .wfe-menu-item.danger { color: #dc2626; }
       .wfe-menu-item.danger:hover { background: #fef2f2; }
-      
+
       .wfe-toolbar {
         position: fixed;
         bottom: 20px;
@@ -315,7 +315,7 @@
         background: #f3f4f6;
         color: #111827;
       }
-      
+
       .wfe-btn {
         padding: 6px 10px;
         border: 1px solid #e5e7eb;
@@ -333,7 +333,7 @@
       .wfe-btn.primary:hover { background: #2563eb; }
       .wfe-btn.danger { color: #dc2626; }
       .wfe-btn.danger:hover { background: #fef2f2; }
-      
+
       .wfe-pick-overlay {
         position: fixed;
         inset: 0;
@@ -442,7 +442,7 @@
         0% { transform: scale(0.55); opacity: 0.95; }
         100% { transform: scale(2.1); opacity: 0; }
       }
-      
+
       .wfe-hidden { display: none !important; }
     `;
     document.head.appendChild(style);
@@ -453,7 +453,7 @@
       state.cleanupHandlers.push(fn);
     }
   }
-  
+
   // ========== DOM 工具 ==========
   function el(tag, props = {}, children = []) {
     const element = document.createElement(tag);
@@ -466,7 +466,7 @@
     children.forEach(c => element.appendChild(typeof c === 'string' ? document.createTextNode(c) : c));
     return element;
   }
-  
+
   function findElement(selector) {
     if (!selector) return null;
     try {
@@ -476,7 +476,7 @@
       return null;
     }
   }
-  
+
   function getElementCenter(element) {
     if (!element) return { x: window.innerWidth / 2, y: window.innerHeight / 2 };
     const rect = element.getBoundingClientRect();
@@ -485,21 +485,21 @@
       y: rect.top + rect.height / 2
     };
   }
-  
+
   function generateSelector(element) {
     if (!element || element === document.body) return 'body';
-    
+
     if (element.id && !element.id.startsWith('wfe-')) {
       const sel = '#' + CSS.escape(element.id);
       if (document.querySelectorAll(sel).length === 1) return sel;
     }
-    
+
     const testId = element.getAttribute('data-testid');
     if (testId) {
       const sel = `[data-testid="${testId}"]`;
       if (document.querySelectorAll(sel).length === 1) return sel;
     }
-    
+
     if (element.className && typeof element.className === 'string') {
       const classes = element.className.split(' ')
         .filter(c => c && !c.startsWith('wfe-'))
@@ -509,7 +509,7 @@
         if (document.querySelectorAll(sel).length === 1) return sel;
       }
     }
-    
+
     return element.tagName.toLowerCase();
   }
 
@@ -785,11 +785,21 @@
           value: null
         });
       } else if (ball.type === 'SCRIPT') {
+        const target = String(ball.config.target || '').trim();
+        const rawScript = ball.config.script;
+        let val = rawScript;
+        if (target && typeof rawScript === 'string' && rawScript.trim().startsWith('{')) {
+          try {
+            val = JSON.parse(rawScript);
+          } catch (_) {
+            val = rawScript;
+          }
+        }
         newWorkflow.push({
           action: 'JS_EXEC',
-          target: '',
+          target: target,
           optional: !!ball.config.optional,
-          value: String(ball.config.script || '').trim() || 'return document.title;'
+          value: val !== undefined && val !== null ? val : (target ? {} : 'return document.title;')
         });
       } else if (ball.type === 'PAGE_FETCH') {
         newWorkflow.push({
@@ -1047,7 +1057,7 @@
   async function testAllSteps() {
     await runWorkflowTest();
   }
-  
+
   function normalizeKey(value) {
     return String(value || '')
       .trim()
@@ -1104,7 +1114,7 @@
     selectors[resolvedKey] = ball.config.selector;
     return resolvedKey;
   }
-  
+
   // ========== 小球类 ==========
     class Ball {
         constructor(opts) {
@@ -1122,6 +1132,7 @@
                 wait_seconds: 1,
                 key: 'Enter',
                 script: 'return document.title;',
+                target: '',
                 selector: '',
                 targetKey: '',
                 description: '使用当前预设的 request_transport 页面直发配置发送 prompt',
@@ -1147,7 +1158,7 @@
 
             // 不在构造函数中自动定位，由 addBall 统一处理
         }
-    
+
       render() {
           const tc = TYPES[this.type];
           const selectorHint = this.config.selector ? ` → ${this.config.selector.slice(0, 30)}` : '';
@@ -1198,7 +1209,7 @@
 
           document.body.appendChild(this.element);
       }
-    
+
     bind() {
       this.element.addEventListener('mousedown', (e) => {
         if (e.button !== 0 || this.type === 'READ') return;
@@ -1206,13 +1217,13 @@
         e.preventDefault();
         e.stopPropagation();
       });
-      
+
       this.element.addEventListener('contextmenu', (e) => {
         e.preventDefault();
         e.stopPropagation();
         showMenu(this, e.clientX, e.clientY);
       });
-      
+
       if (this.type === 'READ') {
         this.element.addEventListener('click', () => {
           startPicker(this);
@@ -1282,7 +1293,7 @@
       this.connectionElement.style.width = `${distance}px`;
       this.connectionElement.style.transform = `rotate(${angle}deg)`;
     }
-    
+
     move(x, y) {
       this.x = Math.max(0, Math.min(window.innerWidth - BALL_SIZE, x));
       this.y = Math.max(0, Math.min(window.innerHeight - BALL_SIZE, y));
@@ -1302,7 +1313,7 @@
       }
       this.syncScrollVisuals();
     }
-    
+
       updateSeq(n) {
           this.seq = n;
           if (this.type === 'COORD_SCROLL') {
@@ -1328,7 +1339,7 @@
           }
           if (n === 1) this.config.delay_ms = 0;
       }
-    
+
     locateToElement() {
       const target = findElement(this.config.selector);
       if (target) {
@@ -1374,14 +1385,14 @@
       this.element?.remove();
       this.endElement?.remove();
     }
-    
+
     toJSON() {
       const data = {
         seq: this.seq,
         type: this.type.toLowerCase(),
         delay_ms: this.config.delay_ms
       };
-      
+
       if (this.type === 'CLICK' || this.type === 'COORD_CLICK') {
         data.x = Math.round(this.x + BALL_RADIUS);
         data.y = Math.round(this.y + BALL_RADIUS);
@@ -1404,11 +1415,11 @@
       } else if (this.type === 'READ') {
         data.selector = this.config.selector;
       }
-      
+
       return data;
     }
   }
-  
+
   // ========== 全局拖拽 ==========
   const handleDocumentDragMove = (e) => {
     const ball = state.steps.find(b => b.dragAnchor);
@@ -1421,7 +1432,7 @@
   };
   document.addEventListener('mousemove', handleDocumentDragMove, true);
   registerCleanup(() => document.removeEventListener('mousemove', handleDocumentDragMove, true));
-  
+
   const handleDocumentDragEnd = () => {
     state.steps.forEach(b => {
       if (b.dragAnchor) {
@@ -1431,19 +1442,19 @@
   };
   document.addEventListener('mouseup', handleDocumentDragEnd, true);
   registerCleanup(() => document.removeEventListener('mouseup', handleDocumentDragEnd, true));
-  
+
   // ========== 右键菜单 ==========
   let currentMenu = null;
-  
+
   function showMenu(ball, x, y) {
     hideMenu();
-    
+
     const tc = TYPES[ball.type];
     const menu = el('div', { className: 'wfe-menu' });
     if (ball.type === 'SCRIPT') {
       menu.style.minWidth = '360px';
     }
-    
+
     menu.appendChild(el('div', { className: 'wfe-menu-header' }, [
       el('div', { className: 'wfe-menu-title' }, [`步骤 #${ball.seq}：${tc.name}`]),
       el('div', { className: 'wfe-menu-subtitle' }, [
@@ -1454,9 +1465,9 @@
         '提取特定元素的文本'
       ])
     ]));
-    
+
     const body = el('div', { className: 'wfe-menu-body' });
-    
+
     // 延迟
     if (ball.seq === 1) {
       body.appendChild(el('div', { className: 'wfe-menu-item disabled' }, [
@@ -1472,15 +1483,15 @@
       });
       delayInput.addEventListener('change', () => ball.config.delay_ms = parseInt(delayInput.value) || 0);
       delayInput.addEventListener('click', e => e.stopPropagation());
-      
+
       body.appendChild(el('div', { className: 'wfe-menu-item' }, [
         el('span', { className: 'wfe-menu-label' }, ['⏱️ 距上一步间隔 (ms)']),
         delayInput
       ]));
     }
-    
+
     body.appendChild(el('div', { className: 'wfe-divider' }));
-    
+
     // 类型特定
     if (['CLICK', 'MODEL', 'INPUT', 'READ'].includes(ball.type)) {
       const keyInput = el('input', {
@@ -1541,7 +1552,7 @@
       });
       radiusInput.addEventListener('change', () => ball.config.random_radius = parseInt(radiusInput.value) || 0);
       radiusInput.addEventListener('click', e => e.stopPropagation());
-      
+
       body.appendChild(el('div', { className: 'wfe-menu-item' }, [
         el('span', { className: 'wfe-menu-label' }, ['🎯 随机范围 (px)']),
         radiusInput
@@ -1617,7 +1628,7 @@
       });
       textInput.addEventListener('input', () => ball.config.text = textInput.value);
       textInput.addEventListener('click', e => e.stopPropagation());
-      
+
       body.appendChild(el('div', { className: 'wfe-menu-item' }, [
         el('span', { className: 'wfe-menu-label' }, ['✏️ 输入文本']),
         textInput
@@ -1656,10 +1667,21 @@
         el('span', { className: 'wfe-menu-label' }, ['例如：Enter、Ctrl+Enter、Shift+Enter、Escape'])
       ]));
     } else if (ball.type === 'SCRIPT') {
+      const targetInput = el('input', {
+        type: 'text',
+        className: 'wfe-menu-input wide',
+        value: ball.config.target || '',
+        placeholder: 'custom_scripts/xxx.js (可选外部文件)'
+      });
+      targetInput.addEventListener('input', () => {
+        ball.config.target = targetInput.value.trim();
+      });
+      targetInput.addEventListener('click', e => e.stopPropagation());
+
       const scriptInput = el('textarea', {
         className: 'wfe-menu-textarea',
-        value: ball.config.script || '',
-        placeholder: 'return document.title;'
+        value: typeof ball.config.script === 'object' && ball.config.script !== null ? JSON.stringify(ball.config.script, null, 2) : (ball.config.script || ''),
+        placeholder: 'return document.title; 或 { "param": "val" }'
       });
       scriptInput.addEventListener('input', () => {
         ball.config.script = scriptInput.value;
@@ -1670,7 +1692,11 @@
         el('span', { className: 'wfe-menu-label' }, ['🧠 JavaScript 脚本步骤'])
       ]));
       body.appendChild(el('div', { className: 'wfe-menu-item' }, [
-        el('span', { className: 'wfe-menu-label' }, ['代码'])
+        el('span', { className: 'wfe-menu-label' }, ['脚本文件']),
+        targetInput
+      ]));
+      body.appendChild(el('div', { className: 'wfe-menu-item' }, [
+        el('span', { className: 'wfe-menu-label' }, ['代码 / 参数'])
       ]));
       body.appendChild(scriptInput);
     } else if (ball.type === 'PAGE_FETCH') {
@@ -1684,7 +1710,7 @@
       body.appendChild(el('div', { className: 'wfe-menu-item disabled' }, [
         el('span', { className: 'wfe-menu-label' }, [`🔍 ${ball.config.selector || '(未设置)'}`])
       ]));
-      
+
       const pickBtn = el('div', { className: 'wfe-menu-item clickable' }, [
         el('span', { className: 'wfe-menu-label', style: { color: '#8b5cf6' } }, ['🖱️ 重新拾取元素'])
       ]);
@@ -1694,7 +1720,7 @@
       });
       body.appendChild(pickBtn);
     }
-    
+
     body.appendChild(el('div', { className: 'wfe-divider' }));
 
     const testBtn = el('div', { className: 'wfe-menu-item clickable' }, [
@@ -1712,7 +1738,7 @@
     body.appendChild(testBtn);
 
     body.appendChild(el('div', { className: 'wfe-divider' }));
-    
+
     const delBtn = el('div', { className: 'wfe-menu-item clickable danger' }, [
       el('span', { className: 'wfe-menu-label' }, ['❌ 删除此步骤'])
     ]);
@@ -1721,22 +1747,22 @@
       hideMenu();
     });
     body.appendChild(delBtn);
-    
+
     menu.appendChild(body);
     document.body.appendChild(menu);
-    
+
     const rect = menu.getBoundingClientRect();
     menu.style.left = Math.min(x, window.innerWidth - rect.width - 10) + 'px';
     menu.style.top = Math.min(y, window.innerHeight - rect.height - 10) + 'px';
-    
+
     currentMenu = menu;
   }
-  
+
   function hideMenu() {
     currentMenu?.remove();
     currentMenu = null;
   }
-  
+
   const handleDocumentMenuClick = (e) => {
     if (currentMenu && !currentMenu.contains(e.target) && !e.target.closest('.wfe-ball')) {
       hideMenu();
@@ -1744,10 +1770,10 @@
   };
   document.addEventListener('click', handleDocumentMenuClick, true);
   registerCleanup(() => document.removeEventListener('click', handleDocumentMenuClick, true));
-  
+
   // ========== 元素拾取 ==========
   let pickOverlay, pickTip, highlighted;
-  
+
   function startPicker(ball) {
     state.isPickingElement = true;
     state.pickingCallback = (selector) => {
@@ -1759,45 +1785,45 @@
       }
       ball.locateToElement();
     };
-    
+
     pickOverlay = el('div', { className: 'wfe-pick-overlay' });
     pickTip = el('div', { className: 'wfe-pick-tip' }, ['🎯 点击元素选择 | ESC 取消']);
-    
+
     document.body.append(pickOverlay, pickTip);
-    
+
     pickOverlay.addEventListener('mousemove', onPickMove);
     pickOverlay.addEventListener('click', onPickClick);
     document.addEventListener('keydown', onPickKey);
   }
-  
+
   function onPickMove(e) {
     pickOverlay.style.pointerEvents = 'none';
     const target = document.elementFromPoint(e.clientX, e.clientY);
     pickOverlay.style.pointerEvents = 'auto';
-    
+
     highlighted?.classList.remove('wfe-highlight');
-    
+
     if (target && target !== document.body && !target.className?.includes?.('wfe-')) {
       target.classList.add('wfe-highlight');
       highlighted = target;
     }
   }
-  
+
   function onPickClick(e) {
     pickOverlay.style.pointerEvents = 'none';
     const target = document.elementFromPoint(e.clientX, e.clientY);
     pickOverlay.style.pointerEvents = 'auto';
-    
+
     if (target && highlighted && state.pickingCallback) {
       state.pickingCallback(generateSelector(target));
     }
     endPicker();
   }
-  
+
   function onPickKey(e) {
     if (e.key === 'Escape') endPicker();
   }
-  
+
   function endPicker() {
     state.isPickingElement = false;
     state.pickingCallback = null;
@@ -1807,7 +1833,7 @@
     pickTip?.remove();
     document.removeEventListener('keydown', onPickKey);
   }
-  
+
     // ========== 小球管理 ==========
     function addBall(type, config = {}) {
         const seq = state.steps.length + 1;
@@ -1868,16 +1894,16 @@
       state.steps.forEach((b, i) => b.updateSeq(i + 1));
     }
   }
-  
+
   function clearAll() {
     state.steps.forEach(b => b.destroy());
     state.steps = [];
   }
-  
+
   function exportConfig() {
     return state.steps.map(b => b.toJSON());
   }
-  
+
     // ========== 🔧 加载现有配置（读取实际延迟）==========
     function loadFromConfig(config) {
         clearAll();
@@ -1974,7 +2000,8 @@
                 type = 'SCRIPT';
                 stepConfig = {
                     delay_ms: 0,
-                    script: String(step.value || '').trim() || 'return document.title;',
+                    target: String(step.target || '').trim(),
+                    script: typeof step.value === 'object' && step.value !== null ? JSON.stringify(step.value, null, 2) : (step.value || ''),
                     optional: !!step.optional
                 };
             } else if (action === 'PAGE_FETCH') {
@@ -2018,7 +2045,7 @@
             }, 300);
         }
     }
-    
+
   // ========== 工具栏 ==========
   let toolbar;
   let toolbarActionMenu;
@@ -2093,7 +2120,7 @@
     e.preventDefault();
     e.stopPropagation();
   }
-  
+
   function createToolbar() {
     if (toolbar) return;
       const handleDots = el('div', { className: 'wfe-toolbar-handle-dots' }, [
@@ -2160,7 +2187,7 @@
           el('button', { className: 'wfe-btn danger', 'data-action': 'clear' }, ['清空']),
           el('button', { className: 'wfe-btn', 'data-action': 'close' }, ['✖'])
       ]);
-    
+
     document.body.appendChild(toolbar);
     const rect = toolbar.getBoundingClientRect();
     setToolbarPosition(rect.left, rect.top);
@@ -2171,7 +2198,7 @@
       if (e.target !== toolbar) return;
       startToolbarDrag(e);
     });
-    
+
     toolbar.addEventListener('click', (e) => {
       const btn = e.target.closest('[data-action]');
       if (!btn) return;
@@ -2212,7 +2239,7 @@
   };
   window.addEventListener('resize', handleToolbarResize);
   registerCleanup(() => window.removeEventListener('resize', handleToolbarResize));
-  
+
     async function doSave() {
         if (!state.siteConfig) {
             state.siteConfig = { selectors: {}, workflow: [] };
@@ -2317,14 +2344,14 @@
             }
         }
     }
-  
+
   function showEditor() {
     state.isVisible = true;
     toolbar?.classList.remove('wfe-hidden');
     state.steps.forEach(b => b.setHidden(false));
     refreshToolbarMeta();
   }
-  
+
   function hideEditor() {
     state.isVisible = false;
     toolbar?.classList.add('wfe-hidden');
@@ -2332,7 +2359,7 @@
     hideMenu();
     endPicker();
   }
-  
+
   // ========== 初始化 ==========
     function init() {
         console.log('[WorkflowEditor] 🚀 初始化中...');
@@ -2372,9 +2399,9 @@
 
         console.log('[WorkflowEditor] ✅ 编辑器已就绪');
     }
-  
+
   init();
-  
+
   window.WorkflowEditor = {
     addClick: () => addBall('CLICK'),
     addModel: () => addBall('MODEL'),
@@ -2459,5 +2486,5 @@
       loadFromConfig(window.__WORKFLOW_EDITOR_CONFIG__ || state.siteConfig);
     }
   };
-  
+
 })();

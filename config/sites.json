@@ -1010,7 +1010,7 @@
           "selector": "img",
           "audio_selector": "generated-music audio, generated-music source, audio, audio source",
           "video_selector": "generated-music video, video-player video, response-element video, video",
-          "container_selector": "response-element, single-image.generated-image, .generated-image, generated-music, .attachment-container, .markdown-main-panel",
+          "container_selector": "response-element, single-image.generated-image, .generated-image, generated-music, .markdown-main-panel",
           "force_postprocess": false,
           "debounce_seconds": 1,
           "wait_for_load": true,
@@ -1284,7 +1284,7 @@
           "selector": "img",
           "audio_selector": "generated-music audio, generated-music source, audio, audio source",
           "video_selector": "generated-music video, video-player video, response-element video, video",
-          "container_selector": "response-element, single-image.generated-image, .generated-image, generated-music, .attachment-container, .markdown-main-panel",
+          "container_selector": "response-element, single-image.generated-image, .generated-image, generated-music, .markdown-main-panel",
           "force_postprocess": false,
           "debounce_seconds": 1,
           "wait_for_load": true,
@@ -1558,7 +1558,7 @@
           "selector": "img",
           "audio_selector": "generated-music audio, generated-music source, audio, audio source",
           "video_selector": "generated-music video, video-player video, response-element video, video",
-          "container_selector": "response-element, single-image.generated-image, .generated-image, generated-music, .attachment-container, .markdown-main-panel",
+          "container_selector": "response-element, single-image.generated-image, .generated-image, generated-music, .markdown-main-panel",
           "force_postprocess": false,
           "debounce_seconds": 1,
           "wait_for_load": true,
@@ -1852,7 +1852,7 @@
           "selector": "img",
           "audio_selector": "generated-music audio, generated-music source, audio, audio source",
           "video_selector": "generated-music video, video-player video, response-element video, video",
-          "container_selector": "response-element, single-image.generated-image, .generated-image, generated-music, .attachment-container, .markdown-main-panel",
+          "container_selector": "response-element, single-image.generated-image, .generated-image, generated-music, .markdown-main-panel",
           "force_postprocess": false,
           "debounce_seconds": 1,
           "wait_for_load": true,
@@ -3200,12 +3200,275 @@
   },
   "arena.ai": {
     "presets": {
+      "万能直连-通用生图": {
+        "model_catalog": {
+          "enabled": true,
+          "source": "arena_direct",
+          "modality": "image",
+          "include_keywords": [
+            "openai",
+            "gpt-image",
+            "google",
+            "gemini",
+            "imagen",
+            "grok",
+            "flux",
+            "mona-lisa",
+            "luna-lisa",
+            "lina-alpha",
+            "lina-f-alpha",
+            "lina",
+            "silver_halide",
+            "z-image",
+            "seed",
+            "seedream",
+            "seededit"
+          ],
+          "exclude_keywords": [
+            "hunyuan",
+            "hy",
+            "baidu",
+            "wenxin",
+            "ernie",
+            "tencent",
+            "minimax",
+            "qwen",
+            "video",
+            "sora",
+            "veo",
+            "gemini-omni",
+            "seedance",
+            "dreamina",
+            "kling",
+            "hailuo",
+            "runway",
+            "pika",
+            "luma",
+            "wan",
+            "vidu",
+            "mochi",
+            "ltx",
+            "pixverse",
+            "kandinsky",
+            "sensenova",
+            "baichuan",
+            "internlm",
+            "stepfun",
+            "telechat"
+          ]
+        },
+        "selectors": {
+          "input_box": "textarea[name=\"message\"]",
+          "send_btn": "button[aria-label=\"Send message\"][type=\"submit\"]:not(:disabled):not([aria-disabled=\"true\"]), button[type=\"submit\"]:not(:disabled):not([aria-disabled=\"true\"]), button[aria-label=\"Send message\"]:not(:disabled):not([aria-disabled=\"true\"])",
+          "result_container": "main ol > div.w-full:not(.flex) .flex.flex-col.gap-3",
+          "new_chat_btn": null,
+          "message_wrapper": null,
+          "generating_indicator": null,
+          "retry button": "button[aria-label=\"Rerun stopped messages\"], button[data-slot=\"tooltip-trigger\"]:has(svg path[d*=\"21.8883\"])",
+          "stop_btn": "button[aria-label=\"Stop generation\"]"
+        },
+        "workflow": [
+          {
+            "action": "CLICK",
+            "target": "retry button",
+            "optional": true,
+            "value": null,
+            "execution": {
+              "click_mode": "dom_safe"
+            }
+          },
+          {
+            "action": "CLICK",
+            "target": "stop_btn",
+            "optional": true,
+            "value": null,
+            "execution": {
+              "click_mode": "dom_safe"
+            }
+          },
+          {
+            "action": "JS_EXEC",
+            "target": "file://custom_scripts/examples/arena_payload_interceptor.js",
+            "optional": false,
+            "value": {
+              "target_endpoint": "/nextjs-api/stream/create-evaluation",
+              "override_model": "{{context.model}}"
+            }
+          },
+          {
+            "action": "FILL_INPUT",
+            "target": "input_box",
+            "optional": false,
+            "value": null
+          },
+          {
+            "action": "CLICK",
+            "target": "send_btn",
+            "optional": false,
+            "value": null
+          },
+          {
+            "action": "STREAM_WAIT",
+            "target": "result_container",
+            "optional": false,
+            "value": null
+          }
+        ],
+        "stealth": true,
+        "stream_config": {
+          "mode": "network",
+          "request_transport": {
+            "mode": "workflow",
+            "profile": "",
+            "options": {}
+          },
+          "hard_timeout": 300,
+          "network": {
+            "listen_pattern": "/nextjs-api/stream/",
+            "stream_match_mode": "keyword",
+            "stream_match_pattern": "",
+            "parser": "lmarena",
+            "first_response_timeout": 15,
+            "silence_threshold": 6,
+            "response_interval": 1
+          }
+        },
+        "image_extraction": {
+          "enabled": true,
+          "modalities": {
+            "image": {
+              "enabled": true,
+              "run_policy": "on_signal",
+              "quick_probe_timeout_seconds": 1,
+              "late_wait_timeout_seconds": 60,
+              "blind_wait_timeout_seconds": 1
+            },
+            "audio": {
+              "enabled": false,
+              "run_policy": "disabled",
+              "quick_probe_timeout_seconds": 1,
+              "capture_timeout_seconds": 12
+            },
+            "video": {
+              "enabled": false,
+              "run_policy": "disabled",
+              "quick_probe_timeout_seconds": 1,
+              "late_wait_timeout_seconds": 90
+            }
+          },
+          "selector": "img",
+          "audio_selector": "audio, audio source",
+          "video_selector": "video, video source",
+          "container_selector": null,
+          "force_postprocess": false,
+          "debounce_seconds": 2,
+          "wait_for_load": true,
+          "load_timeout_seconds": 5,
+          "download_blobs": true,
+          "max_size_mb": 20,
+          "canvas_export_mime": "image/jpeg",
+          "canvas_export_quality": 0.88,
+          "src_allow_patterns": [],
+          "mode": "first",
+          "audio_capture_enabled": true,
+          "audio_capture_mute_playback": true,
+          "audio_capture_preload_enabled": true,
+          "audio_capture_reload_before_workflow": false,
+          "audio_capture_preserve_graph": true,
+          "audio_capture_terminal_settle_seconds": 0.35,
+          "audio_trigger_selector": "",
+          "audio_trigger_labels": [
+            "朗读",
+            "语音朗读",
+            "收听",
+            "read aloud",
+            "listen",
+            "tts",
+            "voice"
+          ],
+          "audio_capture_max_wait_seconds": 12,
+          "audio_capture_min_wait_seconds": 2,
+          "audio_capture_hard_max_wait_seconds": 45,
+          "audio_capture_estimated_chars_per_second": 4.8,
+          "audio_capture_wait_padding_seconds": 1.2,
+          "audio_network_capture": {
+            "enabled": false,
+            "timeout_seconds": 2.5,
+            "transport": "page_websocket_probe",
+            "url_patterns": [
+              "voicegenie",
+              "speech",
+              "audio",
+              "tts"
+            ],
+            "extractor": "voicegenie_binary_stream",
+            "settle_seconds": 0.35,
+            "max_payload_bytes": 10485760
+          },
+          "audio_browser_tts_fallback": {
+            "enabled": false,
+            "provider": "doubao_samantha",
+            "speaker": "2",
+            "speech_rate": 0,
+            "pitch": 0,
+            "format": "aac",
+            "timeout_seconds": 30,
+            "pc_version": "3.20.2",
+            "aid": "497858",
+            "real_aid": "497858",
+            "language": "zh",
+            "device_platform": "web",
+            "pkg_type": "release_version",
+            "region": "CN",
+            "sys_region": "CN",
+            "use_olympus_account": "1",
+            "samantha_web": "1"
+          },
+          "audio_capture_poll_seconds": 0.25,
+          "audio_capture_silence_seconds": 1.2,
+          "audio_capture_activity_threshold": 0.006,
+          "audio_capture_activity_silence_seconds": 0.65,
+          "arena_image_generation": true
+        },
+        "file_paste": {
+          "enabled": true,
+          "threshold": 120000,
+          "temp_file_type": "chunk",
+          "hint_text": "超过输入上限，本次请求中断",
+          "txt_hint_text": "完全专注于文件内容",
+          "pdf_hint_text": "完全专注于文件内容",
+          "error_hint_text": "输入文本长度超过限制，已中止发送",
+          "reacquire_input_after_upload": false,
+          "post_upload_input_selector": "",
+          "post_upload_settle": 0,
+          "upload_signal_timeout": 2.5,
+          "upload_signal_grace": 3,
+          "state_probe": {
+            "enabled": false,
+            "code": ""
+          }
+        },
+        "prompt_padding": {
+          "enabled": false,
+          "marker_text": "测试号，无实际意义",
+          "segments_per_side": 12,
+          "random_insert_enabled": true,
+          "random_insert_chars": "。，、’"
+        }
+      },
       "主预设-直连模式": {
         "model_catalog": {
           "enabled": true,
           "source": "arena_direct",
           "include_keywords": [],
-          "exclude_keywords": []
+          "exclude_keywords": [
+            "qwen",
+            "devstral",
+            "dola",
+            "kimi",
+            "minimax",
+            "step"
+          ]
         },
         "selectors": {
           "input_box": "textarea[name=\"message\"]",
@@ -4109,14 +4372,14 @@
           "mode": "network",
           "hard_timeout": 300,
           "network": {
-            "parser": "lmarena_image_side_left",
+          "parser": "lmarena_image_side_left",
             "url_pattern": "**/nextjs-api/stream/post-to-evaluation/**",
             "method": "POST",
             "listen_pattern": "/nextjs-api/stream/post-to-evaluation",
             "first_response_timeout": 12,
             "silence_threshold": 3,
             "response_interval": 1,
-            "first_content_timeout": 6
+            "first_content_timeout": 60
           }
         },
         "image_extraction": {
@@ -5116,13 +5379,13 @@
             "listen_pattern": "/nextjs-api/stream/post-to-evaluation",
             "stream_match_mode": "keyword",
             "stream_match_pattern": "",
-            "parser": "lmarena_image_side_right",
+          "parser": "lmarena_image_side_right",
             "first_response_timeout": 12,
             "silence_threshold": 3,
             "response_interval": 1,
             "url_pattern": "**/nextjs-api/stream/post-to-evaluation/**",
             "method": "POST",
-            "first_content_timeout": 6
+            "first_content_timeout": 60
           }
         },
         "image_extraction": {

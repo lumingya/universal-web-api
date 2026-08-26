@@ -72,7 +72,7 @@ class CommandEngine(CommandEngineRuntimeMixin, CommandEngineResultsMixin, Comman
         self._commands_loaded = False
         self._commands_cache: List[Dict[str, Any]] = []
         self._command_runtime_stats: Dict[str, Dict[str, Any]] = {}
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._commands_lock = threading.RLock()
         self._scheduler_lifecycle_lock = threading.RLock()
         self._shutdown_requested = False
@@ -3504,8 +3504,10 @@ return (function() {
         if str(trigger.get("type", "")).strip().lower() != "page_check":
             return
         if not trigger.get("reset_latch_on_failure", True):
-            # Only block latch reset if the command actually started executing (not blocked by session acquire timeout or scheduling failures)
-            if reason not in {"acquire_timeout", "workflow_schedule_failed"}:
+            # Only block latch reset if the command actually started executing (not blocked by session acquire timeout, scheduling failures, or page navigation)
+            if reason not in {"acquire_timeout", "workflow_schedule_failed"} and not (
+                reason.startswith("navigated") or reason.startswith("tab_navigated")
+            ):
                 return
 
         key = (command.get("id"), getattr(session, "id", ""))
@@ -3544,6 +3546,176 @@ return (function() {
                 f"[CMD] 页面检查锁存已重置: {command.get('name')} "
                 f"(标签页={session.id}, 原因={reason})"
             )
+
+    def _is_command_applicable_on_navigation(self, cmd: Dict[str, Any]) -> bool:
+        """判断命令是否适用于页面导航/刷新事件触发。"""
+        if not isinstance(cmd, dict) or not bool(cmd.get("enabled", True)):
+            return False
+
+        trigger = cmd.get("trigger", {}) or {}
+        # 1. 显式配置 check_on_navigation / check_on_page_load
+        if bool(trigger.get("check_on_navigation", False)) or bool(cmd.get("check_on_navigation", False)):
+            return True
+        if bool(trigger.get("check_on_page_load", False)) or bool(cmd.get("check_on_page_load", False)):
+            return True
+
+        # 2. page_check 触发器天然依赖页面 DOM/内容，页面跳转刷新后必须立即重新检查
+        trigger_type = str(trigger.get("type", "")).strip().lower()
+        if trigger_type == "page_check":
+            return True
+
+        # 3. 包含 bootstrap_on_session_ready 的 run_js_file 命令需要在页面就绪后注入/执行
+        for action in list(cmd.get("actions") or []):
+            if isinstance(action, dict) and bool(action.get("bootstrap_on_session_ready", False)):
+                return True
+
+        return False
+
+    def notify_tab_navigated(
+        self,
+        session: 'TabSession',
+        reason: str = "page_reload",
+        async_dispatch: bool = True,
+    ) -> None:
+        """
+        通用的页面导航/刷新通知接口。
+
+        当标签页发生刷新（F5、location.reload、断流恢复刷新等）或导航（URL 跳转、新标签页打开等）时调用。
+
+        执行操作：
+        1. 即时重置 JS 执行失败退避锁（_pc_js_backoff_until = 0.0）和失败计数（_pc_js_failures = 0）
+        2. 清空页面快照缓存与刷新宽限期，重置 observer 探测节流与缓存
+        3. 清除 observer 缓存与 haystack 缓存，重置适用命令的周期倒计时与 edge 锁存
+        4. 异步或同步派发页面导航后评估（_dispatch_tab_navigated_evaluation）：
+           - 同步 bootstrap 启动 JS 文件注入（Page.addScriptToEvaluateOnNewDocument + 立即执行）
+           - 重新注入/同步 MutationObserver
+           - 毫秒级触发并评估适用命令
+        """
+        if session is None:
+            return
+
+        session_id = getattr(session, "id", "")
+        if not session_id:
+            return
+
+        # 1. 同步清理 session 上的快照与退避状态
+        try:
+            setattr(session, "_pc_js_failures", 0)
+            setattr(session, "_pc_js_backoff_until", 0.0)
+            setattr(session, "_pc_refresh_grace_until", 0.0)
+            setattr(session, "_pc_snapshot_cached", None)
+            setattr(session, "_last_pc_observer_check_at", 0.0)
+            setattr(session, "_pc_observer_empty_cleanup_done", False)
+            if hasattr(self, "_invalidate_wake_throttle"):
+                self._invalidate_wake_throttle(session)
+        except Exception as e:
+            logger.debug(f"[CMD] 重置会话退避状态失败（忽略）: {e}")
+
+        # 2. 清理引擎层全局缓存与适用命令的状态
+        try:
+            commands = self._load_commands_for_checks()
+        except Exception as e:
+            logger.debug(f"[CMD] 导航通知加载命令失败: {e}")
+            commands = []
+
+        applicable_cmds = []
+        with self._lock:
+            self._observer_keywords_by_session.pop(session_id, None)
+            self._compact_haystack_cache = None
+            for cmd in commands:
+                cmd_id = cmd.get("id")
+                if not cmd_id:
+                    continue
+                if self._is_command_applicable_on_navigation(cmd):
+                    self._periodic_next_run[(cmd_id, session_id)] = 0.0
+                    applicable_cmds.append(cmd)
+
+        for cmd in applicable_cmds:
+            self._reset_page_check_latch(cmd, session, reason=f"navigated:{reason}")
+
+        logger.info(
+            f"[CMD] 标签页导航/刷新通知: session={session_id}, reason={reason}, async={async_dispatch}"
+        )
+
+        # 3. 派发评估
+        if async_dispatch:
+            self.submit_background_task(self._dispatch_tab_navigated_evaluation, session, reason)
+        else:
+            self._dispatch_tab_navigated_evaluation(session, reason)
+
+    def _dispatch_tab_navigated_evaluation(
+        self,
+        session: 'TabSession',
+        reason: str = "page_reload",
+    ) -> None:
+        """在页面导航/刷新后执行 bootstrap 脚本注入、observer 同步及命令评估调度。"""
+        if self._is_session_closed(session):
+            return
+
+        self.ensure_scheduler_running()
+        try:
+            commands = self._load_commands_for_checks()
+        except Exception as e:
+            logger.debug(f"[CMD] 导航后评估加载命令失败: {e}")
+            return
+
+        if not commands:
+            return
+
+        # 1. 优先执行/注入 bootstrap 启动脚本（例如 Page.addScriptToEvaluateOnNewDocument 及即时注入）
+        try:
+            self._sync_session_bootstrap_js_files(commands, session)
+        except Exception as e:
+            logger.warning(f"[CMD] 导航后同步 bootstrap 脚本失败: {e}")
+
+        # 2. 同步 Page Check Observer（如果有 page_check 关键词）
+        try:
+            pc_keywords = self._collect_page_check_keywords(commands, session)
+            if pc_keywords:
+                self._ensure_page_check_observer(session, pc_keywords)
+            else:
+                self._clear_page_check_observer(session)
+        except Exception as e:
+            logger.debug(f"[CMD] 导航后同步 observer 失败: {e}")
+
+        # 3. 评估并调度适用的命令
+        applicable_commands = [
+            (idx, cmd) for idx, cmd in enumerate(commands)
+            if self._is_command_applicable_on_navigation(cmd) and self._matches_scope(cmd, session)
+        ]
+        applicable_commands.sort(key=lambda item: (-self._get_command_priority(item[1]), item[0]))
+
+        for _, cmd in applicable_commands:
+            with self._command_logging_context(cmd):
+                try:
+                    current_status = str(getattr(getattr(session, "status", None), "value", "")).lower()
+                    if current_status == "busy" and not self._has_active_workflow(session):
+                        continue
+                    if current_status not in {"idle", "busy"}:
+                        continue
+                    if self._should_trigger(cmd, session):
+                        meta = self._take_pending_async_trigger_meta(cmd, session) or {}
+                        if current_status == "busy":
+                            scheduled = self._schedule_command_for_active_workflow(
+                                cmd,
+                                session,
+                                interrupt_context=meta.get("interrupt_context"),
+                                trigger_rollback=meta.get("rollback"),
+                            )
+                            if not scheduled:
+                                if meta.get("rollback"):
+                                    self._rollback_trigger_consumption(cmd, session, meta.get("rollback"))
+                                self._finalize_request_count_trigger_state(cmd, session, rollback=True)
+                                self._reset_page_check_latch(cmd, session, reason="workflow_schedule_failed")
+                        else:
+                            self._execute_command_async(
+                                cmd,
+                                session,
+                                interrupt_context=meta.get("interrupt_context"),
+                                trigger_rollback=meta.get("rollback"),
+                            )
+                except Exception as e:
+                    logger.error(f"[CMD] 导航后触发检查失败 [{cmd.get('name')}]: {e}")
 
     def _finalize_request_count_trigger_state(
         self,

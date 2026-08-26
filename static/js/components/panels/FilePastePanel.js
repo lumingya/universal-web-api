@@ -93,8 +93,27 @@ window.FilePastePanel = {
                     label: '高',
                     description: '更早接受附件发送成功信号，适合附件反馈慢、预览挂得晚的站点。'
                 }
-            ]
+            ],
+            attachmentMonitorDrafts: {}
         };
+    },
+    watch: {
+        filePasteConfig: {
+            handler() {
+                this.syncAttachmentMonitorDrafts();
+            },
+            deep: true,
+            immediate: true
+        },
+        currentDomain() {
+            this.syncAttachmentMonitorDrafts(true);
+        },
+        selectedPreset() {
+            this.syncAttachmentMonitorDrafts(true);
+        }
+    },
+    mounted() {
+        this.syncAttachmentMonitorDrafts(true);
     },
     computed: {
         resolvedFilePaste() {
@@ -228,7 +247,39 @@ window.FilePastePanel = {
             return [...new Set(lines)];
         },
 
+        syncAttachmentMonitorDrafts(force = false) {
+            const monitor = this.resolvedFilePaste?.attachment_monitor || {};
+            const listFields = [
+                'attachment_selectors',
+                'pending_selectors',
+                'busy_text_markers',
+                'send_button_disabled_markers',
+                'ignored_busy_text_markers',
+                'root_selectors'
+            ];
+            if (!this.attachmentMonitorDrafts) {
+                this.attachmentMonitorDrafts = {};
+            }
+            const nextDrafts = { ...this.attachmentMonitorDrafts };
+            let hasChange = false;
+            for (const field of listFields) {
+                const propArr = Array.isArray(monitor[field]) ? monitor[field] : [];
+                const curDraftArr = this.normalizeRuleList(nextDrafts[field]);
+                if (force || JSON.stringify(propArr) !== JSON.stringify(curDraftArr) || nextDrafts[field] === undefined || nextDrafts[field] === null) {
+                    nextDrafts[field] = propArr.join('\n');
+                    hasChange = true;
+                }
+            }
+            if (hasChange) {
+                this.attachmentMonitorDrafts = nextDrafts;
+            }
+        },
+
         updateAttachmentMonitorListField(field, value) {
+            if (!this.attachmentMonitorDrafts) {
+                this.attachmentMonitorDrafts = {};
+            }
+            this.attachmentMonitorDrafts[field] = value;
             this.updateAttachmentMonitorField(field, this.normalizeRuleList(value));
         },
 
@@ -604,7 +655,7 @@ window.FilePastePanel = {
                             <div>
                                 <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">附件预览 selector</label>
                                 <textarea
-                                    :value="formatRuleList(resolvedFilePaste.attachment_monitor.attachment_selectors)"
+                                    :value="attachmentMonitorDrafts ? (attachmentMonitorDrafts.attachment_selectors ?? '') : ''"
                                     @input="updateAttachmentMonitorListField('attachment_selectors', $event.target.value)"
                                     rows="5"
                                     placeholder="[class*='attachment']&#10;.upload-preview"
@@ -614,7 +665,7 @@ window.FilePastePanel = {
                             <div>
                                 <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">上传中 selector</label>
                                 <textarea
-                                    :value="formatRuleList(resolvedFilePaste.attachment_monitor.pending_selectors)"
+                                    :value="attachmentMonitorDrafts ? (attachmentMonitorDrafts.pending_selectors ?? '') : ''"
                                     @input="updateAttachmentMonitorListField('pending_selectors', $event.target.value)"
                                     rows="5"
                                     placeholder="[aria-busy='true']&#10;.uploading"
@@ -627,7 +678,7 @@ window.FilePastePanel = {
                             <div>
                                 <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">忙碌文本 / token</label>
                                 <textarea
-                                    :value="formatRuleList(resolvedFilePaste.attachment_monitor.busy_text_markers)"
+                                    :value="attachmentMonitorDrafts ? (attachmentMonitorDrafts.busy_text_markers ?? '') : ''"
                                     @input="updateAttachmentMonitorListField('busy_text_markers', $event.target.value)"
                                     rows="5"
                                     placeholder="uploading&#10;处理中&#10;解析中"
@@ -637,7 +688,7 @@ window.FilePastePanel = {
                             <div>
                                 <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">发送按钮灰态 token</label>
                                 <textarea
-                                    :value="formatRuleList(resolvedFilePaste.attachment_monitor.send_button_disabled_markers)"
+                                    :value="attachmentMonitorDrafts ? (attachmentMonitorDrafts.send_button_disabled_markers ?? '') : ''"
                                     @input="updateAttachmentMonitorListField('send_button_disabled_markers', $event.target.value)"
                                     rows="5"
                                     placeholder="is-disabled&#10;cursor-not-allowed&#10;upload failed"
@@ -649,7 +700,7 @@ window.FilePastePanel = {
                         <div v-show="!sectionCollapsed.advancedRules">
                             <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">忽略忙碌文本 / token</label>
                             <textarea
-                                :value="formatRuleList(resolvedFilePaste.attachment_monitor.ignored_busy_text_markers)"
+                                :value="attachmentMonitorDrafts ? (attachmentMonitorDrafts.ignored_busy_text_markers ?? '') : ''"
                                 @input="updateAttachmentMonitorListField('ignored_busy_text_markers', $event.target.value)"
                                 rows="3"
                                 placeholder="thinking"
@@ -660,7 +711,7 @@ window.FilePastePanel = {
                         <div v-show="!sectionCollapsed.advancedRules">
                             <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">根容器 selector</label>
                             <textarea
-                                :value="formatRuleList(resolvedFilePaste.attachment_monitor.root_selectors)"
+                                :value="attachmentMonitorDrafts ? (attachmentMonitorDrafts.root_selectors ?? '') : ''"
                                 @input="updateAttachmentMonitorListField('root_selectors', $event.target.value)"
                                 rows="4"
                                 placeholder=".composer-shell&#10;.input-area"

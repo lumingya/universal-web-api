@@ -14,7 +14,9 @@ window.ImageConfigPanel = {
             availablePresets: [],
             currentPreset: null,
             loadingPresets: false,
-            imagePresetRequestSeq: 0
+            imagePresetRequestSeq: 0,
+            srcAllowPatternsDraft: '',
+            audioNetworkUrlPatternsDraft: ''
         };
     },
     computed: {
@@ -78,15 +80,24 @@ window.ImageConfigPanel = {
         }
     },
     watch: {
+        imageConfig: {
+            handler() {
+                this.syncDraftsFromProps();
+            },
+            deep: true,
+            immediate: true
+        },
         currentDomain(newVal) {
             this.imagePresetRequestSeq += 1;
             this.currentPreset = null;
             if (newVal) this.checkCurrentPreset();
+            this.syncDraftsFromProps(true);
         }
     },
     mounted() {
         this.loadPresets();
         if (this.currentDomain) this.checkCurrentPreset();
+        this.syncDraftsFromProps(true);
     },
     methods: {
         buildAuthHeaders(extraHeaders = {}) {
@@ -194,11 +205,34 @@ window.ImageConfigPanel = {
             });
         },
 
-        updateSrcAllowPatterns(text) {
-            const patterns = String(text || '')
+        parsePatternLines(text) {
+            return String(text || '')
                 .split(/\r?\n/)
                 .map(line => line.trim())
                 .filter(Boolean);
+        },
+
+        syncDraftsFromProps(force = false) {
+            const srcArr = Array.isArray(this.imageConfig?.src_allow_patterns)
+                ? this.imageConfig.src_allow_patterns
+                : [];
+            const curSrcArr = this.parsePatternLines(this.srcAllowPatternsDraft);
+            if (force || JSON.stringify(srcArr) !== JSON.stringify(curSrcArr) || this.srcAllowPatternsDraft === undefined || this.srcAllowPatternsDraft === null) {
+                this.srcAllowPatternsDraft = srcArr.join('\n');
+            }
+
+            const audioArr = Array.isArray(this.audioNetworkCapture?.url_patterns)
+                ? this.audioNetworkCapture.url_patterns
+                : [];
+            const curAudioArr = this.parsePatternLines(this.audioNetworkUrlPatternsDraft);
+            if (force || JSON.stringify(audioArr) !== JSON.stringify(curAudioArr) || this.audioNetworkUrlPatternsDraft === undefined || this.audioNetworkUrlPatternsDraft === null) {
+                this.audioNetworkUrlPatternsDraft = audioArr.join('\n');
+            }
+        },
+
+        updateSrcAllowPatterns(text) {
+            this.srcAllowPatternsDraft = text;
+            const patterns = this.parsePatternLines(text);
             this.updateField('src_allow_patterns', patterns);
         },
 
@@ -211,10 +245,8 @@ window.ImageConfigPanel = {
         },
 
         updateAudioNetworkUrlPatterns(text) {
-            const patterns = String(text || '')
-                .split(/\r?\n/)
-                .map(line => line.trim())
-                .filter(Boolean);
+            this.audioNetworkUrlPatternsDraft = text;
+            const patterns = this.parsePatternLines(text);
             this.updateAudioNetworkCapture({ url_patterns: patterns });
         },
 
@@ -571,8 +603,8 @@ window.ImageConfigPanel = {
 
                 <div :class="inputWrapClass(modalities.image)">
                     <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">图片来源白名单 <span class="text-gray-400 font-normal">(可选)</span></label>
-                    <textarea :value="srcAllowPatternsText" @input="updateSrcAllowPatterns($event.target.value)" rows="5"
-                              placeholder="^data:image/\n^blob:\n^https?://[^/]*oaiusercontent\\.com/\n^https?://[^/]*oaistatic\\.com/\n^https?://cdn\\.openai\\.com/"
+                    <textarea :value="srcAllowPatternsDraft" @input="updateSrcAllowPatterns($event.target.value)" rows="5"
+                              placeholder="^data:image/&#10;^blob:&#10;^https?://[^/]*oaiusercontent\.com/&#10;^https?://[^/]*oaistatic\.com/&#10;^https?://cdn\.openai\.com/"
                               :disabled="!modalities.image"
                               class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm font-mono bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent disabled:cursor-not-allowed"></textarea>
                     <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">每行一个正则，仅提取匹配这些 <code>src</code> 的图片。留空表示不过滤。</p>
@@ -734,7 +766,7 @@ window.ImageConfigPanel = {
 
                         <div>
                             <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">URL 匹配关键字</label>
-                            <textarea :value="audioNetworkUrlPatternsText"
+                            <textarea :value="audioNetworkUrlPatternsDraft"
                                       @input="updateAudioNetworkUrlPatterns($event.target.value)"
                                       rows="4"
                                       :disabled="!audioNetworkCapture.enabled"

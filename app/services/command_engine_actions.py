@@ -59,9 +59,13 @@ class CommandEngineActionsMixin:
         "navigate_skipped",
     )
     _PYTHON_SANDBOX_ALLOWED_IMPORTS = frozenset({
+        "app.services.arena_cf_solver",
+        "app.services.arena_proxy_rotation",
+        "app.utils.human_mouse",
         "datetime",
         "json",
         "math",
+        "random",
         "time",
     })
     _PYTHON_SANDBOX_BLOCKED_CALLS = frozenset({
@@ -892,6 +896,10 @@ return (() => {
         elif action_type == "refresh_page":
             try:
                 tab.refresh()
+                try:
+                    self.notify_tab_navigated(session, reason="action_refresh_page")
+                except Exception:
+                    pass
                 time.sleep(2)
                 logger.debug("[CMD] 页面已刷新")
                 return "page_refreshed"
@@ -957,6 +965,10 @@ return (() => {
                         if retry_after_refresh:
                             try:
                                 tab.refresh()
+                                try:
+                                    self.notify_tab_navigated(session, reason="action_run_js_retry_refresh")
+                                except Exception:
+                                    pass
                                 time.sleep(2)
                             except Exception as refresh_error:
                                 logger.warning(f"[CMD] JS 重试前刷新失败: {refresh_error}")
@@ -1168,6 +1180,10 @@ return (() => {
             if url:
                 try:
                     tab.get(url)
+                    try:
+                        self.notify_tab_navigated(session, reason="action_navigate")
+                    except Exception:
+                        pass
                     time.sleep(2)
                     logger.debug(f"[CMD] 已导航到: {url}")
                     return f"navigated:{url}"
@@ -2437,6 +2453,10 @@ return (() => {
                 time.sleep(1)
                 try:
                     session.tab.refresh()
+                    try:
+                        self.notify_tab_navigated(session, reason="action_switch_proxy_refresh")
+                    except Exception:
+                        pass
                     time.sleep(2)
                     logger.debug("[CMD] 页面已刷新")
                 except Exception as e:
@@ -2835,7 +2855,7 @@ return (() => {
                     pass
                 try:
                     stop_reason = str(getattr(session, "_workflow_stop_reason", "") or "").strip().lower()
-                    if stop_reason in {"command_interrupt", "command_interrupt_abort", "timeout"}:
+                    if stop_reason in {"command_interrupt_abort", "timeout"}:
                         return True
                 except Exception:
                     pass

@@ -44,6 +44,10 @@ class ArenaCommandPersistenceTests(unittest.TestCase):
         self.assertIn("const REPAIR_INTERVAL_MS = 1000;", source)
         self.assertEqual(command["trigger"]["periodic_interval_sec"], 30)
         self.assertEqual(command["trigger"]["interrupt_policy"], "resume")
+        self.assertEqual(command["trigger"]["fire_mode"], "level")
+        self.assertTrue(command["log_enabled"])
+        self.assertEqual(command["log_level"], "INFO")
+        self.assertTrue(command["actions"][0]["bootstrap_on_session_ready"])
         self.assertFalse(command["trigger"].get("abort_on_match", False))
 
     def test_arena_clear_error_command_clicks_clear_then_aborts_workflow(self):

@@ -339,6 +339,10 @@ class LmarenaParser(ResponseParser):
         self._last_debug_summary = {}
         self._last_debug_raw_signature = ""
 
+    def should_abort_on_error(self) -> bool:
+        """当 Arena 返回 ae: 或 a3: 等错误协议行时，立即终止工作流。"""
+        return True
+
     def should_fallback_to_dom_when_no_visible_content(self) -> bool:
         """Arena 的心跳流可能因网络波动提前关闭，空结果必须交给 DOM 接管。"""
         return True

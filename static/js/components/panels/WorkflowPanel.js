@@ -38,6 +38,12 @@ window.WorkflowPanel = {
             editorBridgeIdleDelay: 250,
             keyPresets: WORKFLOW_KEY_PRESETS,
             expandedJsEditors: {},
+            jsExecutionModes: {},
+            availableScripts: [],
+            loadingScripts: false,
+            expandedJsPreviews: {},
+            scriptPreviewContents: {},
+            loadingScriptPreviews: {},
             customKeyModes: {},
             expandedHintEditors: {},
             expandedExecutionMenus: {},
@@ -46,7 +52,12 @@ window.WorkflowPanel = {
                 { value: 'success', label: '成功' },
                 { value: 'warning', label: '警告' },
                 { value: 'danger', label: '注意' }
-            ]
+            ],
+            jsonParamPlaceholder: '{\n  "target_endpoint": "/nextjs-api/stream/create-evaluation",\n  "override_model": "{{context.model}}"\n}',
+            catalogKeywordsDraft: {
+                include_keywords: '',
+                exclude_keywords: ''
+            }
         };
     },
     watch: {
@@ -57,10 +68,29 @@ window.WorkflowPanel = {
             deep: true,
             immediate: true
         },
+        modelCatalog: {
+            handler() {
+                this.syncCatalogKeywordsDraft();
+            },
+            deep: true,
+            immediate: true
+        },
         selectedPreset() {
             this.expandedHintEditors = {};
+            this.expandedExecutionMenus = {};
+            this.customKeyModes = {};
+            this.expandedJsEditors = {};
+            this.expandedJsPreviews = {};
             this.syncHintEditorState();
+            this.syncCatalogKeywordsDraft(true);
+        },
+        currentDomain() {
+            this.syncCatalogKeywordsDraft(true);
         }
+    },
+    mounted() {
+        this.loadAvailableScripts(false);
+        this.syncCatalogKeywordsDraft(true);
     },
     beforeUnmount() {
         this.stopEditorBridgePolling();
@@ -79,6 +109,30 @@ window.WorkflowPanel = {
 
         catalogKeywordsText(key) {
             return this.normalizeCatalogKeywords(this.modelCatalog && this.modelCatalog[key]).join('\n');
+        },
+
+        syncCatalogKeywordsDraft(force = false) {
+            if (!this.catalogKeywordsDraft) {
+                this.catalogKeywordsDraft = { include_keywords: '', exclude_keywords: '' };
+            }
+            ['include_keywords', 'exclude_keywords'].forEach(key => {
+                const propArr = this.normalizeCatalogKeywords(this.modelCatalog && this.modelCatalog[key]);
+                const draftArr = this.normalizeCatalogKeywords(this.catalogKeywordsDraft[key]);
+                const isSame = JSON.stringify(propArr) === JSON.stringify(draftArr);
+                if (force || !isSame || this.catalogKeywordsDraft[key] === undefined) {
+                    this.catalogKeywordsDraft[key] = propArr.join('\n');
+                }
+            });
+        },
+
+        handleCatalogKeywordsInput(key, rawText) {
+            if (!this.catalogKeywordsDraft) {
+                this.catalogKeywordsDraft = { include_keywords: '', exclude_keywords: '' };
+            }
+            this.catalogKeywordsDraft[key] = rawText;
+            this.updateModelCatalog({
+                [key]: this.normalizeCatalogKeywords(rawText)
+            });
         },
 
         updateModelCatalog(patch) {
@@ -256,8 +310,12 @@ window.WorkflowPanel = {
             return this.keyPresets.some(item => item.value === target) ? target : '__custom__';
         },
 
-        isExecutionExpanded(index) {
-            return !!this.expandedExecutionMenus[index];
+        isExecutionExpanded(index, step = null) {
+            const expanded = !!this.expandedExecutionMenus[index];
+            if (expanded && step) {
+                this.ensureStepExecution(step);
+            }
+            return expanded;
         },
 
         ensureStepExecution(step) {
@@ -400,6 +458,143 @@ window.WorkflowPanel = {
 
         getHintStepClasses(step) {
             return 'shadow-none ' + this.getHintToneClasses(step);
+        },
+
+        normalizeScriptTarget(target) {
+            return String(target || '').trim().replace(/^file:\/+/i, '').replace(/^scripts:\/+/i, 'scripts/');
+        },
+
+        getJsMode(index, step) {
+            const clean = this.normalizeScriptTarget(step?.target);
+            if (clean) {
+                return 'file';
+            }
+            if (step?.value && typeof step.value === 'object' && !Array.isArray(step.value)) {
+                return 'file';
+            }
+            return 'inline';
+        },
+
+        setJsMode(index, step, mode) {
+            if (mode === 'file') {
+                if (!step.target && this.availableScripts.length > 0) {
+                    step.target = this.availableScripts[0].path;
+                }
+                if (typeof step.value === 'string' && step.value.trim().startsWith('{')) {
+                    try {
+                        step.value = JSON.parse(step.value);
+                    } catch (_) {}
+                } else if (!step.value || typeof step.value === 'string') {
+                    step.value = {};
+                }
+            } else {
+                step.target = '';
+                if (typeof step.value !== 'string') {
+                    step.value = 'return document.title;';
+                }
+            }
+        },
+
+        async loadAvailableScripts(force = false) {
+            if (this.availableScripts.length > 0 && !force) return;
+            this.loadingScripts = true;
+            try {
+                const res = await this.authJsonRequest('/api/config/workflow/scripts');
+                this.availableScripts = Array.isArray(res?.scripts) ? res.scripts : [];
+            } catch (e) {
+                console.error('[WorkflowPanel] 获取脚本列表失败:', e);
+            } finally {
+                this.loadingScripts = false;
+            }
+        },
+
+        isJsPreviewExpanded(index) {
+            return !!this.expandedJsPreviews[index];
+        },
+
+        async toggleJsPreview(index, step) {
+            const next = !this.isJsPreviewExpanded(index);
+            this.expandedJsPreviews = {
+                ...this.expandedJsPreviews,
+                [index]: next
+            };
+            if (next && step.target) {
+                await this.fetchScriptPreviewContent(step.target);
+            }
+        },
+
+        async fetchScriptPreviewContent(target) {
+            const cleanPath = this.normalizeScriptTarget(target);
+            if (!cleanPath || this.scriptPreviewContents[cleanPath]) return;
+            this.loadingScriptPreviews = { ...this.loadingScriptPreviews, [cleanPath]: true };
+            try {
+                const res = await this.authJsonRequest('/api/config/workflow/script-content?path=' + encodeURIComponent(cleanPath));
+                if (res && res.content !== undefined) {
+                    this.scriptPreviewContents = {
+                        ...this.scriptPreviewContents,
+                        [cleanPath]: res
+                    };
+                }
+            } catch (e) {
+                console.warn('[WorkflowPanel] 获取脚本内容预览失败:', e);
+                this.scriptPreviewContents = {
+                    ...this.scriptPreviewContents,
+                    [cleanPath]: { content: '// 无法加载脚本内容: ' + (e.message || e), description: '' }
+                };
+            } finally {
+                this.loadingScriptPreviews = { ...this.loadingScriptPreviews, [cleanPath]: false };
+            }
+        },
+
+        getScriptPreviewData(step) {
+            const cleanPath = this.normalizeScriptTarget(step?.target);
+            return this.scriptPreviewContents[cleanPath] || null;
+        },
+
+        insertMacro(index, step, macroText) {
+            const textarea = document.getElementById('wf-js-param-' + index) || document.getElementById('wf-js-inline-' + index);
+            if (textarea) {
+                const start = textarea.selectionStart ?? textarea.value.length;
+                const end = textarea.selectionEnd ?? textarea.value.length;
+                const text = textarea.value || '';
+                const next = text.slice(0, start) + macroText + text.slice(end);
+                textarea.value = next;
+                textarea.dispatchEvent(new Event('input'));
+                this.$nextTick(() => {
+                    textarea.focus();
+                    const newPos = start + macroText.length;
+                    textarea.setSelectionRange(newPos, newPos);
+                });
+            } else {
+                if (typeof step.value === 'string') {
+                    step.value = (step.value ? step.value + ' ' : '') + macroText;
+                } else if (step.value && typeof step.value === 'object') {
+                    step.value = { ...step.value, macro: macroText };
+                }
+            }
+        },
+
+        formatJsStepValue(step) {
+            if (typeof step.value === 'string') return step.value;
+            if (step.value && typeof step.value === 'object') {
+                try {
+                    return JSON.stringify(step.value, null, 2);
+                } catch (_) {
+                    return '{}';
+                }
+            }
+            return '';
+        },
+
+        updateJsStepParamValue(step, rawText) {
+            const trimmed = String(rawText || '').trim();
+            if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+                try {
+                    step.value = JSON.parse(trimmed);
+                    return;
+                } catch (_) {}
+            }
+            step.value = rawText;
         }
     },
     template: `
@@ -452,21 +647,21 @@ window.WorkflowPanel = {
                     <div v-if="modelCatalog.enabled" class="grid grid-cols-1 md:grid-cols-2 gap-3">
                         <label class="block min-w-0">
                             <span class="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">仅保留关键词（可选，每行一个）</span>
-                            <textarea :value="catalogKeywordsText('include_keywords')"
-                                      @input="updateModelCatalog({ include_keywords: normalizeCatalogKeywords($event.target.value) })"
+                            <textarea :value="catalogKeywordsDraft ? catalogKeywordsDraft.include_keywords : ''"
+                                      @input="handleCatalogKeywordsInput('include_keywords', $event.target.value)"
                                       rows="4"
                                       spellcheck="false"
                                       class="w-full rounded-md border dark:border-gray-600 px-3 py-2 font-mono text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white resize-y focus:outline-none focus:ring-2 focus:ring-blue-400"
-                                      placeholder="glm\nclaude"></textarea>
+                                      placeholder="glm&#10;claude"></textarea>
                         </label>
                         <label class="block min-w-0">
                             <span class="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">排除关键词（每行一个）</span>
-                            <textarea :value="catalogKeywordsText('exclude_keywords')"
-                                      @input="updateModelCatalog({ exclude_keywords: normalizeCatalogKeywords($event.target.value) })"
+                            <textarea :value="catalogKeywordsDraft ? catalogKeywordsDraft.exclude_keywords : ''"
+                                      @input="handleCatalogKeywordsInput('exclude_keywords', $event.target.value)"
                                       rows="4"
                                       spellcheck="false"
                                       class="w-full rounded-md border dark:border-gray-600 px-3 py-2 font-mono text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white resize-y focus:outline-none focus:ring-2 focus:ring-blue-400"
-                                      placeholder="image\npreview\nlegacy"></textarea>
+                                      placeholder="image&#10;preview&#10;legacy"></textarea>
                         </label>
                     </div>
                 </div>
@@ -504,7 +699,6 @@ window.WorkflowPanel = {
                                 <option value="COORD_CLICK">坐标点击</option>
                                 <option value="COORD_SCROLL">模拟滑动</option>
                                 <option value="STREAM_WAIT">流式等待</option>
-                                <!-- 修复：STREAM_OUTPUT 是后端 STREAM_WAIT 的完整别名，缺失会导致动作列渲染空白 -->
                                 <option value="STREAM_OUTPUT">流式输出（同流式等待）</option>
                                 <option value="WAIT">等待</option>
                                 <option value="KEY_PRESS">按键</option>
@@ -518,7 +712,6 @@ window.WorkflowPanel = {
                                 {{ step.action === 'SELECT_MODEL' ? '模型选择器' : ['FILL_INPUT', 'CLICK', 'STREAM_WAIT', 'STREAM_OUTPUT'].includes(step.action) ? '目标选择器' : step.action === 'PAGE_FETCH' ? '发送方式' : ['COORD_CLICK', 'COORD_SCROLL'].includes(step.action) ? '坐标参数' : step.action === 'JS_EXEC' ? 'JavaScript' : step.action === 'READONLY_HINT' ? '提示内容' : '参数' }}
                             </label>
 
-                            <!-- 修复：STREAM_OUTPUT 与 STREAM_WAIT 等价，参数区需同步显示目标选择器 -->
                             <select v-if="['FILL_INPUT', 'SELECT_MODEL', 'CLICK', 'STREAM_WAIT', 'STREAM_OUTPUT'].includes(step.action)" v-model="step.target"
                                     class="border dark:border-gray-600 px-2 py-1.5 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent w-full mt-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
                                 <option value="" disabled>选择选择器...</option>
@@ -598,23 +791,175 @@ window.WorkflowPanel = {
                                 </div>
                             </div>
 
-                            <div v-else-if="step.action === 'JS_EXEC'" class="mt-1 space-y-2">
-                                <div class="flex items-center justify-between gap-2">
-                                    <span class="text-xs text-gray-500 dark:text-gray-400">在当前页面上下文执行对应的 JavaScript 脚本。</span>
-                                    <button @click="toggleJsExpand(index)"
-                                            type="button"
-                                            class="px-2 py-1 text-xs rounded-md border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700">
-                                        {{ isJsExpanded(index) ? '收起' : '展开' }}
-                                    </button>
+                            <div v-else-if="step.action === 'JS_EXEC'" class="mt-1 space-y-3">
+                                <!-- 模式选择器 -->
+                                <div class="flex items-center justify-between gap-3 flex-wrap">
+                                    <div class="flex items-center gap-4 text-xs font-medium text-gray-700 dark:text-gray-300">
+                                        <label class="inline-flex items-center gap-1.5 cursor-pointer">
+                                            <input type="radio"
+                                                   :name="'js-mode-' + index"
+                                                   value="file"
+                                                   :checked="getJsMode(index, step) === 'file'"
+                                                   @change="setJsMode(index, step, 'file')"
+                                                   class="text-blue-600 focus:ring-blue-500">
+                                            <span>外部脚本文件 (推荐)</span>
+                                        </label>
+                                        <label class="inline-flex items-center gap-1.5 cursor-pointer">
+                                            <input type="radio"
+                                                   :name="'js-mode-' + index"
+                                                   value="inline"
+                                                   :checked="getJsMode(index, step) === 'inline'"
+                                                   @change="setJsMode(index, step, 'inline')"
+                                                   class="text-blue-600 focus:ring-blue-500">
+                                            <span>内联代码</span>
+                                        </label>
+                                    </div>
+
+                                    <div class="flex items-center gap-2">
+                                        <button v-if="getJsMode(index, step) === 'file' && step.target"
+                                                @click="toggleJsPreview(index, step)"
+                                                type="button"
+                                                class="px-2 py-1 text-xs rounded-md border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-1">
+                                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                                                <path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                                                <path d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+                                            </svg>
+                                            {{ isJsPreviewExpanded(index) ? '收起源码' : '预览源码' }}
+                                        </button>
+                                        <button v-if="getJsMode(index, step) === 'inline'"
+                                                @click="toggleJsExpand(index)"
+                                                type="button"
+                                                class="px-2 py-1 text-xs rounded-md border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700">
+                                            {{ isJsExpanded(index) ? '收起编辑器' : '展开编辑器' }}
+                                        </button>
+                                    </div>
                                 </div>
-                                <textarea v-model="step.value"
-                                          :rows="isJsExpanded(index) ? 16 : 4"
-                                          :class="[
-                                              'w-full rounded-md border dark:border-gray-600 px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white resize-y',
-                                              isJsExpanded(index) ? 'min-h-[22rem]' : 'min-h-[7rem]'
-                                          ]"
-                                          spellcheck="false"
-                                          placeholder="return document.title;"></textarea>
+
+                                <!-- 外部脚本模式 -->
+                                <div v-if="getJsMode(index, step) === 'file'" class="space-y-3">
+                                    <div>
+                                        <div class="flex items-center justify-between gap-2 mb-1">
+                                            <label class="block text-xs font-semibold text-gray-700 dark:text-gray-300">
+                                                脚本文件 (custom_scripts/ 或 scripts/)
+                                            </label>
+                                            <button @click="loadAvailableScripts(true)"
+                                                    type="button"
+                                                    class="text-[11px] text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-0.5">
+                                                <span>刷新列表</span>
+                                            </button>
+                                        </div>
+                                        <div class="relative">
+                                            <select :value="normalizeScriptTarget(step.target)"
+                                                    @change="step.target = $event.target.value; if (isJsPreviewExpanded(index)) fetchScriptPreviewContent(step.target)"
+                                                    @focus="loadAvailableScripts(false)"
+                                                    class="w-full border dark:border-gray-600 px-3 py-1.5 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-400">
+                                                <option value="" disabled>-- 请选择脚本文件 --</option>
+                                                <optgroup v-if="availableScripts.some(s => s.category === 'custom')" label="自定义扩展脚本 (custom_scripts/)">
+                                                    <option v-for="s in availableScripts.filter(s => s.category === 'custom')"
+                                                            :key="s.path"
+                                                            :value="s.path">
+                                                        {{ s.name }} ({{ s.description || s.path }})
+                                                    </option>
+                                                </optgroup>
+                                                <optgroup v-if="availableScripts.some(s => s.category === 'scripts')" label="内置/系统脚本 (scripts/)">
+                                                    <option v-for="s in availableScripts.filter(s => s.category === 'scripts')"
+                                                            :key="s.path"
+                                                            :value="s.path">
+                                                        {{ s.name }} ({{ s.description || s.path }})
+                                                    </option>
+                                                </optgroup>
+                                                <option v-if="normalizeScriptTarget(step.target) && !availableScripts.some(s => s.path === normalizeScriptTarget(step.target))"
+                                                        :value="normalizeScriptTarget(step.target)">
+                                                    {{ step.target }} (自定义路径)
+                                                </option>
+                                            </select>
+                                        </div>
+                                    </div>
+
+                                    <!-- 宏变量快捷插入器与参数编辑 -->
+                                    <div class="space-y-1.5">
+                                         <div class="flex items-center justify-between gap-2 flex-wrap">
+                                             <label class="block text-xs font-semibold text-gray-700 dark:text-gray-300">
+                                                 运行入参 (__ARGS__ 参数对象 / JSON 模板):
+                                             </label>
+                                             <div class="flex items-center gap-1 text-[11px] flex-wrap">
+                                                 <span class="text-gray-500 dark:text-gray-400">插入宏:</span>
+                                                 <button type="button"
+                                                         @click="insertMacro(index, step, '{{context.model}}')"
+                                                         class="px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-100 border border-blue-200 dark:border-blue-800 transition">
+                                                     <span v-text="'{{context.model}}'"></span>
+                                                 </button>
+                                                 <button type="button"
+                                                         @click="insertMacro(index, step, '{{context.prompt}}')"
+                                                         class="px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-100 border border-blue-200 dark:border-blue-800 transition">
+                                                     <span v-text="'{{context.prompt}}'"></span>
+                                                 </button>
+                                                 <button type="button"
+                                                         @click="insertMacro(index, step, '{{context.session_id}}')"
+                                                         class="px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-100 border border-blue-200 dark:border-blue-800 transition">
+                                                     <span v-text="'{{context.session_id}}'"></span>
+                                                 </button>
+                                                 <button type="button"
+                                                         @click="insertMacro(index, step, '{{context.stream}}')"
+                                                         class="px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-100 border border-blue-200 dark:border-blue-800 transition">
+                                                     <span v-text="'{{context.stream}}'"></span>
+                                                 </button>
+                                             </div>
+                                         </div>
+                                         <textarea :id="'wf-js-param-' + index"
+                                                   :value="formatJsStepValue(step)"
+                                                   @input="updateJsStepParamValue(step, $event.target.value)"
+                                                   rows="3"
+                                                   class="w-full rounded-md border dark:border-gray-600 px-3 py-2 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white resize-y min-h-[4.5rem]"
+                                                   spellcheck="false"
+                                                   :placeholder="jsonParamPlaceholder"></textarea>
+                                     </div>
+
+                                     <!-- 脚本源码预览折叠卡片 -->
+                                     <div v-if="isJsPreviewExpanded(index)" class="border dark:border-gray-700 rounded-md bg-gray-50 dark:bg-gray-800/80 p-3 space-y-2">
+                                         <div class="flex items-center justify-between text-xs text-gray-600 dark:text-gray-400 border-b dark:border-gray-700 pb-2">
+                                             <span class="font-medium">只读源码预览: {{ step.target }}</span>
+                                             <span v-if="(getScriptPreviewData(step) || {}).description" class="text-gray-500 italic">
+                                                 {{ (getScriptPreviewData(step) || {}).description }}
+                                             </span>
+                                         </div>
+                                         <div v-if="loadingScriptPreviews[normalizeScriptTarget(step.target)]"
+                                              class="text-xs text-gray-500 py-4 text-center">
+                                             加载脚本源码中...
+                                         </div>
+                                         <pre v-else
+                                              class="text-xs font-mono max-h-60 overflow-auto bg-gray-900 text-gray-100 dark:bg-gray-950 p-3 rounded leading-5 whitespace-pre-wrap select-text">{{ (getScriptPreviewData(step) || {}).content || '// 点击上方预览按钮加载脚本内容' }}</pre>
+                                     </div>
+                                 </div>
+
+                                 <!-- 内联代码模式 -->
+                                 <div v-else class="space-y-2">
+                                     <div class="flex items-center justify-between gap-2 flex-wrap">
+                                         <span class="text-xs text-gray-500 dark:text-gray-400">在当前页面上下文直接执行原生 JavaScript 代码。</span>
+                                         <div class="flex items-center gap-1 text-[11px]">
+                                             <span class="text-gray-500 dark:text-gray-400">插入宏:</span>
+                                             <button type="button"
+                                                     @click="insertMacro(index, step, '{{context.model}}')"
+                                                     class="px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-100 border border-blue-200 dark:border-blue-800 transition">
+                                                 <span v-text="'{{context.model}}'"></span>
+                                             </button>
+                                             <button type="button"
+                                                     @click="insertMacro(index, step, '{{context.prompt}}')"
+                                                     class="px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-100 border border-blue-200 dark:border-blue-800 transition">
+                                                 <span v-text="'{{context.prompt}}'"></span>
+                                             </button>
+                                         </div>
+                                     </div>
+                                    <textarea :id="'wf-js-inline-' + index"
+                                              v-model="step.value"
+                                              :rows="isJsExpanded(index) ? 16 : 4"
+                                              :class="[
+                                                  'w-full rounded-md border dark:border-gray-600 px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white resize-y',
+                                                  isJsExpanded(index) ? 'min-h-[22rem]' : 'min-h-[7rem]'
+                                              ]"
+                                              spellcheck="false"
+                                              placeholder="return document.title;"></textarea>
+                                </div>
                             </div>
 
                             <div v-else-if="step.action === 'READONLY_HINT'" class="space-y-3">
@@ -734,7 +1079,7 @@ window.WorkflowPanel = {
                         </div>
                     </div>
 
-                    <div v-if="step.action === 'CLICK' && isExecutionExpanded(index)"
+                    <div v-if="step.action === 'CLICK' && isExecutionExpanded(index, step)"
                          class="mt-3 ml-9 border-t border-gray-200 dark:border-gray-700 pt-3 space-y-4">
                         <div class="flex items-center justify-between gap-3">
                             <div class="text-sm font-medium text-gray-800 dark:text-gray-200">执行设置</div>

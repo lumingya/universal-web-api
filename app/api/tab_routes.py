@@ -81,6 +81,7 @@ from app.utils.site_url import (
 from app.utils.tab_route_groups import (
     normalize_route_group_id,
     normalize_route_groups,
+    route_group_member_key,
     route_groups_by_id,
 )
 from app.core.tab_pool_parts._utils import _should_skip_pool_url
@@ -1789,6 +1790,7 @@ async def update_tab_pool_config(
 @router.get("/tab/{tab_index}/v1/models")
 async def list_models_with_tab(
     tab_index: int,
+    anthropic_version: Optional[str] = Header(None, alias="anthropic-version"),
     authenticated: bool = Depends(verify_service_auth),
     _route_method: None = Depends(_route_method_guard("fixed_tab")),
 ):
@@ -1796,32 +1798,60 @@ async def list_models_with_tab(
     if tab_index < 1:
         raise HTTPException(status_code=400, detail="标签页编号必须大于 0")
 
-    try:
-        browser = get_browser(auto_connect=False)
-        # 这里只需要判断"这个编号的标签页存在吗"，不要用 acquire 探测：
-        # 1) acquire 对 BUSY 标签页返回 None，会把"正在处理长请求"误判成"不存在"，
-        #    而客户端（Claude Code / Cherry Studio 等）每次会话前都会拉模型列表，
-        #    一个 3 分钟的流式请求会让这条路由在客户端眼里整段不可用；
-        # 2) acquire/release 会推高 request_count 并触发 command_engine 的释放触发器，
-        #    让"每 N 次请求新建对话"这类规则被纯轮询打满。
-        if _get_tab_info_by_index(browser, tab_index) is None:
-            raise HTTPException(status_code=404, detail=f"标签页 #{tab_index} 不存在")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.debug(f"标签页模型列表校验失败（忽略）: {e}")
+    browser = get_browser(auto_connect=False)
+    tab_info = _get_tab_info_by_index(browser, tab_index)
+    if tab_info is None:
+        raise HTTPException(status_code=404, detail=f"标签页 #{tab_index} 不存在")
 
-    return {
-        "object": "list",
-        "data": [
-            {
-                "id": "web-browser",
+    entries: List[Dict[str, Any]] = []
+    try:
+        from app.services.config_engine import config_engine
+
+        catalog_preset = get_arena_direct_catalog_for_tab(config_engine, tab_info)
+        if catalog_preset:
+            entries = build_openai_model_entries(
+                list_arena_direct_models(
+                    browser,
+                    catalog_config=catalog_preset.get("catalog"),
+                ),
+                created=MODEL_LIST_CREATED,
+            )
+    except Exception as e:
+        logger.debug(f"读取标签页模型目录失败（已忽略）: {e}")
+
+    if bool(tab_info.get("model_name_override_source")):
+        exposed_name = str(tab_info.get("exposed_model_name") or tab_info.get("model_name_override") or "").strip()
+        seen_ids = {str(e.get("id") or "").strip().lower() for e in entries}
+        if exposed_name and exposed_name.lower() not in seen_ids:
+            entries.append({
+                "id": exposed_name,
                 "object": "model",
+                "type": "model",
                 "created": MODEL_LIST_CREATED,
-                "owned_by": "universal-web-api"
-            }
-        ]
-    }
+                "owned_by": "universal-web-api",
+                "display_name": exposed_name,
+            })
+
+    if not entries:
+        entries = [{
+            "id": "web-browser",
+            "object": "model",
+            "type": "model",
+            "created": MODEL_LIST_CREATED,
+            "owned_by": "universal-web-api",
+            "display_name": "web-browser",
+        }]
+
+    payload = _build_route_model_entries_payload(
+        entries,
+        anthropic_version=anthropic_version,
+    )
+    response = JSONResponse(content=payload)
+    response.headers.update(_build_tab_resolution_headers(
+        tab_info,
+        selector="fixed",
+    ))
+    return response
 
 
 @router.get("/url/{route_domain}/models")
@@ -2047,23 +2077,134 @@ async def list_models_with_exact_tab_url_and_preset(
     return response
 
 
+def _collect_models_for_route_group(
+    browser: Any,
+    group: Dict[str, Any],
+    preset_name: Optional[str] = None,
+    anthropic_version: Optional[str] = None,
+) -> Dict[str, Any]:
+    """为路由组收集模型条目：
+    1. 优先提取对应预设中的 Model Catalog 模型（如 Arena Direct 模型列表）；
+    2. 提取组内成员标签页的自定义 exposed_model_name；
+    3. 若均无具体模型，回退返回 group ID 聚合名称。
+    """
+    resolved_preset = str(preset_name or group.get("preset_name") or "").strip() or None
+    route_domain = str(group.get("route_domain") or "").strip()
+
+    group_tabs: List[Dict[str, Any]] = []
+    try:
+        tabs_snapshot = browser.tab_pool.get_tabs_with_index()
+        raw_members = group.get("members") or []
+        group_member_keys = {route_group_member_key(m) for m in raw_members if m}
+        for t in tabs_snapshot:
+            t_url = normalize_exact_tab_url(str(t.get("url") or ""))
+            t_token = str(t.get("url_route_token") or "").strip().lower()
+            t_idx = int(t.get("persistent_index") or 0)
+            if (
+                f"{t_token}::#{t_idx}" in group_member_keys
+                or f"{t_token}::#*" in group_member_keys
+                or f"{t_url}::#{t_idx}" in group_member_keys
+                or f"{t_url}::#*" in group_member_keys
+            ):
+                group_tabs.append(t)
+        if not group_tabs and route_domain:
+            group_tabs = [
+                t for t in tabs_snapshot
+                if route_domain_matches(route_domain, t.get("current_domain") or t.get("route_domain") or "")
+            ]
+    except Exception as e:
+        logger.debug(f"读取路由组成员标签页失败（已忽略）: {e}")
+        group_tabs = []
+
+    if not route_domain and group_tabs:
+        first_domain = str(group_tabs[0].get("current_domain") or group_tabs[0].get("route_domain") or "").strip()
+        if first_domain:
+            route_domain = first_domain
+
+    catalog_entries: List[Dict[str, Any]] = []
+    try:
+        from app.services.config_engine import config_engine
+
+        if route_domain and route_domain_matches(route_domain, "arena.ai"):
+            catalog_preset = None
+            for t in group_tabs:
+                catalog_preset = get_arena_direct_catalog_for_tab(
+                    config_engine,
+                    t,
+                    preset_name=resolved_preset,
+                )
+                if catalog_preset:
+                    break
+            if not catalog_preset:
+                catalog_preset = get_arena_direct_catalog_for_tab(
+                    config_engine,
+                    {
+                        "status": "idle",
+                        "url": f"https://{route_domain}/c",
+                        "current_domain": route_domain,
+                        "route_domain": route_domain,
+                    },
+                    preset_name=resolved_preset,
+                )
+            if catalog_preset:
+                catalog_entries = build_openai_model_entries(
+                    list_arena_direct_models(
+                        browser,
+                        catalog_config=catalog_preset.get("catalog"),
+                    ),
+                    created=MODEL_LIST_CREATED,
+                )
+    except Exception as e:
+        logger.debug(f"构建路由组模型目录失败（已忽略）: {e}")
+
+    custom_entries: List[Dict[str, Any]] = []
+    seen_ids = {str(e.get("id") or "").strip().lower() for e in catalog_entries}
+    for t in group_tabs:
+        if bool(t.get("model_name_override_source")):
+            exp_name = str(t.get("exposed_model_name") or t.get("model_name_override") or "").strip()
+            if exp_name and exp_name.lower() not in seen_ids:
+                seen_ids.add(exp_name.lower())
+                custom_entries.append({
+                    "id": exp_name,
+                    "object": "model",
+                    "type": "model",
+                    "created": MODEL_LIST_CREATED,
+                    "owned_by": "universal-web-api",
+                    "display_name": exp_name,
+                })
+
+    all_entries = catalog_entries + custom_entries
+    if not all_entries:
+        all_entries = [{
+            "id": group["id"],
+            "object": "model",
+            "type": "model",
+            "created": MODEL_LIST_CREATED,
+            "owned_by": "universal-web-api",
+            "display_name": str(group.get("name") or group["id"]),
+        }]
+
+    return _build_route_model_entries_payload(
+        all_entries,
+        anthropic_version=anthropic_version,
+    )
+
+
 @router.get("/group/{group_id}/v1/models")
 async def list_models_with_route_group(
     group_id: str,
+    anthropic_version: Optional[str] = Header(None, alias="anthropic-version"),
     authenticated: bool = Depends(verify_service_auth),
     _route_method: None = Depends(_route_method_guard("route_group")),
 ):
     browser = get_browser(auto_connect=False)
     group = _resolve_route_group(browser, group_id)
-    payload = {
-        "object": "list",
-        "data": [{
-            "id": group["id"],
-            "object": "model",
-            "created": MODEL_LIST_CREATED,
-            "owned_by": "universal-web-api",
-        }],
-    }
+    payload = _collect_models_for_route_group(
+        browser,
+        group,
+        preset_name=None,
+        anthropic_version=anthropic_version,
+    )
     response = JSONResponse(content=payload)
     response.headers.update(_build_tab_resolution_headers(
         None,
@@ -2081,24 +2222,24 @@ async def list_models_with_route_group(
 async def list_models_with_route_group_and_preset(
     group_id: str,
     preset_name: str,
+    anthropic_version: Optional[str] = Header(None, alias="anthropic-version"),
     authenticated: bool = Depends(verify_service_auth),
     _route_method: None = Depends(_route_method_guard("route_group")),
 ):
     browser = get_browser(auto_connect=False)
     group = _resolve_route_group(browser, group_id)
     route_domain = str(group.get("route_domain") or "").strip()
-    if not route_domain:
-        raise HTTPException(status_code=400, detail="路由组未配置站点域名，不能绑定预设")
-    preset_resolution = _resolve_strict_domain_preset(route_domain, preset_name)
-    payload = {
-        "object": "list",
-        "data": [{
-            "id": group["id"],
-            "object": "model",
-            "created": MODEL_LIST_CREATED,
-            "owned_by": "universal-web-api",
-        }],
-    }
+    preset_resolution = (
+        _resolve_strict_domain_preset(route_domain, preset_name)
+        if route_domain
+        else {"domain": "", "preset_name": preset_name}
+    )
+    payload = _collect_models_for_route_group(
+        browser,
+        group,
+        preset_name=preset_resolution["preset_name"],
+        anthropic_version=anthropic_version,
+    )
     response = JSONResponse(content=payload)
     response.headers.update(_build_tab_resolution_headers(
         None,
@@ -2420,9 +2561,9 @@ async def chat_with_route_domain(
     with logger.context(ctx.request_id):
         if tab_index is not None:
             logger.info(
-                f"开始 (域名路由 {route_key} -> 标签页 #{resolved_tab_index}, "
-                f"selector=tab_index, "
-                f"preset={resolved_preset_name or '<follow-tab/default>'})"
+                f"[ROUTE:TAB] 域名路由分发指定标签页: route={route_key}, tab_index=#{resolved_tab_index}, "
+                f"tab_url={(tab_info or {}).get('url')}, model={body.model!r}, "
+                f"preset={resolved_preset_name or '<follow-tab/default>'}"
             )
             return await _chat_with_resolved_tab(
                 request,

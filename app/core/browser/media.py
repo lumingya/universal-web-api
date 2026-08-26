@@ -30,6 +30,7 @@ from app.core.background_image_downloader import (
 )
 from app.utils.remote_resource import get_public_remote_resource
 from app.utils.site_url import extract_remote_site_domain
+from app.utils.image_validation import filter_reference_images
 from app.core.tab_pool import TabSession
 
 if TYPE_CHECKING:
@@ -1713,6 +1714,15 @@ class BrowserMediaMixin:
                 )
             except Exception as e:
                 logger.warning(f"data uri 落盘失败（已忽略）: {e}")
+
+            uploaded_images = image_config.get("uploaded_image_paths") or []
+            if uploaded_images and media_items:
+                media_items = filter_reference_images(
+                    media_items,
+                    uploaded_images,
+                    tab=tab,
+                    logger_context="media_after_stream",
+                )
 
             # 汇总并打印多模态媒体提取完成的日志
             final_images = [item for item in media_items if item.get("media_type") == "image"]

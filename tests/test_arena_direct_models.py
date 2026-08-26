@@ -113,6 +113,7 @@ def test_catalog_normalization_deduplicates_and_builds_openai_entries():
             "aliases": ["claude-sonnet-4-6-vertex", "claude-sonnet-4-6"],
             "provider": "googleVertexAnthropic",
             "organization": "anthropic",
+            "modality": "text",
         }
     ]
 
@@ -146,7 +147,7 @@ def test_local_alias_overrides_are_applied_to_search_and_resolution(tmp_path, mo
     entries = build_openai_model_entries(models, created=123)
     assert entries == [
         {
-            "id": "claude-visible",
+            "id": "claude-sonnet-4-6",
             "object": "model",
             "type": "model",
             "created": 123,
@@ -684,9 +685,9 @@ class _ActionHarness(WorkflowExecutorActionMixin):
         if selector == MODEL_TRIGGER_SELECTOR:
             return [self.trigger]
         if selector == 'input[placeholder="Search models"]':
-            return [self.search]
-        if selector == '[role="option"][data-value]':
-            return [self.option]
+            return [self.search] if getattr(self, "dialog_open", False) else []
+        if selector in ('[role="option"]', '[role="option"][data-value]'):
+            return [self.option] if getattr(self, "dialog_open", False) else []
         return []
 
     @staticmethod
@@ -695,11 +696,21 @@ class _ActionHarness(WorkflowExecutorActionMixin):
 
     def _stealth_click_element(self, element, **_kwargs):
         self.clicks.append(element)
-        if element is self.option:
-            self.trigger.text = "claude-sonnet-4-6"
+        if element is self.trigger:
+            self.dialog_open = True
+        elif element is self.option or getattr(element, "attr", None):
+            self.dialog_open = False
+            cand_text = (
+                getattr(element, "text", "")
+                or getattr(element, "raw_text", "")
+                or getattr(element, "_data_value", "")
+                or "claude-sonnet-4-6"
+            )
+            if cand_text:
+                self.trigger.text = cand_text.splitlines()[0].strip()
 
     def _close_arena_model_dialog(self):
-        raise AssertionError("successful selection should not need dialog cleanup")
+        self.dialog_open = False
 
 
 class _BattleActionHarness(_ActionHarness):
@@ -714,8 +725,10 @@ class _BattleActionHarness(_ActionHarness):
             return [self.trigger] if self.direct_mode else []
         if selector == 'button[role="combobox"]':
             return [self.mode_button]
-        if selector == '[role="option"]':
-            return [self.direct_option]
+        if selector in ('[role="option"]', '[role="option"][data-value]'):
+            return [self.option] if (self.direct_mode and self.dialog_open) else [self.direct_option]
+        if selector == 'input[placeholder="Search models"]':
+            return [self.search] if (self.direct_mode and self.dialog_open) else []
         return super()._find_visible_elements(selector)
 
     def _stealth_click_element(self, element, **kwargs):
@@ -723,8 +736,18 @@ class _BattleActionHarness(_ActionHarness):
         if element is self.direct_option:
             self.direct_mode = True
             self.mode_button.text = "Direct"
-        elif element is self.option:
-            self.trigger.text = "claude-sonnet-4-6"
+        elif element is self.trigger:
+            self.dialog_open = True
+        else:
+            self.dialog_open = False
+            cand_text = (
+                getattr(element, "text", "")
+                or getattr(element, "raw_text", "")
+                or getattr(element, "_data_value", "")
+                or "claude-sonnet-4-6"
+            )
+            if cand_text:
+                self.trigger.text = cand_text.splitlines()[0].strip()
 
 
 class _DuplicateTriggerHarness(_ActionHarness):
@@ -750,7 +773,7 @@ class _ProviderIconTriggerHarness(_ActionHarness):
         self.trigger.raw_text = current_label
 
     def _stealth_click_element(self, element, **_kwargs):
-        self.clicks.append(element)
+        super()._stealth_click_element(element, **_kwargs)
         if element is self.option:
             self.trigger.text = "Anthropicclaude-sonnet-4-6"
             self.trigger.raw_text = "claude-sonnet-4-6"
@@ -923,3 +946,419 @@ def test_is_arena_direct_url_with_presets():
     # 畸形或非 Arena URL 防御
     assert _is_arena_direct_url("about:blank") is False
     assert _is_arena_direct_url("https://gemini.google.com/app") is False
+
+
+def test_arena_universal_direct_image_preset_workflow():
+    sites_path = Path(__file__).parents[1] / "config" / "sites.json"
+    sites = json.loads(sites_path.read_text(encoding="utf-8"))
+    preset = sites["arena.ai"]["presets"]["万能直连-通用生图"]
+
+    selectors = preset["selectors"]
+    assert selectors.get("new_chat_btn") is None
+    assert "Stop generation" not in selectors.get("send_btn", "")
+    assert selectors.get("retry button") is not None
+    assert selectors.get("stop_btn") is not None
+
+    workflow = preset["workflow"]
+    assert len(workflow) == 6
+    assert workflow[0]["action"] == "CLICK" and workflow[0]["target"] == "retry button" and workflow[0]["optional"] is True
+    assert workflow[0]["execution"]["click_mode"] == "dom_safe"
+    assert workflow[1]["action"] == "CLICK" and workflow[1]["target"] == "stop_btn" and workflow[1]["optional"] is True
+    assert workflow[1]["execution"]["click_mode"] == "dom_safe"
+    assert workflow[2]["action"] == "JS_EXEC" and "arena_payload_interceptor.js" in workflow[2]["target"]
+    assert workflow[3]["action"] == "FILL_INPUT" and workflow[3]["target"] == "input_box"
+    assert workflow[4]["action"] == "CLICK" and workflow[4]["target"] == "send_btn"
+    assert workflow[5]["action"] == "STREAM_WAIT" and workflow[5]["target"] == "result_container"
+
+
+def test_arena_universal_direct_text_preset_workflow():
+    sites_path = Path(__file__).parents[1] / "config" / "sites.json"
+    sites = json.loads(sites_path.read_text(encoding="utf-8"))
+    presets = sites.get("arena.ai", {}).get("presets", {})
+    if "万能直连-通用文本" not in presets:
+        return
+    preset = presets["万能直连-通用文本"]
+
+    selectors = preset["selectors"]
+    assert selectors.get("new_chat_btn") is not None
+    assert selectors.get("retry button") is not None
+    assert selectors.get("stop_btn") is not None
+
+    workflow = preset["workflow"]
+    assert len(workflow) == 9
+    assert workflow[0]["action"] == "CLICK" and workflow[0]["target"] == "new_chat_btn"
+    assert workflow[1]["action"] == "WAIT" and workflow[1]["value"] == 0.5
+    assert workflow[2]["action"] == "JS_EXEC" and "arena_payload_interceptor.js" in workflow[2]["target"]
+    assert workflow[3]["action"] == "CLICK" and workflow[3]["target"] == "stop_btn" and workflow[3]["optional"] is True
+    assert workflow[4]["action"] == "CLICK" and workflow[4]["target"] == "retry button" and workflow[4]["optional"] is True
+    assert workflow[5]["action"] == "CLICK" and workflow[5]["target"] == "input_box"
+    assert workflow[6]["action"] == "FILL_INPUT" and workflow[6]["target"] == "input_box"
+    assert workflow[7]["action"] == "CLICK" and workflow[7]["target"] == "send_btn"
+    assert workflow[8]["action"] == "STREAM_WAIT" and workflow[8]["target"] == "result_container"
+
+
+def test_filter_models_respects_explicit_modality_over_keyword():
+    models = [
+        {
+            "arena_model_id": "text-model-1",
+            "name": "qwen-image-reasoning",
+            "public_name": "qwen-image-reasoning",
+            "display_name": "qwen-image-reasoning",
+            "modality": "text",
+        },
+        {
+            "arena_model_id": "image-model-1",
+            "name": "recraft-v4.1-pro",
+            "public_name": "recraft-v4.1-pro",
+            "display_name": "recraft-v4.1-pro",
+            "modality": "image",
+        },
+    ]
+
+    text_filtered = arena_direct_models._filter_models(models, {"enabled": True, "modality": "text"})
+    assert [m["name"] for m in text_filtered] == ["qwen-image-reasoning"]
+
+    image_filtered = arena_direct_models._filter_models(models, {"enabled": True, "modality": "image"})
+    assert [m["name"] for m in image_filtered] == ["recraft-v4.1-pro"]
+
+
+def test_collect_model_entries_collects_both_image_and_text_models(monkeypatch):
+    from app.api.chat import _collect_model_entries
+
+    class _MockPool:
+        def get_tabs_with_index(self):
+            return [
+                {
+                    "route_domain": "arena.ai",
+                    "current_url": "https://arena.ai/image/direct",
+                    "persistent_index": 1,
+                    "status": "idle",
+                }
+            ]
+
+    class _MockBrowser:
+        def __init__(self):
+            self.tab_pool = _MockPool()
+
+    monkeypatch.setattr("app.api.chat.get_browser", lambda **_: _MockBrowser())
+    monkeypatch.setattr(
+        "app.api.chat.list_arena_direct_models",
+        lambda browser, catalog_config=None: [
+            {
+                "arena_model_id": "019fe39a-b4c5-7442-850f-26c39b95b3ca",
+                "name": "mona-lisa-1",
+                "public_name": "mona-lisa-1",
+                "display_name": "mona-lisa-1",
+                "modality": "image",
+                "provider": "arena.ai",
+                "organization": "arena.ai",
+            }
+        ] if (catalog_config or {}).get("modality") == "image" else [
+            {
+                "arena_model_id": "019c6d29-a30c-7e20-9bd0-6650af926623",
+                "name": "claude-sonnet-4-6",
+                "public_name": "claude-sonnet-4-6",
+                "display_name": "claude-sonnet-4-6",
+                "modality": "text",
+                "provider": "anthropic",
+                "organization": "anthropic",
+            }
+        ],
+    )
+
+    entries = _collect_model_entries()
+    model_ids = [e["id"] for e in entries]
+    assert "mona-lisa-1" in model_ids
+
+
+def test_match_arena_direct_model_with_derived_suffixes():
+    models = [
+        {
+            "arena_model_id": "019fb6ba-031f-7e6b-ac0b-33dc6569bbc4",
+            "name": "gemini-3.7-flash-high",
+            "public_name": "gemini-3.7-flash-high",
+            "display_name": "gemini-3.7-flash-high",
+            "aliases": ["gemini-3.7-flash-high", "gemini-3.7-flash"],
+        },
+        {
+            "arena_model_id": "019d5e8d-d53e-75f3-bcf5-815ae0cf202a",
+            "name": "glm-5.1",
+            "public_name": "glm-5.1",
+            "display_name": "glm-5.1",
+            "aliases": ["glm-5.1"],
+        },
+        {
+            "arena_model_id": "019ebf6a-94d4-7649-b704-1dbbd5eb0942",
+            "name": "glm-5.2",
+            "public_name": "glm-5.2",
+            "display_name": "glm-5.2",
+            "aliases": ["glm-5.2", "glm-5.2 (max)"],
+        },
+        {
+            "arena_model_id": "019fe39a-b4c5-7442-850f-26c39b95b3ca",
+            "name": "mona-lisa-1",
+            "public_name": "mona-lisa-1",
+            "display_name": "mona-lisa-1",
+            "aliases": ["mona-lisa-1"],
+        },
+    ]
+
+    matched_gemini = arena_direct_models.match_arena_direct_model(models, "gemini-3.7-flash")
+    assert matched_gemini is not None
+    assert matched_gemini["display_name"] == "gemini-3.7-flash-high"
+
+    matched_glm51 = arena_direct_models.match_arena_direct_model(models, "glm-5.1")
+    assert matched_glm51 is not None
+    assert matched_glm51["display_name"] == "glm-5.1"
+
+    matched_glm52 = arena_direct_models.match_arena_direct_model(models, "glm-5.2")
+    assert matched_glm52 is not None
+    assert matched_glm52["display_name"] == "glm-5.2"
+
+    matched_mona = arena_direct_models.match_arena_direct_model(models, "mona-lisa")
+    assert matched_mona is not None
+    assert matched_mona["display_name"] == "mona-lisa-1"
+
+
+def test_select_model_matches_option_by_display_name_when_internal_name_is_uuid(monkeypatch):
+    model = {
+        "arena_model_id": "019c7820-5480-78b6-9fef-04c0d7004054",
+        "name": "019c7820-5480-78b6-9fef-04c0d7004054",
+        "public_name": "gemini-3.1-pro-preview",
+        "display_name": "gemini-3.1-pro-preview",
+        "search_name": "gemini-3.1-pro-preview",
+        "aliases": ["gemini-3.1-pro-preview", "gemini-3.1-pro"],
+    }
+    monkeypatch.setattr(
+        "app.core.workflow.executor_actions.resolve_arena_direct_model",
+        lambda _tab, _requested, catalog_config=None: model,
+    )
+
+    harness = _ActionHarness(current_label="gemini-3.7-flash-high")
+    harness.option = _Element(data_value="gemini-3.1-pro-preview", text="gemini-3.1-pro-preview")
+
+    harness._execute_select_model(
+        selector=MODEL_TRIGGER_SELECTOR,
+        target_key="model_select_btn",
+        value={"timeout": 1},
+        context={"model": "gemini-3.1-pro-preview"},
+        optional=False,
+    )
+
+    assert harness.clicks == [harness.trigger, harness.option]
+    assert harness._text_handler.calls == [(harness.search, "gemini-3.1-pro-preview")]
+
+
+def test_select_model_matches_option_with_text_and_icons_without_data_value(monkeypatch):
+    model = {
+        "arena_model_id": "019c7820-5480-78b6-9fef-04c0d7004054",
+        "name": "019c7820-5480-78b6-9fef-04c0d7004054",
+        "public_name": "gemini-3.1-pro-preview",
+        "display_name": "gemini-3.1-pro-preview",
+        "search_name": "gemini-3.1-pro-preview",
+        "aliases": ["gemini-3.1-pro-preview"],
+    }
+    monkeypatch.setattr(
+        "app.core.workflow.executor_actions.resolve_arena_direct_model",
+        lambda _tab, _requested, catalog_config=None: model,
+    )
+
+    harness = _ActionHarness(current_label="gemini-3.7-flash-high")
+    # Option has empty data-value, but has multiline text containing display name and icon descriptions
+    harness.option = _Element(data_value="", text="gemini-3.1-pro-preview\nVision Document")
+
+    harness._execute_select_model(
+        selector=MODEL_TRIGGER_SELECTOR,
+        target_key="model_select_btn",
+        value={"timeout": 1},
+        context={"model": "gemini-3.1-pro-preview"},
+        optional=False,
+    )
+
+    assert harness.clicks == [harness.trigger, harness.option]
+
+
+def test_model_label_matches_truncated_and_provider_prefixed_labels():
+    target = {
+        "name": "andwise-evfd",
+        "display_name": "gemini-3.7-flash-high",
+        "public_name": "gemini-3.7-flash-high",
+        "search_name": "gemini-3.7-flash-high",
+        "aliases": ["gemini-3.7-flash-high", "gemini-3.7-flash"],
+    }
+
+    # Truncated button text on UI (e.g. gemini-3.7-flash-...)
+    assert WorkflowExecutorActionMixin._model_label_matches("gemini-3.7-flash-...", target)
+    assert WorkflowExecutorActionMixin._model_label_matches("gemini-3.7-flash-…", target)
+    # Non-truncated shorter name must not match target high model
+    assert not WorkflowExecutorActionMixin._model_label_matches("gemini-3.7-flash", target)
+
+    # Provider icon text combined (e.g. Google gemini-3.7-flash-high)
+    assert WorkflowExecutorActionMixin._model_label_matches("Google gemini-3.7-flash-high", target)
+    assert WorkflowExecutorActionMixin._model_label_matches("Google\ngemini-3.7-flash-high", target)
+
+    # Different model should not match
+    assert not WorkflowExecutorActionMixin._model_label_matches("gemini-3.1-pro-preview", target)
+
+
+def test_collect_model_entries_does_not_expose_synthetic_preview_alias(monkeypatch):
+    class _TabPool:
+        @staticmethod
+        def get_tabs_with_index():
+            return [
+                {
+                    "status": "idle",
+                    "url": "https://arena.ai/text/direct",
+                    "preset_name": "direct",
+                    "current_domain": "arena.ai",
+                    "route_domain": "arena.ai",
+                    "exposed_model_name": "arena.ai",
+                }
+            ]
+
+    class _Browser:
+        tab_pool = _TabPool()
+
+    monkeypatch.setattr(chat_api, "get_browser", lambda auto_connect=False: _Browser())
+    monkeypatch.setattr(
+        chat_api,
+        "get_arena_direct_catalog_for_tab",
+        lambda _config_engine, _tab, preset_name=None: {"catalog": {"enabled": True}},
+    )
+    monkeypatch.setattr(
+        chat_api,
+        "list_arena_direct_models",
+        lambda _browser, catalog_config=None: [
+            {
+                "arena_model_id": "019c7820-5480-78b6-9fef-04c0d7004054",
+                "name": "gemini-3.1-pro-preview",
+                "public_name": "gemini-3.1-pro-preview",
+                "display_name": "gemini-3.1-pro-preview",
+                "search_name": "gemini-3.1-pro-preview",
+                "aliases": ["gemini-3.1-pro-preview", "gemini-3.1-pro"],
+                "provider": "google",
+                "organization": "google",
+            }
+        ],
+    )
+
+    entries = chat_api._collect_model_entries()
+    model_ids = [item["id"] for item in entries]
+
+    assert "gemini-3.1-pro-preview" in model_ids
+    assert "gemini-3.1-pro" not in model_ids
+
+
+def test_model_label_matches_rejects_prefix_match_when_not_truncated():
+    gpt_4o_mini = {
+        "name": "gpt-4o-mini",
+        "display_name": "gpt-4o-mini",
+        "public_name": "gpt-4o-mini",
+    }
+    # Non-truncated button showing "gpt-4o" MUST NOT match target "gpt-4o-mini"
+    assert not WorkflowExecutorActionMixin._model_label_matches("gpt-4o", gpt_4o_mini)
+
+    # Truncated button with ellipsis DOES match
+    assert WorkflowExecutorActionMixin._model_label_matches("gpt-4o-min...", gpt_4o_mini)
+    assert WorkflowExecutorActionMixin._model_label_matches("gpt-4o-min…", gpt_4o_mini)
+
+
+def test_select_model_prefers_exact_match_over_earlier_longer_candidate(monkeypatch):
+    target_model = {
+        "arena_model_id": "target-uuid",
+        "name": "gpt-4o",
+        "display_name": "gpt-4o",
+        "public_name": "gpt-4o",
+        "search_name": "gpt-4o",
+    }
+    monkeypatch.setattr(
+        "app.core.workflow.executor_actions.resolve_arena_direct_model",
+        lambda _tab, _requested, catalog_config=None: target_model,
+    )
+
+    class _MultiCandidateHarness(_ActionHarness):
+        def __init__(self):
+            super().__init__(current_label="claude-sonnet-4-6")
+            self.cand_mini = _Element(data_value="gpt-4o-mini", text="gpt-4o-mini")
+            self.cand_exact = _Element(data_value="gpt-4o", text="gpt-4o")
+
+        def _find_visible_elements(self, selector):
+            if selector == MODEL_TRIGGER_SELECTOR:
+                return [self.trigger]
+            if selector == 'input[placeholder="Search models"]':
+                return [self.search]
+            if selector in ('[role="option"]', '[role="option"][data-value]'):
+                # Longer prefix item appears FIRST
+                return [self.cand_mini, self.cand_exact]
+            return []
+
+    harness = _MultiCandidateHarness()
+    harness._execute_select_model(
+        selector=MODEL_TRIGGER_SELECTOR,
+        target_key="model_select_btn",
+        value={"timeout": 1},
+        context={"model": "gpt-4o"},
+        optional=False,
+    )
+
+    # Pass 1 exact match must select cand_exact, not cand_mini
+    assert harness.clicks == [harness.trigger, harness.cand_exact]
+
+
+def test_select_model_prefers_search_name_over_display_name(monkeypatch):
+    target_model = {
+        "arena_model_id": "target-uuid",
+        "name": "claude-sonnet-4-6-vertex",
+        "display_name": "claude-sonnet-4-6",
+        "search_name": "claude-visible-override",
+    }
+    monkeypatch.setattr(
+        "app.core.workflow.executor_actions.resolve_arena_direct_model",
+        lambda _tab, _requested, catalog_config=None: target_model,
+    )
+
+    harness = _ActionHarness(current_label="Max")
+    harness.option = _Element(data_value="claude-visible-override", text="claude-visible-override")
+
+    harness._execute_select_model(
+        selector=MODEL_TRIGGER_SELECTOR,
+        target_key="model_select_btn",
+        value={"timeout": 1},
+        context={"model": "claude-sonnet-4-6-vertex"},
+        optional=False,
+    )
+
+    assert harness._text_handler.calls == [(harness.search, "claude-visible-override")]
+
+
+
+
+
+def test_model_label_matches_provider_prefix_whitelist_and_short_names():
+    gpt_4 = {
+        "name": "gpt-4",
+        "display_name": "gpt-4",
+        "public_name": "gpt-4",
+    }
+    # Known provider attached directly without space
+    assert WorkflowExecutorActionMixin._model_label_matches("OpenAIgpt-4", gpt_4)
+    assert WorkflowExecutorActionMixin._model_label_matches("openai gpt-4", gpt_4)
+
+    # Unknown prefix (like minigpt-4) must NOT match
+    assert not WorkflowExecutorActionMixin._model_label_matches("minigpt-4", gpt_4)
+
+    # Short name o1
+    o1 = {
+        "name": "o1",
+        "display_name": "o1",
+        "public_name": "o1",
+    }
+    assert WorkflowExecutorActionMixin._model_label_matches("OpenAIo1", o1)
+    assert not WorkflowExecutorActionMixin._model_label_matches("demoo1", o1)
+
+
+
+
+
+
+

@@ -355,6 +355,26 @@ class TabPoolManager:
         info["exposed_model_name"] = override_name or default_name
         info["model_name_override_source"] = override_source
 
+    def _get_session_override_model_name(self, session: TabSession) -> str:
+        """获取 session 当前被用户显式覆盖的重命名模型名（若未重命名则返回空串）。"""
+        override_name = self._normalize_model_name(getattr(session, "model_name_override", None))
+        if override_name:
+            return override_name
+        try:
+            current_url, route_domain = session.get_cached_route_snapshot()
+        except Exception:
+            current_url, route_domain = "", ""
+        overrides = self._normalize_model_name_overrides(
+            getattr(self, "model_name_overrides", None)
+        )
+        normalized_url = normalize_exact_tab_url(current_url)
+        if normalized_url and normalized_url in overrides.get("urls", {}):
+            return str(overrides["urls"][normalized_url] or "").strip()
+        norm_domain = normalize_route_domain(route_domain)
+        if norm_domain and norm_domain in overrides.get("sites", {}):
+            return str(overrides["sites"][norm_domain] or "").strip()
+        return ""
+
     def is_url_excluded(self, url: str) -> bool:
         current_url = str(url or "").strip()
         if not current_url:
@@ -1763,6 +1783,11 @@ class TabPoolManager:
             logger.debug(f"标签页 {session.id} 分配编号 #{persistent_idx}")
 
         self._apply_preset_overrides(session)
+        try:
+            setattr(tab, "_session", session)
+        except Exception:
+            pass
+        session.notify_navigated(reason="tab_created")
         return session
 
     def _on_session_removed(self, session_id: str):
@@ -2066,11 +2091,14 @@ class TabPoolManager:
                     continue
                 if raw_id in current_url_known_raw:
                     current_url = current_url_by_raw.get(raw_id, "")
+                    old_url = session.last_known_url
                     session._remember_url(current_url)
                     try:
                         session.current_domain = extract_remote_site_domain(current_url)
                     except Exception:
                         session.current_domain = None
+                    if old_url and current_url and old_url != current_url:
+                        session.notify_navigated(reason="url_changed")
                 if not session.is_isolated_context:
                     continue
                 if session.status == TabStatus.BUSY:
@@ -3365,6 +3393,7 @@ class TabPoolManager:
         task_id: str,
         timeout: float = None,
         allocation_mode: Optional[str] = None,
+        requested_model: Optional[str] = None,
     ) -> Optional[TabSession]:
         return await self._run_cancellable_acquire(
             lambda: self.acquire_by_route_group(
@@ -3372,6 +3401,7 @@ class TabPoolManager:
                 task_id,
                 timeout,
                 allocation_mode,
+                requested_model=requested_model,
             ),
             task_id,
         )
@@ -3869,6 +3899,7 @@ class TabPoolManager:
         task_id: str,
         timeout: float = None,
         allocation_mode: Optional[str] = None,
+        requested_model: Optional[str] = None,
     ) -> Optional[TabSession]:
         target = normalize_route_group_id(group_id)
         if not target:
@@ -3939,6 +3970,15 @@ class TabPoolManager:
                             f"(task={task_id})"
                         )
                         return None
+
+                    if requested_model:
+                        clean_req_model = str(requested_model).strip().lower()
+                        model_specific = [
+                            s for s in matching_sessions
+                            if self._get_session_override_model_name(s).strip().lower() == clean_req_model
+                        ]
+                        if model_specific:
+                            matching_sessions = model_specific
 
                     mode = allocation_mode or group.get("allocation_mode") or self.allocation_mode
                     session = self._try_acquire_session_for_request(
@@ -4391,6 +4431,19 @@ class TabPoolManager:
         """Return a shallow snapshot of all current tab sessions."""
         with self._lock:
             return list(self._tabs.values())
+
+    def get_session_by_tab(self, tab: Any) -> Optional[TabSession]:
+        """Look up a TabSession for a given tab instance."""
+        if tab is None:
+            return None
+        direct = getattr(tab, "_session", None)
+        if direct is not None and isinstance(direct, TabSession):
+            return direct
+        with self._lock:
+            for session in self._tabs.values():
+                if getattr(session, "tab", None) is tab:
+                    return session
+        return None
 
     def shutdown(self):
         monitor = None

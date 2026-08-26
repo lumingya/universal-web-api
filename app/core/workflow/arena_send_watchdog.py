@@ -18,6 +18,7 @@ from app.core.config import logger
 
 
 ARENA_SEND_NO_TARGET_AFTER_RETRY = "arena_send_no_target_after_retry"
+ARENA_PAGE_ERROR = "arena_page_error"
 ARENA_NATIVE_STOP_SELECTOR = 'button[aria-label="Stop generation"]'
 ARENA_UPLOAD_CARD_SELECTOR = (
     'div.group.relative.overflow-hidden:has(img[src^="blob:"])'
@@ -41,6 +42,39 @@ class ArenaSendRetryRefreshError(RuntimeError):
     """The required refresh after an Arena watchdog failure did not recover."""
 
 
+class ArenaPageError(RuntimeError):
+    """Arena page displayed a terminal error or policy restriction banner."""
+
+
+def is_terminal_arena_page_error(message: Any) -> bool:
+    """Check if the page error text represents an unrecoverable terminal error."""
+    lowered = str(message or "").lower()
+    if not lowered:
+        return False
+    verification_patterns = (
+        "captcha",
+        "turnstile",
+        "verification",
+        "verify you are human",
+        "challenge",
+        "recaptcha",
+        "人机",
+        "验证",
+    )
+    if any(vp in lowered for vp in verification_patterns):
+        return False
+    patterns = (
+        "not permitted to handle this",
+        "choose another model",
+        "violates our terms of use",
+        "this content violates",
+        "something went wrong with this response",
+        "access denied",
+        "response failed",
+    )
+    return any(p in lowered for p in patterns)
+
+
 def is_arena_page_url(url: Any) -> bool:
     """Match only arena.ai and its subdomains, never legacy lmarena.ai."""
     try:
@@ -58,6 +92,7 @@ class ArenaSendSnapshot:
     stop_visible: bool = False
     upload_in_progress: bool = False
     page_error: bool = False
+    page_error_message: str = ""
 
     @property
     def confirms_send(self) -> bool:
@@ -166,6 +201,11 @@ class ArenaSendWatchdog:
 
             if now >= next_snapshot_at:
                 snapshot = self._read_snapshot()
+                if snapshot.page_error and is_terminal_arena_page_error(snapshot.page_error_message):
+                    error_msg = snapshot.page_error_message or "Arena 页面提示错误"
+                    logger.error(f"[ArenaWatchdog] 检测到页面明确错误拦截: {error_msg}")
+                    raise ArenaPageError(error_msg)
+
                 if snapshot.confirms_send:
                     stable_snapshots += 1
                     if stable_snapshots >= 2 and confirmed_at is None:
@@ -235,6 +275,7 @@ class ArenaSendWatchdog:
             stop_visible=bool(raw.get("stopVisible")),
             upload_in_progress=bool(raw.get("uploadInProgress")),
             page_error=bool(raw.get("pageError")),
+            page_error_message=str(raw.get("pageErrorMessage") or "").strip(),
         )
 
     @staticmethod
@@ -273,17 +314,23 @@ return (() => {{
   }});
   const errorSelectors = [
     '[role="alert"]', '[aria-live="assertive"]', '[data-testid*="error" i]',
-    '[class*="error" i]', '[class*="destructive" i]', '[data-state="error"]',
-    '[data-status="error"]', '[role="dialog"]', '[class*="captcha" i]', '[id*="captcha" i]'
+    '[class*="destructive" i]', '[data-state="error"]', '[data-status="error"]',
+    'div[class*="bg-destructive"]', 'div[class*="text-destructive"]'
   ];
-  const hasVerificationElement = Array.from(document.querySelectorAll(
-    'iframe[src*="recaptcha" i], iframe[src*="hcaptcha" i], iframe[src*="challenges.cloudflare.com" i], .g-recaptcha, .h-captcha, .cf-turnstile, [data-sitekey]'
-  )).some(visible);
-  const errorText = Array.from(document.querySelectorAll(errorSelectors.join(',')))
-    .filter(visible)
-    .map((element) => String(element.innerText || element.textContent || element.getAttribute('title') || '').toLowerCase())
-    .join(' ');
-  const pageError = hasVerificationElement || /response failed|terms of use|captcha|security verification|verify you are human|access denied|something went wrong/.test(errorText);
+  const errorElements = Array.from(document.querySelectorAll(errorSelectors.join(','))).filter((element) => {{
+    if (!visible(element)) return false;
+    if (element.closest('.prose, pre, code, ol, [data-message-author-role]')) return false;
+    return true;
+  }});
+  const errorTexts = errorElements
+    .map((element) => String(element.innerText || element.textContent || element.getAttribute('title') || '').trim())
+    .filter(Boolean);
+  const combinedErrorText = errorTexts.join(' ').toLowerCase();
+  const errorPattern = /not permitted to handle this|choose another model|violates our terms of use|this content violates|something went wrong with this response|response failed|access denied/i;
+  const hasErrorMatch = errorPattern.test(combinedErrorText);
+  const pageError = hasErrorMatch;
+  let rawErrorMessage = errorTexts.find((t) => errorPattern.test(t.toLowerCase())) || (hasErrorMatch ? errorTexts[0] : '') || '';
+  const pageErrorMessage = rawErrorMessage.replace(/\\s+/g, ' ').trim();
   return {{
     documentReady: location.hostname === 'arena.ai' || location.hostname.endsWith('.arena.ai')
       ? document.readyState === 'complete'
@@ -292,7 +339,8 @@ return (() => {{
     inputEmpty: inputValue.trim().length === 0,
     stopVisible: visible(find(selectors.stop)) || visible(find(selectors.nativeStop)),
     uploadInProgress: hasPendingUpload,
-    pageError
+    pageError: Boolean(pageError),
+    pageErrorMessage: String(pageErrorMessage || '')
   }};
 }})();
 """
@@ -341,14 +389,17 @@ def refresh_arena_page_for_retry(
 
 __all__ = [
     "ARENA_NATIVE_STOP_SELECTOR",
+    "ARENA_PAGE_ERROR",
     "ARENA_SEND_NO_TARGET_AFTER_RETRY",
     "ARENA_UPLOAD_CARD_SELECTOR",
     "ArenaConfirmedSendNoTarget",
+    "ArenaPageError",
     "ArenaSendRetryRefreshError",
     "ArenaSendSnapshot",
     "ArenaSendUnconfirmed",
     "ArenaSendWatchdog",
     "ArenaSendWatchdogCancelled",
     "is_arena_page_url",
+    "is_terminal_arena_page_error",
     "refresh_arena_page_for_retry",
 ]

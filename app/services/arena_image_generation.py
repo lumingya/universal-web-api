@@ -15,8 +15,17 @@ from pathlib import Path
 from typing import Any, Iterable, Optional
 from urllib.parse import urlsplit
 
-import requests
-from PIL import Image, ImageOps
+from app.core.config import logger
+from app.utils.image_validation import (
+    extract_media_item_bytes as _common_extract_media_item_bytes,
+    get_current_page_url as current_page_url,
+    image_signatures,
+    read_image_bytes,
+    read_local_image_bytes,
+    read_uploaded_image_bytes as _common_read_uploaded_image_bytes,
+    same_image,
+    validate_generated_images as _common_validate_generated_images,
+)
 
 
 ARENA_NATIVE_STOP_SELECTOR = 'css:button[aria-label="Stop generation"]'
@@ -90,12 +99,26 @@ class ArenaImageGenerationObservation:
     stop_present: bool
     has_new_image: bool
     terminal_error: Optional[ArenaImageGenerationError] = None
+    has_stop: Optional[bool] = None
+    has_generating_text: bool = False
+    has_spin_canvas: bool = False
+    still_generating: Optional[bool] = None
+
+    def __post_init__(self):
+        if self.has_stop is None:
+            object.__setattr__(self, "has_stop", bool(self.stop_present))
+        if self.still_generating is None:
+            object.__setattr__(
+                self,
+                "still_generating",
+                bool(self.stop_present or (self.has_generating_text and self.has_spin_canvas)),
+            )
 
     @property
     def is_complete(self) -> bool:
-        return bool(
-            not self.stop_present and (self.has_new_image or self.terminal_error)
-        )
+        if self.terminal_error is not None:
+            return True
+        return bool(not self.still_generating and self.has_new_image)
 
 
 def is_arena_page_url(page_url: str) -> bool:
@@ -179,8 +202,11 @@ def is_interrupted_stream_reason(reason: str) -> bool:
     return bool(normalized) and any(marker in normalized for marker in _INTERRUPTED_STREAM_MARKERS)
 
 
-def is_visible_arena_stop(tab: Any, selector: str = ARENA_NATIVE_STOP_SELECTOR) -> bool:
-    """Return whether Arena's stop control is visibly rendered or actively generating."""
+def get_arena_generation_status(
+    tab: Any,
+    selector: str = ARENA_NATIVE_STOP_SELECTOR,
+) -> dict[str, bool]:
+    """Return structured multi-modal generation indicators and fault-tolerant generation state."""
     script = r"""
         const selector = String(arguments[0] || '').trim().replace(/^css:/i, '');
         const visible = (element) => {
@@ -191,6 +217,9 @@ def is_visible_arena_stop(tab: Any, selector: str = ARENA_NATIVE_STOP_SELECTOR) 
             if (element.hidden || element.closest('[hidden], [inert], [aria-hidden="true"]')) {
                 return false;
             }
+            if (element.closest('[data-message-author="user"], [data-role="user"]')) {
+                return false;
+            }
             const style = getComputedStyle(element);
             if (style.display === 'none' || style.visibility === 'hidden'
                 || style.visibility === 'collapse' || Number(style.opacity) === 0) {
@@ -199,40 +228,146 @@ def is_visible_arena_stop(tab: Any, selector: str = ARENA_NATIVE_STOP_SELECTOR) 
             const rect = element.getBoundingClientRect();
             return rect.width > 0 && rect.height > 0;
         };
+
+        // 1. Indicator 1: Stop button & __arenaHardStop
+        let has_stop = false;
         try {
             if (window.__arenaHardStop && typeof window.__arenaHardStop.status === 'function') {
                 const st = window.__arenaHardStop.status();
                 if (st) {
-                    if (st.hasNativeStopButton || st.hasOverlayStopButton) return true;
-                    if (Array.isArray(st.active) && st.active.length > 0) return true;
-                    if (st.store && typeof st.store.pendingAssistantCount === 'number' && st.store.pendingAssistantCount > 0) return true;
+                    if (st.hasNativeStopButton || st.hasOverlayStopButton) has_stop = true;
+                    else if (Array.isArray(st.active) && st.active.some(record => record && !record.done && record.ageMs < 180000)) has_stop = true;
                 }
             }
         } catch (_) {}
-        if (selector) {
+
+        if (!has_stop && selector) {
             try {
                 if (Array.from(document.querySelectorAll(selector)).some(visible)) {
-                    return true;
+                    has_stop = true;
                 }
             } catch (_) {}
         }
+
+        if (!has_stop) {
+            try {
+                const overlaySelectors = [
+                    'button[aria-label="Stop generation"]',
+                    '[data-arena-hard-stop-overlay="true"]',
+                    'button[aria-label="Hard stop Arena stream"]',
+                ];
+                for (const sel of overlaySelectors) {
+                    if (Array.from(document.querySelectorAll(sel)).some(visible)) {
+                        has_stop = true;
+                        break;
+                    }
+                }
+            } catch (_) {}
+        }
+
+        // 2. Indicator 2: "Generating image..." text placeholder
+        let has_generating_text = false;
         try {
-            const overlaySelectors = [
-                '[data-arena-hard-stop-overlay="true"]',
-                'button[aria-label="Hard stop Arena stream"]',
+            const textPlaceholders = [
+                'generating image',
+                'generating images',
+                'creating image',
+                'creating your image',
+                'image is being generated',
+                'images are being generated',
+                '正在生成图片',
+                '正在生成图像',
+                '正在创建您的图片',
+                '图片正在生成',
+                '图像正在生成',
             ];
-            for (const sel of overlaySelectors) {
-                if (Array.from(document.querySelectorAll(sel)).some(visible)) {
-                    return true;
+            const textCandidates = Array.from(document.querySelectorAll(
+                '.text-shimmer, [class*="text-shimmer"], [class*="shimmer"], [data-testid*="generating"], div[role="status"]'
+            ));
+            for (const el of textCandidates) {
+                if (el.closest('[data-message-author="user"], [data-role="user"]')) {
+                    continue;
+                }
+                const text = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+                if (text && text.length <= 160) {
+                    if (textPlaceholders.some(p => text.includes(p))) {
+                        if (visible(el)) {
+                            has_generating_text = true;
+                            break;
+                        }
+                    }
                 }
             }
         } catch (_) {}
-        return false;
+
+        // 3. Indicator 3: animate-spin canvas loading animation
+        let has_spin_canvas = false;
+        try {
+            const spinCanvases = Array.from(document.querySelectorAll(
+                '.animate-spin canvas, [class*="animate-spin"] canvas, canvas.animate-spin, canvas[class*="animate-spin"]'
+            ));
+            for (const el of spinCanvases) {
+                if (visible(el)) {
+                    has_spin_canvas = true;
+                    break;
+                }
+            }
+        } catch (_) {}
+
+        const still_generating = Boolean(has_stop || (has_generating_text && has_spin_canvas));
+
+        return {
+            has_stop: Boolean(has_stop),
+            has_generating_text: Boolean(has_generating_text),
+            has_spin_canvas: Boolean(has_spin_canvas),
+            still_generating: Boolean(still_generating),
+        };
     """
     try:
-        return bool(tab.run_js(script, selector))
+        result = tab.run_js(script, selector)
     except Exception:
-        return False
+        return {
+            "has_stop": False,
+            "has_generating_text": False,
+            "has_spin_canvas": False,
+            "still_generating": False,
+        }
+
+    if isinstance(result, dict):
+        has_stop = bool(result.get("has_stop", False))
+        has_generating_text = bool(result.get("has_generating_text", False))
+        has_spin_canvas = bool(result.get("has_spin_canvas", False))
+        still_generating = bool(
+            result.get(
+                "still_generating",
+                has_stop or (has_generating_text and has_spin_canvas),
+            )
+        )
+        return {
+            "has_stop": has_stop,
+            "has_generating_text": has_generating_text,
+            "has_spin_canvas": has_spin_canvas,
+            "still_generating": still_generating,
+        }
+    elif isinstance(result, bool):
+        return {
+            "has_stop": bool(result),
+            "has_generating_text": False,
+            "has_spin_canvas": False,
+            "still_generating": bool(result),
+        }
+    return {
+        "has_stop": False,
+        "has_generating_text": False,
+        "has_spin_canvas": False,
+        "still_generating": False,
+    }
+
+
+def is_visible_arena_stop(tab: Any, selector: str = ARENA_NATIVE_STOP_SELECTOR) -> bool:
+    """Return whether the Arena stop button / overlay is visible."""
+    status = get_arena_generation_status(tab, selector)
+    return bool(status.get("has_stop", False))
 
 
 def capture_arena_result_baseline(
@@ -303,23 +438,32 @@ def capture_arena_result_baseline(
 class ArenaImageGenerationGuard:
     """Arena-specific terminal-state and interrupted-stream recovery policy."""
 
-    DEFAULT_REFRESH_INTERVAL_SECONDS = 10.0
+    DEFAULT_REFRESH_INTERVAL_SECONDS = 20.0
+    DEFAULT_MAX_REFRESHES = 16
 
     def __init__(
         self,
         tab: Any,
         *,
         result_selector: str = "",
+        stop_selector: str = ARENA_NATIVE_STOP_SELECTOR,
         baseline_token: str = "",
         baseline_property: str = "",
     ):
         self.tab = tab
         self.result_selector = str(result_selector or "")
+        self.stop_selector = str(stop_selector or ARENA_NATIVE_STOP_SELECTOR)
         self.baseline_token = str(baseline_token or "")
         self.baseline_property = str(baseline_property or "")
 
+    def generation_status(self) -> dict[str, bool]:
+        return get_arena_generation_status(
+            self.tab,
+            self.stop_selector,
+        )
+
     def native_stop_present(self) -> bool:
-        return is_visible_arena_stop(self.tab)
+        return bool(self.generation_status().get("has_stop", False))
 
     def detect_terminal_error(self) -> Optional[ArenaImageGenerationError]:
         """Map the current Arena result/error node to a terminal failure.
@@ -420,11 +564,31 @@ class ArenaImageGenerationGuard:
         return None
 
     def observe(self, has_new_image: bool) -> ArenaImageGenerationObservation:
-        return ArenaImageGenerationObservation(
-            stop_present=self.native_stop_present(),
+        status = self.generation_status()
+        obs = ArenaImageGenerationObservation(
+            stop_present=bool(status.get("has_stop", False)),
             has_new_image=bool(has_new_image),
             terminal_error=self.detect_terminal_error(),
+            has_stop=bool(status.get("has_stop", False)),
+            has_generating_text=bool(status.get("has_generating_text", False)),
+            has_spin_canvas=bool(status.get("has_spin_canvas", False)),
+            still_generating=bool(status.get("still_generating", False)),
         )
+        current_state = (
+            obs.still_generating,
+            obs.has_new_image,
+            obs.is_complete,
+            bool(obs.terminal_error),
+        )
+        if getattr(self, "_last_logged_state", None) != current_state:
+            self._last_logged_state = current_state
+            logger.debug(
+                f"[Arena Guard] 生图状态变化: still_generating={obs.still_generating}, "
+                f"has_new_image={obs.has_new_image}, complete={obs.is_complete}, "
+                f"stop={obs.has_stop}, text={obs.has_generating_text}, spin={obs.has_spin_canvas}, "
+                f"terminal_error={bool(obs.terminal_error)}"
+            )
+        return obs
 
     @classmethod
     def refresh_interval_seconds(cls, image_config: Optional[dict[str, Any]]) -> float:
@@ -454,178 +618,21 @@ class ArenaImageGenerationGuard:
             except (TypeError, ValueError):
                 pass
         interval = cls.refresh_interval_seconds(config)
-        return max(12, int(max(1.0, float(hard_timeout_seconds)) / interval) + 1)
-
-
-def current_page_url(tab: Any) -> str:
-    try:
-        return str(tab.run_js("return location.href") or "").strip()
-    except Exception:
-        return str(getattr(tab, "url", "") or "").strip()
-
-
-def read_image_bytes(
-    tab: Any,
-    url: str,
-    timeout: Any = (3.0, 15.0),
-) -> bytes:
-    """Read an image through the browser session when direct HTTP is blocked."""
-    source = str(url or "")
-    if source.startswith("data:"):
-        try:
-            return base64.b64decode(source.split(",", 1)[1])
-        except Exception:
-            return b""
-
-    # Normalize timeout to (connect_timeout, read_timeout) tuple
-    if isinstance(timeout, (int, float)):
-        eff_timeout: Any = (min(3.0, float(timeout)), float(timeout)) if float(timeout) > 5.0 else float(timeout)
-    elif isinstance(timeout, (tuple, list)) and len(timeout) >= 2:
-        try:
-            c_to = float(timeout[0]) if timeout[0] is not None else None
-            r_to = float(timeout[1]) if timeout[1] is not None else None
-            eff_timeout = (c_to, r_to)
-        except (TypeError, ValueError):
-            eff_timeout = (3.0, 15.0)
-    else:
-        eff_timeout = (3.0, 15.0)
-
-    if source.startswith(("http://", "https://")):
-        try:
-            response = requests.get(
-                source,
-                headers={"Referer": current_page_url(tab), "User-Agent": "Mozilla/5.0"},
-                timeout=eff_timeout,
-            )
-            response.raise_for_status()
-            return response.content
-        except Exception:
-            pass
-
-    if tab is None:
-        return b""
-
-    try:
-        result = tab.run_js(
-            """
-            return (async function(url) {
-                let timer = null;
-                try {
-                    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-                    timer = controller ? setTimeout(() => controller.abort(), 6000) : null;
-                    const response = await fetch(url, {
-                        signal: controller ? controller.signal : undefined
-                    });
-                    if (!response.ok) return '';
-                    const buffer = await response.arrayBuffer();
-                    const bytes = new Uint8Array(buffer);
-                    let binary = '';
-                    const step = 0x8000;
-                    for (let index = 0; index < bytes.length; index += step) {
-                        binary += String.fromCharCode(...bytes.subarray(index, index + step));
-                    }
-                    return btoa(binary);
-                } catch (e) {
-                    return '';
-                } finally {
-                    if (timer) clearTimeout(timer);
-                }
-            })(arguments[0]);
-            """,
-            source,
+        return min(
+            cls.DEFAULT_MAX_REFRESHES,
+            max(12, int(max(1.0, float(hard_timeout_seconds)) / interval) + 1),
         )
-        return base64.b64decode(str(result or ""))
-    except Exception:
-        return b""
 
 
-def image_signatures(payload: bytes) -> dict[str, Any]:
-    """Create byte and decoded-pixel fingerprints for equality checks."""
-    data = bytes(payload or b"")
-    signatures: dict[str, Any] = {
-        "sha256": hashlib.sha256(data).hexdigest(),
-        "pixel_sha256": None,
-        "size": None,
-        "dhash": None,
-    }
-    try:
-        with Image.open(BytesIO(data)) as source:
-            image = ImageOps.exif_transpose(source).convert("RGBA")
-            signatures["size"] = image.size
-            signatures["pixel_sha256"] = hashlib.sha256(image.tobytes()).hexdigest()
-            grayscale = image.convert("L").resize((17, 16), Image.Resampling.LANCZOS)
-            flattened_data = getattr(grayscale, "get_flattened_data", grayscale.getdata)
-            pixels = list(flattened_data())
-        bits = 0
-        for row in range(16):
-            offset = row * 17
-            for column in range(16):
-                bits = (bits << 1) | int(pixels[offset + column] > pixels[offset + column + 1])
-        signatures["dhash"] = bits
-    except Exception:
-        pass
-    return signatures
-
-
-def same_image(
-    candidate: dict[str, Any],
-    reference: Optional[dict[str, Any]],
-    *,
-    max_dhash_distance: Optional[int] = 4,
-) -> bool:
-    """Compare images exactly first, with optional perceptual fallback."""
-    if not reference:
-        return False
-    if candidate.get("sha256") == reference.get("sha256"):
-        return True
-    if (
-        candidate.get("size") == reference.get("size")
-        and candidate.get("pixel_sha256")
-        and candidate.get("pixel_sha256") == reference.get("pixel_sha256")
-    ):
-        return True
-    candidate_dhash = candidate.get("dhash")
-    reference_dhash = reference.get("dhash")
-    return bool(
-        max_dhash_distance is not None
-        and isinstance(candidate_dhash, int)
-        and isinstance(reference_dhash, int)
-        and (candidate_dhash ^ reference_dhash).bit_count() <= max_dhash_distance
-    )
-
-
-def _read_local_image(path_value: Any) -> bytes:
-    try:
-        path = Path(str(path_value or "")).expanduser()
-        return path.read_bytes() if path.is_file() else b""
-    except Exception:
-        return b""
+_read_local_image = read_local_image_bytes
 
 
 def _read_uploaded_image(value: Any) -> bytes:
-    if isinstance(value, (bytes, bytearray)):
-        return bytes(value)
-    source = str(value or "")
-    if source.startswith("data:"):
-        try:
-            return base64.b64decode(source.split(",", 1)[1])
-        except Exception:
-            return b""
-    return _read_local_image(source)
+    return _common_read_uploaded_image_bytes(value, local_reader=_read_local_image)
 
 
 def _media_item_image_bytes(tab: Any, item: dict[str, Any]) -> bytes:
-    for key in ("local_path", "path", "file_path"):
-        payload = _read_local_image(item.get(key))
-        if payload:
-            return payload
-    for key in ("data_uri", "url", "src"):
-        value = str(item.get(key) or "")
-        if value:
-            payload = read_image_bytes(tab, value)
-            if payload:
-                return payload
-    return b""
+    return _common_extract_media_item_bytes(tab, item, local_reader=_read_local_image)
 
 
 def validate_generated_images(
@@ -635,32 +642,17 @@ def validate_generated_images(
     tab: Any = None,
 ) -> None:
     """Reject Arena image output that is the uploaded reference image itself."""
-    references = [
-        image_signatures(payload)
-        for payload in (_read_uploaded_image(path) for path in uploaded_images or [])
-        if payload
-    ]
-    if not references:
-        return
-
-    for item in generated_media_items or []:
-        if not isinstance(item, dict):
-            continue
-        media_type = str(item.get("media_type") or item.get("type") or "image").lower()
-        if media_type not in {"image", "image_url", "input_image"}:
-            continue
-        payload = _media_item_image_bytes(tab, item)
-        if not payload:
-            continue
-        candidate = image_signatures(payload)
-        # The API contract is strict equality. Pixel equality handles a server
-        # re-encode; dHash is intentionally disabled here to avoid rejecting a
-        # legitimate edit that merely looks similar to its reference.
-        if any(same_image(candidate, reference, max_dhash_distance=None) for reference in references):
-            raise ArenaImageGenerationError(
-                ARENA_IMAGE_UNCHANGED_CODE,
-                "Arena 图片生成失败：生成结果与上传图片一致",
-            )
+    _common_validate_generated_images(
+        uploaded_images,
+        generated_media_items,
+        tab=tab,
+        max_dhash_distance=None,
+        local_reader=_read_local_image,
+        error_builder=lambda msg: ArenaImageGenerationError(
+            ARENA_IMAGE_UNCHANGED_CODE,
+            f"Arena 图片生成失败：{msg}",
+        ),
+    )
 
 
 __all__ = [
@@ -675,6 +667,7 @@ __all__ = [
     "ArenaImageGenerationObservation",
     "current_page_url",
     "capture_arena_result_baseline",
+    "get_arena_generation_status",
     "image_signatures",
     "is_arena_image_generation_request",
     "is_arena_page_url",

@@ -271,3 +271,32 @@ def restore_visibility_emulation(tab: Any, owner: Any = None, *, reason: str = "
                 interval_sec=10.0,
             )
         return False
+
+
+def notify_page_navigated(target: Any, reason: str = "page_reload") -> None:
+    """Notify the command engine that a tab or session has completed navigation or page reload."""
+    if target is None:
+        return
+    try:
+        session = target
+        if not hasattr(session, "notify_navigated") and not (hasattr(session, "id") and hasattr(session, "tab")):
+            session = getattr(target, "_session", None) or getattr(target, "session", None)
+            if session is None:
+                try:
+                    from app.core.browser.manager import browser
+                    tab_pool = getattr(browser, "_tab_pool", None) or getattr(browser, "tab_pool", None)
+                    if tab_pool and hasattr(tab_pool, "get_session_by_tab"):
+                        session = tab_pool.get_session_by_tab(target)
+                except Exception:
+                    session = None
+
+        if session is not None:
+            if hasattr(session, "notify_navigated") and callable(session.notify_navigated):
+                session.notify_navigated(reason=reason)
+            else:
+                from app.services.command_engine import command_engine
+                if hasattr(command_engine, "notify_tab_navigated"):
+                    command_engine.notify_tab_navigated(session, reason=reason)
+    except Exception as e:
+        logger.debug(f"[PAGE_LIFECYCLE] notify_page_navigated failed (ignored): {e}")
+

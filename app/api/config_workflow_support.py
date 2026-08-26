@@ -452,6 +452,43 @@ def _save_site_workflow_payload(domain: str, data: Dict[str, Any]) -> Dict[str, 
     }
 
 
+def _scan_workflow_scripts() -> Dict[str, Any]:
+    """扫描可用工作流脚本列表"""
+    from app.core.workflow.script_loader import script_loader
+    scripts = script_loader.scan_available_scripts()
+    return {"scripts": scripts}
+
+
+def _load_workflow_script_content(target_path: str) -> Dict[str, Any]:
+    """加载指定脚本的内容与元数据（用于前端预览）"""
+    from app.core.workflow.script_loader import script_loader
+    from app.core.config import WorkflowError
+
+    if not target_path:
+        raise HTTPException(status_code=400, detail="缺少脚本路径参数")
+
+    try:
+        resolved_path = script_loader.resolve_script_path(target_path)
+        content = script_loader.load_script_content(resolved_path)
+        stat = resolved_path.stat()
+        mtime = int(stat.st_mtime)
+        desc = script_loader.extract_script_description(content, resolved_path.name)
+        rel_path = resolved_path.relative_to(script_loader.base_dir).as_posix()
+        return {
+            "path": rel_path,
+            "uri": f"file://{rel_path}",
+            "name": resolved_path.name,
+            "description": desc,
+            "content": content,
+            "mtime": mtime,
+        }
+    except WorkflowError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"读取脚本内容失败 ({target_path!r}): {e}")
+        raise HTTPException(status_code=500, detail=f"读取脚本失败: {e}")
+
+
 # ================= 请求模型 =================
 
 __all__ = [
@@ -459,4 +496,6 @@ __all__ = [
     '_notify_workflow_editor_action_status',
     '_execute_workflow_editor_test_payload',
     '_save_site_workflow_payload',
+    '_scan_workflow_scripts',
+    '_load_workflow_script_content',
 ]

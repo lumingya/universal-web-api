@@ -37,6 +37,7 @@ from app.core.network_monitor import (
 from .attachment_monitor import AttachmentMonitor
 from .arena_send_watchdog import (
     ArenaConfirmedSendNoTarget,
+    ArenaPageError,
     ArenaSendUnconfirmed,
     ArenaSendWatchdog,
     ArenaSendWatchdogCancelled,
@@ -47,6 +48,7 @@ from .executor_actions import WorkflowExecutorActionMixin
 from .executor_interaction import WorkflowExecutorInteractionMixin
 from .executor_request_transport import WorkflowExecutorRequestTransportMixin
 from .executor_send import WorkflowExecutorSendMixin
+from .script_loader import script_loader
 
 
 class WorkflowExecutor(
@@ -56,8 +58,8 @@ class WorkflowExecutor(
     WorkflowExecutorActionMixin,
 ):
     """工作流执行器"""
-    
-    def __init__(self, tab, stealth_mode: bool = False, 
+
+    def __init__(self, tab, stealth_mode: bool = False,
                  should_stop_checker: Callable[[], bool] = None,
                  extractor = None,
                  image_config: Dict = None,
@@ -72,15 +74,15 @@ class WorkflowExecutor(
         self.finder = ElementFinder(tab)
         self.formatter = SSEFormatter()
         self._completion_id = SSEFormatter._generate_id()
-        
+
         self._should_stop = should_stop_checker or (lambda: False)
         self._extractor = extractor
-        self._image_config = image_config or {}  
+        self._image_config = image_config or {}
         self._stream_config = stream_config or {}
         self._file_paste_config = file_paste_config or {}
         self._site_advanced_config = site_advanced_config or {}
         self._selectors = selectors or {}
-        
+
         # 🆕 初始化双 Monitor（优先网络，回退 DOM）
         self._network_monitor = None
         self._stream_monitor = None
@@ -107,7 +109,7 @@ class WorkflowExecutor(
         self._current_result_prompt = ""
         self._current_step_execution: Dict[str, Any] = {}
         self._result_event_handler = self._create_result_event_handler()
-        
+
         # 检查是否启用网络监听模式
         self._stream_mode = stream_config.get("mode", "dom") if stream_config else "dom"
         network_config = stream_config.get("network", {}) if stream_config else {}
@@ -174,7 +176,7 @@ class WorkflowExecutor(
                 )
             except Exception as e:
                 logger.warning(f"[Executor] 网络异常拦截监听创建失败: {e}")
-        
+
         # 始终创建 DOM 监听器（作为回退）
         self._stream_monitor = StreamMonitor(
             tab=tab,
@@ -183,9 +185,10 @@ class WorkflowExecutor(
             stop_checker=should_stop_checker,
             extractor=extractor,
             image_config=image_config,
-            stream_config=stream_config
+            stream_config=stream_config,
+            session=session,
         )
-        
+
         # 🆕 隐身模式鼠标位置追踪（CDP 绝对坐标）
         self._mouse_pos = None
         self._attachment_monitor_config = self._build_attachment_monitor_config(
@@ -209,7 +212,7 @@ class WorkflowExecutor(
             attachment_monitor=self._attachment_monitor,
             attachment_monitor_config=self._attachment_monitor_config,
         )
-        
+
         self._image_handler = ImageInputHandler(
             tab=tab,
             stealth_mode=stealth_mode,
@@ -219,10 +222,10 @@ class WorkflowExecutor(
             focus_input_fn=self._focus_last_input_for_attachment_paste,
             selectors=self._selectors,
         )
-        
+
         if self._image_config.get("enabled"):
             logger.debug(f"[IMAGE] 图片提取已启用")
-        
+
         if self.stealth_mode:
             logger.debug("[STEALTH] 低熵模式已启用")
 
@@ -350,11 +353,11 @@ class WorkflowExecutor(
 
         try:
             wait_seconds = float(
-                (self._stream_config or {}).get("verification_recovery_wait_seconds", 6.0)
+                (self._stream_config or {}).get("verification_recovery_wait_seconds", 20.0)
             )
         except Exception:
-            wait_seconds = 6.0
-        wait_seconds = min(15.0, max(0.5, wait_seconds))
+            wait_seconds = 20.0
+        wait_seconds = min(20.0, max(0.5, wait_seconds))
         deadline = time.time() + wait_seconds
         saw_verification = False
         trigger_check_requested = False
@@ -747,30 +750,30 @@ class WorkflowExecutor(
         if self._page_fetch_capture is None:
             return
         self._page_fetch_capture.prepare()
-    
+
     # ================= 控制方法 =================
-    
+
     def _check_cancelled(self) -> bool:
         """检查是否被取消"""
         return self._should_stop()
-    
+
     def execute_step(self, action: str, selector: str,
                      target_key: str, value: Any = None,
                      optional: bool = False,
                      context: Dict = None,
                      execution: Dict = None) -> Generator[str, None, None]:
         """执行单个步骤"""
-        
+
         if self._check_cancelled():
             logger.debug(f"步骤 {action} 跳过（已取消）")
             return
-        
+
         self._context = context
         previous_step_execution = self._current_step_execution
         self._current_step_execution = execution if isinstance(execution, dict) else {}
         if action in ("STREAM_WAIT", "STREAM_OUTPUT"):
             self._last_stream_media_state = {}
-        
+
         try:
             if action == "WAIT":
                 wait_time = float(value or 0.5)
@@ -780,7 +783,7 @@ class WorkflowExecutor(
                         return
                     time.sleep(min(0.1, wait_time - elapsed))
                     elapsed += 0.1
-            
+
             elif action == "KEY_PRESS":
                 key = target_key or value
                 # 包含 Enter 的按键（Enter、Ctrl+Enter 等）可能触发提交
@@ -802,7 +805,13 @@ class WorkflowExecutor(
                 self._execute_keypress_combo(key)
 
             elif action == "JS_EXEC":
-                self._execute_javascript(value)
+                self._execute_javascript(
+                    code=value,
+                    target=target_key,
+                    context=context,
+                    execution=execution,
+                    optional=optional,
+                )
 
             elif action == "READONLY_HINT":
                 logger.debug(f"[WORKFLOW_HINT] {str(value or '')[:160]}")
@@ -839,11 +848,11 @@ class WorkflowExecutor(
                         self._request_transport_bypass = True
                         self._clear_request_transport_state()
                 return
-            
+
             elif action == "CLICK":
                 # ===== 隐身模式：首次交互前执行人类行为预热 =====
                 self._maybe_warmup_page_for_stealth(action, target_key)
-                
+
                 if target_key == "send_btn":
                     # 🆕 发送前启动网络监听（如果已配置）
                     if self._network_monitor is not None:
@@ -880,7 +889,7 @@ class WorkflowExecutor(
                 self._maybe_warmup_page_for_stealth(action, target_key)
 
                 self._execute_coord_scroll(value, optional)
-            
+
             elif action == "FILL_INPUT":
                 prompt = context.get("prompt", "") if context else ""
                 if self._stage_request_transport_from_context(
@@ -891,7 +900,7 @@ class WorkflowExecutor(
                 ):
                     return
                 self._execute_fill(selector, prompt, target_key, optional)
-            
+
             elif action in ("STREAM_WAIT", "STREAM_OUTPUT"):
                 user_input = context.get("prompt", "") if context else ""
                 self._current_result_prompt = str(user_input or "")
@@ -960,6 +969,20 @@ class WorkflowExecutor(
                             watchdog.wait_for_target()
                         except ArenaSendWatchdogCancelled:
                             return
+                        except ArenaPageError as exc:
+                            logger.error(
+                                f"[Executor] Arena 页面检测到明确错误拦截，立即终止工作流: {exc}"
+                            )
+                            for monitor in (self._network_monitor, self._stream_monitor):
+                                try:
+                                    if monitor is not None and hasattr(monitor, "cleanup"):
+                                        monitor.cleanup()
+                                except Exception as cleanup_exc:
+                                    logger.debug(
+                                        "[Executor] Arena watchdog error cleanup failed: "
+                                        f"{cleanup_exc}"
+                                    )
+                            raise WorkflowError(f"stream_terminal_error:{exc}")
                         except ArenaSendUnconfirmed:
                             raise WorkflowError("send_unconfirmed")
                         except ArenaConfirmedSendNoTarget as exc:
@@ -1070,7 +1093,7 @@ class WorkflowExecutor(
                         self._last_stream_media_state = {}
                         self._last_stream_media_items = []
                         monitor_used = "dom_fallback"
-                    
+
                     except NetworkMonitorError as e:
                         fallback_reason = str(e)
                         logger.error(
@@ -1095,7 +1118,7 @@ class WorkflowExecutor(
                         self._last_stream_media_state = {}
                         self._last_stream_media_items = []
                         monitor_used = "dom_fallback"
-                
+
                 else:
                     yield from self._stream_monitor.monitor(
                         selector=selector,
@@ -1107,13 +1130,13 @@ class WorkflowExecutor(
                     self._last_stream_media_state = {}
                     self._last_stream_media_items = []
                     monitor_used = "dom"
-                
+
                 if monitor_used:
                     logger.debug(f"[Executor] 监听完成 (mode={monitor_used})")
-            
+
             else:
                 logger.debug(f"未知动作: {action}")
-        
+
         except ElementNotFoundError as e:
             if self._check_cancelled():
                 logger.info(f"[Executor] step cancelled after element lookup failure [{action}]: {e}")
@@ -1147,6 +1170,12 @@ class WorkflowExecutor(
                     code="file_paste_length_error",
                 )
                 raise
+            if "stream_terminal_error:" in error_code:
+                yield self.formatter.pack_error(
+                    error_code,
+                    code="arena_page_error",
+                )
+                raise
             if not optional:
                 file_paste_messages = {
                     "file_paste_hint_unconfirmed": (
@@ -1161,7 +1190,7 @@ class WorkflowExecutor(
                     code=error_code if error_code in file_paste_messages else "workflow_failed",
                 )
                 raise
-        
+
         except Exception as e:
             if self._check_cancelled():
                 logger.info(f"[Executor] step cancelled; suppressing exception [{action}]: {e}")
@@ -1172,12 +1201,12 @@ class WorkflowExecutor(
                 raise
         finally:
             self._current_step_execution = previous_step_execution
-    
+
     def _execute_keypress(self, key: str):
         """执行按键操作（隐身模式人类化时序）"""
         if self._check_cancelled():
             return
-       
+
         with self._page_interaction_slot("KEY_PRESS", str(key or "")) as acquired:
             if not acquired or self._check_cancelled():
                 return
@@ -1189,9 +1218,9 @@ class WorkflowExecutor(
                 self.tab.actions.key_down(key).key_up(key)
             if self._combo_contains_submit_key(key):
                 self._capture_dom_send_baseline("keypress")
-        
+
         self._smart_delay(0.1, 0.2)
-    
+
     def _execute_keypress_combo(self, key: Any):
         """执行按键动作，支持组合键。"""
         if self._check_cancelled():
@@ -1223,20 +1252,78 @@ class WorkflowExecutor(
 
         self._smart_delay(0.1, 0.2)
 
-    def _execute_javascript(self, code: Any):
-        """在当前页面执行 JavaScript。"""
+    def _execute_javascript(
+        self,
+        code: Any,
+        target: Optional[str] = None,
+        context: Optional[Dict] = None,
+        execution: Optional[Dict] = None,
+        optional: bool = False,
+    ):
+        """在当前页面执行 JavaScript，支持通过 ScriptLoader 动态加载外部脚本与参数注入。"""
         if self._check_cancelled():
-            return
+            return None
 
-        script = str(code or "").strip()
-        if not script:
+        start_time = time.perf_counter()
+        effective_context = context if context is not None else getattr(self, "_context", {})
+        ctx_summary = {
+            k: v for k, v in (effective_context or {}).items()
+            if k in {"model", "session_id", "tab_id", "current_domain", "stream"}
+        }
+        prompt_sample = str((effective_context or {}).get("prompt", "") or "")[:60]
+        if prompt_sample:
+            ctx_summary["prompt_preview"] = prompt_sample
+
+        logger.info(
+            f"[JS_EXEC:RUN] 准备执行脚本: target={target!r}, optional={optional}, "
+            f"effective_context={ctx_summary}"
+        )
+
+        try:
+            executable_script = script_loader.resolve_and_load(
+                script_target=target,
+                code_or_args=code,
+                context=effective_context,
+            )
+        except WorkflowError as e:
+            if optional:
+                logger.warning(f"[JS_EXEC] 可选脚本加载失败（已跳过）: target={target!r}, error={e}")
+                return None
+            raise
+        except Exception as e:
+            logger.error(f"[JS_EXEC] 脚本准备失败 (target={target!r}): {e}")
+            if optional:
+                logger.warning(f"[JS_EXEC] 可选脚本准备失败（已跳过）: target={target!r}, error={e}")
+                return None
+            raise WorkflowError(f"js_exec_prepare_failed: {e}")
+
+        if not executable_script:
+            if optional:
+                logger.warning(f"[JS_EXEC] 可选脚本代码为空（已跳过）: target={target!r}")
+                return None
             raise WorkflowError("js_exec_empty")
 
         with self._page_interaction_slot("JS_EXEC", "workflow_js") as acquired:
             if not acquired or self._check_cancelled():
-                return
-            result = self.tab.run_js(script)
-        logger.debug(f"[JS_EXEC] 执行完成: {str(result)[:120]}")
+                return None
+            try:
+                result = self.tab.run_js(executable_script)
+                elapsed_ms = (time.perf_counter() - start_time) * 1000
+                logger.info(
+                    f"[JS_EXEC:DONE] 脚本执行成功: target={target!r}, 耗时={elapsed_ms:.2f}ms, "
+                    f"返回值={str(result)[:200]!r}"
+                )
+            except Exception as e:
+                elapsed_ms = (time.perf_counter() - start_time) * 1000
+                logger.error(
+                    f"[JS_EXEC:ERROR] 脚本执行异常: target={target!r}, 耗时={elapsed_ms:.2f}ms, error={e}"
+                )
+                if optional:
+                    logger.warning(f"[JS_EXEC] 可选脚本执行失败（已跳过）: target={target!r}, error={e}")
+                    return None
+                raise WorkflowError(f"js_exec_failed: {e}")
+
+        return result
 
     def _combo_contains_submit_key(self, key: Any) -> bool:
         return any(item == "Enter" for item in self._parse_key_combo(key))

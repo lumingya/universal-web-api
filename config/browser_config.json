@@ -155,7 +155,21 @@
       "https://arena.ai/c/01a01086-c3ba-71c7-ab49-19d50f18aae5",
       "https://arena.ai/c/01a0050b-bc42-79fb-a4ef-0cccff99b1b8",
       "https://arena.ai/c/01a01eac-8142-700c-9ed7-2b0a122b0385",
-      "https://arena.ai/c/01a004cc-dc8a-70c0-9a98-e8a90fca666f"
+      "https://arena.ai/c/01a004cc-dc8a-70c0-9a98-e8a90fca666f",
+      "https://arena.ai/c/01a024a0-119d-7ec9-b02f-ba907f6fef33",
+      "https://arena.ai/c/01a023e5-53c5-7ffd-87b2-e4ea12ba3c28",
+      "https://arena.ai/c/01a023da-7a8f-7e8a-ba00-fd78aa63e781",
+      "https://arena.ai/c/01a026ae-5def-7a85-90b5-a8c71466eed0",
+      "https://arena.ai/c/01a026ab-a73a-7c2a-bb67-2bbdfa9161a1",
+      "https://arena.ai/c/01a02783-4a05-78f1-958c-535e540a09f2",
+      "https://arena.ai/c/01a02783-908e-7e93-8f71-97db3efd0a3b",
+      "https://arena.ai/c/01a02c0d-2ded-772b-a7a2-a683f2dd174f",
+      "https://arena.ai/c/01a02c0d-65de-7077-b65f-71df1581fa10",
+      "https://arena.ai/c/01a031a9-99a0-7d3e-abd1-0bc71a2b8422",
+      "https://arena.ai/c/01a03277-4413-706b-9894-a16e8f691faf",
+      "https://arena.ai/c/01a032f3-288f-7a21-b54d-2b7f6c773450",
+      "https://arena.ai/c/01a036e1-7d69-7902-b460-38b1dfe45bcd",
+      "https://arena.ai/c/01a03cef-138f-76ce-82c9-66cd4d96812d"
     ],
     "preserve_error_tabs": true,
     "route_groups": [
@@ -301,6 +315,70 @@
           {
             "url": "https://arena.ai/c/01a01eac-8142-700c-9ed7-2b0a122b0385",
             "url_token": "9d88624f8e73",
+            "tab_index": 2
+          }
+        ]
+      },
+      {
+        "id": "arena-universeal",
+        "name": "通用生图",
+        "route_domain": "arena.ai",
+        "preset_name": "万能直连-通用生图",
+        "allocation_mode": "round_robin",
+        "members": [
+          {
+            "url": "https://arena.ai/c/01a024a0-119d-7ec9-b02f-ba907f6fef33",
+            "url_token": "8dc1c280e39a",
+            "tab_index": 1
+          },
+          {
+            "url": "https://arena.ai/c/01a026ab-a73a-7c2a-bb67-2bbdfa9161a1",
+            "url_token": "0b74e8d8b555",
+            "tab_index": 1
+          },
+          {
+            "url": "https://arena.ai/c/01a02783-4a05-78f1-958c-535e540a09f2",
+            "url_token": "429aadd26a5f",
+            "tab_index": 4
+          },
+          {
+            "url": "https://arena.ai/c/01a02783-908e-7e93-8f71-97db3efd0a3b",
+            "url_token": "c5ba12c389e8",
+            "tab_index": 5
+          },
+          {
+            "url": "https://arena.ai/c/01a02c0d-65de-7077-b65f-71df1581fa10",
+            "url_token": "a84a34b45bff",
+            "tab_index": 3
+          },
+          {
+            "url": "https://arena.ai/c/01a02c0d-2ded-772b-a7a2-a683f2dd174f",
+            "url_token": "b5872d289702",
+            "tab_index": 1
+          },
+          {
+            "url": "https://arena.ai/c/01a031a9-99a0-7d3e-abd1-0bc71a2b8422",
+            "url_token": "d06e24355d60",
+            "tab_index": 5
+          },
+          {
+            "url": "https://arena.ai/c/01a03277-4413-706b-9894-a16e8f691faf",
+            "url_token": "cb775378b119",
+            "tab_index": 1
+          },
+          {
+            "url": "https://arena.ai/c/01a032f3-288f-7a21-b54d-2b7f6c773450",
+            "url_token": "6a88f116337d",
+            "tab_index": 2
+          },
+          {
+            "url": "https://arena.ai/c/01a036e1-7d69-7902-b460-38b1dfe45bcd",
+            "url_token": "da54143745e9",
+            "tab_index": 1
+          },
+          {
+            "url": "https://arena.ai/c/01a03cef-138f-76ce-82c9-66cd4d96812d",
+            "url_token": "f6213aca2cdd",
             "tab_index": 2
           }
         ]

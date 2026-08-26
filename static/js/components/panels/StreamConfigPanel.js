@@ -116,7 +116,8 @@ window.StreamConfigPanel = {
                 retry_block_if_generating: true,
                 trust_network_activity: true,
                 trust_generating_indicator: true,
-                trust_send_disabled_with_input_shrink: true
+                trust_send_disabled_with_input_shrink: true,
+                pre_send_interrupt_existing_generation: true
             };
             return {
                 ...defaults,
@@ -710,6 +711,13 @@ window.StreamConfigPanel = {
                                        :checked="sendConfirmationConfig.trust_generating_indicator"
                                        @change="updateSendConfirmationField('trust_generating_indicator', $event.target.checked)">
                                 <span>生成态可作为发送成功信号</span>
+                            </label>
+                            <label class="flex items-center gap-3 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
+                                <input type="checkbox"
+                                       class="rounded"
+                                       :checked="sendConfirmationConfig.pre_send_interrupt_existing_generation"
+                                       @change="updateSendConfirmationField('pre_send_interrupt_existing_generation', $event.target.checked)">
+                                <span>发送前主动打断旧生成态 (Arena)</span>
                             </label>
                         </div>
                     </div>

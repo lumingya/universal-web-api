@@ -77,12 +77,17 @@ from app.services.arena_direct_models import (
     get_arena_direct_model_public_id,
     list_arena_direct_models,
     match_arena_direct_model,
+    normalize_model_catalog_config,
+    resolve_model_catalog_preset_for_model,
 )
 from app.services.arena_image_generation import (
     ARENA_NON_RETRYABLE_CODES,
     ARENA_PROMPT_REJECTED_CODE,
 )
-from app.core.workflow.arena_send_watchdog import ARENA_SEND_NO_TARGET_AFTER_RETRY
+from app.core.workflow.arena_send_watchdog import (
+    ARENA_PAGE_ERROR,
+    ARENA_SEND_NO_TARGET_AFTER_RETRY,
+)
 from app.utils.model_routing import collect_route_domain_models, inspect_model_route
 from app.utils.site_url import route_domain_matches
 
@@ -146,7 +151,7 @@ _MANUAL_TERMINATE_REASONS = frozenset({
 })
 _ARENA_PROMPT_REJECTION_REASONS = frozenset({ARENA_PROMPT_REJECTED_CODE})
 _ARENA_NON_RETRYABLE_REASONS = frozenset(
-    {*ARENA_NON_RETRYABLE_CODES, ARENA_SEND_NO_TARGET_AFTER_RETRY}
+    {*ARENA_NON_RETRYABLE_CODES, ARENA_SEND_NO_TARGET_AFTER_RETRY, ARENA_PAGE_ERROR}
 )
 
 
@@ -2134,6 +2139,11 @@ async def chat_completions(
     client_fp = cancel_storm_guard.get_client_fingerprint(request)
     await cancel_storm_guard.maybe_backoff(client_fp)
 
+    logger.info(
+        f"[CHAT:ENTRY] 收到聊天补全请求: model={body.model!r}, preset={body.preset_name!r}, "
+        f"stream={body.stream}, messages_count={len(body.messages)}"
+    )
+
     _validate_image_inputs(body.messages)
 
     if isinstance(body.response_format, dict) and body.response_format:
@@ -2162,57 +2172,81 @@ async def chat_completions(
         if route_info.get("match_type") == "none":
             from app.services.config_engine import config_engine
 
-            catalog_candidates = []
-            catalog_preset = None
-            is_url_excluded = getattr(browser.tab_pool, "is_url_excluded", None)
-            for tab in tabs:
-                tab_url = str(tab.get("url") or "").strip()
-                if callable(is_url_excluded) and is_url_excluded(tab_url):
-                    continue
-                candidate = get_arena_direct_catalog_for_tab(
-                    config_engine,
-                    tab,
-                    preset_name=body.preset_name,
-                )
-                if candidate:
-                    catalog_candidates.append(tab)
-                    if catalog_preset is None:
-                        catalog_preset = candidate
-            catalog_tab = _select_arena_catalog_tab(
-                browser,
-                catalog_candidates,
-                preset_name=body.preset_name,
+            # 阶段 2：使用 resolve_model_catalog_preset_for_model 自动匹配生图/文本专属预设与模型
+            matched_preset_info = await asyncio.to_thread(
+                resolve_model_catalog_preset_for_model,
+                config_engine,
+                "arena.ai",
+                None,
+                body.model,
             )
-            requested_key = str(body.model or "").strip().casefold()
-            catalog_models = (
-                await asyncio.to_thread(
-                    list_arena_direct_models,
+            if not matched_preset_info and browser:
+                for t in tabs:
+                    cat_info = get_arena_direct_catalog_for_tab(config_engine, t, preset_name=body.preset_name)
+                    if cat_info and isinstance(cat_info.get("catalog"), dict):
+                        cat = cat_info["catalog"]
+                        if cat.get("enabled"):
+                            cat_models = list_arena_direct_models(browser, catalog_config=cat)
+                            m = match_arena_direct_model(cat_models, body.model)
+                            if m:
+                                matched_preset_info = {
+                                    "preset_name": cat_info.get("preset_name") or "主预设-直连模式",
+                                    "preset": cat_info.get("preset") or {},
+                                    "catalog": cat,
+                                    "matched_model": m,
+                                }
+                                break
+            if matched_preset_info:
+                catalog_match = matched_preset_info.get("matched_model")
+                matched_preset_name = str(matched_preset_info.get("preset_name") or "")
+                is_url_excluded = getattr(browser.tab_pool, "is_url_excluded", None)
+                catalog_candidates = []
+                for t in tabs:
+                    tab_url = str(t.get("current_url") or t.get("url") or "").strip()
+                    if callable(is_url_excluded) and is_url_excluded(tab_url):
+                        continue
+                    if (
+                        str(t.get("route_domain") or "").casefold() in {"arena.ai", "arena", "www.arena.ai"}
+                        or "arena.ai" in tab_url
+                    ):
+                        if not get_arena_direct_catalog_for_tab(
+                            config_engine,
+                            t,
+                            preset_name=matched_preset_name or body.preset_name,
+                        ):
+                            continue
+                        catalog_candidates.append(t)
+                catalog_tab = _select_arena_catalog_tab(
                     browser,
-                    catalog_config=(catalog_preset or {}).get("catalog"),
+                    catalog_candidates,
+                    preset_name=matched_preset_name or body.preset_name,
                 )
-                if catalog_preset and requested_key
-                else []
-            )
-            catalog_match = match_arena_direct_model(catalog_models, requested_key)
-            if catalog_match and catalog_tab:
-                route_domain = "arena.ai"
-                catalog_tab_index = int(catalog_tab.get("persistent_index") or 0) or None
-                public_model_id = get_arena_direct_model_public_id(catalog_match)
-                catalog_model_ids = [
-                    str(item.get("id") or "")
-                    for item in build_openai_model_entries(
-                        catalog_models,
-                        created=MODEL_LIST_CREATED,
+                if catalog_tab:
+                    route_domain = "arena.ai"
+                    catalog_tab_index = int(catalog_tab.get("persistent_index") or 0) or None
+                    public_model_id = get_arena_direct_model_public_id(catalog_match)
+                    matched_uuid = str(catalog_match.get("id") or catalog_match.get("uuid") or catalog_match.get("arena_model_id") or "")
+                    matched_public_name = str(catalog_match.get("public_name") or catalog_match.get("publicName") or "")
+                    matched_display_name = str(catalog_match.get("display_name") or catalog_match.get("displayName") or catalog_match.get("name") or "")
+                    logger.info(
+                        f"[ARENA_CATALOG:MATCH] 成功匹配 Arena 目录模型: requested_model={body.model!r}, "
+                        f"preset={matched_preset_name!r}, uuid={matched_uuid!r}, public_name={matched_public_name!r}, "
+                        f"display_name={matched_display_name!r}, public_model_id={public_model_id!r}, "
+                        f"target_tab_index={catalog_tab_index}, target_tab_url={catalog_tab.get('current_url') or catalog_tab.get('url')}"
                     )
-                ]
-                route_info.update({
-                    "route_domain": route_domain,
-                    "route_type": "model_catalog",
-                    "model_name": public_model_id,
-                    "matched_id": public_model_id,
-                    "match_type": "catalog",
-                    "available_model_ids": catalog_model_ids,
-                })
+                    route_info.update({
+                        "route_domain": route_domain,
+                        "route_type": "model_catalog",
+                        "model_name": public_model_id or str(body.model or ""),
+                        "matched_id": public_model_id or str(body.model or ""),
+                        "match_type": "catalog",
+                        "preset_name": matched_preset_name,
+                        "available_model_ids": [public_model_id] if public_model_id else [],
+                    })
+            else:
+                logger.debug(
+                    f"[ARENA_CATALOG:NOMATCH] 未在 Arena Catalog 中匹配到模型: requested_model={body.model!r}"
+                )
 
         # 阶段 3：若 Arena Catalog 仍未命中，检查通用模型 ID（Generic）与标签页前缀模糊匹配（Prefix）兜底
         if route_info.get("match_type") == "none":
@@ -2275,7 +2309,7 @@ async def chat_completions(
             body=route_body,
             tab_index=(catalog_tab_index if route_info.get("match_type") == "catalog" else None),
             selector=None,
-            preset_name=body.preset_name,
+            preset_name=(route_info.get("preset_name") or body.preset_name),
             authenticated=authenticated,
         )
     elif route_info.get("match_type") == "none" and route_info.get("normalized_model"):
@@ -3006,8 +3040,6 @@ async def _non_stream_tool_calling_with_lifecycle(
     except asyncio.CancelledError:
         if _is_manual_terminate(ctx):
             return _manual_terminate_response()
-        # 修复(2)：内部转换出的取消信号（非真实协程取消）裸抛会让客户端收到
-        # 无结构 500；改为返回与手动终止一致的结构化 499 响应
         if _is_genuine_task_cancellation():
             raise
         return _request_cancelled_response()
@@ -3074,7 +3106,7 @@ async def _stream_tool_calling_with_lifecycle(
                 parsed,
                 legacy_function_call=legacy_function_call,
             ),
-            ctx=ctx,  # 修复(8)：透传 ctx 以便 usage 携带已有的 token 估算
+            ctx=ctx,
         ):
             if await request.is_disconnected():
                 ctx.request_cancel("client_disconnected")
@@ -3082,9 +3114,6 @@ async def _stream_tool_calling_with_lifecycle(
             yield chunk
             await asyncio.sleep(0)
     except asyncio.CancelledError:
-        # 修复(2)：_complete_tool_calling_with_lifecycle 会把非手动终止的取消
-        # 转换为 CancelledError，此处原先只捕获 Exception，导致连接被硬切且无 [DONE]。
-        # 真实协程取消必须继续上抛；内部转换信号则发结构化错误事件后正常收尾
         if _is_genuine_task_cancellation():
             raise
         cancel_code = "manual_terminate" if _is_manual_terminate(ctx) else "request_cancelled"
@@ -3113,7 +3142,6 @@ def _pack_error(
     status_code: Optional[int] = None,
     retryable: Optional[bool] = None,
 ) -> str:
-    """打包 SSE 错误"""
     data = {
         "id": f"chatcmpl-error-{int(time.time() * 1000)}",
         "object": "chat.completion.chunk",
@@ -3136,7 +3164,6 @@ def _pack_error(
 
 
 def _pack_done() -> str:
-    """打包 SSE 结束标记"""
     return "data: [DONE]\n\n"
 
 
@@ -3170,17 +3197,47 @@ def _collect_model_entries() -> List[Dict[str, Any]]:
         tabs = browser.tab_pool.get_tabs_with_index()
         from app.services.config_engine import config_engine
 
-        catalog_preset = None
+        catalog_presets = []
+        seen_catalog_keys = set()
         for tab in tabs:
             candidate = get_arena_direct_catalog_for_tab(config_engine, tab)
-            if candidate:
-                catalog_preset = candidate
-                break
+            if candidate and candidate.get("catalog", {}).get("enabled"):
+                cat = candidate["catalog"]
+                cat_key = (
+                    cat.get("modality", ""),
+                    tuple(cat.get("include_keywords", [])),
+                    tuple(cat.get("exclude_keywords", [])),
+                )
+                if cat_key not in seen_catalog_keys:
+                    seen_catalog_keys.add(cat_key)
+                    catalog_presets.append(cat)
+
+        if not catalog_presets:
+            site = config_engine.sites.get("arena.ai")
+            if isinstance(site, dict) and isinstance(site.get("presets"), dict):
+                has_arena_tab = any(
+                    route_domain_matches("arena.ai", tab.get("route_domain") or tab.get("current_domain"))
+                    for tab in tabs
+                )
+                if has_arena_tab:
+                    for preset in site["presets"].values():
+                        if isinstance(preset, dict):
+                            cat = normalize_model_catalog_config(preset.get("model_catalog"))
+                            if cat.get("enabled") and cat.get("source") == "arena_direct":
+                                cat_key = (
+                                    cat.get("modality", ""),
+                                    tuple(cat.get("include_keywords", [])),
+                                    tuple(cat.get("exclude_keywords", [])),
+                                )
+                                if cat_key not in seen_catalog_keys:
+                                    seen_catalog_keys.add(cat_key)
+                                    catalog_presets.append(cat)
+
         for item in collect_route_domain_models(tabs):
             item_route_domains = list(item.get("route_domains") or [])
             if item.get("route_domain"):
                 item_route_domains.append(item.get("route_domain"))
-            if catalog_preset and item.get("is_route_alias") and any(
+            if catalog_presets and item.get("is_route_alias") and any(
                 route_domain_matches("arena.ai", domain)
                 for domain in item_route_domains
             ):
@@ -3190,12 +3247,13 @@ def _collect_model_entries() -> List[Dict[str, Any]]:
                 owned_by=item.get("route_domain") or "universal-web-api",
                 display_name=item.get("display_name") or item.get("id"),
             )
-        if catalog_preset:
+        for cat in catalog_presets:
+            cat_models = list_arena_direct_models(
+                browser,
+                catalog_config=cat,
+            )
             for item in build_openai_model_entries(
-                list_arena_direct_models(
-                    browser,
-                    catalog_config=catalog_preset["catalog"],
-                ),
+                cat_models,
                 created=MODEL_LIST_CREATED,
             ):
                 _append_entry(
@@ -3247,16 +3305,17 @@ def _verify_models_auth(
 # ================= 模型列表 =================
 
 @router.get("/models")
+@router.get("/model")
 @router.get("/v1/v1/models")
+@router.get("/v1/v1/model")
 @router.get("/v1/models")
+@router.get("/v1/model")
 async def list_models(
     authorization: Optional[str] = Header(None),
     x_api_key: Optional[str] = Header(None, alias="x-api-key"),
     anthropic_version: Optional[str] = Header(None, alias="anthropic-version"),
 ):
-    """列出可用模型"""
     _verify_models_auth(authorization, x_api_key)
-    # _collect_model_entries 内部会触达浏览器（tab 扫描），移入线程池避免阻塞事件循环
     data = await asyncio.to_thread(_collect_model_entries)
 
     if anthropic_version:
@@ -3266,7 +3325,6 @@ async def list_models(
         "object": "list",
         "data": data,
     }
-
 
 @router.get("/api/pool/status")
 async def get_pool_status(authenticated: bool = Depends(verify_dashboard_auth)):

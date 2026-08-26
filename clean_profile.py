@@ -25,17 +25,25 @@ if str(PROJECT_ROOT) not in sys.path:
 # =======================
 
 
-SAFE_TO_DELETE = [
+GLOBAL_SAFE_TO_DELETE = [
     "BrowserMetrics",
     "Crashpad",
     "GraphiteDawnCache",
     "ShaderCache",
     "GrShaderCache",
-    "Default/Cache",
-    "Default/Code Cache",
-    "Default/GPUCache",
-    "Default/Service Worker/CacheStorage",
-    "Default/Service Worker/ScriptCache",
+    "GPUPersistentCache",
+]
+
+PROFILE_SAFE_TO_DELETE = [
+    "Cache",
+    "Code Cache",
+    "GPUCache",
+    "DawnGraphiteCache",
+    "DawnWebGPUCache",
+    "AutofillAiModelCache",
+    "Sessions",
+    "Service Worker/CacheStorage",
+    "Service Worker/ScriptCache",
 ]
 
 
@@ -61,7 +69,8 @@ def safe_slim_profile(profile_path: Path) -> int:
         return 0
 
     count = 0
-    for folder in SAFE_TO_DELETE:
+    # 清理全局根目录缓存
+    for folder in GLOBAL_SAFE_TO_DELETE:
         target = profile_path / folder
         if target.exists() and target.is_dir():
             try:
@@ -72,6 +81,26 @@ def safe_slim_profile(profile_path: Path) -> int:
                 print(f"  [!] 跳过（权限不足）: {folder}")
             except Exception as e:
                 print(f"  [!] 跳过（{type(e).__name__}: {e}）: {folder}")
+
+    # 扫描所有 Profile 子目录（Default, Profile 1, Profile 2, Guest Profile 等）
+    profile_dirs = [profile_path / "Default", profile_path / "Guest Profile"]
+    profile_dirs.extend(profile_path.glob("Profile *"))
+
+    for p_dir in profile_dirs:
+        if not p_dir.is_dir():
+            continue
+        rel_prefix = p_dir.name
+        for folder in PROFILE_SAFE_TO_DELETE:
+            target = p_dir / folder
+            if target.exists() and target.is_dir():
+                try:
+                    shutil.rmtree(target)
+                    print(f"  [√] 已清理: {rel_prefix}/{folder}")
+                    count += 1
+                except PermissionError:
+                    print(f"  [!] 跳过（权限不足）: {rel_prefix}/{folder}")
+                except Exception as e:
+                    print(f"  [!] 跳过（{type(e).__name__}: {e}）: {rel_prefix}/{folder}")
 
     print(f"清理完成，共处理 {count} 个项目。\n")
     return count
