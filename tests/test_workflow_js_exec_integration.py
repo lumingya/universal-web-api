@@ -224,8 +224,8 @@ class TestWorkflowJsExecIntegration(unittest.TestCase):
             _load_workflow_script_content("../main.py")
         self.assertEqual(cm.exception.status_code, 400)
 
-    def test_arena_payload_interceptor_modality_and_field_rules(self):
-        """测试 arena_payload_interceptor.js 模态校验与字段精准重写规则"""
+    def test_arena_payload_interceptor_model_and_field_rules(self):
+        """模型 UUID 由拦截器解析，页面原生 modality 保持不变。"""
         target = "custom_scripts/examples/arena_payload_interceptor.js"
         res = _load_workflow_script_content(target)
         content = res["content"]
@@ -233,19 +233,15 @@ class TestWorkflowJsExecIntegration(unittest.TestCase):
         # 1. 确保 kimi-k3 UUID 准确映射
         self.assertIn("'kimi-k3': '019faec3-b3a8-7871-9059-8eea66f9f279'", content)
 
-        # 2. 确保普通文本默认模态为 'chat'，绝不能是 'text'
-        self.assertNotIn("targetModality = 'text'", content)
-        self.assertNotIn("targetModality = \"text\"", content)
-        self.assertIn("targetModality = 'chat'", content)
-        self.assertIn("targetModality = 'image'", content)
-        self.assertIn("targetModality = 'video'", content)
+        # 2. 模态属于页面/预设上下文，拦截器不得按模型名猜测或覆盖它。
+        self.assertNotIn("targetModality", content)
+        self.assertNotIn("parsed.modality =", content)
 
-        # 3. 确保 rewritePayloadObject 仅精准替换模型与模态字段，不篡改 mode、id、userMessageId
+        # 3. 确保 rewritePayloadObject 仅精准替换模型字段，不篡改控制字段
         self.assertIn("rewritePayloadObject", content)
         self.assertIn("modelAId", content)
         self.assertIn("modelBId", content)
         self.assertIn("modelId", content)
-        self.assertIn("modality", content)
         self.assertNotIn("parsed.mode =", content)
         self.assertNotIn("parsed.id =", content)
         self.assertNotIn("parsed.userMessageId =", content)

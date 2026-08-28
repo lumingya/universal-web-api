@@ -54,11 +54,32 @@ window.WorkflowPanel = {
                 { value: 'danger', label: '注意' }
             ],
             jsonParamPlaceholder: '{\n  "target_endpoint": "/nextjs-api/stream/create-evaluation",\n  "override_model": "{{context.model}}"\n}',
+            localCatalog: {
+                enabled: false,
+                source: 'arena_direct',
+                modality: 'text',
+                include_keywords: [],
+                exclude_keywords: [],
+                enable_dark_pool: false,
+                dark_pool_since: '',
+                dark_pool_whitelist_keywords: [],
+                dark_pool_blacklist_keywords: []
+            },
+            catalogLoading: false,
+            catalogSaveTimer: null,
             catalogKeywordsDraft: {
                 include_keywords: '',
-                exclude_keywords: ''
+                exclude_keywords: '',
+                dark_pool_whitelist_keywords: '',
+                dark_pool_blacklist_keywords: ''
             }
         };
+    },
+    computed: {
+        isArenaPreset() {
+            const domain = String(this.currentDomain || '').trim().toLowerCase();
+            return domain === 'arena.ai' || domain.endsWith('.arena.ai');
+        }
     },
     watch: {
         workflow: {
@@ -68,32 +89,43 @@ window.WorkflowPanel = {
             deep: true,
             immediate: true
         },
-        modelCatalog: {
+        selectedPreset: {
             handler() {
-                this.syncCatalogKeywordsDraft();
+                if (this.catalogSaveTimer) {
+                    clearTimeout(this.catalogSaveTimer);
+                    this.catalogSaveTimer = null;
+                }
+                this.expandedHintEditors = {};
+                this.expandedExecutionMenus = {};
+                this.customKeyModes = {};
+                this.expandedJsEditors = {};
+                this.expandedJsPreviews = {};
+                this.syncHintEditorState();
+                this.loadModelCatalog();
             },
-            deep: true,
             immediate: true
         },
-        selectedPreset() {
-            this.expandedHintEditors = {};
-            this.expandedExecutionMenus = {};
-            this.customKeyModes = {};
-            this.expandedJsEditors = {};
-            this.expandedJsPreviews = {};
-            this.syncHintEditorState();
-            this.syncCatalogKeywordsDraft(true);
-        },
-        currentDomain() {
-            this.syncCatalogKeywordsDraft(true);
+        currentDomain: {
+            handler() {
+                if (this.catalogSaveTimer) {
+                    clearTimeout(this.catalogSaveTimer);
+                    this.catalogSaveTimer = null;
+                }
+                this.loadModelCatalog();
+            },
+            immediate: true
         }
     },
     mounted() {
         this.loadAvailableScripts(false);
-        this.syncCatalogKeywordsDraft(true);
+        this.loadModelCatalog();
     },
     beforeUnmount() {
         this.stopEditorBridgePolling();
+        if (this.catalogSaveTimer) {
+            clearTimeout(this.catalogSaveTimer);
+            this.catalogSaveTimer = null;
+        }
     },
     methods: {
         toggle() {
@@ -108,15 +140,20 @@ window.WorkflowPanel = {
         },
 
         catalogKeywordsText(key) {
-            return this.normalizeCatalogKeywords(this.modelCatalog && this.modelCatalog[key]).join('\n');
+            return this.normalizeCatalogKeywords(this.localCatalog && this.localCatalog[key]).join('\n');
         },
 
         syncCatalogKeywordsDraft(force = false) {
             if (!this.catalogKeywordsDraft) {
-                this.catalogKeywordsDraft = { include_keywords: '', exclude_keywords: '' };
+                this.catalogKeywordsDraft = {
+                    include_keywords: '',
+                    exclude_keywords: '',
+                    dark_pool_whitelist_keywords: '',
+                    dark_pool_blacklist_keywords: ''
+                };
             }
-            ['include_keywords', 'exclude_keywords'].forEach(key => {
-                const propArr = this.normalizeCatalogKeywords(this.modelCatalog && this.modelCatalog[key]);
+            ['include_keywords', 'exclude_keywords', 'dark_pool_whitelist_keywords', 'dark_pool_blacklist_keywords'].forEach(key => {
+                const propArr = this.normalizeCatalogKeywords(this.localCatalog && this.localCatalog[key]);
                 const draftArr = this.normalizeCatalogKeywords(this.catalogKeywordsDraft[key]);
                 const isSame = JSON.stringify(propArr) === JSON.stringify(draftArr);
                 if (force || !isSame || this.catalogKeywordsDraft[key] === undefined) {
@@ -127,23 +164,109 @@ window.WorkflowPanel = {
 
         handleCatalogKeywordsInput(key, rawText) {
             if (!this.catalogKeywordsDraft) {
-                this.catalogKeywordsDraft = { include_keywords: '', exclude_keywords: '' };
+                this.catalogKeywordsDraft = {
+                    include_keywords: '',
+                    exclude_keywords: '',
+                    dark_pool_whitelist_keywords: '',
+                    dark_pool_blacklist_keywords: ''
+                };
             }
             this.catalogKeywordsDraft[key] = rawText;
-            this.updateModelCatalog({
-                [key]: this.normalizeCatalogKeywords(rawText)
-            });
+            if (this.catalogSaveTimer) {
+                clearTimeout(this.catalogSaveTimer);
+                this.catalogSaveTimer = null;
+            }
+            const targetDomain = this.currentDomain;
+            const targetPreset = this.selectedPreset || '主预设';
+            this.catalogSaveTimer = setTimeout(() => {
+                this.catalogSaveTimer = null;
+                if (this.currentDomain !== targetDomain || (this.selectedPreset || '主预设') !== targetPreset) {
+                    return;
+                }
+                this.saveModelCatalog({
+                    [key]: this.normalizeCatalogKeywords(rawText)
+                }, targetPreset, targetDomain);
+            }, 300);
         },
 
-        updateModelCatalog(patch) {
-            this.$emit('update:modelCatalog', {
-                enabled: false,
-                source: 'arena_direct',
-                include_keywords: [],
-                exclude_keywords: [],
-                ...(this.modelCatalog || {}),
-                ...(patch || {})
-            });
+        async loadModelCatalog() {
+            if (!this.isArenaPreset || !this.currentDomain) return;
+            this.catalogLoading = true;
+            try {
+                const domain = this.currentDomain;
+                const preset = this.selectedPreset || '主预设';
+                const res = await this.authJsonRequest(
+                    '/api/sites/' + encodeURIComponent(domain) + '/model-catalog?preset_name=' + encodeURIComponent(preset)
+                );
+                if (res && res.catalog && domain === this.currentDomain && preset === (this.selectedPreset || '主预设')) {
+                    this.localCatalog = {
+                        enabled: false,
+                        source: 'arena_direct',
+                        modality: 'text',
+                        include_keywords: [],
+                        exclude_keywords: [],
+                        enable_dark_pool: false,
+                        dark_pool_since: '',
+                        dark_pool_whitelist_keywords: [],
+                        dark_pool_blacklist_keywords: [],
+                        ...res.catalog
+                    };
+                    this.syncCatalogKeywordsDraft(true);
+                }
+            } catch (e) {
+                console.warn('[WorkflowPanel] 加载独立模型目录配置失败:', e);
+            } finally {
+                this.catalogLoading = false;
+            }
+        },
+
+        async saveModelCatalog(patch = {}, targetPreset = null, targetDomain = null) {
+            const domain = targetDomain || this.currentDomain;
+            const preset = targetPreset || this.selectedPreset || '主预设';
+            if (!this.isArenaPreset || !domain) return;
+            const isCurrent = domain === this.currentDomain && preset === (this.selectedPreset || '主预设');
+            if (isCurrent) {
+                this.localCatalog = {
+                    enabled: false,
+                    source: 'arena_direct',
+                    include_keywords: [],
+                    exclude_keywords: [],
+                    enable_dark_pool: false,
+                    dark_pool_since: '',
+                    dark_pool_whitelist_keywords: [],
+                    dark_pool_blacklist_keywords: [],
+                    ...(this.localCatalog || {}),
+                    ...(patch || {})
+                };
+                this.syncCatalogKeywordsDraft(false);
+            }
+            try {
+                const payloadCatalog = isCurrent
+                    ? this.localCatalog
+                    : {
+                        enabled: false,
+                        source: 'arena_direct',
+                        include_keywords: [],
+                        exclude_keywords: [],
+                        enable_dark_pool: false,
+                        dark_pool_since: '',
+                        dark_pool_whitelist_keywords: [],
+                        dark_pool_blacklist_keywords: [],
+                        ...(patch || {})
+                    };
+                await this.authJsonRequest('/api/sites/' + encodeURIComponent(domain) + '/model-catalog', {
+                    method: 'PUT',
+                    body: JSON.stringify({
+                        preset_name: preset,
+                        catalog: payloadCatalog
+                    })
+                });
+                if (isCurrent) {
+                    this.$emit('update:modelCatalog', { ...this.localCatalog });
+                }
+            } catch (e) {
+                console.error('[WorkflowPanel] 保存模型目录配置失败:', e);
+            }
         },
 
         async authJsonRequest(url, options = {}) {
@@ -495,6 +618,19 @@ window.WorkflowPanel = {
             }
         },
 
+        getJsLifecycle(step) {
+            const execution = step && step.execution && typeof step.execution === 'object'
+                ? step.execution : {};
+            const value = String(execution.lifecycle || execution.script_lifecycle || 'workflow').toLowerCase();
+            return ['workflow', 'resident', 'step'].includes(value) ? value : 'workflow';
+        },
+
+        setJsLifecycle(step, lifecycle) {
+            if (!step) return;
+            if (!step.execution || typeof step.execution !== 'object') step.execution = {};
+            step.execution.lifecycle = ['workflow', 'resident', 'step'].includes(lifecycle) ? lifecycle : 'workflow';
+        },
+
         async loadAvailableScripts(force = false) {
             if (this.availableScripts.length > 0 && !force) return;
             this.loadingScripts = true;
@@ -629,40 +765,96 @@ window.WorkflowPanel = {
             </div>
 
             <div v-show="!collapsed" class="p-4 space-y-4 max-h-[44rem] overflow-auto">
-                <div class="border-b border-gray-200 dark:border-gray-700 pb-4 space-y-3">
+                <div v-if="isArenaPreset" class="border-b border-gray-200 dark:border-gray-700 pb-4 space-y-4">
                     <div class="flex items-center justify-between gap-4">
                         <div>
-                            <div class="text-sm font-semibold text-gray-900 dark:text-white">页面模型目录</div>
-                            <div class="text-xs text-gray-500 dark:text-gray-400 mt-1">启用后，此预设负责读取页面模型、过滤列表，并在请求时切换模型。</div>
+                            <div class="text-sm font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+                                <span>页面模型目录</span>
+                                <span v-if="catalogLoading" class="text-xs text-blue-500 animate-pulse font-normal">读取中...</span>
+                            </div>
+                            <div class="text-xs text-gray-500 dark:text-gray-400 mt-1">独立持久化存储。启用后，此预设负责读取页面模型、过滤列表，并在请求时切换模型。</div>
                         </div>
                         <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200 cursor-pointer">
                             <input type="checkbox"
                                    class="rounded"
-                                   :checked="!!modelCatalog.enabled"
-                                   @change="updateModelCatalog({ enabled: $event.target.checked })">
+                                   :checked="!!localCatalog.enabled"
+                                   @change="saveModelCatalog({ enabled: $event.target.checked })">
                             <span>启用目录</span>
                         </label>
                     </div>
 
-                    <div v-if="modelCatalog.enabled" class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        <label class="block min-w-0">
-                            <span class="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">仅保留关键词（可选，每行一个）</span>
-                            <textarea :value="catalogKeywordsDraft ? catalogKeywordsDraft.include_keywords : ''"
-                                      @input="handleCatalogKeywordsInput('include_keywords', $event.target.value)"
-                                      rows="4"
-                                      spellcheck="false"
-                                      class="w-full rounded-md border dark:border-gray-600 px-3 py-2 font-mono text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white resize-y focus:outline-none focus:ring-2 focus:ring-blue-400"
-                                      placeholder="glm&#10;claude"></textarea>
-                        </label>
-                        <label class="block min-w-0">
-                            <span class="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">排除关键词（每行一个）</span>
-                            <textarea :value="catalogKeywordsDraft ? catalogKeywordsDraft.exclude_keywords : ''"
-                                      @input="handleCatalogKeywordsInput('exclude_keywords', $event.target.value)"
-                                      rows="4"
-                                      spellcheck="false"
-                                      class="w-full rounded-md border dark:border-gray-600 px-3 py-2 font-mono text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white resize-y focus:outline-none focus:ring-2 focus:ring-blue-400"
-                                      placeholder="image&#10;preview&#10;legacy"></textarea>
-                        </label>
+                    <div v-if="localCatalog.enabled" class="space-y-4">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <label class="block min-w-0">
+                                <span class="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">仅保留关键词（可选，每行一个）</span>
+                                <textarea :value="catalogKeywordsDraft ? catalogKeywordsDraft.include_keywords : ''"
+                                          @input="handleCatalogKeywordsInput('include_keywords', $event.target.value)"
+                                          rows="3"
+                                          spellcheck="false"
+                                          class="w-full rounded-md border dark:border-gray-600 px-3 py-2 font-mono text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white resize-y focus:outline-none focus:ring-2 focus:ring-blue-400"
+                                          placeholder="glm&#10;claude"></textarea>
+                            </label>
+                            <label class="block min-w-0">
+                                <span class="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">排除关键词（每行一个）</span>
+                                <textarea :value="catalogKeywordsDraft ? catalogKeywordsDraft.exclude_keywords : ''"
+                                          @input="handleCatalogKeywordsInput('exclude_keywords', $event.target.value)"
+                                          rows="3"
+                                          spellcheck="false"
+                                          class="w-full rounded-md border dark:border-gray-600 px-3 py-2 font-mono text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white resize-y focus:outline-none focus:ring-2 focus:ring-blue-400"
+                                          placeholder="image&#10;preview&#10;legacy"></textarea>
+                            </label>
+                        </div>
+
+                        <!-- 暗池模型配置区块 -->
+                        <div class="border-t border-dashed border-gray-200 dark:border-gray-700 pt-3 space-y-3">
+                            <div class="flex items-center justify-between gap-4">
+                                <div>
+                                    <div class="text-xs font-semibold text-purple-600 dark:text-purple-400">暗池模型池 (Dark Pool)</div>
+                                    <div class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">聚合离线模型元数据与页面抓取隐藏模型。明池模型不受此规则影响。</div>
+                                </div>
+                                <label class="inline-flex items-center gap-2 text-xs font-medium text-gray-700 dark:text-gray-200 cursor-pointer">
+                                    <input type="checkbox"
+                                           class="rounded text-purple-600 focus:ring-purple-500"
+                                           :checked="!!localCatalog.enable_dark_pool"
+                                           @change="saveModelCatalog({ enable_dark_pool: $event.target.checked })">
+                                    <span>加入暗池模型</span>
+                                </label>
+                            </div>
+
+                            <div v-if="localCatalog.enable_dark_pool" class="bg-purple-50/50 dark:bg-purple-950/20 border border-purple-200/60 dark:border-purple-800/40 rounded-lg p-3 space-y-3">
+                                <div>
+                                    <label class="inline-flex items-center gap-2 text-xs text-gray-700 dark:text-gray-300">
+                                        <span class="font-medium">暗池起始日期（在此日期之后入库的模型放行）：</span>
+                                        <input type="date"
+                                               :value="localCatalog.dark_pool_since || ''"
+                                               @change="saveModelCatalog({ dark_pool_since: $event.target.value })"
+                                               class="rounded border dark:border-gray-600 px-2 py-1 text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-400">
+                                        <span class="text-gray-400 dark:text-gray-500 text-[11px]">留空则不限制日期</span>
+                                    </label>
+                                </div>
+
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                    <label class="block min-w-0">
+                                        <span class="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">暗池白名单（命中直接放行，每行一个）</span>
+                                        <textarea :value="catalogKeywordsDraft ? catalogKeywordsDraft.dark_pool_whitelist_keywords : ''"
+                                                  @input="handleCatalogKeywordsInput('dark_pool_whitelist_keywords', $event.target.value)"
+                                                  rows="3"
+                                                  spellcheck="false"
+                                                  class="w-full rounded-md border dark:border-gray-600 px-3 py-2 font-mono text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white resize-y focus:outline-none focus:ring-2 focus:ring-purple-400"
+                                                  placeholder="deepseek&#10;claude"></textarea>
+                                    </label>
+                                    <label class="block min-w-0">
+                                        <span class="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">暗池黑名单（命中最终否决，每行一个）</span>
+                                        <textarea :value="catalogKeywordsDraft ? catalogKeywordsDraft.dark_pool_blacklist_keywords : ''"
+                                                  @input="handleCatalogKeywordsInput('dark_pool_blacklist_keywords', $event.target.value)"
+                                                  rows="3"
+                                                  spellcheck="false"
+                                                  class="w-full rounded-md border dark:border-gray-600 px-3 py-2 font-mono text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white resize-y focus:outline-none focus:ring-2 focus:ring-purple-400"
+                                                  placeholder="internal&#10;test&#10;dlp"></textarea>
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -833,6 +1025,17 @@ window.WorkflowPanel = {
                                             {{ isJsExpanded(index) ? '收起编辑器' : '展开编辑器' }}
                                         </button>
                                     </div>
+
+                                    <label class="inline-flex items-center gap-2 text-xs text-gray-600 dark:text-gray-300">
+                                        <span>脚本生命周期</span>
+                                        <select :value="getJsLifecycle(step)"
+                                                @change="setJsLifecycle(step, $event.target.value)"
+                                                class="border dark:border-gray-600 px-2 py-1 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
+                                            <option value="workflow">随工作流（推荐）</option>
+                                            <option value="step">仅本步骤</option>
+                                            <option value="resident">常驻页面</option>
+                                        </select>
+                                    </label>
                                 </div>
 
                                 <!-- 外部脚本模式 -->

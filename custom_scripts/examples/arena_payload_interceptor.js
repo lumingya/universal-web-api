@@ -5,7 +5,7 @@
  * 作用：
  * 劫持页面发起的前端 API 请求（如 /nextjs-api/stream/create-evaluation），
  * 动态替换请求体中的模型标识符（如 modelAId、model 等）为指定的目标模型 UUID，
- * 并智能识别目标模型模态（图片/视频/文本），自动校准 Payload 中的 modality 字段。
+ * 模型模态由当前页面/预设决定；本脚本只负责将请求中的模型标识解析为目标模型 UUID。
  */
 
 (function() {
@@ -63,7 +63,6 @@
         'gemini-3.1-flash-lite-image': '019f97d3-92f7-7b82-8412-28df5295aa16',
         'grok-imagine-image-quality': '019f3957-c3fe-789a-ab86-455b7f1ba8e5',
         'grok-imagine-image': '019c8052-a77a-7be8-b99b-014c0a52084c',
-
         // --- 文本 / 推理旗舰暗池 ---
         'claude-sonnet-5-high': '019f19f2-41f1-7c6d-9891-48d02fd9952c',
         'claude-sonnet-5-search': '019f19f2-41f1-7c6d-9891-48d02fd9952c',
@@ -84,10 +83,8 @@
         'glm-5.2 (max)': '019ebf6a-94d4-7649-b704-1dbbd5eb0942',
         'glm-5.2': '019faec4-4a81-765c-832f-9b2d909acee3',
         'glm-5.1': '019d5e8d-d53e-75f3-bcf5-815ae0cf202a',
-        'glm-5': '019c45d7-96f0-7d39-8143-9d57941b5523',
-        'deepseek-v4-pro-max': '019ec802-53b6-79c2-9861-bf96fe4dcfb6',
-        'deepseek-v4-flash-high': '019ec801-b54c-7c0b-a193-41fa1a2ad9e0',
-        'gemini-3.7-pro': '019ebf6a-94d4-7649-b704-1dbbd5eb0942',
+        'gemini-3.7-flash': '01a03590-2058-7d1a-bae4-94295d7ad0ef',
+        'gemini-3.1-pro': '01a03a29-a0cd-79c7-a6ee-da2af3eacd66',
         'grok-4.6-high-public': '019e34c9-b7a4-79fa-bb18-a6211eb906cf'
     };
 
@@ -96,76 +93,73 @@
     // 动态提取页面 Next.js 内存中的全量 initialModels 映射表
     function getDynamicPageModelMap() {
         const map = {};
-        const meta = {};
         const modelsList = [];
-        let payloadTexts = [];
-        const readArray = (text, marker) => {
-            const markerIndex = text.indexOf(marker);
-            if (markerIndex < 0) return null;
-            const start = text.indexOf('[', markerIndex + marker.length);
-            if (start < 0) return null;
-            let depth = 0, quoted = false, escaped = false;
-            for (let i = start; i < text.length; i++) {
-                const c = text[i];
-                if (quoted) {
-                    if (escaped) escaped = false;
-                    else if (c === '\\') escaped = true;
-                    else if (c === '"') quoted = false;
-                    continue;
-                }
-                if (c === '"') quoted = true;
-                else if (c === '[') depth++;
-                else if (c === ']') {
-                    depth--;
-                    if (depth === 0) return text.slice(start, i + 1);
-                }
-            }
-            return null;
-        };
 
         try {
             for (const script of document.scripts) {
-                const source = String(script.textContent || '').trim();
-                const prefix = 'self.__next_f.push(';
-                if (!source.startsWith(prefix) || !source.endsWith(')')) continue;
-                try {
-                    const payload = JSON.parse(source.slice(prefix.length, -1));
-                    if (Array.isArray(payload) && typeof payload[1] === 'string') {
-                        payloadTexts.push(payload[1]);
-                    }
-                } catch (_) {}
-            }
-            for (const text of payloadTexts) {
-                const rawModels = readArray(text, '"initialModels":');
-                if (!rawModels) continue;
-                try {
-                    const models = JSON.parse(rawModels);
-                    for (const m of models) {
-                        if (!m || !m.id) continue;
-                        const id = String(m.id).trim();
-                        const isVideo = Boolean(m.capabilities?.outputCapabilities?.video);
-                        const isImage = Boolean(m.capabilities?.outputCapabilities?.image);
-                        const modality = isVideo ? 'video' : (isImage ? 'image' : 'chat');
+                const text = String(script.textContent || '').trim();
+                if (!text.includes('initialModels')) continue;
 
-                        meta[id] = { id, modality, isVideo, isImage };
-                        map[id.toLowerCase()] = id;
-                        if (m.name) map[String(m.name).trim().toLowerCase()] = id;
-                        if (m.displayName) map[String(m.displayName).trim().toLowerCase()] = id;
-                        if (m.publicName) map[String(m.publicName).trim().toLowerCase()] = id;
+                let searchIdx = 0;
+                while (true) {
+                    const marker = text.indexOf('initialModels', searchIdx);
+                    if (marker < 0) break;
+                    searchIdx = marker + 13;
 
-                        modelsList.push({
-                            id,
-                            name: m.name,
-                            displayName: m.displayName,
-                            publicName: m.publicName,
-                            modality
-                        });
+                    const start = text.indexOf('[', marker);
+                    if (start < 0) continue;
+                    let depth = 0;
+                    let end = -1;
+                    for (let i = start; i < text.length; i++) {
+                        if (text[i] === '[') depth++;
+                        else if (text[i] === ']') {
+                            depth--;
+                            if (depth === 0) { end = i; break; }
+                        }
                     }
-                } catch (_) {}
+                    if (end < 0) continue;
+
+                    let arrayStr = text.substring(start, end + 1);
+                    if (arrayStr.includes('\\"')) {
+                        arrayStr = arrayStr.replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+                    }
+
+                    try {
+                        const models = JSON.parse(arrayStr);
+                        if (Array.isArray(models)) {
+                            for (const m of models) {
+                                if (!m || !m.id) continue;
+                                const id = String(m.id).trim();
+                                const userSelectable = m.userSelectable !== false;
+
+                                const registerKey = (key) => {
+                                    if (!key) return;
+                                    const k = String(key).trim().toLowerCase();
+                                    if (!map[k] || userSelectable) {
+                                        map[k] = id;
+                                    }
+                                };
+
+                                map[id.toLowerCase()] = id;
+                                registerKey(m.name);
+                                registerKey(m.displayName);
+                                registerKey(m.publicName);
+
+                                modelsList.push({
+                                    id,
+                                    name: m.name,
+                                    displayName: m.displayName,
+                                    publicName: m.publicName,
+                                    userSelectable
+                                });
+                            }
+                        }
+                    } catch (_) {}
+                }
             }
         } catch (_) {}
 
-        return { map, meta, modelsList };
+        return { map, modelsList };
     }
 
     let rawModel = String(args.override_model || ctx.model || window.__ARENA_TARGET_MODEL_ID || '').trim();
@@ -173,7 +167,7 @@
         rawModel = rawModel.replace('arena.ai/direct/', '');
     }
 
-    const { map: dynamicMap, meta: modelMeta, modelsList } = getDynamicPageModelMap();
+    const { map: dynamicMap, modelsList } = getDynamicPageModelMap();
     const cleanKey = rawModel.toLowerCase().trim();
 
     // 打印 DOM 抓取到的模型概览
@@ -211,37 +205,6 @@
         }
     }
 
-    // 智能识别模型模态能力（用于适配 request payload 中的 modality 字段）
-    // 注意：Arena 后端 Zod Schema 明确规定文本聊天模态为 'chat' 或 'auto'，禁止使用 'text'
-    const meta = (targetModelId && modelMeta[targetModelId]) ? modelMeta[targetModelId] : {};
-    let targetModality = meta.modality || null;
-    if (targetModality === 'text') {
-        targetModality = 'chat';
-    }
-    if (!targetModality) {
-        if (cleanKey.includes('video') || cleanKey.includes('seedance')) {
-            targetModality = 'video';
-        } else if (
-            cleanKey.includes('image') ||
-            cleanKey.includes('imagine') ||
-            cleanKey.includes('mona') ||
-            cleanKey.includes('luna') ||
-            cleanKey.includes('lina') ||
-            cleanKey.includes('seedream') ||
-            cleanKey.includes('seededit') ||
-            cleanKey.includes('halide') ||
-            cleanKey.includes('flux') ||
-            cleanKey.includes('z-image') ||
-            cleanKey.includes('imagen')
-        ) {
-            targetModality = 'image';
-        } else {
-            targetModality = 'chat';
-        }
-    } else if (targetModality !== 'image' && targetModality !== 'video') {
-        targetModality = 'chat';
-    }
-
     const targetEndpoint = args.target_endpoint || '/nextjs-api/stream/create-evaluation';
 
     function isEvaluationEndpoint(url, config) {
@@ -264,15 +227,12 @@
             console.log('[ArenaInterceptor:PASSTHROUGH] Model is in passthrough list, preserving native payload');
             return parsed;
         }
-        // 绝不修改 mode、id、userMessageId 等其他顶层字段，仅精准替换模型与模态
+        // 绝不修改 mode、id、userMessageId 等其他顶层字段，仅精准替换模型字段
         if ('modelAId' in parsed) parsed.modelAId = config.targetModelId;
         if ('modelBId' in parsed) parsed.modelBId = config.targetModelId;
         if ('model' in parsed) parsed.model = config.targetModelId;
         if ('modelId' in parsed) parsed.modelId = config.targetModelId;
         if ('model_name' in parsed) parsed.model_name = config.targetModelId;
-        if (config.targetModality && 'modality' in parsed && parsed.modality !== config.targetModality) {
-            parsed.modality = config.targetModality;
-        }
         return parsed;
     }
 
@@ -280,37 +240,54 @@
         rawModel,
         cleanKey,
         targetModelId,
-        targetModality,
         isPassthrough,
         targetEndpoint
     });
 
     const interceptorConfig = {
-        targetModelId,
-        targetModality,
         targetEndpoint,
+        targetModelId,
         isPassthrough,
+        maxModelId: MAX_MODEL_ID,
         prompt: ctx.prompt || ''
     };
+    window.__ARENA_INTERCEPTOR_CONFIG__ = interceptorConfig;
 
-    window.__ARENA_INTERCEPTOR_CONFIG__ = {
-        targetEndpoint,
-        targetModelId,
-        targetModality,
-        isPassthrough,
-        maxModelId: MAX_MODEL_ID
-    };
-
+    // A persistent disposer also covers pages where an older version of this
+    // script was installed before the executor lifecycle registry existed.
+    if (window.__ARENA_PAYLOAD_INTERCEPTOR_INSTALLED__
+        && typeof window.__ARENA_PAYLOAD_INTERCEPTOR_DISPOSE__ === 'function') {
+        try { window.__ARENA_PAYLOAD_INTERCEPTOR_DISPOSE__(); } catch (_) {}
+    }
     if (window.__ARENA_PAYLOAD_INTERCEPTOR_INSTALLED__) {
         console.log('[ArenaInterceptor] 拦截器已存在，已热更新目标模型配置:', window.__ARENA_INTERCEPTOR_CONFIG__);
         return true;
     }
 
+    const registerCleanup = typeof __uwaRegisterCleanup === 'function'
+        ? __uwaRegisterCleanup
+        : function() {};
+    const restoreDescriptor = (target, key, descriptor, installedValue) => {
+        try {
+            if (target[key] !== installedValue) return;
+            if (descriptor) {
+                Object.defineProperty(target, key, descriptor);
+            } else {
+                delete target[key];
+            }
+        } catch (_) {
+            try {
+                if (target[key] === installedValue) target[key] = descriptor && descriptor.value;
+            } catch (_) {}
+        }
+    };
+
     window.__ARENA_PAYLOAD_INTERCEPTOR_INSTALLED__ = true;
 
     // 1. 劫持 window.fetch
+    const originalFetchDescriptor = Object.getOwnPropertyDescriptor(window, 'fetch');
     const originalFetch = window.fetch;
-    window.fetch = async function(resource, init) {
+    const installedFetch = async function(resource, init) {
         try {
             let url = typeof resource === 'string' ? resource : ((resource && resource.url) || (resource && resource.href) || String(resource || ''));
             const config = window.__ARENA_INTERCEPTOR_CONFIG__ || {};
@@ -353,7 +330,7 @@
                             length: bodyText.length,
                             parsed: parsed
                         });
-                        console.log(`[ArenaInterceptor] ✅ 已成功重写请求 Payload 模型为: ${config.targetModelId}, 模态: ${config.targetModality || 'auto'}`);
+                        console.log(`[ArenaInterceptor] 已成功重写请求 Payload 模型为: ${config.targetModelId}`);
                     } catch (parseErr) {
                         console.warn('[ArenaInterceptor:ERROR] [fetch] 重写 JSON 失败:', parseErr);
                         init.body = bodyText;
@@ -408,18 +385,22 @@
         }
         return init !== undefined ? originalFetch.call(this, resource, init) : originalFetch.call(this, resource);
     };
+    window.fetch = installedFetch;
 
     // 2. 劫持 XMLHttpRequest
-    const originalXHROpen = XMLHttpRequest.prototype.open;
-    const originalXHRSend = XMLHttpRequest.prototype.send;
+    const xhrPrototype = XMLHttpRequest.prototype;
+    const originalXHROpenDescriptor = Object.getOwnPropertyDescriptor(xhrPrototype, 'open');
+    const originalXHRSendDescriptor = Object.getOwnPropertyDescriptor(xhrPrototype, 'send');
+    const originalXHROpen = xhrPrototype.open;
+    const originalXHRSend = xhrPrototype.send;
 
-    XMLHttpRequest.prototype.open = function(method, url) {
+    const installedXHROpen = function(method, url) {
         this.__intercept_method = method;
         this.__intercept_url = typeof url === 'string' ? url : ((url && url.href) || String(url || ''));
         return originalXHROpen.apply(this, arguments);
     };
 
-    XMLHttpRequest.prototype.send = function(body) {
+    const installedXHRSend = function(body) {
         try {
             const config = window.__ARENA_INTERCEPTOR_CONFIG__ || {};
             const url = this.__intercept_url || '';
@@ -473,6 +454,48 @@
         }
         return originalXHRSend.call(this, body);
     };
+    xhrPrototype.open = installedXHROpen;
+    xhrPrototype.send = installedXHRSend;
+
+    registerCleanup(() => {
+        const ownsAllHooks = window.fetch === installedFetch
+            && xhrPrototype.open === installedXHROpen
+            && xhrPrototype.send === installedXHRSend;
+        restoreDescriptor(window, 'fetch', originalFetchDescriptor, installedFetch);
+        restoreDescriptor(xhrPrototype, 'open', originalXHROpenDescriptor, installedXHROpen);
+        restoreDescriptor(xhrPrototype, 'send', originalXHRSendDescriptor, installedXHRSend);
+        if (ownsAllHooks && window.__ARENA_INTERCEPTOR_CONFIG__ === interceptorConfig) {
+            try { delete window.__ARENA_INTERCEPTOR_CONFIG__; } catch (_) {}
+        }
+        if (ownsAllHooks) {
+            try { delete window.__ARENA_PAYLOAD_INTERCEPTOR_INSTALLED__; } catch (_) {}
+            try { delete window.__ARENA_PAYLOAD_INTERCEPTOR_DISPOSE__; } catch (_) {}
+            try { delete window.__ARENA_PAYLOAD_INTERCEPTOR_OWNER__; } catch (_) {}
+            try { delete window.__ARENA_PAYLOAD_INTERCEPTOR_POLICY__; } catch (_) {}
+        }
+        console.log('[ArenaInterceptor] 已卸载并恢复页面原始网络 API');
+    });
+    window.__ARENA_PAYLOAD_INTERCEPTOR_DISPOSE__ = () => {
+        try {
+            restoreDescriptor(window, 'fetch', originalFetchDescriptor, installedFetch);
+            restoreDescriptor(xhrPrototype, 'open', originalXHROpenDescriptor, installedXHROpen);
+            restoreDescriptor(xhrPrototype, 'send', originalXHRSendDescriptor, installedXHRSend);
+        } finally {
+            try { delete window.__ARENA_PAYLOAD_INTERCEPTOR_DISPOSE__; } catch (_) {}
+            try { delete window.__ARENA_PAYLOAD_INTERCEPTOR_INSTALLED__; } catch (_) {}
+            try { delete window.__ARENA_PAYLOAD_INTERCEPTOR_OWNER__; } catch (_) {}
+            try { delete window.__ARENA_PAYLOAD_INTERCEPTOR_POLICY__; } catch (_) {}
+            if (window.__ARENA_INTERCEPTOR_CONFIG__ === interceptorConfig) {
+                try { delete window.__ARENA_INTERCEPTOR_CONFIG__; } catch (_) {}
+            }
+        }
+    };
+    window.__ARENA_PAYLOAD_INTERCEPTOR_OWNER__ = (
+        typeof __uwaScope === 'object' && __uwaScope ? __uwaScope.owner : ''
+    );
+    window.__ARENA_PAYLOAD_INTERCEPTOR_POLICY__ = (
+        typeof __uwaScope === 'object' && __uwaScope ? __uwaScope.policy : 'workflow'
+    );
 
     console.log('[ArenaInterceptor] 🚀 Arena 智能多模态网络拦截器已就绪！目标:', targetModelId);
     return true;

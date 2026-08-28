@@ -84,9 +84,7 @@ class LmarenaImageSideRightParser(ResponseParser):
                     new_content,
                     append_disjoint=True,
                 )
-                if self._accumulated and not delta:
-                    logger.debug("[LmarenaImageSideRightParser] duplicate full response ignored")
-                else:
+                if delta:
                     result["content"] = delta
                 self._accumulated = next_accumulated
 

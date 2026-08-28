@@ -284,17 +284,13 @@ class LmarenaParser(ResponseParser):
 
             if new_content:
                 delta, next_accumulated = self._content_delta(self._accumulated, new_content)
-                if self._accumulated and not delta:
-                    logger.debug("[LmarenaParser] 检测到重复正文响应，跳过")
-                else:
+                if delta:
                     result["content"] = delta
                 self._accumulated = next_accumulated
 
             if new_reasoning:
                 delta_r, next_acc_r = self._content_delta(self._accumulated_reasoning, new_reasoning)
-                if self._accumulated_reasoning and not delta_r:
-                    logger.debug("[LmarenaParser] 检测到重复思考响应，跳过")
-                else:
+                if delta_r:
                     result["reasoning_content"] = delta_r
                 self._accumulated_reasoning = next_acc_r
 

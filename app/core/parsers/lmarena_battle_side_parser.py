@@ -107,11 +107,7 @@ class _LmarenaBattleSideParser(ResponseParser):
                     new_content,
                     append_disjoint=True,
                 )
-                if self._accumulated and not delta:
-                    logger.debug(
-                        f"[LmarenaBattleSideParser] duplicate {self.SIDE_LABEL} response ignored"
-                    )
-                else:
+                if delta:
                     result["content"] = delta
                 self._accumulated = next_accumulated
 
@@ -121,11 +117,7 @@ class _LmarenaBattleSideParser(ResponseParser):
                     new_reasoning,
                     append_disjoint=True,
                 )
-                if self._accumulated_reasoning and not delta_r:
-                    logger.debug(
-                        f"[LmarenaBattleSideParser] duplicate {self.SIDE_LABEL} reasoning response ignored"
-                    )
-                else:
+                if delta_r:
                     result["reasoning_content"] = delta_r
                 self._accumulated_reasoning = next_acc_r
 

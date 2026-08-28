@@ -31,6 +31,7 @@ from app.core.workflow.arena_direct_guard import (
     is_arena_direct_preset,
     is_arena_unexpected_battle_url,
     recover_arena_direct_page,
+    resolve_arena_direct_entry_url,
     resolve_arena_direct_recovery_url,
     workflow_has_new_chat_step,
 )
@@ -40,7 +41,6 @@ from app.models.schemas import get_modality_run_policy, is_modality_enabled
 from app.services.arena_direct_models import (
     get_model_catalog_preset,
     resolve_arena_direct_model,
-    resolve_model_catalog_preset_for_model,
 )
 from app.services.arena_image_generation import (
     ArenaImageGenerationError,
@@ -992,15 +992,6 @@ class BrowserWorkflowMixin:
 
             config_engine = self._get_config_engine()
             effective_preset_name = preset_name if preset_name is not None else session.preset_name
-            if preset_name is None and requested_model:
-                matched_catalog = resolve_model_catalog_preset_for_model(
-                    config_engine,
-                    domain,
-                    tab,
-                    requested_model,
-                )
-                if matched_catalog:
-                    effective_preset_name = matched_catalog["preset_name"]
 
             site_config = config_engine.get_site_config(
                 domain,
@@ -1665,30 +1656,6 @@ class BrowserWorkflowMixin:
         
         config_engine = self._get_config_engine()
         effective_preset_name = preset_name if preset_name is not None else session.preset_name
-        if preset_name is None and requested_model:
-            matched_catalog = resolve_model_catalog_preset_for_model(
-                config_engine,
-                domain,
-                tab,
-                requested_model,
-            )
-            if matched_catalog:
-                effective_preset_name = matched_catalog["preset_name"]
-                matched_model = matched_catalog.get("matched_model") or {}
-                matched_uuid = str(matched_model.get("id") or matched_model.get("uuid") or "")
-                matched_public_name = str(matched_model.get("public_name") or matched_model.get("publicName") or "")
-                matched_display_name = str(matched_model.get("display_name") or matched_model.get("displayName") or matched_model.get("name") or "")
-                logger.info(
-                    f"[PRESET:RESOLVE] resolve_model_catalog_preset_for_model 成功解析: "
-                    f"requested_model={requested_model!r}, target_preset={effective_preset_name!r}, "
-                    f"uuid={matched_uuid!r}, public_name={matched_public_name!r}, "
-                    f"display_name={matched_display_name!r}"
-                )
-            else:
-                logger.debug(
-                    f"[PRESET:RESOLVE] resolve_model_catalog_preset_for_model 未匹配到专属预设: "
-                    f"requested_model={requested_model!r}, domain={domain!r}"
-                )
 
         resolved_preset_name = effective_preset_name or config_engine.get_default_preset(domain) or "主预设"
         logger.info(
@@ -1749,6 +1716,38 @@ class BrowserWorkflowMixin:
         arena_has_new_chat = workflow_has_new_chat_step(workflow)
         arena_recovery_url = ""
         if arena_direct_active:
+            from app.services.arena_model_catalog import get_arena_model_catalog
+            model_catalog = get_arena_model_catalog(domain, resolved_preset_name, config_engine=config_engine)
+            if not model_catalog or not model_catalog.get("enabled"):
+                if isinstance(site_config, (dict, Mapping)) and site_config.get("model_catalog"):
+                    model_catalog = site_config.get("model_catalog")
+
+            if (
+                requested_model
+                and isinstance(model_catalog, dict)
+                and bool(model_catalog.get("enabled", False))
+                and str(model_catalog.get("source") or "arena_direct").strip().lower() == "arena_direct"
+            ):
+                available_model = resolve_arena_direct_model(
+                    tab,
+                    requested_model,
+                    catalog_config=model_catalog,
+                )
+                if not available_model:
+                    logger.warning(
+                        f"[{session.id}] 请求模型不在当前标签页预设的可用目录中，拒绝执行: "
+                        f"model={requested_model!r}, preset={resolved_preset_name!r}"
+                    )
+                    yield self.formatter.pack_error(
+                        "请求模型不在当前标签页预设的可用模型目录中",
+                        error_type="invalid_request_error",
+                        code="arena_direct_model_not_available",
+                        status_code=422,
+                        retryable=False,
+                    )
+                    yield self.formatter.pack_finish()
+                    return
+
             current_tab_url = str(getattr(tab, "url", "") or "").strip()
             if workflow_attempt == 0 or not getattr(session, "_arena_direct_initial_url", None):
                 setattr(session, "_arena_direct_initial_url", current_tab_url)
@@ -1758,7 +1757,13 @@ class BrowserWorkflowMixin:
                 or "生图" in str(resolved_preset_name or "")
                 or (isinstance(site_config, (dict, Mapping)) and str(site_config.get("model_catalog", {}).get("modality", "")).strip().lower() == "image")
             )
-            fallback_direct_url = "https://arena.ai/image/direct" if is_image_modality else "https://arena.ai/text/direct"
+            catalog_modality = ""
+            if isinstance(model_catalog, (dict, Mapping)):
+                catalog_modality = str(model_catalog.get("modality") or "").strip().lower()
+            fallback_direct_url = resolve_arena_direct_entry_url(
+                current_tab_url,
+                modality="image" if is_image_modality else catalog_modality,
+            )
             arena_recovery_url = resolve_arena_direct_recovery_url(
                 workflow,
                 initial_url=initial_recorded_url,
@@ -2003,7 +2008,7 @@ class BrowserWorkflowMixin:
             "prompt": prompt_text,
             "images": user_images,
             "model": str(requested_model or "").strip(),
-            "model_catalog": site_config.get("model_catalog", {}),
+            "model_catalog": model_catalog if isinstance(model_catalog, dict) else site_config.get("model_catalog", {}),
         }
         
         extractor = config_engine.get_site_extractor(domain, preset_name=effective_preset_name)
@@ -2061,6 +2066,12 @@ class BrowserWorkflowMixin:
             selectors=selectors,
             session=session,
         )
+        # Establish the owner boundary before the first page action. This also
+        # clears scripts from a previous preset when the new workflow has no JS step.
+        try:
+            executor._begin_workflow_scripts()
+        except Exception as e:
+            logger.debug(f"[{session.id}] 工作流脚本边界初始化失败（忽略）: {e}")
         
         result_container_selector = selectors.get("result_container", "")
         setattr(session, "_workflow_stop_reason", None)
@@ -2077,7 +2088,7 @@ class BrowserWorkflowMixin:
                 step_index = 0
                 workflow_total = len(workflow)
                 while step_index < len(workflow):
-                    if arena_direct_active:
+                    if arena_direct_active and step_index > 0:
                         current_loop_url = str(getattr(tab, "url", "") or "").strip()
                         if is_arena_unexpected_battle_url(current_loop_url):
                             logger.warning(

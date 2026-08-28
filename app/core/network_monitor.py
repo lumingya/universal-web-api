@@ -60,6 +60,16 @@ class NetworkMonitorTerminalError(NetworkMonitorError):
     pass
 
 
+class NetworkMonitorRecoverableError(NetworkMonitorError):
+    """可恢复的流请求错误（如 Arena 429/403/503 或 post-to-evaluation 404），应保持监听等待页面重发。"""
+    def __init__(self, event: Dict[str, Any], status_code: int, error_text: str, raw_body: str = ""):
+        super().__init__(error_text)
+        self.event = event
+        self.status_code = status_code
+        self.error_text = error_text
+        self.raw_body = raw_body
+
+
 class _EventOnlyParser(ResponseParser):
     """仅用于消费网络事件，不输出任何流式内容。"""
 
@@ -435,7 +445,7 @@ class NetworkMonitor:
         ):
             threshold = max(threshold, float(self._first_content_timeout))
         if waiting_for_followup_stream:
-            threshold = max(threshold, float(self._first_content_timeout))
+            threshold = max(threshold, 30.0, float(self._first_content_timeout))
         if (
             active_stream_response is not None
             and not self._has_stream_output()
@@ -687,6 +697,26 @@ class NetworkMonitor:
 
         self._prefetched_responses.append(response)
 
+    def _is_recoverable_stream_error(self, event: Dict[str, Any], status_code: int = 0) -> bool:
+        """判断是否为 Arena 场景下的可恢复流错误。
+
+        - 403/429/503：适用于 Arena evaluation stream。
+        - 404：仅适用于 /nextjs-api/stream/post-to-evaluation/{id}。
+        - 400/401/422/500 等保持立即失败。
+        """
+        if status_code <= 0:
+            status_code = self._extract_http_status(event)
+        url = str(event.get("url", "") or "")
+
+        if status_code == 404 and "post-to-evaluation" in url:
+            return True
+
+        if status_code in (403, 429, 503):
+            if "/nextjs-api/stream/" in url or "arena.ai" in url:
+                return True
+
+        return False
+
     def _raise_for_http_error_status(
         self,
         event: Dict[str, Any],
@@ -699,6 +729,8 @@ class NetworkMonitor:
             return
 
         error_text = self._build_http_status_error_text(event, raw_body)
+        is_recoverable = self._is_recoverable_stream_error(event, status_code)
+
         self._write_parser_debug_dump(
             raw_body,
             event,
@@ -713,11 +745,16 @@ class NetworkMonitor:
             force_stage="http_error",
             extra_payload={
                 "http_status": status_code,
-                "recoverable_listener_preserve": self._should_preserve_listener_after_terminal_error(
-                    error_text or f"HTTP {status_code}"
-                ),
+                "is_recoverable": is_recoverable,
             },
         )
+
+        if is_recoverable:
+            logger.warning(
+                f"[NetworkMonitor] 捕获可恢复状态码 (status={status_code}, url={event.get('url', '')[:120]}, body_len={len(raw_body or '')}), 准备保持监听等待重试"
+            )
+            raise NetworkMonitorRecoverableError(event, status_code, error_text or f"HTTP {status_code}", raw_body)
+
         logger.warning(
             "[NetworkMonitor] 目标流返回异常状态码，终止工作流 "
             f"(status={status_code}, url={event.get('url', '')[:120]}, "
@@ -1949,32 +1986,13 @@ class NetworkMonitor:
             )
             self._ensure_listening("monitor_start")
         
-        preserve_listener = False
         try:
             yield from self._stream_output_phase(completion_id)
-        except NetworkMonitorTerminalError as e:
-            preserve_listener = self._should_preserve_listener_after_terminal_error(e)
-            if preserve_listener:
-                logger.warning(
-                    "[NetworkMonitor] 目标流触发可恢复验证/限流状态，保留监听等待页面自动重发"
-                )
-            raise
         finally:
-            if preserve_listener:
-                self._is_listening = self._listen_is_active()
-                self._pre_started = self._is_listening
-                # 修复#3b：记录保留监听的截止时间；若上层不再重建/复用，
-                # 下次进入本实例（monitor/pre_start）时按过期清理，避免长期泄漏
-                self._preserve_deadline = (
-                    time.time() + self.PRESERVED_LISTENER_TTL
-                    if self._is_listening
-                    else 0.0
-                )
-            else:
-                # 立即停止：关闭 Network.enable + 释放额外 CDP session
-                self._cleanup()
-                self._pre_started = False
-                self._preserve_deadline = 0.0
+            # 退出时清理 listener、CDP session 和临时状态，避免监听泄漏
+            self._cleanup()
+            self._pre_started = False
+            self._preserve_deadline = 0.0
     
     def _stream_output_phase(self, completion_id: str) -> Generator[str, None, None]:
         """
@@ -2005,6 +2023,10 @@ class NetworkMonitor:
         active_stream_body_source = ""
         completed_by_done = False
         waiting_for_followup_stream = False
+        followup_stream_deadline = 0.0
+        recorded_recoverable_error = None
+        recorded_recoverable_status = 0
+        recorded_recoverable_url = ""
         completion_reason = "unknown"
 
         while True:
@@ -2040,6 +2062,8 @@ class NetworkMonitor:
             # 设置超时时间
             if active_stream_response is not None:
                 timeout = self.ACTIVE_STREAM_RESPONSE_POLL_TIMEOUT
+            elif waiting_for_followup_stream and followup_stream_deadline > 0:
+                timeout = min(self._response_interval, max(0.01, followup_stream_deadline - now))
             else:
                 timeout = (
                     min(
@@ -2397,11 +2421,22 @@ class NetworkMonitor:
                         interval_sec=10.0,
                     )
 
-                if silence_duration > effective_silence_threshold:
-                    if waiting_for_followup_stream:
+                if (
+                    silence_duration > effective_silence_threshold
+                    or (waiting_for_followup_stream and followup_stream_deadline > 0 and time.time() >= followup_stream_deadline)
+                ):
+                    if waiting_for_followup_stream or recorded_recoverable_status > 0:
+                        if recorded_recoverable_status in (403, 429, 503):
+                            logger.warning(
+                                "[NetworkMonitor] 可恢复重试窗口已耗尽（30s），抛出终态限流/验证错误 "
+                                f"(idle={silence_duration:.1f}s, status={recorded_recoverable_status})"
+                            )
+                            raise NetworkMonitorTerminalError(
+                                recorded_recoverable_error or f"HTTP {recorded_recoverable_status}"
+                            )
                         logger.warning(
-                            "[NetworkMonitor] 等待后续流超时，回退到 DOM 监听 "
-                            f"(idle={silence_duration:.1f}s, limit={effective_silence_threshold:.1f}s)"
+                            "[NetworkMonitor] 可恢复流等待重试超时，回退到 DOM 监听 "
+                            f"(idle={silence_duration:.1f}s, limit={effective_silence_threshold:.1f}s, status={recorded_recoverable_status})"
                         )
                         raise NetworkMonitorTimeout(
                             f"后续流未在宽限期内到达（{silence_duration:.1f}s）"
@@ -2539,58 +2574,82 @@ class NetworkMonitor:
                 logger.debug(f"[NetworkMonitor] 响应对象结构异常: {type(response).__name__}")
                 continue
 
-            # 读取响应体，流式协议优先使用 _stream.fullText
-            raw_body, raw_body_source = self._extract_raw_body(response)
-            raw_body = self._normalize_raw_body(raw_body)
-            self._raise_for_http_error_status(event, raw_body, raw_body_source)
+            try:
+                # 读取响应体，流式协议优先使用 _stream.fullText
+                raw_body, raw_body_source = self._extract_raw_body(response)
+                raw_body = self._normalize_raw_body(raw_body)
+                self._raise_for_http_error_status(event, raw_body, raw_body_source)
 
-            if getattr(response_obj, "_response", None) is None and not raw_body:
-                logger.warning(
-                    "[NetworkMonitor] 目标流响应缺少响应元数据和响应体，回退到 DOM 监听 "
-                    f"(status={event.get('status')}, url={event.get('url', '')[:120]})"
-                )
-                raise NetworkMonitorError("incomplete_target_response")
-            if self.parser.get_id() == "doubao" and raw_body_source == "body":
-                if self._looks_like_sse_payload(raw_body):
-                    logger.debug(
-                        "[NetworkMonitor][DoubaoDebug] body source contains raw SSE payload, "
-                        "continue parsing in network mode"
-                    )
-                else:
-                    logger.debug(
-                        "[NetworkMonitor][DoubaoDebug] body-only response summary: "
-                        f"{self._describe_json_container(raw_body)}"
-                    )
+                if getattr(response_obj, "_response", None) is None and not raw_body:
                     logger.warning(
-                        "[NetworkMonitor] 豆包网络响应仅返回 body 包装结果，回退到 DOM 监听"
+                        "[NetworkMonitor] 目标流响应缺少响应元数据和响应体，回退到 DOM 监听 "
+                        f"(status={event.get('status')}, url={event.get('url', '')[:120]})"
                     )
-                    raise NetworkMonitorError("doubao_body_only_response")
-            is_event_stream = self._is_event_stream_response(response)
-            should_probe_initial_target_body = (
-                stream_target_hits == 1 and self._total_chunks == 0
-            )
-
-            if not raw_body and (is_event_stream or should_probe_initial_target_body):
-                wait_budget = (
-                    self._initial_target_body_wait
-                    if should_probe_initial_target_body
-                    else None
+                    raise NetworkMonitorError("incomplete_target_response")
+                if self.parser.get_id() == "doubao" and raw_body_source == "body":
+                    if self._looks_like_sse_payload(raw_body):
+                        logger.debug(
+                            "[NetworkMonitor][DoubaoDebug] body source contains raw SSE payload, "
+                            "continue parsing in network mode"
+                        )
+                    else:
+                        logger.debug(
+                            "[NetworkMonitor][DoubaoDebug] body-only response summary: "
+                            f"{self._describe_json_container(raw_body)}"
+                        )
+                        logger.warning(
+                            "[NetworkMonitor] 豆包网络响应仅返回 body 包装结果，回退到 DOM 监听"
+                        )
+                        raise NetworkMonitorError("doubao_body_only_response")
+                is_event_stream = self._is_event_stream_response(response)
+                should_probe_initial_target_body = (
+                    (stream_target_hits == 1 or waiting_for_followup_stream or recorded_recoverable_status > 0)
+                    and self._total_chunks == 0
                 )
-                raw_body, raw_body_source = self._wait_for_stream_body(
-                    response,
+
+                if not raw_body and (is_event_stream or should_probe_initial_target_body):
+                    wait_budget = (
+                        self._initial_target_body_wait
+                        if should_probe_initial_target_body
+                        else None
+                    )
+                    raw_body, raw_body_source = self._wait_for_stream_body(
+                        response,
+                        raw_body,
+                        raw_body_source,
+                        wait_budget=wait_budget,
+                    )
+                    if raw_body and not is_event_stream and self._looks_like_sse_payload(raw_body):
+                        is_event_stream = True
+
+                self._raise_for_http_error_status(
+                    event,
                     raw_body,
                     raw_body_source,
-                    wait_budget=wait_budget,
+                    is_event_stream,
                 )
-                if raw_body and not is_event_stream and self._looks_like_sse_payload(raw_body):
-                    is_event_stream = True
-
-            self._raise_for_http_error_status(
-                event,
-                raw_body,
-                raw_body_source,
-                is_event_stream,
-            )
+            except NetworkMonitorRecoverableError as rec_err:
+                recorded_recoverable_error = rec_err.error_text
+                recorded_recoverable_status = rec_err.status_code
+                recorded_recoverable_url = str(rec_err.event.get("url", "") or "")
+                waiting_for_followup_stream = True
+                if followup_stream_deadline <= 0:
+                    followup_stream_deadline = min(
+                        time.time() + 30.0,
+                        phase_start + hard_timeout,
+                    )
+                active_stream_response = None
+                active_stream_event = {}
+                active_stream_body = ""
+                active_stream_body_source = ""
+                self._prepare_parser_for_followup_stream()
+                last_activity_time = time.time()
+                rem_sec = max(0.0, followup_stream_deadline - time.time())
+                logger.warning(
+                    f"[NetworkMonitor] 捕获可恢复流错误 (status={rec_err.status_code}, url={recorded_recoverable_url[:120]}), "
+                    f"保持监听等待重发 (剩余重试窗口={rem_sec:.1f}s)..."
+                )
+                continue
 
             if is_event_stream and response is not None:
                 active_stream_response = response
@@ -2632,10 +2691,13 @@ class NetworkMonitor:
                     f"(targets={stream_target_hits}, source={raw_body_source}, 长度={len(raw_body)} 字符)",
                     interval_sec=5.0,
                 )
-            if waiting_for_followup_stream:
+            if waiting_for_followup_stream or recorded_recoverable_status > 0:
                 waiting_for_followup_stream = False
+                followup_stream_deadline = 0.0
+                recorded_recoverable_error = None
+                recorded_recoverable_status = 0
                 logger.info(
-                    "[NetworkMonitor] 已捕获后续流正文 "
+                    "[NetworkMonitor] 已成功捕获后续流正文 "
                     f"(target={stream_target_hits}, body_len={len(raw_body)})"
                 )
 

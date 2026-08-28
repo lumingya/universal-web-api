@@ -320,6 +320,30 @@ class ConfigEngine:
                     continue
 
                 site_copy = copy.deepcopy(site)
+                from app.utils.site_url import route_domain_matches
+                if route_domain_matches("arena.ai", domain):
+                    try:
+                        from app.services.arena_model_catalog import load_arena_model_catalog_data
+                        cat_data = load_arena_model_catalog_data()
+                        d_key = str(domain).strip().lower().strip(".")
+                        domain_cat = cat_data.get(d_key, {})
+                    except Exception:
+                        domain_cat = None
+
+                    presets_dict = site_copy.get("presets")
+                    if isinstance(presets_dict, dict):
+                        for p_key, p_val in presets_dict.items():
+                            if isinstance(p_val, dict) and "model_catalog" in p_val:
+                                if domain_cat is not None and str(p_key).strip() in domain_cat:
+                                    p_val.pop("model_catalog", None)
+                    # 同步清理内存中的残留
+                    mem_presets = site.get("presets")
+                    if isinstance(mem_presets, dict):
+                        for p_key, p_val in mem_presets.items():
+                            if isinstance(p_val, dict) and "model_catalog" in p_val:
+                                if domain_cat is not None and str(p_key).strip() in domain_cat:
+                                    p_val.pop("model_catalog", None)
+
                 persisted_default = self._get_persisted_default_preset(domain, site_copy)
                 if persisted_default:
                     site_copy["default_preset"] = persisted_default
@@ -381,6 +405,11 @@ class ConfigEngine:
         self.migrate_site_configs()
         self._migrate_site_advanced_to_presets()
         self._cleanup_preset_residuals()
+        try:
+            from app.services.arena_model_catalog import migrate_and_cleanup_sites_model_catalog
+            migrate_and_cleanup_sites_model_catalog(self)
+        except Exception as exc:
+            logger.warning(f"Arena 模型目录自动迁移失败: {exc}")
 
     def _load_local_site_overrides(self) -> Dict[str, str]:
         with self._io_lock:

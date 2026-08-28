@@ -77,6 +77,10 @@ function saveStoredSitesCache(sites, currentDomain) {
             showStepTemplates: false,
             showTestDialog: false,
             showSelectorMenu: false,
+            showImportMenu: false,
+            showExportMenu: false,
+            forceSingleSiteImport: false,
+            singleSiteImportTargetDomain: '',
             darkMode: false,
             sidebarCollapsed: false,
             showMainCompareSummaryDialog: false,
@@ -371,6 +375,13 @@ function saveStoredSitesCache(sites, currentDomain) {
 
         this.initializeDashboard()
 
+        this._globalClickCloser = (e) => {
+            if (!e.target.closest('.uwa-dropdown')) {
+                this.closeAllMenus();
+            }
+        };
+        document.addEventListener('click', this._globalClickCloser);
+
         // 启动日志轮询（每 1 秒）
 
         // 加载系统设置
@@ -390,6 +401,9 @@ function saveStoredSitesCache(sites, currentDomain) {
         }
         this.stopSwitchStatusPolling()
         this.stopTokenStorageHandler()
+        if (this._globalClickCloser) {
+            document.removeEventListener('click', this._globalClickCloser);
+        }
     },
     }
 

@@ -76,9 +76,9 @@ def is_arena_direct_url(url: Any) -> bool:
         if hostname != "arena.ai" and not hostname.endswith(".arena.ai"):
             return False
         path = (parsed.path or "").rstrip("/").lower()
-        if path in {"/text/direct", "/direct", "/image/direct", "/code/direct"}:
+        if path in {"/text/direct", "/direct", "/image/direct", "/code/direct", "/search/direct"}:
             return True
-        if path.startswith(("/text/direct/", "/direct/", "/image/direct/", "/code/direct/")):
+        if path.startswith(("/text/direct/", "/direct/", "/image/direct/", "/code/direct/", "/search/direct/")):
             return True
         if path == "/c" or path.startswith("/c/"):
             return True
@@ -126,6 +126,14 @@ def is_arena_direct_preset(
         if isinstance(catalog, dict) and str(catalog.get("source", "")).strip().lower() == "arena_direct":
             return True
 
+    try:
+        from app.services.arena_model_catalog import get_arena_model_catalog
+        catalog = get_arena_model_catalog(domain or "arena.ai", preset_name)
+        if isinstance(catalog, dict) and str(catalog.get("source", "")).strip().lower() == "arena_direct" and catalog.get("enabled"):
+            return True
+    except Exception:
+        pass
+
     if "direct" in name_lower or "直连" in name_lower:
         return True
 
@@ -147,6 +155,41 @@ def workflow_has_new_chat_step(workflow: Optional[List[Dict[str, Any]]]) -> bool
         if target in {"new_chat_btn", "new_chat", "new_conversation"} or "new_chat" in target:
             return True
     return False
+
+
+def resolve_arena_direct_entry_url(
+    initial_url: Optional[str] = None,
+    *,
+    modality: Any = "",
+    fallback_url: str = ARENA_DIRECT_DEFAULT_ENTRY_URL,
+) -> str:
+    """Resolve a Direct entry URL from preset modality, then page URL context."""
+    normalized_modality = str(modality or "").strip().lower()
+    modality_urls = {
+        "image": "https://arena.ai/image/direct",
+        "code": "https://arena.ai/code/direct",
+        "web": "https://arena.ai/code/direct",
+        "webdev": "https://arena.ai/code/direct",
+        "search": "https://arena.ai/search/direct",
+        "text": "https://arena.ai/text/direct",
+        "chat": "https://arena.ai/text/direct",
+    }
+    if normalized_modality in modality_urls:
+        return modality_urls[normalized_modality]
+
+    try:
+        path = (urlparse(str(initial_url or "").strip()).path or "").rstrip("/").lower()
+    except Exception:
+        path = ""
+    for prefix, entry_url in (
+        ("/image/direct", "https://arena.ai/image/direct"),
+        ("/code/direct", "https://arena.ai/code/direct"),
+        ("/search/direct", "https://arena.ai/search/direct"),
+        ("/text/direct", "https://arena.ai/text/direct"),
+    ):
+        if path == prefix or path.startswith(f"{prefix}/"):
+            return entry_url
+    return str(fallback_url or ARENA_DIRECT_DEFAULT_ENTRY_URL).strip() or ARENA_DIRECT_DEFAULT_ENTRY_URL
 
 
 def resolve_arena_direct_recovery_url(

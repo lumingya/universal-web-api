@@ -199,6 +199,24 @@ class TestWorkflowScriptLoader(unittest.TestCase):
         self.assertTrue(script_code.startswith("return (async function(__CONTEXT__, __ARGS__) {"))
         self.assertIn('({"model": "gemini-1.5-pro"}, {"target_endpoint": "/api/chat", "override_model": "gemini-1.5-pro"})', script_code)
 
+    def test_external_script_gets_lifecycle_scope(self):
+        script_code = self.loader.resolve_and_load(
+            script_target="custom_scripts/examples/arena_payload_interceptor.js",
+            code_or_args={},
+            context={"model": "test-model"},
+            owner_id="owner-a",
+        )
+        self.assertIn("__UWA_SCRIPT_LIFECYCLE__", script_code)
+        self.assertIn('"custom_scripts/examples/arena_payload_interceptor.js"', script_code)
+        self.assertIn('"owner-a"', script_code)
+
+    def test_legacy_inline_script_remains_unwrapped_by_default(self):
+        script_code = self.loader.resolve_and_load(
+            code_or_args="return document.title;",
+            context={},
+        )
+        self.assertEqual(script_code, "return document.title;")
+
     def test_extract_script_description_enhanced(self):
         """测试提取单行注释时的有效注释寻找逻辑（过滤 eslint/注释头）"""
         # @description
@@ -261,4 +279,3 @@ class TestWorkflowScriptLoader(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

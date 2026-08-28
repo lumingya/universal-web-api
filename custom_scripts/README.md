@@ -61,6 +61,24 @@
 })();
 ```
 
+### 工作流脚本生命周期
+
+外部脚本默认使用 `workflow` 生命周期：主执行器开始新的预设时，会清理上一个预设的受管脚本；当前预设结束、取消或报错时，也会执行清理。每个脚本还会获得 `__uwaSignal`（作用域专属 `AbortSignal`），可用于绑定支持 signal 的事件监听器或请求。脚本需要把全局 Hook、事件监听器、定时器等副作用注册到 `__uwaRegisterCleanup`，清理函数应幂等且只恢复本脚本仍持有的对象：
+
+```javascript
+const originalFetch = window.fetch;
+const wrappedFetch = function () { return originalFetch.apply(this, arguments); };
+window.fetch = wrappedFetch;
+
+if (typeof __uwaRegisterCleanup === 'function') {
+    __uwaRegisterCleanup(() => {
+        if (window.fetch === wrappedFetch) window.fetch = originalFetch;
+    });
+}
+```
+
+步骤的 `execution.lifecycle` 可选值为：`workflow`（默认，随预设清理）、`step`（步骤结束立即清理）和 `resident`（常驻页面，直到显式清理或页面刷新）。移除 `<script>` 标签本身不能撤销已执行的全局修改，因此不应把它当作卸载机制。
+
 ---
 
 ## 4. 示例脚本目录

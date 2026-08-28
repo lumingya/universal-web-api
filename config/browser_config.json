@@ -169,7 +169,10 @@
       "https://arena.ai/c/01a03277-4413-706b-9894-a16e8f691faf",
       "https://arena.ai/c/01a032f3-288f-7a21-b54d-2b7f6c773450",
       "https://arena.ai/c/01a036e1-7d69-7902-b460-38b1dfe45bcd",
-      "https://arena.ai/c/01a03cef-138f-76ce-82c9-66cd4d96812d"
+      "https://arena.ai/c/01a03cef-138f-76ce-82c9-66cd4d96812d",
+      "https://arena.ai/c/01a04621-d289-700a-a24d-f33be103013f",
+      "https://arena.ai/c/01a04622-83e2-7984-b1f5-947d41bc2808",
+      "https://arena.ai/c/01a0462b-9414-7561-bca8-58fc55236a59"
     ],
     "preserve_error_tabs": true,
     "route_groups": [
@@ -380,6 +383,21 @@
             "url": "https://arena.ai/c/01a03cef-138f-76ce-82c9-66cd4d96812d",
             "url_token": "f6213aca2cdd",
             "tab_index": 2
+          },
+          {
+            "url": "https://arena.ai/c/01a04621-d289-700a-a24d-f33be103013f",
+            "url_token": "a534a8cbf074",
+            "tab_index": 1
+          },
+          {
+            "url": "https://arena.ai/c/01a04622-83e2-7984-b1f5-947d41bc2808",
+            "url_token": "b8f179204bc9",
+            "tab_index": 2
+          },
+          {
+            "url": "https://arena.ai/c/01a0462b-9414-7561-bca8-58fc55236a59",
+            "url_token": "b85a497ec2a0",
+            "tab_index": 1
           }
         ]
       }

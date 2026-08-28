@@ -212,6 +212,12 @@ class WorkflowExecutorActionMixin:
 
                     const rect = el.getBoundingClientRect();
                     if (!rect || !Number.isFinite(rect.left) || rect.width <= 0 || rect.height <= 0) {
+                        try {
+                            if (typeof el.click === 'function') {
+                                el.click();
+                                return { ok: true, reason: 'clicked_fallback_empty_rect' };
+                            }
+                        } catch (e) {}
                         return { ok: false, reason: 'empty_rect' };
                     }
 
@@ -1625,12 +1631,13 @@ class WorkflowExecutorActionMixin:
                     if not acquired or self._check_cancelled():
                         return False
 
-                    ele = self.finder.find_with_fallback(selector, target_key)
+                    effective_selector = selector
+                    ele = self.finder.find_with_fallback(effective_selector, target_key)
                     if not ele:
                         break
                     found_element = True
 
-                    ele = self._wait_for_element_interactable(ele, selector, target_key)
+                    ele = self._wait_for_element_interactable(ele, effective_selector, target_key)
 
                     if target_key in {"new_chat_btn", "new_chat", "new_conversation"}:
                         pre_click_url = self._get_current_url_snapshot("click_new_chat_before")

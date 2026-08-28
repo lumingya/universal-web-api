@@ -78,7 +78,6 @@ from app.services.arena_direct_models import (
     list_arena_direct_models,
     match_arena_direct_model,
     normalize_model_catalog_config,
-    resolve_model_catalog_preset_for_model,
 )
 from app.services.arena_image_generation import (
     ARENA_NON_RETRYABLE_CODES,
@@ -134,6 +133,52 @@ def _select_arena_catalog_tab(
     if allocation_mode == "random":
         return random.choice(pool)
     return min(pool, key=lambda item: int(item.get("persistent_index") or 0))
+
+
+def _match_arena_catalog_tab(
+    browser: Any,
+    config_engine: Any,
+    tabs: List[Dict[str, Any]],
+    requested_model: Any,
+) -> Optional[Dict[str, Any]]:
+    """Match a model only against each tab's currently assigned preset."""
+    is_url_excluded = getattr(getattr(browser, "tab_pool", None), "is_url_excluded", None)
+    matches: List[Dict[str, Any]] = []
+    for tab in tabs or []:
+        tab_url = str(tab.get("current_url") or tab.get("url") or "").strip()
+        if callable(is_url_excluded) and is_url_excluded(tab_url):
+            continue
+        catalog_info = get_arena_direct_catalog_for_tab(config_engine, tab)
+        catalog = catalog_info.get("catalog") if catalog_info else None
+        if not isinstance(catalog, dict) or not catalog.get("enabled"):
+            continue
+        try:
+            models = list_arena_direct_models(browser, catalog_config=catalog, tab=tab)
+        except TypeError:
+            models = list_arena_direct_models(browser, catalog_config=catalog)
+        model = match_arena_direct_model(models, requested_model)
+        if model:
+            matches.append({
+                "tab": tab,
+                "model": model,
+                "preset_name": str(catalog_info.get("preset_name") or ""),
+            })
+
+    selected_tab = _select_arena_catalog_tab(
+        browser,
+        [entry["tab"] for entry in matches],
+    )
+    if selected_tab is None:
+        return None
+    selected_index = int(selected_tab.get("persistent_index") or 0)
+    return next(
+        (
+            entry
+            for entry in matches
+            if int(entry["tab"].get("persistent_index") or 0) == selected_index
+        ),
+        None,
+    )
 
 _responses_state_lock = threading.RLock()
 # 修复(4)：会话历史改存 json.dumps 序列化字符串（不可变），
@@ -2172,50 +2217,21 @@ async def chat_completions(
         if route_info.get("match_type") == "none":
             from app.services.config_engine import config_engine
 
-            # 阶段 2：使用 resolve_model_catalog_preset_for_model 自动匹配生图/文本专属预设与模型
-            matched_preset_info = await asyncio.to_thread(
-                resolve_model_catalog_preset_for_model,
+            # 阶段 2：只在标签页当前绑定的预设内匹配，不跨预设自动切换。
+            matched_tab_info = await asyncio.to_thread(
+                _match_arena_catalog_tab,
+                browser,
                 config_engine,
-                "arena.ai",
-                None,
+                tabs,
                 body.model,
-            )
-            if not matched_preset_info and browser:
-                for t in tabs:
-                    cat_info = get_arena_direct_catalog_for_tab(config_engine, t, preset_name=body.preset_name)
-                    if cat_info and isinstance(cat_info.get("catalog"), dict):
-                        cat = cat_info["catalog"]
-                        if cat.get("enabled"):
-                            cat_models = list_arena_direct_models(browser, catalog_config=cat)
-                            m = match_arena_direct_model(cat_models, body.model)
-                            if m:
-                                matched_preset_info = {
-                                    "preset_name": cat_info.get("preset_name") or "主预设-直连模式",
-                                    "preset": cat_info.get("preset") or {},
-                                    "catalog": cat,
-                                    "matched_model": m,
-                                }
-                                break
-            if matched_preset_info:
-                catalog_match = matched_preset_info.get("matched_model")
-                matched_preset_name = str(matched_preset_info.get("preset_name") or "")
+            ) if browser else None
+            if matched_tab_info:
+                catalog_match = matched_tab_info["model"]
+                matched_preset_name = matched_tab_info["preset_name"]
                 is_url_excluded = getattr(browser.tab_pool, "is_url_excluded", None)
-                catalog_candidates = []
-                for t in tabs:
-                    tab_url = str(t.get("current_url") or t.get("url") or "").strip()
-                    if callable(is_url_excluded) and is_url_excluded(tab_url):
-                        continue
-                    if (
-                        str(t.get("route_domain") or "").casefold() in {"arena.ai", "arena", "www.arena.ai"}
-                        or "arena.ai" in tab_url
-                    ):
-                        if not get_arena_direct_catalog_for_tab(
-                            config_engine,
-                            t,
-                            preset_name=matched_preset_name or body.preset_name,
-                        ):
-                            continue
-                        catalog_candidates.append(t)
+                matched_tab = matched_tab_info["tab"]
+                tab_url = str(matched_tab.get("current_url") or matched_tab.get("url") or "").strip()
+                catalog_candidates = [] if callable(is_url_excluded) and is_url_excluded(tab_url) else [matched_tab]
                 catalog_tab = _select_arena_catalog_tab(
                     browser,
                     catalog_candidates,
@@ -2245,7 +2261,7 @@ async def chat_completions(
                     })
             else:
                 logger.debug(
-                    f"[ARENA_CATALOG:NOMATCH] 未在 Arena Catalog 中匹配到模型: requested_model={body.model!r}"
+                    f"[ARENA_CATALOG:NOMATCH] 当前标签页预设不包含请求模型: requested_model={body.model!r}"
                 )
 
         # 阶段 3：若 Arena Catalog 仍未命中，检查通用模型 ID（Generic）与标签页前缀模糊匹配（Prefix）兜底
@@ -3203,35 +3219,32 @@ def _collect_model_entries() -> List[Dict[str, Any]]:
             candidate = get_arena_direct_catalog_for_tab(config_engine, tab)
             if candidate and candidate.get("catalog", {}).get("enabled"):
                 cat = candidate["catalog"]
+            else:
+                cat = None
+                if route_domain_matches("arena.ai", tab.get("route_domain") or tab.get("current_domain") or ""):
+                    effective_preset_name = str(tab.get("preset_name") or config_engine.get_default_preset("arena.ai") or "").strip()
+                    try:
+                        preset = config_engine._get_site_data_readonly("arena.ai", effective_preset_name or None)
+                        if isinstance(preset, dict):
+                            cat_candidate = normalize_model_catalog_config(preset.get("model_catalog"))
+                            if cat_candidate.get("enabled") and cat_candidate.get("source") == "arena_direct":
+                                cat = cat_candidate
+                    except Exception:
+                        pass
+            if cat and cat.get("enabled"):
                 cat_key = (
+                    cat.get("source", ""),
                     cat.get("modality", ""),
                     tuple(cat.get("include_keywords", [])),
                     tuple(cat.get("exclude_keywords", [])),
+                    bool(cat.get("enable_dark_pool", False)),
+                    str(cat.get("dark_pool_since") or "").strip(),
+                    tuple(cat.get("dark_pool_whitelist_keywords", [])),
+                    tuple(cat.get("dark_pool_blacklist_keywords", [])),
                 )
                 if cat_key not in seen_catalog_keys:
                     seen_catalog_keys.add(cat_key)
                     catalog_presets.append(cat)
-
-        if not catalog_presets:
-            site = config_engine.sites.get("arena.ai")
-            if isinstance(site, dict) and isinstance(site.get("presets"), dict):
-                has_arena_tab = any(
-                    route_domain_matches("arena.ai", tab.get("route_domain") or tab.get("current_domain"))
-                    for tab in tabs
-                )
-                if has_arena_tab:
-                    for preset in site["presets"].values():
-                        if isinstance(preset, dict):
-                            cat = normalize_model_catalog_config(preset.get("model_catalog"))
-                            if cat.get("enabled") and cat.get("source") == "arena_direct":
-                                cat_key = (
-                                    cat.get("modality", ""),
-                                    tuple(cat.get("include_keywords", [])),
-                                    tuple(cat.get("exclude_keywords", [])),
-                                )
-                                if cat_key not in seen_catalog_keys:
-                                    seen_catalog_keys.add(cat_key)
-                                    catalog_presets.append(cat)
 
         for item in collect_route_domain_models(tabs):
             item_route_domains = list(item.get("route_domains") or [])

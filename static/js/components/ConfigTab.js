@@ -986,10 +986,9 @@ window.ConfigTab = {
         },
 
         updateModelCatalog(value) {
-            const pc = this.presetConfig;
-            if (!pc) return;
-            pc.model_catalog = this.cloneConfigSection(value || {});
+            // 模型目录已独立持久化存储至 config/arena_model_catalog.local.json，不再污染主预设对象
         },
+
 
         sanitizeInputStabilityWaitTimeout(value) {
             const parsed = Number(value);

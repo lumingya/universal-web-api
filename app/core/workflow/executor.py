@@ -9,8 +9,10 @@ app/core/workflow/executor.py - 工作流执行器
 """
 
 import copy
+import json
 import time
 import random
+import uuid
 from typing import Generator, Dict, Any, Callable, Optional
 
 from app.core.config import (
@@ -108,6 +110,10 @@ class WorkflowExecutor(
         self._workflow_visibility_emulation_active = False
         self._current_result_prompt = ""
         self._current_step_execution: Dict[str, Any] = {}
+        # Stable owner token lets a late cleanup from an older executor avoid
+        # touching scripts installed by a newer workflow on the same tab.
+        self._script_lifecycle_owner = f"workflow:{uuid.uuid4().hex}"
+        self._script_lifecycle_started = False
         self._result_event_handler = self._create_result_event_handler()
 
         # 检查是否启用网络监听模式
@@ -399,6 +405,7 @@ class WorkflowExecutor(
 
     def cleanup_after_workflow(self) -> None:
         """Release page-side helpers installed for this executor."""
+        self._cleanup_workflow_scripts()
         try:
             if self._attachment_monitor is not None:
                 self._attachment_monitor.destroy()
@@ -417,6 +424,57 @@ class WorkflowExecutor(
         self._last_stream_media_state = {}
         self._last_stream_media_items = []
         self._pending_interrupted_image_dom_resume = None
+
+    def _begin_workflow_scripts(self) -> None:
+        """Dispose non-resident scripts owned by an older workflow on this tab."""
+        if self._script_lifecycle_started:
+            return
+        self._script_lifecycle_started = True
+        source = (
+            "(function(){try{var l=window.__UWA_SCRIPT_LIFECYCLE__;"
+            "if(l&&typeof l.beginWorkflow==='function') l.beginWorkflow("
+            f"{json.dumps(self._script_lifecycle_owner)}"
+            ");"
+            "var p=window.__ARENA_PAYLOAD_INTERCEPTOR_DISPOSE__;"
+            "var policy=window.__ARENA_PAYLOAD_INTERCEPTOR_POLICY__;"
+            "if(typeof p==='function' && policy!=='resident') p();"
+            "return true;}catch(e){return false;}})();"
+        )
+        try:
+            self.tab.run_js(source)
+        except Exception as e:
+            logger.debug(f"[JS_LIFECYCLE] 旧工作流脚本清理失败（忽略）: {e}")
+
+    def _cleanup_workflow_scripts(self) -> None:
+        """Dispose all scripts owned by this executor, preserving resident scripts."""
+        owner = getattr(self, "_script_lifecycle_owner", "")
+        if not owner:
+            return
+        source = (
+            "(function(){try{var l=window.__UWA_SCRIPT_LIFECYCLE__;"
+            "if(l&&typeof l.cleanupOwner==='function') l.cleanupOwner("
+            f"{json.dumps(owner)}"
+            "); return true;}catch(e){return false;}})();"
+        )
+        try:
+            self.tab.run_js(source)
+        except Exception as e:
+            logger.debug(f"[JS_LIFECYCLE] 工作流脚本清理失败（忽略）: {e}")
+
+    def _cleanup_script_id(self, script_id: str) -> None:
+        """Dispose one non-resident script activation after a step completes."""
+        if not script_id:
+            return
+        source = (
+            "(function(){try{var l=window.__UWA_SCRIPT_LIFECYCLE__;"
+            "if(l&&typeof l.cleanup==='function') l.cleanup("
+            f"{json.dumps(script_id)}"
+            "); return true;}catch(e){return false;}})();"
+        )
+        try:
+            self.tab.run_js(source)
+        except Exception as e:
+            logger.debug(f"[JS_LIFECYCLE] 单步脚本清理失败（忽略）: {e}")
 
     @staticmethod
     def _coerce_bool(value: Any, default: bool = False) -> bool:
@@ -1279,11 +1337,28 @@ class WorkflowExecutor(
             f"effective_context={ctx_summary}"
         )
 
+        self._begin_workflow_scripts()
+
+        execution = execution if isinstance(execution, dict) else {}
+        lifecycle = str(
+            execution.get("lifecycle")
+            or execution.get("script_lifecycle")
+            or "workflow"
+        ).strip().lower()
+        if lifecycle not in {"workflow", "resident", "step"}:
+            lifecycle = "workflow"
+        script_id = str(execution.get("script_id") or target or "").strip()
+        if not script_id and lifecycle != "workflow":
+            script_id = f"inline:{uuid.uuid4().hex}"
+
         try:
             executable_script = script_loader.resolve_and_load(
                 script_target=target,
                 code_or_args=code,
                 context=effective_context,
+                script_id=script_id,
+                lifecycle=lifecycle,
+                owner_id=self._script_lifecycle_owner,
             )
         except WorkflowError as e:
             if optional:
@@ -1322,6 +1397,9 @@ class WorkflowExecutor(
                     logger.warning(f"[JS_EXEC] 可选脚本执行失败（已跳过）: target={target!r}, error={e}")
                     return None
                 raise WorkflowError(f"js_exec_failed: {e}")
+            finally:
+                if lifecycle == "step":
+                    self._cleanup_script_id(script_id)
 
         return result
 

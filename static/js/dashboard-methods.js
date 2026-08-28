@@ -471,14 +471,28 @@
             this.notify('已切换到' + (this.darkMode ? '夜间' : '日间') + '模式', 'success')
         },
 
-        // ========== 选择器菜单 ==========
+        // ========== 菜单控制 ==========
 
         toggleSelectorMenu() {
             this.showSelectorMenu = !this.showSelectorMenu
         },
 
+        toggleImportMenu(e) {
+            if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
+            this.showImportMenu = !this.showImportMenu;
+            this.showExportMenu = false;
+        },
+
+        toggleExportMenu(e) {
+            if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
+            this.showExportMenu = !this.showExportMenu;
+            this.showImportMenu = false;
+        },
+
         closeAllMenus() {
-            this.showSelectorMenu = false
+            this.showSelectorMenu = false;
+            this.showImportMenu = false;
+            this.showExportMenu = false;
         },
 
         // ========== API 调用 ==========
@@ -1103,7 +1117,19 @@
         // ========== 导入功能（支持全量和单站点） ==========
 
         triggerImport() {
-            this.$refs.importFileInput.click();
+            this.forceSingleSiteImport = false;
+            this.singleSiteImportTargetDomain = '';
+            if (this.$refs.importFileInput) {
+                this.$refs.importFileInput.click();
+            }
+        },
+
+        triggerImportSingleSite() {
+            this.forceSingleSiteImport = true;
+            this.singleSiteImportTargetDomain = this.currentDomain || '';
+            if (this.$refs.importFileInput) {
+                this.$refs.importFileInput.click();
+            }
         },
 
         handleImportFile(event) {
@@ -1118,7 +1144,7 @@
                     const config = JSON.parse(e.target.result);
 
                     // 检测是单站点还是全量配置
-                    const detectResult = this.detectConfigType(config);
+                    const detectResult = this.detectConfigType(config, this.forceSingleSiteImport);
 
                     if (!detectResult.valid) {
                         this.notify('导入文件格式无效', 'error');
@@ -1127,10 +1153,14 @@
 
                     this.importType = detectResult.type;
                     this.importedConfig = detectResult.normalizedConfig;
-                    this.singleSiteImportDomain = detectResult.suggestedDomain || '';
+                    this.singleSiteImportDomain = detectResult.suggestedDomain || this.singleSiteImportTargetDomain || this.currentDomain || '';
+                    this.singleSiteImportTargetDomain = '';
+                    this.forceSingleSiteImport = false;
                     this.showImportDialog = true;
                 } catch (error) {
                     this.notify('JSON 解析失败: ' + error.message, 'error');
+                    this.singleSiteImportTargetDomain = '';
+                    this.forceSingleSiteImport = false;
                 }
             };
             reader.readAsText(file);
@@ -1139,9 +1169,16 @@
         },
 
         // 检测配置类型：全量配置 or 单站点配置
-        detectConfigType(config) {
+        detectConfigType(config, forceSingle = false) {
             if (typeof config !== 'object' || config === null || Array.isArray(config)) {
                 return { valid: false };
+            }
+
+            // 尝试从文件名提取域名
+            let suggestedDomain = '';
+            const match = this.importFileName.match(/^(.+?)(?:-config)?(?:-\d+)?\.json$/i);
+            if (match) {
+                suggestedDomain = match[1];
             }
 
             // 检查是否是单站点格式（旧格式 selectors/workflow，或新格式 presets/default_preset）
@@ -1155,24 +1192,38 @@
                     return { valid: false };
                 }
 
-                // 尝试从文件名提取域名
-                let suggestedDomain = '';
-                const match = this.importFileName.match(/^(.+?)(?:-config)?(?:-\d+)?\.json$/i);
-                if (match) {
-                    suggestedDomain = match[1];
-                }
-
                 return {
                     valid: true,
                     type: 'single',
                     normalizedConfig: config,
-                    suggestedDomain: suggestedDomain
+                    suggestedDomain: suggestedDomain || this.singleSiteImportTargetDomain || ''
+                };
+            }
+
+            const keys = Object.keys(config);
+            // 若显式按单站点导入且文件只包含 1 个站点对象
+            if (forceSingle && keys.length === 1 && this.validateSingleSiteConfig(config[keys[0]])) {
+                return {
+                    valid: true,
+                    type: 'single',
+                    normalizedConfig: config[keys[0]],
+                    suggestedDomain: keys[0] || suggestedDomain || this.singleSiteImportTargetDomain || ''
                 };
             }
 
             // 检查是否是全量格式（域名 -> 配置）
             if (!this.validateImportedConfig(config)) {
                 return { valid: false };
+            }
+
+            // 如果文件只包含 1 个站点且强制单站点导入
+            if (forceSingle && keys.length === 1) {
+                return {
+                    valid: true,
+                    type: 'single',
+                    normalizedConfig: config[keys[0]],
+                    suggestedDomain: keys[0] || suggestedDomain || this.singleSiteImportTargetDomain || ''
+                };
             }
 
             return {
@@ -1363,6 +1414,7 @@
         // ========== 导出功能（支持全量和单站点） ==========
 
         exportConfig() {
+            this.flushConfigTabDrafts()
             const dataStr = JSON.stringify(this.sites, null, 2)
             const blob = new Blob([dataStr], { type: 'application/json' })
             const url = URL.createObjectURL(blob)
@@ -1377,6 +1429,7 @@
 
         // 导出单个站点
         exportSingleSite(domain) {
+            this.flushConfigTabDrafts()
             if (!domain || !this.sites[domain]) {
                 this.notify('站点不存在', 'error');
                 return;

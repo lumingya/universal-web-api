@@ -388,15 +388,19 @@ def test_preset_config_normalizes_catalog_keyword_text():
                 "include_keywords": "glm, claude\nglm",
                 "exclude_keywords": "image\npreview",
             },
-        }
+        },
+        domain="arena.ai",
     )
 
-    assert normalized["model_catalog"] == {
+    assert "model_catalog" not in normalized
+    cat = normalize_model_catalog_config({
         "enabled": True,
         "source": "arena_direct",
-        "include_keywords": ["glm", "claude"],
-        "exclude_keywords": ["image", "preview"],
-    }
+        "include_keywords": "glm, claude\nglm",
+        "exclude_keywords": "image\npreview",
+    })
+    assert cat["include_keywords"] == ["glm", "claude"]
+    assert cat["exclude_keywords"] == ["image", "preview"]
 
 
 def test_global_model_list_merges_arena_direct_models(monkeypatch):
@@ -903,14 +907,17 @@ def test_select_model_switches_battle_to_direct_before_selecting(resolved_model)
 
 
 def test_arena_main_direct_workflow_selects_model_before_filling_prompt():
+    from app.services.arena_model_catalog import get_arena_model_catalog
     sites_path = Path(__file__).parents[1] / "config" / "sites.json"
     sites = json.loads(sites_path.read_text(encoding="utf-8"))
     preset = sites["arena.ai"]["presets"]["主预设-直连模式"]
     actions = [step["action"] for step in preset["workflow"]]
 
     assert preset["selectors"]["model_select_btn"] == MODEL_TRIGGER_SELECTOR
-    assert preset["model_catalog"]["enabled"] is True
-    assert preset["model_catalog"]["source"] == "arena_direct"
+    cat = get_arena_model_catalog("arena.ai", "主预设-直连模式")
+    assert cat["enabled"] is True
+    assert cat["source"] == "arena_direct"
+    assert "model_catalog" not in preset
     assert 'href="/code"' in preset["selectors"]["new_chat_btn"]
     assert actions.index("SELECT_MODEL") < actions.index("FILL_INPUT")
 
@@ -978,23 +985,19 @@ def test_arena_universal_direct_text_preset_workflow():
     if "万能直连-通用文本" not in presets:
         return
     preset = presets["万能直连-通用文本"]
-
     selectors = preset["selectors"]
     assert selectors.get("new_chat_btn") is not None
-    assert selectors.get("retry button") is not None
-    assert selectors.get("stop_btn") is not None
+    assert selectors.get("input_box") is not None
+    assert selectors.get("send_btn") is not None
 
     workflow = preset["workflow"]
-    assert len(workflow) == 9
+    assert len(workflow) == 6
     assert workflow[0]["action"] == "CLICK" and workflow[0]["target"] == "new_chat_btn"
-    assert workflow[1]["action"] == "WAIT" and workflow[1]["value"] == 0.5
+    assert workflow[1]["action"] == "WAIT"
     assert workflow[2]["action"] == "JS_EXEC" and "arena_payload_interceptor.js" in workflow[2]["target"]
-    assert workflow[3]["action"] == "CLICK" and workflow[3]["target"] == "stop_btn" and workflow[3]["optional"] is True
-    assert workflow[4]["action"] == "CLICK" and workflow[4]["target"] == "retry button" and workflow[4]["optional"] is True
-    assert workflow[5]["action"] == "CLICK" and workflow[5]["target"] == "input_box"
-    assert workflow[6]["action"] == "FILL_INPUT" and workflow[6]["target"] == "input_box"
-    assert workflow[7]["action"] == "CLICK" and workflow[7]["target"] == "send_btn"
-    assert workflow[8]["action"] == "STREAM_WAIT" and workflow[8]["target"] == "result_container"
+    assert workflow[3]["action"] == "FILL_INPUT" and workflow[3]["target"] == "input_box"
+    assert workflow[4]["action"] == "CLICK" and workflow[4]["target"] == "send_btn"
+    assert workflow[5]["action"] == "STREAM_WAIT" and workflow[5]["target"] == "result_container"
 
 
 def test_filter_models_respects_explicit_modality_over_keyword():
@@ -1013,6 +1016,20 @@ def test_filter_models_respects_explicit_modality_over_keyword():
             "display_name": "recraft-v4.1-pro",
             "modality": "image",
         },
+        {
+            "arena_model_id": "code-model-1",
+            "name": "paloma",
+            "public_name": "paloma",
+            "display_name": "paloma",
+            "modality": "code",
+        },
+        {
+            "arena_model_id": "search-model-1",
+            "name": "o3-search",
+            "public_name": "o3-search",
+            "display_name": "o3-search",
+            "modality": "search",
+        },
     ]
 
     text_filtered = arena_direct_models._filter_models(models, {"enabled": True, "modality": "text"})
@@ -1021,26 +1038,69 @@ def test_filter_models_respects_explicit_modality_over_keyword():
     image_filtered = arena_direct_models._filter_models(models, {"enabled": True, "modality": "image"})
     assert [m["name"] for m in image_filtered] == ["recraft-v4.1-pro"]
 
+    code_filtered = arena_direct_models._filter_models(models, {"enabled": True, "modality": "code"})
+    assert [m["name"] for m in code_filtered] == ["paloma"]
 
-def test_collect_model_entries_collects_both_image_and_text_models(monkeypatch):
+    search_filtered = arena_direct_models._filter_models(models, {"enabled": True, "modality": "search"})
+    assert [m["name"] for m in search_filtered] == ["o3-search"]
+
+
+def test_arena_catalog_tab_does_not_cross_route_code_model_to_text_preset(monkeypatch):
+    class _TabPool:
+        allocation_mode = "first_idle"
+
+        @staticmethod
+        def is_url_excluded(_url):
+            return False
+
+    browser = SimpleNamespace(tab_pool=_TabPool())
+    tabs = [{
+        "persistent_index": 1,
+        "status": "idle",
+        "url": "https://arena.ai/text/direct",
+        "preset_name": "主预设-直连模式",
+    }]
+    paloma = {
+        "arena_model_id": "01a031e9-1cad-76d4-917d-8b9895f77c3c",
+        "name": "paloma",
+        "public_name": "paloma",
+        "display_name": "paloma",
+        "modality": "code",
+    }
+
+    monkeypatch.setattr(
+        chat_api,
+        "get_arena_direct_catalog_for_tab",
+        lambda _config_engine, _tab: {
+            "preset_name": "主预设-直连模式",
+            "catalog": {"enabled": True, "source": "arena_direct", "modality": "text"},
+        },
+    )
+    monkeypatch.setattr(
+        chat_api,
+        "list_arena_direct_models",
+        lambda _browser, catalog_config=None: [paloma]
+        if (catalog_config or {}).get("modality") == "code"
+        else [],
+    )
+
+    assert chat_api._match_arena_catalog_tab(browser, object(), tabs, "paloma") is None
+
+
+def test_collect_model_entries_respects_tab_preset_isolation(monkeypatch):
     from app.api.chat import _collect_model_entries
 
     class _MockPool:
+        def __init__(self, tabs):
+            self._tabs = tabs
+
         def get_tabs_with_index(self):
-            return [
-                {
-                    "route_domain": "arena.ai",
-                    "current_url": "https://arena.ai/image/direct",
-                    "persistent_index": 1,
-                    "status": "idle",
-                }
-            ]
+            return self._tabs
 
     class _MockBrowser:
-        def __init__(self):
-            self.tab_pool = _MockPool()
+        def __init__(self, tabs):
+            self.tab_pool = _MockPool(tabs)
 
-    monkeypatch.setattr("app.api.chat.get_browser", lambda **_: _MockBrowser())
     monkeypatch.setattr(
         "app.api.chat.list_arena_direct_models",
         lambda browser, catalog_config=None: [
@@ -1066,8 +1126,56 @@ def test_collect_model_entries_collects_both_image_and_text_models(monkeypatch):
         ],
     )
 
+    # 1. 只有通用生图预设标签页时，只暴露生图模型，不融入文本模型
+    monkeypatch.setattr("app.api.chat.get_browser", lambda **_: _MockBrowser([
+        {
+            "route_domain": "arena.ai",
+            "url": "https://arena.ai/image/direct",
+            "preset_name": "万能直连-通用生图",
+            "persistent_index": 1,
+            "status": "idle",
+        }
+    ]))
     entries = _collect_model_entries()
     model_ids = [e["id"] for e in entries]
+    assert "mona-lisa-1" in model_ids
+    assert "claude-sonnet-4-6" not in model_ids
+
+    # 2. 只有主预设（文本）标签页时，只暴露文本模型，不融入生图模型
+    monkeypatch.setattr("app.api.chat.get_browser", lambda **_: _MockBrowser([
+        {
+            "route_domain": "arena.ai",
+            "url": "https://arena.ai/text/direct",
+            "preset_name": "主预设-直连模式",
+            "persistent_index": 1,
+            "status": "idle",
+        }
+    ]))
+    entries = _collect_model_entries()
+    model_ids = [e["id"] for e in entries]
+    assert "claude-sonnet-4-6" in model_ids
+    assert "mona-lisa-1" not in model_ids
+
+    # 3. 两个标签页分别打开文本与生图预设时，两者模型均能按活跃标签页聚合暴露
+    monkeypatch.setattr("app.api.chat.get_browser", lambda **_: _MockBrowser([
+        {
+            "route_domain": "arena.ai",
+            "url": "https://arena.ai/text/direct",
+            "preset_name": "主预设-直连模式",
+            "persistent_index": 1,
+            "status": "idle",
+        },
+        {
+            "route_domain": "arena.ai",
+            "url": "https://arena.ai/image/direct",
+            "preset_name": "万能直连-通用生图",
+            "persistent_index": 2,
+            "status": "idle",
+        }
+    ]))
+    entries = _collect_model_entries()
+    model_ids = [e["id"] for e in entries]
+    assert "claude-sonnet-4-6" in model_ids
     assert "mona-lisa-1" in model_ids
 
 
@@ -1357,8 +1465,237 @@ def test_model_label_matches_provider_prefix_whitelist_and_short_names():
     assert not WorkflowExecutorActionMixin._model_label_matches("demoo1", o1)
 
 
+def test_arena_image_direct_models_auto_refresh_and_merge():
+    # 模拟文本标签页和生图标签页
+    class _ImageTab:
+        def run_js(self, script, timeout=None):
+            return [
+                {
+                    "arena_model_id": "image-uuid-1",
+                    "name": "flux-2-pro",
+                    "public_name": "flux-2-pro",
+                    "display_name": "flux-2-pro",
+                    "provider": "bfl",
+                    "organization": "black-forest-labs",
+                    "modality": "image",
+                }
+            ]
+
+    class _ImageSession:
+        status = SimpleNamespace(value="idle")
+        persistent_index = 2
+        tab = _ImageTab()
+
+        @staticmethod
+        def get_cached_route_snapshot():
+            return "https://arena.ai/image/direct", "arena.ai"
+
+    class _MockBrowser:
+        class _TabPool:
+            @staticmethod
+            def get_sessions_snapshot():
+                return [_ImageSession()]
+        tab_pool = _TabPool()
+
+    # 验证生图模态过滤能正确获取生图模型
+    image_models = list_arena_direct_models(
+        _MockBrowser(),
+        force=True,
+        catalog_config={"enabled": True, "modality": "image", "include_keywords": [], "exclude_keywords": []}
+    )
+    assert len(image_models) >= 1
+    assert any(m["name"] == "flux-2-pro" for m in image_models)
+
+def test_arena_model_catalog_save_failure_and_migration_safety(monkeypatch):
+    from app.services import arena_model_catalog
+    import pytest
+
+    # 1. set_arena_model_catalog 在写入失败时必须抛出异常
+    monkeypatch.setattr(
+        arena_model_catalog,
+        "save_arena_model_catalog_data",
+        lambda _data: False,
+    )
+    with pytest.raises(IOError):
+        arena_model_catalog.set_arena_model_catalog(
+            domain="arena.ai",
+            preset_name="主预设",
+            catalog_config={"enabled": True},
+        )
+
+    # 2. migrate_and_cleanup_sites_model_catalog 在独立文件写入失败时不得清空 sites 中的 model_catalog
+    class _MockEngine:
+        def __init__(self):
+            self.sites = {
+                "arena.ai": {
+                    "presets": {
+                        "新预设": {
+                            "model_catalog": {
+                                "enabled": True,
+                                "source": "arena_direct",
+                            }
+                        }
+                    }
+                }
+            }
+            self.saved = False
+
+        def save_config(self):
+            self.saved = True
+            return True
+
+    engine = _MockEngine()
+    monkeypatch.setattr(
+        arena_model_catalog,
+        "load_arena_model_catalog_data",
+        lambda: {},
+    )
+    res = arena_model_catalog.migrate_and_cleanup_sites_model_catalog(engine)
+    assert res is False
+    assert "model_catalog" in engine.sites["arena.ai"]["presets"]["新预设"]
+    assert engine.saved is False
 
 
+def test_non_arena_model_catalog_preservation():
+    from app.api.config_route_models import _normalize_preset_config_payload
+
+    # 1. domain=None 时，model_catalog 必须保留
+    payload = {"model_catalog": {"enabled": True, "source": "custom"}}
+    norm_none = _normalize_preset_config_payload(payload, domain=None)
+    assert "model_catalog" in norm_none
+    assert norm_none["model_catalog"]["source"] == "custom"
+
+    # 2. 非 Arena 站点时，model_catalog 必须保留
+    norm_other = _normalize_preset_config_payload(payload, domain="custom-site.com")
+    assert "model_catalog" in norm_other
+    assert norm_other["model_catalog"]["source"] == "custom"
+
+    # 3. Arena 站点时，model_catalog 从 sites.json 预设结构中剔除（存独立文件）
+    norm_arena = _normalize_preset_config_payload(payload, domain="arena.ai")
+    assert "model_catalog" not in norm_arena
 
 
+def test_dark_pool_different_configs_not_incorrectly_deduped(monkeypatch):
+    import app.api.chat as chat_api
+    from app.services.arena_model_catalog import normalize_arena_model_catalog_config
+
+    class _MockTabPool:
+        def get_tabs_with_index(self):
+            return [
+                {
+                    "route_domain": "arena.ai",
+                    "url": "https://arena.ai/text/direct",
+                    "preset_name": "预设A-明池",
+                    "persistent_index": 1,
+                    "status": "idle",
+                },
+                {
+                    "route_domain": "arena.ai",
+                    "url": "https://arena.ai/text/direct",
+                    "preset_name": "预设B-暗池",
+                    "persistent_index": 2,
+                    "status": "idle",
+                }
+            ]
+
+    class _MockBrowser:
+        tab_pool = _MockTabPool()
+
+    # 两个预设具有相同 modality/include/exclude，但暗池设置不同
+    cat_a = normalize_arena_model_catalog_config({
+        "enabled": True,
+        "modality": "text",
+        "enable_dark_pool": False,
+    })
+    cat_b = normalize_arena_model_catalog_config({
+        "enabled": True,
+        "modality": "text",
+        "enable_dark_pool": True,
+        "dark_pool_since": "2026-01-01",
+        "dark_pool_whitelist_keywords": ["secret"],
+    })
+
+    def mock_get_catalog(_engine, tab):
+        if tab.get("preset_name") == "预设A-明池":
+            return {"preset_name": "预设A-明池", "catalog": cat_a}
+        return {"preset_name": "预设B-暗池", "catalog": cat_b}
+
+    captured_catalogs = []
+    monkeypatch.setattr(chat_api, "get_arena_direct_catalog_for_tab", mock_get_catalog)
+    monkeypatch.setattr(
+        chat_api,
+        "list_arena_direct_models",
+        lambda _browser, catalog_config=None, **_: captured_catalogs.append(catalog_config) or [],
+    )
+    monkeypatch.setattr(chat_api, "get_browser", lambda **_: _MockBrowser())
+
+    chat_api._collect_model_entries()
+    assert len(captured_catalogs) == 2
+    assert any(c.get("enable_dark_pool") is False for c in captured_catalogs)
+    assert any(c.get("enable_dark_pool") is True for c in captured_catalogs)
+
+
+def test_match_arena_catalog_tab_per_tab_isolation(monkeypatch):
+    import app.api.chat as chat_api
+    from types import SimpleNamespace
+
+    class _TabA:
+        def run_js(self, _script, timeout=None):
+            return [{"arena_model_id": "uuid-a", "name": "model-a", "display_name": "model-a", "modality": "text"}]
+
+    class _TabB:
+        def run_js(self, _script, timeout=None):
+            return [{"arena_model_id": "uuid-b", "name": "model-b", "display_name": "model-b", "modality": "text"}]
+
+    class _SessionA:
+        persistent_index = 1
+        id = "session-1"
+        status = SimpleNamespace(value="idle")
+        tab = _TabA()
+        @staticmethod
+        def get_cached_route_snapshot():
+            return "https://arena.ai/text/direct", "arena.ai"
+
+    class _SessionB:
+        persistent_index = 2
+        id = "session-2"
+        status = SimpleNamespace(value="idle")
+        tab = _TabB()
+        @staticmethod
+        def get_cached_route_snapshot():
+            return "https://arena.ai/text/direct", "arena.ai"
+
+    class _TabPool:
+        @staticmethod
+        def is_url_excluded(_url):
+            return False
+        @staticmethod
+        def get_sessions_snapshot():
+            return [_SessionA(), _SessionB()]
+
+    browser = SimpleNamespace(tab_pool=_TabPool())
+    tabs = [
+        {"persistent_index": 1, "status": "idle", "url": "https://arena.ai/text/direct", "preset_name": "预设A"},
+        {"persistent_index": 2, "status": "idle", "url": "https://arena.ai/text/direct", "preset_name": "预设B"},
+    ]
+
+    monkeypatch.setattr(
+        chat_api,
+        "get_arena_direct_catalog_for_tab",
+        lambda _engine, tab: {
+            "preset_name": tab["preset_name"],
+            "catalog": {"enabled": True, "source": "arena_direct", "modality": "text"},
+        },
+    )
+
+    # 标签页 1 只应匹配到 model-a，标签页 2 只应匹配到 model-b
+    matched_a = chat_api._match_arena_catalog_tab(browser, object(), tabs, "model-a")
+    assert matched_a is not None
+    assert matched_a["tab"]["persistent_index"] == 1
+    assert matched_a["model"]["name"] == "model-a"
+
+    matched_b = chat_api._match_arena_catalog_tab(browser, object(), tabs, "model-b")
+    assert matched_b is not None
+    assert matched_b["tab"]["persistent_index"] == 2
+    assert matched_b["model"]["name"] == "model-b"
 

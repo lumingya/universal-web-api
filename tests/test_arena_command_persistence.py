@@ -58,8 +58,8 @@ class ArenaCommandPersistenceTests(unittest.TestCase):
         self.assertEqual(trigger["value"], "Clear")
         self.assertEqual(trigger["scope"], "domain")
         self.assertEqual(trigger["domain"], "arena.ai")
-        self.assertTrue(trigger["check_while_busy_workflow"])
-        self.assertTrue(trigger["allow_during_workflow"])
+        self.assertFalse(trigger["check_while_busy_workflow"])
+        self.assertFalse(trigger["allow_during_workflow"])
         self.assertEqual(trigger["interrupt_policy"], "abort")
         self.assertIn("text === 'clear'", trigger["probe_js"])
         self.assertEqual(

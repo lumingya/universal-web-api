@@ -27,6 +27,7 @@ from app.api.config_compare_support import (
 )
 from app.api.config_route_models import (
     ConfigUpdateRequest,
+    ModelCatalogUpdateRequest,
     SiteAdvancedConfigRequest,
     PresetConfigUpdateRequest,
     _extract_site_advanced_update_payload,
@@ -308,14 +309,14 @@ async def set_site_preset_config(
             raise HTTPException(status_code=404, detail=f"预设不存在: {requested_preset}")
 
         if bool(body.replace):
-            normalized = _normalize_preset_config_payload(body.config)
+            normalized = _normalize_preset_config_payload(body.config, domain=domain)
         else:
             existing_preset = presets.get(resolved_preset)
             merged = _merge_preset_config_payload(
                 existing_preset if isinstance(existing_preset, dict) else {},
                 body.config,
             )
-            normalized = _normalize_preset_config_payload(merged)
+            normalized = _normalize_preset_config_payload(merged, domain=domain)
         previous_preset = copy.deepcopy(presets[resolved_preset])
         presets[resolved_preset] = normalized
         site["presets"] = presets
@@ -1590,3 +1591,49 @@ async def get_stream_config_defaults(authenticated: bool = Depends(verify_auth))
         "mode_options": ["dom", "network"],
         "stream_match_mode_options": ["keyword", "regex"],
     }
+
+
+@router.get("/api/sites/{domain}/model-catalog")
+async def get_site_model_catalog(
+    domain: str,
+    preset_name: Optional[str] = None,
+    authenticated: bool = Depends(verify_auth),
+):
+    """读取指定站点预设的独立模型目录配置"""
+    from app.services.arena_model_catalog import get_arena_model_catalog
+    catalog = get_arena_model_catalog(domain=domain, preset_name=preset_name, config_engine=config_engine)
+    resolved_preset = str(preset_name or config_engine.get_default_preset(domain) or "主预设").strip()
+    return {
+        "status": "success",
+        "domain": domain,
+        "preset_name": resolved_preset,
+        "catalog": catalog,
+    }
+
+
+@router.put("/api/sites/{domain}/model-catalog")
+async def set_site_model_catalog(
+    domain: str,
+    body: ModelCatalogUpdateRequest,
+    authenticated: bool = Depends(verify_auth),
+):
+    """更新并持久化指定站点预设的独立模型目录配置"""
+    from app.services.arena_model_catalog import set_arena_model_catalog
+    resolved_preset = str(body.preset_name or config_engine.get_default_preset(domain) or "主预设").strip()
+    try:
+        catalog = set_arena_model_catalog(
+            domain=domain,
+            preset_name=resolved_preset,
+            catalog_config=body.catalog or {},
+        )
+    except Exception as e:
+        logger.error(f"保存 Arena 独立模型目录配置失败: {e}")
+        raise HTTPException(status_code=500, detail="保存模型目录配置失败")
+    return {
+        "status": "success",
+        "message": "模型目录配置已保存",
+        "domain": domain,
+        "preset_name": resolved_preset,
+        "catalog": catalog,
+    }
+

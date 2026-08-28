@@ -29,7 +29,12 @@ ARENA_MODEL_ALIAS_OVERRIDES_PATH = Path(
 
 _ARENA_DIRECT_MODEL_EXTRACT_JS = r"""
 return (() => {
-    // 1. 优先从 React Fiber 提取前端真实加载的全部用户可选模型（精准排除所有隐藏/盲测/暗池模型）
+    const pathname = (typeof window !== 'undefined' && window.location && window.location.pathname) ? String(window.location.pathname).toLowerCase() : '';
+    const isImagePage = pathname.includes('/image');
+    const isCodePage = pathname.includes('/code');
+    const defaultPageModality = isImagePage ? 'image' : (isCodePage ? 'code' : 'text');
+
+    // 1. 优先从 React Fiber 提取前端真实加载的可用模型
     const all = Array.from(document.querySelectorAll('*'));
     let fiberModels = null;
     for (const el of all) {
@@ -37,10 +42,10 @@ return (() => {
         if (!fiberKey) continue;
         let cur = el[fiberKey];
         let d = 0;
-        while (cur && d < 15) {
+        while (cur && d < 25) {
             if (cur.memoizedProps) {
                 for (const [k, v] of Object.entries(cur.memoizedProps)) {
-                    if (Array.isArray(v) && v.length >= 20 && v.length <= 400 && v[0] && (v[0].id && (v[0].displayName || v[0].name || v[0].publicName))) {
+                    if (Array.isArray(v) && v.length >= 30 && v.length <= 300 && v[0] && (v[0].id && (v[0].displayName || v[0].name || v[0].publicName))) {
                         fiberModels = v;
                         break;
                     }
@@ -65,10 +70,57 @@ return (() => {
 
         const caps = model.capabilities || {};
         const outCaps = caps.outputCapabilities || model.outputCapabilities || {};
-        const isImgOut = Boolean(outCaps.image);
+        const ranks = model.rankByModality || {};
+        const rankIsFinite = (key) => (
+            typeof ranks[key] === 'number' &&
+            Number.isFinite(ranks[key]) &&
+            ranks[key] < Number.MAX_SAFE_INTEGER
+        );
+        const hasText = Boolean(outCaps.text);
+        const hasImage = Boolean(outCaps.image) || rankIsFinite('image');
+        const hasVideo = Boolean(outCaps.video) || rankIsFinite('video');
+        // `outputCapabilities.web` means the model can browse/use web data;
+        // it is not the WebDev/code modality.  Only the modality rank marks
+        // a model as code-capable for catalog filtering.
+        const hasWebDev = rankIsFinite('webdev');
+        const hasSearch = Boolean(outCaps.search) || rankIsFinite('search');
+
         const dispName = String(model.displayName || model.publicName || model.name || idStr).trim();
         const internalName = String(model.name || model.id || dispName).trim();
         const pubName = String(model.publicName || dispName || internalName).trim();
+        const nameSearch = `${internalName} ${dispName} ${pubName} ${idStr}`.toLowerCase();
+
+        const isKnownImageModel = nameSearch.includes('gpt-image') ||
+                                  nameSearch.includes('mona-lisa') ||
+                                  nameSearch.includes('luna-lisa') ||
+                                  nameSearch.includes('lina-alpha') ||
+                                  nameSearch.includes('lina-f-alpha') ||
+                                  nameSearch.includes('lina') ||
+                                  nameSearch.includes('silver_halide') ||
+                                  nameSearch.includes('flux') ||
+                                  nameSearch.includes('imagen') ||
+                                  nameSearch.includes('seedream') ||
+                                  nameSearch.includes('seededit') ||
+                                  nameSearch.includes('z-image') ||
+                                  (nameSearch.includes('grok') && nameSearch.includes('image')) ||
+                                  (nameSearch.includes('imagine') && !nameSearch.includes('video'));
+
+        let modality = defaultModality === 'image' ? 'image' : (defaultModality === 'code' ? 'code' : 'text');
+        if (hasVideo && !hasText && !isKnownImageModel) {
+            modality = 'video';
+        } else if (isKnownImageModel || (hasImage && defaultModality === 'image') || (hasImage && !hasText)) {
+            modality = 'image';
+        } else if (hasWebDev || defaultModality === 'code') {
+            modality = 'code';
+        } else if (hasSearch) {
+            modality = 'search';
+        } else if (hasText) {
+            modality = 'text';
+        } else if (hasImage) {
+            modality = 'image';
+        } else if (hasVideo) {
+            modality = 'video';
+        }
 
         results.push({
             arena_model_id: idStr,
@@ -77,87 +129,110 @@ return (() => {
             display_name: dispName,
             provider: String(model.provider || ''),
             organization: String(model.organization || model.provider || 'arena.ai'),
-            modality: (isImgOut || defaultModality === 'image') ? 'image' : 'text'
+            modality
         });
+    };
+
+    const isModelAvailable = (model) => {
+        if (!model || model.userSelectable === false) return false;
+        const ranks = model.rankByModality || {};
+        const rankValues = Object.values(ranks);
+        const hasVisibleRank = rankValues.some((rank) => (
+            typeof rank === 'number' &&
+            Number.isFinite(rank) &&
+            rank < Number.MAX_SAFE_INTEGER
+        ));
+        const hasPublicRank = typeof model.rank === 'number' &&
+            Number.isFinite(model.rank) && model.rank < 1000;
+        const hasNoAvailabilityMetadata = rankValues.length === 0 &&
+            typeof model.rank === 'undefined';
+        // Arena can keep a user-selectable model at MAX_SAFE_INTEGER for a
+        // modality while still exposing that modality as a valid capability.
+        // userSelectable is the authoritative visibility signal in that case.
+        const hasCapabilityMetadata = Object.values(
+            model.capabilities?.outputCapabilities || model.outputCapabilities || {}
+        ).some(Boolean);
+        return hasVisibleRank || hasPublicRank || hasNoAvailabilityMetadata ||
+            (model.userSelectable === true && hasCapabilityMetadata);
     };
 
     if (fiberModels && fiberModels.length > 0) {
         for (const m of fiberModels) {
-            appendModel(m, 'text');
+            if (isModelAvailable(m)) appendModel(m, defaultPageModality);
         }
-    }
-
-    // 3. 从 SSR initialModels 补充核心生图模型及在未挂载时的保底模型
-    const readArray = (text, marker) => {
-        const markerIndex = text.indexOf(marker);
-        if (markerIndex < 0) return null;
-        const start = text.indexOf('[', markerIndex + marker.length);
-        if (start < 0) return null;
-        let depth = 0;
-        let quoted = false;
-        let escaped = false;
-        for (let index = start; index < text.length; index += 1) {
-            const char = text[index];
-            if (quoted) {
-                if (escaped) escaped = false;
-                else if (char === '\\') escaped = true;
-                else if (char === '"') quoted = false;
-                continue;
-            }
-            if (char === '"') quoted = true;
-            else if (char === '[') depth += 1;
-            else if (char === ']') {
-                depth -= 1;
-                if (depth === 0) return text.slice(start, index + 1);
-            }
-        }
-        return null;
-    };
-
-    const payloadTexts = [];
-    for (const script of document.scripts) {
-        const source = String(script.textContent || '').trim();
-        const cleanSource = source.replace(/;\s*$/, '');
-        const prefix = 'self.__next_f.push(';
-        if (!cleanSource.startsWith(prefix) || !cleanSource.endsWith(')')) continue;
-        try {
-            const payload = JSON.parse(cleanSource.slice(prefix.length, -1));
-            if (Array.isArray(payload) && typeof payload[1] === 'string') {
-                payloadTexts.push(payload[1]);
-            }
-        } catch (_) {}
-    }
-
-    for (const text of payloadTexts) {
-        const rawModels = readArray(text, '"initialModels":');
-        if (!rawModels) continue;
-        try {
-            const models = JSON.parse(rawModels);
-            for (const model of models) {
-                if (!model) continue;
-                const effectiveName = String(model.displayName || model.publicName || model.name || '').trim();
-                const nameLower = effectiveName.toLowerCase();
-                const isUserSpecifiedImage = nameLower.includes('gpt-image-2') ||
-                                             nameLower.includes('mona-lisa') ||
-                                             nameLower.includes('luna-lisa') ||
-                                             nameLower.includes('lina-alpha') ||
-                                             nameLower.includes('lina-f-alpha') ||
-                                             nameLower.includes('lina') ||
-                                             nameLower.includes('grok-imagine') ||
-                                             (nameLower.includes('grok') && nameLower.includes('image'));
-                if (isUserSpecifiedImage) {
-                    appendModel(model, 'image');
-                } else if (!fiberModels || fiberModels.length === 0) {
-                    const hasPublicRank = typeof model.rank === 'number' && model.rank < 1000;
-                    const isUnrankedExplicit = (model.rank === null || typeof model.rank === 'undefined') &&
-                        model.userSelectable !== false &&
-                        (nameLower.includes('3.7') || nameLower.includes('glm-5') || nameLower.includes('gemini') || nameLower.includes('claude') || nameLower.includes('gpt') || nameLower.includes('qwen') || nameLower.includes('deepseek') || nameLower.includes('grok') || nameLower.includes('minimax') || nameLower.includes('mistral'));
-                    if ((hasPublicRank || isUnrankedExplicit) && model.userSelectable !== false) {
-                        appendModel(model, 'text');
-                    }
+    } else {
+        // 2. 仅在未挂载 React Fiber 时才从 SSR initialModels 提取保底
+        const readArray = (text, marker) => {
+            const markerIndex = text.indexOf(marker);
+            if (markerIndex < 0) return null;
+            const start = text.indexOf('[', markerIndex + marker.length);
+            if (start < 0) return null;
+            let depth = 0;
+            let quoted = false;
+            let escaped = false;
+            for (let index = start; index < text.length; index += 1) {
+                const char = text[index];
+                if (quoted) {
+                    if (escaped) escaped = false;
+                    else if (char === '\\') escaped = true;
+                    else if (char === '"') quoted = false;
+                    continue;
+                }
+                if (char === '"') quoted = true;
+                else if (char === '[') depth += 1;
+                else if (char === ']') {
+                    depth -= 1;
+                    if (depth === 0) return text.slice(start, index + 1);
                 }
             }
-        } catch (_) {}
+            return null;
+        };
+
+        const payloadTexts = [];
+        for (const script of document.scripts) {
+            const source = String(script.textContent || '').trim();
+            const cleanSource = source.replace(/;\s*$/, '');
+            const prefix = 'self.__next_f.push(';
+            if (!cleanSource.startsWith(prefix) || !cleanSource.endsWith(')')) continue;
+            try {
+                const payload = JSON.parse(cleanSource.slice(prefix.length, -1));
+                if (Array.isArray(payload) && typeof payload[1] === 'string') {
+                    payloadTexts.push(payload[1]);
+                }
+            } catch (_) {}
+        }
+
+        for (const text of payloadTexts) {
+            const rawModels = readArray(text, '"initialModels":');
+            if (!rawModels) continue;
+            try {
+                const models = JSON.parse(rawModels);
+                for (const model of models) {
+                    if (!model) continue;
+                    const effectiveName = String(model.displayName || model.publicName || model.name || '').trim();
+                    const nameLower = effectiveName.toLowerCase();
+                    const isUserSpecifiedImage = nameLower.includes('gpt-image') ||
+                                                 nameLower.includes('mona-lisa') ||
+                                                 nameLower.includes('luna-lisa') ||
+                                                 nameLower.includes('lina-alpha') ||
+                                                 nameLower.includes('lina-f-alpha') ||
+                                                 nameLower.includes('lina') ||
+                                                 nameLower.includes('silver_halide') ||
+                                                 nameLower.includes('flux') ||
+                                                 nameLower.includes('imagen') ||
+                                                 nameLower.includes('seedream') ||
+                                                 nameLower.includes('seededit') ||
+                                                 nameLower.includes('z-image') ||
+                                                 nameLower.includes('grok-imagine') ||
+                                                 (nameLower.includes('grok') && nameLower.includes('image'));
+                    if (isUserSpecifiedImage && isModelAvailable(model)) {
+                        appendModel(model, 'image');
+                    } else if (isModelAvailable(model)) {
+                        appendModel(model, defaultPageModality);
+                    }
+                }
+            } catch (_) {}
+        }
     }
 
     return results;
@@ -169,6 +244,16 @@ _cache_lock = threading.RLock()
 _refresh_lock = threading.Lock()
 _cached_at = 0.0
 _cached_models: List[Dict[str, Any]] = []
+
+
+def _canonical_modality(value: Any) -> str:
+    """Normalize Arena's page/API terminology to the catalog terminology."""
+    modality = str(value or "").strip().lower()
+    return {
+        "webdev": "code",
+        "web": "code",
+        "chat": "text",
+    }.get(modality, modality)
 
 
 def build_arena_direct_model_id(arena_model_id: Any) -> str:
@@ -267,114 +352,13 @@ def match_arena_direct_model(
 
 
 def normalize_model_catalog_config(value: Any) -> Dict[str, Any]:
-    raw = value if isinstance(value, dict) else {}
-
-    def _keywords(key: str) -> List[str]:
-        source = raw.get(key, [])
-        if isinstance(source, str):
-            source = re.split(r"[\n,]+", source)
-        if not isinstance(source, list):
-            return []
-        result: List[str] = []
-        seen = set()
-        for item in source:
-            keyword = str(item or "").strip()
-            folded = keyword.casefold()
-            if not keyword or folded in seen:
-                continue
-            seen.add(folded)
-            result.append(keyword)
-        return result
-
-    result = {
-        "enabled": bool(raw.get("enabled", False)),
-        "source": str(raw.get("source") or MODEL_CATALOG_SOURCE).strip() or MODEL_CATALOG_SOURCE,
-        "include_keywords": _keywords("include_keywords"),
-        "exclude_keywords": _keywords("exclude_keywords"),
-    }
-    if "modality" in raw and str(raw.get("modality") or "").strip():
-        result["modality"] = str(raw.get("modality") or "").strip().lower()
-    return result
+    from app.services.arena_model_catalog import normalize_arena_model_catalog_config
+    return normalize_arena_model_catalog_config(value)
 
 
 def get_model_catalog_preset(config_engine: Any, domain: Any) -> Optional[Dict[str, Any]]:
-    normalized_domain = str(domain or "").strip().lower().strip(".")
-    if not normalized_domain:
-        return None
-    try:
-        config_engine.refresh_if_changed()
-        site = config_engine.sites.get(normalized_domain)
-    except Exception:
-        return None
-    presets = site.get("presets") if isinstance(site, dict) else None
-    if not isinstance(presets, dict):
-        return None
-    for preset_name, preset in presets.items():
-        if not isinstance(preset, dict):
-            continue
-        catalog = normalize_model_catalog_config(preset.get("model_catalog"))
-        if catalog["enabled"] and catalog["source"] == MODEL_CATALOG_SOURCE:
-            return {
-                "preset_name": str(preset_name),
-                "preset": preset,
-                "catalog": catalog,
-            }
-    return None
-
-
-def resolve_model_catalog_preset_for_model(
-    config_engine: Any,
-    domain: Any,
-    tab: Any,
-    requested_model: Any,
-) -> Optional[Dict[str, Any]]:
-    """
-    遍历指定域名的所有启用了 model_catalog 的预设，
-    根据 requested_model 自动匹配最合适的预设（例如 生图模型自动路由到通用生图预设，文本模型自动路由到通用文本预设）。
-    """
-    normalized_domain = str(domain or "").strip().lower().strip(".")
-    if not normalized_domain or not requested_model:
-        return None
-    try:
-        config_engine.refresh_if_changed()
-        site = config_engine.sites.get(normalized_domain)
-    except Exception:
-        return None
-    presets = site.get("presets") if isinstance(site, dict) else None
-    if not isinstance(presets, dict):
-        return None
-
-    # 按照预设特异性排序：显式声明了 modality 限制的专属预设优先于无模态限制的通用预设
-    preset_items = list(presets.items())
-    preset_items.sort(
-        key=lambda item: (
-            0 if bool((normalize_model_catalog_config(item[1].get("model_catalog")) if isinstance(item[1], dict) else {}).get("modality")) else 1
-        )
-    )
-
-    for preset_name, preset in preset_items:
-        if not isinstance(preset, dict):
-            continue
-        try:
-            catalog = normalize_model_catalog_config(preset.get("model_catalog"))
-            if not catalog["enabled"] or catalog["source"] != MODEL_CATALOG_SOURCE:
-                continue
-            matched_model = resolve_arena_direct_model(
-                tab,
-                requested_model,
-                catalog_config=catalog,
-            )
-            if matched_model:
-                return {
-                    "preset_name": str(preset_name),
-                    "preset": preset,
-                    "catalog": catalog,
-                    "matched_model": matched_model,
-                }
-        except Exception as e:
-            logger.debug(f"匹配预设 {preset_name} 时发生异常（忽略并继续）: {e}")
-            continue
-    return None
+    from app.services.arena_model_catalog import get_model_catalog_preset as _get_preset
+    return _get_preset(config_engine, domain)
 
 
 def get_arena_direct_catalog_for_tab(
@@ -383,44 +367,15 @@ def get_arena_direct_catalog_for_tab(
     *,
     preset_name: Any = None,
 ) -> Optional[Dict[str, Any]]:
-    if not isinstance(tab, dict):
-        return None
-    status = str(tab.get("status") or "").strip().lower()
-    if status not in {"idle", "busy"} or bool(tab.get("terminating")):
-        return None
-
-    current_url = str(tab.get("url") or "").strip()
-    effective_preset_name = str(preset_name or tab.get("preset_name") or "").strip()
-    try:
-        config_engine.refresh_if_changed()
-        if not effective_preset_name:
-            effective_preset_name = str(
-                config_engine.get_default_preset("arena.ai") or ""
-            ).strip()
-        preset = config_engine._get_site_data_readonly(
-            "arena.ai",
-            effective_preset_name or None,
-        )
-    except Exception:
-        return None
-    if not isinstance(preset, dict):
-        return None
-
-    catalog = normalize_model_catalog_config(preset.get("model_catalog"))
-    if not catalog["enabled"] or catalog["source"] != MODEL_CATALOG_SOURCE:
-        return None
-
-    if not _is_arena_direct_url(current_url, catalog_preset=preset):
-        return None
-
-    return {
-        "preset_name": effective_preset_name,
-        "preset": preset,
-        "catalog": catalog,
-    }
+    from app.services.arena_model_catalog import get_arena_direct_catalog_for_tab as _get_tab_catalog
+    return _get_tab_catalog(config_engine, tab, preset_name=preset_name)
 
 
-def _is_arena_direct_url(value: Any, catalog_preset: Optional[Dict[str, Any]] = None) -> bool:
+def _is_arena_direct_url(
+    value: Any,
+    catalog_preset: Optional[Dict[str, Any]] = None,
+    catalog_config: Optional[Dict[str, Any]] = None,
+) -> bool:
     current_url = str(value or "").strip()
     if not current_url or current_url.lower() in {"about:blank", "javascript:void(0)"}:
         return False
@@ -442,8 +397,10 @@ def _is_arena_direct_url(value: Any, catalog_preset: Optional[Dict[str, Any]] = 
         return True
 
     if path == "/c" or path.startswith("/c/"):
-        if catalog_preset is not None:
+        catalog = catalog_config
+        if catalog is None and catalog_preset is not None:
             catalog = normalize_model_catalog_config(catalog_preset.get("model_catalog"))
+        if catalog is not None:
             return bool(catalog.get("enabled") and catalog.get("source") == MODEL_CATALOG_SOURCE)
         return True
 
@@ -454,89 +411,8 @@ def _filter_models(
     models: List[Dict[str, Any]],
     catalog_config: Any,
 ) -> List[Dict[str, Any]]:
-    catalog = normalize_model_catalog_config(catalog_config)
-    target_modality = catalog.get("modality", "")
-    includes = [item.casefold() for item in catalog["include_keywords"]]
-    excludes = [item.casefold() for item in catalog["exclude_keywords"]]
-    result = []
-    for model in models:
-        search_str = " ".join(
-            str(model.get(k) or "") for k in ("name", "public_name", "display_name", "search_name")
-        ).lower()
-        if any(
-            k in search_str
-            for k in (
-                "video",
-                "seedance",
-                "dreamina",
-                "sora",
-                "veo",
-                "gemini-omni",
-                "kling",
-                "hailuo",
-                "runway",
-                "pika",
-                "mochi",
-                "ltx",
-                "vidu",
-                "luma",
-                "wan2",
-                "wan-2",
-                "wan_2",
-                "wanx",
-                "pixverse",
-                "kandinsky",
-                "happyhorse",
-            )
-        ):
-            continue
-
-        if target_modality:
-            model_modality = str(model.get("modality") or "").strip().lower()
-            if model_modality in {"image", "text"}:
-                model_is_image = (model_modality == "image")
-            else:
-                model_is_image = any(
-                    k in search_str
-                    for k in (
-                        "image",
-                        "mona-lisa",
-                        "luna-lisa",
-                        "lina-alpha",
-                        "lina-f-alpha",
-                        "lina",
-                        "silver_halide",
-                        "flux",
-                        "imagine",
-                        "seedream",
-                        "seededit",
-                    )
-                )
-            if target_modality == "image" and not model_is_image:
-                continue
-            if target_modality == "text" and model_is_image:
-                continue
-        searchable = " ".join(
-            str(model.get(key) or "")
-            for key in (
-                "name",
-                "public_name",
-                "display_name",
-                "search_name",
-                "provider",
-                "organization",
-            )
-        ).casefold()
-        searchable += " " + " ".join(
-            str(alias or "") for alias in (model.get("aliases") or [])
-        ).casefold()
-        if includes and not any(keyword in searchable for keyword in includes):
-            continue
-        if excludes and any(keyword in searchable for keyword in excludes):
-            continue
-        result.append(model)
-    result.sort(key=lambda m: _natural_sort_key(get_arena_direct_model_public_id(m)))
-    return result
+    from app.services.arena_model_catalog import filter_arena_catalog_models
+    return filter_arena_catalog_models(models, catalog_config)
 
 
 def _natural_sort_key(text: Any) -> list:
@@ -604,7 +480,27 @@ def _normalize_models(raw_models: Any) -> List[Dict[str, Any]]:
                 base_no_prev = candidate_name[:-8].strip()
                 if base_no_prev and base_no_prev.casefold() not in {item.casefold() for item in aliases}:
                     aliases.append(base_no_prev)
-        raw_modality = str(raw.get("modality") or "").strip().lower()
+        raw_modality = _canonical_modality(raw.get("modality"))
+        name_check = f"{name} {display_name} {public_name} {arena_model_id}".lower()
+        if not raw_modality and any(
+            k in name_check
+            for k in (
+                "gpt-image",
+                "mona-lisa",
+                "luna-lisa",
+                "lina-alpha",
+                "lina-f-alpha",
+                "lina",
+                "silver_halide",
+                "flux",
+                "seedream",
+                "seededit",
+                "imagen",
+                "z-image",
+                "grok-imagine",
+            )
+        ):
+            raw_modality = "image"
         normalized.append(
             {
                 "arena_model_id": arena_model_id,
@@ -643,6 +539,40 @@ def read_arena_direct_models_from_tab(tab: Any) -> List[Dict[str, Any]]:
         return []
 
 
+_session_cached_models: Dict[str, tuple[float, List[Dict[str, Any]]]] = {}
+
+
+def _get_session_cache_key(session_or_tab: Any) -> str:
+    if session_or_tab is None:
+        return ""
+    if isinstance(session_or_tab, dict):
+        idx = session_or_tab.get("persistent_index")
+        tid = session_or_tab.get("tab_id")
+        return f"idx_{idx}" if idx is not None else (f"id_{tid}" if tid else "")
+    idx = getattr(session_or_tab, "persistent_index", None)
+    sid = getattr(session_or_tab, "id", None)
+    return f"idx_{idx}" if idx is not None else (f"id_{sid}" if sid else "")
+
+
+def _session_cache_snapshot(key: str) -> tuple[float, List[Dict[str, Any]]]:
+    if not key:
+        return 0.0, []
+    with _cache_lock:
+        if key in _session_cached_models:
+            ts, models = _session_cached_models[key]
+            return ts, copy.deepcopy(models)
+    return 0.0, []
+
+
+def _replace_session_cache(key: str, models: Any) -> List[Dict[str, Any]]:
+    normalized = _normalize_models(models)
+    if not key:
+        return normalized
+    with _cache_lock:
+        _session_cached_models[key] = (time.monotonic(), copy.deepcopy(normalized))
+    return copy.deepcopy(normalized)
+
+
 def _cache_snapshot() -> tuple[float, List[Dict[str, Any]]]:
     with _cache_lock:
         return _cached_at, copy.deepcopy(_cached_models)
@@ -660,7 +590,8 @@ def _replace_cache(models: Any) -> List[Dict[str, Any]]:
 
 
 def _session_is_idle(session: Any) -> bool:
-    status = str(getattr(getattr(session, "status", None), "value", "") or "").strip().lower()
+    raw_status = getattr(session, "status", None)
+    status = str(getattr(raw_status, "value", None) or raw_status or "").strip().lower()
     return status in {"", "idle"}
 
 
@@ -674,7 +605,8 @@ def _arena_sessions(browser: Any) -> List[Any]:
 
     result = []
     for session in sessions or []:
-        status = str(getattr(getattr(session, "status", None), "value", "") or "").strip().lower()
+        raw_status = getattr(session, "status", None)
+        status = str(getattr(raw_status, "value", None) or raw_status or "").strip().lower()
         if status not in {"idle", "busy"}:
             continue
         try:
@@ -700,33 +632,95 @@ def list_arena_direct_models(
     *,
     force: bool = False,
     catalog_config: Any = None,
+    tab: Any = None,
 ) -> List[Dict[str, Any]]:
+    # 指定单标签页时执行严格标签页隔离读取与缓存
+    if tab is not None:
+        target_session = None
+        target_tab_obj = None
+        if hasattr(tab, "tab"):
+            target_session = tab
+            target_tab_obj = getattr(tab, "tab", None)
+        elif hasattr(tab, "run_js"):
+            target_tab_obj = tab
+        elif isinstance(tab, dict):
+            target_tab_obj = tab.get("tab")
+            if browser and hasattr(browser, "tab_pool"):
+                try:
+                    p_idx = tab.get("persistent_index")
+                    t_id = tab.get("tab_id")
+                    sessions = browser.tab_pool.get_sessions_snapshot()
+                    for s in sessions or []:
+                        if p_idx is not None and getattr(s, "persistent_index", None) == p_idx:
+                            target_session = s
+                            target_tab_obj = getattr(s, "tab", None)
+                            break
+                        if t_id and getattr(s, "id", None) == t_id:
+                            target_session = s
+                            target_tab_obj = getattr(s, "tab", None)
+                            break
+                except Exception:
+                    pass
+
+        key = _get_session_cache_key(target_session or tab)
+        cached_at, cached = _session_cache_snapshot(key)
+        if cached and not force and time.monotonic() - cached_at < ARENA_DIRECT_MODEL_CACHE_TTL:
+            filtered = _filter_models(cached, catalog_config)
+            if filtered:
+                return filtered
+
+        if target_tab_obj is not None:
+            if target_session is None or _session_is_idle(target_session):
+                try:
+                    models = read_arena_direct_models_from_tab(target_tab_obj)
+                    if models:
+                        _replace_session_cache(key, models)
+                        return _filter_models(models, catalog_config)
+                except Exception as exc:
+                    logger.debug(f"从目标标签页读取 Arena 直连模型失败: {exc}")
+
+        if cached:
+            return _filter_models(cached, catalog_config)
+        return []
+
     sessions = _arena_sessions(browser)
     if not sessions:
         return []
 
     cached_at, cached = _cache_snapshot()
     if cached and not force and time.monotonic() - cached_at < ARENA_DIRECT_MODEL_CACHE_TTL:
-        return _filter_models(cached, catalog_config)
+        filtered = _filter_models(cached, catalog_config)
+        if filtered:
+            return filtered
 
     if not _refresh_lock.acquire(blocking=False):
         return _filter_models(cached, catalog_config)
     try:
         cached_at, cached = _cache_snapshot()
         if cached and not force and time.monotonic() - cached_at < ARENA_DIRECT_MODEL_CACHE_TTL:
-            return _filter_models(cached, catalog_config)
+            filtered = _filter_models(cached, catalog_config)
+            if filtered:
+                return filtered
 
+        all_extracted_models: List[Dict[str, Any]] = []
         for session in sessions:
             if not _session_is_idle(session):
                 continue
             try:
                 models = read_arena_direct_models_from_tab(session.tab)
+                if models:
+                    s_key = _get_session_cache_key(session)
+                    _replace_session_cache(s_key, models)
+                    all_extracted_models.extend(models)
             except Exception as exc:
                 logger.debug(f"Arena Direct 模型目录读取失败（尝试下一标签页）: {exc}")
                 continue
-            if models:
-                logger.info(f"Arena Direct 模型目录已刷新: {len(models)} 个文本模型")
-                return _filter_models(_replace_cache(models), catalog_config)
+
+        if all_extracted_models:
+            merged_models = list(cached) + all_extracted_models
+            updated = _replace_cache(merged_models)
+            logger.info(f"Arena Direct 模型目录已刷新: {len(updated)} 个模型")
+            return _filter_models(updated, catalog_config)
         return _filter_models(cached, catalog_config)
     finally:
         _refresh_lock.release()
@@ -760,8 +754,10 @@ def resolve_arena_direct_model(
     else:
         models = read_arena_direct_models_from_tab(tab)
         if models:
-            _replace_cache(models)
-            return match_arena_direct_model(_filter_models(models, catalog_config), requested_value)
+            _cached_at_val, current_cached = _cache_snapshot()
+            merged = list(current_cached) + list(models)
+            updated = _replace_cache(merged)
+            return match_arena_direct_model(_filter_models(updated, catalog_config), requested_value)
 
     return None
 
@@ -805,5 +801,4 @@ __all__ = [
     "parse_arena_direct_model_id",
     "read_arena_direct_models_from_tab",
     "resolve_arena_direct_model",
-    "resolve_model_catalog_preset_for_model",
 ]

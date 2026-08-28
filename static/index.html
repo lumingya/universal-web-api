@@ -29,9 +29,9 @@
     <!-- 自定义样式 -->
     <link rel="stylesheet" href="/static/css/dashboard.css?v=2.6.18">
     <link rel="stylesheet" href="/static/css/dashboard-migration.css?v=3.0.2">
-    <link rel="stylesheet" href="/static/css/dashboard-reference.css?v=3.2.6">
+    <link rel="stylesheet" href="/static/css/dashboard-reference.css?v=3.2.7">
     <link rel="stylesheet" href="/static/css/onboarding-guide.css?v=1.0.0">
-    <link rel="stylesheet" href="/static/css/dashboard-dark.css?v=1.1.4">
+    <link rel="stylesheet" href="/static/css/dashboard-dark.css?v=1.1.5">
 
     <!-- 图标定义 -->
 </head>
@@ -257,8 +257,52 @@
                             <p>管理站点识别、内容提取、文件输入与请求工作流。</p>
                         </div>
                         <div class="uwa-page-actions">
-                            <button type="button" class="uwa-button" @click="triggerImport"><span v-html="$icons.documentArrowDown"></span>导入</button>
-                            <button type="button" class="uwa-button" @click="exportConfig"><span v-html="$icons.arrowUpTray"></span>导出</button>
+                            <!-- 导入二级下拉 -->
+                            <div class="uwa-dropdown" @click.stop>
+                                <button type="button" class="uwa-button" @click.stop="toggleImportMenu" :class="{ 'is-active': showImportMenu }">
+                                    <span v-html="$icons.documentArrowDown"></span>导入<span class="uwa-dropdown-caret" v-html="$icons.chevronDown"></span>
+                                </button>
+                                <div v-if="showImportMenu" class="uwa-dropdown-menu">
+                                    <button type="button" class="uwa-dropdown-item" @click="triggerImport(); closeAllMenus()">
+                                        <span class="uwa-dropdown-icon" v-html="$icons.documentArrowDown"></span>
+                                        <div class="uwa-dropdown-item-copy">
+                                            <strong>导入全部 / 自动识别</strong>
+                                            <small>支持全量或单站点配置 JSON 文件</small>
+                                        </div>
+                                    </button>
+                                    <button type="button" class="uwa-dropdown-item" @click="triggerImportSingleSite(); closeAllMenus()">
+                                        <span class="uwa-dropdown-icon" v-html="$icons.clipboardList"></span>
+                                        <div class="uwa-dropdown-item-copy">
+                                            <strong>导入单站点配置</strong>
+                                            <small>{{ currentDomain ? ('导入到当前站点: ' + currentDomain) : '选择文件并指定导入目标站点' }}</small>
+                                        </div>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- 导出二级下拉 -->
+                            <div class="uwa-dropdown" @click.stop>
+                                <button type="button" class="uwa-button" @click.stop="toggleExportMenu" :class="{ 'is-active': showExportMenu }">
+                                    <span v-html="$icons.arrowUpTray"></span>导出<span class="uwa-dropdown-caret" v-html="$icons.chevronDown"></span>
+                                </button>
+                                <div v-if="showExportMenu" class="uwa-dropdown-menu">
+                                    <button type="button" class="uwa-dropdown-item" @click="exportConfig(); closeAllMenus()">
+                                        <span class="uwa-dropdown-icon" v-html="$icons.arrowUpTray"></span>
+                                        <div class="uwa-dropdown-item-copy">
+                                            <strong>导出全部配置</strong>
+                                            <small>导出所有站点及预设（{{ Object.keys(sites).length }} 个站点）</small>
+                                        </div>
+                                    </button>
+                                    <button type="button" class="uwa-dropdown-item" :disabled="!currentDomain" @click="exportCurrentSite(); closeAllMenus()" :class="{ 'is-disabled': !currentDomain }">
+                                        <span class="uwa-dropdown-icon" v-html="$icons.globe"></span>
+                                        <div class="uwa-dropdown-item-copy">
+                                            <strong>导出当前站点配置</strong>
+                                            <small>{{ currentDomain ? ('导出 ' + currentDomain + ' 的完整预设配置') : '请先在下方选择一个站点' }}</small>
+                                        </div>
+                                    </button>
+                                </div>
+                            </div>
+
                             <button type="button" class="uwa-button is-primary" @click="addNewSite"><span v-html="$icons.plusCircle"></span>新增站点</button>
                         </div>
                     </header>
@@ -713,8 +757,8 @@
 
     <!-- 主应用逻辑 -->
 <script src="/static/js/dashboard-schema.js?v=2.6.29"></script>
-    <script src="/static/js/dashboard-state.js?v=3.1.3"></script>
-    <script src="/static/js/dashboard-methods.js?v=2.6.31"></script>
+    <script src="/static/js/dashboard-state.js?v=3.1.4"></script>
+    <script src="/static/js/dashboard-methods.js?v=2.6.32"></script>
     <script src="/static/js/dashboard.js?v=3.1.0"></script>
 </body>
 </html>

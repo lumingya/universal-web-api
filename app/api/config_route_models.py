@@ -31,6 +31,11 @@ class SiteAdvancedConfigRequest(BaseModel):
     skip_new_chat_on_retry: bool = Field(default=False)
 
 
+class ModelCatalogUpdateRequest(BaseModel):
+    preset_name: Optional[str] = None
+    catalog: Optional[Dict[str, Any]] = None
+
+
 class PresetConfigUpdateRequest(BaseModel):
     """单个预设完整配置更新请求。"""
     preset_name: Optional[str] = Field(default=None)
@@ -111,7 +116,10 @@ def _extract_site_advanced_update_payload(
     return payload
 
 
-def _normalize_preset_config_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+def _normalize_preset_config_payload(
+    payload: Dict[str, Any],
+    domain: Optional[str] = None,
+) -> Dict[str, Any]:
     """校验并规范化单个预设配置对象。"""
     if not isinstance(payload, dict) or isinstance(payload, list):
         raise HTTPException(status_code=400, detail="config 必须是对象")
@@ -140,8 +148,10 @@ def _normalize_preset_config_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail="workflow 必须是数组")
 
     advanced = normalized.get("advanced")
-    if advanced is not None and (
-        not isinstance(advanced, dict) or isinstance(advanced, list)
+    if (
+        advanced is not None
+        and not isinstance(advanced, dict)
+        or isinstance(advanced, list)
     ):
         raise HTTPException(status_code=400, detail="advanced 必须是对象")
     if isinstance(advanced, dict):
@@ -160,7 +170,10 @@ def _normalize_preset_config_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     if model_catalog is not None:
         if not isinstance(model_catalog, dict) or isinstance(model_catalog, list):
             raise HTTPException(status_code=400, detail="model_catalog 必须是对象")
-        normalized["model_catalog"] = normalize_model_catalog_config(model_catalog)
+        if domain is not None:
+            from app.utils.site_url import route_domain_matches
+            if route_domain_matches("arena.ai", domain):
+                normalized.pop("model_catalog", None)
 
     normalized["stealth"] = bool(normalized.get("stealth", False))
     return normalized

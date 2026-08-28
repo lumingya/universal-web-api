@@ -247,6 +247,21 @@
 .dark .uwa-config-search-pop {
     box-shadow: 0 18px 42px rgba(0, 0, 0, .5);
 }
+.dark .uwa-dropdown-menu {
+    border-color: var(--uwa-line);
+    background: var(--uwa-paper-strong);
+    box-shadow: 0 18px 42px rgba(0, 0, 0, .5);
+}
+
+.dark .uwa-dropdown-icon {
+    background: var(--uwa-paper-soft);
+    color: #a3c28e;
+}
+
+.dark .uwa-dropdown-item:hover:not(:disabled):not(.is-disabled) {
+    background: var(--uwa-paper-soft);
+}
+
 
 .dark .uwa-config-editor .config-preset-card .preset-more-pop button.is-danger {
     color: #d99a8c !important;

@@ -13,6 +13,7 @@ app/core/workflow/script_loader.py - 通用工作流 JavaScript 脚本加载与�
 import json
 import os
 import re
+import hashlib
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -261,6 +262,9 @@ class ScriptLoader:
         code: str,
         context: Optional[Dict[str, Any]] = None,
         args: Optional[Any] = None,
+        script_id: str = "",
+        lifecycle: str = "workflow",
+        owner_id: str = "",
     ) -> str:
         """
         将脚本代码包装为标准的异步闭包执行体：
@@ -283,10 +287,60 @@ class ScriptLoader:
         context_json = json.dumps(safe_context, ensure_ascii=False, default=str)
         args_json = json.dumps(safe_args, ensure_ascii=False, default=str)
 
+        # The page-side registry gives managed scripts an explicit disposal scope.
+        # It cannot undo arbitrary side effects automatically; scripts must register
+        # cleanup callbacks for globals, listeners, timers, and other resources.
+        lifecycle_value = str(lifecycle or "workflow").strip().lower()
+        if lifecycle_value not in {"workflow", "resident", "step"}:
+            lifecycle_value = "workflow"
+        safe_script_id = str(script_id or "inline").strip() or "inline"
+        safe_owner_id = str(owner_id or "default").strip() or "default"
+        lifecycle_bootstrap = (
+            "const __uwaLifecycle = (window.__UWA_SCRIPT_LIFECYCLE__ "
+            "|| (window.__UWA_SCRIPT_LIFECYCLE__ = (function(){"
+            "const entries = new Map(); let current = null; let activeOwner = null;"
+            "const disposeEntry = (entry) => { if (!entry || entry.disposed) return; entry.disposed = true;"
+            "try { if (entry.controller) entry.controller.abort(); } catch (_) {}"
+            "try { for (const fn of entry.cleanups.splice(0)) { try { fn(); } catch (_) {} } } catch (_) {}"
+            "if (entries.get(entry.id) === entry) entries.delete(entry.id); };"
+            "const activate = (id, policy, owner) => { const active = !activeOwner || activeOwner === owner;"
+            "if (!active) return {id, policy, owner, active:false, controller:null, signal:null, cleanups:[], disposed:true};"
+            "const previous = entries.get(id); if (previous) disposeEntry(previous);"
+            "const controller = typeof AbortController === 'function' ? new AbortController() : null;"
+            "const entry = {id, policy, owner, active, controller, signal: controller ? controller.signal : null, cleanups: [], disposed:false};"
+            "entries.set(id, entry); current = entry; return entry; };"
+            "const registerCleanup = (fn) => { if (current && typeof fn === 'function') {"
+            "current.cleanups.push(fn); return fn; } return null; };"
+            "const cleanup = (id) => disposeEntry(entries.get(id));"
+            "const beginWorkflow = (owner) => { activeOwner = owner; for (const entry of Array.from(entries.values())) {"
+            "if (entry.policy !== 'resident' && entry.owner !== owner) disposeEntry(entry); } };"
+            "const cleanupOwner = (owner) => { for (const entry of Array.from(entries.values())) {"
+            "if (entry.owner === owner && entry.policy !== 'resident') disposeEntry(entry); } };"
+            "const cleanupWorkflow = () => { for (const entry of Array.from(entries.values())) {"
+            "if (entry.policy !== 'resident') disposeEntry(entry); } };"
+            "const cleanupAll = () => { for (const entry of Array.from(entries.values())) disposeEntry(entry); };"
+            "return {activate, registerCleanup, cleanup, beginWorkflow, cleanupOwner, cleanupWorkflow, cleanupAll};"
+            "})()));"
+            f"const __uwaScope = __uwaLifecycle.activate({json.dumps(safe_script_id, ensure_ascii=False)}, {json.dumps(lifecycle_value)}, {json.dumps(safe_owner_id, ensure_ascii=False)});"
+            "const __uwaPreviousScope = window.__UWA_ACTIVE_SCRIPT_SCOPE__;"
+            "window.__UWA_ACTIVE_SCRIPT_SCOPE__ = __uwaScope;"
+            "const __uwaRegisterCleanup = (fn) => { if (__uwaScope && typeof fn === 'function') {"
+            "__uwaScope.cleanups.push(fn); return fn; } return null; };"
+            "const __uwaSignal = __uwaScope.signal;"
+        )
+        lifecycle_restore = (
+            "window.__UWA_ACTIVE_SCRIPT_SCOPE__ = __uwaPreviousScope;"
+        )
+
         # 包装为闭包
         wrapped = (
             f"return (async function(__CONTEXT__, __ARGS__) {{\n"
+            f"{lifecycle_bootstrap}\n"
+            "if (__uwaScope.active) { try {\n"
             f"{code}\n"
+            "} finally {\n"
+            f"{lifecycle_restore}\n"
+            "} }\n"
             f"}})({context_json}, {args_json});"
         )
         return wrapped
@@ -296,6 +350,9 @@ class ScriptLoader:
         script_target: Optional[str] = None,
         code_or_args: Optional[Any] = None,
         context: Optional[Dict[str, Any]] = None,
+        script_id: str = "",
+        lifecycle: str = "workflow",
+        owner_id: str = "",
     ) -> str:
         """
         统一解析并准备可直接在页面执行的 JavaScript 代码。
@@ -323,6 +380,8 @@ class ScriptLoader:
         # 分支 1：显式指定了 script_target，严格按照外部脚本执行（Fail-Fast）
         if raw_target:
             file_path = self.resolve_script_path(raw_target)
+            relative_id = file_path.relative_to(self.base_dir).as_posix()
+            effective_script_id = script_id or relative_id
             raw_code = self.load_script_content(file_path)
             interpolated_code = self.interpolate_macros(raw_code, ctx, is_code_template=True)
 
@@ -346,6 +405,9 @@ class ScriptLoader:
                 code=interpolated_code,
                 context=ctx,
                 args=interpolated_args,
+                script_id=effective_script_id,
+                lifecycle=lifecycle,
+                owner_id=owner_id,
             )
             logger.debug(
                 f"[ScriptLoader:WRAP] 闭包构建完成: file={file_path.name}, "
@@ -356,6 +418,8 @@ class ScriptLoader:
         # 分支 2：script_target 为空，检查 code_or_args 是否为脚本文件路径
         if isinstance(code_or_args, str) and self.is_script_target(code_or_args):
             file_path = self.resolve_script_path(code_or_args)
+            relative_id = file_path.relative_to(self.base_dir).as_posix()
+            effective_script_id = script_id or relative_id
             raw_code = self.load_script_content(file_path)
             interpolated_code = self.interpolate_macros(raw_code, ctx, is_code_template=True)
             logger.debug(
@@ -365,6 +429,9 @@ class ScriptLoader:
                 code=interpolated_code,
                 context=ctx,
                 args={},
+                script_id=effective_script_id,
+                lifecycle=lifecycle,
+                owner_id=owner_id,
             )
             logger.debug(
                 f"[ScriptLoader:WRAP] 闭包构建完成: file={file_path.name}, wrapped_len={len(wrapped)}"
@@ -382,7 +449,23 @@ class ScriptLoader:
             f"[ScriptLoader:INLINE] 内联脚本宏插值完成: original={inline_code[:80]!r}, "
             f"interpolated={interpolated_inline[:80]!r}"
         )
-        return interpolated_inline
+        # Inline JS also participates in the lifecycle registry. Hashing keeps the
+        # identifier stable without exposing the full source in page globals.
+        # Preserve the historical raw-inline execution unless lifecycle control
+        # was explicitly requested for this inline step.
+        if not script_id and str(lifecycle or "workflow").strip().lower() == "workflow":
+            return interpolated_inline
+        effective_script_id = script_id or (
+            "inline:" + hashlib.sha256(interpolated_inline.encode("utf-8")).hexdigest()[:16]
+        )
+        return self.wrap_script_closure(
+            code=interpolated_inline,
+            context=ctx,
+            args={},
+            script_id=effective_script_id,
+            lifecycle=lifecycle,
+            owner_id=owner_id,
+        )
 
     def extract_script_description(self, content: str, default_name: str = "") -> str:
         """从 JavaScript 脚本头部注释提取描述信息"""
