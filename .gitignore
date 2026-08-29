@@ -74,6 +74,7 @@ download_images/
 image/
 tmp/
 scratch/
+scripts/
 
 # Windows folder metadata
 desktop.ini
@@ -126,9 +127,7 @@ tests/*
 !tests/test_command_navigation_dispatch.py
 
 # 自定义与本地工作流扩展脚本
-custom_scripts/*
-!custom_scripts/README.md
-!custom_scripts/examples/
+custom_scripts/
 scripts/custom/
 *.custom.js
 
