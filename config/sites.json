@@ -3211,6 +3211,16 @@
         },
         "workflow": [
           {
+            "action": "READONLY_HINT",
+            "target": "",
+            "optional": false,
+            "value": {
+              "title": "提示",
+              "text": "请勿使用此工作流",
+              "tone": "warning"
+            }
+          },
+          {
             "action": "CLICK",
             "target": "new_chat_btn",
             "optional": false,
@@ -3406,6 +3416,16 @@
           "stop_btn": "button[aria-label=\"Stop generation\"]"
         },
         "workflow": [
+          {
+            "action": "READONLY_HINT",
+            "target": "",
+            "optional": false,
+            "value": {
+              "title": "提示",
+              "text": "请勿使用此工作流",
+              "tone": "warning"
+            }
+          },
           {
             "action": "CLICK",
             "target": "retry button",
