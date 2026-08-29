@@ -95,7 +95,7 @@ window.RequestMonitorTab = {
                 }
                 domains.set(domain, current)
 
-                const model = String(item && (item.model || item.preset_name) || '默认模型').trim() || '默认模型'
+                const model = String(item && (item.model || item.preset_name) || '未知').trim() || '未知'
                 const modelCurrent = models.get(model) || { model, total: 0, success: 0, failed: 0, tokens: 0, rate: 0 }
                 modelCurrent.total += 1
                 modelCurrent.tokens += (Number.isFinite(itemPromptTokens) ? itemPromptTokens : 0)
@@ -492,7 +492,7 @@ window.RequestMonitorTab = {
         analyticsModelStats() {
             const models = new Map()
             this.analyticsRecords.forEach(record => {
-                const name = String(record && (record.model || record.preset_name) || '默认模型').trim() || '默认模型'
+                const name = String(record && (record.model || record.preset_name) || '未知').trim() || '未知'
                 const current = models.get(name) || { name, calls: 0, tokens: 0 }
                 current.calls += 1
                 current.tokens += this.recordTokens(record).total
@@ -1288,7 +1288,7 @@ window.RequestMonitorTab = {
                     <button v-for="record in visibleRecords" :key="record.__historyKey" type="button" class="uwa-request-row" @click="openRecord(record)">
                         <!-- 修复：后端保证 finished_at 恒非空，原「流式响应」分支恒不成立，已删除死条件 -->
                         <span class="uwa-request-status" :class="statusTone(record)"><i></i><strong>{{ record.__statusText }}</strong></span>
-                        <span class="uwa-request-route"><strong>{{ record.model || record.preset_name || '默认模型' }}</strong><small>{{ record.__domain }}<template v-if="record.route_group"> · {{ record.route_group }}</template><template v-if="record.is_multimodal"> · 多模态</template></small></span>
+                        <span class="uwa-request-route"><strong>{{ record.model || record.preset_name || '未知' }}</strong><small>{{ record.__domain }}<template v-if="record.route_group"> · {{ record.route_group }}</template><template v-if="record.is_multimodal"> · 多模态</template></small></span>
                         <code>{{ record.endpoint || record.request_type || '-' }}</code>
                         <span>{{ formatTokenNumber(record.token_estimate ? record.token_estimate.prompt : 0) }} / {{ formatTokenNumber(record.token_estimate ? record.token_estimate.response : 0) }}</span>
                         <strong>{{ record.__durationText }}</strong>

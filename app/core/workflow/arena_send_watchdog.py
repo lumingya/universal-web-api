@@ -9,6 +9,7 @@ was accepted.
 from __future__ import annotations
 
 import json
+from collections import Counter
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Mapping, Optional
@@ -23,6 +24,11 @@ ARENA_NATIVE_STOP_SELECTOR = 'button[aria-label="Stop generation"]'
 ARENA_UPLOAD_CARD_SELECTOR = (
     'div.group.relative.overflow-hidden:has(img[src^="blob:"])'
     ':has(button[aria-label="Remove file"]):has(svg.animate-spin)'
+)
+ARENA_UPLOAD_ERROR_CARD_SELECTOR = (
+    'div.group.relative.overflow-hidden:has(img[src^="blob:"])'
+    ':has(button[aria-label="Remove file"])'
+    ':has([class*="interactive-negative"], [class*="destructive"], span.text-\\[10px\\])'
 )
 
 
@@ -91,8 +97,11 @@ class ArenaSendSnapshot:
     input_empty: bool = False
     stop_visible: bool = False
     upload_in_progress: bool = False
+    upload_error: bool = False
+    upload_error_message: str = ""
     page_error: bool = False
     page_error_message: str = ""
+    page_error_items: tuple = ()
 
     @property
     def confirms_send(self) -> bool:
@@ -102,6 +111,7 @@ class ArenaSendSnapshot:
             and self.input_empty
             and self.stop_visible
             and not self.upload_in_progress
+            and not self.upload_error
             and not self.page_error
         )
 
@@ -126,6 +136,7 @@ class ArenaSendWatchdog:
         poll_interval_seconds: float = POLL_INTERVAL_SECONDS,
         confirmed_target_timeout_seconds: float = CONFIRMED_TARGET_TIMEOUT_SECONDS,
         unconfirmed_send_timeout_seconds: float = UNCONFIRMED_SEND_TIMEOUT_SECONDS,
+        page_error_baseline: Optional[Mapping[str, Any]] = None,
     ) -> None:
         self.tab = tab
         self.network_monitor = network_monitor
@@ -142,6 +153,7 @@ class ArenaSendWatchdog:
             self.poll_interval_seconds,
             float(unconfirmed_send_timeout_seconds),
         )
+        self.page_error_baseline = dict(page_error_baseline or {})
 
     @classmethod
     def applies_to(cls, tab: Any) -> bool:
@@ -201,7 +213,12 @@ class ArenaSendWatchdog:
 
             if now >= next_snapshot_at:
                 snapshot = self._read_snapshot()
-                if snapshot.page_error and is_terminal_arena_page_error(snapshot.page_error_message):
+                if snapshot.upload_error:
+                    error_msg = snapshot.upload_error_message or "Arena 图片附件上传失败 (Error)"
+                    logger.error(f"[ArenaWatchdog] 检测到 Arena 附件上传失败拦截: {error_msg}")
+                    raise ArenaPageError(error_msg)
+
+                if self._has_new_terminal_page_error(snapshot):
                     error_msg = snapshot.page_error_message or "Arena 页面提示错误"
                     logger.error(f"[ArenaWatchdog] 检测到页面明确错误拦截: {error_msg}")
                     raise ArenaPageError(error_msg)
@@ -265,17 +282,145 @@ class ArenaSendWatchdog:
             raw = self.tab.run_js(script, timeout=2)
         except Exception as exc:
             logger.debug(f"[ArenaWatchdog] DOM snapshot failed: {exc}")
-            return ArenaSendSnapshot(page_error=True)
+            return ArenaSendSnapshot()
         if not isinstance(raw, dict):
-            return ArenaSendSnapshot(page_error=True)
+            logger.debug("[ArenaWatchdog] DOM snapshot returned non-dict; ignoring")
+            return ArenaSendSnapshot()
+        raw_items = raw.get("pageErrorItems")
+        items = []
+        if isinstance(raw_items, list):
+            for item in raw_items:
+                if not isinstance(item, dict):
+                    continue
+                text = str(item.get("text") or "").strip()
+                if text:
+                    items.append({
+                        "text": text,
+                        "token": str(item.get("token") or "").strip(),
+                    })
         return ArenaSendSnapshot(
             document_ready=bool(raw.get("documentReady")),
             input_visible=bool(raw.get("inputVisible")),
             input_empty=bool(raw.get("inputEmpty")),
             stop_visible=bool(raw.get("stopVisible")),
             upload_in_progress=bool(raw.get("uploadInProgress")),
+            upload_error=bool(raw.get("uploadError")),
+            upload_error_message=str(raw.get("uploadErrorMessage") or "").strip(),
             page_error=bool(raw.get("pageError")),
             page_error_message=str(raw.get("pageErrorMessage") or "").strip(),
+            page_error_items=tuple(items),
+        )
+
+    @classmethod
+    def capture_page_error_baseline(
+        cls,
+        *,
+        tab: Any,
+        selectors: Optional[Mapping[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Capture visible terminal-error nodes before a send action.
+
+        The baseline is intentionally limited to error text/token data. DOM
+        nodes may be replaced by React after the send; matching text counts
+        prevent such marker loss from turning a historical banner into a new
+        terminal error.
+        """
+        selectors = selectors or {}
+        script = cls._snapshot_script(
+            str(selectors.get("input_box") or ""),
+            str(selectors.get("stop_btn") or ""),
+        )
+        try:
+            raw = tab.run_js(script, timeout=2)
+        except Exception as exc:
+            logger.debug(f"[ArenaWatchdog] error baseline capture failed: {exc}")
+            return {"available": False, "items": []}
+        if not isinstance(raw, dict):
+            return {"available": False, "items": []}
+        items = raw.get("pageErrorItems")
+        if not isinstance(items, list):
+            return {"available": False, "items": []}
+        normalized = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            text = str(item.get("text") or "").strip()
+            if text:
+                normalized.append({
+                    "text": text,
+                    "token": str(item.get("token") or "").strip(),
+                })
+        return {"available": True, "items": normalized, "captured_at": time.time()}
+
+    def _has_new_terminal_page_error(self, snapshot: ArenaSendSnapshot) -> bool:
+        if not snapshot.page_error:
+            return False
+        if self.page_error_baseline.get("available") is False:
+            # A failed pre-submit read must not fall back to a page-wide scan:
+            # that would recreate the historical-error false positive.
+            return False
+        current_items = [
+            item for item in snapshot.page_error_items
+            if is_terminal_arena_page_error(item.get("text"))
+        ]
+        baseline_items = self.page_error_baseline.get("items")
+        if not isinstance(baseline_items, list):
+            return is_terminal_arena_page_error(snapshot.page_error_message)
+
+        baseline_tokens = {
+            str(item.get("token") or "").strip()
+            for item in baseline_items
+            if isinstance(item, dict) and str(item.get("token") or "").strip()
+        }
+        baseline_text_by_token = {
+            str(item.get("token") or "").strip(): str(item.get("text") or "").strip().casefold()
+            for item in baseline_items
+            if isinstance(item, dict)
+            and str(item.get("token") or "").strip()
+            and str(item.get("text") or "").strip()
+        }
+        baseline_text_counts = Counter(
+            str(item.get("text") or "").strip().casefold()
+            for item in baseline_items
+            if isinstance(item, dict) and str(item.get("text") or "").strip()
+        )
+        current_text_counts = Counter(
+            str(item.get("text") or "").strip().casefold()
+            for item in current_items
+            if str(item.get("text") or "").strip()
+        )
+        unmatched_historical_text = Counter()
+        for item in current_items:
+            text = str(item.get("text") or "").strip()
+            token = str(item.get("token") or "").strip()
+            if token:
+                # A token that survived React reconciliation is authoritative:
+                # a different token means a newly mounted error node, even if
+                # its text is identical to a historical banner.
+                if token in baseline_tokens:
+                    if baseline_text_by_token.get(token, text.casefold()) != text.casefold():
+                        return True
+                    continue
+                return True
+            key = text.casefold()
+            # Marker loss during React replacement leaves no token. In that
+            # case consume one historical occurrence by text, then treat any
+            # additional occurrence as a new error.
+            if baseline_text_counts.get(key, 0) > unmatched_historical_text[key]:
+                unmatched_historical_text[key] += 1
+                continue
+            return True
+
+        # A snapshot implementation without item details still gets the
+        # conservative legacy behavior; normal browser snapshots always have
+        # pageErrorItems, so historical banners are filtered above.
+        if not snapshot.page_error_items:
+            # With a captured baseline, an item-less snapshot is incomplete
+            # (for example during React replacement), not proof of a new error.
+            return False
+        return any(
+            current_text_counts[key] > baseline_text_counts.get(key, 0)
+            for key in current_text_counts
         )
 
     @staticmethod
@@ -306,12 +451,27 @@ return (() => {{
   const inputValue = input
     ? String(typeof input.value === 'string' ? input.value : (input.innerText || input.textContent || ''))
     : '';
-  const hasPendingUpload = Array.from(document.querySelectorAll('img[src^="blob:"]')).some((image) => {{
-    const card = image.closest('div.group.relative.overflow-hidden') || image.parentElement;
-    return !!card
-      && !!card.querySelector('button[aria-label="Remove file"]')
+  const uploadCards = Array.from(document.querySelectorAll('img[src^="blob:"]')).map((image) => {{
+    return image.closest('div.group.relative.overflow-hidden') || image.parentElement;
+  }}).filter(Boolean);
+  const hasPendingUpload = uploadCards.some((card) => {{
+    return !!card.querySelector('button[aria-label="Remove file"]')
       && Array.from(card.querySelectorAll('svg.animate-spin')).some(visible);
   }});
+  const errorUploadCards = uploadCards.filter((card) => {{
+    if (!visible(card)) return false;
+    const hasNegativeClass = Boolean(
+      (card.matches && card.matches('[class*="interactive-negative"], [class*="destructive"]'))
+      || card.querySelector('[class*="interactive-negative"], [class*="destructive"]')
+    );
+    const cardText = String(card.innerText || card.textContent || '').trim();
+    const hasErrorWord = /\berror\b|上传失败|failed/i.test(cardText);
+    return !!card.querySelector('button[aria-label="Remove file"]') && (hasNegativeClass || hasErrorWord);
+  }});
+  const hasUploadError = errorUploadCards.length > 0;
+  const uploadErrorMessage = hasUploadError
+    ? String(errorUploadCards[0].innerText || errorUploadCards[0].textContent || 'Arena 图片附件上传失败 (Error)').replace(/\\s+/g, ' ').trim()
+    : '';
   const errorSelectors = [
     '[role="alert"]', '[aria-live="assertive"]', '[data-testid*="error" i]',
     '[class*="destructive" i]', '[data-state="error"]', '[data-status="error"]',
@@ -329,6 +489,18 @@ return (() => {{
   const errorPattern = /not permitted to handle this|choose another model|violates our terms of use|this content violates|something went wrong with this response|response failed|access denied/i;
   const hasErrorMatch = errorPattern.test(combinedErrorText);
   const pageError = hasErrorMatch;
+  const pageErrorItems = errorElements.map((element, index) => {{
+    let token = '';
+    try {{
+      token = String(element.getAttribute('data-codex-arena-error-token') || '');
+      if (!token) {{
+        token = `arena-error-${{Date.now()}}-${{index}}-${{Math.random().toString(36).slice(2)}}`;
+        element.setAttribute('data-codex-arena-error-token', token);
+      }}
+    }} catch (_) {{}}
+    const text = String(element.innerText || element.textContent || element.getAttribute('title') || '').trim();
+    return {{ text, token }};
+  }}).filter((item) => item.text);
   let rawErrorMessage = errorTexts.find((t) => errorPattern.test(t.toLowerCase())) || (hasErrorMatch ? errorTexts[0] : '') || '';
   const pageErrorMessage = rawErrorMessage.replace(/\\s+/g, ' ').trim();
   return {{
@@ -339,8 +511,11 @@ return (() => {{
     inputEmpty: inputValue.trim().length === 0,
     stopVisible: visible(find(selectors.stop)) || visible(find(selectors.nativeStop)),
     uploadInProgress: hasPendingUpload,
+    uploadError: Boolean(hasUploadError),
+    uploadErrorMessage: String(uploadErrorMessage || ''),
     pageError: Boolean(pageError),
-    pageErrorMessage: String(pageErrorMessage || '')
+    pageErrorMessage: String(pageErrorMessage || ''),
+    pageErrorItems
   }};
 }})();
 """
@@ -392,6 +567,7 @@ __all__ = [
     "ARENA_PAGE_ERROR",
     "ARENA_SEND_NO_TARGET_AFTER_RETRY",
     "ARENA_UPLOAD_CARD_SELECTOR",
+    "ARENA_UPLOAD_ERROR_CARD_SELECTOR",
     "ArenaConfirmedSendNoTarget",
     "ArenaPageError",
     "ArenaSendRetryRefreshError",

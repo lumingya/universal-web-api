@@ -1632,6 +1632,7 @@ body.tab-pool-is-resizing * {
 .member-remove { display: grid; width: 25px; height: 25px; flex: 0 0 25px; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--tp-faint); cursor: pointer; }
 .member-remove:hover { background: rgba(244,63,94,.12); color: #e11d48; }
 .member-remove svg { width: 13px; height: 13px; }
+.member-list-empty { padding: 18px 12px; text-align: center; color: var(--tp-faint); font-size: 11px; }
 .group-editor-actions { display: flex; justify-content: flex-end; gap: 7px; margin-top: 10px; }
 
 .tab-pool-list-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 18px 0 10px; }

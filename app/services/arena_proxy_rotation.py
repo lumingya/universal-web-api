@@ -1,18 +1,21 @@
-"""Shared Clash proxy rotation for Arena commands."""
+"""Shared Clash proxy rotation for Arena and other browser automation commands."""
 
 from __future__ import annotations
 
+import json
+import os
 import time
 import urllib.parse
-from typing import Any, Callable, Dict, Iterable, Optional
+from typing import Any, Callable, Dict, Iterable, Optional, Tuple
 
 import requests
 
 
-ARENA_CLASH_API = "http://127.0.0.1:9097"
-ARENA_CLASH_SECRET = "1"
-ARENA_CLASH_SELECTOR = "主代理"
-ARENA_PROXY_POOL = (
+ARENA_CLASH_API = os.getenv("CLASH_API", os.getenv("ARENA_CLASH_API", "http://127.0.0.1:9097")).rstrip("/")
+ARENA_CLASH_SECRET = os.getenv("CLASH_SECRET", os.getenv("ARENA_CLASH_SECRET", "1"))
+ARENA_CLASH_SELECTOR = os.getenv("CLASH_SELECTOR", os.getenv("ARENA_CLASH_SELECTOR", "主代理"))
+
+DEFAULT_ARENA_PROXY_POOL = (
     "HK自动选择",
     "JP自动选择",
     "KR自动选择",
@@ -22,6 +25,24 @@ ARENA_PROXY_POOL = (
 )
 
 
+def _get_proxy_pool_from_env() -> Tuple[str, ...]:
+    raw = os.getenv("CLASH_PROXY_POOL", os.getenv("ARENA_PROXY_POOL", ""))
+    if not raw:
+        return DEFAULT_ARENA_PROXY_POOL
+    try:
+        if raw.startswith("["):
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                return tuple(str(x).strip() for x in parsed if str(x).strip())
+    except Exception:
+        pass
+    parts = [p.strip() for p in raw.split(",") if p.strip()]
+    return tuple(parts) if parts else DEFAULT_ARENA_PROXY_POOL
+
+
+ARENA_PROXY_POOL = _get_proxy_pool_from_env()
+
+
 def rotate_arena_proxy(
     *,
     tab: Any,
@@ -29,30 +50,37 @@ def rotate_arena_proxy(
     raise_if_cancelled: Optional[Callable[[], None]] = None,
     requests_module: Any = requests,
     sleep: Callable[[float], None] = time.sleep,
-    proxy_pool: Iterable[str] = ARENA_PROXY_POOL,
+    proxy_pool: Optional[Iterable[str]] = None,
+    clash_api: Optional[str] = None,
+    clash_secret: Optional[str] = None,
+    clash_selector: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Move the Arena Clash selector to the next node in the shared pool."""
+    """Move the Clash selector to the next node in the pool."""
     cancel = raise_if_cancelled or (lambda: None)
-    pool = tuple(str(item) for item in proxy_pool if str(item).strip())
+    effective_pool = tuple(str(item) for item in (proxy_pool if proxy_pool is not None else ARENA_PROXY_POOL) if str(item).strip())
+    api_base = str(clash_api or os.getenv("CLASH_API", os.getenv("ARENA_CLASH_API", ARENA_CLASH_API))).rstrip("/")
+    secret = str(clash_secret if clash_secret is not None else os.getenv("CLASH_SECRET", os.getenv("ARENA_CLASH_SECRET", ARENA_CLASH_SECRET)))
+    selector_name = str(clash_selector or os.getenv("CLASH_SELECTOR", os.getenv("ARENA_CLASH_SELECTOR", ARENA_CLASH_SELECTOR)))
+
     headers = {"Content-Type": "application/json"}
-    if ARENA_CLASH_SECRET:
-        headers["Authorization"] = f"Bearer {ARENA_CLASH_SECRET}"
+    if secret:
+        headers["Authorization"] = f"Bearer {secret}"
 
     selector_url = (
-        f"{ARENA_CLASH_API}/proxies/"
-        f"{urllib.parse.quote(ARENA_CLASH_SELECTOR, safe='')}"
+        f"{api_base}/proxies/"
+        f"{urllib.parse.quote(selector_name, safe='')}"
     )
     try:
         cancel()
         response = requests_module.get(selector_url, headers=headers, timeout=5)
         response.raise_for_status()
         selector = response.json()
-        available = [name for name in pool if name in (selector.get("all") or [])]
-        if len(available) != len(pool):
+        available = [name for name in effective_pool if name in (selector.get("all") or [])]
+        if len(available) != len(effective_pool):
             return {
                 "ok": False,
                 "error": "arena_proxy_pool_incomplete",
-                "missing": [name for name in pool if name not in available],
+                "missing": [name for name in effective_pool if name not in available],
             }
 
         current = str(selector.get("now") or "")
@@ -65,7 +93,7 @@ def rotate_arena_proxy(
             return {
                 "ok": True,
                 "switched": False,
-                "selector": ARENA_CLASH_SELECTOR,
+                "selector": selector_name,
                 "node": current,
                 "pool_size": len(available),
             }
@@ -80,7 +108,7 @@ def rotate_arena_proxy(
         switch_response.raise_for_status()
         try:
             requests_module.delete(
-                f"{ARENA_CLASH_API}/connections",
+                f"{api_base}/connections",
                 headers=headers,
                 timeout=5,
             ).raise_for_status()
@@ -90,7 +118,7 @@ def rotate_arena_proxy(
             )
 
         logger.info(
-            f"[ARENA][IP-ROTATE] {ARENA_CLASH_SELECTOR}: "
+            f"[ARENA][IP-ROTATE] {selector_name}: "
             f"{current or '-'} -> {next_proxy}"
         )
         sleep(1.0)
@@ -102,7 +130,7 @@ def rotate_arena_proxy(
         return {
             "ok": True,
             "switched": True,
-            "selector": ARENA_CLASH_SELECTOR,
+            "selector": selector_name,
             "from": current,
             "to": next_proxy,
             "pool_size": len(available),
@@ -112,10 +140,16 @@ def rotate_arena_proxy(
         return {"ok": False, "error": str(error)}
 
 
+# 通用别名
+rotate_clash_proxy = rotate_arena_proxy
+
+
 __all__ = [
     "ARENA_CLASH_API",
     "ARENA_CLASH_SECRET",
     "ARENA_CLASH_SELECTOR",
     "ARENA_PROXY_POOL",
+    "DEFAULT_ARENA_PROXY_POOL",
     "rotate_arena_proxy",
+    "rotate_clash_proxy",
 ]

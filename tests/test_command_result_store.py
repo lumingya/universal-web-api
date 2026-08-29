@@ -237,6 +237,38 @@ class CommandResultStoreTests(unittest.TestCase):
                 worker.join(timeout=2)
                 reader.join(timeout=2)
 
+    def test_concurrent_identical_hits_are_persisted_once(self):
+        values = {
+            "rules": [{"id": "rule", "required_all": "match"}],
+        }
+        info = {"url": "https://arena.ai/c/race", "response_sides": ["match"]}
+        barrier = threading.Barrier(2)
+        original_get_all = command_result_store.get_all_records
+
+        def synchronized_get_all():
+            barrier.wait(timeout=2)
+            return original_get_all()
+
+        outcomes = []
+        with mock.patch.object(command_result_store, "get_all_records", side_effect=synchronized_get_all):
+            workers = [
+                threading.Thread(
+                    target=lambda: outcomes.append(
+                        command_result_store.record_arena_rule_candidates(
+                            "cmd", values, info, profile_resolver=lambda: {"name": "han"}
+                        )
+                    )
+                )
+                for _ in range(2)
+            ]
+            for worker in workers:
+                worker.start()
+            for worker in workers:
+                worker.join(timeout=3)
+
+        self.assertEqual(len(outcomes), 2)
+        self.assertEqual(len(command_result_store.list_command_results("cmd")), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

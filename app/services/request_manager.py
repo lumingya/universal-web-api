@@ -1507,6 +1507,8 @@ class RequestManager:
         response_text: Any,
         *,
         metadata: Optional[Dict[str, Any]] = None,
+        append_if_matched: Optional[Any] = None,
+        strategy: str = "replace",
     ) -> bool:
         """Attach externally observed response text to a tracked request.
 
@@ -1539,7 +1541,20 @@ class RequestManager:
                     max_chars=capture_limit if capture_limit > 0 else MAX_CAPTURED_RESPONSE_CHARS,
                 )
                 existing_text = str(ctx.monitor.get("response_text") or "").strip()
-                if existing_text and "CLAUDE-HIT" in existing_text and stored_text:
+                should_append = False
+                if strategy == "append":
+                    should_append = True
+                elif callable(append_if_matched):
+                    try:
+                        should_append = bool(append_if_matched(existing_text))
+                    except Exception:
+                        should_append = False
+                elif isinstance(append_if_matched, str) and append_if_matched:
+                    should_append = append_if_matched in existing_text
+                elif bool(append_if_matched):
+                    should_append = True
+
+                if existing_text and should_append and stored_text:
                     stored_text = self._sanitize_text_for_storage(
                         f"{existing_text}\n\n{stored_text}",
                         max_chars=capture_limit if capture_limit > 0 else MAX_CAPTURED_RESPONSE_CHARS,

@@ -2449,6 +2449,7 @@ class BrowserMediaMixin:
             candidate_selectors.append("img")
         reply_ele_entries = []
         page_ele_entries = []
+        candidates_initially_scanned = False
         baseline_token = str(image_config.get("request_baseline_token") or "")
         baseline_property = str(image_config.get("request_baseline_property") or "")
         exclude_existing_nodes = bool(image_config.get("request_baseline_exclude_existing_nodes"))
@@ -2541,10 +2542,14 @@ class BrowserMediaMixin:
                         "used": False,
                     })
 
-        _append_image_candidates(last_element, "当前回复", reply_ele_entries)
-        # Battle 模式下 last_element 可能指向另一侧回复。整页候选只用于后续 URL
-        # 精确匹配，不能作为位置兜底，否则会截到旧回复或另一侧的图片。
-        _append_image_candidates(tab, "整页", page_ele_entries)
+        def _ensure_initial_candidates_scanned() -> None:
+            nonlocal candidates_initially_scanned
+            if not candidates_initially_scanned:
+                candidates_initially_scanned = True
+                _append_image_candidates(last_element, "当前回复", reply_ele_entries)
+                # Battle 模式下 last_element 可能指向另一侧回复。整页候选只用于后续 URL
+                # 精确匹配，不能作为位置兜底，否则会截到旧回复或另一侧的图片。
+                _append_image_candidates(tab, "整页", page_ele_entries)
 
         cookies_dict, headers = build_image_download_request_context(tab)
         is_image_gen = bool(
@@ -2606,6 +2611,7 @@ class BrowserMediaMixin:
 
         def _wait_for_matching_image_element(target_url: str):
             """Wait for late-rendered images before giving up screenshot fallback."""
+            _ensure_initial_candidates_scanned()
             matched = _claim_image_element(target_url)
             if matched is not None:
                 return matched

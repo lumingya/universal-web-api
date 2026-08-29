@@ -334,16 +334,17 @@ def evaluate_arena_direct_generation_state(
             }
             const latestAssistant = firstChild;
 
-            // 3. Prompt Echo Guard on the latest User node
+            // 3. Prompt Echo Guard on the latest User node.  Do not return
+            // early: active generation and a newly rendered image are stronger
+            // evidence than a UI-normalized prompt prefix mismatch.
+            let promptEchoMismatch = false;
             if (currentPrompt && String(currentPrompt).trim()) {
                 const latestUser = validChildren.find(c => c.classList.contains('justify-end') || !!c.querySelector('[data-role="user"]'));
                 if (latestUser) {
                     const userText = (latestUser.innerText || '').replace(/\s+/g, ' ').trim();
                     const promptSnippet = String(currentPrompt).trim().slice(0, 15);
                     if (promptSnippet && !userText.includes(promptSnippet)) {
-                        result.status = 'WAITING_HYDRATION';
-                        result.still_generating = true;
-                        return result;
+                        promptEchoMismatch = true;
                     }
                 }
             }
@@ -418,6 +419,12 @@ def evaluate_arena_direct_generation_state(
                 result.is_complete = true;
                 result.still_generating = false;
                 result.image_urls = imgs.map(img => img.src || img.currentSrc);
+                return result;
+            }
+
+            if (promptEchoMismatch) {
+                result.status = 'WAITING_HYDRATION';
+                result.still_generating = true;
                 return result;
             }
 
@@ -899,6 +906,9 @@ def validate_generated_images(
     )
 
 
+from app.services.arena_image_stream_observer import ArenaImageStreamObserver
+
+
 __all__ = [
     "ARENA_IMAGE_GENERATION_FAILED_CODE",
     "ARENA_IMAGE_UNCHANGED_CODE",
@@ -909,6 +919,7 @@ __all__ = [
     "ArenaImageGenerationError",
     "ArenaImageGenerationGuard",
     "ArenaImageGenerationObservation",
+    "ArenaImageStreamObserver",
     "auto_skip_arena_direct_comparison",
     "detect_arena_render_crash",
     "evaluate_arena_direct_generation_state",

@@ -71,22 +71,14 @@ from app.api.deps import (
     verify_service_auth,
     verify_service_token,
 )
-from app.services.arena_direct_models import (
-    build_openai_model_entries,
-    get_arena_direct_catalog_for_tab,
-    get_arena_direct_model_public_id,
-    list_arena_direct_models,
-    match_arena_direct_model,
-    normalize_model_catalog_config,
+from app.services.catalog_routing import catalog_router, select_catalog_tab
+from app.services.error_metadata import (
+    resolve_error_metadata,
+    build_error_response,
+    is_manual_terminate,
+    is_prompt_rejection_code,
 )
-from app.services.arena_image_generation import (
-    ARENA_NON_RETRYABLE_CODES,
-    ARENA_PROMPT_REJECTED_CODE,
-)
-from app.core.workflow.arena_send_watchdog import (
-    ARENA_PAGE_ERROR,
-    ARENA_SEND_NO_TARGET_AFTER_RETRY,
-)
+from app.services.text_filter import sanitize_response_text
 from app.utils.model_routing import collect_route_domain_models, inspect_model_route
 from app.utils.site_url import route_domain_matches
 
@@ -99,87 +91,6 @@ SSE_HEARTBEAT_INTERVAL = 5.0
 RESPONSES_STATE_MAX_ENTRIES = 1024
 RESPONSES_STATE_TTL_SEC = 3600.0
 
-
-def _select_arena_catalog_tab(
-    browser: Any,
-    candidates: List[Dict[str, Any]],
-    preset_name: Any = None,
-) -> Optional[Dict[str, Any]]:
-    """Select an Arena Direct tab without bypassing the pool allocation policy."""
-    if not candidates:
-        return None
-
-    idle_candidates = [
-        item
-        for item in candidates
-        if str(item.get("status") or "").strip().lower() == "idle"
-    ]
-    pool = idle_candidates or candidates
-
-    try:
-        allocation_mode = str(
-            getattr(browser.tab_pool, "allocation_mode", "") or ""
-        ).strip().lower()
-    except Exception:
-        allocation_mode = ""
-    if allocation_mode not in {"first_idle", "round_robin", "random"}:
-        allocation_mode = "first_idle"
-
-    if allocation_mode == "round_robin":
-        from app.api import tab_routes as tab_routes_api
-
-        cursor_key = f"arena_catalog::{str(preset_name or '').strip().casefold()}"
-        return tab_routes_api._select_round_robin_tab(pool, cursor_key)
-    if allocation_mode == "random":
-        return random.choice(pool)
-    return min(pool, key=lambda item: int(item.get("persistent_index") or 0))
-
-
-def _match_arena_catalog_tab(
-    browser: Any,
-    config_engine: Any,
-    tabs: List[Dict[str, Any]],
-    requested_model: Any,
-) -> Optional[Dict[str, Any]]:
-    """Match a model only against each tab's currently assigned preset."""
-    is_url_excluded = getattr(getattr(browser, "tab_pool", None), "is_url_excluded", None)
-    matches: List[Dict[str, Any]] = []
-    for tab in tabs or []:
-        tab_url = str(tab.get("current_url") or tab.get("url") or "").strip()
-        if callable(is_url_excluded) and is_url_excluded(tab_url):
-            continue
-        catalog_info = get_arena_direct_catalog_for_tab(config_engine, tab)
-        catalog = catalog_info.get("catalog") if catalog_info else None
-        if not isinstance(catalog, dict) or not catalog.get("enabled"):
-            continue
-        try:
-            models = list_arena_direct_models(browser, catalog_config=catalog, tab=tab)
-        except TypeError:
-            models = list_arena_direct_models(browser, catalog_config=catalog)
-        model = match_arena_direct_model(models, requested_model)
-        if model:
-            matches.append({
-                "tab": tab,
-                "model": model,
-                "preset_name": str(catalog_info.get("preset_name") or ""),
-            })
-
-    selected_tab = _select_arena_catalog_tab(
-        browser,
-        [entry["tab"] for entry in matches],
-    )
-    if selected_tab is None:
-        return None
-    selected_index = int(selected_tab.get("persistent_index") or 0)
-    return next(
-        (
-            entry
-            for entry in matches
-            if int(entry["tab"].get("persistent_index") or 0) == selected_index
-        ),
-        None,
-    )
-
 _responses_state_lock = threading.RLock()
 # 修复(4)：会话历史改存 json.dumps 序列化字符串（不可变），
 # 读写两侧不再对含 base64 图片的完整消息历史做 deepcopy，序列化/反序列化均在锁外执行
@@ -190,73 +101,13 @@ class _ToolCallingExecutionCancelled(Exception):
     """Raised when a non-stream tool-calling worker is still running after cancellation."""
 
 
-_MANUAL_TERMINATE_REASONS = frozenset({
-    "manual_terminate",
-    "manual_terminate_from_tab_pool",
-})
-_ARENA_PROMPT_REJECTION_REASONS = frozenset({ARENA_PROMPT_REJECTED_CODE})
-_ARENA_NON_RETRYABLE_REASONS = frozenset(
-    {*ARENA_NON_RETRYABLE_CODES, ARENA_SEND_NO_TARGET_AFTER_RETRY, ARENA_PAGE_ERROR}
-)
-
-
 def _get_tool_calling_cancel_reason(ctx: RequestContext) -> str:
     reason = str(ctx.cancel_reason or "").strip()
     return reason or "tool_calling_cancelled"
 
 
 def _is_manual_terminate(ctx: RequestContext) -> bool:
-    return str(ctx.cancel_reason or "").strip() in _MANUAL_TERMINATE_REASONS
-
-
-def _is_arena_prompt_rejection(ctx: RequestContext) -> bool:
-    return str(ctx.cancel_reason or "").strip() in _ARENA_PROMPT_REJECTION_REASONS
-
-
-def _is_arena_non_retryable(ctx: RequestContext) -> bool:
-    return str(ctx.cancel_reason or "").strip() in _ARENA_NON_RETRYABLE_REASONS
-
-
-def _is_arena_prompt_rejection_payload(payload: Any) -> bool:
-    if not isinstance(payload, dict):
-        return False
-    error = payload.get("error")
-    return (
-        isinstance(error, dict)
-        and str(error.get("code") or "").strip() in _ARENA_PROMPT_REJECTION_REASONS
-    )
-
-
-def _is_arena_non_retryable_payload(payload: Any) -> bool:
-    if not isinstance(payload, dict):
-        return False
-    error = payload.get("error")
-    return (
-        isinstance(error, dict)
-        and str(error.get("code") or "").strip() in _ARENA_NON_RETRYABLE_REASONS
-    )
-
-
-def _arena_prompt_rejection_response(
-    message: str = "Arena 拒绝了该提示词：内容违反 Terms of Use",
-) -> JSONResponse:
-    return _arena_non_retryable_response(message, ARENA_PROMPT_REJECTED_CODE)
-
-
-def _arena_non_retryable_response(message: str, code: str) -> JSONResponse:
-    return JSONResponse(
-        content={
-            "error": {
-                "message": message,
-                "type": "invalid_request_error",
-                "code": code,
-                "status_code": 422,
-                "retryable": False,
-            }
-        },
-        status_code=422,
-        headers={"x-should-retry": "false"},
-    )
+    return is_manual_terminate(ctx)
 
 
 def _manual_terminate_response() -> JSONResponse:
@@ -286,6 +137,125 @@ def _request_cancelled_response() -> JSONResponse:
         status_code=499,
         headers={"x-should-retry": "false"},
     )
+
+
+# =========================================================================
+# 兼容性别名与适配函数（维持既有测试用例与下游依赖契约）
+# =========================================================================
+from app.services.error_metadata import (
+    _PROMPT_REJECTION_CODES as _ARENA_PROMPT_REJECTION_REASONS,
+    _KNOWN_NON_RETRYABLE_CODES as _ARENA_NON_RETRYABLE_REASONS,
+    ARENA_PROMPT_REJECTED_CODE,
+    ARENA_NON_RETRYABLE_CODES,
+    ARENA_PAGE_ERROR,
+    ARENA_SEND_NO_TARGET_AFTER_RETRY,
+)
+
+
+def _is_arena_prompt_rejection(ctx: RequestContext) -> bool:
+    meta = resolve_error_metadata(ctx)
+    return meta is not None and meta.code in _ARENA_PROMPT_REJECTION_REASONS
+
+
+def _is_arena_non_retryable(ctx: RequestContext) -> bool:
+    meta = resolve_error_metadata(ctx)
+    return meta is not None and not meta.retryable and meta.status_code == 422
+
+
+def _is_arena_prompt_rejection_payload(payload: Any) -> bool:
+    meta = resolve_error_metadata(payload)
+    return meta is not None and meta.code in _ARENA_PROMPT_REJECTION_REASONS
+
+
+def _is_arena_non_retryable_payload(payload: Any) -> bool:
+    meta = resolve_error_metadata(payload)
+    return meta is not None and not meta.retryable and meta.status_code == 422
+
+
+def _arena_non_retryable_response(message: str, code: str) -> JSONResponse:
+    from app.services.error_metadata import ErrorMetadata
+
+    meta = ErrorMetadata(
+        code=code,
+        message=message,
+        status_code=422,
+        retryable=False,
+        error_type="invalid_request_error",
+    )
+    return build_error_response(meta)
+
+
+def _arena_prompt_rejection_response(
+    message: str = "Arena 拒绝了该提示词：内容违反 Terms of Use",
+) -> JSONResponse:
+    return _arena_non_retryable_response(message, ARENA_PROMPT_REJECTED_CODE)
+
+
+# ================= 向前兼容适配层（供外部测试与兼容调用） =================
+_select_arena_catalog_tab = select_catalog_tab
+
+
+def _match_arena_catalog_tab(
+    browser: Any,
+    config_engine: Any,
+    tabs: List[Dict[str, Any]],
+    requested_model: Any,
+) -> Optional[Dict[str, Any]]:
+    res = catalog_router.match_route(browser, config_engine, tabs, requested_model)
+    if not res:
+        return None
+    return {
+        "tab": res.get("catalog_tab"),
+        "model": res.get("matched_model"),
+        "preset_name": res.get("preset_name"),
+    }
+_match_arena_catalog_tab._is_default_wrapper = True
+
+
+def _is_arena_prompt_rejection(ctx: RequestContext) -> bool:
+    meta = resolve_error_metadata(ctx)
+    return meta is not None and is_prompt_rejection_code(meta.code)
+
+
+def _is_arena_non_retryable(ctx: RequestContext) -> bool:
+    meta = resolve_error_metadata(ctx)
+    return meta is not None and not meta.retryable and meta.status_code == 422
+
+
+def _is_arena_prompt_rejection_payload(payload: Any) -> bool:
+    meta = resolve_error_metadata(payload)
+    return meta is not None and is_prompt_rejection_code(meta.code)
+
+
+def _is_arena_non_retryable_payload(payload: Any) -> bool:
+    meta = resolve_error_metadata(payload)
+    return meta is not None and not meta.retryable and meta.status_code == 422
+
+
+def _arena_prompt_rejection_response(
+    message: str = "Arena 拒绝了该提示词：内容违反 Terms of Use",
+) -> JSONResponse:
+    from app.services.arena_image_generation import ARENA_PROMPT_REJECTED_CODE
+    from app.services.error_metadata import ErrorMetadata
+    meta = resolve_error_metadata(ARENA_PROMPT_REJECTED_CODE, default_message=message)
+    return build_error_response(meta or ErrorMetadata(code=ARENA_PROMPT_REJECTED_CODE, message=message, status_code=422, retryable=False))
+
+
+def _arena_non_retryable_response(message: str, code: str) -> JSONResponse:
+    from app.services.error_metadata import ErrorMetadata
+    meta = ErrorMetadata(code=code, message=message, status_code=422, retryable=False)
+    return build_error_response(meta)
+
+
+# 动态目录函数符号导出（供 monkeypatch / 兼容测试使用）
+from app.services.arena_direct_models import (  # noqa: E402
+    build_openai_model_entries,
+    get_arena_direct_catalog_for_tab,
+    get_arena_direct_model_public_id,
+    list_arena_direct_models,
+    match_arena_direct_model,
+    normalize_model_catalog_config,
+)
 
 
 def _is_genuine_task_cancellation() -> bool:
@@ -525,7 +495,7 @@ def _validate_image_inputs(messages: list) -> None:
 
 class ChatRequest(BaseModel):
     """聊天请求模型"""
-    model: str = Field(default="gpt-3.5-turbo")
+    model: str = Field(default="未知")
     messages: list = Field(...)
     stream: Optional[bool] = Field(default=False)
     temperature: Optional[float] = Field(default=0.7, ge=0, le=2)
@@ -544,7 +514,7 @@ class ChatRequest(BaseModel):
 
 class ResponsesRequest(BaseModel):
     """Responses API 请求模型（兼容 Codex / OpenAI Responses wire format）"""
-    model: str = Field(default="gpt-3.5-turbo")
+    model: str = Field(default="未知")
     input: Optional[Any] = Field(default="")
     instructions: Optional[str] = Field(default=None)
     stream: Optional[bool] = Field(default=False)
@@ -2217,54 +2187,34 @@ async def chat_completions(
         if route_info.get("match_type") == "none":
             from app.services.config_engine import config_engine
 
-            # 阶段 2：只在标签页当前绑定的预设内匹配，不跨预设自动切换。
-            matched_tab_info = await asyncio.to_thread(
-                _match_arena_catalog_tab,
+            # 阶段 2：通用动态模型目录匹配（只在标签页当前绑定的预设内匹配，不跨预设自动切换）
+            catalog_match_result = await asyncio.to_thread(
+                catalog_router.match_route,
                 browser,
                 config_engine,
                 tabs,
                 body.model,
+                body.preset_name,
             ) if browser else None
-            if matched_tab_info:
-                catalog_match = matched_tab_info["model"]
-                matched_preset_name = matched_tab_info["preset_name"]
-                is_url_excluded = getattr(browser.tab_pool, "is_url_excluded", None)
-                matched_tab = matched_tab_info["tab"]
-                tab_url = str(matched_tab.get("current_url") or matched_tab.get("url") or "").strip()
-                catalog_candidates = [] if callable(is_url_excluded) and is_url_excluded(tab_url) else [matched_tab]
-                catalog_tab = _select_arena_catalog_tab(
-                    browser,
-                    catalog_candidates,
-                    preset_name=matched_preset_name or body.preset_name,
-                )
-                if catalog_tab:
-                    route_domain = "arena.ai"
-                    catalog_tab_index = int(catalog_tab.get("persistent_index") or 0) or None
-                    public_model_id = get_arena_direct_model_public_id(catalog_match)
-                    matched_uuid = str(catalog_match.get("id") or catalog_match.get("uuid") or catalog_match.get("arena_model_id") or "")
-                    matched_public_name = str(catalog_match.get("public_name") or catalog_match.get("publicName") or "")
-                    matched_display_name = str(catalog_match.get("display_name") or catalog_match.get("displayName") or catalog_match.get("name") or "")
-                    logger.info(
-                        f"[ARENA_CATALOG:MATCH] 成功匹配 Arena 目录模型: requested_model={body.model!r}, "
-                        f"preset={matched_preset_name!r}, uuid={matched_uuid!r}, public_name={matched_public_name!r}, "
-                        f"display_name={matched_display_name!r}, public_model_id={public_model_id!r}, "
-                        f"target_tab_index={catalog_tab_index}, target_tab_url={catalog_tab.get('current_url') or catalog_tab.get('url')}"
-                    )
-                    route_info.update({
-                        "route_domain": route_domain,
-                        "route_type": "model_catalog",
-                        "model_name": public_model_id or str(body.model or ""),
-                        "matched_id": public_model_id or str(body.model or ""),
-                        "match_type": "catalog",
-                        "preset_name": matched_preset_name,
-                        "available_model_ids": [public_model_id] if public_model_id else [],
-                    })
+
+            if catalog_match_result:
+                route_domain = str(catalog_match_result.get("route_domain") or "")
+                catalog_tab_index = catalog_match_result.get("catalog_tab_index")
+                route_info.update({
+                    "route_domain": route_domain,
+                    "route_type": catalog_match_result.get("route_type", "model_catalog"),
+                    "model_name": catalog_match_result.get("model_name") or str(body.model or ""),
+                    "matched_id": catalog_match_result.get("matched_id") or str(body.model or ""),
+                    "match_type": catalog_match_result.get("match_type", "catalog"),
+                    "preset_name": catalog_match_result.get("preset_name"),
+                    "available_model_ids": catalog_match_result.get("available_model_ids") or [],
+                })
             else:
                 logger.debug(
-                    f"[ARENA_CATALOG:NOMATCH] 当前标签页预设不包含请求模型: requested_model={body.model!r}"
+                    f"[CATALOG_ROUTER:NOMATCH] 当前标签页预设目录不包含请求模型: requested_model={body.model!r}"
                 )
 
-        # 阶段 3：若 Arena Catalog 仍未命中，检查通用模型 ID（Generic）与标签页前缀模糊匹配（Prefix）兜底
+        # 阶段 3：若动态目录仍未命中，检查通用模型 ID（Generic）与标签页前缀模糊匹配（Prefix）兜底
         if route_info.get("match_type") == "none":
             fallback_info = inspect_model_route(
                 body.model,
@@ -2677,31 +2627,29 @@ async def _stream_with_lifecycle(
         ):
             if cancelled_midway:
                 # 明确告知客户端响应因取消而不完整，避免半截回复被当成完整响应
-                prompt_rejected = _is_arena_prompt_rejection(ctx)
-                arena_non_retryable = _is_arena_non_retryable(ctx)
-                cancel_code = (
-                    str(ctx.cancel_reason or "").strip()
-                    if arena_non_retryable
-                    else ("manual_terminate" if _is_manual_terminate(ctx) else "request_cancelled")
-                )
-                cancel_message = (
-                    "Arena 拒绝了该提示词：内容违反 Terms of Use"
-                    if prompt_rejected
-                    else (
-                        "Arena 图片生成失败，响应不可重试"
-                        if arena_non_retryable
-                        else "请求已被取消，响应不完整"
-                    )
-                )
-                if arena_non_retryable:
+                error_meta = resolve_error_metadata(ctx)
+                is_manual = _is_manual_terminate(ctx)
+                if error_meta and not error_meta.retryable:
+                    cancel_code = error_meta.code
+                    cancel_message = error_meta.message
                     request_manager.capture_error(ctx, cancel_message, code=cancel_code)
-                cancel_chunk = _pack_error(
-                    cancel_message,
-                    cancel_code,
-                    error_type="invalid_request_error" if arena_non_retryable else "execution_error",
-                    status_code=422 if arena_non_retryable else None,
-                    retryable=False if arena_non_retryable else None,
-                )
+                    cancel_chunk = _pack_error(
+                        cancel_message,
+                        cancel_code,
+                        error_type=error_meta.error_type,
+                        status_code=error_meta.status_code,
+                        retryable=error_meta.retryable,
+                    )
+                else:
+                    cancel_code = "manual_terminate" if is_manual else "request_cancelled"
+                    cancel_message = "请求已被取消，响应不完整"
+                    cancel_chunk = _pack_error(
+                        cancel_message,
+                        cancel_code,
+                        error_type="execution_error",
+                        status_code=None,
+                        retryable=None,
+                    )
                 request_manager.capture_response_chunk(ctx, cancel_chunk)
                 yield cancel_chunk
                 done_chunk = _pack_done()
@@ -2829,33 +2777,21 @@ async def _non_stream_with_lifecycle(
             if not _consume_stream_payload(data):
                 break
 
-    if _is_arena_non_retryable(ctx) or _is_arena_non_retryable_payload(error_data):
-        message = "Arena 拒绝了该提示词：内容违反 Terms of Use"
-        code = ARENA_PROMPT_REJECTED_CODE
-        if isinstance(error_data, dict):
-            error = error_data.get("error")
-            if isinstance(error, dict):
-                if str(error.get("message") or "").strip():
-                    message = str(error["message"]).strip()
-                candidate_code = str(error.get("code") or "").strip()
-                if candidate_code in _ARENA_NON_RETRYABLE_REASONS:
-                    code = candidate_code
-        return _arena_non_retryable_response(message, code)
+    # 优先解析错误响应（如 400 安全违规、422 提示词拒绝、429 限流等）
+    error_meta = resolve_error_metadata(error_data) or resolve_error_metadata(ctx)
+    if error_meta:
+        return build_error_response(error_meta)
 
     if _is_manual_terminate(ctx):
         return _manual_terminate_response()
 
     if error_data:
+        fallback_meta = resolve_error_metadata(error_data)
+        if fallback_meta:
+            return build_error_response(fallback_meta)
         return JSONResponse(content=error_data, status_code=500)
 
-    full_content = "".join(collected_content)
-    placeholder_pattern = re.compile(
-        r"^\s*https?://(?:[\w.-]+\.)?googleusercontent\.com/(?:image_generation_content|generated_music_content)/\d+\s*$",
-        re.IGNORECASE | re.MULTILINE,
-    )
-    full_content = placeholder_pattern.sub("", full_content)
-    full_content = re.sub(r"\n{3,}", "\n\n", full_content).strip()
-    full_content = apply_stop_sequences_to_text(full_content, body.stop)
+    full_content = sanitize_response_text("".join(collected_content), stop_sequences=body.stop)
 
     response = SSEFormatter.pack_non_stream(
         full_content,
@@ -3157,26 +3093,18 @@ def _pack_error(
     error_type: str = "execution_error",
     status_code: Optional[int] = None,
     retryable: Optional[bool] = None,
+    param: Optional[str] = None,
+    extra: Optional[Dict[str, Any]] = None,
 ) -> str:
-    data = {
-        "id": f"chatcmpl-error-{int(time.time() * 1000)}",
-        "object": "chat.completion.chunk",
-        "created": int(time.time()),
-        "model": "web-browser",
-        "choices": [{
-            "index": 0,
-            "delta": {"content": f"[错误] {message}"},
-            "finish_reason": None
-        }],
-        "error": {
-            "message": message,
-            "type": error_type,
-            "code": code,
-            **({"status_code": status_code} if status_code is not None else {}),
-            **({"retryable": retryable} if retryable is not None else {}),
-        }
-    }
-    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+    return SSEFormatter.pack_error(
+        message=message,
+        error_type=error_type,
+        code=code,
+        status_code=status_code,
+        retryable=retryable,
+        param=param,
+        extra=extra,
+    )
 
 
 def _pack_done() -> str:
@@ -3213,67 +3141,13 @@ def _collect_model_entries() -> List[Dict[str, Any]]:
         tabs = browser.tab_pool.get_tabs_with_index()
         from app.services.config_engine import config_engine
 
-        catalog_presets = []
-        seen_catalog_keys = set()
-        for tab in tabs:
-            candidate = get_arena_direct_catalog_for_tab(config_engine, tab)
-            if candidate and candidate.get("catalog", {}).get("enabled"):
-                cat = candidate["catalog"]
-            else:
-                cat = None
-                if route_domain_matches("arena.ai", tab.get("route_domain") or tab.get("current_domain") or ""):
-                    effective_preset_name = str(tab.get("preset_name") or config_engine.get_default_preset("arena.ai") or "").strip()
-                    try:
-                        preset = config_engine._get_site_data_readonly("arena.ai", effective_preset_name or None)
-                        if isinstance(preset, dict):
-                            cat_candidate = normalize_model_catalog_config(preset.get("model_catalog"))
-                            if cat_candidate.get("enabled") and cat_candidate.get("source") == "arena_direct":
-                                cat = cat_candidate
-                    except Exception:
-                        pass
-            if cat and cat.get("enabled"):
-                cat_key = (
-                    cat.get("source", ""),
-                    cat.get("modality", ""),
-                    tuple(cat.get("include_keywords", [])),
-                    tuple(cat.get("exclude_keywords", [])),
-                    bool(cat.get("enable_dark_pool", False)),
-                    str(cat.get("dark_pool_since") or "").strip(),
-                    tuple(cat.get("dark_pool_whitelist_keywords", [])),
-                    tuple(cat.get("dark_pool_blacklist_keywords", [])),
-                )
-                if cat_key not in seen_catalog_keys:
-                    seen_catalog_keys.add(cat_key)
-                    catalog_presets.append(cat)
-
-        for item in collect_route_domain_models(tabs):
-            item_route_domains = list(item.get("route_domains") or [])
-            if item.get("route_domain"):
-                item_route_domains.append(item.get("route_domain"))
-            if catalog_presets and item.get("is_route_alias") and any(
-                route_domain_matches("arena.ai", domain)
-                for domain in item_route_domains
-            ):
-                continue
-            _append_entry(
-                item.get("id"),
-                owned_by=item.get("route_domain") or "universal-web-api",
-                display_name=item.get("display_name") or item.get("id"),
-            )
-        for cat in catalog_presets:
-            cat_models = list_arena_direct_models(
-                browser,
-                catalog_config=cat,
-            )
-            for item in build_openai_model_entries(
-                cat_models,
-                created=MODEL_LIST_CREATED,
-            ):
-                _append_entry(
-                    item.get("id"),
-                    owned_by=item.get("owned_by") or "arena.ai",
-                    display_name=item.get("display_name") or item.get("id"),
-                )
+        catalog_router.collect_models_for_catalog(
+            browser=browser,
+            config_engine=config_engine,
+            tabs=tabs,
+            append_entry=_append_entry,
+            created=MODEL_LIST_CREATED,
+        )
     except Exception as e:
         logger.debug(f"构建模型列表失败（已忽略）: {e}")
 

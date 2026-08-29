@@ -1,26 +1,7 @@
 """
-app/core/config.py - 配置和基础设施兼容性门面 (Compatibility Facade)
-
-职责：
-- 向后兼容：保持所有现有模块对 `app.core.config` 的导入有效
-- 具体实现已按职责拆分至 `app.core.config_parts/` 子包
-
-子模块分布：
-- env_config.py: 环境变量加载与应用配置 (AppConfig, app_config, load_dotenv, atomic_write_json)
-- browser_constants.py: 浏览器常量配置 (BrowserConstants)
-- exceptions.py: 基础异常定义 (BrowserError, WorkflowError, etc.)
-- sse_formatter.py: SSE 响应格式化器 (SSEFormatter)
-- message_validator.py: 消息验证器 (MessageValidator)
-- log_collector.py: 前端展示日志收集器 (LogCollector, log_collector)
-- log_redaction.py: 敏感信息过滤与脱敏 (sanitize_sensitive_data, _sanitize_sensitive_text)
-- log_formatters.py: 日志格式化器与 Handler 管理 (_ConsoleColorFormatter, _SafeRotatingFileHandler)
-- cute_translator.py: 表驱动的展示层喵化翻译规则与逻辑 (_cuteify_*_message)
-- secure_logger.py: 安全日志器实现与日志工厂 (SecureLogger, get_logger, logger)
+app/core/config_parts - 配置与基础设施子模块包
 """
-
-# 从子模块导入所有对外及内部关键接口，确保 100% 向后兼容
-from app.core.config_parts import (
-    # 环境变量与应用配置
+from .env_config import (
     PROJECT_ROOT,
     DEFAULT_LOG_DIR,
     atomic_write_json,
@@ -29,30 +10,25 @@ from app.core.config_parts import (
     load_dotenv,
     AppConfig,
     app_config,
-
-    # 浏览器常量
+)
+from .browser_constants import (
     BrowserConstants,
     _browser_constant_bool,
     _browser_constant_int,
     _BrowserConstantEnabledFilter,
-
-    # 异常
+)
+from .exceptions import (
     BrowserError,
     BrowserConnectionError,
     ElementNotFoundError,
     WorkflowError,
     WorkflowCancelledError,
     ConfigurationError,
-
-    # SSE 与消息工具
-    SSEFormatter,
-    MessageValidator,
-
-    # 日志收集器
-    LogCollector,
-    log_collector,
-
-    # 敏感信息过滤脱敏
+)
+from .sse_formatter import SSEFormatter
+from .message_validator import MessageValidator
+from .log_collector import LogCollector, log_collector
+from .log_redaction import (
     _SENSITIVE_KEY_HINTS,
     _REDACTED_TEXT,
     _redact_data_uri_for_log,
@@ -74,8 +50,8 @@ from app.core.config_parts import (
     _is_sensitive_key,
     _sanitize_sensitive_text,
     sanitize_sensitive_data,
-
-    # 日志格式化器与 Handler
+)
+from .log_formatters import (
     _truncate_long_message,
     _get_log_display_limit,
     _record_request_id,
@@ -110,8 +86,8 @@ from app.core.config_parts import (
     get_shared_file_log_handler,
     _shared_file_log_handler,
     _shared_file_log_handler_lock,
-
-    # 喵化翻译规则
+)
+from .cute_translator import (
     _REQUEST_FINISH_PATTERN,
     _TAB_START_INDEX_PATTERN,
     _TAB_START_ROUTE_PATTERN,
@@ -156,8 +132,8 @@ from app.core.config_parts import (
     _cuteify_info_message,
     _cuteify_warning_message,
     _cuteify_debug_message,
-
-    # 安全日志器与工厂
+)
+from .secure_logger import (
     _request_context,
     _command_log_context,
     _logger_setup_lock,
@@ -169,25 +145,50 @@ from app.core.config_parts import (
     logger,
 )
 
+__all__ = [
+    # 应用配置
+    'AppConfig',
+    'app_config',
+    'load_dotenv',
+    'PROJECT_ROOT',
+    'DEFAULT_LOG_DIR',
+    'atomic_write_json',
+    '_replace_file_with_retry',
+    'classproperty',
 
-# ================= 模块初始化 =================
+    # 浏览器常量
+    'BrowserConstants',
+    '_browser_constant_bool',
+    '_browser_constant_int',
+    '_BrowserConstantEnabledFilter',
 
-# 加载浏览器配置并应用到类属性
-BrowserConstants._load_config()
-BrowserConstants._apply_to_class_attrs()
+    # 日志系统与收集器
+    'SecureLogger',
+    'logger',
+    'get_logger',
+    'log_collector',
+    'LogCollector',
+    '_request_context',
+    '_command_log_context',
+    'command_log_context',
+    'get_log_file_path',
+    'get_shared_file_log_handler',
+    '_shared_file_log_handler',
+    '_shared_file_log_handler_lock',
+    '_logger_setup_lock',
+    '_logger_registry_lock',
+    '_logger_registry',
+    'sanitize_sensitive_data',
 
-# 启动时打印配置确认
-logger.info(f"[CONFIG] 日志级别: {AppConfig.get_log_level()}")
-logger.info(f"[CONFIG] 调试模式: {AppConfig.is_debug()}")
-logger.info(f"[CONFIG] 浏览器端口: {BrowserConstants.DEFAULT_PORT}")
-logger.info(f"[CONFIG] 配置文件: {BrowserConstants._config_file} (存在: {BrowserConstants._config_file.exists()})")
-logger.info(f"[CONFIG] STREAM_SILENCE_THRESHOLD = {BrowserConstants.STREAM_SILENCE_THRESHOLD}")
-logger.info(f"[CONFIG] STREAM_STABLE_COUNT_THRESHOLD = {BrowserConstants.STREAM_STABLE_COUNT_THRESHOLD}")
-logger.debug("[CONFIG] 这条 DEBUG 日志仅在 LOG_LEVEL=DEBUG 时显示")
+    # 异常
+    'BrowserError',
+    'BrowserConnectionError',
+    'ElementNotFoundError',
+    'WorkflowError',
+    'WorkflowCancelledError',
+    'ConfigurationError',
 
-
-# ================= 导出 =================
-
-from app.core.config_parts import __all__ as _config_parts_all
-
-__all__ = list(_config_parts_all)
+    # SSE 与消息工具
+    'SSEFormatter',
+    'MessageValidator',
+]

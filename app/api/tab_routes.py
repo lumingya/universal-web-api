@@ -59,6 +59,10 @@ from app.services.tool_calling import (
     normalize_tool_request,
     summarize_messages_for_debug,
 )
+from app.services.error_metadata import (
+    resolve_error_metadata,
+    build_error_response,
+)
 from app.api.openai_stop import (
     apply_stop_sequences_to_text,
     build_stop_sequence_stream_state,
@@ -1428,7 +1432,7 @@ def _resolve_strict_domain_preset(route_domain: str, preset_name: str) -> Dict[s
 
 class ChatRequest(BaseModel):
     """聊天请求模型"""
-    model: str = Field(default="gpt-3.5-turbo")
+    model: str = Field(default="未知")
     messages: list = Field(...)
     stream: Optional[bool] = Field(default=False)
     temperature: Optional[float] = Field(default=0.7, ge=0, le=2)
@@ -3207,7 +3211,14 @@ async def _non_stream_with_tab_index(
             if error_data:
                 break
 
+    error_meta = resolve_error_metadata(error_data) or resolve_error_metadata(ctx)
+    if error_meta:
+        return build_error_response(error_meta)
+
     if error_data:
+        fallback_meta = resolve_error_metadata(error_data)
+        if fallback_meta:
+            return build_error_response(fallback_meta)
         return JSONResponse(content=error_data, status_code=500)
 
     full_content = apply_stop_sequences_to_text(
@@ -3545,7 +3556,14 @@ async def _non_stream_with_route_domain(
             if error_data:
                 break
 
+    error_meta = resolve_error_metadata(error_data) or resolve_error_metadata(ctx)
+    if error_meta:
+        return build_error_response(error_meta)
+
     if error_data:
+        fallback_meta = resolve_error_metadata(error_data)
+        if fallback_meta:
+            return build_error_response(fallback_meta)
         return JSONResponse(content=error_data, status_code=500)
 
     full_content = apply_stop_sequences_to_text(
@@ -3860,7 +3878,14 @@ async def _non_stream_with_exact_url(
             if error_data:
                 break
 
+    error_meta = resolve_error_metadata(error_data) or resolve_error_metadata(ctx)
+    if error_meta:
+        return build_error_response(error_meta)
+
     if error_data:
+        fallback_meta = resolve_error_metadata(error_data)
+        if fallback_meta:
+            return build_error_response(fallback_meta)
         return JSONResponse(content=error_data, status_code=500)
 
     full_content = apply_stop_sequences_to_text(
@@ -5006,25 +5031,26 @@ async def delete_site_preset(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def _pack_error(message: str, code: str = "error") -> str:
+def _pack_error(
+    message: str,
+    code: str = "error",
+    *,
+    error_type: str = "execution_error",
+    status_code: Optional[int] = None,
+    retryable: Optional[bool] = None,
+    param: Optional[str] = None,
+    extra: Optional[Dict[str, Any]] = None,
+) -> str:
     """打包 SSE 错误"""
-    data = {
-        "id": f"chatcmpl-error-{int(time.time() * 1000)}",
-        "object": "chat.completion.chunk",
-        "created": int(time.time()),
-        "model": "web-browser",
-        "choices": [{
-            "index": 0,
-            "delta": {"content": f"[错误] {message}"},
-            "finish_reason": None
-        }],
-        "error": {
-            "message": message,
-            "type": "execution_error",
-            "code": code
-        }
-    }
-    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+    return SSEFormatter.pack_error(
+        message=message,
+        error_type=error_type,
+        code=code,
+        status_code=status_code,
+        retryable=retryable,
+        param=param,
+        extra=extra,
+    )
 
 
 def _pack_done() -> str:

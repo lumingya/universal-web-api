@@ -16,6 +16,7 @@ from urllib.parse import unquote, urlparse
 
 from app.core.config import BrowserConstants, ElementNotFoundError, WorkflowError, logger
 from app.core.page_lifecycle import BACKGROUND_WAKE_CDP_TIMEOUT
+from app.core.workflow.model_selection import execute_model_selection
 from app.services.arena_direct_models import (
     resolve_arena_direct_model,
 )
@@ -1648,6 +1649,13 @@ class WorkflowExecutorActionMixin:
                         logger.info(f"[CLICK:STOP] 准备点击停止生成按钮: target={target_key!r}, selector={selector!r}")
 
                     if target_key == "send_btn":
+                        # Capture terminal error nodes at the last safe point
+                        # before the click; React may replace them immediately.
+                        capture_error_baseline = getattr(
+                            self, "_capture_arena_page_error_baseline", None
+                        )
+                        if callable(capture_error_baseline):
+                            capture_error_baseline("click")
                         send_url = self._get_current_url_snapshot("send_click_start")
                         before_len = self._safe_get_input_len_by_key("input_box")
                         logger.info(

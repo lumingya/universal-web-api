@@ -224,6 +224,11 @@ class TabPoolManager:
                 wait_timeout=self._global_network_wait_timeout,
                 retry_delay=self._global_network_retry_delay,
             )
+            try:
+                from app.services.arena_tab_listener import register_arena_tab_listener
+                register_arena_tab_listener(self._global_network_monitor)
+            except Exception as e:
+                logger.debug(f"[TabPool] 注册 Arena 扩展监听器失败（忽略）: {e}")
 
         logger.debug(
             f"TabPoolManager 初始化 (max={max_tabs}, stuck_timeout={self.stuck_timeout}s, "

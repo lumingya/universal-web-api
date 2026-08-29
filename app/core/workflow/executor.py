@@ -100,6 +100,7 @@ class WorkflowExecutor(
         self._request_transport_bypass = False
         self._last_request_transport_sent = False
         self._last_send_attempt_state: Dict[str, Any] = {}
+        self._arena_page_error_baseline: Dict[str, Any] = {}
         self._input_stability_wait_pending = False
         self._last_new_chat_clicked_snapshot: Dict[str, Any] = {}
         self._last_fill_completed_at = 0.0
@@ -680,6 +681,24 @@ class WorkflowExecutor(
         except Exception as e:
             logger.debug(f"[Executor] 预捕获 DOM 发送基线失败（忽略）: {e}")
 
+    def _capture_arena_page_error_baseline(self, reason: str = "") -> None:
+        """Capture Arena terminal-error nodes immediately before submit."""
+        if not ArenaSendWatchdog.applies_to(getattr(self, "tab", None)):
+            self._arena_page_error_baseline = {}
+            return
+        try:
+            self._arena_page_error_baseline = ArenaSendWatchdog.capture_page_error_baseline(
+                tab=self.tab,
+                selectors=self._selectors,
+            )
+            logger.debug(
+                "[Executor] 已捕获 Arena 页面错误基线 "
+                f"({reason or 'send'}, items={len(self._arena_page_error_baseline.get('items') or [])})"
+            )
+        except Exception as exc:
+            self._arena_page_error_baseline = {"available": False, "items": []}
+            logger.debug(f"[Executor] Arena 页面错误基线捕获失败（忽略）: {exc}")
+
     def _build_dom_fallback_kwargs(self) -> Dict[str, Any]:
         kwargs: Dict[str, Any] = {}
         try:
@@ -846,6 +865,7 @@ class WorkflowExecutor(
                 key = target_key or value
                 # 包含 Enter 的按键（Enter、Ctrl+Enter 等）可能触发提交
                 if self._combo_contains_submit_key(key):
+                    self._capture_arena_page_error_baseline("keypress")
                     if self._network_monitor is not None:
                         self._prepare_page_fetch_capture()
                         self._network_monitor.pre_start()
@@ -912,6 +932,7 @@ class WorkflowExecutor(
                 self._maybe_warmup_page_for_stealth(action, target_key)
 
                 if target_key == "send_btn":
+                    self._capture_arena_page_error_baseline("click")
                     # 🆕 发送前启动网络监听（如果已配置）
                     if self._network_monitor is not None:
                         self._prepare_page_fetch_capture()
@@ -1022,6 +1043,7 @@ class WorkflowExecutor(
                             selectors=self._selectors,
                             should_stop=self._check_cancelled,
                             workflow_interrupted=_workflow_interrupt_pending,
+                            page_error_baseline=self._arena_page_error_baseline,
                         )
                         try:
                             watchdog.wait_for_target()
@@ -1104,7 +1126,15 @@ class WorkflowExecutor(
                     except NetworkMonitorTerminalError as e:
                         if self._wait_for_verification_interrupt_after_rate_limit(e):
                             return
-                        logger.error(f"[Executor] 目标流已确认失败，终止工作流: {e}")
+                        clean_err = str(e)
+                        try:
+                            from app.services.error_metadata import resolve_error_metadata
+                            meta = resolve_error_metadata(clean_err)
+                            if meta and meta.message:
+                                clean_err = f"[{meta.code}] {meta.message}" if (meta.code and meta.code not in {"error", "workflow_failed", "upstream_error"}) else meta.message
+                        except Exception:
+                            pass
+                        logger.error(f"[Executor] 目标流已确认失败，终止工作流: {clean_err}")
                         raise WorkflowError(f"stream_terminal_error:{e}")
 
                     except NetworkMonitorTimeout as e:
@@ -1213,7 +1243,15 @@ class WorkflowExecutor(
                 logger.info(f"[Executor] step cancelled; suppressing workflow exception [{action}]: {e}")
                 return
             error_code = str(e)
-            logger.error(f"步骤执行失败 [{action}]: {error_code}")
+            clean_err = error_code
+            try:
+                from app.services.error_metadata import resolve_error_metadata
+                meta = resolve_error_metadata(error_code)
+                if meta and meta.message:
+                    clean_err = f"[{meta.code}] {meta.message}" if (meta.code and meta.code not in {"error", "workflow_failed", "upstream_error"}) else meta.message
+            except Exception:
+                pass
+            logger.error(f"步骤执行失败 [{action}]: {clean_err}")
             if error_code in {
                 "new_chat_transition_timeout",
                 "send_unconfirmed",
@@ -1229,10 +1267,7 @@ class WorkflowExecutor(
                 )
                 raise
             if "stream_terminal_error:" in error_code:
-                yield self.formatter.pack_error(
-                    error_code,
-                    code="arena_page_error",
-                )
+                yield self.formatter.pack_error(error_code)
                 raise
             if not optional:
                 file_paste_messages = {
@@ -1268,6 +1303,8 @@ class WorkflowExecutor(
         with self._page_interaction_slot("KEY_PRESS", str(key or "")) as acquired:
             if not acquired or self._check_cancelled():
                 return
+            if self._combo_contains_submit_key(key):
+                self._capture_arena_page_error_baseline("keypress")
             if self.stealth_mode:
                 self.tab.actions.key_down(key)
                 time.sleep(random.uniform(0.05, 0.13))
@@ -1291,6 +1328,9 @@ class WorkflowExecutor(
         with self._page_interaction_slot("KEY_PRESS", "+".join(keys)) as acquired:
             if not acquired or self._check_cancelled():
                 return
+
+            if self._combo_contains_submit_key(key):
+                self._capture_arena_page_error_baseline("keypress_combo")
 
             if self.stealth_mode:
                 for item in keys:

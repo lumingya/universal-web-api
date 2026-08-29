@@ -1,6 +1,7 @@
 # 环境配置（含敏感信息）
 .env
 *.local
+*.local.json
 
 # Python
 __pycache__/
@@ -12,6 +13,7 @@ venv/
 ENV/
 .venv/
 temp/
+.pytest_cache/
 
 # 浏览器配置（含用户登录态，绝对不能提交！）
 chrome_profile/
@@ -47,6 +49,7 @@ config/command_results.local.json
 config/commands.json
 config/sites.local.json
 config/*.tmp
+config/marketplace_cache.json
 
 # 系统文件
 .DS_Store
@@ -55,6 +58,7 @@ Thumbs.db
 # 备份文件
 *.bak
 *.backup
+*.bak_*
 
 # Node.js
 node_modules/
@@ -68,6 +72,14 @@ git提交.py
 
 download_images/
 image/
+tmp/
+scratch/
+
+# Windows folder metadata
+desktop.ini
+
+# Runtime cache
+scripts/arena_models_cache.json
 
 # Agent 协作与网桥配置文件
 agent_collaboration_rules.md

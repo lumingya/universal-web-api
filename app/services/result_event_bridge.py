@@ -69,20 +69,11 @@ def _get_event_path() -> Path:
 
 def _get_model_map_path() -> Optional[Path]:
     raw_path = str(os.getenv("ARENA_MODEL_MAP_PATH") or "").strip()
-    candidates = []
     if raw_path:
-        candidates.append(Path(raw_path).expanduser())
-    candidates.append(
-        PROJECT_ROOT.parent.parent
-        / "竞技场"
-        / "lmarena 自用"
-        / "LMArenaBridge-main"
-        / "available_models.json"
-    )
-    for path in candidates:
+        path = Path(raw_path).expanduser()
         if path.exists():
             return path
-    return candidates[0] if candidates else None
+    return None
 
 
 def _load_model_id_map() -> Dict[str, str]:
@@ -269,9 +260,23 @@ def _build_event(payload: Dict[str, Any], context: Dict[str, Any]) -> Optional[D
     if not _is_arena_result(payload):
         return None
 
+    event_meta = payload.get("event") if isinstance(payload.get("event"), dict) else {}
+    url = str(event_meta.get("url") or "").strip()
+    try:
+        from app.core.workflow.arena_direct_guard import is_arena_direct_preset
+        from app.services.arena_tab_listener import is_explicit_arena_direct_url
+        if is_explicit_arena_direct_url(url):
+            return None
+        session = _resolve_session_from_event(event_meta, context, payload)
+        if session is not None:
+            preset_name = str(getattr(session, "preset_name", "") or getattr(session, "preset", "") or "")
+            if preset_name and is_arena_direct_preset("arena.ai", preset_name):
+                return None
+    except Exception:
+        pass
+
     raw_body = payload.get("raw_body") or ""
     parse_result = payload.get("parse_result") if isinstance(payload.get("parse_result"), dict) else {}
-    event_meta = payload.get("event") if isinstance(payload.get("event"), dict) else {}
     sides = _parse_arena_sides(raw_body)
 
     content = str(parse_result.get("content") or "")
@@ -643,6 +648,7 @@ def _publish_arena_command_result_event(
                 "arena_parser_id": full_data.get("parser_id") or "",
                 "arena_default_side": "a" if full_data.get("response_a") else "b",
             },
+            append_if_matched="CLAUDE-HIT",
         )
     except Exception as exc:
         logger.debug(f"[RESULT_EVENT_BRIDGE] request monitor update failed: {exc}")
@@ -653,6 +659,22 @@ def emit_arena_snapshot_event(snapshot: Dict[str, Any]) -> bool:
     if not _env_flag("ARENA_EVENT_BRIDGE_ENABLED", True):
         return False
     if not isinstance(snapshot, dict):
+        return False
+
+    if bool(snapshot.get("is_direct")) or str(snapshot.get("mode") or "").strip().lower() == "direct":
+        return False
+
+    url = str(snapshot.get("url") or "").strip()
+    try:
+        from app.services.arena_tab_listener import is_explicit_arena_direct_url
+        if is_explicit_arena_direct_url(url):
+            return False
+    except Exception:
+        pass
+
+    message_id_a = str(snapshot.get("message_id_a") or "").strip()
+    message_id_b = str(snapshot.get("message_id_b") or "").strip()
+    if not message_id_a or not message_id_b or message_id_a == message_id_b:
         return False
 
     response_a = str(snapshot.get("response_a") or "")

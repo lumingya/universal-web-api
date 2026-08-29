@@ -12,7 +12,8 @@ window.LogsTab = {
             expandedRawLogs: {},
             collapsedRequestGroups: {},
             selectedRequestId: 'ALL',
-            viewMode: 'requests'
+            viewMode: 'requests',
+            copiedLogId: null
         };
     },
     computed: {
@@ -148,6 +149,70 @@ window.LogsTab = {
 
         getRawLogText(log) {
             return log.originalMessageText || log.message || this.getLogText(log);
+        },
+
+        formatRawLogText(log) {
+            let raw = String(this.getRawLogText(log) || '');
+            if (!raw) return '';
+
+            // 1. 反转义常见控制字符
+            raw = raw.replace(/\\r\\n/g, '\n').replace(/\\n/g, '\n').replace(/\\r/g, '\r').replace(/\\t/g, '  ');
+
+            // 2. 尝试识别并格式化嵌入的 JSON 对象
+            const jsonStartIdx = raw.search(/[\{\[]/);
+            if (jsonStartIdx !== -1) {
+                const prefix = raw.slice(0, jsonStartIdx);
+                const candidate = raw.slice(jsonStartIdx).trim();
+                try {
+                    const parsed = JSON.parse(candidate);
+                    const pretty = JSON.stringify(parsed, null, 2);
+                    return prefix ? `${prefix.trimEnd()}\n${pretty}` : pretty;
+                } catch (e) {
+                    // 如果末尾有多余字符，尝试寻找匹配的大括号
+                    const lastBraceIdx = Math.max(raw.lastIndexOf('}'), raw.lastIndexOf(']'));
+                    if (lastBraceIdx > jsonStartIdx) {
+                        try {
+                            const subJson = raw.slice(jsonStartIdx, lastBraceIdx + 1);
+                            const parsed = JSON.parse(subJson);
+                            const pretty = JSON.stringify(parsed, null, 2);
+                            const suffix = raw.slice(lastBraceIdx + 1);
+                            return `${raw.slice(0, jsonStartIdx).trimEnd()}\n${pretty}${suffix ? '\n' + suffix.trim() : ''}`.trim();
+                        } catch (err) {
+                            // 降级使用基础反转义文本
+                        }
+                    }
+                }
+            }
+            return raw.trim();
+        },
+
+        async copyRawLog(log) {
+            const text = this.formatRawLogText(log);
+            if (!text) return;
+            try {
+                if (navigator && navigator.clipboard && navigator.clipboard.writeText) {
+                    await navigator.clipboard.writeText(text);
+                } else {
+                    const textarea = document.createElement('textarea');
+                    textarea.value = text;
+                    document.body.appendChild(textarea);
+                    textarea.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(textarea);
+                }
+                this.copiedLogId = String(log.id);
+                setTimeout(() => {
+                    if (this.copiedLogId === String(log.id)) {
+                        this.copiedLogId = null;
+                    }
+                }, 1800);
+            } catch (err) {
+                console.error('复制日志失败:', err);
+            }
+        },
+
+        isCopied(log) {
+            return this.copiedLogId === String(log.id);
         },
 
         hasRawLogText(log) {
@@ -348,8 +413,18 @@ window.LogsTab = {
                                         {{ isRawExpanded(log) ? '收起原文' : '展开原文' }}
                                     </button>
                                 </div>
-                                <pre v-if="hasRawLogText(log) && isRawExpanded(log)"
-                                     class="mt-2 max-h-64 overflow-auto rounded bg-gray-950 p-2 text-xs text-gray-100 whitespace-pre-wrap break-words select-all">{{ getRawLogText(log) }}</pre>
+                                <div v-if="hasRawLogText(log) && isRawExpanded(log)"
+                                     class="mt-2 overflow-hidden rounded-md border border-gray-700/80 bg-gray-950 text-gray-100 shadow-sm">
+                                    <div class="flex items-center justify-between border-b border-gray-800 bg-gray-900/90 px-3 py-1.5 text-xs text-gray-400">
+                                        <span class="font-mono font-medium text-gray-300">技术原文详情 (Raw Log)</span>
+                                        <button type="button"
+                                                @click.stop="copyRawLog(log)"
+                                                class="inline-flex items-center gap-1 rounded bg-gray-800 px-2 py-0.5 text-xs text-gray-200 hover:bg-gray-700 hover:text-white transition-colors">
+                                            <span>{{ isCopied(log) ? '已复制 ✓' : '复制原文' }}</span>
+                                        </button>
+                                    </div>
+                                    <pre class="max-h-72 overflow-auto p-2.5 text-xs font-mono whitespace-pre-wrap break-words select-all leading-relaxed">{{ formatRawLogText(log) }}</pre>
+                                </div>
                             </div>
                         </div>
                     </section>
@@ -376,8 +451,18 @@ window.LogsTab = {
                                 {{ isRawExpanded(log) ? '收起原文' : '展开原文' }}
                             </button>
                         </div>
-                        <pre v-if="hasRawLogText(log) && isRawExpanded(log)"
-                             class="mt-2 max-h-64 overflow-auto rounded bg-gray-950 p-2 text-xs text-gray-100 whitespace-pre-wrap break-words select-all">{{ getRawLogText(log) }}</pre>
+                        <div v-if="hasRawLogText(log) && isRawExpanded(log)"
+                             class="mt-2 overflow-hidden rounded-md border border-gray-700/80 bg-gray-950 text-gray-100 shadow-sm">
+                            <div class="flex items-center justify-between border-b border-gray-800 bg-gray-900/90 px-3 py-1.5 text-xs text-gray-400">
+                                <span class="font-mono font-medium text-gray-300">技术原文详情 (Raw Log)</span>
+                                <button type="button"
+                                        @click.stop="copyRawLog(log)"
+                                        class="inline-flex items-center gap-1 rounded bg-gray-800 px-2 py-0.5 text-xs text-gray-200 hover:bg-gray-700 hover:text-white transition-colors">
+                                    <span>{{ isCopied(log) ? '已复制 ✓' : '复制原文' }}</span>
+                                </button>
+                            </div>
+                            <pre class="max-h-72 overflow-auto p-2.5 text-xs font-mono whitespace-pre-wrap break-words select-all leading-relaxed">{{ formatRawLogText(log) }}</pre>
+                        </div>
                     </div>
                 </div>
 

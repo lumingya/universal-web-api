@@ -327,7 +327,15 @@ class NetworkMonitor:
         if not error_text:
             return parse_result
 
-        logger.warning(f"[NetworkMonitor] 解析失败: {error_text}")
+        clean_error_text = error_text
+        try:
+            from app.services.error_metadata import resolve_error_metadata
+            meta = resolve_error_metadata(error_text)
+            if meta and meta.message:
+                clean_error_text = f"[{meta.code}] {meta.message}" if (meta.code and meta.code not in {"error", "workflow_failed", "upstream_error"}) else meta.message
+        except Exception:
+            pass
+        logger.warning(f"[NetworkMonitor] 解析失败: {clean_error_text}")
         should_abort = False
         try:
             should_abort = bool(self.parser.should_abort_on_error())
@@ -2412,6 +2420,7 @@ class NetworkMonitor:
                     active_stream_response is not None
                     and not self._has_stream_output()
                     and not self._stream_capture_complete(active_stream_response)
+                    and silence_duration >= 3.0
                 ):
                     logger.debug_throttled(
                         f"network.wait_first_content.{id(self)}",

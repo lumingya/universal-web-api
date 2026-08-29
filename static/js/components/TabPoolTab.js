@@ -87,6 +87,8 @@ window.TabPoolTabComponent = {
                 submitting: false,
                 tab: null
             },
+            sitesConfig: {},
+            availableDomains: [],
             modelNameTooltipText: '修改该标签页的模型显示名称后，前端选中这个模型时，只会在该标签页或同名模型的标签页中轮询，不会调度到其他模型标签页。'
         };
     },
@@ -433,6 +435,7 @@ window.TabPoolTabComponent = {
                     this.autoRememberUrlPresets = !!data.auto_remember_url_presets;
                     this.tabsResponseSignature = signature;
                     this.lastUpdate = new Date().toLocaleTimeString();
+                    this.updateAvailableDomains();
                 }
                 // 正常路径：配置字段确实来自后端，允许写回
                 this.configLoaded = true;
@@ -829,37 +832,164 @@ window.TabPoolTabComponent = {
             return groupId ? `/group/${groupId}` : '';
         },
 
+        _extractHostnameFromUrl(urlStr) {
+            const str = String(urlStr || '').trim();
+            if (!str) return '';
+            const withScheme = str.includes('://') ? str : ('https://' + str);
+            try {
+                return new URL(withScheme).hostname.toLowerCase();
+            } catch (e) {
+                return '';
+            }
+        },
+
+        tabMatchesRouteDomain(tab, targetDomain) {
+            const domain = String(targetDomain || '').trim().toLowerCase();
+            if (!domain) return true;
+            if (!tab) return false;
+            const tabDomains = [tab.preset_route_domain, tab.route_domain, tab.current_domain]
+                .map(v => String(v || '').trim().toLowerCase())
+                .filter(Boolean);
+            if (tabDomains.includes(domain)) return true;
+            if (tab.url) {
+                const host = this._extractHostnameFromUrl(tab.url);
+                if (host && (host === domain || host.endsWith('.' + domain))) return true;
+            }
+            return false;
+        },
+
+        routeGroupMemberMatchesDomain(member, targetDomain) {
+            const domain = String(targetDomain || '').trim().toLowerCase();
+            if (!domain) return true;
+            if (!member) return false;
+            const matchedTab = (this.tabs || []).find(tab => this.routeGroupMemberMatchesTab(member, tab));
+            if (matchedTab) {
+                return this.tabMatchesRouteDomain(matchedTab, domain);
+            }
+            if (member.url) {
+                const host = this._extractHostnameFromUrl(member.url);
+                if (host && (host === domain || host.endsWith('.' + domain))) return true;
+            }
+            return false;
+        },
+
+        getRouteGroupAvailableTabs(group) {
+            const routeDomain = String(group && group.route_domain || '').trim().toLowerCase();
+            if (!routeDomain) return this.tabs || [];
+            return (this.tabs || []).filter(tab => this.tabMatchesRouteDomain(tab, routeDomain));
+        },
+
+        async fetchSitesConfig() {
+            try {
+                const token = window.getDashboardAuthToken ? window.getDashboardAuthToken() : '';
+                const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+                const response = await fetch('/api/config', { headers });
+                if (response.ok) {
+                    const data = await response.json();
+                    this.sitesConfig = (data && typeof data === 'object') ? data : {};
+                    this.updateAvailableDomains();
+                }
+            } catch (e) {
+                // ignore fetch errors
+            }
+        },
+
+        updateAvailableDomains() {
+            const domainSet = new Set();
+            Object.keys(this.sitesConfig || {}).forEach(domain => {
+                const clean = String(domain || '').trim().toLowerCase();
+                if (clean && !clean.startsWith('_')) domainSet.add(clean);
+            });
+            (this.tabs || []).forEach(tab => {
+                [tab.route_domain, tab.current_domain, tab.preset_route_domain].forEach(domain => {
+                    const clean = String(domain || '').trim().toLowerCase();
+                    if (clean && !clean.startsWith('_') && clean !== '未识别域名') domainSet.add(clean);
+                });
+            });
+            (this.routeGroups || []).forEach(group => {
+                const clean = String(group && group.route_domain || '').trim().toLowerCase();
+                if (clean && !clean.startsWith('_')) domainSet.add(clean);
+            });
+            if (this.routeGroupModal && this.routeGroupModal.route_domain) {
+                const clean = String(this.routeGroupModal.route_domain || '').trim().toLowerCase();
+                if (clean && !clean.startsWith('_')) domainSet.add(clean);
+            }
+            this.availableDomains = Array.from(domainSet).sort();
+        },
+
+        handleRouteGroupDomainChange(newDomain) {
+            const domain = String(newDomain || '').trim().toLowerCase();
+            this.routeGroupModal.route_domain = domain;
+            if (domain) {
+                this.routeGroupModal.members = (this.routeGroupModal.members || []).filter(member => {
+                    return this.routeGroupMemberMatchesDomain(member, domain);
+                });
+            }
+            const availablePresets = this.getRouteGroupPresetOptions(this.routeGroupModal);
+            if (this.routeGroupModal.preset_name && !availablePresets.includes(this.routeGroupModal.preset_name)) {
+                this.routeGroupModal.preset_name = '';
+            }
+        },
+
         getRouteGroupPresetOptions(group) {
             const names = new Set();
             const configured = String(group && group.preset_name || '').trim();
             if (configured) names.add(configured);
             const routeDomain = String(group && group.route_domain || '').trim().toLowerCase();
+
+            if (routeDomain && this.sitesConfig && this.sitesConfig[routeDomain]) {
+                const siteCfg = this.sitesConfig[routeDomain];
+                if (siteCfg.presets && typeof siteCfg.presets === 'object') {
+                    Object.keys(siteCfg.presets).forEach(p => {
+                        const clean = String(p || '').trim();
+                        if (clean) names.add(clean);
+                    });
+                }
+                if (siteCfg.default_preset) {
+                    const clean = String(siteCfg.default_preset || '').trim();
+                    if (clean) names.add(clean);
+                }
+            }
+
             (this.tabs || []).forEach(tab => {
                 const isMember = (group && group.members || []).some(
                     member => this.routeGroupMemberMatchesTab(member, tab)
                 );
                 const tabDomains = [tab.preset_route_domain, tab.route_domain, tab.current_domain]
                     .map(value => String(value || '').trim().toLowerCase());
-                if (!isMember && (!routeDomain || !tabDomains.includes(routeDomain))) return;
+                if (!isMember && (routeDomain && !tabDomains.includes(routeDomain))) return;
                 (tab.available_presets || []).forEach(name => names.add(String(name || '').trim()));
             });
             return Array.from(names).filter(Boolean);
         },
 
         getRouteGroupOfflineMembers(group) {
-            return (group && group.members || []).filter(member => !(this.tabs || []).some(
-                tab => this.routeGroupMemberMatchesTab(member, tab)
-            ));
+            const routeDomain = String(group && group.route_domain || '').trim().toLowerCase();
+            return (group && group.members || []).filter(member => {
+                const isOnline = (this.tabs || []).some(tab => this.routeGroupMemberMatchesTab(member, tab));
+                if (isOnline) return false;
+                if (routeDomain && !this.routeGroupMemberMatchesDomain(member, routeDomain)) return false;
+                return true;
+            });
         },
 
         getRouteGroupOnlineMemberCount(group) {
-            return (this.tabs || []).filter(tab => (group && group.members || []).some(
-                member => this.routeGroupMemberMatchesTab(member, tab)
-            )).length;
+            const routeDomain = String(group && group.route_domain || '').trim().toLowerCase();
+            return (this.tabs || []).filter(tab => {
+                if (routeDomain && !this.tabMatchesRouteDomain(tab, routeDomain)) return false;
+                return (group && group.members || []).some(
+                    member => this.routeGroupMemberMatchesTab(member, tab)
+                );
+            }).length;
         },
 
         openRouteGroupModal(group = null, editIndex = -1) {
             const source = group || {};
+            const domain = String(source.route_domain || '').trim().toLowerCase();
+            let members = (source.members || []).map(member => ({ ...member }));
+            if (domain) {
+                members = members.filter(member => this.routeGroupMemberMatchesDomain(member, domain));
+            }
             this.routeGroupsExpanded = true;
             this.routeGroupModal = {
                 visible: true,
@@ -867,11 +997,12 @@ window.TabPoolTabComponent = {
                 editIndex,
                 id: String(source.id || ''),
                 name: String(source.name || ''),
-                route_domain: String(source.route_domain || ''),
+                route_domain: domain,
                 preset_name: String(source.preset_name || ''),
                 allocation_mode: String(source.allocation_mode || 'round_robin'),
-                members: (source.members || []).map(member => ({ ...member }))
+                members
             };
+            this.updateAvailableDomains();
         },
 
         closeRouteGroupModal(force = false) {
@@ -895,9 +1026,6 @@ window.TabPoolTabComponent = {
                     url_token: String(tab.url_route_token || ''),
                     tab_index: Number(tab.persistent_index || 0)
                 });
-                if (!this.routeGroupModal.route_domain) {
-                    this.routeGroupModal.route_domain = String(tab.route_domain || tab.current_domain || '');
-                }
             }
             this.routeGroupModal.members = members;
         },
@@ -955,10 +1083,6 @@ window.TabPoolTabComponent = {
                 this.$emit('notify', { type: 'error', message: '组 ID 只能使用小写字母、数字、点、下划线和连字符' });
                 return;
             }
-            if (modal.preset_name && !modal.route_domain) {
-                this.$emit('notify', { type: 'error', message: '固定预设前需要设置站点域名' });
-                return;
-            }
             const duplicateIndex = (this.routeGroups || []).findIndex(
                 (item, index) => String(item.id || '').toLowerCase() === groupId && index !== modal.editIndex
             );
@@ -967,13 +1091,18 @@ window.TabPoolTabComponent = {
                 return;
             }
 
+            const domain = String(modal.route_domain || '').trim().toLowerCase();
+            const members = (modal.members || []).filter(member => {
+                return !domain || this.routeGroupMemberMatchesDomain(member, domain);
+            });
+
             const nextGroup = {
                 id: groupId,
                 name: String(modal.name || groupId).trim() || groupId,
-                route_domain: String(modal.route_domain || '').trim(),
+                route_domain: domain,
                 preset_name: String(modal.preset_name || '').trim(),
                 allocation_mode: String(modal.allocation_mode || 'round_robin'),
-                members: (modal.members || []).map(member => ({ ...member }))
+                members: members.map(member => ({ ...member }))
             };
             const nextGroups = (this.routeGroups || []).map(group => ({ ...group }));
             if (modal.editIndex >= 0) nextGroups.splice(modal.editIndex, 1, nextGroup);
@@ -1308,6 +1437,7 @@ window.TabPoolTabComponent = {
     mounted() {
         this.baseUrl = window.location.origin;
         this.loadTabPoolLayout();
+        this.fetchSitesConfig();
         this.fetchTabs();
         this.startAutoRefresh();
         document.addEventListener('click', this.handleDocumentClick);
@@ -1518,7 +1648,13 @@ window.TabPoolTabComponent = {
                                 <div class="group-editor-fields">
                                     <label><span>组 ID</span><input v-model.trim="routeGroupModal.id" :disabled="routeGroupModal.editIndex >= 0" placeholder="arena-image"></label>
                                     <label><span>显示名称</span><input v-model.trim="routeGroupModal.name" placeholder="Arena 生图"></label>
-                                    <label><span>站点域名</span><input v-model.trim="routeGroupModal.route_domain" placeholder="arena.ai"></label>
+                                    <label>
+                                        <span>站点域名</span>
+                                        <select :value="routeGroupModal.route_domain" @change="handleRouteGroupDomainChange($event.target.value)">
+                                            <option value="">全部 / 不限站点</option>
+                                            <option v-for="domain in availableDomains" :key="domain" :value="domain">{{ domain }}</option>
+                                        </select>
+                                    </label>
                                     <label><span>固定预设</span><select v-model="routeGroupModal.preset_name"><option value="">不固定预设</option><option v-for="preset in getRouteGroupPresetOptions(routeGroupModal)" :key="preset" :value="preset">{{ preset }}</option></select></label>
                                     <label class="wide"><span>组内分配模式</span><select v-model="routeGroupModal.allocation_mode"><option v-for="mode in allocationModeOptions" :key="mode.value" :value="mode.value">{{ mode.label }}</option></select></label>
                                     <div v-if="routeGroupModal.id" class="group-editor-endpoint wide">
@@ -1535,7 +1671,7 @@ window.TabPoolTabComponent = {
                                         </span>
                                     </div>
                                     <div class="member-list">
-                                        <div v-for="tab in tabs" :key="tab.persistent_index" :class="['member-list-item', { selected: isRouteGroupMemberSelected(tab) }]">
+                                        <div v-for="tab in getRouteGroupAvailableTabs(routeGroupModal)" :key="tab.persistent_index" :class="['member-list-item', { selected: isRouteGroupMemberSelected(tab) }]">
                                             <label>
                                                 <input type="checkbox" :checked="isRouteGroupMemberSelected(tab)" @change="toggleRouteGroupMember(tab)">
                                                 <i :class="statusColor(tab.status)"></i>
@@ -1549,6 +1685,9 @@ window.TabPoolTabComponent = {
                                             <span><strong>#{{ member.tab_index || '?' }} · 未在线</strong><small>{{ member.url || member.url_token }}</small></span>
                                             <em>未在线</em>
                                             <button type="button" class="member-remove" @click="removeRouteGroupMember(member)" title="移出路由组" v-html="$icons.xMark"></button>
+                                        </div>
+                                        <div v-if="getRouteGroupAvailableTabs(routeGroupModal).length === 0 && getRouteGroupOfflineMembers(routeGroupModal).length === 0" class="member-list-empty">
+                                            {{ routeGroupModal.route_domain ? ('当前没有属于 ' + routeGroupModal.route_domain + ' 的标签页') : '当前没有可用标签页' }}
                                         </div>
                                     </div>
                                     <div class="group-editor-actions">

@@ -18,6 +18,10 @@ from app.utils.site_url import extract_remote_site_domain, tab_url_matches
 from app.utils.image_handler import extract_images_from_messages
 from app.core.page_lifecycle import BACKGROUND_WAKE_CDP_TIMEOUT
 from app.core.workflow import WorkflowExecutor
+from app.core.workflow.error_handlers import (
+    get_workflow_retry_handler,
+    is_retriable_workflow_error,
+)
 from app.core.workflow.arena_send_watchdog import (
     ARENA_SEND_NO_TARGET_AFTER_RETRY,
     ArenaSendRetryRefreshError,
@@ -1184,79 +1188,20 @@ class BrowserWorkflowMixin:
                 retry_detail = self._get_stream_terminal_error_detail(
                     retry_origin_chunk or ""
                 ).strip().lower()
-                if retry_detail == "arena_direct_unexpected_battle_redirect":
-                    try:
-                        recovery_url = str(
-                            getattr(session, "_arena_direct_recovery_url", "") or ""
-                        ).strip()
-                        recovery_input_selector = str(
-                            getattr(session, "_arena_direct_input_selector", "") or ""
-                        ).strip()
-                        recover_arena_direct_page(
-                            session.tab,
-                            target_url=recovery_url,
-                            input_selector=recovery_input_selector,
-                            should_stop=stop_checker or self._should_stop_checker,
-                        )
-                        setattr(session, "_arena_direct_recovered_retry", True)
-                    except ArenaDirectRecoveryError as exc:
-                        logger.error(
-                            f"[{session.id}] Arena direct recovery failed: {exc}"
-                        )
-                        yield self.formatter.pack_error(
-                            f"stream_terminal_error:{exc}",
-                            code="arena_direct_recovery_failed",
-                        )
-                        yield self.formatter.pack_finish()
-                        return
-                    except Exception as exc:
-                        logger.error(
-                            f"[{session.id}] Arena direct recovery unexpected error: {exc}"
-                        )
-                        yield self.formatter.pack_error(
-                            f"stream_terminal_error:{exc}",
-                            code="arena_direct_recovery_failed",
-                        )
-                        yield self.formatter.pack_finish()
-                        return
-                elif retry_detail == "arena_send_no_target":
-                    try:
-                        input_selector = str(
-                            getattr(session, "_arena_watchdog_input_selector", "")
-                            or getattr(session, "_arena_direct_input_selector", "")
-                            or "textarea, [contenteditable=\"true\"]"
-                        ).strip()
-                        refresh_arena_page_for_retry(
-                            session.tab,
-                            input_selector=input_selector,
-                            should_stop=stop_checker or self._should_stop_checker,
-                        )
-                    except ArenaSendWatchdogCancelled:
-                        return
-                    except ArenaSendRetryRefreshError as exc:
-                        logger.error(
-                            f"[{session.id}] Arena watchdog retry refresh failed: {exc}"
-                        )
-                        yield self.formatter.pack_error(
-                            f"stream_terminal_error:{ARENA_SEND_NO_TARGET_AFTER_RETRY}",
-                            code=ARENA_SEND_NO_TARGET_AFTER_RETRY,
-                            status_code=422,
-                            retryable=False,
-                        )
-                        yield self.formatter.pack_finish()
-                        return
-                    except Exception as exc:
-                        logger.error(
-                            f"[{session.id}] Arena watchdog retry refresh unexpected error: {exc}"
-                        )
-                        yield self.formatter.pack_error(
-                            f"stream_terminal_error:{ARENA_SEND_NO_TARGET_AFTER_RETRY}",
-                            code=ARENA_SEND_NO_TARGET_AFTER_RETRY,
-                            status_code=422,
-                            retryable=False,
-                        )
-                        yield self.formatter.pack_finish()
-                        return
+                retry_handler = get_workflow_retry_handler(retry_detail)
+                if retry_handler is not None:
+                    retry_stream = retry_handler(
+                        session,
+                        stop_checker or self._should_stop_checker,
+                        self.formatter,
+                    )
+                    if retry_stream is not None:
+                        has_error_chunks = False
+                        for chunk in retry_stream:
+                            has_error_chunks = True
+                            yield chunk
+                        if has_error_chunks:
+                            return
 
                 attempt += 1
                 setattr(session, "_workflow_stop_reason", None)
@@ -1290,8 +1235,21 @@ class BrowserWorkflowMixin:
         error = cls._extract_stream_error_payload(chunk)
         if not error:
             return False
-        message = str(error.get("message") or "").strip().lower()
-        return "stream_terminal_error:" in message
+
+        message = str(error.get("message") or "").lower()
+        if "stream_terminal_error:" in message:
+            return True
+        if bool(error.get("terminal") or error.get("is_terminal")):
+            return True
+
+        # Structured non-retryable 4xx errors (for example moderation blocks)
+        # are terminal even when the formatter has already stripped the prefix.
+        retryable = error.get("retryable")
+        try:
+            status_code = int(error.get("status_code"))
+        except (TypeError, ValueError):
+            status_code = 0
+        return retryable is False and 400 <= status_code < 500
 
     @classmethod
     def _extract_stream_terminal_http_status(cls, detail: str) -> int:
@@ -1308,24 +1266,25 @@ class BrowserWorkflowMixin:
         if not cls._is_stream_terminal_error_chunk(chunk):
             return False
 
+        error = cls._extract_stream_error_payload(chunk) or {}
+        if error.get("retryable") is False:
+            return False
+        if error.get("retryable") is True:
+            return True
+
         detail = cls._get_stream_terminal_error_detail(chunk).strip()
         if not detail:
             return False
 
         detail_lower = detail.lower()
-        if detail_lower in {
-            "send_unconfirmed",
-            "new_chat_transition_timeout",
-            "arena_direct_unexpected_battle_redirect",
-            "arena_send_no_target",
-        }:
+        if is_retriable_workflow_error(detail_lower):
             return True
 
-        status_code = cls._extract_stream_terminal_http_status(detail)
+        status_code = error.get("status_code") or cls._extract_stream_terminal_http_status(detail)
         if status_code:
             return status_code >= 500
 
-        if "too many requests" in detail_lower or "rate limit" in detail_lower:
+        if "too many requests" in detail_lower or "rate limit" in detail_lower or "429" in detail_lower:
             return False
 
         if any(token in detail_lower for token in (
@@ -1333,6 +1292,9 @@ class BrowserWorkflowMixin:
             "choose another model",
             "terms of use",
             "violates our terms",
+            "moderation_blocked",
+            "safety_violations",
+            "rejected by the safety",
         )):
             return False
 
@@ -1348,12 +1310,12 @@ class BrowserWorkflowMixin:
         if not message:
             return ""
 
-        marker = "stream_terminal_error:"
-        lowered = message.lower()
-        marker_index = lowered.find(marker)
-        if marker_index >= 0:
-            detail = message[marker_index + len(marker):].strip()
-            return detail or message
+        for marker in ("stream_terminal_error:", "execution_error:", "执行错误:"):
+            marker_index = message.lower().find(marker)
+            if marker_index >= 0:
+                detail = message[marker_index + len(marker):].strip()
+                if detail:
+                    return detail
 
         return message
 
@@ -1371,7 +1333,7 @@ class BrowserWorkflowMixin:
             or "workflow_failed"
         ).strip() or "workflow_failed"
         return self.formatter.pack_error(
-            f"stream_terminal_error:{first_detail}; retry_failed:{final_detail}",
+            f"{first_detail}; retry_failed:{final_detail}",
             code=code,
         )
 
@@ -1391,7 +1353,7 @@ class BrowserWorkflowMixin:
             category = "模型权限限制"
         elif "too many requests" in lowered or "rate limit" in lowered or "429" in lowered:
             category = "限流终止"
-        elif "terms of use" in lowered:
+        elif any(token in lowered for token in ("terms of use", "violates our terms", "moderation", "safety", "rejected by the safety")):
             category = "策略违规终止"
         else:
             category = "异常终止"
@@ -1715,12 +1677,14 @@ class BrowserWorkflowMixin:
         arena_direct_active = is_arena_direct_preset(domain, resolved_preset_name, site_config)
         arena_has_new_chat = workflow_has_new_chat_step(workflow)
         arena_recovery_url = ""
+        model_catalog = None
         if arena_direct_active:
             from app.services.arena_model_catalog import get_arena_model_catalog
             model_catalog = get_arena_model_catalog(domain, resolved_preset_name, config_engine=config_engine)
+            site_cat = site_config.get("model_catalog") if isinstance(site_config, (dict, Mapping)) else None
             if not model_catalog or not model_catalog.get("enabled"):
-                if isinstance(site_config, (dict, Mapping)) and site_config.get("model_catalog"):
-                    model_catalog = site_config.get("model_catalog")
+                if isinstance(site_cat, (dict, Mapping)):
+                    model_catalog = site_cat
 
             if (
                 requested_model
@@ -1755,7 +1719,7 @@ class BrowserWorkflowMixin:
             is_image_modality = (
                 "image" in str(resolved_preset_name or "").lower()
                 or "生图" in str(resolved_preset_name or "")
-                or (isinstance(site_config, (dict, Mapping)) and str(site_config.get("model_catalog", {}).get("modality", "")).strip().lower() == "image")
+                or (isinstance(site_cat, (dict, Mapping)) and str(site_cat.get("modality") or "").strip().lower() == "image")
             )
             catalog_modality = ""
             if isinstance(model_catalog, (dict, Mapping)):
@@ -2004,11 +1968,14 @@ class BrowserWorkflowMixin:
                     yield self.formatter.pack_finish()
                     return
 
+        site_catalog_fallback = site_config.get("model_catalog") if isinstance(site_config, (dict, Mapping)) else None
         context = {
             "prompt": prompt_text,
             "images": user_images,
             "model": str(requested_model or "").strip(),
-            "model_catalog": model_catalog if isinstance(model_catalog, dict) else site_config.get("model_catalog", {}),
+            "model_catalog": model_catalog if isinstance(model_catalog, dict) else (
+                site_catalog_fallback if isinstance(site_catalog_fallback, dict) else {}
+            ),
         }
         
         extractor = config_engine.get_site_extractor(domain, preset_name=effective_preset_name)
@@ -2417,7 +2384,7 @@ class BrowserWorkflowMixin:
                             f"{step_tag} 中断: "
                             f"action={action_upper or action or '-'}, "
                             f"target={target_key or '-'}, elapsed={step_elapsed:.2f}s, "
-                            f"error={self._compact_log_value(e, 180)}"
+                            f"error={str(e).strip() or type(e).__name__}"
                         )
                         if arena_direct_active:
                             current_err_url = str(getattr(tab, "url", "") or "").strip()
@@ -2449,6 +2416,8 @@ class BrowserWorkflowMixin:
                                 )
                             elif err_str.startswith("stream_terminal_error:"):
                                 workflow_aborted = True
+                                if chunk_count == 0:
+                                    yield self.formatter.pack_error(err_str)
                         break
                     except Exception as e:
                         step_elapsed = time.perf_counter() - step_started_at
@@ -2459,7 +2428,7 @@ class BrowserWorkflowMixin:
                             f"{step_tag} 失败: "
                             f"action={action_upper or action or '-'}, "
                             f"target={target_key or '-'}, elapsed={step_elapsed:.2f}s, "
-                            f"optional={bool(optional)}, error={self._compact_log_value(e, 180)}"
+                            f"optional={bool(optional)}, error={str(e).strip() or type(e).__name__}"
                         )
                         if arena_direct_active:
                             current_err_url = str(getattr(tab, "url", "") or "").strip()

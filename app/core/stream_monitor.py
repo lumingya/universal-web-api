@@ -23,18 +23,52 @@ from app.core.background_image_downloader import (
 from app.core.elements import ElementFinder
 from app.core.extractors.base import BaseExtractor
 from app.core.extractors.deep_mode import DeepBrowserExtractor
-from app.models.schemas import is_modality_enabled
-from app.services.arena_image_generation import (
-    ARENA_NATIVE_STOP_SELECTOR as ARENA_IMAGE_NATIVE_STOP_SELECTOR,
-    ArenaImageGenerationError,
-    ArenaImageGenerationGuard,
-    auto_skip_arena_direct_comparison,
-    evaluate_arena_direct_generation_state,
-    is_arena_image_generation_request,
-    is_arena_page_url,
-    is_interrupted_stream_reason,
-    is_visible_arena_stop,
+from app.core.stream_observer import (
+    StreamObserver,
+    get_stream_observer_factories,
 )
+from app.models.schemas import is_modality_enabled
+
+# Compatibility constants and helpers
+ARENA_IMAGE_NATIVE_STOP_SELECTOR = (
+    'button[aria-label="Stop generation"], '
+    'button[aria-label*="Stop generation" i], '
+    'button[aria-label*="Stop" i], '
+    'button[title*="Stop" i]'
+)
+
+
+def is_arena_page_url(url: str) -> bool:
+    """Judge if url is an Arena page."""
+    target = str(url or "").lower()
+    from urllib.parse import urlparse
+    parsed = urlparse(target if "://" in target else f"http://{target}")
+    hostname = (parsed.hostname or "").lower()
+    return any(host == hostname or hostname.endswith(f".{host}") for host in ("lmarena.ai", "arena.ai", "lmsys.org"))
+
+
+def is_interrupted_stream_reason(reason: str) -> bool:
+    """Identify whether a network error indicates an interrupted stream."""
+    r = str(reason or "").lower()
+    return any(
+        marker in r
+        for marker in (
+            "未完整结束",
+            "提前关闭",
+            "连接已关闭",
+            "未收到完成标志",
+            "缺少明确结束事件",
+            "未产出有效正文",
+            "响应正文未就绪",
+            "网络监听超过最大时间",
+            "connection closed",
+            "image_generation_retry",
+            "workflow_interrupt_dom_resume",
+            "workflow_dom_resume",
+            "unexpected eof",
+            "eof",
+        )
+    )
 
 _GEMINI_IMAGE_PLACEHOLDER_RE = re.compile(
     r"^\s*https?://(?:[\w.-]+\.)?googleusercontent\.com/image_generation_content/\d+\s*$",
@@ -371,7 +405,8 @@ class StreamMonitor:
                  extractor: Optional[BaseExtractor] = None,
                  image_config: Optional[Dict] = None,
                  stream_config: Optional[Dict] = None,
-                 session: Optional[Any] = None):  # 🆕 新增流式配置与 session 引用
+                 session: Optional[Any] = None,
+                 observers: Optional[List[StreamObserver]] = None):  # 🆕 新增流式配置与 session / observer 引用
         self.tab = tab
         self.session = session
         self.finder = finder
@@ -405,7 +440,90 @@ class StreamMonitor:
         self._stream_recovery_exhausted = False
         self._stream_recovery_refresh_done = False
         self._stream_recovery_refresh_attempts = 0
-        self._arena_image_guard: Optional[ArenaImageGenerationGuard] = None
+        self._observers: List[StreamObserver] = list(observers or [])
+        self._text_filters: List[Callable[[str], str]] = [self._filter_gemini_image_placeholders]
+
+    def register_observer(self, observer: StreamObserver) -> Callable[[], None]:
+        """注册流式监听观察者。"""
+        if observer not in self._observers:
+            self._observers.append(observer)
+
+        def _unregister():
+            self.unregister_observer(observer)
+
+        return _unregister
+
+    def unregister_observer(self, observer: StreamObserver) -> bool:
+        """注销流式监听观察者。"""
+        if observer in self._observers:
+            self._observers.remove(observer)
+            return True
+        return False
+
+    def register_text_filter(self, filter_fn: Callable[[str], str]) -> Callable[[], None]:
+        """注册流式文本输出过滤器钩子。"""
+        if filter_fn not in self._text_filters:
+            self._text_filters.append(filter_fn)
+
+        def _unregister():
+            if filter_fn in self._text_filters:
+                self._text_filters.remove(filter_fn)
+
+        return _unregister
+
+    @property
+    def _arena_image_guard(self) -> Optional[Any]:
+        observers = getattr(self, "_observers", None) or []
+        for obs in observers:
+            if hasattr(obs, "guard") and obs.guard is not None:
+                return obs.guard
+        return None
+
+    @_arena_image_guard.setter
+    def _arena_image_guard(self, value: Any) -> None:
+        observers = getattr(self, "_observers", None)
+        if observers is None:
+            self._observers = observers = []
+        updated = False
+        for obs in observers:
+            if hasattr(obs, "guard"):
+                obs.guard = value
+                updated = True
+                break
+        if not updated and value is not None:
+            try:
+                from app.services.arena_image_stream_observer import ArenaImageStreamObserver
+                cfg = getattr(self, "_image_config", {}) or {}
+                self._observers.append(
+                    ArenaImageStreamObserver(guard=value, image_config=cfg)
+                )
+            except Exception:
+                class _GenericGuardObserver(StreamObserver):
+                    def __init__(self, guard_obj: Any):
+                        self.guard = guard_obj
+
+                self._observers.append(_GenericGuardObserver(value))
+
+    @staticmethod
+    def _filter_gemini_image_placeholders(text: str) -> str:
+        if not text:
+            return ""
+        sanitized = _GEMINI_IMAGE_PLACEHOLDER_RE.sub("", text)
+        if sanitized != text:
+            sanitized = re.sub(r"\n{3,}", "\n\n", sanitized)
+        return sanitized
+
+    def _sanitize_stream_text(self, text: str) -> str:
+        if not text:
+            return ""
+        result = text
+        filters = getattr(self, "_text_filters", None) or [self._filter_gemini_image_placeholders]
+        for filter_fn in filters:
+            try:
+                result = filter_fn(result)
+            except Exception as exc:
+                logger.debug(f"[StreamMonitor] 文本过滤器异常: {exc}")
+        return result
 
     def _looks_like_expected_image_output(self, user_input: str = "") -> bool:
         marker = self._image_config.get("_arena_image_generation_active")
@@ -511,14 +629,18 @@ class StreamMonitor:
             )
         )
 
-    def _active_stop_recovery_grace_seconds(self, strict_arena_image_generation: bool) -> float:
-        """Return the no-progress grace before reloading an active Arena generation."""
-        key = (
-            "arena_active_stop_recovery_grace_seconds"
-            if strict_arena_image_generation
-            else "dom_active_stop_recovery_grace_seconds"
-        )
-        default = 60.0 if strict_arena_image_generation else 30.0
+    def _active_stop_recovery_grace_seconds(self, is_arena: Optional[bool] = None) -> float:
+        """Return the no-progress grace before reloading an active generation."""
+        is_arena_effective = is_arena if is_arena is not None else self._is_arena_page()
+        default = 60.0 if is_arena_effective else 30.0
+        for obs in getattr(self, "_observers", None) or []:
+            try:
+                custom_grace = obs.get_active_stop_recovery_grace_seconds(default)
+                if custom_grace is not None:
+                    return max(0.0, float(custom_grace))
+            except Exception:
+                pass
+        key = "arena_active_stop_recovery_grace_seconds" if is_arena_effective else "dom_active_stop_recovery_grace_seconds"
         value = self._image_config.get(key, default)
         try:
             return max(0.0, float(value))
@@ -628,15 +750,6 @@ class StreamMonitor:
             or int(sent_content_length or 0) > 0
             or int(network_sent_content_length or 0) > 0
         )
-
-    def _sanitize_stream_text(self, text: str) -> str:
-        if not text:
-            return ""
-
-        sanitized = _GEMINI_IMAGE_PLACEHOLDER_RE.sub("", text)
-        if sanitized != text:
-            sanitized = re.sub(r"\n{3,}", "\n\n", sanitized)
-        return sanitized
 
     def _get_final_target_strategy(self) -> str:
         return str(
@@ -856,6 +969,9 @@ class StreamMonitor:
             completion_id = SSEFormatter._generate_id()
 
         self._prompt = str(user_input or "")
+        # Keep the request-scoped result selector available to observers.
+        # ``selector`` is otherwise only a local monitor() argument.
+        self.selector = str(selector or "")
         ctx = StreamContext()
         ctx.prompt = self._prompt
         self._stream_ctx = ctx
@@ -873,19 +989,15 @@ class StreamMonitor:
         self._stream_recovery_exhausted = False
         self._stream_recovery_refresh_done = False
         self._stream_recovery_refresh_attempts = 0
-        self._arena_image_guard = None
-        if self._expect_image_output and is_arena_image_generation_request(
-            str(getattr(self.tab, "url", "") or ""),
-            user_input,
-            self._image_config,
-            self._image_config.get("uploaded_image_paths") or [],
-        ):
-            self._arena_image_guard = ArenaImageGenerationGuard(
-                self.tab,
-                result_selector=selector,
-                baseline_token=self._image_config.get("arena_result_baseline_token", ""),
-                baseline_property=self._image_config.get("arena_result_baseline_property", ""),
-            )
+        if self._expect_image_output and not self._observers:
+            for factory in get_stream_observer_factories():
+                try:
+                    obs = factory(self.tab, user_input, self._image_config)
+                    if obs is not None:
+                        self._observers.append(obs)
+                except Exception as exc:
+                    logger.debug(f"[StreamMonitor] 挂载观察者失败（忽略）: {exc}")
+
         logger.debug(
             f"[MONITOR] expect_image_output={self._expect_image_output}, "
             f"arena_image_guard={bool(self._arena_image_guard)}, "
@@ -1373,52 +1485,33 @@ class StreamMonitor:
             logger.warning(f"[Image Recovery] 图片停滞恢复刷新失败（继续等待）: {exc}")
             return False
 
-    def _evaluate_direct_arena_image_state(
-        self,
-        ctx: Any,
-        strict_arena_image_generation: bool,
-        current_has_new_rendered_image: bool,
-        still_generating: bool,
-    ) -> Tuple[bool, bool, Optional[dict]]:
-        parser_id = str(self._image_config.get("_parser_id", "") or getattr(self, "_workflow_parser_id", "") or "").lower()
-        parser_side = str(self._image_config.get("_parser_target_side", "") or "").strip().lower()
-        is_battle = "battle" in parser_id or parser_side in {"left", "right"}
-        is_direct = strict_arena_image_generation and not is_battle
-        if not is_direct or not getattr(self, "tab", None):
-            return current_has_new_rendered_image, still_generating, None
+    def _is_arena_page(self) -> bool:
+        url = str(getattr(self.tab, "url", "") or "").lower()
+        return "lmarena.ai" in url or "arena.ai" in url or "lmsys.org" in url
+
+    def _arena_native_stop_present(self) -> bool:
+        """Return whether Arena's native Stop button is currently visible."""
+        if not self._is_arena_page():
+            return False
         try:
-            auto_skip_arena_direct_comparison(self.tab)
-            baseline_depth = int(ctx.baseline_snapshot.get("groups_count") or 0) if ctx.baseline_snapshot else 0
-            prompt_text = str(getattr(self, "_prompt", "") or getattr(self, "prompt", "") or getattr(ctx, "prompt", "") or "")
-            eval_data = evaluate_arena_direct_generation_state(
-                self.tab,
-                baseline_depth=baseline_depth,
-                current_prompt=prompt_text,
-                stop_selector=ARENA_IMAGE_NATIVE_STOP_SELECTOR,
+            res = self.tab.run_js(
+                """
+                return ((sel) => {
+                    const els = Array.from(document.querySelectorAll(sel));
+                    for (const el of els) {
+                        if (!(el instanceof Element) || !el.isConnected) continue;
+                        const r = el.getBoundingClientRect();
+                        const s = getComputedStyle(el);
+                        if (r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden') return true;
+                    }
+                    return false;
+                })(arguments[0])
+                """,
+                self.ARENA_NATIVE_STOP_SELECTOR,
             )
-            if isinstance(eval_data, dict):
-                if eval_data.get("error_code"):
-                    raise ArenaImageGenerationError(
-                        str(eval_data.get("error_code")),
-                        str(eval_data.get("error_msg") or "Arena image generation error"),
-                    )
-                status = eval_data.get("status")
-                if status == "SUCCESS" and eval_data.get("image_urls"):
-                    urls = [u for u in eval_data.get("image_urls") or [] if isinstance(u, str) and u.strip()]
-                    if urls:
-                        self._final_image_urls = list(urls)
-                        if hasattr(self, "_prefetch_snapshot_image_urls"):
-                            self._prefetch_snapshot_image_urls({"image_urls": urls, "image_references": urls})
-                    return True, False, eval_data
-                if status in {"GENERATING", "WAITING_HYDRATION"}:
-                    return current_has_new_rendered_image, True, eval_data
-                return current_has_new_rendered_image, still_generating, eval_data
-            return current_has_new_rendered_image, still_generating, None
-        except ArenaImageGenerationError:
-            raise
-        except Exception as exc:
-            logger.debug(f"Direct generation evaluation non-fatal error: {exc}")
-            return current_has_new_rendered_image, still_generating, None
+            return bool(res)
+        except Exception:
+            return False
 
     def _refresh_interrupted_stream_page(self) -> bool:
         if not self._is_arena_page():
@@ -1461,7 +1554,11 @@ class StreamMonitor:
         """Return whether Arena's native Stop button is currently visible."""
         if not self._is_arena_page():
             return False
-        return is_visible_arena_stop(self.tab, self.ARENA_NATIVE_STOP_SELECTOR)
+        try:
+            from app.services.arena_image_generation import is_visible_arena_stop
+            return is_visible_arena_stop(self.tab, self.ARENA_NATIVE_STOP_SELECTOR)
+        except Exception:
+            return False
 
     def _uses_arena_image_recovery_defaults(self) -> bool:
         return self._is_arena_page()
@@ -1542,10 +1639,6 @@ class StreamMonitor:
         image_recovery_last_refresh_at = phase_start
         interrupted_image_recovery = self._uses_interrupted_image_recovery()
         interrupted_stream_recovery = self._uses_interrupted_stream_recovery()
-        arena_image_guard = getattr(self, "_arena_image_guard", None)
-        strict_arena_image_generation = isinstance(
-            arena_image_guard, ArenaImageGenerationGuard
-        )
         stream_recovery_refresh_done = bool(
             getattr(self, "_stream_recovery_refresh_done", False)
         )
@@ -1562,37 +1655,17 @@ class StreamMonitor:
         stream_recovery_needs_post_refresh_check = False
         recovery_last_progress_at = phase_start
         recovery_rendered_image_seen = False
-        active_stop_recovery_grace_seconds = self._active_stop_recovery_grace_seconds(
-            strict_arena_image_generation
-        )
+        active_stop_recovery_grace_seconds = self._active_stop_recovery_grace_seconds()
+
+        for obs in getattr(self, "_observers", None) or []:
+            try:
+                obs.on_stream_start(self, ctx)
+            except Exception as obs_exc:
+                logger.debug(f"[StreamObserver] on_stream_start error: {obs_exc}")
 
         while True:
             if time.time() - phase_start > self._hard_timeout:
-                max_refreshes = stream_recovery_max_refreshes
-                if strict_arena_image_generation and not max_refreshes:
-                    max_refreshes = ArenaImageGenerationGuard.max_refreshes(
-                        self._image_config,
-                        self._hard_timeout,
-                    )
-                if (
-                    strict_arena_image_generation
-                    and interrupted_stream_recovery
-                    and (
-                        stream_recovery_refresh_attempts < max_refreshes
-                        or stream_recovery_needs_post_refresh_check
-                    )
-                ):
-                    if not deferred_hard_timeout_logged:
-                        deferred_hard_timeout_logged = True
-                        logger.warning(
-                            "[Arena Image] 达到常规监听硬上限，但严格断流恢复仍未达到最大刷新次数，继续等待"
-                        )
-                elif strict_arena_image_generation and not self._should_stop():
-                    raise ArenaImageGenerationError(
-                        "arena_image_generation_failed",
-                        "Arena 图片生成失败：在刷新上限内未检测到新的生成图片或明确错误",
-                    )
-                elif interrupted_stream_recovery:
+                if interrupted_stream_recovery:
                     logger.error(f"[HardTimeout] 超过最大监听时间 {self._hard_timeout}s，强制退出")
                     self._stream_recovery_exhausted = True
                     logger.error(
@@ -1621,7 +1694,7 @@ class StreamMonitor:
             current_text = snap['text'] or ""
             still_generating = snap['is_generating']
             if interrupted_stream_recovery:
-                if not strict_arena_image_generation:
+                if not self._arena_image_guard:
                     still_generating = self._arena_native_stop_present()
                 if stream_recovery_refresh_done:
                     baseline_groups = int(ctx.baseline_snapshot.get('groups_count') or 0) if ctx.baseline_snapshot else 0
@@ -1649,37 +1722,14 @@ class StreamMonitor:
             current_has_new_rendered_image = self._snapshot_has_new_rendered_image(
                 ctx.baseline_snapshot, snap
             )
-            (
-                current_has_new_rendered_image,
-                still_generating,
-                direct_eval,
-            ) = self._evaluate_direct_arena_image_state(
-                ctx,
-                strict_arena_image_generation,
-                current_has_new_rendered_image,
-                still_generating,
-            )
-            arena_observation = (
-                arena_image_guard.observe(current_has_new_rendered_image)
-                if strict_arena_image_generation
-                else None
-            )
-            if arena_observation is not None:
-                if direct_eval is not None:
-                    still_generating = bool(direct_eval.get("still_generating", arena_observation.still_generating))
-                else:
-                    still_generating = arena_observation.still_generating
+
             recovery_output_seen = self._remember_recovery_output(
                 recovery_output_seen,
                 current_text_len,
                 ctx.active_turn_baseline_len,
                 current_image_count,
                 ctx.baseline_image_count,
-                (
-                    current_has_new_rendered_image
-                    if strict_arena_image_generation
-                    else current_has_new_image
-                ),
+                current_has_new_image,
                 ctx.sent_content_length,
                 ctx.network_sent_content_length,
             )
@@ -1687,15 +1737,11 @@ class StreamMonitor:
                 ctx,
                 current_text,
                 has_output=has_output,
-                current_has_new_image=(
-                    current_has_new_rendered_image
-                    if strict_arena_image_generation
-                    else current_has_new_image
-                ),
+                current_has_new_image=current_has_new_image,
             )
             # A page-level signed URL can appear before the DOM mounts the actual
-            # image. During interrupted Arena recovery this is not completion:
-            # keep the Arena recovery window alive until a real image renders.
+            # image. During interrupted recovery this is not completion:
+            # keep the recovery window alive until a real image renders.
             hold_unrendered_image = self._should_hold_interrupted_image_recovery(
                 interrupted_image_recovery,
                 current_image_count,
@@ -1713,44 +1759,60 @@ class StreamMonitor:
                 not stream_recovery_refresh_done
                 or (time.time() - stream_recovery_last_refresh_at >= post_refresh_settle_sec)
             )
-            if strict_arena_image_generation and arena_observation is not None:
-                recovery_has_output = bool(
-                    arena_observation.has_new_image or arena_observation.terminal_error
-                )
-                # A rendered image plus no active generation indicators is already
-                # a terminal DOM observation. Do not reload a page merely because
-                # the network stream missed its completion event.
-                if direct_eval is not None:
-                    recovery_confirmed = bool(
-                        direct_eval.get("is_complete")
-                        and (not stream_recovery_refresh_done or post_refresh_settled)
-                    )
-                else:
-                    recovery_confirmed = bool(
-                        arena_observation.is_complete
-                    )
-            else:
-                recovery_confirmed = self._interrupted_recovery_confirmed(
+
+            recovery_confirmed = self._interrupted_recovery_confirmed(
+                interrupted_stream_recovery,
+                stream_recovery_refresh_done,
+                still_generating,
+                self._recovery_output_ready(
+                    recovery_output_seen,
+                    self._expect_image_output,
+                    stream_recovery_page_ready,
+                ),
+                post_refresh_settled=post_refresh_settled,
+            )
+            recovery_confirmed = bool(
+                recovery_confirmed
+                or self._text_recovery_complete_before_refresh(
                     interrupted_stream_recovery,
-                    stream_recovery_refresh_done,
+                    self._expect_image_output,
                     still_generating,
-                    self._recovery_output_ready(
-                        recovery_output_seen,
-                        self._expect_image_output,
-                        stream_recovery_page_ready,
-                    ),
-                    post_refresh_settled=post_refresh_settled,
+                    recovery_output_seen,
+                    refresh_done=stream_recovery_refresh_done,
                 )
-                recovery_confirmed = bool(
-                    recovery_confirmed
-                    or self._text_recovery_complete_before_refresh(
-                        interrupted_stream_recovery,
-                        self._expect_image_output,
-                        still_generating,
-                        recovery_output_seen,
-                        refresh_done=stream_recovery_refresh_done,
-                    )
-                )
+            )
+
+            # Observer 钩子驱动
+            poll_state = {
+                "still_generating": still_generating,
+                "current_has_new_rendered_image": current_has_new_rendered_image,
+                "recovery_confirmed": recovery_confirmed,
+                "recovery_has_output": recovery_has_output,
+                "no_visible_progress": no_visible_progress,
+                "interrupted_stream_recovery": interrupted_stream_recovery,
+                "stream_recovery_refresh_done": stream_recovery_refresh_done,
+                "post_refresh_settled": post_refresh_settled,
+                "terminal_error": None,
+                "terminal_break": False,
+            }
+            for obs in getattr(self, "_observers", None) or []:
+                try:
+                    obs.on_poll_tick(self, ctx, snap, poll_state)
+                except Exception as obs_exc:
+                    logger.debug(f"[StreamObserver] on_poll_tick error (ignored): {obs_exc}")
+
+            if poll_state.get("terminal_error") is not None:
+                raise poll_state["terminal_error"]
+
+            still_generating = bool(poll_state.get("still_generating", still_generating))
+            current_has_new_rendered_image = bool(poll_state.get("current_has_new_rendered_image", current_has_new_rendered_image))
+            recovery_confirmed = bool(poll_state.get("recovery_confirmed", recovery_confirmed))
+            recovery_has_output = bool(poll_state.get("recovery_has_output", recovery_has_output))
+            if poll_state.get("no_visible_progress") is not None:
+                no_visible_progress = bool(poll_state["no_visible_progress"])
+
+            if poll_state.get("terminal_break"):
+                break
             if interrupted_stream_recovery:
                 current_rec_state = (
                     recovery_confirmed,
@@ -1799,15 +1861,11 @@ class StreamMonitor:
                 recovery_rendered_image_seen = bool(
                     recovery_rendered_image_seen or current_has_new_rendered_image
                 )
-            image_progress_signal = (
-                current_has_new_rendered_image
-                if strict_arena_image_generation
-                else current_has_new_image
-            )
+            image_progress_signal = current_has_new_rendered_image if self._arena_image_guard else current_has_new_image
             if current_has_new_image:
                 self._prefetch_snapshot_image_urls(snap)
             if (
-                strict_arena_image_generation
+                self._arena_image_guard
                 and current_has_new_image
                 and not current_has_new_rendered_image
                 and image_snapshot_changed
@@ -2009,17 +2067,7 @@ class StreamMonitor:
                     not stream_recovery_refresh_done
                     or (time.time() - stream_recovery_last_refresh_at >= post_refresh_settle_sec)
                 )
-                if strict_arena_image_generation and arena_observation is not None:
-                    if direct_eval is not None:
-                        recovery_confirmed = bool(
-                            direct_eval.get("is_complete")
-                            and (not stream_recovery_refresh_done or post_refresh_settled)
-                        )
-                    else:
-                        recovery_confirmed = bool(
-                            arena_observation.is_complete
-                        )
-                else:
+                if not recovery_confirmed:
                     recovery_confirmed = self._interrupted_recovery_confirmed(
                         interrupted_stream_recovery,
                         stream_recovery_refresh_done,
@@ -2060,28 +2108,18 @@ class StreamMonitor:
                 self._image_config.get("dom_image_stall_refresh_seconds")
                 or (90.0 if arena_image_recovery else 0.0)
             )
-            if strict_arena_image_generation:
-                if (
-                    interrupted_image_recovery
-                    and not recovery_output_seen
-                    and self._is_empty_stream_fallback_reason()
-                ):
-                    # Queue/cold-start timeouts do not prove a broken stream.
-                    # Give the page enough time to produce its first image before
-                    # using the slower image-stall reload path.
-                    interrupted_refresh_interval = float(
-                        self._image_config.get("arena_image_no_output_refresh_interval_seconds")
-                        or 60.0
-                    )
-                else:
-                    interrupted_refresh_interval = ArenaImageGenerationGuard.refresh_interval_seconds(
-                        self._image_config
-                    )
-            else:
-                interrupted_refresh_interval = float(
-                    self._image_config.get("dom_image_interrupted_refresh_interval_seconds")
-                    or 20.0
-                )
+            interrupted_refresh_interval = float(
+                self._image_config.get("dom_image_interrupted_refresh_interval_seconds")
+                or (60.0 if (interrupted_image_recovery and not recovery_output_seen and self._is_empty_stream_fallback_reason()) else 20.0)
+            )
+            for obs in getattr(self, "_observers", None) or []:
+                try:
+                    custom_interval = obs.get_interrupted_refresh_interval(interrupted_refresh_interval)
+                    if custom_interval is not None:
+                        interrupted_refresh_interval = float(custom_interval)
+                except Exception:
+                    pass
+
             interrupted_recovery_timeout = float(
                 self._image_config.get("dom_image_interrupted_recovery_timeout_seconds")
                 or 240.0
@@ -2103,32 +2141,31 @@ class StreamMonitor:
                     )
                 ),
             )
-            if strict_arena_image_generation:
-                stream_recovery_max_refreshes = ArenaImageGenerationGuard.max_refreshes(
-                    self._image_config,
-                    self._hard_timeout,
-                )
-            else:
-                stream_recovery_max_refreshes = max(
-                    1,
-                    int(
-                        self._image_config.get("dom_interrupted_max_refreshes")
-                        or max(
-                            1,
-                            min(
-                                16,
-                                max(
-                                    12,
-                                    int(
-                                        max(1.0, float(self._hard_timeout))
-                                        / max(1.0, interrupted_refresh_interval)
-                                    )
-                                    + 1,
-                                ),
-                            ),
-                        )
-                    ),
-                )
+            stream_recovery_max_refreshes = max(
+                1,
+                int(
+                    self._image_config.get("dom_interrupted_max_refreshes")
+                    or min(
+                        16,
+                        max(
+                            12,
+                            int(
+                                max(1.0, float(self._hard_timeout))
+                                / max(1.0, interrupted_refresh_interval)
+                            )
+                            + 1,
+                        ),
+                    )
+                ),
+            )
+            for obs in getattr(self, "_observers", None) or []:
+                try:
+                    custom_max = obs.get_stream_recovery_max_refreshes(stream_recovery_max_refreshes)
+                    if custom_max is not None:
+                        stream_recovery_max_refreshes = int(custom_max)
+                except Exception:
+                    pass
+
             no_progress_wait_limit = float(
                 self._image_config.get("dom_image_no_output_timeout_seconds")
                 or max(
@@ -2141,28 +2178,7 @@ class StreamMonitor:
                 or (240.0 if arena_image_recovery else 0.0)
             )
             elapsed_since_phase_start = time.time() - phase_start
-            if (
-                strict_arena_image_generation
-                and arena_observation is not None
-                and arena_observation.terminal_error is not None
-            ):
-                raise arena_observation.terminal_error
-            if strict_arena_image_generation and arena_observation is not None and recovery_confirmed:
-                logger.info(
-                    "[Arena Image] 原生停止按钮已消失且已确认新图片，生成完成"
-                )
-                break
-            if strict_arena_image_generation and interrupted_stream_recovery:
-                # Every refresh must be followed by one fresh DOM observation.
-                # In particular, do not declare the last permitted refresh
-                # exhausted before its reloaded page has been inspected.
-                stream_recovery_needs_post_refresh_check = False
-                if stream_recovery_refresh_attempts >= stream_recovery_max_refreshes:
-                    self._stream_recovery_exhausted = True
-                    logger.error(
-                        "[Arena Image] 已达到最大刷新次数，仍未满足严格完成条件"
-                    )
-                    break
+
             if interrupted_stream_recovery and recovery_confirmed:
                 if stream_recovery_refresh_done:
                     logger.info(
@@ -2214,13 +2230,10 @@ class StreamMonitor:
                     stream_recovery_needs_post_refresh_check = True
                     time.sleep(2.0)
                     continue
-                if (
-                    strict_arena_image_generation
-                    and stream_recovery_refresh_attempts >= stream_recovery_max_refreshes
-                ):
+                if stream_recovery_refresh_attempts >= stream_recovery_max_refreshes:
                     self._stream_recovery_exhausted = True
                     logger.error(
-                        "[Arena Image] 刷新失败且已达到最大刷新次数，终止本轮"
+                        "[Stream Recovery] 刷新失败且已达到最大刷新次数，终止本轮"
                     )
                     break
             if (
@@ -2290,14 +2303,9 @@ class StreamMonitor:
             if no_visible_progress and elapsed_since_phase_start < no_progress_wait_limit:
                 suppress_fast_exit = True
 
-            if strict_arena_image_generation and not recovery_confirmed:
-                # Arena image generation is final only when its native Stop
-                # control is gone and a new image or a terminal error exists.
+            if (self._arena_image_guard or interrupted_stream_recovery) and not recovery_confirmed:
+                # Arena image generation or interrupted stream is final only when recovery is confirmed.
                 # Text stability and an empty DOM must never shortcut this gate.
-                pass
-            elif interrupted_stream_recovery and not recovery_confirmed:
-                # Do not let stable DOM text from the pre-refresh page satisfy
-                # any completion rule after the network stream was interrupted.
                 pass
             elif hold_unrendered_image:
                 # Do not let a URL/reference-only change satisfy the normal
@@ -2357,6 +2365,12 @@ class StreamMonitor:
                 step = min(0.1, current_interval - sleep_elapsed)
                 time.sleep(step)
                 sleep_elapsed += step
+
+        for obs in getattr(self, "_observers", None) or []:
+            try:
+                obs.on_stream_end(self, ctx)
+            except Exception as obs_exc:
+                logger.debug(f"[StreamObserver] on_stream_end error: {obs_exc}")
 
         if interrupted_stream_recovery and not self._should_stop() and not recovery_confirmed:
             self._stream_recovery_exhausted = True
@@ -2464,7 +2478,11 @@ class StreamMonitor:
             self._image_recovery_exhausted = False
             ctx.images_detected = True
             self._prefetch_snapshot_image_urls(final_snap)
-        self._final_image_urls = final_image_urls
+        self._final_image_urls = list(
+            dict.fromkeys(
+                list(self._final_image_urls or []) + final_image_urls
+            )
+        )
 
         # 文本补齐
         if final_text:

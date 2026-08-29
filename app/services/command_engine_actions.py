@@ -9,7 +9,7 @@ import re
 import string
 import time
 from datetime import date, timedelta
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set, TYPE_CHECKING
 from urllib.parse import urlsplit
 
 try:
@@ -25,8 +25,12 @@ from app.core.request_transport import (
     get_default_request_transport_config,
 )
 from app.services.command_defs import ACTION_TYPES, TRIGGER_TYPES, CommandFlowAbort
-from app.services.command_result_store import record_arena_rule_candidates
+from app.services.arena_rule_service import record_arena_rule_candidates
 from app.services.sse_utils import iter_sse_payloads
+from app.services.transport_profile_handlers import (
+    get_transport_profile_handler,
+    register_transport_profile_handler,
+)
 from app.utils.browser_profile_identity import resolve_tab_browser_profile
 from app.utils.site_url import extract_remote_site_domain
 
@@ -38,6 +42,44 @@ logger = get_logger("CMD_ENG")
 
 MAX_COMMAND_WORKFLOW_SSE_BUFFER_CHARS = 262144
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+_BASE_PYTHON_SANDBOX_ALLOWED_IMPORTS = frozenset({
+    "datetime",
+    "json",
+    "math",
+    "random",
+    "time",
+})
+_REGISTERED_SANDBOX_ALLOWED_IMPORTS: set[str] = set()
+
+
+def register_sandbox_allowed_import(module_name: str) -> None:
+    """动态注册允许在 Python 沙箱中导入的模块。"""
+    normalized = str(module_name or "").strip()
+    if normalized:
+        _REGISTERED_SANDBOX_ALLOWED_IMPORTS.add(normalized)
+
+
+def register_sandbox_allowed_imports(module_names: Iterable[str]) -> None:
+    """批量动态注册允许在 Python 沙箱中导入的模块。"""
+    for name in module_names:
+        register_sandbox_allowed_import(name)
+
+
+def get_sandbox_allowed_imports() -> set[str]:
+    """获取所有已注册的沙箱导入模块。"""
+    return set(_REGISTERED_SANDBOX_ALLOWED_IMPORTS)
+
+
+# 注册辅助服务默认导入
+register_sandbox_allowed_imports([
+    "app.services.arena_cf_solver",
+    "app.services.cf_turnstile_solver",
+    "app.services.arena_proxy_rotation",
+    "app.services.arena_rule_service",
+    "app.services.command_result_store",
+    "app.utils.human_mouse",
+])
 
 
 class CommandEngineActionsMixin:
@@ -58,9 +100,13 @@ class CommandEngineActionsMixin:
         "navigate_failed:",
         "navigate_skipped",
     )
+    _BASE_PYTHON_SANDBOX_ALLOWED_IMPORTS = _BASE_PYTHON_SANDBOX_ALLOWED_IMPORTS
     _PYTHON_SANDBOX_ALLOWED_IMPORTS = frozenset({
         "app.services.arena_cf_solver",
+        "app.services.cf_turnstile_solver",
         "app.services.arena_proxy_rotation",
+        "app.services.arena_rule_service",
+        "app.services.command_result_store",
         "app.utils.human_mouse",
         "datetime",
         "json",
@@ -1738,8 +1784,10 @@ return (() => {
     def _execute_http_request_action(self, action: Dict, session: 'TabSession') -> Any:
         ctx = self._build_template_context(session)
         request_profile = str(action.get("request_profile", "") or "").strip().lower()
-        if request_profile == "deepseek_completion":
-            return self._execute_http_request_deepseek_completion(action, session, ctx)
+        if request_profile:
+            handler = get_transport_profile_handler(request_profile)
+            if handler is not None:
+                return handler(action, session, ctx, self)
 
         method = str(action.get("method", "GET") or "GET").strip().upper()
         url = self._render_template(action.get("url", ""), ctx).strip()
@@ -1888,130 +1936,10 @@ return (() => {
         session: 'TabSession',
         ctx: Dict[str, Any],
     ) -> Any:
-        prompt = self._render_template(action.get("prompt", action.get("body", "")), ctx).strip()
-        if not prompt:
-            return {"ok": False, "error": "empty_prompt"}
-
-        response_mode = str(action.get("response_mode", "text") or "text").strip().lower()
-        consume_response = self._coerce_action_bool(action.get("consume_response"), False)
-        transport_defaults = get_default_request_transport_config()
-        transport_options = {
-            **(transport_defaults.get("options") or {}),
-            "model_type": self._render_template(action.get("model_type", ""), ctx).strip() or "auto",
-            "context_mode": "full_prompt",
-            "search_enabled": self._render_template(str(action.get("search_enabled", "auto") or "auto"), ctx).strip() or "auto",
-            "thinking_enabled": self._render_template(str(action.get("thinking_enabled", "auto") or "auto"), ctx).strip() or "auto",
-            "fallback_mode": "workflow",
-            "client_version": self._render_template(str(action.get("client_version", "2.0.0") or "2.0.0"), ctx).strip() or "2.0.0",
-            "app_version": self._render_template(
-                str(action.get("app_version", action.get("client_version", "2.0.0")) or action.get("client_version", "2.0.0")),
-                ctx,
-            ).strip() or self._render_template(str(action.get("client_version", "2.0.0") or "2.0.0"), ctx).strip() or "2.0.0",
-        }
-        transport_config = {
-            "mode": "page_fetch",
-            "profile": "deepseek_completion",
-            "options": transport_options,
-        }
-
-        result = execute_request_transport(
-            session.tab,
-            transport_config,
-            prompt=prompt,
-            consume_response=consume_response,
-        )
-
-        if not isinstance(result, dict):
-            logger.warning(f"[CMD] DeepSeek 直发返回格式异常: {type(result).__name__}")
-            return {"ok": False, "error": "invalid_result_type"}
-
-        if not result.get("ok"):
-            logger.warning(
-                "[CMD] DeepSeek 直发失败: "
-                f"status={result.get('status')}, error={result.get('error')}, "
-                f"preview={self._preview_text(result.get('responsePreview') or result.get('raw_text') or '')!r}"
-            )
-            return {
-                "ok": False,
-                "error": str(result.get("error") or "deepseek_completion_failed"),
-                "status": result.get("status"),
-                "response": result,
-            }
-
-        raw_text = str(result.get("raw_text", "") or "")
-        content_type = str(result.get("content_type", "") or "")
-        parsed_content = raw_text
-        parse_error = ""
-
-        if raw_text and "text/event-stream" in content_type.lower():
-            try:
-                from app.core.parsers.deepseek_parser import DeepSeekParser
-
-                parser = DeepSeekParser()
-                parsed = parser.parse_chunk(raw_text)
-                parsed_content = str(parsed.get("content", "") or "")
-                parse_error = str(parsed.get("error", "") or "")
-                if not parsed_content and not parse_error:
-                    parsed_content = raw_text
-            except Exception as e:
-                parse_error = str(e)
-                parsed_content = raw_text
-
-        response_payload = {
-            "ok": True,
-            "status": result.get("status"),
-            "url": result.get("url") or "/api/v0/chat/completion",
-            "content_type": content_type,
-            "session_id": result.get("session_id") or "",
-            "model_type": result.get("model_type") or "",
-            "body": parsed_content,
-            "raw_text": raw_text,
-        }
-        if parse_error:
-            response_payload["parse_error"] = parse_error
-
-        saved_as = self._save_generated_value(
-            session,
-            action.get("save_as"),
-            parsed_content,
-            extras={
-                "session_id": response_payload["session_id"],
-                "model_type": response_payload["model_type"],
-                "status": response_payload["status"],
-            },
-        )
-
-        logger.info(
-            f"[CMD] DeepSeek 页面直发{'完成' if consume_response else '已触发'}: "
-            f"status={response_payload['status']}, session_id={response_payload['session_id'] or '-'}, "
-            f"save_as={saved_as or '-'}, preview={self._preview_text(parsed_content)!r}"
-        )
-
-        if response_mode == "status":
-            return {
-                "ok": True,
-                "status": response_payload["status"],
-                "url": response_payload["url"],
-                "session_id": response_payload["session_id"],
-                "model_type": response_payload["model_type"],
-            }
-
-        if response_mode == "response":
-            return response_payload
-
-        if response_mode == "json":
-            return {
-                "content": parsed_content,
-                "session_id": response_payload["session_id"],
-                "model_type": response_payload["model_type"],
-                "status": response_payload["status"],
-                "raw_text": raw_text,
-            }
-
-        if response_mode == "raw":
-            return raw_text
-
-        return parsed_content
+        handler = get_transport_profile_handler("deepseek_completion")
+        if handler is not None:
+            return handler(action, session, ctx, self)
+        return {"ok": False, "error": "deepseek_completion_handler_not_found"}
 
     def _get_append_file_base_dir(self) -> str:
         raw_base = str(os.getenv("CMD_APPEND_FILE_BASE_DIR", "") or "").strip()
@@ -2492,7 +2420,10 @@ return (() => {
         return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
 
     def _get_python_sandbox_allowed_imports(self) -> set:
-        allowed = set(self._PYTHON_SANDBOX_ALLOWED_IMPORTS)
+        allowed = set(getattr(self, "_BASE_PYTHON_SANDBOX_ALLOWED_IMPORTS", _BASE_PYTHON_SANDBOX_ALLOWED_IMPORTS))
+        allowed.update(_REGISTERED_SANDBOX_ALLOWED_IMPORTS)
+        if hasattr(self, "_PYTHON_SANDBOX_ALLOWED_IMPORTS"):
+            allowed.update(self._PYTHON_SANDBOX_ALLOWED_IMPORTS)
         extra = str(os.getenv("CMD_PYTHON_SANDBOX_ALLOWED_IMPORTS", "") or "").strip()
         if extra:
             for name in extra.split(","):
@@ -3067,6 +2998,7 @@ return (() => {
                     raise RuntimeError("python_script_loop_cancelled")
 
             context = {
+                "__cleanups__": [],
                 "tab": session.tab,
                 "session": session,
                 "browser": self._get_browser(),
@@ -3105,6 +3037,7 @@ return (() => {
 
             context["record_arena_rule_candidates"] = _record_arena_candidates
             globals_dict: Dict[str, Any] = {}
+            script_succeeded = False
             try:
                 if self._command_env_flag("CMD_ALLOW_UNSAFE_PYTHON_COMMANDS", False):
                     logger.warning("[CMD] Python 脚本正在以非沙箱模式执行，请仅用于完全可信配置")
@@ -3126,18 +3059,27 @@ return (() => {
                         f"{name} {count} 条" for name, count in grouped.items()
                     )
                 logger.info("[CMD] Python 脚本执行完成")
+                script_succeeded = True
                 return {"mode": "advanced", "result": context.get("result", ""), "steps": []}
             except Exception as e:
                 logger.error(f"[CMD] Python 脚本执行失败: {e}")
                 return {"mode": "advanced", "result": f"python_failed: {e}", "steps": []}
             finally:
+                cleanups = context.get("__cleanups__")
+                if isinstance(cleanups, list):
+                    for cleanup_cb in cleanups:
+                        try:
+                            if callable(cleanup_cb):
+                                cleanup_cb()
+                        except Exception as cleanup_err:
+                            logger.debug(f"[CMD] 脚本清理回调执行异常（忽略）: {cleanup_err}")
                 try:
                     stop_network_watch = globals_dict.get("_stop_claude_network_watch")
-                    if callable(stop_network_watch):
+                    if callable(stop_network_watch) and stop_network_watch not in (cleanups if isinstance(cleanups, list) else []):
                         stop_network_watch()
                 except Exception as e:
                     logger.debug(f"[CMD] 清理脚本网络监听失败（忽略）: {e}")
-                _end_command_loop("stopped")
+                _end_command_loop("completed" if script_succeeded else "stopped")
 
         logger.warning(f"[CMD] 不支持的脚本语言: {lang}")
         return {"mode": "advanced", "result": f"unsupported_lang:{lang}", "steps": []}
