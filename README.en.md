@@ -4,6 +4,8 @@
 
 # Universal Web API
 
+> Current release: **2.9.8** (see [`VERSION`](./VERSION) and [`CHANGELOG_CURRENT.md`](./CHANGELOG_CURRENT.md))
+
 📖 Documentation • [English](./README.en.md) • [简体中文](./README.md)
 
 **Universal Web API** is a **local API bridge & debugging tool** designed for developers. It converts AI web services (e.g., ChatGPT, DeepSeek, Claude, Gemini) logged in your local browser into local standard OpenAI/Anthropic-compatible APIs.
@@ -59,7 +61,7 @@ graph TD
 
 ### Setup Steps
 
-1. **Download & Extract**: Download the latest release from [Releases](../../releases) and extract it to a path **without non-ASCII (e.g. Chinese) characters**.
+1. **Download & Extract**: Download the latest release from [Releases](https://github.com/lumingya/universal-web-api/releases) and extract it to a path **without non-ASCII (e.g. Chinese) characters**.
 2. **Start the Service**:
    * **Windows**: Double-click **`start.bat`**.
    * **macOS / Linux**: Run **`python3 start.py`** in your terminal.
@@ -69,11 +71,38 @@ graph TD
    * **Base URL**: `http://127.0.0.1:8199/v1`
    * **API Key**: If service API auth is disabled (`AUTH_ENABLED=false`), use any value (e.g., `sk-local`). If enabled, use `AUTH_TOKEN`. The dashboard uses the separate `DASHBOARD_AUTH_TOKEN`; do not share it with API users.
 
+### Verify the first request
+
+Run these checks from a terminal after at least one controlled-browser tab is logged in:
+
+```bash
+# Service and model discovery
+curl http://127.0.0.1:8199/v1/models
+
+# Non-streaming smoke test
+curl http://127.0.0.1:8199/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"web-api","messages":[{"role":"user","content":"Reply with OK"}],"stream":false}'
+```
+
+For Windows PowerShell, use `Invoke-RestMethod` or keep the JSON in a file to avoid shell quoting issues. A real chat request is a better connectivity test than a client's short “test API” request, because some sites reject very short prompts.
+
+### Supported API surfaces
+
+| Endpoint | Compatibility | Notes |
+| :--- | :--- | :--- |
+| `POST /v1/chat/completions` | OpenAI Chat Completions | Streaming SSE, multimodal message parts, tool-calling repair |
+| `POST /v1/responses` | OpenAI Responses (experimental) | `input`, `instructions`, tools, and `previous_response_id` are translated to the browser workflow |
+| `POST /v1/messages` | Anthropic Messages (experimental) | Accepts `Authorization` or `x-api-key`; includes `count_tokens` compatibility |
+| `GET /v1/models` | OpenAI model listing | Returns generic models plus models discovered from active tabs |
+
+All endpoints are local by default. Route a request to a specific site or tab with `/url/{domain}/v1`, `/tab/{index}/v1`, or `/tab-url/{token}/v1`; see the [routing guide](./static/tutorial/index.html#routing-methods) for precedence and examples.
+
 ---
 
 ## 🎯 Supported Sites
 
-Built-in automation rules are available for several mainstream AI websites. For unlisted sites, you can use the built-in AI assistant to analyze page DOM structures and generate adaptations. See [Add a New Site Guide](./static/tutorial/index.html#add-site-guide).
+Built-in automation rules are available for several mainstream AI websites. For unlisted sites, you can use the built-in AI assistant to analyze page DOM structures and generate adaptations. See [Add a New Site Guide](./static/tutorial/index.html#addsite).
 
 | Site Name | URL | Notes |
 | :--- | :--- | :--- |
@@ -96,21 +125,88 @@ Detailed HTML guides are hosted locally and can be accessed via the dashboard af
 
 | Section | Description |
 | :--- | :--- |
-| 📖 [Full Tutorial](./static/tutorial/index.html#quick-start) | Installation, platform differences, and UI dashboard guides |
-| 🔗 [Connect API](./static/tutorial/index.html#connect-api) | Request parameters, routing modes (Default, Domain, Fixed Tab, Exact URL, URL-bound Preset), and code examples |
-| 🧩 [Function Calling](./static/tutorial/index.html#function-calling) | Validation repair strategy and multi-turn prompt engineering explanations |
-| 🔄 [Tab Pool and Presets](./static/tutorial/index.html#tab-pool) | Configuring concurrency, route methods, allocation modes, and custom task presets |
-| 📊 [Request Monitor](./static/tutorial/index.html#dashboard-advanced) | Inspect request history, failure details, per-site success rates, and debug stuck tasks |
+| 📖 [Full Tutorial](./static/tutorial/index.html#quickstart) | Installation, platform differences, and UI dashboard guides |
+| 🔗 [Connect API](./static/tutorial/index.html#connect) | Request parameters, routing modes (Default, Domain, Fixed Tab, Exact URL, URL-bound Preset), and code examples |
+| 🧩 [Function Calling](./static/tutorial/index.html#toolcalling) | Validation repair strategy and multi-turn prompt engineering explanations |
+| 🔄 [Tab Pool and Presets](./static/tutorial/index.html#tabpool) | Configuring concurrency, route methods, allocation modes, and custom task presets |
+| 📊 [Request Monitor](./static/tutorial/index.html#dashboard) | Inspect request history, failure details, per-site success rates, and debug stuck tasks |
+| 🧾 [API Endpoint Reference](./static/tutorial/index.html#api-reference) | Health, model, provider, OpenAI, Responses, and Anthropic endpoint quick reference |
 | 🛠️ [Core Selector Configuration](./static/tutorial/index.html#selectors) | CSS selector mapping, visual workflows, and streaming options |
-| 🛡️ [Stealth & Advanced Options](./static/tutorial/index.html#stealth-mode) | Anti-detection settings, browser fingerprint overrides, and low-interference modes |
+| 🛡️ [Stealth & Advanced Options](./static/tutorial/index.html#stealth) | Anti-detection settings, browser fingerprint overrides, and low-interference modes |
 | ❓ [Limitations & FAQ](./static/tutorial/index.html#faq) | Timeout troubleshooting, captcha handling, and OS differences |
+| 🔐 [Security Boundary](./static/tutorial/index.html#security-boundary) | Local binding, authentication, CORS, DevTools, and sensitive-data handling |
+
+The tutorial is bundled as static HTML, so it also works without an internet connection. Open [`static/tutorial/index.html`](./static/tutorial/index.html) directly, or use the dashboard's Tutorial entry after startup.
+
+## ⚙️ Configuration Essentials
+
+Copy [`.env.example`](./.env.example) to `.env` only when you need to override defaults. Values are read at process start; restart `start.bat` / `start.py` after changing environment settings.
+
+| Variable | Recommended local value | Purpose |
+| :--- | :--- | :--- |
+| `APP_HOST` | `127.0.0.1` | Bind to localhost. Use `0.0.0.0` only behind a trusted firewall/reverse proxy. |
+| `APP_PORT` | `8199` | Dashboard and API port. |
+| `APP_DEBUG` | `false` | Enable `/docs`, `/redoc`, and detailed errors only for local debugging. |
+| `AUTH_ENABLED` | `false` | Require a Bearer token or `X-API-Key` for API calls. |
+| `AUTH_TOKEN` | a long random token | API credential when authentication is enabled. |
+| `DASHBOARD_AUTH_ENABLED` | `false` | Protect the dashboard independently from the API. |
+| `DASHBOARD_AUTH_TOKEN` | a separate token | Dashboard credential; never reuse it for client integrations. |
+| `CORS_ENABLED` | `false` | Keep disabled for same-origin local clients; enable only when a browser client needs cross-origin access. |
+| `CORS_ORIGINS` | `http://127.0.0.1:8199` | When CORS is enabled, list explicit trusted origins instead of `*`. |
+| `BROWSER_PORT` | `9222` | Chromium remote-debugging port used by the controlled browser. |
+| `PROXY_ENABLED` | `false` | Send controlled-browser traffic through `PROXY_ADDRESS`. |
+| `PROXY_ADDRESS` | `http://127.0.0.1:7890` | HTTP or SOCKS5 proxy URL. |
+| `HELPER_API_KEY` | empty | Optional key for AI-assisted site analysis. |
+
+Never commit `.env`, `chrome_profile/`, logs, or exported site configurations containing cookies or tokens. If the service is reachable from another machine, enable both API and dashboard authentication and restrict access at the network layer.
+
+## 🧭 Routing and Presets at a Glance
+
+The request body `model` is primarily a display/routing hint; the actual model is the one available in the selected web session. Presets control selectors, workflow, stream parsing, file handling, and media extraction for a site.
+
+```text
+Default pool       /v1/chat/completions
+Domain route       /url/gemini.google.com/v1/chat/completions
+Fixed tab          /tab/1/v1/chat/completions
+Exact URL token    /tab-url/{token}/v1/chat/completions
+Domain + preset    /url/gemini.google.com/pro/v1/chat/completions
+```
+
+When several tabs match, allocation follows the configured `first_idle`, `round_robin`, or `random` mode. A request-level `preset_name` overrides the tab's default for that request only.
+
+## 🧰 Troubleshooting Checklist
+
+1. **The dashboard does not open:** confirm Python 3.10+, the Chromium browser, and that port `8199` (and debugging port `9222`) are free. Read the terminal output and `logs/` before restarting.
+2. **The tab is missing from the pool:** wait for the page to finish loading, close `chrome://newtab` and unrelated tabs, then use “Refresh tabs” in the dashboard.
+3. **Input or send fails:** the site likely changed its DOM. Test `input_box`, `send_btn`, and `result_container` separately in the selector workbench, then save the preset.
+4. **The response is empty or times out:** keep the controlled browser visible, avoid interacting with it during a request, check for captcha/rate-limit pages, and try DOM stream mode if network interception has no matching traffic.
+5. **Requests queue forever:** inspect Request Monitor for `acquire_timeout` or a stuck tab; cancel the request or use the force-release debug action only as a last resort.
+6. **Authentication returns 401/403:** send `Authorization: Bearer <AUTH_TOKEN>` (or `X-API-Key`) and verify `AUTH_ENABLED` is a boolean string (`true`/`false`), not a placeholder such as `your-secret-here`.
+
+Do not attempt to bypass a site's login or human verification. Complete challenges manually in the controlled browser and lower request frequency when a site applies rate limits.
+
+## 🧪 Development and Tests
+
+```bash
+python -m venv venv
+# Windows: .\\venv\\Scripts\\Activate.ps1
+# macOS/Linux: source venv/bin/activate
+pip install -r requirements.txt
+pytest -q
+```
+
+Most tests are browser-independent regression tests under [`tests/`](./tests). A live browser session is required for end-to-end site adaptation tests. Keep generated profiles and logs outside commits.
+
+## 🔄 Upgrading Safely
+
+Before upgrading, back up `config/`, `chrome_profile/`, `.env`, and any custom scripts. The updater preserves user data listed in `UPDATE_PRESERVE` and supports a configurable update whitelist in the dashboard. After upgrading, review [`CHANGELOG_CURRENT.md`](./CHANGELOG_CURRENT.md), rerun the DrissionPage patch when prompted, and send one real smoke-test request before resuming normal traffic.
 
 ---
 
 ## 🤝 Feedback & Discussion
 
 * If you run into issues, join the QQ Group **1073037753**.
-* You can also open issues or suggest features in the GitHub [Issues](../../issues) tracker.
+* You can also open issues or suggest features in the GitHub [Issues](https://github.com/lumingya/universal-web-api/issues) tracker.
 
 ---
 

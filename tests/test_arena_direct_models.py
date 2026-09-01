@@ -966,7 +966,7 @@ def test_arena_universal_direct_image_preset_workflow():
     assert selectors.get("retry button") is not None
     assert selectors.get("stop_btn") is not None
 
-    workflow = preset["workflow"]
+    workflow = [s for s in preset["workflow"] if s.get("action") != "READONLY_HINT"]
     assert len(workflow) == 6
     assert workflow[0]["action"] == "CLICK" and workflow[0]["target"] == "retry button" and workflow[0]["optional"] is True
     assert workflow[0]["execution"]["click_mode"] == "dom_safe"
@@ -990,7 +990,7 @@ def test_arena_universal_direct_text_preset_workflow():
     assert selectors.get("input_box") is not None
     assert selectors.get("send_btn") is not None
 
-    workflow = preset["workflow"]
+    workflow = [s for s in preset["workflow"] if s.get("action") != "READONLY_HINT"]
     assert len(workflow) == 6
     assert workflow[0]["action"] == "CLICK" and workflow[0]["target"] == "new_chat_btn"
     assert workflow[1]["action"] == "WAIT"
@@ -1699,3 +1699,77 @@ def test_match_arena_catalog_tab_per_tab_isolation(monkeypatch):
     assert matched_b["tab"]["persistent_index"] == 2
     assert matched_b["model"]["name"] == "model-b"
 
+
+def test_search_and_webdev_enabled_text_model_retains_text_modality():
+    """验证像 gemini-3.1-pro-preview 这样兼具 search 与 webdev 排行的文本大模型仍被归类为 text 模态并能通过 text 目录过滤。"""
+    from app.services.arena_model_catalog import filter_arena_catalog_models
+
+    models = [
+        {
+            "arena_model_id": "019c6d29-a30c-7e20-9bd0-6650af926623",
+            "name": "gemini-3.1-pro-preview",
+            "public_name": "gemini-3.1-pro-preview",
+            "display_name": "gemini-3.1-pro-preview",
+            "modality": "text",
+        },
+        {
+            "arena_model_id": "019c6d29-a30c-7e20-9bd0-6650af926624",
+            "name": "recraft-v4.1-pro",
+            "public_name": "recraft-v4.1-pro",
+            "display_name": "recraft-v4.1-pro",
+            "modality": "image",
+        },
+    ]
+
+    filtered = filter_arena_catalog_models(models, {"enabled": True, "modality": "text"})
+    assert any(m["name"] == "gemini-3.1-pro-preview" for m in filtered)
+    assert not any(m["name"] == "recraft-v4.1-pro" for m in filtered)
+
+
+def test_inkling_text_models_are_not_falsely_filtered_by_kling():
+    """验证 inkling 系列官方文本模型不会被 video_keywords 中的 kling 误杀。"""
+    from app.services.arena_model_catalog import filter_arena_catalog_models
+
+    models = [
+        {"arena_model_id": "ink-1", "name": "inkling-small", "display_name": "inkling-small", "modality": "text"},
+        {"arena_model_id": "ink-2", "name": "inkling-medium", "display_name": "inkling-medium", "modality": "text"},
+    ]
+
+    filtered = filter_arena_catalog_models(models, {"enabled": True, "modality": "text"})
+    assert [m["name"] for m in filtered] == ["inkling-medium", "inkling-small"]
+
+
+def test_video_preset_correctly_filters_and_returns_video_models():
+    """验证当 target_modality 为 video 时，包含 video/kling/sora 关键词的视频模型能正常输出。"""
+    from app.services.arena_model_catalog import filter_arena_catalog_models
+
+    models = [
+        {"arena_model_id": "sora-1", "name": "sora-2", "display_name": "sora-2", "modality": "video"},
+        {"arena_model_id": "kling-1", "name": "kling-v1.5", "display_name": "kling-v1.5", "modality": "video"},
+        {"arena_model_id": "text-1", "name": "claude-sonnet-4-6", "display_name": "claude-sonnet-4-6", "modality": "text"},
+    ]
+
+    filtered = filter_arena_catalog_models(models, {"enabled": True, "modality": "video"})
+    assert [m["name"] for m in filtered] == ["kling-v1.5", "sora-2"]
+
+
+def test_image_models_recraft_and_dalle_are_isolated_from_text_preset():
+    """验证 recraft, dall-e, midjourney, krea 等生图模型正确识别为 image 且不会泄漏到 text 目录。"""
+    from app.services.arena_direct_models import _normalize_models
+    from app.services.arena_model_catalog import filter_arena_catalog_models
+
+    raw = [
+        {"arena_model_id": "recraft-1", "name": "recraft-v4.1-pro", "display_name": "recraft-v4.1-pro"},
+        {"arena_model_id": "dalle-1", "name": "dall-e-3", "display_name": "dall-e-3"},
+        {"arena_model_id": "gemini-1", "name": "gemini-3.1-pro-preview", "display_name": "gemini-3.1-pro-preview", "modality": "text"},
+    ]
+
+    norm = _normalize_models(raw)
+    assert next(m for m in norm if m["name"] == "recraft-v4.1-pro")["modality"] == "image"
+    assert next(m for m in norm if m["name"] == "dall-e-3")["modality"] == "image"
+
+    text_filtered = filter_arena_catalog_models(norm, {"enabled": True, "modality": "text"})
+    assert [m["name"] for m in text_filtered] == ["gemini-3.1-pro-preview"]
+
+    image_filtered = filter_arena_catalog_models(norm, {"enabled": True, "modality": "image"})
+    assert set(m["name"] for m in image_filtered) == {"recraft-v4.1-pro", "dall-e-3"}

@@ -485,9 +485,8 @@ def get_arena_generation_status(
         try {
             if (window.__arenaHardStop && typeof window.__arenaHardStop.status === 'function') {
                 const st = window.__arenaHardStop.status();
-                if (st) {
-                    if (st.hasNativeStopButton || st.hasOverlayStopButton) has_stop = true;
-                    else if (Array.isArray(st.active) && st.active.some(record => record && !record.done && record.ageMs < 180000)) has_stop = true;
+                if (st && (st.hasNativeStopButton || st.hasOverlayStopButton)) {
+                    has_stop = true;
                 }
             }
         } catch (_) {}

@@ -82,7 +82,7 @@ return (() => {
         // `outputCapabilities.web` means the model can browse/use web data;
         // it is not the WebDev/code modality.  Only the modality rank marks
         // a model as code-capable for catalog filtering.
-        const hasWebDev = rankIsFinite('webdev');
+        const hasWebDev = rankIsFinite('webdev') || Boolean(outCaps.web);
         const hasSearch = Boolean(outCaps.search) || rankIsFinite('search');
 
         const dispName = String(model.displayName || model.publicName || model.name || idStr).trim();
@@ -95,13 +95,16 @@ return (() => {
                                   nameSearch.includes('luna-lisa') ||
                                   nameSearch.includes('lina-alpha') ||
                                   nameSearch.includes('lina-f-alpha') ||
-                                  nameSearch.includes('lina') ||
                                   nameSearch.includes('silver_halide') ||
                                   nameSearch.includes('flux') ||
                                   nameSearch.includes('imagen') ||
                                   nameSearch.includes('seedream') ||
                                   nameSearch.includes('seededit') ||
                                   nameSearch.includes('z-image') ||
+                                  nameSearch.includes('midjourney') ||
+                                  nameSearch.includes('dall-e') ||
+                                  nameSearch.includes('recraft') ||
+                                  nameSearch.includes('krea') ||
                                   (nameSearch.includes('grok') && nameSearch.includes('image')) ||
                                   (nameSearch.includes('imagine') && !nameSearch.includes('video'));
 
@@ -110,12 +113,14 @@ return (() => {
             modality = 'video';
         } else if (isKnownImageModel || (hasImage && defaultModality === 'image') || (hasImage && !hasText)) {
             modality = 'image';
-        } else if (hasWebDev || defaultModality === 'code') {
+        } else if (defaultModality === 'code' || (hasWebDev && !hasText)) {
             modality = 'code';
-        } else if (hasSearch) {
-            modality = 'search';
         } else if (hasText) {
             modality = 'text';
+        } else if (hasSearch) {
+            modality = 'search';
+        } else if (hasWebDev) {
+            modality = 'code';
         } else if (hasImage) {
             modality = 'image';
         } else if (hasVideo) {
@@ -216,13 +221,16 @@ return (() => {
                                                  nameLower.includes('luna-lisa') ||
                                                  nameLower.includes('lina-alpha') ||
                                                  nameLower.includes('lina-f-alpha') ||
-                                                 nameLower.includes('lina') ||
                                                  nameLower.includes('silver_halide') ||
                                                  nameLower.includes('flux') ||
                                                  nameLower.includes('imagen') ||
                                                  nameLower.includes('seedream') ||
                                                  nameLower.includes('seededit') ||
                                                  nameLower.includes('z-image') ||
+                                                 nameLower.includes('midjourney') ||
+                                                 nameLower.includes('dall-e') ||
+                                                 nameLower.includes('recraft') ||
+                                                 nameLower.includes('krea') ||
                                                  nameLower.includes('grok-imagine') ||
                                                  (nameLower.includes('grok') && nameLower.includes('image'));
                     if (isUserSpecifiedImage && isModelAvailable(model)) {
@@ -490,13 +498,16 @@ def _normalize_models(raw_models: Any) -> List[Dict[str, Any]]:
                 "luna-lisa",
                 "lina-alpha",
                 "lina-f-alpha",
-                "lina",
                 "silver_halide",
                 "flux",
                 "seedream",
                 "seededit",
                 "imagen",
                 "z-image",
+                "midjourney",
+                "dall-e",
+                "recraft",
+                "krea",
                 "grok-imagine",
             )
         ):

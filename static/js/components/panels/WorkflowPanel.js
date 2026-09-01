@@ -54,6 +54,9 @@ window.WorkflowPanel = {
                 { value: 'danger', label: '注意' }
             ],
             jsonParamPlaceholder: '{\n  "target_endpoint": "/nextjs-api/stream/create-evaluation",\n  "override_model": "{{context.model}}"\n}',
+            catalogCollapsed: false,
+            darkPoolCollapsed: false,
+            expandedSteps: {},
             localCatalog: {
                 enabled: false,
                 source: 'arena_direct',
@@ -67,6 +70,9 @@ window.WorkflowPanel = {
             },
             catalogLoading: false,
             catalogSaveTimer: null,
+            draggedIndex: null,
+            dragOverIndex: null,
+            dragOverPosition: null,
             catalogKeywordsDraft: {
                 include_keywords: '',
                 exclude_keywords: '',
@@ -100,6 +106,10 @@ window.WorkflowPanel = {
                 this.customKeyModes = {};
                 this.expandedJsEditors = {};
                 this.expandedJsPreviews = {};
+                this.expandedSteps = {};
+                this.draggedIndex = null;
+                this.dragOverIndex = null;
+                this.dragOverPosition = null;
                 this.syncHintEditorState();
                 this.loadModelCatalog();
             },
@@ -130,6 +140,214 @@ window.WorkflowPanel = {
     methods: {
         toggle() {
             this.$emit('update:collapsed', !this.collapsed);
+        },
+
+        hasStepDetail(step, index = null) {
+            if (!step) return false;
+            if (step.action === 'KEY_PRESS') {
+                return index !== null && this.isCustomKeyPreset(index, step);
+            }
+            return ['JS_EXEC', 'COORD_CLICK', 'COORD_SCROLL', 'READONLY_HINT', 'PAGE_FETCH'].includes(step.action);
+        },
+
+        isStepExpanded(index, step = null) {
+            if (step && !this.hasStepDetail(step, index)) return false;
+            return !!this.expandedSteps[index];
+        },
+
+        toggleStepExpand(index, step = null) {
+            if (step && !this.hasStepDetail(step, index)) return;
+            this.expandedSteps = {
+                ...this.expandedSteps,
+                [index]: !this.isStepExpanded(index, step)
+            };
+        },
+
+        expandAllSteps() {
+            const next = {};
+            (this.workflow || []).forEach((step, idx) => {
+                if (this.hasStepDetail(step, idx)) {
+                    next[idx] = true;
+                }
+            });
+            this.expandedSteps = next;
+        },
+
+        collapseAllSteps() {
+            this.expandedSteps = {};
+        },
+
+        reorderIndexMap(map, fromIndex, toIndex) {
+            if (!map || typeof map !== 'object') return {};
+            const newMap = {};
+            Object.entries(map).forEach(([key, val]) => {
+                const idx = Number(key);
+                if (isNaN(idx)) return;
+                let nextIdx = idx;
+                if (idx === fromIndex) {
+                    nextIdx = toIndex;
+                } else if (fromIndex < toIndex && idx > fromIndex && idx <= toIndex) {
+                    nextIdx = idx - 1;
+                } else if (fromIndex > toIndex && idx >= toIndex && idx < fromIndex) {
+                    nextIdx = idx + 1;
+                }
+                newMap[nextIdx] = val;
+            });
+            return newMap;
+        },
+
+        removeIndexFromMap(map, removeIndex) {
+            if (!map || typeof map !== 'object') return {};
+            const newMap = {};
+            Object.entries(map).forEach(([key, val]) => {
+                const idx = Number(key);
+                if (isNaN(idx) || idx === removeIndex) return;
+                const nextIdx = idx > removeIndex ? idx - 1 : idx;
+                newMap[nextIdx] = val;
+            });
+            return newMap;
+        },
+
+        handleMoveStep(index, direction) {
+            const newIndex = index + direction;
+            if (newIndex < 0 || !this.workflow || newIndex >= this.workflow.length) return;
+            this.reorderWorkflowStep(index, newIndex, direction > 0 ? 'after' : 'before');
+        },
+
+        handleRemoveStep(index) {
+            if (Array.isArray(this.workflow)) {
+                this.workflow.splice(index, 1);
+            }
+            this.expandedSteps = this.removeIndexFromMap(this.expandedSteps, index);
+            this.expandedJsEditors = this.removeIndexFromMap(this.expandedJsEditors, index);
+            this.expandedHintEditors = this.removeIndexFromMap(this.expandedHintEditors, index);
+            this.expandedExecutionMenus = this.removeIndexFromMap(this.expandedExecutionMenus, index);
+            this.customKeyModes = this.removeIndexFromMap(this.customKeyModes, index);
+            this.expandedJsPreviews = this.removeIndexFromMap(this.expandedJsPreviews, index);
+        },
+
+        handleDragStart(index, event) {
+            this.draggedIndex = index;
+            this.dragOverIndex = null;
+            this.dragOverPosition = null;
+            if (event && event.dataTransfer) {
+                event.dataTransfer.effectAllowed = 'move';
+                event.dataTransfer.setData('text/plain', String(index));
+            }
+        },
+
+        handleDragOver(index, event) {
+            if (this.draggedIndex === null || this.draggedIndex === index) {
+                this.dragOverIndex = null;
+                this.dragOverPosition = null;
+                return;
+            }
+            event.preventDefault();
+            if (event.dataTransfer) {
+                event.dataTransfer.dropEffect = 'move';
+            }
+            const rect = event.currentTarget.getBoundingClientRect();
+            const midY = rect.top + rect.height / 2;
+            const pos = event.clientY < midY ? 'before' : 'after';
+            this.dragOverIndex = index;
+            this.dragOverPosition = pos;
+        },
+
+        handleDragLeave(index, event) {
+            if (event.currentTarget && !event.currentTarget.contains(event.relatedTarget)) {
+                if (this.dragOverIndex === index) {
+                    this.dragOverIndex = null;
+                    this.dragOverPosition = null;
+                }
+            }
+        },
+
+        handleDrop(targetIndex, event) {
+            event.preventDefault();
+            const fromIndex = this.draggedIndex;
+            const position = this.dragOverPosition || 'before';
+            this.draggedIndex = null;
+            this.dragOverIndex = null;
+            this.dragOverPosition = null;
+
+            if (fromIndex === null || fromIndex === undefined || fromIndex === targetIndex) {
+                return;
+            }
+
+            this.reorderWorkflowStep(fromIndex, targetIndex, position);
+        },
+
+        handleDragEnd() {
+            this.draggedIndex = null;
+            this.dragOverIndex = null;
+            this.dragOverPosition = null;
+        },
+
+        reorderWorkflowStep(fromIndex, targetIndex, position) {
+            if (!Array.isArray(this.workflow)) return;
+            if (fromIndex === targetIndex) return;
+
+            const [movedItem] = this.workflow.splice(fromIndex, 1);
+            let insertIndex = targetIndex;
+            if (fromIndex < targetIndex) {
+                insertIndex = position === 'after' ? targetIndex : targetIndex - 1;
+            } else {
+                insertIndex = position === 'after' ? targetIndex + 1 : targetIndex;
+            }
+
+            if (insertIndex < 0) insertIndex = 0;
+            if (insertIndex > this.workflow.length) insertIndex = this.workflow.length;
+
+            this.workflow.splice(insertIndex, 0, movedItem);
+
+            this.expandedSteps = this.reorderIndexMap(this.expandedSteps, fromIndex, insertIndex);
+            this.expandedJsEditors = this.reorderIndexMap(this.expandedJsEditors, fromIndex, insertIndex);
+            this.expandedHintEditors = this.reorderIndexMap(this.expandedHintEditors, fromIndex, insertIndex);
+            this.expandedExecutionMenus = this.reorderIndexMap(this.expandedExecutionMenus, fromIndex, insertIndex);
+            this.customKeyModes = this.reorderIndexMap(this.customKeyModes, fromIndex, insertIndex);
+            this.expandedJsPreviews = this.reorderIndexMap(this.expandedJsPreviews, fromIndex, insertIndex);
+        },
+
+
+
+        getStepSummary(step) {
+            if (!step) return '';
+            switch (step.action) {
+                case 'FILL_INPUT':
+                    return step.target ? `填入目标: ${step.target}` : '未选择目标输入框';
+                case 'SELECT_MODEL':
+                    return step.target ? `选择模型器: ${step.target}` : '未选择模型选择器';
+                case 'PAGE_FETCH':
+                    return '页面直发 prompt 请求';
+                case 'CLICK':
+                    return step.target ? `点击: ${step.target}` : '未选择点击目标';
+                case 'COORD_CLICK':
+                    return `坐标 (${step.value?.x ?? 0}, ${step.value?.y ?? 0})`;
+                case 'COORD_SCROLL':
+                    return `滑动 (${step.value?.start_x ?? 0}, ${step.value?.start_y ?? 0}) → (${step.value?.end_x ?? 0}, ${step.value?.end_y ?? 0})`;
+                case 'STREAM_WAIT':
+                case 'STREAM_OUTPUT':
+                    return step.target ? `等待流式容器: ${step.target}` : '流式等待';
+                case 'WAIT':
+                    return `等待 ${step.value ?? 0} 秒`;
+                case 'KEY_PRESS':
+                    return `按键: ${step.target || '未设置'}`;
+                case 'JS_EXEC': {
+                    const mode = this.getJsMode(-1, step);
+                    if (mode === 'file') {
+                        const file = this.normalizeScriptTarget(step.target);
+                        return file ? `脚本: ${file.split('/').pop()}` : '未选择脚本文件';
+                    }
+                    const code = String(step.value || '').trim();
+                    return code ? `内联: ${code.slice(0, 30)}${code.length > 30 ? '...' : ''}` : '空 JS 代码';
+                }
+                case 'READONLY_HINT': {
+                    const hint = this.normalizeHintStepValue(step);
+                    return `提示: ${hint.title || '无标题'}`;
+                }
+                default:
+                    return '';
+            }
         },
 
         normalizeCatalogKeywords(value) {
@@ -407,6 +625,10 @@ window.WorkflowPanel = {
                     ...this.customKeyModes,
                     [index]: true
                 };
+                this.expandedSteps = {
+                    ...this.expandedSteps,
+                    [index]: true
+                };
                 if (!step.target || this.keyPresets.some(item => item.value === step.target)) {
                     step.target = '';
                 }
@@ -415,6 +637,10 @@ window.WorkflowPanel = {
             if (value) {
                 this.customKeyModes = {
                     ...this.customKeyModes,
+                    [index]: false
+                };
+                this.expandedSteps = {
+                    ...this.expandedSteps,
                     [index]: false
                 };
                 step.target = value;
@@ -731,6 +957,20 @@ window.WorkflowPanel = {
                 } catch (_) {}
             }
             step.value = rawText;
+        },
+
+                getCoordProp(step, key, defaultVal = '') {
+            if (!step || !step.value || typeof step.value !== 'object') {
+                return defaultVal;
+            }
+            const val = step.value[key];
+            return (val !== undefined && val !== null) ? val : defaultVal;
+        },
+
+        updateCoordValue(step, key, val) {
+            const base = (step.value && typeof step.value === 'object' && !Array.isArray(step.value)) ? step.value : {};
+            const num = val === '' ? '' : Number(val);
+            step.value = { ...base, [key]: isNaN(num) ? val : num };
         }
     },
     template: `
@@ -765,26 +1005,41 @@ window.WorkflowPanel = {
             </div>
 
             <div v-show="!collapsed" class="p-4 space-y-4 max-h-[44rem] overflow-auto">
-                <div v-if="isArenaPreset" class="border-b border-gray-200 dark:border-gray-700 pb-4 space-y-4">
-                    <div class="flex items-center justify-between gap-4">
-                        <div>
-                            <div class="text-sm font-semibold text-gray-900 dark:text-white flex items-center gap-2">
-                                <span>页面模型目录</span>
-                                <span v-if="catalogLoading" class="text-xs text-blue-500 animate-pulse font-normal">读取中...</span>
+                <!-- 页面模型目录 (支持折叠) -->
+                <div v-if="isArenaPreset" class="border border-gray-200 dark:border-gray-700 rounded-lg bg-gray-50/40 dark:bg-gray-900/20 overflow-hidden">
+                    <div class="px-3.5 py-2.5 flex items-center justify-between gap-3 cursor-pointer hover:bg-gray-100/60 dark:hover:bg-gray-800/60 transition-colors select-none"
+                         @click="catalogCollapsed = !catalogCollapsed">
+                        <div class="flex items-center gap-2 min-w-0">
+                            <span class="w-4 inline-flex justify-center text-gray-500 dark:text-gray-400"
+                                  v-html="catalogCollapsed ? $icons.chevronDown : $icons.chevronUp"></span>
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <span class="text-sm font-semibold text-gray-900 dark:text-white">页面模型目录</span>
+                                <span :class="[
+                                    'px-1.5 py-0.5 rounded text-[11px] font-medium',
+                                    localCatalog.enabled
+                                        ? 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800'
+                                        : 'bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 border dark:border-gray-700'
+                                ]">
+                                    {{ localCatalog.enabled ? '已启用' : '未启用' }}
+                                </span>
                             </div>
-                            <div class="text-xs text-gray-500 dark:text-gray-400 mt-1">独立持久化存储。启用后，此预设负责读取页面模型、过滤列表，并在请求时切换模型。</div>
                         </div>
-                        <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200 cursor-pointer">
-                            <input type="checkbox"
-                                   class="rounded"
-                                   :checked="!!localCatalog.enabled"
-                                   @change="saveModelCatalog({ enabled: $event.target.checked })">
-                            <span>启用目录</span>
-                        </label>
+                        <div class="flex items-center gap-3" @click.stop>
+                            <label class="inline-flex items-center gap-1.5 text-xs font-medium text-gray-700 dark:text-gray-300 cursor-pointer">
+                                <input type="checkbox"
+                                       class="rounded text-emerald-600 focus:ring-emerald-500"
+                                       :checked="!!localCatalog.enabled"
+                                       @change="saveModelCatalog({ enabled: $event.target.checked })">
+                                <span>启用目录</span>
+                            </label>
+                        </div>
                     </div>
 
-                    <div v-if="localCatalog.enabled" class="space-y-4">
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div class="px-3.5 pb-2 text-xs text-gray-500 dark:text-gray-400">
+                        独立持久化存储。启用后，此预设负责读取页面模型、过滤列表，并在请求时切换模型。
+                    </div>
+                    <div v-show="!catalogCollapsed && localCatalog.enabled" class="px-3.5 pb-3.5 pt-1 space-y-3 border-t border-gray-200/70 dark:border-gray-700/70">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">
                             <label class="block min-w-0">
                                 <span class="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">仅保留关键词（可选，每行一个）</span>
                                 <textarea :value="catalogKeywordsDraft ? catalogKeywordsDraft.include_keywords : ''"
@@ -805,25 +1060,43 @@ window.WorkflowPanel = {
                             </label>
                         </div>
 
-                        <!-- 暗池模型配置区块 -->
-                        <div class="border-t border-dashed border-gray-200 dark:border-gray-700 pt-3 space-y-3">
-                            <div class="flex items-center justify-between gap-4">
-                                <div>
-                                    <div class="text-xs font-semibold text-purple-600 dark:text-purple-400">暗池模型池 (Dark Pool)</div>
-                                    <div class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">聚合离线模型元数据与页面抓取隐藏模型。明池模型不受此规则影响。</div>
+                        <!-- 暗池模型配置区块 (支持折叠) -->
+                        <div class="border border-purple-200/80 dark:border-purple-800/60 rounded-lg bg-purple-50/30 dark:bg-purple-950/15 overflow-hidden">
+                            <div class="px-3 py-2 flex items-center justify-between gap-3 cursor-pointer hover:bg-purple-100/40 dark:hover:bg-purple-900/30 transition-colors select-none"
+                                 @click="darkPoolCollapsed = !darkPoolCollapsed">
+                                <div class="flex items-center gap-2 min-w-0">
+                                    <span class="w-3.5 inline-flex justify-center text-purple-500 dark:text-purple-400 text-xs"
+                                          v-html="darkPoolCollapsed ? $icons.chevronDown : $icons.chevronUp"></span>
+                                    <div class="flex items-center gap-2 flex-wrap">
+                                        <span class="text-xs font-semibold text-purple-700 dark:text-purple-300">暗池模型池 (Dark Pool)</span>
+                                        <span :class="[
+                                            'px-1.5 py-0.2 rounded text-[10px] font-medium',
+                                            localCatalog.enable_dark_pool
+                                                ? 'bg-purple-100 dark:bg-purple-900/60 text-purple-700 dark:text-purple-300 border border-purple-300 dark:border-purple-700'
+                                                : 'bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 border dark:border-gray-700'
+                                        ]">
+                                            {{ localCatalog.enable_dark_pool ? '已加入' : '未加入' }}
+                                        </span>
+                                    </div>
                                 </div>
-                                <label class="inline-flex items-center gap-2 text-xs font-medium text-gray-700 dark:text-gray-200 cursor-pointer">
-                                    <input type="checkbox"
-                                           class="rounded text-purple-600 focus:ring-purple-500"
-                                           :checked="!!localCatalog.enable_dark_pool"
-                                           @change="saveModelCatalog({ enable_dark_pool: $event.target.checked })">
-                                    <span>加入暗池模型</span>
-                                </label>
+                                <div class="flex items-center gap-3" @click.stop>
+                                    <label class="inline-flex items-center gap-1.5 text-xs font-medium text-purple-700 dark:text-purple-300 cursor-pointer">
+                                        <input type="checkbox"
+                                               class="rounded text-purple-600 focus:ring-purple-500"
+                                               :checked="!!localCatalog.enable_dark_pool"
+                                               @change="saveModelCatalog({ enable_dark_pool: $event.target.checked })">
+                                        <span>加入暗池模型</span>
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="px-3 pb-2 text-[11px] text-gray-500 dark:text-gray-400">
+                                聚合离线模型元数据与页面抓取隐藏模型。明池模型不受此规则影响。
                             </div>
 
-                            <div v-if="localCatalog.enable_dark_pool" class="bg-purple-50/50 dark:bg-purple-950/20 border border-purple-200/60 dark:border-purple-800/40 rounded-lg p-3 space-y-3">
+                            <div v-show="!darkPoolCollapsed && localCatalog.enable_dark_pool"
+                                 class="px-3 pb-3 pt-2 space-y-3 border-t border-purple-200/50 dark:border-purple-800/40">
                                 <div>
-                                    <label class="inline-flex items-center gap-2 text-xs text-gray-700 dark:text-gray-300">
+                                    <label class="inline-flex items-center gap-2 text-xs text-gray-700 dark:text-gray-300 flex-wrap">
                                         <span class="font-medium">暗池起始日期（在此日期之后入库的模型放行）：</span>
                                         <input type="date"
                                                :value="localCatalog.dark_pool_since || ''"
@@ -858,32 +1131,66 @@ window.WorkflowPanel = {
                     </div>
                 </div>
 
-                <div v-for="(step, index) in workflow" :key="index"
+                <!-- 步骤列表顶部控制条 -->
+                <div v-if="workflow.length > 0" class="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400 px-1 pt-1">
+                    <span class="font-medium text-gray-600 dark:text-gray-300">执行步骤 ({{ workflow.length }})</span>
+                    <div class="flex items-center gap-2">
+                        <button type="button" @click="expandAllSteps" class="hover:text-blue-500 transition-colors">全部展开</button>
+                        <span>·</span>
+                        <button type="button" @click="collapseAllSteps" class="hover:text-blue-500 transition-colors">全部折叠</button>
+                    </div>
+                </div>
+                <!-- 步骤卡片 (所有步骤展开前高度严格一致) -->
+                <div v-for="(step, index) in workflow" :key="'step-' + index"
+                     @dragover="handleDragOver(index, $event)"
+                     @dragleave="handleDragLeave(index, $event)"
+                     @drop="handleDrop(index, $event)"
                      :class="[
-                         'border rounded-lg p-3 transition-colors',
+                         'border rounded-lg transition-colors overflow-hidden relative',
                          step.action === 'READONLY_HINT'
                              ? getHintStepClasses(step)
-                             : 'dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-600 bg-gray-50/50 dark:bg-gray-900/30'
+                             : 'border-gray-200 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-600 bg-gray-50/50 dark:bg-gray-900/30',
+                         draggedIndex === index ? 'opacity-40 border-dashed border-blue-400 dark:border-blue-500 bg-blue-50/20 scale-[0.99]' : '',
+                         dragOverIndex === index && dragOverPosition === 'before' ? 'border-t-2 border-t-blue-500 shadow-sm' : '',
+                         dragOverIndex === index && dragOverPosition === 'after' ? 'border-b-2 border-b-blue-500 shadow-sm' : ''
                      ]">
-                    <div class="flex gap-3 items-start">
-                        <div class="flex flex-col items-center gap-0.5 pt-1">
-                            <span class="text-xs font-bold text-gray-600 dark:text-gray-300 w-6 h-6 flex items-center justify-center bg-gray-200 dark:bg-gray-700 rounded-full">{{ index + 1 }}</span>
-                            <div class="flex flex-col mt-1">
-                                <button @click="$emit('move-step', index, -1)" :disabled="index === 0"
-                                        :class="['p-1 rounded-md transition-all duration-150', index === 0 ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed' : 'text-gray-600 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900/40 active:scale-95']">
-                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 15.75l7.5-7.5 7.5 7.5"/></svg>
+                    <!-- 步骤卡片头部 (统一高度 h-12，所有步骤展开前高度完全一致) -->
+                    <div class="h-12 px-3 py-1.5 flex items-center gap-2.5 flex-nowrap"
+                         :class="isStepExpanded(index, step) && hasStepDetail(step, index) ? 'border-b border-gray-200/80 dark:border-gray-700/80 bg-white/40 dark:bg-gray-800/40' : ''">
+
+                        <!-- 步骤序号、拖拽抓手与上下移动 -->
+                        <div class="flex items-center gap-1.5 flex-shrink-0">
+                            <!-- 拖拽抓手 -->
+                            <div draggable="true"
+                                 @dragstart="handleDragStart(index, $event)"
+                                 @dragend="handleDragEnd"
+                                 title="按住拖拽调整步骤顺序"
+                                 class="cursor-grab active:cursor-grabbing p-1 -ml-0.5 text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 rounded hover:bg-gray-200/60 dark:hover:bg-gray-700/60 transition-colors flex items-center justify-center select-none">
+                                <span class="w-3.5 h-3.5 inline-flex items-center justify-center text-gray-400 dark:text-gray-500" v-html="$icons.gripVertical"></span>
+                            </div>
+
+                            <!-- 步骤序号 -->
+                            <span class="text-xs font-bold text-gray-600 dark:text-gray-300 w-6 h-6 flex items-center justify-center bg-gray-200 dark:bg-gray-700 rounded-full select-none">{{ index + 1 }}</span>
+
+                            <!-- 上下微调按钮 -->
+                            <div class="flex items-center">
+                                <button @click="handleMoveStep(index, -1)" :disabled="index === 0"
+                                        title="上移步骤"
+                                        :class="['p-0.5 rounded transition-all duration-150', index === 0 ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed' : 'text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900/40 active:scale-95']">
+                                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4.5 15.75l7.5-7.5 7.5 7.5"/></svg>
                                 </button>
-                                <button @click="$emit('move-step', index, 1)" :disabled="index === workflow.length - 1"
-                                        :class="['p-1 rounded-md transition-all duration-150', index === workflow.length - 1 ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed' : 'text-gray-600 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900/40 active:scale-95']">
-                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
+                                <button @click="handleMoveStep(index, 1)" :disabled="index === workflow.length - 1"
+                                        title="下移步骤"
+                                        :class="['p-0.5 rounded transition-all duration-150', index === workflow.length - 1 ? 'text-gray-300 dark:text-gray-600 cursor-not-allowed' : 'text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900/40 active:scale-95']">
+                                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5"/></svg>
                                 </button>
                             </div>
                         </div>
 
-                        <div v-if="step.action !== 'READONLY_HINT'" class="w-36">
-                            <label class="text-xs font-medium text-gray-500 dark:text-gray-400">动作</label>
+                        <!-- 动作选择下拉框 (全部动作统一保留) -->
+                        <div v-if="step.action !== 'READONLY_HINT'" class="w-32 sm:w-36 flex-shrink-0">
                             <select v-model="step.action" @change="$emit('action-change', step)"
-                                    class="border dark:border-gray-600 px-2 py-1.5 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent w-full text-sm mt-1 bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
+                                    class="border dark:border-gray-600 px-2 py-1 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent w-full text-xs sm:text-sm h-8 bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
                                 <option value="FILL_INPUT">填入内容</option>
                                 <option value="SELECT_MODEL">选择请求模型</option>
                                 <option value="PAGE_FETCH">页面直发</option>
@@ -899,247 +1206,225 @@ window.WorkflowPanel = {
                             </select>
                         </div>
 
-                        <div class="flex-1 min-w-0">
-                            <label v-if="step.action !== 'READONLY_HINT'" class="text-xs font-medium text-gray-500 dark:text-gray-400">
-                                {{ step.action === 'SELECT_MODEL' ? '模型选择器' : ['FILL_INPUT', 'CLICK', 'STREAM_WAIT', 'STREAM_OUTPUT'].includes(step.action) ? '目标选择器' : step.action === 'PAGE_FETCH' ? '发送方式' : ['COORD_CLICK', 'COORD_SCROLL'].includes(step.action) ? '坐标参数' : step.action === 'JS_EXEC' ? 'JavaScript' : step.action === 'READONLY_HINT' ? '提示内容' : '参数' }}
-                            </label>
-
-                            <select v-if="['FILL_INPUT', 'SELECT_MODEL', 'CLICK', 'STREAM_WAIT', 'STREAM_OUTPUT'].includes(step.action)" v-model="step.target"
-                                    class="border dark:border-gray-600 px-2 py-1.5 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent w-full mt-1 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
+                        <!-- 中间参数/摘要区 (单行，高度 h-8) -->
+                        <div class="flex-1 min-w-0 flex items-center">
+                            <!-- 选择器类 -->
+                            <select v-if="['FILL_INPUT', 'SELECT_MODEL', 'CLICK', 'STREAM_WAIT', 'STREAM_OUTPUT'].includes(step.action)"
+                                    v-model="step.target"
+                                    class="border dark:border-gray-600 px-2 py-1 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent w-full text-xs sm:text-sm h-8 bg-white dark:bg-gray-700 text-gray-900 dark:text-white truncate">
                                 <option value="" disabled>选择选择器...</option>
                                 <option v-for="(v, k) in selectors" :key="k" :value="k">{{ k }} ({{ v || '未设置' }})</option>
                             </select>
 
-                            <div v-else-if="step.action === 'COORD_CLICK'" class="flex items-center gap-2 mt-1 flex-wrap">
-                                <input :value="step.value?.x ?? ''"
-                                       @input="step.value = { ...(step.value || {}), x: Number($event.target.value) }"
-                                       type="number"
-                                       step="1"
-                                       class="border dark:border-gray-600 px-2 py-1.5 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent w-28 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                                       placeholder="X viewport">
-                                <input :value="step.value?.y ?? ''"
-                                       @input="step.value = { ...(step.value || {}), y: Number($event.target.value) }"
-                                       type="number"
-                                       step="1"
-                                       class="border dark:border-gray-600 px-2 py-1.5 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent w-28 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                                       placeholder="Y viewport">
-                                <input :value="step.value?.random_radius ?? 0"
-                                       @input="step.value = { ...(step.value || {}), random_radius: Number($event.target.value) }"
-                                       type="number"
-                                       min="0"
-                                       step="1"
-                                       class="border dark:border-gray-600 px-2 py-1.5 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent w-28 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                                       placeholder="随机半径">
-                                <div class="w-full text-xs text-gray-500 dark:text-gray-400">
-                                    使用 viewport CSS 坐标，不是屏幕坐标。
-                                </div>
+                            <!-- WAIT 等待 -->
+                            <div v-else-if="step.action === 'WAIT'" class="flex items-center gap-1.5">
+                                <input v-model.number="step.value" type="number" step="0.1" min="0"
+                                       class="border dark:border-gray-600 px-2 py-1 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent w-24 text-xs sm:text-sm h-8 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                                       placeholder="秒数">
+                                <span class="text-xs text-gray-500 dark:text-gray-400">秒</span>
                             </div>
 
-                            <div v-else-if="step.action === 'COORD_SCROLL'" class="flex items-center gap-2 mt-1 flex-wrap">
-                                <input :value="step.value?.start_x ?? ''"
-                                       @input="step.value = { ...(step.value || {}), start_x: Number($event.target.value) }"
-                                       type="number"
-                                       step="1"
-                                       class="border dark:border-gray-600 px-2 py-1.5 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent w-28 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                                       placeholder="起点 X">
-                                <input :value="step.value?.start_y ?? ''"
-                                       @input="step.value = { ...(step.value || {}), start_y: Number($event.target.value) }"
-                                       type="number"
-                                       step="1"
-                                       class="border dark:border-gray-600 px-2 py-1.5 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent w-28 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                                       placeholder="起点 Y">
-                                <input :value="step.value?.end_x ?? ''"
-                                       @input="step.value = { ...(step.value || {}), end_x: Number($event.target.value) }"
-                                       type="number"
-                                       step="1"
-                                       class="border dark:border-gray-600 px-2 py-1.5 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent w-28 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                                       placeholder="终点 X">
-                                <input :value="step.value?.end_y ?? ''"
-                                       @input="step.value = { ...(step.value || {}), end_y: Number($event.target.value) }"
-                                       type="number"
-                                       step="1"
-                                       class="border dark:border-gray-600 px-2 py-1.5 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent w-28 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                                       placeholder="终点 Y">
-                                <div class="w-full text-xs text-gray-500 dark:text-gray-400">
-                                    使用 viewport CSS 坐标。普通模式直接派发滚轮，低熵模式会按站点 stealth 配置走人类化轨迹。
-                                </div>
-                            </div>
-
-                            <div v-else-if="step.action === 'KEY_PRESS'" class="mt-1 space-y-2">
+                            <!-- KEY_PRESS 按键 -->
+                            <div v-else-if="step.action === 'KEY_PRESS'" class="w-full flex items-center gap-2">
                                 <select :value="getKeyPresetValue(index, step)"
                                         @change="applyKeyPreset(index, step, $event.target.value)"
-                                        class="border dark:border-gray-600 px-2 py-1.5 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent w-full text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
+                                        class="border dark:border-gray-600 px-2 py-1 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent w-full text-xs sm:text-sm h-8 bg-white dark:bg-gray-700 text-gray-900 dark:text-white truncate">
                                     <option value="">选择常用按键/组合键...</option>
                                     <option v-for="preset in keyPresets" :key="preset.value" :value="preset.value">{{ preset.label }}</option>
-                                    <option value="__custom__">自定义...</option>
+                                    <option value="__custom__">自定义: {{ step.target || '未输入' }}</option>
                                 </select>
-                                <input v-if="isCustomKeyPreset(index, step)"
-                                       v-model="step.target"
-                                       list="workflow-key-presets"
-                                       placeholder="例如: Enter / Ctrl+Enter / Ctrl+Shift+P"
-                                       class="border dark:border-gray-600 px-2 py-1.5 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent w-full text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
-                                <div class="text-xs text-gray-500 dark:text-gray-400">
-                                    支持直接选择，也支持手输任意按键或组合键。
+                                <button v-if="isCustomKeyPreset(index, step)"
+                                        type="button"
+                                        @click="toggleStepExpand(index, step)"
+                                        class="text-[11px] text-blue-600 dark:text-blue-400 hover:underline flex-shrink-0 px-1">
+                                    {{ isStepExpanded(index, step) ? '收起' : '展开输入' }}
+                                </button>
+                            </div>
+
+                            <!-- JS_EXEC 执行 JavaScript (单行胶囊与摘要，点击整行展开/收起) -->
+                            <div v-else-if="step.action === 'JS_EXEC'"
+                                 @click="toggleStepExpand(index, step)"
+                                 class="w-full flex items-center gap-2 cursor-pointer group py-0.5 min-w-0">
+                                <span :class="[
+                                    'px-2 py-0.5 rounded text-[11px] font-medium flex-shrink-0',
+                                    getJsMode(index, step) === 'file'
+                                        ? 'bg-blue-100 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border border-blue-300 dark:border-blue-800'
+                                        : 'bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-300 dark:border-amber-800'
+                                ]">
+                                    {{ getJsMode(index, step) === 'file' ? '外部脚本' : '内联代码' }}
+                                </span>
+                                <span class="text-xs text-gray-700 dark:text-gray-300 font-mono truncate flex-1 group-hover:text-blue-500 transition-colors">
+                                    {{ getStepSummary(step) }}
+                                </span>
+                                <span class="text-[11px] text-gray-400 dark:text-gray-500 flex-shrink-0 group-hover:text-blue-400">
+                                    {{ isStepExpanded(index, step) ? '收起' : '展开配置' }}
+                                </span>
+                            </div>
+
+                            <!-- COORD_CLICK 坐标点击 (点击整行展开/收起) -->
+                            <div v-else-if="step.action === 'COORD_CLICK'"
+                                 @click="toggleStepExpand(index, step)"
+                                 class="w-full flex items-center gap-2 cursor-pointer group min-w-0">
+                                <span class="text-xs font-mono text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700/60 px-2 py-1 rounded border dark:border-gray-600 truncate">
+                                    X: {{ getCoordProp(step, 'x', 0) }}, Y: {{ getCoordProp(step, 'y', 0) }} (半径: {{ getCoordProp(step, 'random_radius', 0) }})
+                                </span>
+                                <span class="text-[11px] text-gray-400 dark:text-gray-500 flex-shrink-0 group-hover:text-blue-400">
+                                    {{ isStepExpanded(index, step) ? '收起' : '展开编辑' }}
+                                </span>
+                            </div>
+
+                            <!-- COORD_SCROLL 模拟滑动 (点击整行展开/收起) -->
+                            <div v-else-if="step.action === 'COORD_SCROLL'"
+                                 @click="toggleStepExpand(index, step)"
+                                 class="w-full flex items-center gap-2 cursor-pointer group min-w-0">
+                                <span class="text-xs font-mono text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700/60 px-2 py-1 rounded border dark:border-gray-600 truncate">
+                                    ({{ getCoordProp(step, 'start_x', 0) }}, {{ getCoordProp(step, 'start_y', 0) }}) → ({{ getCoordProp(step, 'end_x', 0) }}, {{ getCoordProp(step, 'end_y', 0) }})
+                                </span>
+                                <span class="text-[11px] text-gray-400 dark:text-gray-500 flex-shrink-0 group-hover:text-blue-400">
+                                    {{ isStepExpanded(index, step) ? '收起' : '展开编辑' }}
+                                </span>
+                            </div>
+
+                            <!-- PAGE_FETCH 页面直发 (点击整行展开/收起) -->
+                            <div v-else-if="step.action === 'PAGE_FETCH'"
+                                 @click="toggleStepExpand(index, step)"
+                                 class="w-full flex items-center gap-2 cursor-pointer group min-w-0">
+                                <span class="px-2 py-0.5 rounded text-[11px] font-medium bg-purple-100 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 border border-purple-300 dark:border-purple-800">
+                                    页面直发
+                                </span>
+                                <span class="text-xs text-gray-500 dark:text-gray-400 truncate">使用当前预设直接在页面发请求</span>
+                                <span class="text-[11px] text-gray-400 dark:text-gray-500 flex-shrink-0 group-hover:text-blue-400">
+                                    {{ isStepExpanded(index, step) ? '收起' : '说明' }}
+                                </span>
+                            </div>
+
+                            <!-- READONLY_HINT 只读提示 (点击整行展开/收起) -->
+                            <div v-else-if="step.action === 'READONLY_HINT'"
+                                 @click="toggleStepExpand(index, step)"
+                                 class="w-full flex items-center gap-2 cursor-pointer group min-w-0">
+                                <span class="text-xs font-semibold text-gray-800 dark:text-gray-200">
+                                    {{ normalizeHintStepValue(step).title || '提示' }}
+                                </span>
+                                <span class="text-xs text-gray-500 dark:text-gray-400 truncate flex-1">
+                                    {{ normalizeHintStepValue(step).text || '展示只读提示' }}
+                                </span>
+                                <span class="text-[11px] text-gray-400 flex-shrink-0 group-hover:text-blue-400">
+                                    {{ isStepExpanded(index, step) ? '收起编辑' : '展开编辑' }}
+                                </span>
+                            </div>
+                        </div>
+
+                        <!-- 右侧操作区 -->
+                        <div class="flex items-center gap-2 flex-shrink-0">
+                            <div v-if="!['READONLY_HINT', 'PAGE_FETCH'].includes(step.action)">
+                                <label class="flex items-center text-xs cursor-pointer whitespace-nowrap text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white transition-colors"
+                                       title="勾选后找不到元素会报错；不勾选则跳过该步骤">
+                                    <input type="checkbox"
+                                           :checked="!step.optional"
+                                           @change="step.optional = !$event.target.checked"
+                                           class="mr-1 rounded">
+                                    <span class="hidden sm:inline">必需步骤</span>
+                                    <span class="sm:hidden">必需</span>
+                                </label>
+                            </div>
+
+                            <button v-if="step.action === 'CLICK'"
+                                    @click="toggleExecutionMenu(index, step)"
+                                    type="button"
+                                    :title="isExecutionExpanded(index) ? '收起执行设置' : '展开执行设置'"
+                                    :class="[
+                                        'p-1.5 rounded-md transition-all duration-150',
+                                        isExecutionExpanded(index)
+                                            ? 'text-blue-600 bg-blue-100 dark:text-blue-300 dark:bg-blue-900/40'
+                                            : 'text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900/40'
+                                    ]">
+                                <span v-html="$icons.cog"></span>
+                            </button>
+
+                            <button @click="handleRemoveStep(index)"
+                                    title="删除该步骤"
+                                    class="p-1.5 rounded-md transition-all duration-150 text-gray-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 active:scale-95">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 步骤展开详细编辑区 (Body, 仅在具有详细编辑项的步骤且展开时显示) -->
+                    <div v-show="isStepExpanded(index, step) && hasStepDetail(step, index)" class="p-3.5 space-y-3 bg-white/60 dark:bg-gray-800/60 border-t border-gray-100 dark:border-gray-700/60">
+                        <!-- JS_EXEC 展开详细配置 -->
+                        <div v-if="step.action === 'JS_EXEC'" class="space-y-3">
+                            <!-- 模式选择器与生命周期 -->
+                            <div class="flex items-center justify-between gap-3 flex-wrap border-b dark:border-gray-700/60 pb-2.5">
+                                <div class="flex items-center gap-4 text-xs font-medium text-gray-700 dark:text-gray-300">
+                                    <label class="inline-flex items-center gap-1.5 cursor-pointer">
+                                        <input type="radio"
+                                               :name="'js-mode-' + index"
+                                               value="file"
+                                               :checked="getJsMode(index, step) === 'file'"
+                                               @change="setJsMode(index, step, 'file')"
+                                               class="text-blue-600 focus:ring-blue-500">
+                                        <span>外部脚本文件 (推荐)</span>
+                                    </label>
+                                    <label class="inline-flex items-center gap-1.5 cursor-pointer">
+                                        <input type="radio"
+                                               :name="'js-mode-' + index"
+                                               value="inline"
+                                               :checked="getJsMode(index, step) === 'inline'"
+                                               @change="setJsMode(index, step, 'inline')"
+                                               class="text-blue-600 focus:ring-blue-500">
+                                        <span>内联代码</span>
+                                    </label>
                                 </div>
                             </div>
 
-                            <div v-else-if="step.action === 'JS_EXEC'" class="mt-1 space-y-3">
-                                <!-- 模式选择器 -->
-                                <div class="flex items-center justify-between gap-3 flex-wrap">
-                                    <div class="flex items-center gap-4 text-xs font-medium text-gray-700 dark:text-gray-300">
-                                        <label class="inline-flex items-center gap-1.5 cursor-pointer">
-                                            <input type="radio"
-                                                   :name="'js-mode-' + index"
-                                                   value="file"
-                                                   :checked="getJsMode(index, step) === 'file'"
-                                                   @change="setJsMode(index, step, 'file')"
-                                                   class="text-blue-600 focus:ring-blue-500">
-                                            <span>外部脚本文件 (推荐)</span>
+                            <!-- 外部脚本模式详细配置 -->
+                            <div v-if="getJsMode(index, step) === 'file'" class="space-y-3">
+                                <div>
+                                    <div class="flex items-center justify-between gap-2 mb-1">
+                                        <label class="block text-xs font-semibold text-gray-700 dark:text-gray-300">
+                                            脚本文件 (custom_scripts/ 或 scripts/)
                                         </label>
-                                        <label class="inline-flex items-center gap-1.5 cursor-pointer">
-                                            <input type="radio"
-                                                   :name="'js-mode-' + index"
-                                                   value="inline"
-                                                   :checked="getJsMode(index, step) === 'inline'"
-                                                   @change="setJsMode(index, step, 'inline')"
-                                                   class="text-blue-600 focus:ring-blue-500">
-                                            <span>内联代码</span>
-                                        </label>
-                                    </div>
-
-                                    <div class="flex items-center gap-2">
-                                        <button v-if="getJsMode(index, step) === 'file' && step.target"
-                                                @click="toggleJsPreview(index, step)"
+                                        <button @click="loadAvailableScripts(true)"
                                                 type="button"
-                                                class="px-2 py-1 text-xs rounded-md border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-1">
-                                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                                                <path d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
-                                                <path d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
-                                            </svg>
-                                            {{ isJsPreviewExpanded(index) ? '收起源码' : '预览源码' }}
-                                        </button>
-                                        <button v-if="getJsMode(index, step) === 'inline'"
-                                                @click="toggleJsExpand(index)"
-                                                type="button"
-                                                class="px-2 py-1 text-xs rounded-md border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700">
-                                            {{ isJsExpanded(index) ? '收起编辑器' : '展开编辑器' }}
+                                                class="text-[11px] text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-0.5">
+                                            <span>刷新列表</span>
                                         </button>
                                     </div>
-
-                                    <label class="inline-flex items-center gap-2 text-xs text-gray-600 dark:text-gray-300">
-                                        <span>脚本生命周期</span>
-                                        <select :value="getJsLifecycle(step)"
-                                                @change="setJsLifecycle(step, $event.target.value)"
-                                                class="border dark:border-gray-600 px-2 py-1 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
-                                            <option value="workflow">随工作流（推荐）</option>
-                                            <option value="step">仅本步骤</option>
-                                            <option value="resident">常驻页面</option>
-                                        </select>
-                                    </label>
+                                    <select :value="normalizeScriptTarget(step.target)"
+                                            @change="step.target = $event.target.value; if (isJsPreviewExpanded(index)) fetchScriptPreviewContent(step.target)"
+                                            @focus="loadAvailableScripts(false)"
+                                            class="w-full border dark:border-gray-600 px-3 py-1.5 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-400">
+                                        <option value="" disabled>-- 请选择脚本文件 --</option>
+                                        <optgroup v-if="availableScripts.some(s => s.category === 'custom')" label="自定义扩展脚本 (custom_scripts/)">
+                                            <option v-for="s in availableScripts.filter(s => s.category === 'custom')"
+                                                    :key="s.path"
+                                                    :value="s.path">
+                                                {{ s.name }} ({{ s.description || s.path }})
+                                            </option>
+                                        </optgroup>
+                                        <optgroup v-if="availableScripts.some(s => s.category === 'scripts')" label="内置/系统脚本 (scripts/)">
+                                            <option v-for="s in availableScripts.filter(s => s.category === 'scripts')"
+                                                    :key="s.path"
+                                                    :value="s.path">
+                                                {{ s.name }} ({{ s.description || s.path }})
+                                            </option>
+                                        </optgroup>
+                                        <option v-if="normalizeScriptTarget(step.target) && !availableScripts.some(s => s.path === normalizeScriptTarget(step.target))"
+                                                :value="normalizeScriptTarget(step.target)">
+                                            {{ step.target }} (自定义路径)
+                                        </option>
+                                    </select>
                                 </div>
 
-                                <!-- 外部脚本模式 -->
-                                <div v-if="getJsMode(index, step) === 'file'" class="space-y-3">
-                                    <div>
-                                        <div class="flex items-center justify-between gap-2 mb-1">
-                                            <label class="block text-xs font-semibold text-gray-700 dark:text-gray-300">
-                                                脚本文件 (custom_scripts/ 或 scripts/)
-                                            </label>
-                                            <button @click="loadAvailableScripts(true)"
-                                                    type="button"
-                                                    class="text-[11px] text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-0.5">
-                                                <span>刷新列表</span>
-                                            </button>
-                                        </div>
-                                        <div class="relative">
-                                            <select :value="normalizeScriptTarget(step.target)"
-                                                    @change="step.target = $event.target.value; if (isJsPreviewExpanded(index)) fetchScriptPreviewContent(step.target)"
-                                                    @focus="loadAvailableScripts(false)"
-                                                    class="w-full border dark:border-gray-600 px-3 py-1.5 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-400">
-                                                <option value="" disabled>-- 请选择脚本文件 --</option>
-                                                <optgroup v-if="availableScripts.some(s => s.category === 'custom')" label="自定义扩展脚本 (custom_scripts/)">
-                                                    <option v-for="s in availableScripts.filter(s => s.category === 'custom')"
-                                                            :key="s.path"
-                                                            :value="s.path">
-                                                        {{ s.name }} ({{ s.description || s.path }})
-                                                    </option>
-                                                </optgroup>
-                                                <optgroup v-if="availableScripts.some(s => s.category === 'scripts')" label="内置/系统脚本 (scripts/)">
-                                                    <option v-for="s in availableScripts.filter(s => s.category === 'scripts')"
-                                                            :key="s.path"
-                                                            :value="s.path">
-                                                        {{ s.name }} ({{ s.description || s.path }})
-                                                    </option>
-                                                </optgroup>
-                                                <option v-if="normalizeScriptTarget(step.target) && !availableScripts.some(s => s.path === normalizeScriptTarget(step.target))"
-                                                        :value="normalizeScriptTarget(step.target)">
-                                                    {{ step.target }} (自定义路径)
-                                                </option>
-                                            </select>
-                                        </div>
-                                    </div>
-
-                                    <!-- 宏变量快捷插入器与参数编辑 -->
-                                    <div class="space-y-1.5">
-                                         <div class="flex items-center justify-between gap-2 flex-wrap">
-                                             <label class="block text-xs font-semibold text-gray-700 dark:text-gray-300">
-                                                 运行入参 (__ARGS__ 参数对象 / JSON 模板):
-                                             </label>
-                                             <div class="flex items-center gap-1 text-[11px] flex-wrap">
-                                                 <span class="text-gray-500 dark:text-gray-400">插入宏:</span>
-                                                 <button type="button"
-                                                         @click="insertMacro(index, step, '{{context.model}}')"
-                                                         class="px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-100 border border-blue-200 dark:border-blue-800 transition">
-                                                     <span v-text="'{{context.model}}'"></span>
-                                                 </button>
-                                                 <button type="button"
-                                                         @click="insertMacro(index, step, '{{context.prompt}}')"
-                                                         class="px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-100 border border-blue-200 dark:border-blue-800 transition">
-                                                     <span v-text="'{{context.prompt}}'"></span>
-                                                 </button>
-                                                 <button type="button"
-                                                         @click="insertMacro(index, step, '{{context.session_id}}')"
-                                                         class="px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-100 border border-blue-200 dark:border-blue-800 transition">
-                                                     <span v-text="'{{context.session_id}}'"></span>
-                                                 </button>
-                                                 <button type="button"
-                                                         @click="insertMacro(index, step, '{{context.stream}}')"
-                                                         class="px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-100 border border-blue-200 dark:border-blue-800 transition">
-                                                     <span v-text="'{{context.stream}}'"></span>
-                                                 </button>
-                                             </div>
-                                         </div>
-                                         <textarea :id="'wf-js-param-' + index"
-                                                   :value="formatJsStepValue(step)"
-                                                   @input="updateJsStepParamValue(step, $event.target.value)"
-                                                   rows="3"
-                                                   class="w-full rounded-md border dark:border-gray-600 px-3 py-2 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white resize-y min-h-[4.5rem]"
-                                                   spellcheck="false"
-                                                   :placeholder="jsonParamPlaceholder"></textarea>
-                                     </div>
-
-                                     <!-- 脚本源码预览折叠卡片 -->
-                                     <div v-if="isJsPreviewExpanded(index)" class="border dark:border-gray-700 rounded-md bg-gray-50 dark:bg-gray-800/80 p-3 space-y-2">
-                                         <div class="flex items-center justify-between text-xs text-gray-600 dark:text-gray-400 border-b dark:border-gray-700 pb-2">
-                                             <span class="font-medium">只读源码预览: {{ step.target }}</span>
-                                             <span v-if="(getScriptPreviewData(step) || {}).description" class="text-gray-500 italic">
-                                                 {{ (getScriptPreviewData(step) || {}).description }}
-                                             </span>
-                                         </div>
-                                         <div v-if="loadingScriptPreviews[normalizeScriptTarget(step.target)]"
-                                              class="text-xs text-gray-500 py-4 text-center">
-                                             加载脚本源码中...
-                                         </div>
-                                         <pre v-else
-                                              class="text-xs font-mono max-h-60 overflow-auto bg-gray-900 text-gray-100 dark:bg-gray-950 p-3 rounded leading-5 whitespace-pre-wrap select-text">{{ (getScriptPreviewData(step) || {}).content || '// 点击上方预览按钮加载脚本内容' }}</pre>
-                                     </div>
-                                 </div>
-
-                                 <!-- 内联代码模式 -->
-                                 <div v-else class="space-y-2">
+                                <!-- 宏变量快捷插入器与运行入参 -->
+                                <div class="space-y-1.5">
                                      <div class="flex items-center justify-between gap-2 flex-wrap">
-                                         <span class="text-xs text-gray-500 dark:text-gray-400">在当前页面上下文直接执行原生 JavaScript 代码。</span>
-                                         <div class="flex items-center gap-1 text-[11px]">
+                                         <label class="block text-xs font-semibold text-gray-700 dark:text-gray-300">
+                                             运行入参 (__ARGS__ 参数对象 / JSON 模板):
+                                         </label>
+                                         <div class="flex items-center gap-1 text-[11px] flex-wrap">
                                              <span class="text-gray-500 dark:text-gray-400">插入宏:</span>
                                              <button type="button"
                                                      @click="insertMacro(index, step, '{{context.model}}')"
@@ -1151,139 +1436,193 @@ window.WorkflowPanel = {
                                                      class="px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-100 border border-blue-200 dark:border-blue-800 transition">
                                                  <span v-text="'{{context.prompt}}'"></span>
                                              </button>
+                                             <button type="button"
+                                                     @click="insertMacro(index, step, '{{context.session_id}}')"
+                                                     class="px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-100 border border-blue-200 dark:border-blue-800 transition">
+                                                 <span v-text="'{{context.session_id}}'"></span>
+                                             </button>
+                                             <button type="button"
+                                                     @click="insertMacro(index, step, '{{context.stream}}')"
+                                                     class="px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-100 border border-blue-200 dark:border-blue-800 transition">
+                                                 <span v-text="'{{context.stream}}'"></span>
+                                             </button>
                                          </div>
                                      </div>
-                                    <textarea :id="'wf-js-inline-' + index"
-                                              v-model="step.value"
-                                              :rows="isJsExpanded(index) ? 16 : 4"
-                                              :class="[
-                                                  'w-full rounded-md border dark:border-gray-600 px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white resize-y',
-                                                  isJsExpanded(index) ? 'min-h-[22rem]' : 'min-h-[7rem]'
-                                              ]"
-                                              spellcheck="false"
-                                              placeholder="return document.title;"></textarea>
+                                     <textarea :id="'wf-js-param-' + index"
+                                               :value="formatJsStepValue(step)"
+                                               @input="updateJsStepParamValue(step, $event.target.value)"
+                                               rows="3"
+                                               class="w-full rounded-md border dark:border-gray-600 px-3 py-2 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white resize-y min-h-[4.5rem]"
+                                               spellcheck="false"
+                                               :placeholder="jsonParamPlaceholder"></textarea>
+                                </div>
+
+                                <!-- 脚本源码预览折叠卡片 -->
+                                <div v-if="isJsPreviewExpanded(index)" class="border dark:border-gray-700 rounded-md bg-gray-50 dark:bg-gray-800/80 p-3 space-y-2">
+                                     <div class="flex items-center justify-between text-xs text-gray-600 dark:text-gray-400 border-b dark:border-gray-700 pb-2">
+                                         <span class="font-medium">只读源码预览: {{ step.target }}</span>
+                                         <span v-if="(getScriptPreviewData(step) || {}).description" class="text-gray-500 italic">
+                                             {{ (getScriptPreviewData(step) || {}).description }}
+                                         </span>
+                                     </div>
+                                     <div v-if="loadingScriptPreviews[normalizeScriptTarget(step.target)]"
+                                          class="text-xs text-gray-500 py-4 text-center">
+                                         加载脚本源码中...
+                                     </div>
+                                     <pre v-else
+                                          class="text-xs font-mono max-h-60 overflow-auto bg-gray-900 text-gray-100 dark:bg-gray-950 p-3 rounded leading-5 whitespace-pre-wrap select-text">{{ (getScriptPreviewData(step) || {}).content || '// 点击上方预览按钮加载脚本内容' }}</pre>
                                 </div>
                             </div>
 
-                            <div v-else-if="step.action === 'READONLY_HINT'" class="space-y-3">
-                                <div class="relative min-h-[4.5rem]">
-                                    <button @click="toggleHintExpand(index)"
-                                            type="button"
-                                            class="absolute right-0 top-0 z-10 inline-flex h-8 w-8 items-center justify-center rounded-md border border-current/20 bg-white/45 text-[11px] font-semibold shadow-sm transition hover:bg-white/70 dark:bg-slate-950/20 dark:hover:bg-slate-950/35">
-                                        {{ isHintExpanded(index) ? '−' : '✎' }}
-                                    </button>
-                                    <div class="w-full pr-12 text-sm leading-7">
-                                        <div class="text-base font-semibold">
-                                            {{ normalizeHintStepValue(step).title || '提示' }}
-                                        </div>
-                                        <div class="mt-1 whitespace-pre-wrap">
-                                            {{ normalizeHintStepValue(step).text || '这里会展示提示预览，执行时不会触发页面操作。' }}
-                                        </div>
+                            <!-- 内联代码模式详细配置 -->
+                            <div v-else class="space-y-2">
+                                <div class="flex items-center justify-between gap-2 flex-wrap">
+                                    <span class="text-xs text-gray-500 dark:text-gray-400">在当前页面上下文直接执行原生 JavaScript 代码。</span>
+                                    <div class="flex items-center gap-1 text-[11px]">
+                                        <span class="text-gray-500 dark:text-gray-400">插入宏:</span>
+                                        <button type="button"
+                                                @click="insertMacro(index, step, '{{context.model}}')"
+                                                class="px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-100 border border-blue-200 dark:border-blue-800 transition">
+                                            <span v-text="'{{context.model}}'"></span>
+                                        </button>
+                                        <button type="button"
+                                                @click="insertMacro(index, step, '{{context.prompt}}')"
+                                                class="px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-100 border border-blue-200 dark:border-blue-800 transition">
+                                            <span v-text="'{{context.prompt}}'"></span>
+                                        </button>
                                     </div>
                                 </div>
-
-                                <div v-if="isHintExpanded(index)" class="space-y-3 border-t border-current/15 pt-3">
-                                    <div class="grid grid-cols-1 md:grid-cols-[160px_minmax(0,1fr)_180px] gap-3">
-                                        <div>
-                                            <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">动作</label>
-                                            <select v-model="step.action" @change="$emit('action-change', step)"
-                                                    class="w-full border dark:border-gray-600 px-2 py-1.5 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent">
-                                                <option value="FILL_INPUT">填入内容</option>
-                                                <option value="SELECT_MODEL">选择请求模型</option>
-                                                <option value="PAGE_FETCH">页面直发</option>
-                                                <option value="CLICK">点击元素</option>
-                                                <option value="COORD_CLICK">坐标点击</option>
-                                                <option value="COORD_SCROLL">模拟滑动</option>
-                                                <option value="STREAM_WAIT">流式等待</option>
-                                                <!-- 修复：STREAM_OUTPUT 是后端 STREAM_WAIT 的完整别名，缺失会导致动作列渲染空白 -->
-                                                <option value="STREAM_OUTPUT">流式输出（同流式等待）</option>
-                                                <option value="WAIT">等待</option>
-                                                <option value="KEY_PRESS">按键</option>
-                                                <option value="JS_EXEC">执行 JavaScript</option>
-                                                <option value="READONLY_HINT">只读提示</option>
-                                            </select>
-                                        </div>
-                                        <div>
-                                            <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">标题</label>
-                                            <input :value="normalizeHintStepValue(step).title"
-                                                   @input="step.value = { ...normalizeHintStepValue(step), title: $event.target.value }"
-                                                   type="text"
-                                                   class="w-full border dark:border-gray-600 px-2 py-1.5 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
-                                                   placeholder="例如：实验功能说明">
-                                        </div>
-                                        <div>
-                                            <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">语气</label>
-                                            <select :value="normalizeHintStepValue(step).tone"
-                                                    @change="step.value = { ...normalizeHintStepValue(step), tone: $event.target.value }"
-                                                    class="w-full border dark:border-gray-600 px-2 py-1.5 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent">
-                                                <option v-for="tone in hintToneOptions" :key="tone.value" :value="tone.value">{{ tone.label }}</option>
-                                            </select>
-                                        </div>
-                                    </div>
-                                    <div>
-                                        <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">正文</label>
-                                        <textarea :value="normalizeHintStepValue(step).text"
-                                                  @input="step.value = { ...normalizeHintStepValue(step), text: $event.target.value }"
-                                                  rows="4"
-                                                  class="w-full rounded-md border dark:border-gray-600 px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white resize-y focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent"
-                                                  placeholder="这里填写给用户看的只读提示内容。"></textarea>
-                                    </div>
-                                    <div class="text-xs text-gray-500 dark:text-gray-400">
-                                        这一步只用于给用户展示说明，不会在执行时点击、输入或等待页面。
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div v-else-if="step.action === 'WAIT'" class="flex items-center gap-2 mt-1">
-                                <input v-model.number="step.value" type="number" step="0.1" min="0"
-                                       class="border dark:border-gray-600 px-2 py-1.5 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent w-24 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
-                                <span class="text-sm text-gray-500 dark:text-gray-400">秒</span>
-                            </div>
-
-                            <div v-else-if="step.action === 'PAGE_FETCH'" class="mt-1 space-y-2">
-                                <div class="uwa-wf-note rounded-md px-3 py-2 text-sm leading-6">
-                                    使用当前预设的页面直发配置发送已构造的 prompt。失败且回退模式为工作流时，会继续执行后续填入 / 按键 / 等待步骤。
-                                </div>
+                                <textarea :id="'wf-js-inline-' + index"
+                                          v-model="step.value"
+                                          rows="6"
+                                          class="w-full rounded-md border dark:border-gray-600 px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white resize-y min-h-[8rem]"
+                                          spellcheck="false"
+                                          placeholder="return document.title;"></textarea>
                             </div>
                         </div>
 
-                        <div v-if="!['READONLY_HINT', 'PAGE_FETCH'].includes(step.action)" class="pt-5">
-                            <label class="flex items-center text-xs cursor-pointer whitespace-nowrap text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white transition-colors"
-                                   title="勾选后找不到元素会报错；不勾选则跳过该步骤">
-                                <input type="checkbox"
-                                       :checked="!step.optional"
-                                       @change="step.optional = !$event.target.checked"
-                                       class="mr-1.5 rounded">
-                                <span>必需步骤</span>
-                            </label>
+                        <!-- COORD_CLICK 展开详细参数 -->
+                        <div v-else-if="step.action === 'COORD_CLICK'" class="space-y-2">
+                            <div class="text-xs font-semibold text-gray-700 dark:text-gray-300">点击坐标参数</div>
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <label class="text-xs text-gray-600 dark:text-gray-400">X:
+                                    <input :value="getCoordProp(step, 'x', '')"
+                                           @input="updateCoordValue(step, 'x', $event.target.value)"
+                                           type="number" step="1"
+                                           class="border dark:border-gray-600 px-2 py-1 rounded-md w-24 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                                           placeholder="X viewport">
+                                </label>
+                                <label class="text-xs text-gray-600 dark:text-gray-400">Y:
+                                    <input :value="getCoordProp(step, 'y', '')"
+                                           @input="updateCoordValue(step, 'y', $event.target.value)"
+                                           type="number" step="1"
+                                           class="border dark:border-gray-600 px-2 py-1 rounded-md w-24 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                                           placeholder="Y viewport">
+                                </label>
+                                <label class="text-xs text-gray-600 dark:text-gray-400">随机半径:
+                                    <input :value="getCoordProp(step, 'random_radius', 0)"
+                                           @input="updateCoordValue(step, 'random_radius', $event.target.value)"
+                                           type="number" min="0" step="1"
+                                           class="border dark:border-gray-600 px-2 py-1 rounded-md w-24 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                                           placeholder="半径">
+                                </label>
+                            </div>
+                            <div class="text-xs text-gray-500 dark:text-gray-400">
+                                使用 viewport CSS 坐标，不是屏幕坐标。
+                            </div>
                         </div>
 
-                        <div v-if="step.action === 'CLICK'" class="pt-4">
-                            <button @click="toggleExecutionMenu(index, step)"
-                                    type="button"
-                                    :title="isExecutionExpanded(index) ? '收起执行设置' : '展开执行设置'"
-                                    :class="[
-                                        'p-1.5 rounded-md transition-all duration-150',
-                                        isExecutionExpanded(index)
-                                            ? 'text-blue-600 bg-blue-100 dark:text-blue-300 dark:bg-blue-900/40'
-                                            : 'text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900/40'
-                                    ]">
-                                <span v-html="$icons.cog"></span>
-                            </button>
+                        <!-- COORD_SCROLL 展开详细参数 -->
+                        <div v-else-if="step.action === 'COORD_SCROLL'" class="space-y-2">
+                            <div class="text-xs font-semibold text-gray-700 dark:text-gray-300">模拟滑动参数</div>
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <label class="text-xs text-gray-600 dark:text-gray-400">起点 X:
+                                    <input :value="getCoordProp(step, 'start_x', '')"
+                                           @input="updateCoordValue(step, 'start_x', $event.target.value)"
+                                           type="number" step="1"
+                                           class="border dark:border-gray-600 px-2 py-1 rounded-md w-24 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                                           placeholder="起点 X">
+                                </label>
+                                <label class="text-xs text-gray-600 dark:text-gray-400">起点 Y:
+                                    <input :value="getCoordProp(step, 'start_y', '')"
+                                           @input="updateCoordValue(step, 'start_y', $event.target.value)"
+                                           type="number" step="1"
+                                           class="border dark:border-gray-600 px-2 py-1 rounded-md w-24 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                                           placeholder="起点 Y">
+                                </label>
+                                <label class="text-xs text-gray-600 dark:text-gray-400">终点 X:
+                                    <input :value="getCoordProp(step, 'end_x', '')"
+                                           @input="updateCoordValue(step, 'end_x', $event.target.value)"
+                                           type="number" step="1"
+                                           class="border dark:border-gray-600 px-2 py-1 rounded-md w-24 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                                           placeholder="终点 X">
+                                </label>
+                                <label class="text-xs text-gray-600 dark:text-gray-400">终点 Y:
+                                    <input :value="getCoordProp(step, 'end_y', '')"
+                                           @input="updateCoordValue(step, 'end_y', $event.target.value)"
+                                           type="number" step="1"
+                                           class="border dark:border-gray-600 px-2 py-1 rounded-md w-24 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                                           placeholder="终点 Y">
+                                </label>
+                            </div>
+                            <div class="text-xs text-gray-500 dark:text-gray-400">
+                                使用 viewport CSS 坐标。普通模式直接派发滚轮，低熵模式会按站点 stealth 配置走人类化轨迹。
+                            </div>
                         </div>
 
-                        <div class="pt-4">
-                            <button @click="$emit('remove-step', index)"
-                                    class="p-1.5 rounded-md transition-all duration-150 text-gray-500 dark:text-gray-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/40 active:scale-95">
-                                <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
-                                </svg>
-                            </button>
+                        <!-- KEY_PRESS 自定义按键展开 -->
+                        <div v-else-if="step.action === 'KEY_PRESS'" class="space-y-2">
+                            <div class="text-xs font-semibold text-gray-700 dark:text-gray-300">自定义按键输入</div>
+                            <input v-model="step.target"
+                                   list="workflow-key-presets"
+                                   placeholder="例如: Enter / Ctrl+Enter / Ctrl+Shift+P"
+                                   class="border dark:border-gray-600 px-2 py-1.5 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 w-full text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
+                            <div class="text-xs text-gray-500 dark:text-gray-400">
+                                支持手输任意按键或组合键。
+                            </div>
+                        </div>
+
+                        <!-- READONLY_HINT 只读提示编辑 -->
+                        <div v-else-if="step.action === 'READONLY_HINT'" class="space-y-3">
+                            <div class="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_180px] gap-3">
+                                <div>
+                                    <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">标题</label>
+                                    <input :value="normalizeHintStepValue(step).title"
+                                           @input="step.value = { ...normalizeHintStepValue(step), title: $event.target.value }"
+                                           type="text"
+                                           class="w-full border dark:border-gray-600 px-2 py-1.5 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-400"
+                                           placeholder="例如：实验功能说明">
+                                </div>
+                                <div>
+                                    <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">语气</label>
+                                    <select :value="normalizeHintStepValue(step).tone"
+                                            @change="step.value = { ...normalizeHintStepValue(step), tone: $event.target.value }"
+                                            class="w-full border dark:border-gray-600 px-2 py-1.5 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-400">
+                                        <option v-for="tone in hintToneOptions" :key="tone.value" :value="tone.value">{{ tone.label }}</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div>
+                                <label class="block text-xs text-gray-500 dark:text-gray-400 mb-1">正文</label>
+                                <textarea :value="normalizeHintStepValue(step).text"
+                                          @input="step.value = { ...normalizeHintStepValue(step), text: $event.target.value }"
+                                          rows="3"
+                                          class="w-full rounded-md border dark:border-gray-600 px-3 py-2 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white resize-y focus:outline-none focus:ring-2 focus:ring-blue-400"
+                                          placeholder="这里填写给用户看的只读提示内容。"></textarea>
+                            </div>
+                        </div>
+
+                        <!-- PAGE_FETCH 说明 -->
+                        <div v-else-if="step.action === 'PAGE_FETCH'" class="space-y-2">
+                            <div class="uwa-wf-note rounded-md px-3 py-2 text-sm leading-6">
+                                使用当前预设的页面直发配置发送已构造的 prompt。失败且回退模式为工作流时，会继续执行后续填入 / 按键 / 等待步骤。
+                            </div>
                         </div>
                     </div>
 
+                    <!-- CLICK 执行设置面板 (独立折叠区) -->
                     <div v-if="step.action === 'CLICK' && isExecutionExpanded(index, step)"
-                         class="mt-3 ml-9 border-t border-gray-200 dark:border-gray-700 pt-3 space-y-4">
+                         class="p-3.5 space-y-4 bg-gray-50/80 dark:bg-gray-900/50 border-t border-gray-200 dark:border-gray-700">
                         <div class="flex items-center justify-between gap-3">
                             <div class="text-sm font-medium text-gray-800 dark:text-gray-200">执行设置</div>
                             <div class="text-xs text-gray-500 dark:text-gray-400">{{ getExecutionSummary(step) }}</div>
@@ -1398,4 +1737,5 @@ window.WorkflowPanel = {
         </div>
     `
 };
+
 

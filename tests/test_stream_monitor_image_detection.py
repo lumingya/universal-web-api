@@ -21,6 +21,7 @@ from app.services.arena_image_generation import (
     ArenaImageGenerationError,
     ArenaImageGenerationGuard,
     capture_arena_result_baseline,
+    get_arena_generation_status,
     is_arena_image_generation_request,
     is_arena_page_url,
     validate_generated_images,
@@ -550,6 +551,29 @@ def test_arena_stop_present_recognizes_hard_stop_runtime_and_overlay_buttons():
     assert "hasOverlayStopButton" in captured["script"]
     assert "pendingAssistantCount" not in captured["script"]
     assert "data-arena-hard-stop-overlay" in captured["script"]
+
+
+def test_arena_generation_status_ignores_active_fetch_without_stop_or_spinner():
+    captured = {}
+
+    class _Tab:
+        def run_js(self, script, selector):
+            captured["script"] = script
+            captured["selector"] = selector
+            return {
+                "has_stop": False,
+                "has_generating_text": False,
+                "has_spin_canvas": False,
+                "still_generating": False,
+                "active": [{"done": False, "ageMs": 56_000}],
+            }
+
+    status = get_arena_generation_status(_Tab())
+
+    assert status["has_stop"] is False
+    assert status["still_generating"] is False
+    assert "st.active" not in captured["script"]
+    assert "ageMs < 180000" not in captured["script"]
 
 
 

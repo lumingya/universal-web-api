@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Universal Web-to-API · 使用手册</title>
+<link rel="icon" href="../images/logo.svg" type="image/svg+xml">
 <script src="lucide.min.js"></script>
 
 
@@ -22,7 +23,7 @@
       <div class="sb-logo"><i data-lucide="globe" style="width:20px;height:20px"></i></div>
       <div>
         <div class="sb-name">Universal Web-to-API</div>
-        <div class="sb-sub">docs · v2.9.5</div>
+        <div class="sb-sub">docs · v2.9.8</div>
       </div>
     </div>
     <div class="sb-search">
@@ -40,7 +41,7 @@
       <button class="tb-btn" id="menuBtn" aria-label="打开导航"><i data-lucide="menu" style="width:16px;height:16px"></i></button>
       <div class="tb-crumb"><span>使用手册</span><i data-lucide="chevron-right" style="width:13px;height:13px"></i><b id="crumbNow">项目概览</b></div>
       <div class="tb-right">
-        <span class="tb-ver">v2.9.5</span>
+        <span class="tb-ver">v2.9.8</span>
         <button class="tb-btn" id="themeBtn" aria-label="切换主题"><i data-lucide="sun" style="width:15px;height:15px" id="themeIcon"></i></button>
         <a class="tb-btn" href="https://github.com/lumingya/universal-web-api" target="_blank" rel="noopener"><i data-lucide="github" style="width:15px;height:15px"></i><span class="hide-sm">GitHub</span></a>
       </div>
@@ -52,7 +53,7 @@
         <div class="hero">
           <div class="hero-in">
             <div class="hero-eyebrow">
-              <span class="bdg"><i data-lucide="sparkles" style="width:11px;height:11px"></i>&nbsp;v2.9.5</span>
+              <span class="bdg"><i data-lucide="sparkles" style="width:11px;height:11px"></i>&nbsp;v2.9.8</span>
               <span class="bdg g">OpenAI 兼容</span>
               <span class="bdg g">本地部署 · 免费开源</span>
             </div>
@@ -261,6 +262,20 @@
             </div>
           </div>
 
+          <h3 id="quickstart-checklist">首次启动检查清单</h3>
+          <p>第一次运行时按“进程 → 端口 → 浏览器 → 站点 → API”的顺序确认，任何一步失败都先停在当前层排查，不要直接反复点击发送。</p>
+          <ol class="steps">
+            <li><strong>启动脚本没有立即退出。</strong><code>start.bat</code> 窗口应保持打开；若窗口闪退，在项目目录打开 PowerShell 执行 <code>python start.py</code>，保留完整错误信息。</li>
+            <li><strong>端口可访问。</strong>在普通浏览器打开 <code>http://127.0.0.1:8199/health</code>。返回 JSON 且 HTTP 状态为 <code>200</code> 表示服务和浏览器均已就绪；若为 <code>503</code>，服务还在但受控浏览器未连接。</li>
+            <li><strong>远程调试端口已监听。</strong>打开 <code>http://127.0.0.1:9222/json/version</code>；能看到 <code>Browser</code> 与 <code>webSocketDebuggerUrl</code> 才表示自动化连接正常。不要把该端口暴露到公网。</li>
+            <li><strong>标签页池有可用页面。</strong>控制面板 → 标签页池中至少有一个目标站点，状态为“空闲”；新标签页加载完成后等待 2–3 秒再刷新列表。</li>
+            <li><strong>先做最小请求。</strong>使用 <code>/v1/models</code> 检查路由，再发送一句短文本；确认成功后再启用流式、多模态或函数调用。</li>
+          </ol>
+          <div class="co co-warn">
+            <i data-lucide="stethoscope" style="width:18px;height:18px"></i>
+            <div class="co-bd"><span class="co-t">端口检查失败时的快速判断</span><p><code>8199</code> 无响应通常是服务未启动或端口被占用；<code>/health</code> 返回 <code>503</code> 通常是 Chrome 尚未连上；<code>9222/json/version</code> 无响应则是浏览器启动参数、路径或端口冲突。先看启动窗口中的第一条 <code>[ERROR]</code>，再到「控制台 → 日志」按 <code>RequestID</code> 追踪。</p></div>
+          </div>
+
           <h3>选择一个已适配的站点</h3>
           <p>受控浏览器的基础引导会列出若干已经适配的站点。列表中存在的网站代表已经完成适配，你可以任选一个使用；本教程以 <strong>Gemini</strong> 为例。点击下方卡片复制网址，再粘贴到<strong>受控浏览器</strong>的地址栏中打开。</p>
           <div class="site-grid" id="siteGrid"></div>
@@ -325,10 +340,10 @@
             <thead><tr><th>Base URL 形态</th><th>地址</th><th>适用场景</th></tr></thead>
             <tbody>
               <tr><td>默认 · 自动分配</td><td><code>http://127.0.0.1:8199/v1</code></td><td>不关心具体站点或标签页时使用</td></tr>
-              <tr><td>指定站点域名</td><td><code>http://127.0.0.1:8199/url/gemini.com/v1</code></td><td>自动匹配该站点的标签页</td></tr>
+              <tr><td>指定站点域名</td><td><code>http://127.0.0.1:8199/url/gemini.google.com/v1</code></td><td>自动匹配该站点的标签页</td></tr>
               <tr><td>指定标签页</td><td><code>http://127.0.0.1:8199/tab/1/v1</code></td><td>编号见「标签页池」，适合绑定过预设的标签页</td></tr>
               <tr><td>指定完整 URL</td><td><code>http://127.0.0.1:8199/tab-url/{token}/v1</code></td><td>token 从「标签页池」复制，严格匹配当前 URL</td></tr>
-              <tr><td>站点 + 预设路径</td><td><code>http://127.0.0.1:8199/url/gemini.com/pro/v1</code></td><td>同一站点拆多种用途时最推荐，直接作为 Base URL</td></tr>
+              <tr><td>站点 + 预设路径</td><td><code>http://127.0.0.1:8199/url/gemini.google.com/pro/v1</code></td><td>同一站点拆多种用途时最推荐，直接作为 Base URL</td></tr>
               <tr><td>完整路径补全</td><td>在末尾补上 <code>/chat/completions</code></td><td>部分客户端要求填写完整接口路径</td></tr>
             </tbody>
           </table></div>
@@ -343,12 +358,12 @@
           <h3>单次请求指定预设的三种方式</h3>
           <p>聊天接口支持直接指定 <code>preset_name</code>，只对<strong>当前这一次请求</strong>生效，不改变站点默认预设。</p>
           <div class="cb" data-lang="bash"><div class="cb-top"><span class="cb-dots"><i></i><i></i><i></i></span><span class="cb-lang">bash</span><button class="cb-copy"><i data-lucide="copy" style="width:12px;height:12px"></i><span>复制</span></button></div><pre><code># 方式 A：直接写进路径（最推荐，适合作为 Base URL）
-curl "http://127.0.0.1:8199/url/gemini.com/pro/v1/chat/completions" ^
+curl "http://127.0.0.1:8199/url/gemini.google.com/pro/v1/chat/completions" ^
   -H "Content-Type: application/json" ^
   -d "{\"model\":\"any\",\"messages\":[{\"role\":\"user\",\"content\":\"你好\"}]}"
 
 # 方式 B：放到 URL 查询参数
-curl "http://127.0.0.1:8199/url/gemini.com/v1/chat/completions?preset_name=pro" -d "..."
+curl "http://127.0.0.1:8199/url/gemini.google.com/v1/chat/completions?preset_name=pro" -d "..."
 
 # 方式 C：放到请求体
 {"model":"any","messages":[...],"stream":false,"preset_name":"pro"}</code></pre></div>
@@ -377,19 +392,47 @@ curl http://127.0.0.1:8199/v1/chat/completions ^
   -d "{\"model\":\"any\",\"messages\":[{\"role\":\"user\",\"content\":\"你好\"}],\"stream\":false}"
 
 # 3. 按域名路由 + 轮询调度
-curl "http://127.0.0.1:8199/url/gemini.com/v1/chat/completions?selector=round_robin" -d "..."
+curl "http://127.0.0.1:8199/url/gemini.google.com/v1/chat/completions?selector=round_robin" -d "..."
 
 # 4. 按域名路由 + 固定标签页
-curl "http://127.0.0.1:8199/url/gemini.com/v1/chat/completions?tab_index=2" -d "..."
+curl "http://127.0.0.1:8199/url/gemini.google.com/v1/chat/completions?tab_index=2" -d "..."
 
 # 5. 域名 + 预设路径
-curl http://127.0.0.1:8199/url/gemini.com/pro/v1/chat/completions -d "..."
+curl http://127.0.0.1:8199/url/gemini.google.com/pro/v1/chat/completions -d "..."
 
 # 6. 精确 URL 路由（token 从标签页池复制）
 curl http://127.0.0.1:8199/tab-url/abc123def456/v1/chat/completions -d "..."
 
 # 7. 精确 URL 路由 + 预设路径
 curl http://127.0.0.1:8199/tab-url/abc123def456/pro/v1/chat/completions -d "..."</code></pre></div>
+
+          <h3 id="api-reference">API 端点速查</h3>
+          <p>下面是日常集成会用到的公开端点。除 <code>/health</code> 外，服务端点是否要求认证取决于「系统设置」中的开关；启用后统一使用 <code>Authorization: Bearer &lt;AUTH_TOKEN&gt;</code>，Anthropic 客户端也可使用 <code>x-api-key</code>。</p>
+          <div class="tw"><table class="tbl">
+            <thead><tr><th>方法</th><th>路径</th><th>用途 / 关键字段</th><th>认证</th></tr></thead>
+            <tbody>
+              <tr><td><code>GET</code></td><td><code>/health</code></td><td>服务与受控浏览器健康检查；浏览器未连接时返回 <code>503</code></td><td>免认证</td></tr>
+              <tr><td><code>GET</code></td><td><code>/v1/models</code></td><td>列出当前可路由模型与站点；适合作为连通性探针</td><td>服务认证</td></tr>
+              <tr><td><code>POST</code></td><td><code>/v1/chat/completions</code></td><td>OpenAI Chat Completions；支持 <code>messages</code>、<code>stream</code>、<code>tools</code></td><td>服务认证</td></tr>
+              <tr><td><code>POST</code></td><td><code>/v1/responses</code></td><td>OpenAI Responses / Codex 兼容；支持 <code>input</code>、<code>instructions</code>、<code>previous_response_id</code></td><td>服务认证</td></tr>
+              <tr><td><code>POST</code></td><td><code>/v1/messages</code></td><td>Anthropic Messages / Claude Code 兼容；支持 <code>system</code>、<code>messages</code>、<code>max_tokens</code></td><td>服务认证</td></tr>
+              <tr><td><code>POST</code></td><td><code>/v1/messages/count_tokens</code></td><td>返回 Anthropic 客户端所需的最小 token 估算结果</td><td>服务认证</td></tr>
+              <tr><td><code>GET</code></td><td><code>/v1/provider/capabilities</code></td><td>机器可读能力清单、协议开关、模型列表与就绪度</td><td>服务认证</td></tr>
+              <tr><td><code>GET</code></td><td><code>/v1/provider/status</code></td><td>运行时快照：浏览器、标签页池、请求计数；不返回 Cookie 或令牌</td><td>服务认证</td></tr>
+              <tr><td><code>GET</code></td><td><code>/docs</code></td><td>FastAPI 交互式 OpenAPI 文档；仅在调试模式开启时提供</td><td>按部署配置</td></tr>
+            </tbody>
+          </table></div>
+          <div class="cb" data-lang="bash"><div class="cb-top"><span class="cb-dots"><i></i><i></i><i></i></span><span class="cb-lang">bash</span><button class="cb-copy"><i data-lucide="copy" style="width:12px;height:12px"></i><span>复制</span></button></div><pre><code># 健康检查（无需令牌）
+curl -i http://127.0.0.1:8199/health
+
+# 开启认证后查询能力清单
+curl http://127.0.0.1:8199/v1/provider/capabilities ^
+  -H "Authorization: Bearer YOUR_AUTH_TOKEN"
+
+# Anthropic 客户端也可使用 x-api-key
+curl http://127.0.0.1:8199/v1/messages/count_tokens ^
+  -H "x-api-key: YOUR_AUTH_TOKEN" -H "Content-Type: application/json" ^
+  -d "{\"model\":\"web-api\",\"messages\":[{\"role\":\"user\",\"content\":\"你好\"}]}"</code></pre></div>
 
           <h3>响应头诊断</h3>
           <p>路由类接口会返回诊断响应头，方便确认后端实际采用了哪种分配策略。</p>
@@ -1133,13 +1176,47 @@ curl http://127.0.0.1:8199/tab-url/abc123def456/pro/v1/chat/completions -d "..."
           <h2><span class="h-ic"><i data-lucide="settings-2" style="width:20px;height:20px"></i></span>系统设置与配置管理<a class="h-anchor" href="#settings"><i data-lucide="link" style="width:16px;height:16px"></i></a></h2>
           <p>环境配置在控制面板 → 设置 → 环境配置中修改，主要放端口、认证、代理、辅助 AI 等<strong>全局设置</strong>——改完通常需要<strong>重启服务</strong>才能生效。</p>
 
+          <h3 id="security-boundary">安全边界与部署建议</h3>
+          <p>本项目默认面向<strong>单机、本地回环</strong>场景。它会代替你操作已登录的网页，并在日志、请求历史和浏览器配置中接触敏感内容；请把 API、控制面板和调试端口视为同一台机器上的高权限本地服务。</p>
+          <div class="co co-danger">
+            <i data-lucide="shield-alert" style="width:18px;height:18px"></i>
+            <div class="co-bd"><span class="co-t">不要直接暴露到局域网或公网</span>
+              <ul>
+                <li><code>APP_HOST=127.0.0.1</code> 是默认且推荐值；改成 <code>0.0.0.0</code> 后，任何能访问该端口的设备都可能调用你的登录态网页。</li>
+                <li>对外提供服务时必须同时开启 <code>AUTH_ENABLED=true</code> 与高强度随机 <code>AUTH_TOKEN</code>；控制面板使用独立的 <code>DASHBOARD_AUTH_TOKEN</code>，不要混用或分享。</li>
+                <li>仅靠 CORS 不能保护 API。CORS 只约束浏览器跨域读取，脚本、命令行和同网段客户端仍可直接发请求；安全控制应依赖监听地址、防火墙和令牌。</li>
+                <li>远程调试端口 <code>BROWSER_PORT=9222</code> 不具备应用层认证。务必仅监听本机，不要做端口转发，也不要把 <code>chrome_profile/</code>、Cookie 或日志目录提交到仓库。</li>
+              </ul>
+            </div>
+          </div>
+          <div class="cb" data-lang="bash"><div class="cb-top"><span class="cb-dots"><i></i><i></i><i></i></span><span class="cb-lang">.env（本机推荐）</span><button class="cb-copy"><i data-lucide="copy" style="width:12px;height:12px"></i><span>复制</span></button></div><pre><code># 仅本机监听；不要改成 0.0.0.0 再依赖 CORS 兜底
+APP_HOST=127.0.0.1
+APP_PORT=8199
+BROWSER_PORT=9222
+
+# 即使只在本机，也建议给脚本客户端设置令牌
+AUTH_ENABLED=true
+AUTH_TOKEN=请替换为至少32位的随机字符串
+
+# 控制面板使用独立令牌；留空时才会沿用 AUTH_TOKEN
+DASHBOARD_AUTH_ENABLED=true
+DASHBOARD_AUTH_TOKEN=请替换为另一枚随机字符串
+
+# 不需要跨域时关闭；需要时填写明确来源，不要长期使用 *
+CORS_ENABLED=false
+CORS_ORIGINS=http://127.0.0.1:8199</code></pre></div>
+          <div class="co co-warn">
+            <i data-lucide="file-warning" style="width:18px;height:18px"></i>
+            <div class="co-bd"><span class="co-t">日志与备份也属于敏感数据</span><p>请求历史可能包含提示词、模型输出、站点域名和错误摘要。共享日志前先删除 Authorization、Cookie、完整 URL、图片 Data URI 与个人信息；导出配置或提交 Issue 前同样检查 <code>config/</code>、<code>logs/</code>、<code>chrome_profile/</code>。</p></div>
+          </div>
+
           <h3>环境配置速查</h3>
           <div class="tw"><table class="tbl">
-            <thead><tr><th>分组</th><th>配置项</th><th>默认值</th><th>说明</th></tr></thead>
+            <thead><tr><th>分组</th><th>配置项</th><th>当前值</th><th>说明</th></tr></thead>
             <tbody>
               <tr><td rowspan="4">服务</td><td>监听地址</td><td><code>127.0.0.1</code></td><td><code>0.0.0.0</code> 允许外部访问，127.0.0.1 仅本地</td></tr>
               <tr><td>监听端口</td><td><code>8199</code></td><td>HTTP 服务端口</td></tr>
-              <tr><td>调试模式</td><td>开启</td><td>开启 API 文档（/docs）与详细错误信息</td></tr>
+              <tr><td>调试模式</td><td><code>false</code></td><td><code>APP_DEBUG=true</code> 才开启 <code>/docs</code>、<code>/redoc</code> 与详细错误信息；生产环境建议保持关闭</td></tr>
               <tr><td>日志级别</td><td><code>INFO</code></td><td>DEBUG / INFO / WARNING / ERROR</td></tr>
               <tr><td rowspan="2">认证</td><td>启用认证</td><td>关闭</td><td>是否要求 API 调用提供 Bearer Token</td></tr>
               <tr><td>Bearer Token</td><td>空</td><td>启用认证时必须设置；用法 <code>curl -H "Authorization: Bearer YOUR_TOKEN" …</code></td></tr>
@@ -1149,7 +1226,7 @@ curl http://127.0.0.1:8199/tab-url/abc123def456/pro/v1/chat/completions -d "..."
               <tr><td>代理地址</td><td><code>socks5://127.0.0.1:1080</code></td><td>支持 socks5:// 或 http://</td></tr>
               <tr><td>绕过代理</td><td><code>localhost,127.0.0.1</code></td><td>不走代理的地址，逗号分隔</td></tr>
               <tr><td rowspan="4">AI 分析</td><td>API Key</td><td>空</td><td>辅助 AI 的 API 密钥</td></tr>
-              <tr><td>API 地址</td><td><code>http://127.0.0.1:8199/url/gemini.com/v1</code></td><td>API 基础 URL（默认回指反代自身的 Gemini 路由，可改为任意 OpenAI 兼容端点）</td></tr>
+              <tr><td>API 地址</td><td><code>http://127.0.0.1:8199/url/gemini.google.com/v1</code></td><td>API 基础 URL（默认回指反代自身的 Gemini 路由，可改为任意 OpenAI 兼容端点）</td></tr>
               <tr><td>模型名称</td><td><code>gemini-3.0-pro</code></td><td>使用的模型</td></tr>
               <tr><td>HTML 最大字符数</td><td><code>120000</code></td><td>超过会截断以节省 Token</td></tr>
               <tr><td>浏览器</td><td>Chrome 调试端口</td><td><code>9222</code></td><td>浏览器远程调试端口</td></tr>
@@ -1194,7 +1271,7 @@ BROWSER_PROFILE_NAME=Default</code></pre></div>
           </div>
 
           <h3>浏览器常量（即时生效，无需重启）</h3>
-          <p>控制面板 → 设置 → 浏览器常量。这里更适合放"运行时调优"参数：响应检测、操作延迟、标签页池回收等。</p>
+          <p>控制面板 → 设置 → 浏览器常量。这里更适合放"运行时调优"参数：响应检测、操作延迟、标签页池回收等。下表按仓库当前 <code>config/browser_config.json</code> 列示，若你在面板中改过值，应以面板显示的实际值为准；首次启动时缺少配置文件则会回退到代码内置默认值。</p>
           <div class="tw"><table class="tbl">
             <thead><tr><th>分组</th><th>配置项</th><th>默认值</th><th>说明</th></tr></thead>
             <tbody>
@@ -1204,22 +1281,21 @@ BROWSER_PROFILE_NAME=Default</code></pre></div>
               <tr><td>动作延迟下限 / 上限</td><td><code>0.06</code> / <code>0.14</code> 秒</td><td>点击 / 输入等动作的随机延迟，防止被识别为机器人</td></tr>
               <tr><td>默认 / 备用等待</td><td><code>3</code> / <code>1</code> 秒</td><td>查找元素的超时与首次失败重试超时</td></tr>
               <tr><td>缓存有效期</td><td><code>5</code> 秒</td><td>元素位置缓存时间</td></tr>
-              <tr><td rowspan="4">响应检测 🔑</td><td>检查间隔（下 / 默认 / 上）</td><td><code>0.1 / 0.3 / 1.0</code> 秒</td><td>轮询检测频率范围</td></tr>
-              <tr><td><strong>静默超时阈值</strong></td><td><code>8.0</code> 秒</td><td>🔑 内容不再变化多久后判定完成（备用 12 秒）</td></tr>
-              <tr><td><strong>稳定判定次数</strong></td><td><code>8</code> 次</td><td>🔑 连续多少次检查不变判定完成</td></tr>
+              <tr><td rowspan="4">响应检测 🔑</td><td>检查间隔（下 / 默认 / 上）</td><td><code>0.3 / 0.5 / 1.0</code> 秒</td><td>轮询检测频率范围；默认间隔会在上下限之间动态调整</td></tr>
+              <tr><td><strong>静默超时阈值</strong></td><td><code>5.0</code> 秒</td><td>🔑 内容不再变化多久后判定完成（备用阈值 <code>6.0</code> 秒）</td></tr>
+              <tr><td><strong>稳定判定次数</strong></td><td><code>6</code> 次</td><td>🔑 连续多少次检查不变判定完成</td></tr>
               <tr><td>最大超时</td><td><code>600</code> 秒</td><td>单次请求绝对超时上限</td></tr>
-              <tr><td rowspan="4">高级</td><td>重渲染等待</td><td><code>0.5</code> 秒</td><td>等待页面重新渲染</td></tr>
+              <tr><td rowspan="3">高级</td><td>首段响应初始等待</td><td><code>180</code> 秒</td><td>发送后等待页面开始出现回复的最长时间</td></tr>
               <tr><td>内容收缩阈值</td><td><code>3</code> 字符</td><td>允许正文回缩的最大字符数，超过才视为异常回退——思考模型折叠思维链时可见文本会短暂缩短，此参数用作容差防误判</td></tr>
-              <tr><td>最小有效长度</td><td><code>10</code> 字符</td><td>响应被视为有效的最小长度</td></tr>
-              <tr><td>最大异常 / 元素丢失次数</td><td><code>5</code> / <code>10</code> 次</td><td>连续异常中止 / 元素持续丢失退出</td></tr>
-              <tr><td rowspan="2">输入验证</td><td>消息最大长度</td><td><code>100000</code> 字符</td><td>单条消息最大字符数</td></tr>
-              <tr><td>消息最大数量</td><td><code>100</code> 条</td><td>单次请求最大消息数</td></tr>
-              <tr><td rowspan="5">标签页池</td><td>最大 / 最小保留标签页数</td><td><code>5</code> / <code>1</code></td><td>池容量上限与维持下限</td></tr>
+              <tr><td>元素丢失上限</td><td><code>10</code> 次</td><td>响应节点连续丢失达到上限后退出本轮监听；这是代码内置保护，不在面板中单独调节</td></tr>
+              <tr><td rowspan="2">输入验证</td><td>消息最大长度</td><td><code>1000000</code> 字符</td><td>单条消息本地最大字符数；目标站点或模型可能有更小的真实上限</td></tr>
+              <tr><td>消息最大数量</td><td><code>1000</code> 条</td><td>单次请求本地最大消息数；目标站点或模型可能有更小的上下文上限</td></tr>
+              <tr><td rowspan="5">标签页池</td><td>最大 / 最小保留标签页数</td><td><code>12</code> / <code>1</code></td><td>池容量上限与维持下限</td></tr>
               <tr><td>空闲超时</td><td><code>300</code> 秒</td><td>空闲多久后允许回收或重置</td></tr>
               <tr><td>占用等待超时</td><td><code>60</code> 秒</td><td>获取标签页会话的最大等待</td></tr>
-              <tr><td><strong>卡死强制释放超时</strong></td><td><code>180</code> 秒</td><td>🔑 日志出现 <code>stuck for ... force release</code> 时调的就是它</td></tr>
-              <tr><td>上传历史对话图片</td><td>开启</td><td>历史消息里的图片是否一起上传（图片发送分组）</td></tr>
-              <tr><td rowspan="2">日志显示</td><td>INFO / DEBUG 日志可爱化</td><td>关闭 / 关闭</td><td>把常见日志润色成更易扫读的中文文案；仅阅读体验开关，不改真实执行，前端保留原始日志对照</td></tr>
+              <tr><td><strong>卡死强制释放超时</strong></td><td><code>600</code> 秒</td><td>🔑 日志出现 <code>stuck for ... force release</code> 时调的就是它</td></tr>
+              <tr><td>上传历史对话图片</td><td>关闭</td><td>历史消息里的图片是否一起上传；当前配置关闭时只上传本次用户消息里的图片</td></tr>
+              <tr><td rowspan="2">日志显示</td><td>INFO / DEBUG 日志可爱化</td><td>开启 / 开启</td><td>把常见日志润色成更易扫读的中文文案；仅阅读体验开关，不改真实执行，前端保留原始日志对照</td></tr>
               <tr><td>Dashboard</td><td>开启 · <code>static/index.html</code></td><td>是否开启 Web 控制面板及入口文件位置</td></tr>
             </tbody>
           </table></div>
@@ -1260,6 +1336,17 @@ BROWSER_PROFILE_NAME=Default</code></pre></div>
             <div class="acc-bd"><p>酒馆的「测试 API」按钮发送的请求通常太短，部分站点（尤其 AI Studio）不会正常响应而误报失败。<strong>不要点测试按钮，直接发送一句真实对话来测试。</strong></p></div>
           </details>
           <details class="acc">
+            <summary><i data-lucide="key-round" class="ac-ic" style="width:16px;height:16px"></i>返回 401 / 403，认证令牌应该怎么填？<i data-lucide="chevron-right" class="chev" style="width:15px;height:15px"></i></summary>
+            <div class="acc-bd">
+              <ol>
+                <li>确认 <code>AUTH_ENABLED=true</code> 时，<code>AUTH_TOKEN</code> 已设置为非空随机字符串；修改环境变量后必须重启服务。</li>
+                <li>OpenAI 兼容客户端发送 <code>Authorization: Bearer YOUR_TOKEN</code> 或 <code>X-API-Key: YOUR_TOKEN</code>；Anthropic 客户端也可发送 <code>x-api-key: YOUR_TOKEN</code>。</li>
+                <li><code>DASHBOARD_AUTH_TOKEN</code> 只用于控制面板和管理接口，不要把它填进客户端 API 配置；两套令牌建议完全不同。</li>
+                <li><code>/health</code> 用于基础连通性检查，免认证；它返回 200 不代表带令牌的业务请求一定通过，仍要检查请求头和令牌对应的开关。</li>
+              </ol>
+            </div>
+          </details>
+          <details class="acc">
             <summary><i data-lucide="stethoscope" class="ac-ic" style="width:16px;height:16px"></i>请求频繁失败，怎么排查？<i data-lucide="chevron-right" class="chev" style="width:15px;height:15px"></i></summary>
             <div class="acc-bd">
               <ol>
@@ -1277,7 +1364,7 @@ BROWSER_PROFILE_NAME=Default</code></pre></div>
             <div class="acc-bd">
               <ul>
                 <li><strong>默认路由</strong> <code>/v1/chat/completions</code>：自动挑空闲标签页。</li>
-                <li><strong>指定站点</strong> <code>/url/gemini.com/v1/chat/completions</code>：只发到对应站点。</li>
+                <li><strong>指定站点</strong> <code>/url/gemini.google.com/v1/chat/completions</code>：只发到对应站点。</li>
                 <li><strong>指定标签页</strong> <code>/tab/1/v1/chat/completions</code>：精确使用编号 1。</li>
                 <li>可以给不同标签页配不同预设（一个聊天、一个识图）；多个请求到来时空闲标签页依次分配，全忙时排队。</li>
               </ul>
@@ -1334,7 +1421,7 @@ BROWSER_PROFILE_NAME=Default</code></pre></div>
             <summary><i data-lucide="alert-triangle" class="ac-ic" style="width:16px;height:16px"></i>浏览器能正常输入和点击发送，但提取出来的回复始终为空？<i data-lucide="chevron-right" class="chev" style="width:15px;height:15px"></i></summary>
             <div class="acc-bd">
               <p>这通常是因为<strong>受控浏览器的 Chrome 内核版本过低</strong>导致的。以 ChatGPT 网页版为例，旧版 Chrome 内核会触发服务端的安全风控策略，使其在返回完会话初始元数据后瞬间发送 DONE 信号切断数据流（网络流仅 900+ 字节且完全不包含 AI 文本数据）。</p>
-              <p><strong>解决方法：</strong>请升级运行脚本环境中的 Google Chrome 浏览器版本至最新版（建议至少 150+ 或更高），等自动更新并重启浏览器后再重新测试即可。</p>
+              <p><strong>解决方法：</strong>请升级运行脚本环境中的 Google Chrome 浏览器到当前稳定版，并以启动日志或 DrissionPage 要求的最低版本为准；更新后完全重启受控浏览器，再重新测试即可。</p>
             </div>
           </details>
           <details class="acc">
@@ -1358,7 +1445,7 @@ BROWSER_PROFILE_NAME=Default</code></pre></div>
     </div>
 
     <footer class="foot">
-      <span>Universal Web-to-API · 社区教程（重构版） · v2.9.5</span>
+      <span>Universal Web-to-API · 社区教程（重构版） · v2.9.8</span>
       <span>反馈：GitHub Issues · QQ 群 1073037753</span>
     </footer>
   </div>
@@ -1502,9 +1589,8 @@ function initSites(){
   grid.querySelectorAll('.site-card').forEach(c=>c.addEventListener('click',()=>copyText(c.dataset.url,'网址已复制 — 请粘贴到受控浏览器打开')));
 }
 /* ================= 图标 & 初始化 ================= */
-const ICON_ALIAS={'alert-triangle':'triangle-alert','alert-octagon':'octagon-alert','check-circle-2':'circle-check-big','plus-circle':'circle-plus','code-2':'code-xml','help-circle':'circle-help','x-circle':'circle-x','minus-circle':'circle-minus','edit-3':'pen-line','external-link':'arrow-up-right'};
+const ICON_ALIAS={'alert-triangle':'triangle-alert','alert-octagon':'octagon-alert','check-circle-2':'circle-check-big','plus-circle':'circle-plus','code-2':'code-xml','help-circle':'circle-help','x-circle':'circle-x','minus-circle':'circle-minus','edit-3':'pen-line','external-link':'arrow-up-right','github':'code-xml','chrome':'globe'};
 function refreshIcons(){
-  try{lucide.createIcons();}catch(e){}
   try{
     document.querySelectorAll('i[data-lucide]').forEach(el=>{
       if(el.querySelector('svg'))return;

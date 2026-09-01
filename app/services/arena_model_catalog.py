@@ -534,7 +534,7 @@ def load_arena_offline_cache_models() -> List[Dict[str, Any]]:
                 has_video = bool(out_caps.get("video")) or rank_is_finite("video")
                 # `outputCapabilities.web` is browsing/search support, not
                 # the WebDev/code modality.  Use only the webdev rank here.
-                has_web = rank_is_finite("webdev")
+                has_web = rank_is_finite("webdev") or bool(out_caps.get("web"))
                 has_search = bool(out_caps.get("search")) or rank_is_finite("search")
 
                 disp_name = str(item.get("displayName") or item.get("publicName") or item.get("name") or mid).strip()
@@ -551,12 +551,14 @@ def load_arena_offline_cache_models() -> List[Dict[str, Any]]:
                     modality = "video"
                 elif is_known_image or (has_image and not has_text):
                     modality = "image"
+                elif has_web and not has_text:
+                    modality = "code"
+                elif has_text:
+                    modality = "text"
                 elif has_web:
                     modality = "code"
                 elif has_search:
                     modality = "search"
-                elif has_text:
-                    modality = "text"
                 elif has_image:
                     modality = "image"
                 elif has_video:
@@ -626,8 +628,9 @@ def filter_arena_catalog_models(
     )
 
     image_keywords = (
-        "image", "mona-lisa", "luna-lisa", "lina-alpha", "lina-f-alpha", "lina",
-        "silver_halide", "flux", "imagine", "seedream", "seededit", "imagen", "z-image"
+        "image", "mona-lisa", "luna-lisa", "lina-alpha", "lina-f-alpha",
+        "silver_halide", "flux", "imagine", "seedream", "seededit", "imagen", "z-image",
+        "midjourney", "dall-e", "recraft", "krea"
     )
 
     result = []
@@ -637,8 +640,9 @@ def filter_arena_catalog_models(
         search_str = " ".join(
             str(model.get(k) or "") for k in ("name", "public_name", "display_name", "search_name")
         ).lower()
-        if any(k in search_str for k in video_keywords):
-            continue
+        if target_modality != "video":
+            if any((k in search_str and (k != "kling" or "inkling" not in search_str)) for k in video_keywords):
+                continue
 
         model_modality = _canonical_modality(model.get("modality"))
         if target_modality:

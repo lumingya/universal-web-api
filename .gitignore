@@ -132,5 +132,5 @@ scripts/custom/
 *.custom.js
 
 # JS 脚本与用户脚本（UserScripts）
-js/
+/js/
 *.user.js
