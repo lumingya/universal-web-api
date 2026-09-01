@@ -922,6 +922,31 @@ def test_arena_main_direct_workflow_selects_model_before_filling_prompt():
     assert actions.index("SELECT_MODEL") < actions.index("FILL_INPUT")
 
 
+def test_arena_main_direct_catalog_defaults_enabled_when_missing(tmp_path, monkeypatch):
+    from app.services import arena_model_catalog
+
+    monkeypatch.setattr(
+        arena_model_catalog,
+        "ARENA_MODEL_CATALOG_CONFIG_PATH",
+        tmp_path / "arena_model_catalog.local.json",
+    )
+
+    cat = arena_model_catalog.get_arena_model_catalog("arena.ai", "主预设-直连模式")
+    assert cat["enabled"] is True
+    assert cat["source"] == "arena_direct"
+    assert cat["modality"] == "text"
+
+    arena_model_catalog.set_arena_model_catalog(
+        domain="arena.ai",
+        preset_name="主预设-直连模式",
+        catalog_config={"enabled": False, "modality": "text"},
+    )
+
+    overridden = arena_model_catalog.get_arena_model_catalog("arena.ai", "主预设-直连模式")
+    assert overridden["enabled"] is False
+    assert overridden["modality"] == "text"
+
+
 def test_is_arena_direct_url_with_presets():
     from app.services.arena_direct_models import _is_arena_direct_url
 

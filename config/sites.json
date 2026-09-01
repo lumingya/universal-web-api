@@ -635,7 +635,7 @@
             "response_interval": 0.5,
             "silence_threshold": 2,
             "stream_match_mode": "regex",
-            "stream_match_pattern": "/rest/app-chat/conversations/(?:new|[^/]+/responses)(?:$|[?#])"
+            "stream_match_pattern": "/rest/app-chat/conversations/(?:new|[^/]+/(?:responses|load-responses))(?:$|[?#])"
           }
         },
         "prompt_padding": {

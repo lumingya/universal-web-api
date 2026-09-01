@@ -125,6 +125,21 @@ def normalize_arena_model_catalog_config(value: Any) -> Dict[str, Any]:
     return result
 
 
+def _default_arena_model_catalog_config(domain: str, preset_name: str) -> Optional[Dict[str, Any]]:
+    """Return built-in catalog defaults for presets that should start enabled."""
+    normalized_domain = str(domain or "").strip().lower().strip(".")
+    normalized_preset = str(preset_name or "").strip()
+    if route_domain_matches("arena.ai", normalized_domain) and normalized_preset == "主预设-直连模式":
+        return normalize_arena_model_catalog_config(
+            {
+                "enabled": True,
+                "source": MODEL_CATALOG_SOURCE,
+                "modality": "text",
+            }
+        )
+    return None
+
+
 def load_arena_model_catalog_data() -> Dict[str, Dict[str, Any]]:
     """加载独立配置文件，返回 { domain: { preset_name: catalog_config } }"""
     with _catalog_io_lock:
@@ -216,6 +231,10 @@ def get_arena_model_catalog(
                     return normalize_arena_model_catalog_config(preset_dict.get("model_catalog"))
         except Exception:
             pass
+
+    default_catalog = _default_arena_model_catalog_config(normalized_domain, target_preset)
+    if default_catalog is not None:
+        return default_catalog
 
     return normalize_arena_model_catalog_config({})
 

@@ -6,6 +6,7 @@ Observed stream traits:
 - body is a growing sequence of JSON objects separated by newlines
 - visible answer tokens arrive as result.token with isThinking=false
 - final assistant snapshot arrives as result.modelResponse
+- completed reload/fetch snapshots can arrive as responses[*].message
 - generated images can be exposed via generatedImageUrls / imageAttachments
 """
 
@@ -51,7 +52,24 @@ class GrokParser(ResponseParser):
         try:
             if isinstance(raw_response, (bytes, bytearray)):
                 raw_response = raw_response.decode("utf-8", errors="ignore")
-            elif not isinstance(raw_response, str):
+
+            snapshot = self._load_json_snapshot(raw_response)
+            if snapshot is not None:
+                snapshot_payload, snapshot_text = snapshot
+                if snapshot_text == getattr(self, "_last_raw_response", ""):
+                    return result
+
+                self._last_raw_length = len(snapshot_text)
+                self._last_raw_response = snapshot_text
+                delta_content, images, done = self._consume_json_snapshot(snapshot_payload)
+                if delta_content:
+                    result["content"] = delta_content
+                if images:
+                    result["images"] = images
+                result["done"] = done
+                return result
+
+            if not isinstance(raw_response, str):
                 raw_response = str(raw_response)
 
             new_data = self._prepare_incremental_raw_response(raw_response)
@@ -115,6 +133,40 @@ class GrokParser(ResponseParser):
         delta = self._compute_delta(previous_content, self._rendered_content)
         return delta, images, done
 
+    def _consume_json_snapshot(self, payload: Any) -> Tuple[str, List[Dict[str, Any]], bool]:
+        previous_content = self._rendered_content
+        images, done = self._consume_payload(payload)
+        delta = self._compute_delta(previous_content, self._rendered_content)
+        return delta, images, done
+
+    @staticmethod
+    def _load_json_snapshot(raw_response: Any) -> Tuple[Any, str] | None:
+        if isinstance(raw_response, (dict, list)):
+            snapshot_text = json.dumps(
+                raw_response,
+                ensure_ascii=False,
+                sort_keys=True,
+                default=str,
+            )
+            return raw_response, snapshot_text
+
+        if not isinstance(raw_response, str):
+            return None
+
+        text = raw_response.strip()
+        if not text or text[0] not in "[{":
+            return None
+
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            return None
+
+        if not isinstance(payload, (dict, list)):
+            return None
+
+        return payload, text
+
     def _extract_complete_lines(self, new_data: str) -> List[str]:
         normalized = (self._pending + str(new_data or "")).replace("\r\n", "\n").replace("\r", "\n")
         if not normalized:
@@ -142,8 +194,29 @@ class GrokParser(ResponseParser):
         return [pending]
 
     def _consume_payload(self, payload: Any) -> Tuple[List[Dict[str, Any]], bool]:
+        if isinstance(payload, list):
+            if any(isinstance(item, dict) and "message" in item for item in payload):
+                return self._consume_responses_snapshot(payload)
+
+            images: List[Dict[str, Any]] = []
+            done = False
+            for item in payload:
+                item_images, item_done = self._consume_payload(item)
+                if item_images:
+                    images.extend(item_images)
+                if item_done:
+                    done = True
+            return self._dedupe_images(images), done
+
         if not isinstance(payload, dict):
             return [], False
+
+        responses = payload.get("responses")
+        if isinstance(responses, list):
+            return self._consume_responses_snapshot(responses)
+
+        if self._looks_like_response_snapshot(payload):
+            return self._consume_response_snapshot(payload)
 
         result = payload.get("result")
         if not isinstance(result, dict):
@@ -170,6 +243,43 @@ class GrokParser(ResponseParser):
             self._update_media_generation_state(event_payload)
 
         return images, done
+
+    def _consume_responses_snapshot(self, responses: List[Any]) -> Tuple[List[Dict[str, Any]], bool]:
+        response = self._select_latest_assistant_response(responses)
+        if response is None:
+            return [], False
+        return self._consume_response_snapshot(response)
+
+    def _consume_response_snapshot(self, response: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], bool]:
+        self._consume_model_response(response)
+        images = self._dedupe_images(self._extract_image_items(response))
+        done = not bool(response.get("partial", False))
+        if images:
+            self._media_generation_state = {}
+        else:
+            self._update_media_generation_state(response)
+        return images, done
+
+    @classmethod
+    def _select_latest_assistant_response(cls, responses: List[Any]) -> Dict[str, Any] | None:
+        for response in reversed(responses):
+            if not isinstance(response, dict):
+                continue
+            if cls._is_assistant_sender(response.get("sender")):
+                return response
+        return None
+
+    @classmethod
+    def _looks_like_response_snapshot(cls, payload: Dict[str, Any]) -> bool:
+        if "message" not in payload:
+            return False
+        sender = payload.get("sender")
+        return sender in (None, "") or cls._is_assistant_sender(sender)
+
+    @staticmethod
+    def _is_assistant_sender(sender: Any) -> bool:
+        normalized = str(sender or "").strip().lower()
+        return normalized in {"assistant", "bot"}
 
     def _update_media_generation_state(self, event_payload: Dict[str, Any]) -> None:
         progress = event_payload.get("progressReport")
@@ -413,7 +523,7 @@ class GrokParser(ResponseParser):
 
     @classmethod
     def get_supported_patterns(cls) -> List[str]:
-        return ["/rest/app-chat/conversations/", "/responses"]
+        return ["/rest/app-chat/conversations/", "/responses", "/load-responses"]
 
 
 __all__ = ["GrokParser"]

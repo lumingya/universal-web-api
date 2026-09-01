@@ -122,6 +122,7 @@ tests/*
 !tests/test_arena_direct_models.py
 !tests/test_tool_calling_repairs.py
 !tests/test_input_chunking.py
+!tests/test_grok_parser.py
 !tests/test_workflow_script_loader.py
 !tests/test_workflow_js_exec_integration.py
 !tests/test_command_navigation_dispatch.py
