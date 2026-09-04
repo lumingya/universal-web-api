@@ -146,7 +146,6 @@
 
 /* 亮色强调块上的白色文字，在夜间换成深墨绿，保证对比度 */
 .dark .uwa-site-mark,
-.dark .uwa-editor-site-icon,
 .dark .uwa-domain-avatar,
 .dark .uwa-feature-icon,
 .dark .uwa-token-kpi-icon,
@@ -156,6 +155,12 @@
 .dark .uwa-segmented button.is-active,
 .dark .uwa-page-button.is-active {
     color: #16200f;
+}
+
+.dark .uwa-editor-site-icon {
+    border-color: var(--uwa-line);
+    color: var(--uwa-ink);
+    background: var(--uwa-paper-strong);
 }
 
 /* --- 首页 Hero 插画 --- */
@@ -287,6 +292,16 @@
 .dark .uwa-config-editor .config-fixed-panel > div:first-child,
 .dark .uwa-config-editor .config-fixed-panel > div:first-child:hover {
     background: rgba(36, 44, 37, .4) !important;
+}
+
+.dark .uwa-config-editor .config-fixed-panel button.selector-add-btn {
+    border-color: var(--uwa-line) !important;
+    color: var(--uwa-ink) !important;
+    background: var(--uwa-paper-strong) !important;
+}
+
+.dark .uwa-config-editor .config-fixed-panel button.selector-add-btn:hover {
+    background: var(--uwa-paper-soft) !important;
 }
 
 /* --- 请求监控：Token 用量卡片 --- */

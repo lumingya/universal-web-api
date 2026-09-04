@@ -261,7 +261,7 @@ window.SelectorPanel = {
 
                 <div class="relative" @click.stop>
                     <button @click="toggleMenu"
-                            class="border rounded-md transition-colors bg-blue-500 text-white hover:bg-blue-600 border-blue-500 px-3 py-1 text-sm font-medium flex items-center gap-1">
+                            class="selector-add-btn">
                         <span v-html="$icons.plusCircle"></span> 新增 <span v-html="$icons.chevronDown"></span>
                     </button>
 

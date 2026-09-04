@@ -1171,7 +1171,7 @@ select {
 }
 
 .uwa-editor-heading > div:first-child { display: flex; align-items: center; min-width: 0; gap: 12px; }
-.uwa-editor-site-icon { display: grid; flex: 0 0 42px; width: 42px; height: 42px; place-items: center; border-radius: 7px; color: #fff; background: var(--uwa-olive); font-weight: 800; }
+.uwa-editor-site-icon { display: grid; flex: 0 0 42px; width: 42px; height: 42px; place-items: center; border-radius: 7px; border: 1px solid var(--uwa-line); color: var(--uwa-ink); background: var(--uwa-paper-strong); font-weight: 800; }
 .uwa-editor-heading h2 { margin: 0; overflow: hidden; color: var(--uwa-ink-strong); text-overflow: ellipsis; white-space: nowrap; font-size: 18px; font-weight: 800; }
 .uwa-editor-heading p { margin: 4px 0 0; color: var(--uwa-muted-soft); font-size: 11px; }
 
@@ -1600,6 +1600,26 @@ select {
 .uwa-config-editor .config-fixed-panel textarea,
 .uwa-config-editor .config-fixed-panel button {
     font-size: 12px;
+}
+
+.uwa-config-editor .config-fixed-panel button.selector-add-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-height: 30px;
+    padding: 4px 10px;
+    border: 1px solid var(--uwa-line) !important;
+    border-radius: 6px;
+    color: var(--uwa-ink) !important;
+    background: var(--uwa-paper-strong) !important;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color .15s ease, border-color .15s ease;
+}
+
+.uwa-config-editor .config-fixed-panel button.selector-add-btn:hover {
+    background: var(--uwa-paper-soft) !important;
 }
 
 .uwa-config-editor .config-fixed-panel input,

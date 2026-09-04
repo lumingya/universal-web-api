@@ -73,11 +73,16 @@
     "presets": {
       "主预设": {
         "selectors": {
-          "input_box": "textarea[formcontrolname=\"promptText\"]",
-          "send_btn": "button[aria-label=\"Run\"]",
-          "result_container": ".chat-turn-container.model ms-prompt-chunk:not(:has(ms-thought-chunk)) ms-cmark-node.cmark-node",
-          "new_chat_btn": "a.playground-link[href=\"/u/0/prompts/new_chat\"]",
-          "confirm_btn": "button.ms-button-primary[type=\"button\"]"
+          "input_box": "textarea[formcontrolname=\"promptText\"], textarea.textarea",
+          "send_btn": "ms-run-button button[type=\"submit\"], button.ctrl-enter-submits, button[mattooltipclass=\"run-button-tooltip\"], button[aria-label=\"Run\"]",
+          "result_container": ".chat-turn-container.model ms-text-chunk ms-cmark-node.cmark-node, .chat-turn-container.model ms-prompt-chunk:not(:has(ms-thought-chunk)) ms-cmark-node.cmark-node",
+          "new_chat_btn": "button[aria-label=\"New chat\"], a.playground-link[href*=\"/prompts/new_chat\"]",
+          "confirm_btn": "mat-dialog-actions button.ms-button-primary, .mat-mdc-dialog-actions button.ms-button-primary, .mat-mdc-dialog-actions button, [role=\"dialog\"] button.ms-button-primary",
+          "stop_btn": "ms-run-button button[type=\"button\"], button[aria-label*=\"Stop\" i]",
+          "generating_indicator": "ms-run-button button[type=\"button\"], ms-run-button span.spin",
+          "upload_btn": "button[data-test-id=\"add-media-button\"], button[aria-label*=\"Insert\"]",
+          "file_input": "input[data-test-upload-file-input], input[type=\"file\"].file-input, input[type=\"file\"]",
+          "retry_send_btn": "button.rerun-button, button[aria-label=\"Rerun this turn\"]"
         },
         "stream_config": {
           "mode": "network",
@@ -93,7 +98,7 @@
           {
             "action": "CLICK",
             "target": "new_chat_btn",
-            "optional": false,
+            "optional": true,
             "value": null
           },
           {

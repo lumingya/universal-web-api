@@ -303,7 +303,7 @@
                                 </div>
                             </div>
 
-                            <button type="button" class="uwa-button is-primary" @click="addNewSite"><span v-html="$icons.plusCircle"></span>新增站点</button>
+                            <button type="button" class="uwa-button" @click="addNewSite"><span v-html="$icons.plusCircle"></span>新增站点</button>
                         </div>
                     </header>
 
@@ -372,7 +372,7 @@
                                     <i v-if="getActivePresetConfig()" class="uwa-actions-divider" aria-hidden="true"></i>
                                     <button type="button" class="uwa-icon-button" @click="showJsonPreview = true" title="查看 JSON" aria-label="查看 JSON"><span v-html="$icons.clipboardList"></span></button>
                                     <button type="button" class="uwa-button" @click="reanalyzeCurrentSite">重新分析</button>
-                                    <button type="button" class="uwa-button is-primary" @click="saveConfig" :disabled="isSaving"><span v-html="$icons.arrowDownTray"></span>{{ isSaving ? '保存中' : '保存配置' }}</button>
+                                    <button type="button" class="uwa-button" @click="saveConfig" :disabled="isSaving"><span v-html="$icons.arrowDownTray"></span>{{ isSaving ? '保存中' : '保存配置' }}</button>
                                 </div>
                             </div>
 

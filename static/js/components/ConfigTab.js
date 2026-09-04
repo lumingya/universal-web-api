@@ -1815,7 +1815,7 @@ window.ConfigTab = {
                                        autofocus>
                                 <button @click="createPreset"
                                         :disabled="!newPresetName.trim()"
-                                        class="preset-btn is-primary">
+                                        class="preset-btn">
                                     创建
                                 </button>
                                 <button @click="showNewPresetInput = false; newPresetName = ''"
@@ -1833,7 +1833,7 @@ window.ConfigTab = {
                                        class="preset-inline-input border dark:border-gray-600 px-2 py-1 rounded text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400">
                                 <button @click="renamePreset"
                                         :disabled="!renamePresetName.trim()"
-                                        class="preset-btn is-primary">
+                                        class="preset-btn">
                                     重命名
                                 </button>
                                 <button @click="showRenamePresetInput = false; renamePresetName = ''"
@@ -1851,7 +1851,7 @@ window.ConfigTab = {
                                     设为默认
                                 </button>
                                 <button @click="showNewPresetInput = true; showRenamePresetInput = false; renamePresetName = ''"
-                                        class="preset-btn is-primary">
+                                        class="preset-btn">
                                     <span v-html="$icons.plusCircle"></span>新建预设
                                 </button>
                                 <details class="preset-more">
