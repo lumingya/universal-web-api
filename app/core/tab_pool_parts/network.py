@@ -5,6 +5,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from app.core.config import logger
 
+from ._arena_snapshot import _ARENA_STORE_SNAPSHOT_JS
 from .session import TabSession
 
 

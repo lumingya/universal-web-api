@@ -1168,18 +1168,100 @@
             event.target.value = '';
         },
 
+        // 从配置内容内部提取站点域名标识（优先识别文件内部元数据与单站点包装）
+        extractDomainFromContent(config, knownDomains = []) {
+            if (!config || typeof config !== 'object' || Array.isArray(config)) {
+                return '';
+            }
+
+            // 1. 严格限定域名语义字段，避免被通用的 name/id 字段误导
+            const candidateKeys = ['domain', 'site_domain', 'target_domain', 'site', '_domain'];
+            for (const key of candidateKeys) {
+                const val = config[key];
+                if (typeof val === 'string') {
+                    let cleanVal = val.trim();
+                    if (!cleanVal || cleanVal.startsWith('_')) continue;
+                    // 剥离协议头、端口与路径（如 https://chat.deepseek.com/ -> chat.deepseek.com）
+                    cleanVal = cleanVal.replace(/^https?:\/\//i, '').split('/')[0].split(':')[0].trim();
+                    if (!cleanVal) continue;
+
+                    const matched = knownDomains.find(d => d.toLowerCase() === cleanVal.toLowerCase());
+                    if (matched) return matched;
+                    // 基本域名格式特征：包含点且由合法字符构成
+                    if (/^[a-zA-Z0-9][-a-zA-Z0-9.]*\.[a-zA-Z0-9]+$/.test(cleanVal)) {
+                        return cleanVal;
+                    }
+                }
+            }
+
+            // 2. 检查单站点包装格式（如 { "chat.deepseek.com": { presets: ... } }）
+            const validKeys = Object.keys(config).filter(k => k && !k.startsWith('_'));
+            if (validKeys.length === 1 && this.validateSingleSiteConfig(config[validKeys[0]])) {
+                const singleKey = validKeys[0].trim();
+                const matched = knownDomains.find(d => d.toLowerCase() === singleKey.toLowerCase());
+                return matched || singleKey;
+            }
+
+            return '';
+        },
+
+        // 从文件名中清洗并提取站点域名（支持去除 (4)、_1、- 副本、-config 等）
+        extractDomainFromFilename(filename, knownDomains = []) {
+            if (!filename || typeof filename !== 'string') {
+                return '';
+            }
+
+            let name = filename.trim();
+            // 剥离 .json 后缀
+            name = name.replace(/\.json$/i, '').trim();
+
+            // 循环剥离末尾的重复下载序号、括号序号、副本标记与配置后缀
+            const dupSuffixRegex = /(?:\s*\(\s*\d+\s*\)|\s*\[\s*\d+\s*\]|[-_\s]+\d+|[-_\s]*(?:副本|复本|copy)(?:\s*\(\d+\))?)$/i;
+            const configSuffixRegex = /[-_.]*(?:(?:sites?|site|presets?)[-_.]*)?config(?:uration)?$/i;
+
+            let prev = null;
+            let loopCount = 0;
+            while (prev !== name && loopCount < 10) {
+                prev = name;
+                name = name.replace(dupSuffixRegex, '').trim();
+                name = name.replace(configSuffixRegex, '').trim();
+                loopCount++;
+            }
+
+            if (!name) return '';
+
+            // 1. 优先完全匹配已知站点域名（不区分大小写）
+            const exactMatch = knownDomains.find(d => d.toLowerCase() === name.toLowerCase());
+            if (exactMatch) return exactMatch;
+
+            // 2. 若清洗后的 name 本身符合标准域名结构，直接采纳，严禁退化去匹配更短的父域或任意子串
+            if (/^[a-zA-Z0-9][-a-zA-Z0-9.]*\.[a-zA-Z0-9]+$/.test(name)) {
+                return name;
+            }
+
+            // 3. 仅当末尾带有未剥离的连接符后缀时，按最长前缀优先匹配已有站点（如 chat.deepseek.com-v2）
+            const sortedKnown = [...knownDomains].sort((a, b) => b.length - a.length);
+            const lowN = name.toLowerCase();
+            const prefixMatch = sortedKnown.find(d => {
+                const lowD = d.toLowerCase();
+                return lowN.startsWith(lowD + '-') || lowN.startsWith(lowD + '_') || lowN.startsWith(lowD + '.');
+            });
+            if (prefixMatch) return prefixMatch;
+
+            return name;
+        },
+
         // 检测配置类型：全量配置 or 单站点配置
         detectConfigType(config, forceSingle = false) {
             if (typeof config !== 'object' || config === null || Array.isArray(config)) {
                 return { valid: false };
             }
 
-            // 尝试从文件名提取域名
-            let suggestedDomain = '';
-            const match = this.importFileName.match(/^(.+?)(?:-config)?(?:-\d+)?\.json$/i);
-            if (match) {
-                suggestedDomain = match[1];
-            }
+            const knownDomains = Object.keys(this.sites || {}).filter(k => k && !k.startsWith('_'));
+            // 优先从文件内容内部提取站点域名标识，次选从清洗后的文件名提取
+            const contentDomain = this.extractDomainFromContent(config, knownDomains);
+            const filenameDomain = this.extractDomainFromFilename(this.importFileName, knownDomains);
+            const suggestedDomain = contentDomain || filenameDomain || this.singleSiteImportTargetDomain || '';
 
             // 检查是否是单站点格式（旧格式 selectors/workflow，或新格式 presets/default_preset）
             if (
@@ -1200,8 +1282,8 @@
                 };
             }
 
-            const keys = Object.keys(config);
-            // 若显式按单站点导入且文件只包含 1 个站点对象
+            const keys = Object.keys(config).filter(k => k && !k.startsWith('_'));
+            // 若显式指定单站点导入且文件只包含 1 个站点对象
             if (forceSingle && keys.length === 1 && this.validateSingleSiteConfig(config[keys[0]])) {
                 return {
                     valid: true,
@@ -1214,16 +1296,6 @@
             // 检查是否是全量格式（域名 -> 配置）
             if (!this.validateImportedConfig(config)) {
                 return { valid: false };
-            }
-
-            // 如果文件只包含 1 个站点且强制单站点导入
-            if (forceSingle && keys.length === 1) {
-                return {
-                    valid: true,
-                    type: 'single',
-                    normalizedConfig: config[keys[0]],
-                    suggestedDomain: keys[0] || suggestedDomain || this.singleSiteImportTargetDomain || ''
-                };
             }
 
             return {
@@ -1435,9 +1507,13 @@
                 return;
             }
 
-            // 导出整个站点（含所有预设）
+            // 导出整个站点（含所有预设与站点域名自描述）
             const siteConfig = this.sites[domain];
-            const dataStr = JSON.stringify(siteConfig, null, 2);
+            const exportPayload = {
+                ...siteConfig,
+                domain: domain
+            };
+            const dataStr = JSON.stringify(exportPayload, null, 2);
             const blob = new Blob([dataStr], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
@@ -2562,6 +2638,9 @@
                         if (field !== 'presets' && field !== 'default_preset' && !PRESET_FIELDS.includes(field)) {
                             siteObj[field] = value
                         }
+                    }
+                    if (siteObj.domain) {
+                        siteObj.domain = k
                     }
                     norm[k] = siteObj
                 } else {

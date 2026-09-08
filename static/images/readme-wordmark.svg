@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="200" viewBox="0 0 960 200" fill="none" role="img" aria-labelledby="wordmark-title wordmark-description">
+  <title id="wordmark-title">Universal Web API</title>
+  <desc id="wordmark-description">蓝灰色渐变的几何艺术字。字形由矢量路径绘制，使用透明背景，不依赖外部字体。</desc>
+
+  <defs>
+    <linearGradient id="wordmark-ink" x1="0" y1="0" x2="649" y2="76" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#526D93"/>
+      <stop offset="0.48" stop-color="#6F8EB6"/>
+      <stop offset="1" stop-color="#536D92"/>
+    </linearGradient>
+  </defs>
+
+  <!-- UNIVERSAL: custom geometric letterforms, independent of installed fonts. -->
+  <g transform="translate(155 36)" stroke="url(#wordmark-ink)" stroke-width="11" stroke-linecap="round" stroke-linejoin="round">
+    <path d="
+      M0 0 V48 C0 66 11 76 29 76 C47 76 58 66 58 48 V0
+      M84 76 V0 L142 76 V0
+      M168 0 V76
+      M196 0 L225 76 L254 0
+      M328 0 H280 V76 H328 M280 37 H320
+      M354 76 V0 H380 C398 0 408 10 408 24 C408 39 398 48 380 48 H354 M381 48 L411 76
+      M488 8 C476 -4 452 -3 440 9 C429 22 436 37 453 40 L471 44 C494 49 496 67 481 76 C467 85 446 80 436 69
+      M518 76 L546 0 H550 L578 76 M531 46 H565
+      M604 0 V76 H649
+    "/>
+  </g>
+
+  <!-- WEB API: a quiet, widely spaced secondary wordmark. -->
+  <g transform="translate(375 148)" stroke="#627C9F" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="
+      M0 0 L5 20 L11 6 L17 20 L22 0
+      M54 0 H38 V20 H54 M38 10 H51
+      M70 0 V20 H80 C90 20 90 10 80 10 H70 M70 0 H79 C88 0 88 10 79 10
+      M121 20 L131 0 L141 20 M125 12 H137
+      M159 20 V0 H168 C179 0 179 11 168 11 H159
+      M193 0 H209 M201 0 V20 M193 20 H209
+    "/>
+  </g>
+
+  <g stroke="#B6C6DC" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
+    <path d="M282 158 H338 M622 158 H678"/>
+    <circle cx="274" cy="158" r="2.5"/>
+    <circle cx="686" cy="158" r="2.5"/>
+  </g>
+</svg>

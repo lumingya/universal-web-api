@@ -898,3 +898,67 @@ def test_interruption_returns_urls_collected_so_far(raise_statement, expected_st
 
     assert "https://arena.ai/c/partial" in namespace["result"]
     assert end_statuses == [expected_status]
+
+
+def test_arena_store_snapshot_js_backward_compatibility_import():
+    from app.core.tab_pool_parts._arena_snapshot import _ARENA_STORE_SNAPSHOT_JS as pure_js
+    from app.core.tab_pool_parts.network import _ARENA_STORE_SNAPSHOT_JS as network_js
+    from app.services.arena_tab_listener import _ARENA_STORE_SNAPSHOT_JS as listener_js
+
+    assert isinstance(pure_js, str) and len(pure_js) > 0
+    assert network_js == pure_js
+    assert listener_js == pure_js
+
+
+def test_arena_auto_battle_commands_script_imports():
+    for cmd_id in ["cmd_arena_auto_battle", "cmd_8c7f95ba"]:
+        cmd = _command_by_id(cmd_id)
+        script = cmd["script"]
+        tree = ast.parse(script)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                for alias in node.names:
+                    mod = __import__(node.module, fromlist=[alias.name])
+                    assert hasattr(mod, alias.name), f"{node.module} missing {alias.name}"
+
+
+def test_sandbox_blocks_indirect_system_imports_and_network_module():
+    import pytest
+    from app.services.command_engine_actions import CommandEngineActionsMixin
+    class _SandboxTester(CommandEngineActionsMixin):
+        def _command_env_flag(self, k, default): return default
+        def _get_browser(self): return None
+        def _get_config_engine(self): return None
+
+    tester = _SandboxTester()
+    allowed = tester._get_python_sandbox_allowed_imports()
+
+    # 1. 验证 app.core.tab_pool_parts.network 不在白名单
+    assert "app.core.tab_pool_parts.network" not in allowed
+
+    # 2. 验证纯常量模块在白名单
+    assert "app.core.tab_pool_parts._arena_snapshot" in allowed
+
+    # 3. 验证纯常量模块在沙箱中通过 AST 安全检查
+    tester._validate_python_script_safety(
+        "from app.core.tab_pool_parts._arena_snapshot import _ARENA_STORE_SNAPSHOT_JS",
+        allowed
+    )
+
+    # 4. 验证直接从 network 导入在沙箱模式下被拦截
+    with pytest.raises(PermissionError):
+        tester._validate_python_script_safety("from app.core.tab_pool_parts.network import threading", allowed)
+
+    # 5. 验证从白名单模块导入危险属性（如 os, sys, threading）被拦截
+    with pytest.raises(PermissionError):
+        tester._validate_python_script_safety("from app.services.arena_proxy_rotation import os", allowed)
+
+    with pytest.raises(PermissionError):
+        tester._validate_python_script_safety("from app.services.arena_tab_listener import threading", allowed)
+
+    # 6. 验证运行时动态 import 同样被拦截
+    guarded_import = tester._guarded_python_import(allowed)
+    with pytest.raises(ImportError):
+        guarded_import("app.services.arena_proxy_rotation", fromlist=("os",))
+
+

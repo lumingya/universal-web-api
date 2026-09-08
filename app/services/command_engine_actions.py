@@ -33,9 +33,10 @@ from app.services.transport_profile_handlers import (
 )
 from app.utils.browser_profile_identity import resolve_tab_browser_profile
 from app.utils.site_url import extract_remote_site_domain
+from app.core.tab_pool_parts._arena_snapshot import _ARENA_STORE_SNAPSHOT_JS
 
 if TYPE_CHECKING:
-    from app.core.tab_pool import TabSession
+    from app.core.tab_pool_parts.session import TabSession
 
 
 logger = get_logger("CMD_ENG")
@@ -73,10 +74,12 @@ def get_sandbox_allowed_imports() -> set[str]:
 
 # 注册辅助服务默认导入
 register_sandbox_allowed_imports([
+    "app.core.tab_pool_parts._arena_snapshot",
     "app.services.arena_cf_solver",
     "app.services.cf_turnstile_solver",
     "app.services.arena_proxy_rotation",
     "app.services.arena_rule_service",
+    "app.services.arena_tab_listener",
     "app.services.command_result_store",
     "app.utils.human_mouse",
 ])
@@ -102,10 +105,12 @@ class CommandEngineActionsMixin:
     )
     _BASE_PYTHON_SANDBOX_ALLOWED_IMPORTS = _BASE_PYTHON_SANDBOX_ALLOWED_IMPORTS
     _PYTHON_SANDBOX_ALLOWED_IMPORTS = frozenset({
+        "app.core.tab_pool_parts._arena_snapshot",
         "app.services.arena_cf_solver",
         "app.services.cf_turnstile_solver",
         "app.services.arena_proxy_rotation",
         "app.services.arena_rule_service",
+        "app.services.arena_tab_listener",
         "app.services.command_result_store",
         "app.utils.human_mouse",
         "datetime",
@@ -2447,6 +2452,21 @@ return (() => {
 
     def _guarded_python_import(self, allowed_imports: set):
         real_import = __import__
+        blocked_import_symbols = {
+            "__builtins__",
+            "builtins",
+            "ctypes",
+            "gc",
+            "importlib",
+            "multiprocessing",
+            "os",
+            "pathlib",
+            "shutil",
+            "socket",
+            "subprocess",
+            "sys",
+            "threading",
+        }
 
         def _import(name, globals=None, locals=None, fromlist=(), level=0):
             if level != 0:
@@ -2454,6 +2474,15 @@ return (() => {
             module_name = str(name or "").strip()
             if not self._is_python_import_allowed(module_name, allowed_imports):
                 raise ImportError(f"import disabled in command python sandbox: {module_name}")
+            if fromlist:
+                for sym in fromlist:
+                    s_name = str(sym or "").strip()
+                    if (
+                        s_name in blocked_import_symbols
+                        or s_name in self._PYTHON_SANDBOX_BLOCKED_CALLS
+                        or (s_name.startswith("__") and s_name.endswith("__"))
+                    ):
+                        raise ImportError(f"import symbol disabled in command python sandbox: {s_name}")
             return real_import(name, globals, locals, fromlist, level)
 
         return _import
@@ -2476,6 +2505,21 @@ return (() => {
             "socket",
             "subprocess",
             "sys",
+        }
+        blocked_import_symbols = {
+            "__builtins__",
+            "builtins",
+            "ctypes",
+            "gc",
+            "importlib",
+            "multiprocessing",
+            "os",
+            "pathlib",
+            "shutil",
+            "socket",
+            "subprocess",
+            "sys",
+            "threading",
         }
         blocked_attr_calls = {
             "chmod",
@@ -2517,6 +2561,16 @@ return (() => {
                 module_name = str(node.module or "").strip()
                 if not module_name or not self._is_python_import_allowed(module_name, allowed_imports):
                     raise PermissionError(f"import disabled: {module_name or '<relative>'}")
+                for alias in node.names:
+                    symbol_name = str(alias.name or "").strip()
+                    if (
+                        symbol_name in blocked_import_symbols
+                        or symbol_name in blocked_attrs
+                        or symbol_name in self._PYTHON_SANDBOX_BLOCKED_CALLS
+                    ):
+                        raise PermissionError(f"import symbol disabled: {symbol_name}")
+                    if symbol_name.startswith("__") and symbol_name.endswith("__"):
+                        raise PermissionError(f"dunder symbol disabled: {symbol_name}")
             elif isinstance(node, ast.Name):
                 if node.id in self._PYTHON_SANDBOX_BLOCKED_CALLS:
                     raise PermissionError(f"name disabled: {node.id}")
@@ -3015,6 +3069,7 @@ return (() => {
                 "record_command_loop_request": _record_command_loop_request,
                 "check_command_loop_cancelled": _check_command_loop_cancelled,
                 "raise_if_command_loop_cancelled": _raise_if_command_loop_cancelled,
+                "_ARENA_STORE_SNAPSHOT_JS": _ARENA_STORE_SNAPSHOT_JS,
                 "result": "",
             }
             collector_state = {"matched": 0, "records": []}

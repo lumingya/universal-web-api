@@ -2048,7 +2048,7 @@
           {
             "action": "CLICK",
             "target": "专家",
-            "optional": false,
+            "optional": true,
             "value": null
           },
           {
@@ -2176,7 +2176,7 @@
         "file_paste": {
           "enabled": true,
           "threshold": 163840,
-          "temp_file_type": "txt",
+          "temp_file_type": "chunk",
           "hint_text": "完全专注于文件内容",
           "txt_hint_text": "完全专注于文件内容",
           "pdf_hint_text": "完全专注于文件内容",
@@ -2239,7 +2239,7 @@
           "result_container": "css:div.ds-markdown",
           "new_chat_btn": "div._5a8ac7a",
           "generating_indicator": "css:._7436101.bcc55ca1",
-          "专家": "div[data-model-type=\"default\"]"
+          "快速": "div[data-model-type=\"default\"]"
         },
         "stream_config": {
           "mode": "network",
@@ -2260,8 +2260,8 @@
           },
           {
             "action": "CLICK",
-            "target": "专家",
-            "optional": false,
+            "target": "快速",
+            "optional": true,
             "value": null
           },
           {
