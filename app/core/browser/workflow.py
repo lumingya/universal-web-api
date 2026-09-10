@@ -15,7 +15,7 @@ from app.core.config import (
     MessageValidator,
 )
 from app.utils.site_url import extract_remote_site_domain, tab_url_matches
-from app.utils.image_handler import extract_images_from_messages
+from app.utils.attachments import attachment_scope, AttachmentError, has_attachments
 from app.core.page_lifecycle import BACKGROUND_WAKE_CDP_TIMEOUT
 from app.core.workflow import WorkflowExecutor
 from app.core.workflow.error_handlers import (
@@ -91,6 +91,8 @@ class BrowserWorkflowMixin:
             return False
 
         content = message.get("content")
+        if has_attachments(content):
+            return True
         if isinstance(content, str):
             stripped = content.strip()
             if "image_url" not in stripped and "data:image" not in stripped:
@@ -1512,6 +1514,7 @@ class BrowserWorkflowMixin:
             obj in lowered for obj in chinese_objects
         )
 
+    @attachment_scope
     def _execute_workflow_stream_once(
         self,
         session: TabSession,
@@ -1524,6 +1527,7 @@ class BrowserWorkflowMixin:
         _prepared_prompt: Optional[str] = None,
         _chunk_continuation: bool = False,
         _include_message_images: bool = True,
+        _attachment_batch=None,
     ) -> Generator[str, None, None]:
         """流式工作流执行（v2.0）"""
         tab = session.tab
@@ -1888,40 +1892,23 @@ class BrowserWorkflowMixin:
         )
 
         logger.debug(f"图片源消息数: {len(image_source_messages)}/{len(messages)}")
-        user_images = extract_images_from_messages(image_source_messages)
-        logger.info(
-            "[IMAGE_FLOW_DIAG] backend.workflow.images | "
-            f"upload_history={upload_history} "
-            f"source_messages={len(image_source_messages)}/{len(messages)} "
-            f"roles={[str(m.get('role', '')) for m in image_source_messages if isinstance(m, dict)]} "
-            f"extracted={len(user_images)} "
-            f"paths={[str(path) for path in user_images[:3]]}"
-        )
-
-        has_declared_image = False
         try:
-            for mm in image_source_messages:
-                c = mm.get("content")
-                if isinstance(c, str):
-                    if '"type"' in c and "image_url" in c:
-                        has_declared_image = True
-                        break
-                elif isinstance(c, (list, tuple)):
-                    for it in c:
-                        if isinstance(it, dict) and it.get("type") == "image_url":
-                            has_declared_image = True
-                            break
-                    if has_declared_image:
-                        break
-        except Exception:
-            pass
-
-        if has_declared_image and not user_images:
-            logger.warning(
-                "收到图片占位符但没有实际图片数据：image_url.url 为空或无效，"
-                "已自动忽略图片并继续执行纯文本对话。"
+            prepared_attachments = _attachment_batch.prepare(
+                [m if any(m is selected for selected in image_source_messages) else {**m, "content": ""}
+                 for m in messages if isinstance(m, dict)],
+                config=file_paste_config.get("attachments"),
+                cancelled=effective_stop_checker,
             )
-        
+        except AttachmentError as exc:
+            yield self.formatter.pack_error(
+                f"{exc.message} (message={exc.message_index}, part={exc.part_index})",
+                code=exc.code, error_type="invalid_request_error", status_code=400, retryable=False,
+                extra={"message_index": exc.message_index, "part_index": exc.part_index},
+            )
+            yield self.formatter.pack_finish()
+            return
+        user_images = [str(item.path) for item in prepared_attachments if item.is_image]
+
         if _prepared_prompt is None:
             prompt_text = self._build_prompt_from_messages(messages)
             prompt_text = self._apply_prompt_padding(prompt_text, prompt_padding_config)
@@ -1972,6 +1959,7 @@ class BrowserWorkflowMixin:
         context = {
             "prompt": prompt_text,
             "images": user_images,
+            "attachments": prepared_attachments,
             "model": str(requested_model or "").strip(),
             "model_catalog": model_catalog if isinstance(model_catalog, dict) else (
                 site_catalog_fallback if isinstance(site_catalog_fallback, dict) else {}
@@ -2033,6 +2021,8 @@ class BrowserWorkflowMixin:
             selectors=selectors,
             session=session,
         )
+        executor._attachment_uploader.resource_batch = _attachment_batch
+        executor._attachment_uploader.planned_items = list(prepared_attachments)
         # Establish the owner boundary before the first page action. This also
         # clears scripts from a previous preset when the new workflow has no JS step.
         try:

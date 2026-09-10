@@ -62,6 +62,12 @@ const DEFAULT_SELECTOR_DEFINITIONS = [
         required: false
     },
     {
+        key: "composer_root",
+        description: "当前消息编辑区根节点，限定附件查找范围",
+        enabled: false,
+        required: false
+    },
+    {
         key: "drop_zone",
         description: "支持拖拽上传的区域（某些站点不支持粘贴但支持拖拽）",
         enabled: false,

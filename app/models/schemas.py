@@ -45,6 +45,7 @@ OPTIONAL_SELECTOR_KEYS = [
     "upload_btn",
     "file_input",
     "drop_zone",
+    "composer_root",
 ]
 
 ALL_SELECTOR_KEYS = REQUIRED_SELECTOR_KEYS + OPTIONAL_SELECTOR_KEYS
@@ -140,6 +141,12 @@ DEFAULT_SELECTOR_DEFINITIONS: List[SelectorDefinition] = [
         "required": False
     },
     {
+        "key": "composer_root",
+        "description": "当前消息编辑区根节点，限定附件输入框和就绪观察范围",
+        "enabled": False,
+        "required": False
+    },
+    {
         "key": "drop_zone",
         "description": "支持拖拽上传的区域（某些站点不支持粘贴但支持拖拽）",
         "enabled": False,
@@ -203,6 +210,7 @@ class FilePasteConfig(TypedDict, total=False):
 
     用于 sites.json 中的 file_paste 字段
     """
+    attachments: Dict[str, Any]  # 通用附件能力、限额、上传策略（独立于超长文本开关）
     enabled: bool       # 是否启用文件粘贴模式，默认 False
     threshold: int      # 字符数阈值，超过此值时使用文件粘贴，默认 50000
     temp_file_type: Literal["txt", "pdf", "chunk", "error"]  # 临时文件类型/超长处理策略，默认 txt
@@ -654,6 +662,7 @@ class AIAnalysisResult(TypedDict, total=False):
     upload_btn: Optional[str]
     file_input: Optional[str]
     drop_zone: Optional[str]
+    composer_root: Optional[str]
 
 
 # ================= 健康检查结果 =================

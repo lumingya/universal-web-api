@@ -375,7 +375,11 @@ _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
     };
     const uploadNodes = (root && attachmentSelector) ? Array.from(root.querySelectorAll(attachmentSelector)) : [];
     const pendingNodes = (root && pendingSelector) ? Array.from(root.querySelectorAll(pendingSelector)).filter(isVisibleNode) : [];
-    const fileInputs = Array.from(document.querySelectorAll("input[type='file']"));
+    const errorSelector = joinSelectors(mergeUnique(
+      ["[data-upload-state='error']", "[data-upload-state='failed']"], opts && opts.errorSelectors));
+    let uploadErrorCount = 0;
+    try { uploadErrorCount = root && errorSelector ? Array.from(root.querySelectorAll(errorSelector)).filter(isVisibleNode).length : 0; } catch (_) {}
+    const fileInputs = Array.from((root || document).querySelectorAll("input[type='file']"));
     const fileInputCount = fileInputs.reduce((sum, inputNode) => {
       try {
         return sum + (((inputNode.files && inputNode.files.length) || 0));
@@ -473,6 +477,7 @@ _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
       rootFound: !!root,
       inputFound: !!input,
       sendFound: !!sendBtn,
+      uploadErrorCount,
       attachmentCount: uploadNodes.length,
       previewCount,
       fileInputCount,
@@ -506,6 +511,11 @@ _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
         (state.attachmentText.includes(needle) || state.rootText.includes(needle))
     );
 
+    const freshPreview = state.attachmentCount > baseline.attachmentCount ||
+      state.previewCount > baseline.previewCount ||
+      (state.attachmentCount > 0 && state.attachmentFingerprint !== baseline.attachmentFingerprint);
+    const newExpectedName = matchedExpectedName && expected.some(needle =>
+      state.attachmentText.includes(needle) && !String(baseline.attachmentText || '').includes(needle));
     const attachmentChanged =
       state.attachmentCount > baseline.attachmentCount ||
       state.previewCount > baseline.previewCount ||
@@ -522,7 +532,7 @@ _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
 
     const attachmentObserved =
       attachmentChanged ||
-      matchedExpectedName ||
+      newExpectedName ||
       ((mutationCount || 0) > 0 &&
         (pendingChanged || sendTransition || state.attachmentCount > 0 || state.previewCount > 0));
 
@@ -535,6 +545,7 @@ _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
 
     return {
       matchedExpectedName,
+      freshPreview: freshPreview || newExpectedName,
       attachmentChanged,
       pendingChanged,
       sendTransition,
@@ -774,6 +785,7 @@ class AttachmentMonitor:
             "useDefaultAttachmentSelectors": self._config_flag("use_default_attachment_selectors", True),
             "attachmentSelectors": self._config_list("attachment_selectors"),
             "pendingSelectors": self._config_list("pending_selectors"),
+            "errorSelectors": self._config_list("error_selectors"),
             "busyTextMarkers": self._config_list("busy_text_markers"),
             "ignoredBusyTextMarkers": self._config_list("ignored_busy_text_markers"),
             "sendButtonDisabledMarkers": self._config_list("send_button_disabled_markers"),
@@ -920,6 +932,8 @@ class AttachmentMonitor:
 
     @staticmethod
     def _is_ready_state(state: Dict[str, Any], require_send_enabled: bool) -> bool:
+        if int(state.get("uploadErrorCount", 0) or 0) > 0:
+            return False
         pending_count = int(state.get("pendingCount", 0) or 0)
         pending_text = bool(state.get("pendingText"))
         attachment_present = AttachmentMonitor._attachment_present(state)
@@ -1121,6 +1135,7 @@ class AttachmentMonitor:
         idle_timeout: Optional[float] = None,
         hard_max_wait: Optional[float] = None,
         label: str = "attachment",
+        require_fresh_preview: bool = False,
     ) -> Dict[str, Any]:
         wait_timeout = float(max_wait or getattr(BrowserConstants, "ATTACHMENT_READY_MAX_WAIT", 20.0))
         check_interval = float(
@@ -1172,7 +1187,7 @@ class AttachmentMonitor:
                 "reason": "monitor_unavailable",
             }
 
-        start = time.time()
+        start = time.monotonic()
         stable_since = None
         observed_once = bool(state.get("attachmentObserved"))
         activity_seen = observed_once or int(state.get("mutationCount", 0) or 0) > 0
@@ -1182,16 +1197,22 @@ class AttachmentMonitor:
         hard_deadline = start + max(0.5, hard_max_wait)
         activity_deadline = start + max(0.5, wait_timeout)
 
-        while time.time() <= hard_deadline:
+        while time.monotonic() <= hard_deadline:
             if self._check_cancelled():
                 break
 
             previous_state = dict(last_state or {})
             state = self.snapshot(expected_names)
-            if state:
-                last_state = state
+            if not state:
+                # Never infer stability from a stale snapshot after the observer is lost.
+                stable_since = None
+                time.sleep(min(check_interval, max(0, hard_deadline - time.monotonic())))
+                continue
+            last_state = state
+            if int(state.get("uploadErrorCount", 0) or 0) > 0:
+                return {**state, "success": False, "reason": "upload_rejected"}
 
-            now = time.time()
+            now = time.monotonic()
             progress = self._has_meaningful_progress(previous_state, last_state)
             if progress:
                 last_progress_at = now
@@ -1229,6 +1250,8 @@ class AttachmentMonitor:
                 require_upload_signal_before_ready=require_upload_signal_before_ready,
             )
             ready = bool(phase_flags.get("upload_ready"))
+            if require_fresh_preview and not last_state.get("freshPreview"):
+                ready = False
             attachment_present = bool(phase_flags.get("attachment_present"))
             upload_started = bool(phase_flags.get("upload_started"))
             presence_ok = attachment_present or not require_attachment_present
@@ -1240,8 +1263,8 @@ class AttachmentMonitor:
 
             if gate_ok and ready:
                 if stable_since is None:
-                    stable_since = time.time()
-                elif time.time() - stable_since >= settle_window:
+                    stable_since = time.monotonic()
+                elif time.monotonic() - stable_since >= settle_window:
                     result = dict(last_state)
                     result.update(
                         {
@@ -1252,7 +1275,7 @@ class AttachmentMonitor:
                         }
                     )
                     logger.debug(
-                        f"[ATTACHMENT] {label} ready after {time.time() - start:.1f}s: {self.summarize(result)}"
+                        f"[ATTACHMENT] {label} ready after {time.monotonic() - start:.1f}s: {self.summarize(result)}"
                     )
                     return result
             else:
@@ -1275,9 +1298,9 @@ class AttachmentMonitor:
                 "success": False,
                 "attachmentObserved": observed_once,
                 "activitySeen": activity_seen,
-                "reason": "idle_timeout" if time.time() >= idle_deadline else "timeout",
-                "waitedSeconds": round(max(0.0, time.time() - start), 3),
-                "idleSeconds": round(max(0.0, time.time() - last_progress_at), 3),
+                "reason": "idle_timeout" if time.monotonic() >= idle_deadline else "timeout",
+                "waitedSeconds": round(max(0.0, time.monotonic() - start), 3),
+                "idleSeconds": round(max(0.0, time.monotonic() - last_progress_at), 3),
             }
         )
         blockers = self.explain_not_ready(
@@ -1290,7 +1313,7 @@ class AttachmentMonitor:
             accept_existing=accept_existing,
         )
         logger.warning(
-            f"[ATTACHMENT] {label} not ready after {time.time() - start:.1f}s: {self.summarize(result)} "
+            f"[ATTACHMENT] {label} not ready after {time.monotonic() - start:.1f}s: {self.summarize(result)} "
             f"(reason={result.get('reason')}, idle={result.get('idleSeconds')}, blockers={blockers})"
         )
         return result

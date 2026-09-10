@@ -202,6 +202,12 @@ class WorkflowExecutor(
             stream_config=stream_config,
             file_paste_config=file_paste_config,
         )
+        from app.utils.attachments import attachment_config
+        upload_config = attachment_config(self._file_paste_config.get("attachments"))
+        self._attachment_monitor_config["error_selectors"] = upload_config["error_selectors"]
+        composer_root = self._selectors.get("composer_root")
+        if composer_root:
+            self._attachment_monitor_config["root_selectors"] = [self._to_query_selector(composer_root)] + self._attachment_monitor_config.get("root_selectors", [])
         self._attachment_monitor = AttachmentMonitor(
             tab=tab,
             selectors=self._selectors,
@@ -220,6 +226,8 @@ class WorkflowExecutor(
             attachment_monitor_config=self._attachment_monitor_config,
         )
 
+        self._attachment_uploader = self._text_handler.get_attachment_uploader()
+        self._attachment_uploader.focus = self._focus_last_input_for_attachment_paste
         self._image_handler = ImageInputHandler(
             tab=tab,
             stealth_mode=stealth_mode,
@@ -228,6 +236,7 @@ class WorkflowExecutor(
             attachment_monitor=self._attachment_monitor,
             focus_input_fn=self._focus_last_input_for_attachment_paste,
             selectors=self._selectors,
+            coordinator=self._attachment_uploader,
         )
 
         if self._image_config.get("enabled"):
@@ -1258,6 +1267,14 @@ class WorkflowExecutor(
                 "arena_send_no_target",
                 "stream_recovery_exhausted",
             }:
+                raise
+            if error_code.startswith("attachment"):
+                if self.session is not None and (getattr(self._attachment_uploader, "tainted", False) or self._attachment_uploader.completed_paths):
+                    self.session.mark_error(error_code)
+                yield self.formatter.pack_error(
+                    "附件未能完整上传，已停止发送。请检查类型限制、上传入口和就绪探针。",
+                    code=error_code,
+                )
                 raise
             if error_code.startswith("file_paste_length_error:"):
                 message = error_code.split(":", 1)[1].strip() or "输入文本超过站点配置的长度限制"

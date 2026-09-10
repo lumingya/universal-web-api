@@ -98,7 +98,8 @@ window.SelectorPanel = {
                 'retry_send_btn',
                 'upload_btn',
                 'file_input',
-                'drop_zone'
+                'drop_zone',
+                'composer_root'
             ].includes(String(key || '').trim());
         },
 
@@ -212,6 +213,12 @@ window.SelectorPanel = {
                     chip: '上传',
                     placeholder: '例如：input[type="file"]'
                 },
+                composer_root: {
+                    title: '消息编辑区根节点',
+                    description: '限定自动查找文件输入框和附件观察的范围，避免匹配页面历史消息。',
+                    hint: '通常是包围输入框、附件预览和发送按钮的容器。配置 file_input 时仍优先使用指定入口。',
+                    required: false, chip: '上传', placeholder: '例如：.composer, form.chat-input'
+                },
                 drop_zone: {
                     title: '拖拽上传区域',
                     description: '支持把文件拖到页面里的区域，适合不吃粘贴的网站。',
@@ -298,6 +305,10 @@ window.SelectorPanel = {
                                 class="w-full text-left px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700 text-xs transition-colors">
                             <div class="font-semibold text-gray-900 dark:text-white">file_input</div>
                             <div class="text-gray-500 dark:text-gray-400">原生 input[type=file]</div>
+                        </button>
+                        <button @click="addSelector('composer_root')" class="w-full text-left px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700 text-xs transition-colors">
+                            <div class="font-semibold text-gray-900 dark:text-white">composer_root</div>
+                            <div class="text-gray-500 dark:text-gray-400">限定附件操作的消息编辑区根节点</div>
                         </button>
                         <button @click="addSelector('drop_zone')"
                                 class="w-full text-left px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700 text-xs transition-colors">

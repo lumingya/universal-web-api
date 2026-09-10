@@ -28,6 +28,26 @@ class BrowserPromptMixin:
         - JSON 字符串: '[{"type":"text",...}]' → 解析后处理
         - 类列表对象: tuple/其他可迭代 → 转换为 list 处理
         """
+        from app.utils.attachments import content_parts, normalize_attachment_part, safe_filename
+        parsed_parts = content_parts(content)
+        if isinstance(parsed_parts, list) and any(
+            isinstance(p, dict) and p.get("type") in {"image_url", "image", "input_image", "file", "input_file", "document", "input_audio", "audio_url", "input_video", "video_url"}
+            for p in parsed_parts
+        ):
+            rendered, image_index, file_index = [], 0, 0
+            for part in parsed_parts:
+                attachment = normalize_attachment_part(part)
+                if attachment is None:
+                    rendered.append(self._extract_text_from_content(part))
+                elif attachment["type"] == "image_url":
+                    image_index += 1
+                    rendered.append(f"[图片{image_index}]")
+                else:
+                    file_index += 1
+                    name = safe_filename(attachment["file"].get("filename"), "附件")
+                    rendered.append(f"[附件{file_index}: {name}]")
+            return " ".join(value for value in rendered if value).strip()
+
         content_type = type(content).__name__
 
         if content is None:

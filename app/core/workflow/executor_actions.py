@@ -2699,10 +2699,13 @@ class WorkflowExecutorActionMixin:
                 self._text_handler.fill_via_js(ele, text)
 
             if hasattr(self, '_context') and self._context:
-                images = self._context.get('images', [])
-                if images:
-                    if not self._image_handler.paste_images(images):
-                        raise WorkflowError("image_paste_unconfirmed")
+                attachments = self._context.get('attachments')
+                if attachments:
+                    self._image_handler.paste_attachments(attachments)
+                else:
+                    images = self._context.get('images', [])
+                    if images:
+                        self._image_handler.paste_images(images)
 
             self._last_input_element = self._resolve_active_text_input() or ele
             self._note_fill_completion(text, after_new_chat=fill_after_new_chat)

@@ -136,3 +136,8 @@ scripts/custom/
 # JS 脚本与用户脚本（UserScripts）
 /js/
 *.user.js
+
+# Generic attachment regression tests
+!tests/test_attachments.py
+!tests/test_attachment_ui.py
+!tests/test_attachment_browser.py

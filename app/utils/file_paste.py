@@ -117,6 +117,10 @@ def cleanup_temp_dir():
             if not target_dir.exists():
                 continue
             for item in target_dir.iterdir():
+                if item.name == "attachment_inputs" and target_dir == TEMP_DIR:
+                    from app.utils.attachments import cleanup_attachment_inputs
+                    cleanup_attachment_inputs()
+                    continue
                 try:
                     min_age_seconds = _get_cleanup_min_age_seconds(item)
                     if not _is_path_old_enough_for_cleanup(item, now, min_age_seconds):
@@ -224,70 +228,6 @@ def _find_pdf_font_path(*, prefer_single_face: bool = False) -> Optional[str]:
     return None
 
 
-def _write_pdf_with_pillow(text: str, filepath: str) -> None:
-    """Render text pages to a PDF using Pillow, which is already a project dependency."""
-    from PIL import Image, ImageDraw, ImageFont
-
-    page_width, page_height = 2480, 3508
-    margin_x, margin_y = 48, 48
-    font_size = 12
-    line_spacing = 1
-    font_path = _find_pdf_font_path()
-    font = (
-        ImageFont.truetype(font_path, font_size)
-        if font_path
-        else ImageFont.load_default()
-    )
-
-    max_width = page_width - (margin_x * 2)
-    max_lines = max(1, (page_height - (margin_y * 2)) // (font_size + line_spacing))
-
-    def text_width(value: str) -> float:
-        if not value:
-            return 0.0
-        try:
-            return float(font.getlength(value))
-        except Exception:
-            bbox = font.getbbox(value)
-            return float(bbox[2] - bbox[0])
-
-    def wrap_paragraph(paragraph: str) -> list[str]:
-        if paragraph == "":
-            return [""]
-        lines = []
-        current = ""
-        for char in paragraph:
-            candidate = current + char
-            if current and text_width(candidate) > max_width:
-                lines.append(current)
-                current = char
-            else:
-                current = candidate
-        lines.append(current)
-        return lines
-
-    wrapped_lines = []
-    normalized_text = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
-    for paragraph in normalized_text.split("\n"):
-        wrapped_lines.extend(wrap_paragraph(paragraph))
-
-    if not wrapped_lines:
-        wrapped_lines = [""]
-
-    pages = []
-    for start in range(0, len(wrapped_lines), max_lines):
-        page = Image.new("RGB", (page_width, page_height), "white")
-        draw = ImageDraw.Draw(page)
-        y = margin_y
-        for line in wrapped_lines[start:start + max_lines]:
-            draw.text((margin_x, y), line, fill=(20, 24, 33), font=font)
-            y += font_size + line_spacing
-        pages.append(page)
-
-    first, rest = pages[0], pages[1:]
-    first.save(filepath, "PDF", resolution=300.0, save_all=True, append_images=rest)
-
-
 def _write_pdf_with_reportlab(text: str, filepath: str) -> None:
     """Write a text-layer PDF when reportlab is available."""
     from reportlab.lib.pagesizes import A4
@@ -344,12 +284,8 @@ def _write_pdf_with_reportlab(text: str, filepath: str) -> None:
 
 
 def _write_temp_pdf(text: str, filepath: str) -> None:
-    """Create a readable PDF from text with optional text-layer support."""
-    try:
-        _write_pdf_with_reportlab(text, filepath)
-    except Exception as reportlab_error:
-        logger.debug(f"reportlab PDF 生成不可用，改用 Pillow 渲染: {reportlab_error}")
-        _write_pdf_with_pillow(text, filepath)
+    """Generate text-layer PDF only; never silently degrade context to raster pages."""
+    _write_pdf_with_reportlab(text, filepath)
 
 
 def create_temp_pdf(text: str, prefix: str = "paste_") -> Optional[str]:

@@ -207,6 +207,13 @@ def _content_value_to_openai_parts(value: Any) -> List[Dict[str, Any]]:
 
 
 def _anthropic_block_to_openai_part(block: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    from app.utils.attachments import normalize_attachment_part, AttachmentError
+    try:
+        attachment = normalize_attachment_part(block)
+    except AttachmentError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail()) from exc
+    if attachment is not None:
+        return attachment
     block_type = str(block.get("type") or "").strip().lower()
     if block_type == "text":
         text = str(block.get("text") or "")

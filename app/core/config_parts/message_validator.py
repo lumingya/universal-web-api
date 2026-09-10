@@ -45,6 +45,8 @@ class MessageValidator:
         """保留多模态结构，避免把图片/base64 粗暴 str() 化。"""
         if content is None:
             return ""
+        if isinstance(content, dict):
+            return [content]
         if isinstance(content, list):
             return content
         if isinstance(content, tuple):
@@ -77,7 +79,7 @@ class MessageValidator:
                 item_type = str(item.get("type", "") or "").strip()
                 if item_type == "text":
                     total += len(str(item.get("text", "") or ""))
-                elif item_type == "image_url":
+                elif item_type in {"image_url", "file", "input_file", "document", "input_audio", "audio_url", "video_url", "input_video"}:
                     total += len(cls._IMAGE_PLACEHOLDER)
                 else:
                     total += len(str(item))

@@ -441,54 +441,12 @@ def _dedupe_media_items(media_items: List[Dict[str, Any]]) -> List[Dict[str, Any
 
 
 def _validate_image_inputs(messages: list) -> None:
+    """Legacy name: validate all recognized attachment sources, never partial success."""
+    from app.utils.attachments import normalize_messages, AttachmentError
     try:
-        has_image_declared = False
-        has_any_valid_image = False
-
-        for m in messages or []:
-            content = m.get("content")
-
-            if isinstance(content, str):
-                s = content.strip()
-                # 修复(1)：字符串 content 仅在包含 "data:image" 前缀时才视为声明了图片；
-                # 之前只要含 "image_url" 子串（如纯文本聊到这个词）就会被误判为图片声明而 400
-                if "data:image" in s:
-                    has_image_declared = True
-                if "data:image" in s and "base64," in s and not s.endswith("base64,"):
-                    has_any_valid_image = True
-                continue
-
-            if isinstance(content, list):
-                for item in content:
-                    if not isinstance(item, dict):
-                        continue
-                    if item.get("type") != "image_url":
-                        continue
-
-                    has_image_declared = True
-                    image_url = item.get("image_url") or {}
-                    url = image_url.get("url") if isinstance(image_url, dict) else str(image_url)
-
-                    if not isinstance(url, str):
-                        continue
-
-                    u = url.strip()
-                    if u.startswith("data:image") and "base64," in u and not u.endswith("base64,"):
-                        has_any_valid_image = True
-                    elif u.startswith("http://") or u.startswith("https://"):
-                        has_any_valid_image = True
-
-        if has_image_declared and not has_any_valid_image:
-            raise HTTPException(
-                status_code=400,
-                detail="检测到图片输入，但未收到任何可用图片数据。"
-                       "上游发送的是空的 data:image/...;base64, 前缀（或缺失图片 URL/base64）。"
-                       "请让上游客户端透传完整 base64 或可访问的图片 URL。"
-            )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.warning(f"图片输入校验异常（已放行）: {e}")
+        normalize_messages(messages)
+    except AttachmentError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail()) from exc
 
 
 # ================= 请求模型 =================
@@ -757,6 +715,15 @@ def _normalize_response_message_content(content: Any) -> Any:
                 leading_text_parts.append(text)
             continue
 
+        from app.utils.attachments import normalize_attachment_part, AttachmentError
+        try:
+            attachment = normalize_attachment_part(part)
+        except AttachmentError as exc:
+            raise HTTPException(status_code=400, detail=exc.detail()) from exc
+        if attachment is not None:
+            normalized_parts.append(attachment)
+            continue
+
         part_type = str(part.get("type") or "").strip().lower()
         if part_type in {"input_text", "output_text", "text"}:
             text = str(part.get("text") or "")
@@ -792,8 +759,8 @@ def _normalize_response_message_content(content: Any) -> Any:
             )
             continue
 
-        if part_type in {"input_audio", "audio_url", "output_audio", "input_video", "video_url", "output_video"}:
-            if part_type in {"input_audio", "audio_url", "output_audio"}:
+        if part_type in {"output_audio", "output_video"}:
+            if part_type == "output_audio":
                 media_value = part.get("audio_url") or part.get("input_audio") or part.get("url") or ""
                 media_label = "audio"
             else:
@@ -2159,7 +2126,11 @@ async def chat_completions(
         f"stream={body.stream}, messages_count={len(body.messages)}"
     )
 
-    _validate_image_inputs(body.messages)
+    from app.utils.attachments import normalize_messages, AttachmentError
+    try:
+        body.messages = normalize_messages(body.messages)
+    except AttachmentError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail()) from exc
 
     if isinstance(body.response_format, dict) and body.response_format:
         format_type = str(body.response_format.get("type") or "text").strip().lower() or "text"

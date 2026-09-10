@@ -2775,6 +2775,10 @@ class ConfigEngine:
         if legacy_attachment_monitor or include_attachment_defaults:
             result["attachment_monitor"] = self._validate_attachment_monitor_config(legacy_attachment_monitor)
 
+        from app.utils.attachments import attachment_config
+        if "attachments" in config or include_attachment_defaults:
+            result["attachments"] = attachment_config(config.get("attachments"))
+
         return result
 
     def _validate_prompt_padding_config(self, config: Dict[str, Any]) -> Dict[str, Any]:

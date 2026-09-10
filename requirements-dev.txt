@@ -1,0 +1,4 @@
+-r requirements.txt
+pytest>=8,<10
+# Optional local Chromium UI/DOM integration tests (not required by the server).
+playwright>=1.50,<2

@@ -13,10 +13,23 @@ window.FilePastePanel = {
         return {
             // 内部分区折叠状态：高级附件规则默认收起，其余默认展开
             sectionCollapsed: {
+                attachments: false,
                 pasteMode: false,
                 sendConfirm: false,
                 advancedRules: true
             },
+            defaultAttachments: {
+                enabled: true, max_count: 8, max_file_mb: 20, max_total_mb: 50,
+                allowed_types: [], error_selectors: [], ready_timeout: 30,
+                transport_order: ['file_input', 'cdp_drop', 'js_drop', 'file_clipboard']
+            },
+            transportOptions: [
+                { value: 'file_input', label: '文件输入框', description: '优先上传原文件；使用 file_input 选择器或自动查找。' },
+                { value: 'cdp_drop', label: '浏览器原生拖拽', description: '需要 drop_zone；不通过 base64 传输大文件。' },
+                { value: 'js_drop', label: '网页拖拽事件', description: '需要 drop_zone；仅用于不超过 4 MB 的文件。' },
+                { value: 'file_clipboard', label: '原生文件剪贴板', description: '需要系统支持与已确认的输入框焦点。' },
+                { value: 'image_clipboard', label: '图片像素剪贴板（有损）', description: '仅用于图片兼容；可能丢失透明度、动画帧和元数据。' }
+            ],
             defaultFilePaste: {
                 enabled: false,
                 threshold: 50000,
@@ -116,6 +129,17 @@ window.FilePastePanel = {
         this.syncAttachmentMonitorDrafts(true);
     },
     computed: {
+        resolvedAttachments() {
+            return { ...this.defaultAttachments, ...((this.filePasteConfig || {}).attachments || {}) };
+        },
+        orderedTransports() {
+            return (this.resolvedAttachments.transport_order || [])
+                .map(value => this.transportOptions.find(option => option.value === value)).filter(Boolean);
+        },
+        longTextStrategy() {
+            return ['chunk', 'error'].includes(this.resolvedFilePaste.temp_file_type)
+                ? this.resolvedFilePaste.temp_file_type : 'attachment';
+        },
         resolvedFilePaste() {
             const raw = this.filePasteConfig || {};
             return {
@@ -139,7 +163,7 @@ window.FilePastePanel = {
             return String(this.selectedPreset || '').trim() || '主预设';
         },
         statusText() {
-            return this.resolvedFilePaste.enabled ? '已启用' : '未启用';
+            return (this.resolvedAttachments.enabled ? '附件允许' : '附件禁止') + ' · ' + (this.resolvedFilePaste.enabled ? '长文本处理开启' : '长文本处理关闭');
         },
         attachmentSensitivityMeta() {
             const value = this.resolvedFilePaste.send_confirmation.attachment_sensitivity;
@@ -147,6 +171,33 @@ window.FilePastePanel = {
         }
     },
     methods: {
+        updateAttachmentField(key, value) {
+            const config = this.getMutableFilePaste();
+            config.attachments = { ...(config.attachments || {}), [key]: value };
+        },
+        updateAttachmentLimit(key, value, ceiling) {
+            const number = Number(value);
+            if (!Number.isFinite(number) || value === '') return;
+            this.updateAttachmentField(key, Math.max(1, Math.min(ceiling, Math.trunc(number))));
+        },
+        updateAllowedTypes(value) {
+            this.updateAttachmentField('allowed_types', [...new Set(String(value || '').toLowerCase().split(/[\s,;]+/).filter(Boolean))]);
+        },
+        toggleTransport(value) {
+            const current = [...(this.resolvedAttachments.transport_order || [])];
+            const next = current.includes(value) ? current.filter(item => item !== value) : [...current, value];
+            this.updateAttachmentField('transport_order', next);
+        },
+        moveTransport(index, direction) {
+            const current = [...(this.resolvedAttachments.transport_order || [])];
+            const next = index + direction;
+            if (next < 0 || next >= current.length) return;
+            [current[index], current[next]] = [current[next], current[index]];
+            this.updateAttachmentField('transport_order', current);
+        },
+        updateLongTextStrategy(value) {
+            this.updateTempFileType(value === 'attachment' ? 'txt' : value);
+        },
         toggle() {
             this.$emit('update:collapsed', !this.collapsed);
         },
@@ -293,7 +344,7 @@ window.FilePastePanel = {
                  @click="toggle">
                 <div class="flex items-center gap-2">
                     <span class="w-4 inline-flex justify-center text-gray-500 dark:text-gray-400" v-html="collapsed ? $icons.chevronDown : $icons.chevronUp"></span>
-                    <h3 class="font-semibold text-gray-900 dark:text-white">文件粘贴 / 附件发送</h3>
+                    <h3 class="font-semibold text-gray-900 dark:text-white">通用附件 / 超长输入</h3>
                     <span class="text-sm text-gray-500 dark:text-gray-400">({{ statusText }})</span>
                 </div>
             </div>
@@ -304,6 +355,67 @@ window.FilePastePanel = {
                         当前预设：{{ currentPresetLabel }}
                     </div>
                 </div>
+
+                <section class="rounded-xl border border-blue-200 dark:border-blue-800 bg-blue-50/40 dark:bg-blue-900/10 p-4 space-y-4" aria-label="通用附件设置">
+                    <div class="flex items-center justify-between gap-4">
+                        <div>
+                            <h4 class="text-sm font-semibold text-gray-900 dark:text-white">通用附件管线</h4>
+                            <p class="mt-1 text-xs text-gray-600 dark:text-gray-400">图片、文档、音频、视频与长文本生成文件，共用上传限制与确认规则。与下方超长文本开关独立。</p>
+                        </div>
+                        <label class="toggle-label flex-shrink-0" title="允许当前预设上传附件">
+                            <input type="checkbox" aria-label="允许附件上传" :checked="resolvedAttachments.enabled" @change="updateAttachmentField('enabled', $event.target.checked)" class="sr-only peer">
+                            <div class="toggle-bg"></div>
+                        </label>
+                    </div>
+                    <div v-if="!resolvedAttachments.enabled" class="text-sm text-amber-700 dark:text-amber-300">当前预设会拒绝附件请求；超长文本转文件也不可用。纯文本、分块和直接报错策略不受此开关影响。</div>
+                    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                        <label class="text-xs text-gray-700 dark:text-gray-300">最多附件数
+                            <input type="number" min="1" max="32" :value="resolvedAttachments.max_count" @change="updateAttachmentLimit('max_count', $event.target.value, 32)" class="mt-1 w-full border dark:border-gray-600 rounded-md px-3 py-2 bg-white dark:bg-gray-700">
+                        </label>
+                        <label class="text-xs text-gray-700 dark:text-gray-300">单文件上限（MB）
+                            <input type="number" min="1" max="100" :value="resolvedAttachments.max_file_mb" @change="updateAttachmentLimit('max_file_mb', $event.target.value, 100)" class="mt-1 w-full border dark:border-gray-600 rounded-md px-3 py-2 bg-white dark:bg-gray-700">
+                        </label>
+                        <label class="text-xs text-gray-700 dark:text-gray-300">附件总上限（MB）
+                            <input type="number" min="1" max="200" :value="resolvedAttachments.max_total_mb" @change="updateAttachmentLimit('max_total_mb', $event.target.value, 200)" class="mt-1 w-full border dark:border-gray-600 rounded-md px-3 py-2 bg-white dark:bg-gray-700">
+                        </label>
+                        <label class="text-xs text-gray-700 dark:text-gray-300">单附件确认预算（秒）
+                            <input type="number" min="1" max="180" :value="resolvedAttachments.ready_timeout" @change="updateAttachmentLimit('ready_timeout', $event.target.value, 180)" class="mt-1 w-full border dark:border-gray-600 rounded-md px-3 py-2 bg-white dark:bg-gray-700">
+                        </label>
+                    </div>
+                    <label class="block text-sm text-gray-700 dark:text-gray-300">允许的 MIME / 扩展名
+                        <input type="text" :value="(resolvedAttachments.allowed_types || []).join(', ')" @change="updateAllowedTypes($event.target.value)" placeholder="例如 image/*, application/pdf, .docx, .txt, audio/*" class="mt-1 w-full border dark:border-gray-600 rounded-md px-3 py-2 text-sm font-mono bg-white dark:bg-gray-700">
+                        <span class="block mt-1 text-xs text-gray-500 dark:text-gray-400">留空表示不额外限制类型，不代表网站或模型支持所有文件。实际上传仍需网站就绪信号；默认不转换、不截断、不忽略失败。</span>
+                    </label>
+                    <label class="block text-sm text-gray-700 dark:text-gray-300">上传错误 CSS 选择器（可选，一行一个）
+                        <textarea :value="(resolvedAttachments.error_selectors || []).join('\\n')" @change="updateAttachmentField('error_selectors', $event.target.value.split(/\\n/).map(v => v.trim()).filter(Boolean))" placeholder=".upload-card[data-state=error]" rows="2" class="mt-1 w-full border dark:border-gray-600 rounded-md px-3 py-2 text-sm font-mono bg-white dark:bg-gray-700"></textarea>
+                        <span class="block text-xs text-gray-500 dark:text-gray-400">只匹配编辑区内可见的错误节点；命中后立即停止，不把错误预览视为上传成功。</span>
+                    </label>
+                    <div class="space-y-2">
+                        <div class="text-sm font-medium text-gray-800 dark:text-gray-200">上传优先级 <span class="text-xs font-normal text-gray-500">仅在确认尚未投递时回退</span></div>
+                        <div v-for="(transport, index) in orderedTransports" :key="transport.value" class="flex items-center gap-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-3">
+                            <span class="text-xs text-blue-600 dark:text-blue-400">{{ index + 1 }}</span>
+                            <div class="flex-1 min-w-0"><div class="text-sm text-gray-800 dark:text-gray-200">{{ transport.label }}</div><p class="text-xs text-gray-500 dark:text-gray-400 mt-1">{{ transport.description }}</p></div>
+                            <button type="button" :disabled="index === 0" @click="moveTransport(index, -1)" :aria-label="transport.label + '上移'" class="px-2 py-1 border rounded disabled:opacity-30">↑</button>
+                            <button type="button" :disabled="index === orderedTransports.length - 1" @click="moveTransport(index, 1)" :aria-label="transport.label + '下移'" class="px-2 py-1 border rounded disabled:opacity-30">↓</button>
+                            <button type="button" @click="toggleTransport(transport.value)" :aria-label="'停用' + transport.label" class="text-xs text-red-600 dark:text-red-400 px-2 py-1">停用</button>
+                        </div>
+                        <div v-if="!orderedTransports.length" class="text-xs text-red-600 dark:text-red-400">没有启用上传方式，附件将被明确拒绝，不会自动启用其他方式。</div>
+                        <div class="flex flex-wrap gap-2">
+                            <template v-for="option in transportOptions" :key="option.value">
+                                <button v-if="!resolvedAttachments.transport_order.includes(option.value)" type="button" @click="toggleTransport(option.value)" class="border border-dashed border-gray-400 rounded-md text-xs px-3 py-2 text-gray-600 dark:text-gray-300">＋ {{ option.label }}</button>
+                            </template>
+                        </div>
+                        <p v-if="resolvedAttachments.transport_order.includes('image_clipboard')" class="text-xs text-amber-700 dark:text-amber-300">已启用有损图片剪贴板兼容。需要原文件保真时，请停用此方式。</p>
+                    </div>
+                    <details class="text-xs text-gray-600 dark:text-gray-400">
+                        <summary class="cursor-pointer font-medium">API 附件格式与兼容说明</summary>
+                        <div class="mt-2 space-y-2 leading-5">
+                            <p>支持 image_url、OpenAI file / Responses input_file、Anthropic document、input_audio 与音视频 URL。文件 ID、本地路径和 file:// 暂不支持；原始附件内容不会降级为提示词。</p>
+                            <pre class="overflow-x-auto p-3 rounded bg-gray-900 text-gray-100">{"type":"file","file":{"filename":"notes.txt","file_data":"data:text/plain;base64,aGVsbG8="}}</pre>
+                            <p>配置存储在当前预设的 file_paste.attachments 中，旧配置无需手动迁移。选择器仍在「元素选择器」，就绪探针在下方「高级附件规则」。MB 按 1024² 字节计算。</p>
+                        </div>
+                    </details>
+                </section>
 
                 <div class="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50/60 dark:bg-gray-900/30 p-4"
                      :class="sectionCollapsed.pasteMode ? '' : 'space-y-4'">
@@ -340,15 +452,18 @@ window.FilePastePanel = {
                         </div>
                         <div>
                             <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">超长处理方式</label>
-                            <select :value="resolvedFilePaste.temp_file_type"
-                                    @change="updateTempFileType($event.target.value)"
+                            <select :value="longTextStrategy"
+                                    @change="updateLongTextStrategy($event.target.value)"
                                     class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent">
-                                <option v-for="option in tempFileTypeOptions"
-                                        :key="option.value"
-                                        :value="option.value">
-                                    {{ option.label }}
-                                </option>
+                                <option value="attachment">转为附件（共用上传管线）</option>
+                                <option value="chunk">分块连续发送</option>
+                                <option value="error">直接返回错误</option>
                             </select>
+                            <label v-if="longTextStrategy === 'attachment'" class="mt-2 block text-xs text-gray-600 dark:text-gray-400">生成格式
+                                <select :value="resolvedFilePaste.temp_file_type" @change="updateTempFileType($event.target.value)" class="ml-2 border rounded px-2 py-1 bg-white dark:bg-gray-700">
+                                    <option value="txt">TXT（推荐，保留原文）</option><option value="pdf">PDF</option>
+                                </select>
+                            </label>
                         </div>
                         <div>
                             <label v-if="resolvedFilePaste.temp_file_type !== 'chunk'" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
@@ -367,32 +482,6 @@ window.FilePastePanel = {
                     </div>
 
                     <div v-show="!sectionCollapsed.pasteMode" class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">上传信号超时</label>
-                            <div class="flex items-center gap-2">
-                                <input type="number"
-                                       :value="resolvedFilePaste.upload_signal_timeout"
-                                       @input="updateNumberField('upload_signal_timeout', $event.target.value, 2.5)"
-                                       min="0.5"
-                                       max="120"
-                                       step="0.5"
-                                       class="flex-1 border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent">
-                                <span class="text-sm text-gray-500 dark:text-gray-400">秒</span>
-                            </div>
-                        </div>
-                        <div>
-                            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">弱信号宽限</label>
-                            <div class="flex items-center gap-2">
-                                <input type="number"
-                                       :value="resolvedFilePaste.upload_signal_grace"
-                                       @input="updateNumberField('upload_signal_grace', $event.target.value, 3)"
-                                       min="0"
-                                       max="120"
-                                       step="0.5"
-                                       class="flex-1 border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent">
-                                <span class="text-sm text-gray-500 dark:text-gray-400">秒</span>
-                            </div>
-                        </div>
                         <div>
                             <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">上传后稳定等待</label>
                             <div class="flex items-center gap-2">
@@ -435,7 +524,7 @@ window.FilePastePanel = {
                                 <span>附件发送判定</span>
                             </div>
                             <p v-show="!sectionCollapsed.sendConfirm" class="mt-1 text-xs leading-5 text-gray-600 dark:text-gray-300">
-                                这里会同时作用于文件粘贴和图片粘贴。点击发送后，系统会先观察附件预览、上传中状态、发送按钮灰态和页面进入生成态的信号，再决定这次附件是否真的发出去了。
+                                这里会同时作用于图片、文档、音视频与长文本附件。点击发送后，系统会先观察附件预览、上传中状态、发送按钮灰态和页面进入生成态的信号，再决定这次附件是否真的发出去了。
                             </p>
                         </div>
                         <span class="px-2 py-0.5 text-xs rounded-full bg-white/80 dark:bg-gray-800/80 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-700 flex-shrink-0">

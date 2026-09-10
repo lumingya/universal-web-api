@@ -13,7 +13,6 @@ import time
 import json
 import hashlib
 import threading
-import base64
 import random
 import math
 import mimetypes
@@ -1107,7 +1106,7 @@ class TextInputHandler:
         if self._should_use_file_paste(text):
             if self._fill_via_file_paste(ele, text):
                 return
-            logger.warning("[FILE_PASTE] 文件粘贴失败，降级到 JS 输入模式")
+            raise WorkflowError("attachment_prepare_failed")
         
         self.clear_input_safely(ele)
         
@@ -1726,311 +1725,16 @@ class TextInputHandler:
             logger.debug(f"[FILE_PASTE] 点击上传按钮失败: {e}")
             return False
 
-    def _list_file_inputs(self, selector: str = "") -> list:
-        """列出 file input 候选元素。"""
-        if selector:
-            return self._find_elements(selector, timeout=1.5)
-
-        try:
-            return list(self.tab.eles('css:input[type="file"]', timeout=0.8) or [])
-        except Exception as e:
-            logger.debug(f"[FILE_PASTE] 查找通用 file input 失败: {e}")
-            return []
-
-    def _upload_file_via_input(self, filepath: str, selector: str = "") -> bool:
-        """Use file input elements to attach the temporary file directly."""
-        candidates = self._list_file_inputs(selector)
-        if not candidates:
-            logger.debug("[FILE_PASTE] no usable file input is available on this page")
-            return False
-
-        for index, file_input in enumerate(candidates, 1):
-            try:
-                if file_input.attr("disabled") is not None:
-                    continue
-
-                baseline = self._probe_upload_signal(filepath)
-                file_input.input(filepath)
-
-                selected_count = self._get_element_file_count(file_input)
-                wait_state = self._wait_for_upload_signal(filepath, timeout=1.2, baseline=baseline)
-                if wait_state.get("confirmed"):
-                    logger.debug(
-                        f"[FILE_PASTE] file input #{index} triggered a confirmed attachment signal "
-                        f"(selector={selector or 'input[type=file]'})"
-                    )
-                    return True
-
-                if selected_count <= 0:
-                    if wait_state.get("weak_signal_seen"):
-                        logger.warning(
-                            f"[FILE_PASTE] file input #{index} produced only a weak signal; "
-                            "clipboard fallback will be skipped for this attempt"
-                        )
-
-                    logger.debug(
-                        f"[FILE_PASTE] file input #{index} did not keep a selected file "
-                        f"(selector={selector or 'input[type=file]'})"
-                    )
-                    continue
-
-                if not wait_state.get("weak_signal_seen"):
-                    try:
-                        file_input.run_js(
-                            """
-                            this.dispatchEvent(new Event('change', { bubbles: true }));
-                            """
-                        )
-                    except Exception:
-                        pass
-                    wait_state = self._wait_for_upload_signal(filepath, timeout=0.8, baseline=baseline)
-                    if wait_state.get("confirmed"):
-                        logger.debug(
-                            f"[FILE_PASTE] file input #{index} triggered a confirmed attachment signal "
-                            f"after change event (selector={selector or 'input[type=file]'})"
-                        )
-                        return True
-
-                logger.debug(
-                    f"[FILE_PASTE] uploaded file via file input "
-                    f"(candidate={index}, files={selected_count})"
-                )
-                return True
-            except Exception as e:
-                logger.debug(f"[FILE_PASTE] file input #{index} upload failed: {e}")
-
-        return False
-
-    def _dispatch_native_file_drag(self, zone, filepath: str) -> bool:
-        """
-        Use CDP drag events to simulate a browser-level file drop.
-
-        This is closer to a real OS drag-and-drop than page-injected DragEvent,
-        and works better on sites like Qwen that register file drops at the browser layer.
-        """
-        try:
-            point = zone.run_js(
-                """
-                return (function() {
-                    try {
-                        this.scrollIntoView({ block: 'center', inline: 'center' });
-                    } catch (e) {}
-                    const rect = this.getBoundingClientRect();
-                    const minX = rect.left + Math.min(40, Math.max(8, rect.width * 0.15));
-                    const maxX = rect.right - Math.min(40, Math.max(8, rect.width * 0.15));
-                    const minY = rect.top + Math.min(24, Math.max(6, rect.height * 0.2));
-                    const maxY = rect.bottom - Math.min(24, Math.max(6, rect.height * 0.2));
-                    const x = Math.round((minX + maxX) / 2);
-                    const y = Math.round((minY + maxY) / 2);
-                    return {
-                        x,
-                        y,
-                        width: Math.round(window.innerWidth || 1280),
-                        height: Math.round(window.innerHeight || 720)
-                    };
-                }).call(this);
-                """
-            ) or {}
-        except Exception as e:
-            logger.debug(f"[FILE_PASTE] 读取 drop zone 坐标失败: {e}")
-            return False
-
-        target_x = int(point.get("x", 0) or 0)
-        target_y = int(point.get("y", 0) or 0)
-        viewport_w = int(point.get("width", 1280) or 1280)
-        viewport_h = int(point.get("height", 720) or 720)
-
-        if target_x <= 0 or target_y <= 0:
-            logger.debug("[FILE_PASTE] drop zone 坐标无效，跳过原生拖拽")
-            return False
-
-        start_x = max(8, min(viewport_w - 8, target_x - random.randint(160, 280)))
-        start_y = max(8, min(viewport_h - 8, target_y - random.randint(100, 180)))
-        pre_start_x = max(8, min(viewport_w - 8, start_x - random.randint(40, 110)))
-        pre_start_y = max(8, min(viewport_h - 8, start_y - random.randint(20, 90)))
-
-        drag_data = {
-            "items": [],
-            "files": [filepath],
-            "dragOperationsMask": 1,
-        }
-
-        try:
-            smooth_move_mouse(
-                self.tab,
-                from_pos=(pre_start_x, pre_start_y),
-                to_pos=(start_x, start_y),
-                duration=random.uniform(0.08, 0.2),
-                check_cancelled=self._check_cancelled,
+    def get_attachment_uploader(self):
+        if getattr(self, "_attachment_uploader", None) is None:
+            from .attachment_upload import AttachmentUploadCoordinator
+            self._attachment_uploader = AttachmentUploadCoordinator(
+                self.tab, selectors=self._selectors, monitor=self._attachment_monitor,
+                config=self._file_paste_config.get("attachments"), cancelled=self._check_cancelled,
+                focus=lambda: self.ensure_input_focus(self._reacquire_input_after_upload()),
             )
+        return self._attachment_uploader
 
-            self.tab.run_cdp(
-                "Input.dispatchDragEvent",
-                type="dragEnter",
-                x=start_x,
-                y=start_y,
-                data=drag_data,
-                modifiers=0,
-            )
-            time.sleep(random.uniform(0.02, 0.06))
-
-            # 连续 dragOver：沿轨迹派发，避免“仅 1~2 次 over”的机械特征
-            over_steps = random.randint(7, 13)
-            for i in range(1, over_steps + 1):
-                if self._check_cancelled():
-                    return False
-
-                raw_t = i / over_steps
-                eased_t = 1 - (1 - raw_t) ** 3
-                x = int(round(start_x + (target_x - start_x) * eased_t))
-                y = int(round(start_y + (target_y - start_y) * eased_t))
-
-                # 中段允许轻微抖动，首尾收敛
-                envelope = max(0.0, 1.0 - abs(raw_t - 0.5) * 2.0)
-                x += int(round(random.gauss(0, 1.0 * envelope)))
-                y += int(round(random.gauss(0, 0.8 * envelope)))
-
-                self.tab.run_cdp(
-                    "Input.dispatchDragEvent",
-                    type="dragOver",
-                    x=x,
-                    y=y,
-                    data=drag_data,
-                    modifiers=0,
-                )
-                time.sleep(random.uniform(0.01, 0.03))
-
-            self.tab.run_cdp(
-                "Input.dispatchDragEvent",
-                type="dragOver",
-                x=target_x,
-                y=target_y,
-                data=drag_data,
-                modifiers=0,
-            )
-            time.sleep(random.uniform(0.02, 0.06))
-
-            self.tab.run_cdp(
-                "Input.dispatchDragEvent",
-                type="drop",
-                x=target_x,
-                y=target_y,
-                data=drag_data,
-                modifiers=0,
-            )
-            logger.debug("[FILE_PASTE] 已通过 CDP 原生拖拽投递文件")
-            return True
-        except Exception as e:
-            logger.debug(f"[FILE_PASTE] CDP 原生拖拽失败: {e}")
-            return False
-
-    def _upload_file_via_drop_zone(self, filepath: str, selector: str) -> bool:
-        """通过拖拽事件把文件投递到配置的 drop zone。"""
-        zone = self._find_first_element(selector, timeout=1.5)
-        if not zone:
-            logger.debug("[FILE_PASTE] 已配置 drop_zone，但当前页面未找到")
-            return False
-
-        if self._dispatch_native_file_drag(zone, filepath):
-            return True
-
-        try:
-            with open(filepath, "rb") as f:
-                raw = f.read()
-        except Exception as e:
-            logger.error(f"[FILE_PASTE] 读取临时文件失败: {e}")
-            return False
-
-        filename = os.path.basename(filepath)
-        mime_type = self._guess_mime_type(filepath)
-        b64_data = base64.b64encode(raw).decode("ascii")
-        escaped_name = json.dumps(filename)
-        escaped_mime = json.dumps(mime_type)
-        escaped_data = json.dumps(b64_data)
-
-        js = f"""
-        return (async function() {{
-            try {{
-                const fileName = {escaped_name};
-                const mimeType = {escaped_mime};
-                const b64 = {escaped_data};
-                const binary = atob(b64);
-                const bytes = new Uint8Array(binary.length);
-                for (let i = 0; i < binary.length; i++) {{
-                    bytes[i] = binary.charCodeAt(i);
-                }}
-
-                const file = new File([bytes], fileName, {{
-                    type: mimeType,
-                    lastModified: Date.now()
-                }});
-
-                const dt = new DataTransfer();
-                dt.items.add(file);
-
-                const target = this;
-                try {{
-                    target.scrollIntoView({{ block: 'center', inline: 'center' }});
-                }} catch (e) {{}}
-
-                for (const eventName of ['dragenter', 'dragover', 'drop']) {{
-                    const event = new DragEvent(eventName, {{
-                        bubbles: true,
-                        cancelable: true,
-                        dataTransfer: dt
-                    }});
-                    target.dispatchEvent(event);
-                }}
-
-                return true;
-            }} catch (error) {{
-                console.error('drop upload failed', error);
-                return false;
-            }}
-        }}).call(this);
-        """
-
-        try:
-            ok = bool(zone.run_js(js))
-            if ok:
-                logger.info("[FILE_PASTE] 已通过拖拽区域上传文件")
-            return ok
-        except Exception as e:
-            logger.debug(f"[FILE_PASTE] drop zone 上传失败: {e}")
-            return False
-
-    def _upload_file_via_site_targets(self, filepath: str) -> bool:
-        """
-        站点感知的上传顺序：
-        1. 配置的 file_input
-        2. 点击 upload_btn 后再次尝试 file_input / 通用 file input
-        3. 配置的 drop_zone 拖拽
-        4. 通用 input[type=file]
-        """
-        configured_file_input = self._get_selector_value("file_input")
-        configured_drop_zone = self._get_selector_value("drop_zone")
-
-        if configured_file_input and self._upload_file_via_input(filepath, configured_file_input):
-            return True
-
-        if self._upload_file_via_input(filepath):
-            return True
-
-        if configured_drop_zone and self._upload_file_via_drop_zone(filepath, configured_drop_zone):
-            return True
-
-        clicked_upload_button = self._click_upload_button_if_configured()
-        if clicked_upload_button:
-            time.sleep(0.35)
-            if configured_file_input and self._upload_file_via_input(filepath, configured_file_input):
-                return True
-            if self._upload_file_via_input(filepath):
-                return True
-            if configured_drop_zone and self._upload_file_via_drop_zone(filepath, configured_drop_zone):
-                return True
-
-        return False
-    
     def _should_use_file_paste(self, text: str) -> bool:
         """判断是否应该使用文件粘贴模式"""
         if not self._file_paste_config.get("enabled", False):
@@ -2089,8 +1793,6 @@ class TextInputHandler:
         2. Prefer site-native upload entry points and file inputs.
         3. Only fall back to clipboard file paste when there was no ambiguous upload activity.
         """
-        from app.core.tab_pool import get_clipboard_lock
-
         threshold = self._file_paste_config.get("threshold", 50000)
         temp_file_type = self._get_file_paste_temp_file_type()
         if temp_file_type == "error":
@@ -2111,7 +1813,6 @@ class TextInputHandler:
             f"using file-paste mode (type={temp_file_type})"
         )
 
-        clipboard_lock = get_clipboard_lock()
         self._recent_file_upload_at = 0.0
         self._last_upload_signal_wait = {
             "confirmed": False,
@@ -2121,6 +1822,7 @@ class TextInputHandler:
 
         filepath = None
         keep_temp_file_for_browser = False
+        lease_owned = False
         try:
             ele.click()
             self._smart_delay(0.15, 0.35)
@@ -2149,85 +1851,18 @@ class TextInputHandler:
                 logger.error(f"[FILE_PASTE] failed to create temp {temp_file_type} file")
                 return False
 
+            uploader = self.get_attachment_uploader()
+            if uploader.resource_batch is not None:
+                filepath = str(uploader.resource_batch.adopt_generated(filepath))
+                lease_owned = True
             logger.debug(f"[FILE_PASTE] temp file: temp/{os.path.basename(filepath)}")
             self._last_file_upload_path = filepath
-            expected_names = [
-                os.path.basename(filepath),
-                os.path.splitext(os.path.basename(filepath))[0],
-            ]
-            if self._attachment_monitor is not None:
-                self._attachment_monitor.begin_tracking(expected_names=expected_names)
-            upload_baseline = self._probe_upload_signal(filepath)
-
-            uploaded = self._upload_file_via_site_targets(filepath)
-            if uploaded:
-                keep_temp_file_for_browser = True
-
-            if not uploaded:
-                ambiguous_input_signal = (
-                    bool(self._last_upload_signal_wait.get("weak_signal_seen"))
-                    and not bool(self._last_upload_signal_wait.get("confirmed"))
-                )
-                if ambiguous_input_signal:
-                    keep_temp_file_for_browser = True
-                    logger.warning(
-                        "[FILE_PASTE] ambiguous file-input signal detected; skip clipboard fallback to avoid duplicate attachments"
-                    )
-                else:
-                    with clipboard_lock:
-                        if not copy_file_to_clipboard(filepath):
-                            logger.error("[FILE_PASTE] copy file to clipboard failed")
-                            return False
-
-                        keep_temp_file_for_browser = True
-                        time.sleep(random.uniform(0.08, 0.15))
-
-                        if self.stealth_mode:
-                            self._press_primary_combo('V', humanized=True)
-                        else:
-                            self._press_primary_combo('V')
-
-            if self._check_cancelled():
-                return True
-
-            if self._attachment_monitor is not None:
-                if self._has_confirmed_upload_signal():
-                    logger.debug(
-                        "[FILE_PASTE] 已拿到强上传信号，跳过 attachment_monitor 的长等待，直接进入补文本阶段"
-                    )
-                else:
-                    upload_timeout = self.get_upload_signal_timeout(
-                        getattr(BrowserConstants, "ATTACHMENT_READY_MAX_WAIT", 20.0)
-                    )
-                    upload_grace = self.get_upload_signal_grace(4.0)
-                    check_interval = getattr(BrowserConstants, "ATTACHMENT_READY_CHECK_INTERVAL", 0.25)
-                    stable_window = getattr(BrowserConstants, "ATTACHMENT_READY_STABLE_WINDOW", 0.8)
-                    attachment_state = self._attachment_monitor.wait_until_ready(
-                        expected_names=expected_names,
-                        require_observed=True,
-                        require_send_enabled=False,
-                        accept_existing=False,
-                        start_new_tracking=False,
-                        max_wait=max(upload_timeout, 0.5) + max(upload_grace, 0.0),
-                        poll_interval=check_interval,
-                        stable_window=stable_window,
-                        label="file-paste",
-                    )
-                    if not attachment_state.get("success"):
-                        if attachment_state.get("activitySeen") or attachment_state.get("attachmentObserved"):
-                            logger.error(
-                                "[FILE_PASTE] Attachment activity was observed but never confirmed; aborting text fallback to avoid duplicate send"
-                            )
-                            raise WorkflowError("file_paste_upload_unconfirmed")
-                        logger.warning("[FILE_PASTE] file upload did not take effect; giving up file-paste mode")
-                        return False
-            else:
-                time.sleep(random.uniform(0.5, 1.0))
-                self._smart_delay(0.3, 0.6)
-                wait_state = self._wait_for_upload_signal(filepath, baseline=upload_baseline)
-                if not wait_state.get("confirmed"):
-                    logger.warning("[FILE_PASTE] file upload did not take effect; giving up file-paste mode")
-                    return False
+            # May be asynchronously read even when readiness cannot be confirmed.
+            keep_temp_file_for_browser = True
+            uploader = self.get_attachment_uploader()
+            uploader.focus = lambda: bool(self.ensure_input_focus(self._reacquire_input_after_upload(fallback_ele=ele)))
+            uploader.upload(filepath)
+            self._last_upload_signal_wait = {"confirmed": True, "weak_signal_seen": False, "last_state": {}}
             self._recent_file_upload_at = time.time()
 
             settle_seconds = self.get_post_upload_settle_seconds(0.0)
@@ -2258,7 +1893,8 @@ class TextInputHandler:
         except WorkflowError as e:
             error_code = str(e)
             if (
-                error_code in {"file_paste_upload_unconfirmed", "file_paste_hint_unconfirmed"}
+                error_code.startswith("attachment")
+                or error_code in {"file_paste_upload_unconfirmed", "file_paste_hint_unconfirmed"}
                 or error_code.startswith("file_paste_length_error:")
             ):
                 logger.error(f"[FILE_PASTE] file paste failed with fatal state: {e}")
@@ -2269,10 +1905,11 @@ class TextInputHandler:
             logger.error(f"[FILE_PASTE] file paste failed: {e}")
             return False
         finally:
-            self._cleanup_file_paste_temp_file(
-                filepath,
-                keep_for_browser=keep_temp_file_for_browser,
-            )
+            if not lease_owned:
+                self._cleanup_file_paste_temp_file(
+                    filepath,
+                    keep_for_browser=keep_temp_file_for_browser,
+                )
 
     def fill_via_clipboard_no_click(self, ele, text: str):
         """
@@ -2284,7 +1921,7 @@ class TextInputHandler:
         if self._should_use_file_paste(text):
             if self._fill_via_file_paste(ele, text):
                 return
-            logger.warning("[FILE_PASTE] 文件粘贴失败，降级到剪贴板文本粘贴")
+            raise WorkflowError("attachment_prepare_failed")
         
         settle_min = float(BrowserConstants.get('STEALTH_PASTE_SETTLE_MIN') or 0.12)
         settle_max = float(BrowserConstants.get('STEALTH_PASTE_SETTLE_MAX') or 0.25)
@@ -2353,7 +1990,7 @@ class TextInputHandler:
         if self._should_use_file_paste(text):
             if self._fill_via_file_paste(ele, text):
                 return
-            logger.warning("[FILE_PASTE] 文件粘贴失败，降级到剪贴板文本粘贴")
+            raise WorkflowError("attachment_prepare_failed")
         
         settle_min = float(BrowserConstants.get('STEALTH_PASTE_SETTLE_MIN') or 0.12)
         settle_max = float(BrowserConstants.get('STEALTH_PASTE_SETTLE_MAX') or 0.25)

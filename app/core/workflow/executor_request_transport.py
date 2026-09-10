@@ -40,7 +40,7 @@ class WorkflowExecutorRequestTransportMixin:
 
     def _context_has_non_text_inputs(self, prompt: str = "") -> bool:
         context = getattr(self, "_context", None) or {}
-        if bool(context.get("images")):
+        if bool(context.get("images")) or bool(context.get("attachments")):
             return True
         try:
             if prompt and self._text_handler._should_use_file_paste(prompt):
