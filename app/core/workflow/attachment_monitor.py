@@ -356,8 +356,25 @@ _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
 
     const attachmentSelector = joinSelectors(attachmentSelectors);
     const pendingSelector = joinSelectors(pendingSelectors);
+    const isVisibleNode = (node) => {
+      if (!node) return false;
+      try {
+        let cur = node;
+        while (cur && cur !== root && cur !== document.body) {
+          const style = window.getComputedStyle ? window.getComputedStyle(cur) : null;
+          if (style) {
+            if (style.display === "none" || style.visibility === "hidden") return false;
+            if (Number(style.opacity || 1) <= 0.05) return false;
+          }
+          cur = cur.parentElement;
+        }
+        return true;
+      } catch (error) {
+        return true;
+      }
+    };
     const uploadNodes = (root && attachmentSelector) ? Array.from(root.querySelectorAll(attachmentSelector)) : [];
-    const pendingNodes = (root && pendingSelector) ? Array.from(root.querySelectorAll(pendingSelector)) : [];
+    const pendingNodes = (root && pendingSelector) ? Array.from(root.querySelectorAll(pendingSelector)).filter(isVisibleNode) : [];
     const fileInputs = Array.from(document.querySelectorAll("input[type='file']"));
     const fileInputCount = fileInputs.reduce((sum, inputNode) => {
       try {

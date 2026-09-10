@@ -25,7 +25,7 @@ class DoubaoParser(ResponseParser):
     # 同一张图的各尺寸共享 tos 路径(差异仅在 ~tplv 模板与签名参数)。
     _IMAGE_FIELD_RE = re.compile(
         r'"(image_ori|image_ori_raw|image_preview_resize|image_preview|image_thumb)"\s*:\s*'
-        r'\{[^{}]*?"url"\s*:\s*"(https://[^"\s]+)"'
+        r'\{[^{}]*?"url"\s*:\s*"(https?:\\?/\\?/[^"\s]+)"'
     )
     _IMAGE_KEY_PRIORITY = {
         "image_ori": 0,
@@ -48,7 +48,8 @@ class DoubaoParser(ResponseParser):
         """从新的 SSE 数据中提取生成图片 URL,按图片去重、尺寸优先级取最优。"""
         found: Dict[str, Tuple[int, str]] = {}
         for match in self._IMAGE_FIELD_RE.finditer(new_data):
-            key, url = match.group(1), match.group(2)
+            key, raw_url = match.group(1), match.group(2)
+            url = raw_url.replace(r"\/", "/")
             # 去掉主机与签名参数/裁剪模板,同一张图的不同 CDN 副本视为一条
             base_key = re.sub(r"^https?://[^/]+/", "", url).split("?", 1)[0].split("~tplv", 1)[0]
             priority = self._IMAGE_KEY_PRIORITY.get(key, 99)

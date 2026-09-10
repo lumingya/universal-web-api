@@ -1,10 +1,22 @@
 <p align="center">
-  <img src="./static/images/logo.svg" alt="Universal Web API logo" width="160">
+  <img src="./static/images/logo.svg" alt="Universal Web API logo" width="128">
 </p>
 
-# Universal Web API
+<p align="center">
+  <img src="./static/images/readme-wordmark.svg" alt="Universal Web API" width="720">
+</p>
 
-📖 文档 • [English](./README.en.md) • [简体中文](./README.md)
+<p align="center">
+  <samp>Universal &nbsp;·&nbsp; Simple &nbsp;·&nbsp; Local</samp>
+</p>
+
+<p align="center">
+  <a href="./README.en.md">English</a>
+  &nbsp; / &nbsp;
+  <a href="./README.zh-CN.md">简体中文</a>
+</p>
+
+<br>
 
 当前版本：**2.9.8**（以 [`VERSION`](./VERSION) 和 [`CHANGELOG_CURRENT.md`](./CHANGELOG_CURRENT.md) 为准）
 

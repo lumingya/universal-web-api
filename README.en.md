@@ -1,12 +1,24 @@
 <p align="center">
-  <img src="./static/images/logo.svg" alt="Universal Web API logo" width="160">
+  <img src="./static/images/logo.svg" alt="Universal Web API logo" width="128">
 </p>
 
-# Universal Web API
+<p align="center">
+  <img src="./static/images/readme-wordmark.svg" alt="Universal Web API" width="720">
+</p>
+
+<p align="center">
+  <samp>Universal &nbsp;·&nbsp; Simple &nbsp;·&nbsp; Local</samp>
+</p>
+
+<p align="center">
+  <a href="./README.en.md">English</a>
+  &nbsp; / &nbsp;
+  <a href="./README.zh-CN.md">简体中文</a>
+</p>
+
+<br>
 
 > Current release: **2.9.8** (see [`VERSION`](./VERSION) and [`CHANGELOG_CURRENT.md`](./CHANGELOG_CURRENT.md))
-
-📖 Documentation • [English](./README.en.md) • [简体中文](./README.md)
 
 **Universal Web API** is a **local API bridge & debugging tool** designed for developers. It converts AI web services (e.g., ChatGPT, DeepSeek, Claude, Gemini) logged in your local browser into local standard OpenAI/Anthropic-compatible APIs.
 

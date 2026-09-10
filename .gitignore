@@ -126,6 +126,7 @@ tests/*
 !tests/test_workflow_script_loader.py
 !tests/test_workflow_js_exec_integration.py
 !tests/test_command_navigation_dispatch.py
+!tests/test_doubao_parser_images.py
 
 # 自定义与本地工作流扩展脚本
 custom_scripts/
