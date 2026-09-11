@@ -17,6 +17,11 @@ window.SelectorPanel = {
     data() {
         return {
             showMenu: false,
+            fieldQuery: '',
+            fieldFilter: 'all',
+            editingSelectorKey: '',
+            expandedField: 'input_box',
+            auxiliaryExpanded: false,
             guideExpanded: false,
             openRenameKey: '',
             renameDrafts: {},
@@ -29,9 +34,23 @@ window.SelectorPanel = {
         },
 
         selectorEntries() {
-            return Object.entries(this.selectors || {});
+            const query = this.fieldQuery.trim().toLowerCase();
+            return Object.entries(this.selectors || {}).filter(([key, value]) => {
+                // Keep the active field mounted while typing, even when its value stops matching.
+                if (key === this.editingSelectorKey) return true;
+                if (this.fieldFilter === 'core' && !this.coreSelectorKeys.includes(key)) return false;
+                if (this.fieldFilter === 'empty' && this.isSelectorFilled(key)) return false;
+                const meta = this.getSelectorMeta(key);
+                return !query || [key, value, meta.title, meta.description].join(' ').toLowerCase().includes(query);
+            });
         },
 
+        selectorGroups() {
+            return [
+                { id: 'core', title: '核心定位', note: '一次对话的三个关键位置', entries: this.selectorEntries.filter(([key]) => this.coreSelectorKeys.includes(key)) },
+                { id: 'auxiliary', title: '辅助与扩展', note: '对话管理、上传入口及自定义字段', entries: this.selectorEntries.filter(([key]) => !this.coreSelectorKeys.includes(key)) }
+            ];
+        },
         coreChecklist() {
             return this.coreSelectorKeys.map(key => ({
                 key,
@@ -48,7 +67,29 @@ window.SelectorPanel = {
             return this.coreChecklist.filter(item => !Object.prototype.hasOwnProperty.call(this.selectors || {}, item.key));
         }
     },
+    watch: {
+        selectors() {
+            this.fieldQuery = '';
+            this.fieldFilter = 'all';
+            this.editingSelectorKey = '';
+            this.expandedField = Object.prototype.hasOwnProperty.call(this.selectors || {}, 'input_box') ? 'input_box' : Object.keys(this.selectors || {})[0] || '';
+            this.auxiliaryExpanded = false;
+            this.closeRenameEditor();
+        }
+    },
     methods: {
+        openCoreField(key) {
+            this.fieldFilter = 'all'; this.fieldQuery = '';
+            if (!Object.prototype.hasOwnProperty.call(this.selectors || {}, key)) {
+                this.addSelector(key);
+                return;
+            }
+            this.expandedField = key;
+            this.$nextTick(() => {
+                const field = document.getElementById('selector-expression-' + key);
+                if (field) { field.focus({ preventScroll: true }); field.scrollIntoView({ block: 'nearest' }); }
+            });
+        },
         toggle() {
             this.$emit('update:collapsed', !this.collapsed);
         },
@@ -60,7 +101,15 @@ window.SelectorPanel = {
 
         addSelector(type) {
             this.showMenu = false;
+            const previous = Object.keys(this.selectors || {});
             this.$emit('add-selector', type);
+            this.$nextTick(() => {
+                const key = Object.keys(this.selectors || {}).find(key => !previous.includes(key));
+                if (!key) return;
+                this.fieldFilter = 'all'; this.fieldQuery = '';
+                this.expandedField = key;
+                this.auxiliaryExpanded = !this.coreSelectorKeys.includes(key);
+            });
         },
 
         closeMenu() {
@@ -137,6 +186,9 @@ window.SelectorPanel = {
                 return;
             }
             this.$emit('update-selector-key', key, nextKey);
+            this.$nextTick(() => {
+                if (Object.prototype.hasOwnProperty.call(this.selectors || {}, nextKey) && !Object.prototype.hasOwnProperty.call(this.selectors || {}, key)) this.expandedField = nextKey;
+            });
         },
 
         getSelectorMeta(key) {
@@ -256,13 +308,13 @@ window.SelectorPanel = {
         }
     },
     template: `
-        <div class="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg shadow-sm" @click="closeMenu">
+        <div class="studio-selector-panel bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg shadow-sm" @click="closeMenu">
             <!-- 标题栏 -->
             <div class="px-4 py-3 border-b dark:border-gray-700 flex justify-between items-center cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
                  @click="toggle">
                 <div class="flex items-center gap-2">
                     <span class="w-4 inline-flex justify-center text-gray-500 dark:text-gray-400" v-html="collapsed ? $icons.chevronDown : $icons.chevronUp"></span>
-                    <h3 class="font-semibold text-gray-900 dark:text-white">选择器</h3>
+                    <h3 class="font-semibold text-gray-900 dark:text-white">字段配置</h3>
                     <span class="text-sm text-gray-500 dark:text-gray-400">({{ count }})</span>
                 </div>
 
@@ -321,9 +373,65 @@ window.SelectorPanel = {
 
             <!-- 内容 -->
             <div v-show="!collapsed" class="p-4 space-y-4 max-h-[44rem] overflow-auto">
-                <div v-if="!guideExpanded">
+                <div v-if="count === 0" class="dashboard-empty-state text-center text-sm text-slate-500 dark:text-slate-400">
+                    <div class="text-3xl mb-3">🧭</div>
+                    <p class="leading-6">
+                        现在还是空白很正常。先把 <code>input_box</code>、<code>send_btn</code>、<code>result_container</code> 加出来，再开始一项一项测试。
+                    </p>
+                </div>
+
+                <div class="site-core-path" aria-label="核心字段填写进度">
+                    <button type="button" v-for="(item, index) in coreChecklist" :key="item.key" :class="{ 'is-filled': item.ready }" :aria-label="'配置' + item.title" @click="openCoreField(item.key)"><span class="site-path-node" v-html="item.ready ? $icons.check : $icons.minus"></span><span><strong>{{ item.title }}</strong><small>{{ item.ready ? '已填写' : '待配置' }}</small></span><i v-if="index < 2" v-html="$icons.arrowRight"></i></button>
+                </div>
+                <div v-if="missingQuickAdds.length" class="site-missing-fields"><span>缺少核心字段</span><button v-for="item in missingQuickAdds" :key="item.key" type="button" @click="addSelector(item.key)"><span v-html="$icons.plusCircle"></span>添加{{ item.title }}</button></div>
+                <div class="studio-field-toolbar">
+                    <div class="studio-field-filters" aria-label="筛选选择器">
+                        <button type="button" :class="{ 'is-active': fieldFilter === 'all' }" :aria-pressed="fieldFilter === 'all'" @click="fieldFilter = 'all'">全部字段 <span>{{ count }}</span></button>
+                        <button type="button" :class="{ 'is-active': fieldFilter === 'core' }" :aria-pressed="fieldFilter === 'core'" @click="fieldFilter = 'core'">核心字段</button>
+                        <button type="button" :class="{ 'is-active': fieldFilter === 'empty' }" :aria-pressed="fieldFilter === 'empty'" @click="fieldFilter = 'empty'">未填写</button>
+                    </div>
+                    <label class="studio-field-search"><span v-html="$icons.magnifyingGlass"></span><input v-model="fieldQuery" type="search" aria-label="搜索选择器字段" placeholder="搜索字段…" @keyup.escape="fieldQuery = ''"></label>
+                </div>
+                <div v-if="count > 0 && !selectorEntries.length" class="studio-fields-empty"><span v-html="$icons.magnifyingGlass"></span><strong>{{ fieldFilter === 'empty' && !fieldQuery ? '当前字段均已填写' : '没有匹配的字段' }}</strong><p>{{ fieldFilter === 'empty' && !fieldQuery ? '接下来可以逐项测试，确认网页元素能被正确定位。' : '试试其他关键词，或切换到全部字段。' }}</p><button type="button" @click="fieldQuery = ''; fieldFilter = 'all'">查看全部字段</button></div>
+                <section v-for="group in selectorGroups" :key="group.id" v-show="group.entries.length" :class="['site-field-group', 'is-' + group.id]">
+                    <div class="site-field-group-heading"><div><h4>{{ group.title }} <span>{{ group.entries.length }}</span></h4><p>{{ group.note }}</p></div><button v-if="group.id === 'auxiliary'" type="button" :aria-expanded="auxiliaryExpanded || !!fieldQuery || fieldFilter !== 'all'" @click="auxiliaryExpanded = !auxiliaryExpanded; fieldQuery = ''; fieldFilter = 'all'">{{ auxiliaryExpanded || fieldQuery || fieldFilter !== 'all' ? '收起' : '展开' }}<span v-html="auxiliaryExpanded ? $icons.chevronUp : $icons.chevronDown"></span></button></div>
+                    <div v-show="group.id === 'core' || auxiliaryExpanded || fieldQuery || fieldFilter !== 'all'" class="site-field-group-list">
+                        <article v-for="([key, val], index) in group.entries" :key="key" :class="['studio-selector-card', { 'is-expanded': expandedField === key }]">
+                            <button type="button" class="site-field-toggle" :aria-label="'编辑字段 ' + key" :aria-expanded="expandedField === key" @click="expandedField = expandedField === key ? '' : key">
+                                <span class="site-field-index">{{ String(index + 1).padStart(2, '0') }}</span><span class="site-field-heading"><span><strong>{{ getSelectorMeta(key).title }}</strong><code>{{ key }}</code></span><small v-if="expandedField !== key">{{ val || '尚未填写定位表达式' }}</small></span><span :class="['site-field-state', { 'is-filled': isSelectorFilled(key) }]">{{ isSelectorFilled(key) ? '已填写' : '待填写' }}</span><span class="site-field-chevron" v-html="expandedField === key ? $icons.chevronUp : $icons.chevronDown"></span>
+                            </button>
+                            <div v-show="expandedField === key" class="site-field-expanded">
+                    <div v-if="openRenameKey === key"
+                         class="mb-2 flex flex-col md:flex-row gap-2 rounded-xl border border-blue-200/80 dark:border-blue-800/70 bg-blue-50/70 dark:bg-blue-900/20 p-2.5">
+                        <input :ref="'renameInput-' + key"
+                               v-model="renameDrafts[key]"
+                               @keyup.enter="submitRenameKey(key)"
+                               @keyup.esc="closeRenameEditor()"
+                               class="flex-1 border dark:border-gray-600 px-2.5 py-2 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent font-semibold text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                               placeholder="新的字段键名">
+                        <div class="flex items-center gap-2">
+                            <button @click="submitRenameKey(key)"
+                                    type="button"
+                                    class="px-3 py-1.5 rounded-md text-xs font-medium text-blue-600 dark:text-blue-300 border border-blue-300 dark:border-blue-700 hover:bg-blue-100/80 dark:hover:bg-blue-900/40 transition-colors">
+                                保存
+                            </button>
+                            <button @click="closeRenameEditor()"
+                                    type="button"
+                                    class="px-3 py-1.5 rounded-md text-xs font-medium text-slate-500 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-white/80 dark:hover:bg-slate-800/70 transition-colors">
+                                取消
+                            </button>
+                        </div>
+                    </div>
+
+                                <div class="site-field-edit-row"><div class="site-field-expression"><label :for="'selector-expression-' + key">定位表达式</label><textarea :id="'selector-expression-' + key" rows="3" :value="selectors[key]" :aria-label="getSelectorMeta(key).title + '选择器'" @focus="editingSelectorKey = key" @blur="editingSelectorKey = ''" @input="$emit('update-selector-value', key, $event.target.value)" :placeholder="getSelectorMeta(key).placeholder || '输入选择器'"></textarea></div><aside class="site-field-context"><span>如何定位</span><p>{{ getSelectorMeta(key).description }}</p><small>{{ getSelectorMeta(key).hint }}</small></aside></div>
+                                <div class="studio-field-actions"><span>填写后，请在目标网页上验证。</span><button v-if="canRenameSelectorKey(key)" type="button" @click="openRenameEditor(key)" class="site-rename-field"><span v-html="$icons.pencil"></span>改名</button><button type="button" class="site-delete-field" :aria-label="'删除选择器 ' + key" @click="$emit('remove-selector', key)"><span v-html="$icons.trash"></span></button><button type="button" class="site-test-field" @click="$emit('test-selector', key, val)"><span v-html="$icons.play"></span>测试选择器</button></div>
+                            </div>
+                        </article>
+                    </div>
+                </section>
+                <div v-if="!guideExpanded" class="studio-guide-entry">
                     <button @click="guideExpanded = true" type="button" class="dashboard-guide-toggle">
-                        <span>新手引导</span>
+                        <span v-html="$icons.bookOpen"></span><span>不知道怎么填写？查看选择器指南</span>
                         <span v-html="$icons.chevronDown"></span>
                     </button>
                 </div>
@@ -394,88 +502,6 @@ window.SelectorPanel = {
                     </div>
                 </div>
 
-                <div v-if="count === 0" class="dashboard-empty-state text-center text-sm text-slate-500 dark:text-slate-400">
-                    <div class="text-3xl mb-3">🧭</div>
-                    <p class="leading-6">
-                        现在还是空白很正常。先把 <code>input_box</code>、<code>send_btn</code>、<code>result_container</code> 加出来，再开始一项一项测试。
-                    </p>
-                </div>
-
-                <div v-for="([key, val]) in selectorEntries"
-                     :key="key"
-                     class="p-3 border dark:border-gray-700 rounded-xl hover:border-blue-300 dark:hover:border-blue-500 transition-colors bg-gray-50/70 dark:bg-gray-900/30">
-                    <div class="flex items-start justify-between gap-3 mb-3">
-                        <div class="dashboard-field-summary min-w-0">
-                            <div class="flex flex-wrap items-center gap-2">
-                                <div class="text-sm font-semibold text-gray-900 dark:text-white">{{ key }}</div>
-                                <span :class="getChipClass(key)">{{ getSelectorMeta(key).chip }}</span>
-                                <button v-if="canRenameSelectorKey(key)"
-                                        @click="openRenameEditor(key)"
-                                        type="button"
-                                        class="inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-medium text-slate-500 dark:text-slate-400 border border-slate-200/80 dark:border-slate-700/80 hover:text-blue-600 dark:hover:text-blue-300 hover:border-blue-300 dark:hover:border-blue-700 transition-colors">
-                                    <span v-html="$icons.pencil"></span>
-                                    <span>改名</span>
-                                </button>
-                                <div class="dashboard-field-help">
-                                    <button type="button"
-                                            class="dashboard-field-help-trigger"
-                                            :aria-label="key + ' 字段说明'">
-                                        i
-                                    </button>
-                                    <div class="dashboard-field-tooltip" role="tooltip">
-                                        <div class="dashboard-field-tooltip-title">{{ getSelectorMeta(key).title }}</div>
-                                        <div class="dashboard-field-tooltip-copy">{{ getSelectorMeta(key).description }}</div>
-                                        <div class="dashboard-field-tooltip-copy dashboard-field-tooltip-copy--muted">{{ getSelectorMeta(key).hint }}</div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="text-[11px] font-medium text-slate-400 dark:text-slate-500 shrink-0">
-                            {{ isSelectorFilled(key) ? '已填写' : '待填写' }}
-                        </div>
-                    </div>
-
-                    <div v-if="openRenameKey === key"
-                         class="mb-2 flex flex-col md:flex-row gap-2 rounded-xl border border-blue-200/80 dark:border-blue-800/70 bg-blue-50/70 dark:bg-blue-900/20 p-2.5">
-                        <input :ref="'renameInput-' + key"
-                               v-model="renameDrafts[key]"
-                               @keyup.enter="submitRenameKey(key)"
-                               @keyup.esc="closeRenameEditor()"
-                               class="flex-1 border dark:border-gray-600 px-2.5 py-2 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent font-semibold text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                               placeholder="新的字段键名">
-                        <div class="flex items-center gap-2">
-                            <button @click="submitRenameKey(key)"
-                                    type="button"
-                                    class="px-3 py-1.5 rounded-md text-xs font-medium text-blue-600 dark:text-blue-300 border border-blue-300 dark:border-blue-700 hover:bg-blue-100/80 dark:hover:bg-blue-900/40 transition-colors">
-                                保存
-                            </button>
-                            <button @click="closeRenameEditor()"
-                                    type="button"
-                                    class="px-3 py-1.5 rounded-md text-xs font-medium text-slate-500 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-white/80 dark:hover:bg-slate-800/70 transition-colors">
-                                取消
-                            </button>
-                        </div>
-                    </div>
-
-                    <input :value="selectors[key]"
-                           @input="$emit('update-selector-value', key, $event.target.value)"
-                           class="border dark:border-gray-600 px-2.5 py-2 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent w-full bg-white dark:bg-gray-800 text-sm font-mono text-gray-700 dark:text-gray-300"
-                           :placeholder="getSelectorMeta(key).placeholder || 'CSS 选择器'">
-
-                    <div class="mt-3 flex justify-between items-center gap-3">
-                        <button @click="$emit('test-selector', key, val)"
-                                class="px-3 py-1.5 rounded-md text-xs font-medium transition-all duration-150 text-blue-600 dark:text-blue-400 border border-blue-300 dark:border-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30 active:scale-95">
-                            测试这个字段
-                        </button>
-                        <button @click="$emit('remove-selector', key)"
-                                class="p-1.5 rounded-md transition-all duration-150 text-gray-500 dark:text-gray-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/40 active:scale-95"
-                                title="删除选择器">
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/>
-                            </svg>
-                        </button>
-                    </div>
-                </div>
             </div>
         </div>
     `

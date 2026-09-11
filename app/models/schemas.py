@@ -26,6 +26,7 @@ ActionType = Literal[
     "JS_EXEC",
     "READONLY_HINT",
     "PAGE_FETCH",
+    "SET", "CAPTURE", "IF", "GROUP", "GUARD", "TRY", "LABEL",
 ]
 
 # ================= 选择器字段名称 =================
@@ -60,6 +61,10 @@ class WorkflowStep(TypedDict):
     optional: bool
     value: Optional[Any]
     execution: NotRequired[Dict[str, Any]]
+    selector: NotRequired[str]
+    label: NotRequired[str]
+    flow_version: NotRequired[int]
+    retry_safe: NotRequired[bool]
 
 
 # ================= 元素定义 =================

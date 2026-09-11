@@ -100,6 +100,10 @@ window.ImageConfigPanel = {
         this.syncDraftsFromProps(true);
     },
     methods: {
+        mediaPolicyLabel(type) {
+            const labels = { disabled: '不提取', generic_only: '读取现成媒体', on_signal: '发现媒体信号时提取', probe_if_trigger_found: '发现播放入口后探测', always_probe: '每次主动探测' };
+            return labels[this.modalityPolicies[type].run_policy] || this.modalityPolicies[type].run_policy;
+        },
         buildAuthHeaders(extraHeaders = {}) {
             const token = String(window.getDashboardAuthToken ? window.getDashboardAuthToken() : '').trim();
             const headers = { ...extraHeaders };
@@ -353,12 +357,12 @@ window.ImageConfigPanel = {
         }
     },
     template: `
-        <div class="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg shadow-sm" @click="closeMenu">
+        <div class="cap-panel cap-media-panel bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg shadow-sm" @click="closeMenu">
             <div class="px-4 py-3 border-b dark:border-gray-700 flex justify-between items-center cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
                  @click="toggle">
                 <div class="flex items-center gap-2 flex-wrap">
                     <span class="w-4 inline-flex justify-center text-gray-500 dark:text-gray-400" v-html="collapsed ? $icons.chevronDown : $icons.chevronUp"></span>
-                    <h3 class="font-semibold text-gray-900 dark:text-white">多模态提取</h3>
+                    <h3 class="font-semibold text-gray-900 dark:text-white">更改会自动保存</h3>
                     <span v-if="isEnabled" class="px-2 py-0.5 text-xs bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-300 rounded font-medium">已启用</span>
                     <span v-else class="px-2 py-0.5 text-xs bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 rounded">未启用</span>
                     <span v-for="label in enabledLabels" :key="label"
@@ -379,12 +383,12 @@ window.ImageConfigPanel = {
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
                             </svg>
-                            预设
+                            站点规则模板
                         </button>
 
                         <div v-if="showPresetMenu" class="absolute right-0 mt-1 w-80 max-h-96 overflow-y-auto bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg shadow-lg z-10">
                             <div v-if="currentPreset && currentPreset.available" class="px-3 py-2 bg-blue-50 dark:bg-blue-900/30 border-b dark:border-gray-700 text-xs text-blue-700 dark:text-blue-300">
-                                <div class="font-medium">当前使用预设</div>
+                                <div class="font-medium">当前使用的媒体规则模板</div>
                                 <div class="mt-0.5">{{ currentPreset.name }}</div>
                             </div>
                             <div v-if="loadingPresets" class="px-3 py-6 text-center text-sm text-gray-400">加载中...</div>
@@ -405,35 +409,30 @@ window.ImageConfigPanel = {
 
             <div v-show="!collapsed" class="p-4 space-y-4">
                 <div>
-                    <div class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">提取类型</div>
-                    <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-                        <div :class="['border rounded-xl p-4 transition-colors', modalityCardClass('image')]">
-                            <div class="flex items-start justify-between gap-3">
-                                <div>
-                                    <div class="text-sm font-medium text-gray-900 dark:text-white">图片提取</div>
-                                    <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">提取回复中的图片资源，并以图片形式返回。</div>
-                                </div>
-                                <label class="toggle-label scale-90">
-                                    <input type="checkbox" :checked="modalities.image" @change="toggleModality('image')" class="sr-only peer">
-                                    <div class="toggle-bg"></div>
-                                </label>
-                            </div>
-                            <div class="mt-4 grid grid-cols-3 gap-2">
-                                <div>
-                                    <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">运行策略</label>
-                                    <select :value="modalityPolicies.image.run_policy"
+
+                    <div class="cap-feature-stack">
+                        <section class="cap-card" :class="{ 'is-enabled': modalities.image }" aria-label="接收图片"><div class="cap-card-header"><span class="cap-icon" v-html="$icons.photo"></span><div class="cap-copy"><div class="cap-title-row"><h4>接收图片</h4><span class="cap-scope">当前预设</span></div><p>把 AI 回复里的图片带回客户端。</p></div><label class="cap-switch"><span class="cap-state" :class="{ 'is-on': modalities.image }">{{ modalities.image ? '已开启' : '已关闭' }}</span><input role="switch" aria-label="接收图片" type="checkbox" :checked="modalities.image" @change="toggleModality('image')" class="cap-switch-input"><i aria-hidden="true"></i></label></div><p v-if="modalities.image" class="cap-facts">{{ modalities.image ? '当前方式：' + mediaPolicyLabel('image') : '已关闭，不提取这类媒体' }}</p><details class="cap-settings"><summary><span><strong>配置图片提取</strong><small>识别位置与提取时机</small></span><span class="cap-chevron" v-html="$icons.chevronDown"></span></summary><div class="cap-settings-body"><p class="cap-inline-help">开启上方开关后，可调整识别位置与提取方式。关闭不会清空识别位置和等待参数。</p><div class="cap-form-grid"><div :class="inputWrapClass(modalities.image)">
+                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">图片选择器</label>
+                        <input type="text" :value="imageConfig.selector" @input="updateField('selector', $event.target.value)" placeholder="img"
+                               :disabled="!modalities.image"
+                               class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm font-mono bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent disabled:cursor-not-allowed">
+                        <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">默认 <code>img</code></p>
+                    </div><div>
+                                    <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">什么时候提取</label>
+                                    <select :disabled="!modalities.image" :value="modalityPolicies.image.run_policy"
                                             @change="updateModalityPolicy('image', { run_policy: $event.target.value, enabled: $event.target.value !== 'disabled' })"
                                             class="w-full border dark:border-gray-600 px-2 py-1.5 rounded-md text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
-                                        <option value="disabled">disabled</option>
-                                        <option value="generic_only">generic_only</option>
-                                        <option value="on_signal">on_signal</option>
+                                        <option value="disabled">不提取</option>
+                                        <option value="generic_only">只读取现成的媒体</option>
+                                        <option value="on_signal">发现媒体信号时提取</option>
                                         <!-- 修复：补齐后端 MODALITY_RUN_POLICY_VALUES 的第 5 个枚举 -->
-                                        <option value="probe_if_trigger_found">probe_if_trigger_found</option>
-                                        <option value="always_probe">always_probe</option>
+                                        <option value="probe_if_trigger_found">发现播放入口后探测</option>
+                                        <option value="always_probe">每次主动探测</option>
                                     </select>
-                                </div>
+                                </div></div><details class="cap-technical"><summary><span><strong>提取不完整或等待太久？</strong><small>调整等待时间与特殊站点的兼容规则。</small></span><span class="cap-chevron" v-html="$icons.chevronDown"></span></summary><div class="cap-settings-body"><div class="cap-form-grid">
+
                                 <div>
-                                    <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">快速探测</label>
+                                    <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">快速查找时长（秒）</label>
                                     <input type="number"
                                            :value="modalityPolicies.image.quick_probe_timeout_seconds"
                                            @input="updateModalityPolicy('image', { quick_probe_timeout_seconds: numberOrFallback($event.target.value, 1) })"
@@ -442,7 +441,7 @@ window.ImageConfigPanel = {
                                            class="w-full border dark:border-gray-600 px-2 py-1.5 rounded-md text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50">
                                 </div>
                                 <div>
-                                    <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">长等上限</label>
+                                    <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">最长等待（秒）</label>
                                     <input type="number"
                                            :value="modalityPolicies.image.late_wait_timeout_seconds"
                                            @input="updateModalityPolicy('image', { late_wait_timeout_seconds: numberOrFallback($event.target.value, 45) })"
@@ -452,7 +451,7 @@ window.ImageConfigPanel = {
                                 </div>
                             </div>
                             <div class="mt-2">
-                                <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">无占位盲等</label>
+                                <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">没有加载提示时等待（秒）</label>
                                 <input type="number"
                                        :value="modalityPolicies.image.blind_wait_timeout_seconds"
                                        @input="updateModalityPolicy('image', { blind_wait_timeout_seconds: numberOrFallback($event.target.value, 1) })"
@@ -460,180 +459,14 @@ window.ImageConfigPanel = {
                                        :disabled="!modalities.image || modalityPolicies.image.run_policy === 'generic_only'"
                                        class="w-full border dark:border-gray-600 px-2 py-1.5 rounded-md text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50">
                             </div>
-                        </div>
-
-                        <div :class="['border rounded-xl p-4 transition-colors', modalityCardClass('audio')]">
-                            <div class="flex items-start justify-between gap-3">
-                                <div>
-                                    <div class="text-sm font-medium text-gray-900 dark:text-white">音频文件提取</div>
-                                    <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">提取回复里的音频节点或音频源链接。</div>
-                                </div>
-                                <label class="toggle-label scale-90">
-                                    <input type="checkbox" :checked="modalities.audio" @change="toggleModality('audio')" class="sr-only peer">
-                                    <div class="toggle-bg"></div>
-                                </label>
-                            </div>
-                            <div class="mt-4 grid grid-cols-3 gap-2">
-                                <div>
-                                    <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">运行策略</label>
-                                    <select :value="modalityPolicies.audio.run_policy"
-                                            @change="updateModalityPolicy('audio', { run_policy: $event.target.value, enabled: $event.target.value !== 'disabled' })"
-                                            class="w-full border dark:border-gray-600 px-2 py-1.5 rounded-md text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
-                                        <option value="disabled">disabled</option>
-                                        <option value="generic_only">generic_only</option>
-                                        <option value="on_signal">on_signal</option>
-                                        <option value="probe_if_trigger_found">probe_if_trigger_found</option>
-                                        <option value="always_probe">always_probe</option>
-                                    </select>
-                                </div>
-                                <div>
-                                    <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">快速探测</label>
-                                    <input type="number"
-                                           :value="modalityPolicies.audio.quick_probe_timeout_seconds"
-                                           @input="updateModalityPolicy('audio', { quick_probe_timeout_seconds: numberOrFallback($event.target.value, 1) })"
-                                           min="0.1" max="10" step="0.1"
-                                           :disabled="!modalities.audio"
-                                           class="w-full border dark:border-gray-600 px-2 py-1.5 rounded-md text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50">
-                                </div>
-                                <div>
-                                    <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">录制上限</label>
-                                    <input type="number"
-                                           :value="modalityPolicies.audio.capture_timeout_seconds"
-                                           @input="updateModalityPolicy('audio', { capture_timeout_seconds: numberOrFallback($event.target.value, 12) })"
-                                           min="0.2" max="180" step="0.5"
-                                           :disabled="!modalities.audio || !['probe_if_trigger_found', 'always_probe', 'on_signal'].includes(modalityPolicies.audio.run_policy)"
-                                           class="w-full border dark:border-gray-600 px-2 py-1.5 rounded-md text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50">
-                                </div>
-                            </div>
-                        </div>
-
-                        <div :class="['border rounded-xl p-4 transition-colors', modalityCardClass('video')]">
-                            <div class="flex items-start justify-between gap-3">
-                                <div>
-                                    <div class="text-sm font-medium text-gray-900 dark:text-white">视频提取</div>
-                                    <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">提取回复里的视频节点或视频源链接。</div>
-                                </div>
-                                <label class="toggle-label scale-90">
-                                    <input type="checkbox" :checked="modalities.video" @change="toggleModality('video')" class="sr-only peer">
-                                    <div class="toggle-bg"></div>
-                                </label>
-                            </div>
-                            <div class="mt-4 grid grid-cols-3 gap-2">
-                                <div>
-                                    <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">运行策略</label>
-                                    <select :value="modalityPolicies.video.run_policy"
-                                            @change="updateModalityPolicy('video', { run_policy: $event.target.value, enabled: $event.target.value !== 'disabled' })"
-                                            class="w-full border dark:border-gray-600 px-2 py-1.5 rounded-md text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
-                                        <option value="disabled">disabled</option>
-                                        <option value="generic_only">generic_only</option>
-                                        <option value="on_signal">on_signal</option>
-                                        <!-- 修复：补齐后端 MODALITY_RUN_POLICY_VALUES 的第 5 个枚举 -->
-                                        <option value="probe_if_trigger_found">probe_if_trigger_found</option>
-                                        <option value="always_probe">always_probe</option>
-                                    </select>
-                                </div>
-                                <div>
-                                    <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">快速探测</label>
-                                    <input type="number"
-                                           :value="modalityPolicies.video.quick_probe_timeout_seconds"
-                                           @input="updateModalityPolicy('video', { quick_probe_timeout_seconds: numberOrFallback($event.target.value, 1) })"
-                                           min="0.1" max="10" step="0.1"
-                                           :disabled="!modalities.video"
-                                           class="w-full border dark:border-gray-600 px-2 py-1.5 rounded-md text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50">
-                                </div>
-                                <div>
-                                    <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">长等上限</label>
-                                    <input type="number"
-                                           :value="modalityPolicies.video.late_wait_timeout_seconds"
-                                           @input="updateModalityPolicy('video', { late_wait_timeout_seconds: numberOrFallback($event.target.value, 90) })"
-                                           min="0.2" max="300" step="1"
-                                           :disabled="!modalities.video || modalityPolicies.video.run_policy === 'generic_only'"
-                                           class="w-full border dark:border-gray-600 px-2 py-1.5 rounded-md text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50">
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <div v-if="!isEnabled" class="bg-gray-50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-700 rounded-lg p-3 text-center">
-                    <div class="text-gray-500 dark:text-gray-400 text-sm">当前未启用任何提取类型。请至少开启一种媒体提取能力。</div>
-                </div>
-
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div :class="inputWrapClass(modalities.image)">
-                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">图片选择器</label>
-                        <input type="text" :value="imageConfig.selector" @input="updateField('selector', $event.target.value)" placeholder="img"
-                               :disabled="!modalities.image"
-                               class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm font-mono bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent disabled:cursor-not-allowed">
-                        <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">默认 <code>img</code></p>
-                    </div>
-                    <div :class="inputWrapClass(modalities.audio)">
-                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">音频选择器</label>
-                        <input type="text" :value="imageConfig.audio_selector" @input="updateField('audio_selector', $event.target.value)" placeholder="audio, audio source"
-                               :disabled="!modalities.audio"
-                               class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm font-mono bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent disabled:cursor-not-allowed">
-                        <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">默认 <code>audio, audio source</code></p>
-                    </div>
-                    <div :class="inputWrapClass(modalities.video)">
-                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">视频选择器</label>
-                        <input type="text" :value="imageConfig.video_selector" @input="updateField('video_selector', $event.target.value)" placeholder="video, video source"
-                               :disabled="!modalities.video"
-                               class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm font-mono bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent disabled:cursor-not-allowed">
-                        <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">默认 <code>video, video source</code></p>
-                    </div>
-                </div>
-
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">容器选择器 <span class="text-gray-400 font-normal">(可选)</span></label>
-                        <input type="text" :value="imageConfig.container_selector || ''" @input="updateField('container_selector', $event.target.value || null)" placeholder="留空则使用响应容器"
-                               class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm font-mono bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent">
-                        <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">统一限定媒体查找范围</p>
-                    </div>
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">提取模式</label>
-                        <select :value="imageConfig.mode" @change="updateField('mode', $event.target.value)"
-                                class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent">
-                            <option value="all">全部提取</option>
-                            <option value="first">仅第一项</option>
-                            <option value="last">仅最后一项</option>
-                        </select>
-                    </div>
-                </div>
-
-                <div :class="inputWrapClass(modalities.image)">
+                        <div :class="inputWrapClass(modalities.image)">
                     <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">图片来源白名单 <span class="text-gray-400 font-normal">(可选)</span></label>
                     <textarea :value="srcAllowPatternsDraft" @input="updateSrcAllowPatterns($event.target.value)" rows="5"
                               placeholder="^data:image/&#10;^blob:&#10;^https?://[^/]*oaiusercontent\.com/&#10;^https?://[^/]*oaistatic\.com/&#10;^https?://cdn\.openai\.com/"
                               :disabled="!modalities.image"
                               class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm font-mono bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent disabled:cursor-not-allowed"></textarea>
                     <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">每行一个正则，仅提取匹配这些 <code>src</code> 的图片。留空表示不过滤。</p>
-                </div>
-
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">最大大小 (MB)</label>
-                        <!-- 修复：后端取值域是连续区间 1..100，原下拉只有 5/10/20/50，存 100 的预设会渲染空白并被砍到 ≤50 -->
-                        <input type="number" :value="imageConfig.max_size_mb"
-                               @input="updateField('max_size_mb', numberOrFallback($event.target.value, 10))"
-                               min="1" max="100" step="1"
-                               class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">防抖延迟 (秒)</label>
-                        <!-- 修复：parseFloat("0") || 2 恒为 2，用户输 0 关防抖会被写成 2 秒；后端下限是 0 -->
-                        <input type="number" :value="imageConfig.debounce_seconds" @input="updateField('debounce_seconds', numberOrFallback($event.target.value, 2))" min="0" max="30" step="0.5"
-                               class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent">
-                    </div>
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">加载超时时间 (秒)</label>
-                        <input type="number" :value="imageConfig.load_timeout_seconds" @input="updateField('load_timeout_seconds', parseFloat($event.target.value) || 5)"
-                               min="1" max="60" step="1" :disabled="!imageConfig.wait_for_load"
-                               :class="['w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent', !imageConfig.wait_for_load ? 'opacity-50 cursor-not-allowed' : '']">
-                    </div>
-                </div>
-
-                <div :class="inputWrapClass(modalities.image)" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                </div><div :class="inputWrapClass(modalities.image)" class="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
                         <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Canvas 导出格式</label>
                         <select :value="imageConfig.canvas_export_mime || 'image/jpeg'"
@@ -656,35 +489,47 @@ window.ImageConfigPanel = {
                                class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed">
                         <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">仅 JPEG/WebP 生效，建议 0.80-0.92。</p>
                     </div>
-                </div>
+                </div></div></details></div></details></section>
 
-                <div class="border-t dark:border-gray-700 pt-4">
-                    <div class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">高级选项</div>
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div class="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg">
-                            <div>
-                                <div class="text-sm font-medium text-gray-700 dark:text-gray-300">等待媒体加载</div>
-                                <div class="text-xs text-gray-500 dark:text-gray-400">等待音视频或图片完成加载后再提取</div>
-                            </div>
-                            <label class="toggle-label scale-90">
-                                <input type="checkbox" :checked="imageConfig.wait_for_load" @change="updateField('wait_for_load', $event.target.checked)" class="sr-only peer">
-                                <div class="toggle-bg"></div>
-                            </label>
-                        </div>
-                        <div class="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg">
-                            <div>
-                                <div class="text-sm font-medium text-gray-700 dark:text-gray-300">转换 Blob 媒体</div>
-                                <div class="text-xs text-gray-500 dark:text-gray-400">将 blob: 资源转为可返回的数据 URI 或本地文件</div>
-                            </div>
-                            <label class="toggle-label scale-90">
-                                <input type="checkbox" :checked="imageConfig.download_blobs" @change="updateField('download_blobs', $event.target.checked)" class="sr-only peer">
-                                <div class="toggle-bg"></div>
-                            </label>
-                        </div>
-                    </div>
-                </div>
+                        <section class="cap-card" :class="{ 'is-enabled': modalities.audio }" aria-label="接收音频"><div class="cap-card-header"><span class="cap-icon" v-html="$icons.activity"></span><div class="cap-copy"><div class="cap-title-row"><h4>接收音频</h4><span class="cap-scope">当前预设</span></div><p>把 AI 回复里的声音文件带回客户端。</p></div><label class="cap-switch"><span class="cap-state" :class="{ 'is-on': modalities.audio }">{{ modalities.audio ? '已开启' : '已关闭' }}</span><input role="switch" aria-label="接收音频" type="checkbox" :checked="modalities.audio" @change="toggleModality('audio')" class="cap-switch-input"><i aria-hidden="true"></i></label></div><p v-if="modalities.audio" class="cap-facts">{{ modalities.audio ? '当前方式：' + mediaPolicyLabel('audio') : '已关闭，不提取这类媒体' }}</p><details class="cap-settings"><summary><span><strong>配置音频提取</strong><small>识别位置与提取时机</small></span><span class="cap-chevron" v-html="$icons.chevronDown"></span></summary><div class="cap-settings-body"><p class="cap-inline-help">开启上方开关后，可调整识别位置与提取方式。关闭不会清空识别位置和等待参数。</p><div class="cap-form-grid"><div :class="inputWrapClass(modalities.audio)">
+                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">音频选择器</label>
+                        <input type="text" :value="imageConfig.audio_selector" @input="updateField('audio_selector', $event.target.value)" placeholder="audio, audio source"
+                               :disabled="!modalities.audio"
+                               class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm font-mono bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent disabled:cursor-not-allowed">
+                        <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">默认 <code>audio, audio source</code></p>
+                    </div><div>
+                                    <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">什么时候提取</label>
+                                    <select :disabled="!modalities.audio" :value="modalityPolicies.audio.run_policy"
+                                            @change="updateModalityPolicy('audio', { run_policy: $event.target.value, enabled: $event.target.value !== 'disabled' })"
+                                            class="w-full border dark:border-gray-600 px-2 py-1.5 rounded-md text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
+                                        <option value="disabled">不提取</option>
+                                        <option value="generic_only">只读取现成的媒体</option>
+                                        <option value="on_signal">发现媒体信号时提取</option>
+                                        <option value="probe_if_trigger_found">发现播放入口后探测</option>
+                                        <option value="always_probe">每次主动探测</option>
+                                    </select>
+                                </div></div><details class="cap-technical"><summary><span><strong>提取不完整或等待太久？</strong><small>调整等待时间与特殊站点的兼容规则。</small></span><span class="cap-chevron" v-html="$icons.chevronDown"></span></summary><div class="cap-settings-body"><div class="cap-form-grid">
 
-                <div v-if="modalities.audio" class="border-t dark:border-gray-700 pt-4">
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">快速查找时长（秒）</label>
+                                    <input type="number"
+                                           :value="modalityPolicies.audio.quick_probe_timeout_seconds"
+                                           @input="updateModalityPolicy('audio', { quick_probe_timeout_seconds: numberOrFallback($event.target.value, 1) })"
+                                           min="0.1" max="10" step="0.1"
+                                           :disabled="!modalities.audio"
+                                           class="w-full border dark:border-gray-600 px-2 py-1.5 rounded-md text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">最长录制时间（秒）</label>
+                                    <input type="number"
+                                           :value="modalityPolicies.audio.capture_timeout_seconds"
+                                           @input="updateModalityPolicy('audio', { capture_timeout_seconds: numberOrFallback($event.target.value, 12) })"
+                                           min="0.2" max="180" step="0.5"
+                                           :disabled="!modalities.audio || !['probe_if_trigger_found', 'always_probe', 'on_signal'].includes(modalityPolicies.audio.run_policy)"
+                                           class="w-full border dark:border-gray-600 px-2 py-1.5 rounded-md text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50">
+                                </div>
+                            </div>
+                        <details class="cap-technical"><summary><span><strong>没有音频文件时，尝试捕获声音</strong><small>可能触发页面播放或录音；Gemini 直连提取预设应保持播放录音回退关闭。</small></span><span class="cap-chevron" v-html="$icons.chevronDown"></span></summary><div class="cap-settings-body"><div v-if="modalities.audio" class="border-t dark:border-gray-700 pt-4">
                     <div class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">音频捕获</div>
 
                     <div class="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg mb-3">
@@ -693,7 +538,7 @@ window.ImageConfigPanel = {
                             <div class="text-xs text-gray-500 dark:text-gray-400">直接提取不到音频时，允许触发页面播放并录制音频。Gemini 直连提取预设应保持关闭。</div>
                         </div>
                         <label class="toggle-label scale-90">
-                            <input type="checkbox" :checked="audioCaptureEnabled" @change="updateField('audio_capture_enabled', $event.target.checked)" class="sr-only peer">
+                            <input type="checkbox" aria-label="允许播放并录制音频" :checked="audioCaptureEnabled" @change="updateField('audio_capture_enabled', $event.target.checked)" class="sr-only peer">
                             <div class="toggle-bg"></div>
                         </label>
                     </div>
@@ -704,7 +549,7 @@ window.ImageConfigPanel = {
                             <div class="text-xs text-gray-500 dark:text-gray-400">优先尝试从页面内 WebSocket / 网络流直接提取音频；是否继续回退到页面录音由上方开关控制。</div>
                         </div>
                         <label class="toggle-label scale-90">
-                            <input type="checkbox" :checked="audioNetworkCapture.enabled" @change="updateAudioNetworkCapture({ enabled: $event.target.checked })" class="sr-only peer">
+                            <input type="checkbox" aria-label="从网络捕获音频" :checked="audioNetworkCapture.enabled" @change="updateAudioNetworkCapture({ enabled: $event.target.checked })" class="sr-only peer">
                             <div class="toggle-bg"></div>
                         </label>
                     </div>
@@ -775,8 +620,130 @@ window.ImageConfigPanel = {
                             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">每行一个关键字，命中对应 WebSocket / 网络请求 URL 时才会参与音频聚合。</p>
                         </div>
                     </div>
+                </div></div></details></div></details></div></details></section>
+
+                        <section class="cap-card" :class="{ 'is-enabled': modalities.video }" aria-label="接收视频"><div class="cap-card-header"><span class="cap-icon" v-html="$icons.play"></span><div class="cap-copy"><div class="cap-title-row"><h4>接收视频</h4><span class="cap-scope">当前预设</span></div><p>把 AI 回复里的视频文件带回客户端。</p></div><label class="cap-switch"><span class="cap-state" :class="{ 'is-on': modalities.video }">{{ modalities.video ? '已开启' : '已关闭' }}</span><input role="switch" aria-label="接收视频" type="checkbox" :checked="modalities.video" @change="toggleModality('video')" class="cap-switch-input"><i aria-hidden="true"></i></label></div><p v-if="modalities.video" class="cap-facts">{{ modalities.video ? '当前方式：' + mediaPolicyLabel('video') : '已关闭，不提取这类媒体' }}</p><details class="cap-settings"><summary><span><strong>配置视频提取</strong><small>识别位置与提取时机</small></span><span class="cap-chevron" v-html="$icons.chevronDown"></span></summary><div class="cap-settings-body"><p class="cap-inline-help">开启上方开关后，可调整识别位置与提取方式。关闭不会清空识别位置和等待参数。</p><div class="cap-form-grid"><div :class="inputWrapClass(modalities.video)">
+                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">视频选择器</label>
+                        <input type="text" :value="imageConfig.video_selector" @input="updateField('video_selector', $event.target.value)" placeholder="video, video source"
+                               :disabled="!modalities.video"
+                               class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm font-mono bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent disabled:cursor-not-allowed">
+                        <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">默认 <code>video, video source</code></p>
+                    </div><div>
+                                    <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">什么时候提取</label>
+                                    <select :disabled="!modalities.video" :value="modalityPolicies.video.run_policy"
+                                            @change="updateModalityPolicy('video', { run_policy: $event.target.value, enabled: $event.target.value !== 'disabled' })"
+                                            class="w-full border dark:border-gray-600 px-2 py-1.5 rounded-md text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
+                                        <option value="disabled">不提取</option>
+                                        <option value="generic_only">只读取现成的媒体</option>
+                                        <option value="on_signal">发现媒体信号时提取</option>
+                                        <!-- 修复：补齐后端 MODALITY_RUN_POLICY_VALUES 的第 5 个枚举 -->
+                                        <option value="probe_if_trigger_found">发现播放入口后探测</option>
+                                        <option value="always_probe">每次主动探测</option>
+                                    </select>
+                                </div></div><details class="cap-technical"><summary><span><strong>提取不完整或等待太久？</strong><small>调整等待时间与特殊站点的兼容规则。</small></span><span class="cap-chevron" v-html="$icons.chevronDown"></span></summary><div class="cap-settings-body"><div class="cap-form-grid">
+
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">快速查找时长（秒）</label>
+                                    <input type="number"
+                                           :value="modalityPolicies.video.quick_probe_timeout_seconds"
+                                           @input="updateModalityPolicy('video', { quick_probe_timeout_seconds: numberOrFallback($event.target.value, 1) })"
+                                           min="0.1" max="10" step="0.1"
+                                           :disabled="!modalities.video"
+                                           class="w-full border dark:border-gray-600 px-2 py-1.5 rounded-md text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">最长等待（秒）</label>
+                                    <input type="number"
+                                           :value="modalityPolicies.video.late_wait_timeout_seconds"
+                                           @input="updateModalityPolicy('video', { late_wait_timeout_seconds: numberOrFallback($event.target.value, 90) })"
+                                           min="0.2" max="300" step="1"
+                                           :disabled="!modalities.video || modalityPolicies.video.run_policy === 'generic_only'"
+                                           class="w-full border dark:border-gray-600 px-2 py-1.5 rounded-md text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50">
+                                </div>
+                            </div>
+                        </div></details></div></details></section>
+                    </div>
                 </div>
-            </div>
+
+                <div v-if="!isEnabled" class="bg-gray-50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-700 rounded-lg p-3 text-center">
+                    <div class="text-gray-500 dark:text-gray-400 text-sm">当前只处理文字回复；需要接收图片、声音或视频时，再开启对应能力。</div>
+                </div>
+
+
+
+<details class="cap-troubleshoot"><summary><span><strong>通用识别与下载规则</strong><small>范围、文件大小和资源转换。现有提取正常时无需改动。</small></span><span class="cap-chevron" v-html="$icons.chevronDown"></span></summary><div class="cap-settings-body">                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">容器选择器 <span class="text-gray-400 font-normal">(可选)</span></label>
+                        <input type="text" :value="imageConfig.container_selector || ''" @input="updateField('container_selector', $event.target.value || null)" placeholder="留空则使用响应容器"
+                               class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm font-mono bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent">
+                        <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">统一限定媒体查找范围</p>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">提取模式</label>
+                        <select :value="imageConfig.mode" @change="updateField('mode', $event.target.value)"
+                                class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent">
+                            <option value="all">全部提取</option>
+                            <option value="first">仅第一项</option>
+                            <option value="last">仅最后一项</option>
+                        </select>
+                    </div>
+                </div>
+
+
+
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">最大大小 (MB)</label>
+                        <!-- 修复：后端取值域是连续区间 1..100，原下拉只有 5/10/20/50，存 100 的预设会渲染空白并被砍到 ≤50 -->
+                        <input type="number" :value="imageConfig.max_size_mb"
+                               @input="updateField('max_size_mb', numberOrFallback($event.target.value, 10))"
+                               min="1" max="100" step="1"
+                               class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">防抖延迟 (秒)</label>
+                        <!-- 修复：parseFloat("0") || 2 恒为 2，用户输 0 关防抖会被写成 2 秒；后端下限是 0 -->
+                        <input type="number" :value="imageConfig.debounce_seconds" @input="updateField('debounce_seconds', numberOrFallback($event.target.value, 2))" min="0" max="30" step="0.5"
+                               class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">加载超时时间 (秒)</label>
+                        <input type="number" :value="imageConfig.load_timeout_seconds" @input="updateField('load_timeout_seconds', parseFloat($event.target.value) || 5)"
+                               min="1" max="60" step="1" :disabled="!imageConfig.wait_for_load"
+                               :class="['w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent', !imageConfig.wait_for_load ? 'opacity-50 cursor-not-allowed' : '']">
+                    </div>
+                </div>
+
+
+
+                <div class="border-t dark:border-gray-700 pt-4">
+                    <div class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">高级选项</div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg">
+                            <div>
+                                <div class="text-sm font-medium text-gray-700 dark:text-gray-300">等待媒体加载</div>
+                                <div class="text-xs text-gray-500 dark:text-gray-400">等待音视频或图片完成加载后再提取</div>
+                            </div>
+                            <label class="toggle-label scale-90">
+                                <input type="checkbox" aria-label="等待媒体加载完成" :checked="imageConfig.wait_for_load" @change="updateField('wait_for_load', $event.target.checked)" class="sr-only peer">
+                                <div class="toggle-bg"></div>
+                            </label>
+                        </div>
+                        <div class="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg">
+                            <div>
+                                <div class="text-sm font-medium text-gray-700 dark:text-gray-300">转换 Blob 媒体</div>
+                                <div class="text-xs text-gray-500 dark:text-gray-400">将 blob: 资源转为可返回的数据 URI 或本地文件</div>
+                            </div>
+                            <label class="toggle-label scale-90">
+                                <input type="checkbox" aria-label="转换临时媒体资源" :checked="imageConfig.download_blobs" @change="updateField('download_blobs', $event.target.checked)" class="sr-only peer">
+                                <div class="toggle-bg"></div>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+
+</div></details>            </div>
         </div>
     `
 };

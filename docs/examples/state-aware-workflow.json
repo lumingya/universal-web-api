@@ -1,0 +1,72 @@
+{
+  "workflow": [
+    {
+      "action": "SET",
+      "label": "将请求值映射为页面标签",
+      "value": {
+        "name": "desired",
+        "value": {
+          "$map": {
+            "gemini 3.1 Pro": "Pro",
+            "gemini Flash": "Flash"
+          },
+          "input": "{{context.model}}",
+          "default": "{{context.model}}"
+        }
+      }
+    },
+    {
+      "action": "CAPTURE",
+      "label": "读取当前页面模式",
+      "target": "current_mode",
+      "value": {
+        "name": "current",
+        "source": "text",
+        "timeout": 2
+      }
+    },
+    {
+      "action": "IF",
+      "label": "只在状态不一致时切换",
+      "value": {
+        "condition": {
+          "left": "{current}",
+          "op": "ne",
+          "right": "{desired}"
+        },
+        "then": [
+          {
+            "action": "CLICK",
+            "target": "mode_menu",
+            "label": "展开选项"
+          },
+          {
+            "action": "CLICK",
+            "selector": "css:button[data-mode=\"{desired}\"]",
+            "label": "选择期望值"
+          }
+        ],
+        "else": []
+      }
+    },
+    {
+      "action": "FILL_INPUT",
+      "target": "input_box"
+    },
+    {
+      "action": "CLICK",
+      "target": "send_btn"
+    },
+    {
+      "action": "STREAM_WAIT",
+      "target": "response_container"
+    }
+  ],
+  "selectors": {
+    "current_mode": "css:[data-current-mode]",
+    "mode_menu": "css:[data-mode-menu]",
+    "input_box": "css:textarea",
+    "send_btn": "css:button[type=submit]",
+    "response_container": "css:[data-response]"
+  }
+}

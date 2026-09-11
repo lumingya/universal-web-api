@@ -1,14 +1,16 @@
 """Workflow-editor helpers for config routes."""
 
 import copy
+import json
 import time
 from typing import Optional, Dict, Any, Callable, get_args
 
 from fastapi import HTTPException
 
-from app.core.config import get_logger
+from app.core.config import get_logger, WorkflowCancelledError
 from app.core.page_lifecycle import BACKGROUND_WAKE_CDP_TIMEOUT, BACKGROUND_WAKE_JS_TIMEOUT
 from app.models.schemas import ActionType
+from app.core.workflow.flow_runtime import (FlowProgram, FlowValidationError, validate_workflow, has_control_flow, capture_page_state, validate_inputs)
 from app.services.config_engine import config_engine
 from app.utils.site_url import extract_remote_site_domain
 
@@ -18,22 +20,23 @@ logger = get_logger('API.CONFIG.WORKFLOW')
 # 运行期 executor 的 dispatch 用原始 action 精确匹配大写字面量、不做归一化，故此处也要求精确大写。
 VALID_WORKFLOW_ACTIONS = frozenset(get_args(ActionType))
 
-def _notify_workflow_editor_action_result(tab, action_id: str, success: bool, message: str) -> None:
+def _notify_workflow_editor_action_result(tab, action_id: str, success: bool, message: str, trace=None) -> None:
     """将测试结果回推给已注入的可视化编辑器页面。"""
     try:
         tab.run_js(
             """
-            return (function(actionId, ok, text) {
+            return (function(actionId, ok, text, trace) {
               if (window.WorkflowEditor && typeof window.WorkflowEditor.handleBackendResult === 'function') {
-                window.WorkflowEditor.handleBackendResult(actionId, ok, text);
+                window.WorkflowEditor.handleBackendResult(actionId, ok, text, trace);
                 return true;
               }
               return false;
-            })(arguments[0], arguments[1], arguments[2]);
+            })(arguments[0], arguments[1], arguments[2], arguments[3]);
             """,
             str(action_id or ""),
             bool(success),
             str(message or ""),
+            list(trace or [])[:500],
         )
     except Exception as e:
         logger.debug(f"回推编辑器测试结果失败（忽略）: {e}")
@@ -149,13 +152,21 @@ def _execute_workflow_editor_test_payload(
     if not isinstance(selectors, dict):
         raise HTTPException(status_code=400, detail="selectors 必须是对象")
 
+    try:
+        validate_workflow(workflow)
+        validate_inputs(data.get("workflow_variables", {}))
+    except FlowValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     if not browser_instance.get_browser_handle():
         raise HTTPException(status_code=503, detail="浏览器未连接")
 
     task_id = f"workflow_editor_test_{time.time_ns()}"
     session = None
     executor = None
+    flow_program = None
     started_at = time.time()
+    executed = 0
 
     try:
         if tab_id and getattr(browser_instance, "tab_pool", None) is not None:
@@ -202,6 +213,9 @@ def _execute_workflow_editor_test_payload(
             f"silence_threshold={test_network_config['silence_threshold']:.1f}s"
         )
 
+        if progress_callback is None and data.get("visual_feedback") is True:
+            progress_callback = lambda phase, message: _notify_workflow_editor_action_status(tab, "", phase, message)
+
         if progress_callback:
             progress_callback("running", f"本地控制台已接管，准备执行 {len(workflow)} 个动作")
 
@@ -228,10 +242,25 @@ def _execute_workflow_editor_test_payload(
         )
 
         extractor = config_engine.get_site_extractor(domain, preset_name=preset_name)
+        cancellation = {"checked_at": 0.0, "cancelled": False}
+        def editor_should_stop():
+            if time.time() - started_at > 45:
+                return True
+            if data.get("visual_feedback") is True and time.monotonic() - cancellation["checked_at"] >= 0.2:
+                cancellation["checked_at"] = time.monotonic()
+                try:
+                    cancellation["cancelled"] = cancellation["cancelled"] or tab.run_js(
+                        "return window.__WORKFLOW_EDITOR_TEST_CANCELLED__ === true || (arguments[0] && window.__WORKFLOW_EDITOR_TEST_RUN_ID__ !== arguments[0]);",
+                        str(data.get("visual_run_id") or "")[:128], timeout=0.5,
+                    ) is True
+                except Exception:
+                    pass  # Browser failure still respects the overall time budget.
+            return cancellation["cancelled"]
+
         executor = WorkflowExecutor(
             tab=tab,
             stealth_mode=stealth,
-            should_stop_checker=lambda: False,
+            should_stop_checker=editor_should_stop,
             extractor=extractor,
             image_config=image_config,
             stream_config=test_stream_config or resolved_site_config.get("stream_config") or {},
@@ -256,16 +285,35 @@ def _execute_workflow_editor_test_payload(
             context["model_catalog"] = model_catalog
         skipped_select_model = 0
 
+        flow_program = None
+        if has_control_flow(workflow) or data.get("workflow_variables"):
+            flow_program = FlowProgram(
+                workflow, context=context, inputs=data.get("workflow_variables"),
+                capture=lambda spec, target: capture_page_state(executor, spec, target, flow_program.variables),
+                stop_checker=executor._check_cancelled, deadline_seconds=45,
+            )
+            workflow = flow_program.steps
         with executor.workflow_execution_scope():
             step_index = 0
             while step_index < len(workflow):
-                step = workflow[step_index]
+                if flow_program is not None:
+                    step_index = flow_program.next_leaf(step_index)
+                    if step_index >= len(workflow): break
+                    try:
+                        step, flow_selector = flow_program.prepare_leaf(step_index, selectors)
+                    except Exception as exc:
+                        resumed = flow_program.recover(exc, min(step_index, len(workflow) - 1))
+                        if resumed is None: raise
+                        step_index = resumed
+                        continue
+                else:
+                    step = workflow[step_index]
                 action = str(step.get("action") or "").strip()
                 target_key = str(step.get("target") or "")
                 optional = bool(step.get("optional", False))
                 value = step.get("value")
                 execution_policy = step.get("execution")
-                selector = selectors.get(target_key, "")
+                selector = flow_selector if flow_program is not None else selectors.get(target_key, "")
                 current_index = step_index + 1
 
                 logger.debug(
@@ -291,25 +339,52 @@ def _execute_workflow_editor_test_payload(
                     continue
 
                 if progress_callback:
+                    # Ephemeral page feedback uses resolved targets; it is NOT
+                    # persisted in the privacy-preserving workflow trace.
+                    phase = "step"
+                    if data.get("visual_feedback") is True:
+                        phase = "step:" + json.dumps({
+                            "path": step.get("_path", f"root.{step_index}"),
+                            "selector": selector,
+                            "coordinates": value if action in {"COORD_CLICK", "COORD_SCROLL"} and isinstance(value, dict) else None,
+                        }, ensure_ascii=False)
                     progress_callback(
-                        "step",
+                        phase,
                         f"执行 {current_index}/{len(workflow)} · {action_labels.get(action, action)}"
                     )
+                    if data.get("visual_feedback") is True:
+                        # Give the browser one visible frame before performing
+                        # the action. Only editor tests opt into this pacing.
+                        until = time.monotonic() + 0.25
+                        while time.monotonic() < until and not executor._check_cancelled():
+                            time.sleep(0.02)
 
-                if action == "FILL_INPUT" and value is not None:
+                if flow_program is None and action == "FILL_INPUT" and value is not None:
                     context["prompt"] = str(value)
 
-                for _ in executor.execute_step(
+                step_events = executor.execute_step(
                     action=action,
                     selector=selector,
                     target_key=target_key,
                     value=value,
                     optional=optional,
-                    context=context,
+                    context=flow_program.leaf_context(step) if flow_program is not None else context,
                     execution=execution_policy,
-                ):
-                    pass
+                )
+                if flow_program is not None:
+                    step_events = flow_program.events(step_events, step_index)
+                try:
+                    for _ in step_events:
+                        pass
+                except Exception as exc:
+                    if flow_program is None: raise
+                    resumed = flow_program.recover(exc, step_index)
+                    if resumed is None: raise
+                    step_index = resumed
+                    continue
 
+                if executor._check_cancelled():
+                    raise WorkflowCancelledError("workflow_cancelled")
                 executed += 1
                 if (
                     action == "PAGE_FETCH"
@@ -340,9 +415,19 @@ def _execute_workflow_editor_test_payload(
             "tab_id": tab_id or str(getattr(tab, "tab_id", "") or ""),
             "preset_name": preset_name or config_engine.get_default_preset(domain) or "主预设",
             "executed_steps": executed,
+            "trace": flow_program.trace if flow_program is not None else [],
             "skipped_select_model_steps": skipped_select_model,
             "_tab_ref": tab,
         }
+    except Exception as exc:
+        if data.get("visual_feedback") is True and isinstance(exc, WorkflowCancelledError):
+            return {"success": False, "cancelled": True, "message": "测试已停止（取消或达到时间预算），已执行的网页操作不会撤销。",
+                    "trace": flow_program.trace if flow_program is not None else [],
+                    "executed_steps": executed, "_tab_ref": tab}
+        if flow_program is None:
+            raise
+        return {"success": False, "message": str(exc), "trace": flow_program.trace,
+                "executed_steps": executed, "_tab_ref": tab}
     finally:
         if executor is not None:
             try:
@@ -384,6 +469,11 @@ def _save_site_workflow_payload(domain: str, data: Dict[str, Any]) -> Dict[str, 
                     f"（动作名必须大写，可选值：{'、'.join(sorted(VALID_WORKFLOW_ACTIONS))}）"
                 ),
             )
+
+    try:
+        validate_workflow(new_workflow)
+    except FlowValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if new_selectors is not None and (
         not isinstance(new_selectors, dict) or isinstance(new_selectors, list)

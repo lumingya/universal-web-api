@@ -32,6 +32,8 @@
     <link rel="stylesheet" href="/static/css/dashboard-reference.css?v=3.2.7">
     <link rel="stylesheet" href="/static/css/onboarding-guide.css?v=1.0.0">
     <link rel="stylesheet" href="/static/css/dashboard-dark.css?v=1.1.5">
+    <link rel="stylesheet" href="/static/css/site-studio.css?v=3.1.0">
+    <link rel="stylesheet" href="/static/css/operations-studio.css?v=1.0.1">
 
     <!-- 图标定义 -->
 </head>
@@ -250,11 +252,11 @@
                 </home-tab>
 
                 <section v-if="activeTab === 'config'" class="uwa-page uwa-config-page">
-                    <header class="uwa-page-header">
+                    <header class="uwa-page-header" v-show="siteConfigView === 'library'">
                         <div>
-                            <p class="uwa-eyebrow">SITES</p>
+                            <p class="uwa-eyebrow">SITES & CONNECTIONS</p>
                             <h1>站点配置</h1>
-                            <p>管理站点识别、内容提取、文件输入与请求工作流。</p>
+                            <p>从网页到接口，把每个站点配置得井井有条。</p>
                         </div>
                         <div class="uwa-page-actions">
                             <!-- 导入二级下拉 -->
@@ -266,15 +268,15 @@
                                     <button type="button" class="uwa-dropdown-item" @click="triggerImport(); closeAllMenus()">
                                         <span class="uwa-dropdown-icon" v-html="$icons.documentArrowDown"></span>
                                         <div class="uwa-dropdown-item-copy">
-                                            <strong>导入全部 / 自动识别</strong>
-                                            <small>支持全量或单站点配置 JSON 文件</small>
+                                            <strong>按文件域名导入</strong>
+                                            <small>按文件中的域名导入；支持一个或多个站点</small>
                                         </div>
                                     </button>
                                     <button type="button" class="uwa-dropdown-item" @click="triggerImportSingleSite(); closeAllMenus()">
                                         <span class="uwa-dropdown-icon" v-html="$icons.clipboardList"></span>
                                         <div class="uwa-dropdown-item-copy">
-                                            <strong>导入单站点配置</strong>
-                                            <small>{{ currentDomain ? ('导入到当前站点: ' + currentDomain) : '选择文件并指定导入目标站点' }}</small>
+                                            <strong>导入到指定站点</strong>
+                                            <small>手动选择目标域名，用于迁移单站点配置</small>
                                         </div>
                                     </button>
                                 </div>
@@ -289,7 +291,7 @@
                                     <button type="button" class="uwa-dropdown-item" @click="exportConfig(); closeAllMenus()">
                                         <span class="uwa-dropdown-icon" v-html="$icons.arrowUpTray"></span>
                                         <div class="uwa-dropdown-item-copy">
-                                            <strong>导出全部配置</strong>
+                                            <strong>导出所有站点</strong>
                                             <small>导出所有站点及预设（{{ Object.keys(sites).length }} 个站点）</small>
                                         </div>
                                     </button>
@@ -303,50 +305,51 @@
                                 </div>
                             </div>
 
-                            <button type="button" class="uwa-button" @click="addNewSite"><span v-html="$icons.plusCircle"></span>新增站点</button>
+                            <button type="button" class="uwa-button studio-add-site" @click="addNewSite"><span v-html="$icons.plusCircle"></span>新增站点</button>
                         </div>
                     </header>
 
-                    <div class="uwa-config-toolbar">
-                        <div class="uwa-config-search">
-                            <label class="uwa-search-field">
-                                <span v-html="$icons.magnifyingGlass"></span>
-                                <input v-model="searchQuery" type="search" autocomplete="off" placeholder="搜索站点或域名"
-                                       @keyup.escape="searchQuery = ''"
-                                       @keyup.enter="filteredSites.length && selectSiteFromSearch(filteredSites[0])">
-                            </label>
-                            <div v-if="searchQuery.trim()" class="uwa-config-search-pop">
-                                <button v-for="domain in filteredSites"
-                                        :key="'search-hit-' + domain"
-                                        type="button"
-                                        :class="{ 'is-active': currentDomain === domain }"
-                                        @click="selectSiteFromSearch(domain)">
-                                    <span class="uwa-site-mark">{{ domain.charAt(0).toUpperCase() }}</span>
-                                    <span class="uwa-search-hit-name">{{ domain }}</span>
-                                    <i v-if="currentDomain === domain">当前</i>
+                    <section v-show="siteConfigView === 'library'" class="site-library" aria-label="站点总览">
+                        <div class="site-library-intro">
+                            <div class="site-library-intro-copy"><span class="site-library-kicker">你的站点连接库</span><h2>一个站点，一套连接方式。</h2><p>先选择站点，再配置元素、输入与响应。<br>每个站点支持多套预设，适配不同的使用场景。</p><button v-if="currentDomain" type="button" class="site-resume" @click="selectSite(currentDomain)">继续编辑 {{ siteDisplayName(currentDomain) }} <span v-html="$icons.arrowRight"></span></button></div>
+                            <div class="site-library-stats"><div><strong>{{ siteLibraryStats.sites }}</strong><span>已添加站点</span></div><div><strong>{{ siteLibraryStats.presets }}</strong><span>配置预设</span></div><div><strong>{{ siteLibraryStats.incomplete }}</strong><span>核心字段待补全<small>按默认预设统计</small></span></div></div>
+                        </div>
+                        <div class="site-library-toolbar">
+                            <div class="site-library-filters" aria-label="筛选站点"><button type="button" :class="{ 'is-active': siteLibraryFilter === 'all' }" :aria-pressed="siteLibraryFilter === 'all'" @click="siteLibraryFilter = 'all'">全部站点 <span>{{ Object.keys(sites).length }}</span></button><button type="button" :class="{ 'is-active': siteLibraryFilter === 'incomplete' }" :aria-pressed="siteLibraryFilter === 'incomplete'" @click="siteLibraryFilter = 'incomplete'">待补全 <span>{{ siteLibraryStats.incomplete }}</span></button></div>
+                            <label class="library-search"><span v-html="$icons.magnifyingGlass"></span><input v-model="searchQuery" type="search" aria-label="搜索站点" placeholder="搜索名称或域名" @keyup.escape="searchQuery = ''" @keyup.enter="librarySites.length && selectSite(librarySites[0])"><kbd>/</kbd></label>
+                            <button type="button" class="site-library-compare" @click="openMainCompareSummaryDialog"><span v-html="$icons.arrowPathRoundedSquare"></span>配置对比</button>
+                            <button type="button" class="uwa-icon-button" @click="refreshStatus" aria-label="刷新状态" title="刷新状态"><span v-html="$icons.arrowPath"></span></button>
+                        </div>
+                        <div class="site-library-grid">
+                            <article v-for="domain in librarySites" :key="domain" class="site-library-card">
+                                <details class="site-card-menu preset-more"><summary :aria-label="siteDisplayName(domain) + ' 站点操作'"><span v-html="$icons.ellipsisVertical"></span></summary><div class="preset-more-pop"><button type="button" @click="exportSingleSite(domain); $event.currentTarget.closest('details').open = false"><span v-html="$icons.arrowUpTray"></span>导出站点</button><button type="button" class="is-danger" @click="$event.currentTarget.closest('details').open = false; confirmDelete(domain)"><span v-html="$icons.trash"></span>删除站点</button></div></details>
+                                <button type="button" class="site-card-open" :aria-label="'编辑 ' + siteDisplayName(domain)" @click="selectSite(domain)">
+                                    <span class="site-card-identity"><span class="site-card-mark">{{ siteStudioInitial(domain) }}</span><span><strong>{{ siteDisplayName(domain) }}</strong><small>{{ domain }}</small></span></span>
+                                    <span class="site-card-preset"><span v-html="$icons.folderOpen"></span>默认预设 <strong>{{ siteLibrarySummary(domain).presetName }}</strong></span>
+                                    <span class="site-card-readiness"><span>核心定位</span><strong>{{ siteLibrarySummary(domain).coreFilled }}<small> / 3 已填写</small></strong></span>
+                                    <span class="site-card-progress" aria-hidden="true"><i v-for="(filled, index) in siteLibrarySummary(domain).coreChecks" :key="index" :class="{ 'is-filled': filled }"></i></span>
+                                    <span class="site-card-footer"><span>{{ siteLibrarySummary(domain).presets }} 套预设 <i>·</i> {{ siteLibrarySummary(domain).selectors }} 个默认预设字段</span><b><span>编辑</span><span v-html="$icons.arrowRight"></span></b></span>
                                 </button>
-                                <div v-if="filteredSites.length === 0" class="uwa-search-hit-empty">没有匹配的站点</div>
-                            </div>
+                            </article>
+                            <button v-if="!searchQuery.trim() && siteLibraryFilter === 'all'" type="button" class="site-add-card" @click="addNewSite"><span v-html="$icons.plusCircle"></span><strong>连接新的站点</strong><small>从一套空白配置开始</small></button>
                         </div>
-                        <div class="uwa-config-toolbar-meta">
-                            <span><strong>{{ filteredSites.length }}</strong><template v-if="searchQuery.trim()">&nbsp;/ {{ Object.keys(sites).length }}</template> 个站点</span>
-                            <button type="button" @click="refreshStatus" title="刷新状态" aria-label="刷新状态"><span v-html="$icons.arrowPath"></span>刷新</button>
-                            <button type="button" @click="openMainCompareSummaryDialog"><span v-html="$icons.clipboardList"></span>配置对比</button>
-                        </div>
-                    </div>
-
-                    <div class="uwa-config-workspace">
+                        <div v-if="!librarySites.length && (searchQuery || siteLibraryFilter !== 'all')" class="site-library-empty"><span v-html="$icons.magnifyingGlass"></span><h3>{{ siteLibraryFilter === 'incomplete' && !searchQuery ? '核心字段均已填写' : '没有找到匹配的站点' }}</h3><p>{{ siteLibraryFilter === 'incomplete' && !searchQuery ? '填写进度不等于验证结果，接下来可以进入站点逐项测试。' : '换个关键词，或清除筛选重新查看。' }}</p><button type="button" class="uwa-button" @click="searchQuery = ''; siteLibraryFilter = 'all'">查看全部站点</button></div>
+                        <p class="site-library-footnote"><span v-html="$icons.bookOpen"></span>填写进度仅用于整理配置，不代表站点在线或选择器已通过验证。</p>
+                        <div class="site-library-save"><span>站点新增、删除和编辑后，记得保存配置。</span><button type="button" class="uwa-button" @click="saveConfig" :disabled="isSaving">{{ isSaving ? '保存中…' : '保存全部配置' }}</button></div>
+                    </section>
+                    <div v-show="siteConfigView === 'editor'" class="site-editor-breadcrumb"><button type="button" @click="showSiteLibrary"><span v-html="$icons.arrowUp"></span>全部站点</button><span>/</span><span>{{ siteDisplayName(currentDomain) }}</span><small>正在编辑本地配置</small></div>
+                    <div v-show="siteConfigView === 'editor'" class="uwa-config-workspace">
                         <section class="uwa-config-editor">
                             <div v-if="currentDomain && currentConfig" class="uwa-editor-heading">
                                 <details class="uwa-site-switcher">
                                     <summary title="切换站点">
-                                        <span class="uwa-editor-site-icon">{{ currentDomain.charAt(0).toUpperCase() }}</span>
-                                        <span class="uwa-site-switcher-current"><h2>{{ currentDomain }}</h2><p>{{ getActivePresetName() }} · 点击切换站点</p></span>
+                                        <span class="uwa-editor-site-icon" >{{ siteStudioInitial(currentDomain) }}</span>
+                                        <span class="uwa-site-switcher-current"><h2>{{ siteDisplayName(currentDomain) }}</h2><p>{{ currentDomain }}</p></span>
                                         <span class="uwa-site-switcher-chevron" v-html="$icons.chevronDown"></span>
                                     </summary>
                                     <div class="uwa-site-switcher-popover">
                                         <div class="uwa-site-switcher-top"><strong>切换站点</strong><span>{{ filteredSites.length }} / {{ Object.keys(sites).length }}</span></div>
-                                        <label class="uwa-search-field"><span v-html="$icons.magnifyingGlass"></span><input v-model="searchQuery" type="search" autocomplete="off" placeholder="搜索站点或域名"></label>
+                                        <label class="uwa-search-field"><span v-html="$icons.magnifyingGlass"></span><input v-model="searchQuery" type="search" autocomplete="off" placeholder="搜索名称或域名" aria-label="搜索站点"></label>
                                         <div class="uwa-site-switcher-list">
                                             <div v-for="domain in filteredSites" :key="domain" :class="['uwa-switcher-site', { 'is-active': currentDomain === domain }]">
                                                 <button type="button" class="uwa-switcher-select" @click="selectSite(domain); $event.currentTarget.closest('details').open = false">
@@ -370,12 +373,13 @@
                                         <i></i>
                                     </label>
                                     <i v-if="getActivePresetConfig()" class="uwa-actions-divider" aria-hidden="true"></i>
-                                    <button type="button" class="uwa-icon-button" @click="showJsonPreview = true" title="查看 JSON" aria-label="查看 JSON"><span v-html="$icons.clipboardList"></span></button>
-                                    <button type="button" class="uwa-button" @click="reanalyzeCurrentSite">重新分析</button>
-                                    <button type="button" class="uwa-button" @click="saveConfig" :disabled="isSaving"><span v-html="$icons.arrowDownTray"></span>{{ isSaving ? '保存中' : '保存配置' }}</button>
+                                    <button type="button" class="uwa-button studio-tip" @click="flushConfigTabDrafts(); showJsonPreview = true" data-tip="查看当前站点的完整配置源码，包括全部预设。"><span v-html="$icons.clipboardList"></span>配置 JSON</button>
+                                    <details class="preset-more site-tools"><summary class="uwa-button">站点工具<span v-html="$icons.chevronDown"></span></summary><div class="preset-more-pop"><button type="button" class="is-danger" title="删除本站点的所有预设，之后需重新访问站点进行识别。建议先导出备份。" @click="$event.currentTarget.closest('details').open=false; reanalyzeCurrentSite()"><span v-html="$icons.trash"></span>清除配置，重新识别…</button></div></details>
+                                    <button type="button" class="uwa-button studio-save-button" @click="saveConfig" :disabled="isSaving" title="保存全部配置（Ctrl / ⌘ + S）"><span :class="{ 'studio-spin': isSaving }" v-html="isSaving ? $icons.arrowPath : $icons.arrowDownTray"></span>{{ isSaving ? '保存中…' : '保存配置' }}</button>
                                 </div>
                             </div>
 
+                            <div v-if="currentDomain && currentConfig" class="studio-editor-caption"><span><span class="studio-caption-dot"></span> 配置在本地管理；填写后请保存并测试。</span><span class="studio-save-status" role="status" aria-live="polite">{{ isSaving ? '正在保存…' : (studioLastSavedAt ? '上次完整保存 ' + studioLastSavedAt : 'Ctrl / ⌘ + S 保存') }}</span></div>
                             <config-tab ref="configTab"
                                         v-if="currentDomain && currentConfig"
                                         :current-domain="currentDomain"
@@ -731,25 +735,27 @@
         })();
     </script>
     <script src="/static/vendor/vue.global.prod.js?v=2.6.7"></script>
-    <script src="/static/js/icons.js?v=3.1.1"></script>
-    <script src="/static/js/components/Sidebar.js?v=3.1.3"></script>
+    <script src="/static/js/icons.js?v=operations-2"></script>
+    <script src="/static/js/components/Sidebar.js?v=studio-2.0.0"></script>
     <script src="/static/js/components/OnboardingGuide.js?v=1.0.0"></script>
     <script src="/static/js/components/HomeTab.js?v=3.1.1"></script>
     <!-- 子组件（在 ConfigTab 之前） -->
-    <script src="static/js/components/panels/SelectorPanel.js?v=attachments-1"></script>
-    <script src="static/js/components/panels/ImageConfigPanel.js?v=2.6.13"></script>
-    <script src="static/js/components/panels/StreamConfigPanel.js?v=2.6.12"></script>
-    <script src="/static/js/components/panels/WorkflowPanel.js?v=2.6.13"></script>
-    <script src="static/js/components/panels/FilePastePanel.js?v=attachments-1"></script>
-    <script src="static/js/components/panels/PromptPaddingPanel.js?v=2.6.26"></script>
+    <script src="static/js/components/panels/SelectorPanel.js?v=studio-2"></script>
+    <script src="static/js/components/panels/ImageConfigPanel.js?v=gentle-2"></script>
+    <script src="static/js/components/panels/StreamConfigPanel.js?v=gentle-2"></script>
+    <script src="/static/js/workflow-studio.js?v=3.3.0"></script>
+    <script src="/static/js/components/panels/WorkflowPanel.js?v=3.1.0"></script>
+    <script src="static/js/components/panels/FilePastePanel.js?v=gentle-2"></script>
+    <script src="static/js/components/panels/PromptPaddingPanel.js?v=gentle-2"></script>
 
     <!-- 主组件 -->
-    <script src="static/js/components/ConfigTab.js?v=3.1.4"></script>
+    <script src="/static/js/components/panels/PresetTransfer.js?v=1.1.0"></script>
+    <script src="static/js/components/ConfigTab.js?v=scoped-transfer-1"></script>
     <script src="/static/js/components/LogsTab.js?v=3.0.1"></script>
-    <script src="/static/js/components/RequestMonitorTab.js?v=3.0.4"></script>
+    <script src="/static/js/components/RequestMonitorTab.js?v=operations-2"></script>
     <script src="/static/js/components/SettingsTab.js?v=3.0.1"></script>
     <script src="/static/js/components/Dialogs.js?v=2.6.9"></script>
-    <script src="/static/js/components/TabPoolTab.js?v=2.6.15"></script>
+    <script src="/static/js/components/TabPoolTab.js?v=operations-2"></script>
     <script src="/static/js/components/commands/CommandsTabComputed.js?v=2.6.9"></script>
     <script src="/static/js/components/commands/CommandsTabMethods.js?v=2.6.16"></script>
     <script src="/static/js/components/commands/CommandsTabTemplate.js?v=3.0.1"></script>
@@ -757,8 +763,8 @@
 
     <!-- 主应用逻辑 -->
 <script src="/static/js/dashboard-schema.js?v=attachments-1"></script>
-    <script src="/static/js/dashboard-state.js?v=3.1.4"></script>
-    <script src="/static/js/dashboard-methods.js?v=2.6.32"></script>
+    <script src="/static/js/dashboard-state.js?v=studio-2"></script>
+    <script src="/static/js/dashboard-methods.js?v=scoped-transfer-1"></script>
     <script src="/static/js/dashboard.js?v=3.1.0"></script>
 </body>
 </html>

@@ -147,6 +147,13 @@ def _normalize_preset_config_payload(
     elif not isinstance(workflow, list):
         raise HTTPException(status_code=400, detail="workflow 必须是数组")
 
+    from app.core.workflow.flow_runtime import has_control_flow, validate_workflow, FlowValidationError
+    if has_control_flow(normalized.get("workflow", [])):
+        try:
+            validate_workflow(normalized["workflow"])
+        except FlowValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     advanced = normalized.get("advanced")
     if (
         advanced is not None

@@ -1501,6 +1501,25 @@ class RequestManager:
                 ctx.monitor[key] = self._sanitize_for_storage(value)
         return True
 
+    def append_workflow_trace(self, request_id: str, trace: list) -> bool:
+        """Append bounded structural traces across chunks/tool rounds; no values."""
+        ctx = self.get_request(str(request_id or ""))
+        if ctx is None:
+            return False
+        allowed = {"path", "action", "status", "branch", "attempt", "variable", "error_type", "reason"}
+        with ctx._lock:
+            run = int(ctx.monitor.get("_workflow_trace_run", 0)) + 1
+            ctx.monitor["_workflow_trace_run"] = run
+            previous = list(ctx.monitor.get("workflow_trace") or [])[:500]
+            for entry in list(trace or [])[:500 - len(previous)]:
+                if not isinstance(entry, dict):
+                    continue
+                safe = {k: self._sanitize_for_storage(v) for k, v in entry.items()
+                        if k in allowed and isinstance(v, (str, int, bool))}
+                previous.append({**safe, "run": run})
+            ctx.monitor["workflow_trace"] = previous
+        return True
+
     def capture_external_response(
         self,
         request_id: str,
@@ -1879,6 +1898,7 @@ class RequestManager:
             "error_code": error_code,
             "error_message": error_message,
             "error_stack": error_stack,
+            "workflow_trace": list(monitor.get("workflow_trace") or [])[:500],
             "cancel_reason": str(snapshot["cancel_reason"] or ""),
             "media_count": len(media_items),
             "token_estimate": {
@@ -2086,6 +2106,7 @@ class RequestManager:
         response_text = str(item.pop("response", "") or "")
         error_stack = str(item.pop("error_stack", "") or "")
         item.pop("payload", None)
+        item.pop("workflow_trace", None)
         item.pop("response_payload", None)
         item.pop("response_parts", None)
         item.pop("response_parts_chars", None)

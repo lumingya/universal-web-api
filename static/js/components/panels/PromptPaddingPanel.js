@@ -87,22 +87,18 @@ window.PromptPaddingPanel = {
         }
     },
     template: `
-        <div class="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg shadow-sm">
+        <div class="cap-panel cap-padding-panel bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg shadow-sm">
             <div class="px-4 py-3 border-b dark:border-gray-700 flex justify-between items-center cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
                  @click="toggle">
                 <div class="flex items-center gap-2">
                     <span class="w-4 inline-flex justify-center text-gray-500 dark:text-gray-400" v-html="collapsed ? $icons.chevronDown : $icons.chevronUp"></span>
-                    <h3 class="font-semibold text-gray-900 dark:text-white">开头注入</h3>
+                    <h3 class="font-semibold text-gray-900 dark:text-white">特殊输入适配</h3>
                     <span class="text-sm text-gray-500 dark:text-gray-400">({{ statusText }})</span>
                 </div>
             </div>
 
-            <div v-show="!collapsed" class="p-4 space-y-4">
-                <div class="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg px-4 py-3">
-                    <div class="text-sm text-blue-700 dark:text-blue-300">
-                        当前预设：{{ currentPresetLabel }}
-                    </div>
-                </div>
+            <div v-show="!collapsed" class="p-4"><details class="cap-troubleshoot"><summary><span><strong>特殊站点：调整提示词</strong><small>会在原消息中加入额外内容，普通对话通常无需修改。</small></span><span class="cap-summary-value">{{ resolvedPromptPadding.enabled || resolvedPromptPadding.random_insert_enabled ? '有功能已开启' : '未开启' }}</span><span class="cap-chevron" v-html="$icons.chevronDown"></span></summary><div class="cap-settings-body"><p class="cap-warning">随机插入字符会改变原文。处理代码、结构化数据或需要精确措辞时请谨慎使用。</p>
+
 
                 <div class="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50/60 dark:bg-gray-900/30 p-4 space-y-4">
                     <div class="flex items-center justify-between gap-4">
@@ -113,7 +109,7 @@ window.PromptPaddingPanel = {
                             </p>
                         </div>
                         <label class="toggle-label scale-90 flex-shrink-0">
-                            <input type="checkbox" :checked="resolvedPromptPadding.enabled" @change="toggleEnabled" class="sr-only peer">
+                            <input type="checkbox" aria-label="启用开头占位片段" :checked="resolvedPromptPadding.enabled" @change="toggleEnabled" class="sr-only peer">
                             <div class="toggle-bg"></div>
                         </label>
                     </div>
@@ -161,7 +157,7 @@ window.PromptPaddingPanel = {
                             </div>
                             <label class="toggle-label scale-90 flex-shrink-0">
                                 <input type="checkbox"
-                                       :checked="resolvedPromptPadding.random_insert_enabled"
+                                       aria-label="在提示词中随机插入字符" :checked="resolvedPromptPadding.random_insert_enabled"
                                        @change="toggleRandomInsertEnabled"
                                        class="sr-only peer">
                                 <div class="toggle-bg"></div>
@@ -178,7 +174,7 @@ window.PromptPaddingPanel = {
                         </div>
                     </div>
                 </div>
-            </div>
+            </div></details></div>
         </div>
     `
 };

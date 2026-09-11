@@ -20,6 +20,7 @@ const WORKFLOW_KEY_PRESETS = [
 
 window.WorkflowPanel = {
     name: 'WorkflowPanel',
+    components: { WorkflowStudio: window.WorkflowStudioComponent },
     props: {
         workflow: { type: Array, required: true },
         selectors: { type: Object, required: true },
@@ -31,6 +32,7 @@ window.WorkflowPanel = {
     emits: ['update:collapsed', 'update:modelCatalog', 'add-step', 'remove-step', 'move-step', 'action-change', 'show-templates'],
     data() {
         return {
+            legacyDetails: false,
             editorInjecting: false,
             editorBridgePolling: false,
             editorBridgeInFlight: false,
@@ -82,6 +84,7 @@ window.WorkflowPanel = {
         };
     },
     computed: {
+        hasStructuredFlow() { return this.workflow.some(s => ['SET','CAPTURE','IF','GROUP','GUARD','TRY','LABEL'].includes(s.action)); },
         isArenaPreset() {
             const domain = String(this.currentDomain || '').trim().toLowerCase();
             return domain === 'arena.ai' || domain.endsWith('.arena.ai');
@@ -138,6 +141,9 @@ window.WorkflowPanel = {
         }
     },
     methods: {
+        addStudioStep() { const studio = this.$refs.flowStudio?.studio; if (studio) { studio.palette = 'root'; studio.tab = 'flow'; studio.render(); } else this.$emit('add-step'); },
+        replaceStudioWorkflow(value) { this.workflow.splice(0, this.workflow.length, ...value); },
+        replaceStudioSelectors(value) { Object.keys(this.selectors).forEach(k => delete this.selectors[k]); Object.assign(this.selectors, value); },
         toggle() {
             this.$emit('update:collapsed', !this.collapsed);
         },
@@ -975,11 +981,11 @@ window.WorkflowPanel = {
     },
     template: `
         <div class="uwa-workflow-panel bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg shadow-sm">
-            <div class="px-4 py-3 border-b dark:border-gray-700 flex justify-between items-center cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
+            <div class="px-4 py-3 border-b dark:border-gray-700 flex flex-wrap gap-3 justify-between items-center cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
                  @click="toggle">
                 <div class="flex items-center gap-2">
                     <span class="w-4 inline-flex justify-center text-gray-500 dark:text-gray-400" v-html="collapsed ? $icons.chevronDown : $icons.chevronUp"></span>
-                    <h3 class="font-semibold text-gray-900 dark:text-white">工作流</h3>
+                    <h3 class="font-semibold whitespace-nowrap text-gray-900 dark:text-white">工作流</h3>
                     <span class="text-sm text-gray-500 dark:text-gray-400">({{ workflow.length }} 步)</span>
                 </div>
 
@@ -997,14 +1003,14 @@ window.WorkflowPanel = {
                             class="px-3 py-1 rounded-md text-sm font-medium transition-colors text-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-1">
                         <span v-html="$icons.clipboardList"></span> 模板
                     </button>
-                    <button @click="$emit('add-step')"
+                    <button @click="addStudioStep"
                             class="px-3 py-1 rounded-md text-sm font-medium transition-colors bg-blue-500 text-white hover:bg-blue-600 border border-blue-500 flex items-center gap-1">
                         <span v-html="$icons.plusCircle"></span> 新增步骤
                     </button>
                 </div>
             </div>
 
-            <div v-show="!collapsed" class="p-4 space-y-4 max-h-[44rem] overflow-auto">
+            <div v-show="!collapsed" class="p-4 space-y-4">
                 <!-- 页面模型目录 (支持折叠) -->
                 <div v-if="isArenaPreset" class="border border-gray-200 dark:border-gray-700 rounded-lg bg-gray-50/40 dark:bg-gray-900/20 overflow-hidden">
                     <div class="px-3.5 py-2.5 flex items-center justify-between gap-3 cursor-pointer hover:bg-gray-100/60 dark:hover:bg-gray-800/60 transition-colors select-none"
@@ -1131,6 +1137,11 @@ window.WorkflowPanel = {
                     </div>
                 </div>
 
+                <workflow-studio ref="flowStudio" :workflow="workflow" :selectors="selectors" @change="replaceStudioWorkflow" @selectors-change="replaceStudioSelectors"></workflow-studio>
+                <button v-if="!hasStructuredFlow" type="button" @click="legacyDetails = !legacyDetails" class="text-xs text-gray-500 dark:text-gray-400 hover:underline">
+                    {{ legacyDetails ? '收起旧版详细参数' : '兼容工具：打开旧版详细参数编辑器' }}
+                </button>
+                <template v-if="legacyDetails && !hasStructuredFlow">
                 <!-- 步骤列表顶部控制条 -->
                 <div v-if="workflow.length > 0" class="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400 px-1 pt-1">
                     <span class="font-medium text-gray-600 dark:text-gray-300">执行步骤 ({{ workflow.length }})</span>
@@ -1730,6 +1741,7 @@ window.WorkflowPanel = {
                     暂无工作流步骤，点击新增步骤或使用模板。
                 </div>
 
+                </template>
                 <datalist id="workflow-key-presets">
                     <option v-for="preset in keyPresets" :key="'key-' + preset.value" :value="preset.value"></option>
                 </datalist>

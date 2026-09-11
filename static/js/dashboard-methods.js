@@ -71,6 +71,43 @@
 
     window.DashboardMethods = {
         siteDisplayName,
+        siteStudioInitial(domain) {
+            const name = this.siteDisplayName(domain)
+            const initials = { 'aistudio.google.com': 'G', 'aistudio.xiaomimimo.com': 'M', 'chat.qwen.ai': 'Q', 'www.doubao.com': '豆', 'chatglm.cn': '智' }
+            return initials[domain] || Array.from(name || '?')[0].toUpperCase()
+        },
+        siteLibrarySummary(domain) {
+            const site = this.sites[domain] || {}
+            const presets = site.presets || null
+            const names = presets ? Object.keys(presets) : []
+            const presetName = presets ? (names.includes(site.default_preset) ? site.default_preset : names.includes('主预设') ? '主预设' : names[0] || '无预设') : '主预设'
+            const config = presets ? presets[presetName] || {} : site
+            const selectors = config.selectors || {}
+            const coreChecks = ['input_box', 'send_btn', 'result_container'].map(key => !!String(selectors[key] || '').trim())
+            return { presetName, presets: presets ? names.length : 1, selectors: Object.keys(selectors).length, coreChecks, coreFilled: coreChecks.filter(Boolean).length }
+        },
+        showSiteLibrary() {
+            this.flushConfigTabDrafts()
+            this.siteConfigView = 'library'
+            this.$nextTick(() => document.querySelector('.dashboard-scroll-region')?.scrollTo({ top: 0 }))
+        },
+        handleStudioShortcut(event) {
+            if (this.activeTab !== 'config' || event.defaultPrevented) return
+            const editing = event.target && (event.target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName))
+            const visibleDialog = Array.from(document.querySelectorAll('[role="dialog"]')).some(el => el.getClientRects().length)
+            const editingDialog = Object.entries(this.$data || {}).some(([key, value]) => /^show.*(Dialog|Modal|Preview)$/.test(key) && value === true)
+            if (visibleDialog || editingDialog) return
+            if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+                event.preventDefault()
+                if (!this.isSaving && this.currentConfig && !this.showJsonPreview) this.saveConfig()
+            } else if (event.key === '/' && !editing && !event.ctrlKey && !event.metaKey && !event.altKey) {
+                const field = document.querySelector('.library-search input')
+                if (field && field.getClientRects().length) {
+                    event.preventDefault()
+                    field.focus()
+                }
+            }
+        },
         async initializeDashboard() {
             await this.loadConfig(true)
             await this.loadBrowserConstants().catch(() => {})
@@ -621,10 +658,13 @@
             this.isSaving = true
             try {
                 this.flushConfigTabDrafts()
+                const tab = this.$refs?.configTab, configRef = tab?.currentConfig, transferRevision = tab?.pendingPresetTransfer
                 await this.apiRequest('/api/config', {
                     method: 'POST',
                     body: JSON.stringify({ config: this.sites })
                 })
+                if (tab && tab.currentConfig === configRef && tab.pendingPresetTransfer === transferRevision) tab.pendingPresetTransfer = 0
+                this.studioLastSavedAt = new Date().toLocaleTimeString('zh-CN', { hour12: false })
                 this.notify('配置已保存', 'success')
             } catch (error) {
                 this.notify('保存失败: ' + error.message, 'error')
@@ -947,6 +987,7 @@
             this.showMainCompareSummaryDialog = false;
             this.activeTab = 'config';
             this.currentDomain = item.domain;
+            this.siteConfigView = 'editor';
 
             const configTab = await this.waitForConfigTabRef();
             if (!configTab) {
@@ -2740,7 +2781,12 @@
         },
 
         selectSite(domain) {
+            if (!domain || !this.sites[domain]) return
+            this.flushConfigTabDrafts()
             this.currentDomain = domain
+            this.siteConfigView = 'editor'
+            this.searchQuery = ''
+            this.$nextTick(() => document.querySelector('.dashboard-scroll-region')?.scrollTo({ top: 0 }))
         },
 
         selectSiteFromSearch(domain) {
@@ -2752,6 +2798,7 @@
         addNewSite() {
             const domain = prompt('请输入域名（例如: chat.example.com）:')
             if (!domain) return
+            this.siteConfigView = 'editor'
 
             if (this.sites[domain]) {
                 this.notify('该站点已存在', 'warning')

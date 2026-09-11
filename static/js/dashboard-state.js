@@ -68,6 +68,7 @@ function saveStoredSitesCache(sites, currentDomain) {
             toastCounter: 0,
             hasLoadedSettings: false,
             isSaving: false,
+        studioLastSavedAt: '',
             isLoading: false,
             configLoadSeq: 0,
             imageConfigSaveSeq: 0,
@@ -109,6 +110,8 @@ function saveStoredSitesCache(sites, currentDomain) {
 
             // Tab 切换（新增 settings）
             activeTab: 'home',
+            siteConfigView: 'library',
+            siteLibraryFilter: 'all',
             mountedTabs: {
                 home: true,
                 config: true
@@ -266,10 +269,18 @@ function saveStoredSitesCache(sites, currentDomain) {
 
 
     computed: {
+        siteLibraryStats() {
+            const summaries = Object.keys(this.sites).map(domain => this.siteLibrarySummary(domain))
+            return { sites: summaries.length, presets: summaries.reduce((n, s) => n + s.presets, 0), incomplete: summaries.filter(s => s.coreFilled < 3).length }
+        },
+        librarySites() {
+            return this.filteredSites.filter(domain => this.siteLibraryFilter !== 'incomplete' || this.siteLibrarySummary(domain).coreFilled < 3)
+        },
         filteredSites() {
             const keys = Object.keys(this.sites).sort()
-            return this.searchQuery
-                ? keys.filter(d => d.toLowerCase().includes(this.searchQuery.toLowerCase()))
+            const query = this.searchQuery.trim().toLowerCase()
+            return query
+                ? keys.filter(d => (d + ' ' + this.siteDisplayName(d)).toLowerCase().includes(query))
                 : keys
         },
 
@@ -340,6 +351,7 @@ function saveStoredSitesCache(sites, currentDomain) {
             }
         },
         activeTab(tab) {
+            document.getElementById('app')?.classList.toggle('site-studio-active', tab === 'config')
             this.markTabAsVisited(tab)
             this.ensureTabDataLoaded(tab)
             if (tab === 'logs') {
@@ -352,6 +364,8 @@ function saveStoredSitesCache(sites, currentDomain) {
     },
 
     mounted() {
+        document.addEventListener('keydown', this.handleStudioShortcut)
+        document.getElementById('app')?.classList.toggle('site-studio-active', this.activeTab === 'config')
         // 读取夜间模式设置
         let savedDarkMode = null
         try {
@@ -392,6 +406,7 @@ function saveStoredSitesCache(sites, currentDomain) {
     },
 
     beforeUnmount() {
+        document.removeEventListener('keydown', this.handleStudioShortcut)
         this.stopLogPolling()
         this.stopRequestHistoryPolling()
         this.stopSystemStatsPolling()

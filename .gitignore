@@ -141,3 +141,27 @@ scripts/custom/
 !tests/test_attachments.py
 !tests/test_attachment_ui.py
 !tests/test_attachment_browser.py
+
+# Site configuration workspace regression
+!tests/test_site_studio_ui.py
+!tests/browser_site_capabilities.py
+
+# Operations workspace regression and generated screenshots
+!tests/test_operations_studio_ui.py
+!tests/browser_operations_studio.py
+/test-artifacts/
+
+# Structured workflow engine and shared editor regression
+!tests/test_workflow_flow_runtime.py
+!tests/test_workflow_studio_integration.py
+!tests/browser_workflow_studio.py
+
+# Keep only the shared workflow CSS bundler from the otherwise local scripts tree
+!/scripts/
+/scripts/*
+!/scripts/bundle_workflow_studio_css.py
+!tests/test_workflow_page_guide.py
+
+# Scoped preset transfer regression
+!tests/test_preset_transfer.py
+!tests/browser_preset_transfer.py

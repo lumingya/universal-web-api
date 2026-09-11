@@ -339,59 +339,42 @@ window.FilePastePanel = {
         }
     },
     template: `
-        <div class="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg shadow-sm">
+        <div class="cap-panel cap-input-panel bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg shadow-sm">
             <div class="px-4 py-3 border-b dark:border-gray-700 flex justify-between items-center cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
                  @click="toggle">
                 <div class="flex items-center gap-2">
                     <span class="w-4 inline-flex justify-center text-gray-500 dark:text-gray-400" v-html="collapsed ? $icons.chevronDown : $icons.chevronUp"></span>
-                    <h3 class="font-semibold text-gray-900 dark:text-white">通用附件 / 超长输入</h3>
+                    <h3 class="font-semibold text-gray-900 dark:text-white">发送内容</h3>
                     <span class="text-sm text-gray-500 dark:text-gray-400">({{ statusText }})</span>
                 </div>
             </div>
 
             <div v-show="!collapsed" class="p-4 space-y-4">
-                <div class="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg px-4 py-3">
-                    <div class="text-sm text-blue-700 dark:text-blue-300">
-                        当前预设：{{ currentPresetLabel }}
-                    </div>
-                </div>
 
-                <section class="rounded-xl border border-blue-200 dark:border-blue-800 bg-blue-50/40 dark:bg-blue-900/10 p-4 space-y-4" aria-label="通用附件设置">
-                    <div class="flex items-center justify-between gap-4">
-                        <div>
-                            <h4 class="text-sm font-semibold text-gray-900 dark:text-white">通用附件管线</h4>
-                            <p class="mt-1 text-xs text-gray-600 dark:text-gray-400">图片、文档、音频、视频与长文本生成文件，共用上传限制与确认规则。与下方超长文本开关独立。</p>
-                        </div>
-                        <label class="toggle-label flex-shrink-0" title="允许当前预设上传附件">
-                            <input type="checkbox" aria-label="允许附件上传" :checked="resolvedAttachments.enabled" @change="updateAttachmentField('enabled', $event.target.checked)" class="sr-only peer">
-                            <div class="toggle-bg"></div>
-                        </label>
-                    </div>
-                    <div v-if="!resolvedAttachments.enabled" class="text-sm text-amber-700 dark:text-amber-300">当前预设会拒绝附件请求；超长文本转文件也不可用。纯文本、分块和直接报错策略不受此开关影响。</div>
-                    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                        <label class="text-xs text-gray-700 dark:text-gray-300">最多附件数
+
+<section class="cap-card" :class="{ 'is-enabled': resolvedAttachments.enabled }" aria-label="发送附件"><div class="cap-card-header"><span class="cap-icon" v-html="$icons.arrowUpTray"></span><div class="cap-copy"><div class="cap-title-row"><h4>发送附件</h4><span class="cap-scope">当前预设</span></div><p>把图片、文档或音视频交给 AI。网站本身也需要支持这些文件。</p></div><label class="cap-switch"><span class="cap-state" :class="{ 'is-on': resolvedAttachments.enabled }">{{ resolvedAttachments.enabled ? '已开启' : '已关闭' }}</span><input role="switch" aria-label="发送附件" type="checkbox" :checked="resolvedAttachments.enabled" @change="updateAttachmentField('enabled', $event.target.checked)" class="cap-switch-input"><i aria-hidden="true"></i></label></div><p class="cap-facts">最多 {{ resolvedAttachments.max_count }} 个文件 <i>·</i> 单个 {{ resolvedAttachments.max_file_mb }} MB <i>·</i> 合计 {{ resolvedAttachments.max_total_mb }} MB</p><p v-if="!resolvedAttachments.enabled" class="cap-warning">已关闭附件上传；长文本也不能转为文件发送。普通文本仍可使用。</p><details class="cap-settings"><summary><span><strong>调整文件限制</strong><small>文件数量、大小与类型</small></span><span class="cap-chevron" v-html="$icons.chevronDown"></span></summary><div class="cap-settings-body"><div class="cap-form-grid">
+                        <label class="text-xs text-gray-700 dark:text-gray-300">一次最多几个文件
                             <input type="number" min="1" max="32" :value="resolvedAttachments.max_count" @change="updateAttachmentLimit('max_count', $event.target.value, 32)" class="mt-1 w-full border dark:border-gray-600 rounded-md px-3 py-2 bg-white dark:bg-gray-700">
                         </label>
-                        <label class="text-xs text-gray-700 dark:text-gray-300">单文件上限（MB）
+                        <label class="text-xs text-gray-700 dark:text-gray-300">单个文件大小（MB）
                             <input type="number" min="1" max="100" :value="resolvedAttachments.max_file_mb" @change="updateAttachmentLimit('max_file_mb', $event.target.value, 100)" class="mt-1 w-full border dark:border-gray-600 rounded-md px-3 py-2 bg-white dark:bg-gray-700">
                         </label>
-                        <label class="text-xs text-gray-700 dark:text-gray-300">附件总上限（MB）
+                        <label class="text-xs text-gray-700 dark:text-gray-300">全部文件总大小（MB）
                             <input type="number" min="1" max="200" :value="resolvedAttachments.max_total_mb" @change="updateAttachmentLimit('max_total_mb', $event.target.value, 200)" class="mt-1 w-full border dark:border-gray-600 rounded-md px-3 py-2 bg-white dark:bg-gray-700">
                         </label>
-                        <label class="text-xs text-gray-700 dark:text-gray-300">单附件确认预算（秒）
+
+                    </div><label class="block text-sm text-gray-700 dark:text-gray-300">允许哪些文件（可选）
+                        <input type="text" :value="(resolvedAttachments.allowed_types || []).join(', ')" @change="updateAllowedTypes($event.target.value)" placeholder="例如 .pdf, .docx, image/*" class="mt-1 w-full border dark:border-gray-600 rounded-md px-3 py-2 text-sm font-mono bg-white dark:bg-gray-700">
+                        <span class="block mt-1 text-xs text-gray-500 dark:text-gray-400">用逗号分隔文件扩展名或 MIME 类型；留空不额外限制。网站本身仍需支持这些文件。</span>
+                    </label><details class="cap-technical"><summary><span><strong>上传兼容与错误识别</strong><small>只有上传失败、需要拖拽或网站提示错误时再调整。</small></span><span class="cap-chevron" v-html="$icons.chevronDown"></span></summary><div class="cap-settings-body"><label class="text-xs text-gray-700 dark:text-gray-300">单附件确认预算（秒）
                             <input type="number" min="1" max="180" :value="resolvedAttachments.ready_timeout" @change="updateAttachmentLimit('ready_timeout', $event.target.value, 180)" class="mt-1 w-full border dark:border-gray-600 rounded-md px-3 py-2 bg-white dark:bg-gray-700">
                         </label>
-                    </div>
-                    <label class="block text-sm text-gray-700 dark:text-gray-300">允许的 MIME / 扩展名
-                        <input type="text" :value="(resolvedAttachments.allowed_types || []).join(', ')" @change="updateAllowedTypes($event.target.value)" placeholder="例如 image/*, application/pdf, .docx, .txt, audio/*" class="mt-1 w-full border dark:border-gray-600 rounded-md px-3 py-2 text-sm font-mono bg-white dark:bg-gray-700">
-                        <span class="block mt-1 text-xs text-gray-500 dark:text-gray-400">留空表示不额外限制类型，不代表网站或模型支持所有文件。实际上传仍需网站就绪信号；默认不转换、不截断、不忽略失败。</span>
-                    </label>
-                    <label class="block text-sm text-gray-700 dark:text-gray-300">上传错误 CSS 选择器（可选，一行一个）
+                    <label class="block text-sm text-gray-700 dark:text-gray-300">网页上的上传错误提示（CSS 选择器）（可选，一行一个）
                         <textarea :value="(resolvedAttachments.error_selectors || []).join('\\n')" @change="updateAttachmentField('error_selectors', $event.target.value.split(/\\n/).map(v => v.trim()).filter(Boolean))" placeholder=".upload-card[data-state=error]" rows="2" class="mt-1 w-full border dark:border-gray-600 rounded-md px-3 py-2 text-sm font-mono bg-white dark:bg-gray-700"></textarea>
                         <span class="block text-xs text-gray-500 dark:text-gray-400">只匹配编辑区内可见的错误节点；命中后立即停止，不把错误预览视为上传成功。</span>
                     </label>
                     <div class="space-y-2">
-                        <div class="text-sm font-medium text-gray-800 dark:text-gray-200">上传优先级 <span class="text-xs font-normal text-gray-500">仅在确认尚未投递时回退</span></div>
+                        <div class="text-sm font-medium text-gray-800 dark:text-gray-200">尝试上传的顺序 <span class="text-xs font-normal text-gray-500">仅在确认尚未投递时回退</span></div>
                         <div v-for="(transport, index) in orderedTransports" :key="transport.value" class="flex items-center gap-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-3">
                             <span class="text-xs text-blue-600 dark:text-blue-400">{{ index + 1 }}</span>
                             <div class="flex-1 min-w-0"><div class="text-sm text-gray-800 dark:text-gray-200">{{ transport.label }}</div><p class="text-xs text-gray-500 dark:text-gray-400 mt-1">{{ transport.description }}</p></div>
@@ -412,33 +395,16 @@ window.FilePastePanel = {
                         <div class="mt-2 space-y-2 leading-5">
                             <p>支持 image_url、OpenAI file / Responses input_file、Anthropic document、input_audio 与音视频 URL。文件 ID、本地路径和 file:// 暂不支持；原始附件内容不会降级为提示词。</p>
                             <pre class="overflow-x-auto p-3 rounded bg-gray-900 text-gray-100">{"type":"file","file":{"filename":"notes.txt","file_data":"data:text/plain;base64,aGVsbG8="}}</pre>
-                            <p>配置存储在当前预设的 file_paste.attachments 中，旧配置无需手动迁移。选择器仍在「元素选择器」，就绪探针在下方「高级附件规则」。MB 按 1024² 字节计算。</p>
+                            <p>通用附件管线的配置存储在当前预设的 file_paste.attachments 中，旧配置无需手动迁移。选择器仍在「元素选择器」，就绪探针在下方「高级附件规则」。MB 按 1024² 字节计算。</p>
                         </div>
                     </details>
-                </section>
+                </div></details></div></details></section>
 
-                <div class="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50/60 dark:bg-gray-900/30 p-4"
-                     :class="sectionCollapsed.pasteMode ? '' : 'space-y-4'">
-                    <div class="flex items-center justify-between gap-4 cursor-pointer select-none -m-2 p-2 rounded-md hover:bg-gray-100/70 dark:hover:bg-gray-800/60 transition-colors"
-                         @click="toggleSection('pasteMode')">
-                        <div>
-                            <div class="flex items-center gap-2 text-sm font-medium text-gray-800 dark:text-gray-100">
-                                <span class="w-4 inline-flex justify-center text-gray-400 dark:text-gray-500" v-html="sectionCollapsed.pasteMode ? $icons.chevronDown : $icons.chevronUp"></span>
-                                <span>超长输入处理</span>
-                            </div>
-                            <p v-show="!sectionCollapsed.pasteMode" class="mt-1 text-xs text-gray-500 dark:text-gray-400 leading-5">
-                                超过阈值后可转为附件、分块连续发送或直接报错。分块会等待每一轮完成，但只把最后一轮回复返回客户端。
-                            </p>
-                        </div>
-                        <label class="toggle-label scale-90 flex-shrink-0" @click.stop>
-                            <input type="checkbox" :checked="resolvedFilePaste.enabled" @change="toggleEnabled" class="sr-only peer">
-                            <div class="toggle-bg"></div>
-                        </label>
-                    </div>
+<section class="cap-card" :class="{ 'is-enabled': resolvedFilePaste.enabled }" aria-label="长文本处理"><div class="cap-card-header"><span class="cap-icon" v-html="$icons.documentArrowDown"></span><div class="cap-copy"><div class="cap-title-row"><h4>长文本处理</h4><span class="cap-scope">当前预设</span></div><p>文字太长、网页放不下时，选择转成文件、分段发送或中止请求。</p></div><label class="cap-switch"><span class="cap-state" :class="{ 'is-on': resolvedFilePaste.enabled }">{{ resolvedFilePaste.enabled ? '已开启' : '已关闭' }}</span><input role="switch" aria-label="长文本处理" type="checkbox" :checked="resolvedFilePaste.enabled" @change="toggleEnabled" class="cap-switch-input"><i aria-hidden="true"></i></label></div><p class="cap-facts">{{ resolvedFilePaste.enabled ? '超过 ' + resolvedFilePaste.threshold + ' 字符时处理' : '当前不启用额外的长文本处理' }}<template v-if="resolvedFilePaste.enabled"> <i>·</i> {{ longTextStrategy === 'attachment' ? '转成文件' : longTextStrategy === 'chunk' ? '分段发送' : '中止并报错' }}</template></p><details class="cap-settings"><summary><span><strong>设置长文本处理方式</strong><small>长度阈值与超长后的行为</small></span><span class="cap-chevron" v-html="$icons.chevronDown"></span></summary><div class="cap-settings-body"><p class="cap-inline-help">转成文件需要先允许附件上传。分段发送会逐轮等待，只返回最后一轮回复。</p>
 
-                    <div v-show="!sectionCollapsed.pasteMode" class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div  class="grid grid-cols-1 md:grid-cols-3 gap-4">
                         <div>
-                            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">阈值</label>
+                            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">超过多少字符开始处理</label>
                             <div class="flex items-center gap-2">
                                 <input type="number"
                                        :value="resolvedFilePaste.threshold"
@@ -481,8 +447,11 @@ window.FilePastePanel = {
                         </div>
                     </div>
 
-                    <div v-show="!sectionCollapsed.pasteMode" class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        <div>
+                    <div  class="grid grid-cols-1 md:grid-cols-3 gap-4">
+
+                    </div>
+
+                    <details class="cap-technical"><summary><span><strong>上传后的输入适配</strong><small>只有文件上传后输入框发生变化时再设置。</small></span><span class="cap-chevron" v-html="$icons.chevronDown"></span></summary><div class="cap-settings-body"><div>
                             <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">上传后稳定等待</label>
                             <div class="flex items-center gap-2">
                                 <input type="number"
@@ -494,10 +463,7 @@ window.FilePastePanel = {
                                        class="flex-1 border dark:border-gray-600 px-3 py-2 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent">
                                 <span class="text-sm text-gray-500 dark:text-gray-400">秒</span>
                             </div>
-                        </div>
-                    </div>
-
-                    <label v-show="!sectionCollapsed.pasteMode" class="flex items-center gap-3 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
+                        </div><label  class="flex items-center gap-3 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
                         <input type="checkbox"
                                class="rounded"
                                :checked="resolvedFilePaste.reacquire_input_after_upload"
@@ -505,34 +471,19 @@ window.FilePastePanel = {
                         <span>上传完成后重新定位输入框</span>
                     </label>
 
-                    <div v-show="!sectionCollapsed.pasteMode">
-                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">上传后专用输入框 selector</label>
+                    <div >
+                        <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">上传后输入框的位置（选择器）</label>
                         <input type="text"
                                :value="resolvedFilePaste.post_upload_input_selector"
                                @input="updateTextField('post_upload_input_selector', $event.target.value)"
                                placeholder=".composer textarea"
                                class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm font-mono bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent">
                     </div>
-                </div>
+                </div></details></div></details></section>
 
-                <div class="rounded-xl border border-blue-200/80 dark:border-blue-800/70 bg-blue-50/70 dark:bg-blue-900/20 p-4">
-                    <div class="flex items-start justify-between gap-3 cursor-pointer select-none -m-2 p-2 rounded-md hover:bg-blue-100/50 dark:hover:bg-blue-900/30 transition-colors"
-                         @click="toggleSection('sendConfirm')">
-                        <div>
-                            <div class="flex items-center gap-2 text-sm font-medium text-gray-800 dark:text-gray-100">
-                                <span class="w-4 inline-flex justify-center text-gray-400 dark:text-gray-500" v-html="sectionCollapsed.sendConfirm ? $icons.chevronDown : $icons.chevronUp"></span>
-                                <span>附件发送判定</span>
-                            </div>
-                            <p v-show="!sectionCollapsed.sendConfirm" class="mt-1 text-xs leading-5 text-gray-600 dark:text-gray-300">
-                                这里会同时作用于图片、文档、音视频与长文本附件。点击发送后，系统会先观察附件预览、上传中状态、发送按钮灰态和页面进入生成态的信号，再决定这次附件是否真的发出去了。
-                            </p>
-                        </div>
-                        <span class="px-2 py-0.5 text-xs rounded-full bg-white/80 dark:bg-gray-800/80 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-700 flex-shrink-0">
-                            当前：{{ attachmentSensitivityMeta.label }}
-                        </span>
-                    </div>
+<details class="cap-troubleshoot"><summary><span><strong>附件上传了，但没有发出去？</strong><small>排查发送确认、重试和网页识别规则。正常发送时无需调整。</small></span><span class="cap-summary-value">敏感度：{{ attachmentSensitivityMeta.label }}</span><span class="cap-chevron" v-html="$icons.chevronDown"></span></summary><div class="cap-settings-body"><p class="cap-inline-help">这些规则会影响所有附件。先确认网页上是否真的发出了消息，再调整等待或重试。</p>
 
-                    <div v-show="!sectionCollapsed.sendConfirm" class="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3 items-start">
+                    <div  class="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3 items-start">
                         <div>
                             <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">敏感度</label>
                             <select :value="resolvedFilePaste.send_confirmation.attachment_sensitivity"
@@ -550,7 +501,7 @@ window.FilePastePanel = {
                         </div>
                     </div>
 
-                    <div v-show="!sectionCollapsed.sendConfirm" class="mt-4 grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div  class="mt-4 grid grid-cols-1 md:grid-cols-4 gap-4">
                         <div>
                             <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">最大重试次数</label>
                             <div class="flex items-center gap-2">
@@ -605,7 +556,7 @@ window.FilePastePanel = {
                         </div>
                     </div>
 
-                    <div v-show="!sectionCollapsed.sendConfirm" class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div  class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
                             <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">自动重试动作</label>
                             <select :value="resolvedFilePaste.send_confirmation.retry_action"
@@ -631,10 +582,9 @@ window.FilePastePanel = {
                         </div>
                     </div>
 
-                    <div v-show="!sectionCollapsed.sendConfirm" class="mt-4 border-t border-blue-100 dark:border-blue-900/60 pt-4"
+                    <div  class="mt-4 border-t border-blue-100 dark:border-blue-900/60 pt-4"
                          :class="sectionCollapsed.advancedRules ? '' : 'space-y-4'">
-                        <div class="cursor-pointer select-none -m-2 p-2 rounded-md hover:bg-blue-100/50 dark:hover:bg-blue-900/30 transition-colors"
-                             @click="toggleSection('advancedRules')">
+                        <div class="cursor-pointer select-none -m-2 p-2 rounded-md hover:bg-blue-100/50 dark:hover:bg-blue-900/30 transition-colors" role="button" tabindex="0" :aria-expanded="!sectionCollapsed.advancedRules" @keydown.enter.prevent="toggleSection('advancedRules')" @keydown.space.prevent="toggleSection('advancedRules')" @click="toggleSection('advancedRules')">
                             <div class="flex items-center gap-2 text-sm font-medium text-gray-800 dark:text-gray-100">
                                 <span class="w-4 inline-flex justify-center text-gray-400 dark:text-gray-500" v-html="sectionCollapsed.advancedRules ? $icons.chevronDown : $icons.chevronUp"></span>
                                 <span>高级附件规则</span>
@@ -836,7 +786,7 @@ window.FilePastePanel = {
                             </div>
                         </div>
                     </div>
-                </div>
+                </div></details>
             </div>
         </div>
     `

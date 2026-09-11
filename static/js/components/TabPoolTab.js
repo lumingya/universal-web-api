@@ -34,6 +34,7 @@ window.TabPoolTabComponent = {
             routeGroupsExpanded: false,
             selectedRouteGroupId: 'all',
             tabSearchQuery: '',
+            tabStatusFilter: 'all',
             helpExpanded: false,
             mobileGroupNavOpen: false,
             groupNavWidth: 268,
@@ -144,10 +145,21 @@ window.TabPoolTabComponent = {
                 member => this.routeGroupMemberMatchesTab(member, tab)
             ));
         },
+        poolStatusCounts() {
+            const tabs = this.visibleTabs || [];
+            return { all: tabs.length, idle: tabs.filter(t => t.status === 'idle').length,
+                busy: tabs.filter(t => t.status === 'busy').length,
+                attention: tabs.filter(t => !['idle', 'busy'].includes(t.status)).length };
+        },
+        statusFilteredTabs() {
+            if (this.tabStatusFilter === 'all') return this.visibleTabs;
+            return this.visibleTabs.filter(tab => this.tabStatusFilter === 'attention'
+                ? !['idle', 'busy'].includes(tab.status) : tab.status === this.tabStatusFilter);
+        },
         displayedTabs() {
             const query = String(this.tabSearchQuery || '').trim().toLowerCase();
-            if (!query) return this.visibleTabs;
-            return (this.visibleTabs || []).filter(tab => {
+            if (!query) return this.statusFilteredTabs;
+            return (this.statusFilteredTabs || []).filter(tab => {
                 const searchable = [
                     tab.persistent_index,
                     tab.current_domain,
@@ -174,7 +186,7 @@ window.TabPoolTabComponent = {
                 : '全部标签页';
         },
         groupNavStyle() {
-            const width = this.groupNavCollapsed ? 64 : this.groupNavWidth;
+            const width = this.mobileGroupNavOpen ? this.groupNavWidth : (this.groupNavCollapsed ? 64 : this.groupNavWidth);
             return { '--tp-group-nav-width': width + 'px' };
         },
         groupNavCompact() {
@@ -188,6 +200,9 @@ window.TabPoolTabComponent = {
         }
     },
     watch: {
+        mobileGroupNavOpen(open) { this.focusPoolOverlay(open, '.tab-pool-group-nav.is-mobile-open') },
+        'modelNameModal.visible'(open) { this.focusPoolOverlay(open, '.tab-pool-modal-backdrop') },
+        'terminateModal.visible'(open) { this.focusPoolOverlay(open, '.tab-pool-modal-backdrop') },
         autoRefresh(enabled) {
             if (enabled) {
                 this.startAutoRefresh();
@@ -200,6 +215,30 @@ window.TabPoolTabComponent = {
         }
     },
     methods: {
+        focusPoolOverlay(open, selector) {
+            if (open) this.overlayReturnFocus = document.activeElement;
+            this.$nextTick(() => {
+                if (open) Array.from(this.$el.querySelector(selector)?.querySelectorAll('button:not([disabled]),input:not([disabled])') || []).find(el => el.getClientRects().length)?.focus();
+                else this.overlayReturnFocus?.focus();
+            });
+        },
+        handleOverlayKeydown(event) {
+            const modal = this.$el.querySelector('.tab-pool-modal-backdrop');
+            const panel = modal || (this.mobileGroupNavOpen && this.$el.querySelector('.tab-pool-group-nav.is-mobile-open'));
+            if (event.key === 'Escape') {
+                if (this.modelNameModal.visible) this.closeModelNameModal();
+                else if (this.terminateModal.visible) this.closeTerminateModal();
+                else if (this.mobileGroupNavOpen) this.mobileGroupNavOpen = false;
+                else this.showRouteSettings = false;
+                event.preventDefault();
+            }
+            if (event.key !== 'Tab' || !panel) return;
+            const controls = Array.from(panel.querySelectorAll('button,input,select,textarea,[tabindex="0"]'))
+                .filter(el => !el.disabled && el.getClientRects().length);
+            const first = controls[0], last = controls[controls.length - 1];
+            if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+            if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+        },
         loadTabPoolLayout() {
             try {
                 const storedWidth = Number(localStorage.getItem('tab_pool_group_nav_width'));
@@ -233,7 +272,7 @@ window.TabPoolTabComponent = {
         },
 
         startGroupNavResize(event) {
-            if (this.groupNavCollapsed || !event) return;
+            if ((this.groupNavCollapsed && !this.mobileGroupNavOpen) || !event) return;
             this.groupNavResizing = true;
             this.groupNavResizeStartX = Number(event.clientX || 0);
             this.groupNavResizeStartWidth = this.groupNavWidth;
@@ -245,7 +284,7 @@ window.TabPoolTabComponent = {
 
         handleGroupNavResize(event) {
             if (!this.groupNavResizing || !event) return;
-            const delta = Number(event.clientX || 0) - this.groupNavResizeStartX;
+            const delta = (Number(event.clientX || 0) - this.groupNavResizeStartX) * (this.mobileGroupNavOpen ? -1 : 1);
             this.groupNavWidth = Math.min(340, Math.max(220, this.groupNavResizeStartWidth + delta));
         },
 
@@ -259,7 +298,7 @@ window.TabPoolTabComponent = {
         },
 
         handleGroupNavResizeKeydown(event) {
-            if (this.groupNavCollapsed || !event) return;
+            if ((this.groupNavCollapsed && !this.mobileGroupNavOpen) || !event) return;
             const step = event.shiftKey ? 24 : 8;
             if (event.key === 'ArrowLeft') {
                 this.groupNavWidth = Math.max(220, this.groupNavWidth - step);
@@ -1456,18 +1495,18 @@ window.TabPoolTabComponent = {
         document.removeEventListener('click', this.handleDocumentClick);
     },
     template: `
-        <div class="tab-pool-console">
+        <div class="tab-pool-console ops-pool" @keydown="handleOverlayKeydown">
             <div v-if="mobileGroupNavOpen" class="tab-pool-mobile-backdrop" @click="mobileGroupNavOpen = false"></div>
 
             <aside
                 :class="['tab-pool-group-nav', { 'is-mobile-open': mobileGroupNavOpen, 'is-collapsed': groupNavCollapsed, 'is-compact': groupNavCompact, 'is-resizing': groupNavResizing }]"
-                :style="groupNavStyle"
+                :style="groupNavStyle" :role="mobileGroupNavOpen ? 'dialog' : null" :aria-modal="mobileGroupNavOpen ? 'true' : null" aria-label="路由与调度设置"
             >
                 <div class="tab-pool-group-brand">
                     <span class="tab-pool-brand-icon" aria-hidden="true">▱</span>
                     <span class="tab-pool-brand-copy">
                         <strong>标签页池</strong>
-                        <small>Tab Pool Console</small>
+                        <small>路由分组与调度</small>
                     </span>
                     <button type="button" class="tab-pool-nav-collapse" @click="toggleGroupNavCollapsed" :title="groupNavCollapsed ? '展开路由组栏' : '折叠路由组栏'">
                         <span v-html="$icons.chevronDown"></span>
@@ -1522,7 +1561,7 @@ window.TabPoolTabComponent = {
                     <label>
                         <span>全局分配模式</span>
                         <select
-                            :value="allocationMode"
+                            :value="allocationMode" aria-label="全局分配模式"
                             @change="updateAllocationMode($event.target.value)"
                             :disabled="allocationModeUpdating || !configLoaded"
                         >
@@ -1554,26 +1593,22 @@ window.TabPoolTabComponent = {
                 <header class="tab-pool-topbar">
                     <button type="button" class="tab-pool-mobile-menu" @click="mobileGroupNavOpen = true" aria-label="打开路由组导航" title="打开路由组导航">☰</button>
                     <div class="tab-pool-view-title">
-                        <small class="tab-pool-breadcrumb">Console / Pool / Live</small>
+                        <small class="ops-eyebrow">BROWSER WORKSPACE</small>
                         <span class="tab-pool-title-line">
-                            <h2>{{ selectedViewTitle }}</h2>
-                            <span v-if="selectedRouteGroup" class="tab-pool-pill tab-pool-pill-violet">/group/{{ selectedRouteGroup.id }}</span>
-                            <span v-else class="tab-pool-pill tab-pool-pill-green">{{ idleTabCount }}/{{ tabs.length }} 空闲</span>
+                            <h1>标签页池</h1>
                         </span>
+                        <p class="ops-page-description">让每个网页各司其职。查看可用状态，按需分配模型与路由。</p>
                     </div>
                     <div class="tab-pool-top-actions">
-                        <label class="tab-pool-search">
-                            <input v-model="tabSearchQuery" type="search" aria-label="搜索标签页、模型或会话" placeholder="搜索标签页、模型或会话" autocomplete="off">
-                            <span v-if="tabSearchQuery">{{ displayedTabs.length }}</span>
-                        </label>
-                        <button type="button" @click="helpExpanded = !helpExpanded" :class="{ active: helpExpanded }" title="使用说明">使用说明</button>
+
+                        <button type="button" @click="mobileGroupNavOpen = true" aria-label="路由与调度"><span v-html="$icons.folderOpen"></span>路由与调度</button>
                         <div class="tab-pool-settings-wrap">
                             <button
                                 type="button"
                                 data-route-settings-trigger
                                 @click="showRouteSettings = !showRouteSettings"
                                 :class="{ active: showRouteSettings }"
-                                title="标签页池设置"
+                                title="标签页池设置" aria-label="标签页池设置" :aria-expanded="showRouteSettings"
                                 v-html="$icons.cog"
                             ></button>
                             <div v-if="showRouteSettings" data-route-settings-panel class="tab-pool-settings-popover">
@@ -1698,32 +1733,55 @@ window.TabPoolTabComponent = {
                             </div>
                         </section>
 
+                        <section class="ops-pool-summary" aria-label="标签页状态筛选">
+                            <button v-for="item in [{key:'all',label:'全部标签页',hint:'当前分组中的网页',icon:'window'}, {key:'idle',label:'空闲可用',hint:'可以接收新请求',icon:'checkCircle'}, {key:'busy',label:'正在执行',hint:'正在处理任务',icon:'activity'}, {key:'attention',label:'需要关注',hint:'错误、关闭或未知状态',icon:'exclamationTriangle'}]"
+                                :key="item.key" type="button" :class="['ops-stat', 'is-'+item.key, {'is-selected':tabStatusFilter===item.key}]" :aria-pressed="tabStatusFilter===item.key" @click="tabStatusFilter=item.key">
+                                <span>{{ item.label }}<i v-html="$icons[item.icon] || $icons.folderOpen"></i></span>
+                                <strong>{{ lastUpdate ? poolStatusCounts[item.key] : '—' }}</strong><small>{{ item.hint }}</small>
+                            </button>
+                        </section>
+                        <div class="ops-pool-toolbar">
+                            <div class="ops-group-chips" aria-label="选择路由组">
+                                <button type="button" :class="{'is-active':selectedRouteGroupId==='all'}" @click="selectAllTabs">全部网页</button>
+                                <button v-for="(group,index) in routeGroups" :key="group.id" type="button" :class="{'is-active':selectedRouteGroupId===group.id}" @click="selectRouteGroup(group,index)">{{ group.name || group.id }}<small>{{ getRouteGroupStats(group).total }}</small></button>
+                                <button type="button" class="ops-new-group" @click="createRouteGroup" :disabled="!configLoaded"><span v-html="$icons.plusCircle"></span>新建路由组</button>
+                            </div>
+                        <label class="tab-pool-search">
+                            <input v-model="tabSearchQuery" type="search" aria-label="搜索标签页、模型或会话" placeholder="搜索标签页、模型或会话" autocomplete="off">
+                            <span v-if="tabSearchQuery">{{ displayedTabs.length }}</span>
+                        </label>
+                        </div>
                         <div class="tab-pool-list-heading">
-                            <h3>{{ selectedRouteGroup ? '组内标签页' : '全部标签页' }}</h3>
-                            <span>{{ displayedTabs.length }} 个标签页 · {{ displayedIdleCount }} 个空闲</span>
+                            <h3>{{ selectedRouteGroup ? selectedViewTitle : '浏览器标签页' }} · {{ displayedTabs.length }}</h3>
+                            <span class="ops-pool-live"><i :class="{'is-paused':!autoRefresh || !!error}"></i>{{ error ? '更新异常' : (autoRefresh ? '自动更新' : '已暂停更新') }}<small v-if="lastUpdate">{{ lastUpdate }}</small><button type="button" @click="helpExpanded = !helpExpanded" :aria-expanded="helpExpanded">接入说明</button></span>
                         </div>
 
                         <div v-if="loading && tabs.length === 0" class="tab-pool-empty">正在加载标签页...</div>
                         <div v-else-if="displayedTabs.length === 0" class="tab-pool-empty">
-                            <strong>{{ tabSearchQuery ? '没有匹配的标签页' : (selectedRouteGroup ? '该路由组暂无成员' : '当前没有标签页') }}</strong>
-                            <span>{{ tabSearchQuery ? '请尝试其他域名、模型名或会话 ID' : (selectedRouteGroup ? '在上方勾选标签页并保存即可加入' : '请先在浏览器中打开受支持的站点') }}</span>
+                            <div class="ops-empty-art" aria-hidden="true"><span></span><span><i></i><i></i><i></i><b v-html="$icons.window || $icons.folderOpen"></b></span></div>
+                            <strong>{{ error && !tabs.length ? '暂时无法读取标签页' : (tabSearchQuery || tabStatusFilter !== 'all' ? '没有匹配的标签页' : (selectedRouteGroup ? '该路由组暂无成员' : '等待第一个网页加入')) }}</strong>
+                            <span>{{ error && !tabs.length ? '请确认受控浏览器已连接，然后点击右上方刷新。' : (tabSearchQuery || tabStatusFilter !== 'all' ? '换个筛选条件，或搜索其他模型与网页。' : (selectedRouteGroup ? '在上方勾选标签页并保存即可加入' : '连接受控浏览器并打开已配置的 AI 站点，网页就会出现在这里。')) }}</span>
+                            <button v-if="tabSearchQuery || tabStatusFilter !== 'all'" type="button" class="ops-text-button" @click="tabSearchQuery='';tabStatusFilter='all'">清除筛选 <span v-html="$icons.arrowRight"></span></button>
+                            <div v-else-if="!selectedRouteGroup" class="ops-empty-steps"><span>01 · 连接浏览器</span><i></i><span>02 · 打开 AI 网页</span><i></i><span>03 · 接收请求</span></div>
                         </div>
 
                         <div v-else class="tab-pool-resource-board">
                             <div class="tab-pool-board-labels"><span>序号</span><span>连接与路由</span><span>运行配置</span></div>
                             <div class="tab-pool-card-list">
-                            <article v-for="tab in displayedTabs" :key="tab.persistent_index" class="tab-pool-card">
+                            <article v-for="tab in displayedTabs" :key="tab.persistent_index" class="tab-pool-card" :data-status="tab.status">
                                 <div :class="['tab-number', tab.status]">{{ tab.persistent_index }}</div>
                                 <div class="tab-card-main">
                                     <div class="tab-card-status">
                                         <i :class="['status-dot', tab.status]"></i>
-                                        <strong>{{ statusText(tab.status) }} · {{ getDomainLabel(tab) }}</strong>
+                                        <strong>{{ getDomainLabel(tab) }}</strong><em :class="['ops-status', tab.status]">{{ statusText(tab.status) }}</em>
                                         <span v-if="tab.route_excluded" class="tab-pool-pill tab-pool-pill-amber">域名路由已排除</span>
                                         <span v-for="groupId in getTabRouteGroupIds(tab)" :key="groupId" class="tab-pool-pill tab-pool-pill-blue">组: {{ groupId }}</span>
                                         <span v-if="tab.is_isolated_context" class="tab-pool-pill tab-pool-pill-green">独立 Cookie</span>
                                     </div>
                                     <p class="tab-card-url" :title="tab.url">{{ tab.url || '(空)' }}</p>
-                                    <div class="tab-route-list">
+                                                                        <p v-if="getCommandLoopText(tab)" class="tab-task-line">{{ getCommandLoopText(tab) }}</p>
+                                    <p v-if="tab.current_task" class="tab-task-line">任务: {{ tab.current_task }}</p>
+<details class="ops-routes"><summary><span v-html="$icons.link || $icons.copy"></span>调用地址<span class="ops-chevron" v-html="$icons.chevronDown"></span></summary><div class="tab-route-list">
                                         <!-- 修复：补上 route_group 的显示守卫（Vue3 不允许同元素 v-if + v-for，故外层包 template） -->
                                         <template v-if="isRouteMethodEnabled('route_group')">
                                             <div v-for="groupId in getTabRouteGroupIds(tab)" :key="'route-' + groupId" class="tab-route-row">
@@ -1745,7 +1803,7 @@ window.TabPoolTabComponent = {
                                         <div v-if="tab.available_presets && tab.available_presets.length > 0 && isRouteMethodEnabled('exact_url_preset') && getExactUrlRoutePrefix(tab)" class="tab-route-row">
                                             <span>URL 绑定预设</span><code>{{ buildPresetEndpointPath(getExactUrlRoutePrefix(tab), getDisplayedPreset(tab)) }}</code><button type="button" @click="copyPresetEndpoint(getExactUrlRoutePrefix(tab), getDisplayedPreset(tab), '已复制 URL 绑定预设路由')" title="复制 URL 绑定预设路由" v-html="$icons.copy"></button>
                                         </div>
-                                    </div>
+                                    </div></details>
                                 </div>
                                 <aside class="tab-card-side">
                                     <div><span>请求次数</span><strong>{{ tab.request_count || 0 }}</strong></div>
@@ -1762,8 +1820,6 @@ window.TabPoolTabComponent = {
                                         </select>
                                     </label>
                                     <div v-else class="tab-single-preset"><span>标签页预设 <small v-if="getPresetSourceText(tab)" class="preset-source-badge">{{ getPresetSourceText(tab) }}</small></span><strong>{{ getDisplayedPreset(tab) }}</strong></div>
-                                    <p v-if="getCommandLoopText(tab)" class="tab-task-line">{{ getCommandLoopText(tab) }}</p>
-                                    <p v-if="tab.current_task" class="tab-task-line">任务: {{ tab.current_task }}</p>
                                     <div class="tab-card-actions">
                                         <button v-if="tab.url" type="button" @click="toggleTabExcluded(tab)" :disabled="excludedUrlsUpdating || !configLoaded">{{ tab.route_excluded ? '解除排除' : '排除域名路由' }}</button>
                                         <button v-if="!tab.terminating && (tab.status === 'busy' || tab.current_task || tab.command_task || tab.current_command)" type="button" class="danger" @click="openTerminateModal(tab)">终止并解锁</button>
@@ -1778,7 +1834,7 @@ window.TabPoolTabComponent = {
 
             <div v-if="modelNameTooltip.visible" :style="modelNameTooltipStyle" class="tab-pool-tooltip">{{ modelNameTooltip.text }}</div>
 
-            <div v-if="terminateModal.visible" class="tab-pool-modal-backdrop">
+            <div v-if="terminateModal.visible" class="tab-pool-modal-backdrop" role="dialog" aria-modal="true" aria-label="标签页操作">
                 <div class="tab-pool-modal">
                     <div class="tab-pool-modal-head"><span><strong>终止标签页任务</strong><small>标签页 #{{ terminateModal.tab && terminateModal.tab.persistent_index }}</small></span><button type="button" @click="closeTerminateModal()" :disabled="terminateModal.submitting" v-html="$icons.xMark" title="关闭"></button></div>
                     <div class="tab-pool-modal-body"><p>当前任务: {{ (terminateModal.tab && (terminateModal.tab.current_task || terminateModal.tab.command_task)) || '无 task_id' }}</p><small>终止本次循环只发送单轮取消信号；终止整个任务会取消请求并释放标签页。</small></div>
@@ -1786,7 +1842,7 @@ window.TabPoolTabComponent = {
                 </div>
             </div>
 
-            <div v-if="modelNameModal.visible" class="tab-pool-modal-backdrop">
+            <div v-if="modelNameModal.visible" class="tab-pool-modal-backdrop" role="dialog" aria-modal="true" aria-label="标签页操作">
                 <div class="tab-pool-modal">
                     <div class="tab-pool-modal-head"><span><strong>修改模型显示名称</strong><small>标签页 #{{ modelNameModal.tab && modelNameModal.tab.persistent_index }}</small></span><button type="button" @click="closeModelNameModal()" :disabled="modelNameModal.saving" v-html="$icons.xMark" title="关闭"></button></div>
                     <div v-if="!modelNameModal.showSaveOptions" class="tab-pool-modal-body">

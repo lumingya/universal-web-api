@@ -173,6 +173,14 @@ async def save_config(
                             status_code=400,
                             detail=f"站点配置必须是对象: {domain}",
                         )
+                    from app.core.workflow.flow_runtime import has_control_flow, validate_workflow, FlowValidationError
+                    candidates = list((raw_site.get("presets") or {}).values()) if isinstance(raw_site.get("presets"), dict) else [raw_site]
+                    for candidate in candidates:
+                        if isinstance(candidate, dict) and has_control_flow(candidate.get("workflow", [])):
+                            try:
+                                validate_workflow(candidate["workflow"])
+                            except FlowValidationError as exc:
+                                raise HTTPException(status_code=400, detail=f"{domain}: {exc}") from exc
                     new_sites[domain] = copy.deepcopy(raw_site)
 
                 existing_local_sites = {
@@ -922,7 +930,7 @@ async def consume_workflow_editor_actions(
                 f"payload_keys={sorted(list(payload.keys())) if isinstance(payload, dict) else 'invalid'}"
             )
 
-            if action_type not in {"test_workflow", "save_workflow"}:
+            if action_type not in {"test_workflow", "save_workflow", "validate_workflow"}:
                 logger.debug(f"忽略未知编辑器动作: {action_type}")
                 continue
 
@@ -958,6 +966,11 @@ async def consume_workflow_editor_actions(
                         )
                     )
                     tab_ref = result.pop("_tab_ref", tab)
+                elif action_type == "validate_workflow":
+                    from app.core.workflow.flow_runtime import validate_workflow
+                    validation = validate_workflow(payload.get("workflow"))
+                    result = {"success": True, "message": f"结构检查通过 · {validation['nodes']} 个节点（尚未验证网页元素）"}
+                    tab_ref = tab
                 else:
                     domain = str(payload.get("domain") or "").strip()
                     result = _save_site_workflow_payload(domain, payload)
@@ -965,8 +978,9 @@ async def consume_workflow_editor_actions(
                 _notify_workflow_editor_action_result(
                     tab_ref,
                     action_id,
-                    True,
+                    bool(result.get("success", True)),
                     str(result.get("message") or "测试完成"),
+                    trace=result.get("trace", []),
                 )
                 logger.debug(
                     "[WFE_BRIDGE] action success "
@@ -977,7 +991,8 @@ async def consume_workflow_editor_actions(
                 results.append({
                     "id": action_id,
                     "type": action_type,
-                    "success": True,
+                    "success": bool(result.get("success", True)),
+                    "trace": result.get("trace", []),
                     "message": result.get("message") or "测试完成",
                 })
             except HTTPException as e:
@@ -1637,3 +1652,26 @@ async def set_site_model_catalog(
         "catalog": catalog,
     }
 
+
+
+@router.post("/api/workflow/validate")
+async def validate_workflow_draft(request: Request, authenticated: bool = Depends(verify_auth)):
+    """Validate a draft without saving it or connecting to a browser."""
+    from app.core.workflow.flow_runtime import validate_workflow, FlowValidationError
+    data = await _read_json_object_or_400(request)
+    try:
+        return validate_workflow(data.get("workflow"))
+    except FlowValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/api/workflow/preview")
+async def preview_workflow_draft(request: Request, authenticated: bool = Depends(verify_auth)):
+    """Explicit simulation: supplied capture fixtures, no page actions."""
+    from app.core.workflow.preview import preview_workflow
+    from app.core.workflow.flow_runtime import FlowValidationError
+    data = await _read_json_object_or_400(request)
+    try:
+        return await asyncio.to_thread(preview_workflow, data)
+    except FlowValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc

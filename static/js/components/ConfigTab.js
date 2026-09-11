@@ -18,7 +18,8 @@ window.ConfigTab = {
         'stream-config-panel': window.StreamConfigPanel,
         'workflow-panel': window.WorkflowPanel,
         'file-paste-panel': window.FilePastePanel,
-        'prompt-padding-panel': window.PromptPaddingPanel
+        'prompt-padding-panel': window.PromptPaddingPanel,
+        'preset-transfer': window.PresetTransfer
     },
     data() {
         return {
@@ -31,7 +32,7 @@ window.ConfigTab = {
             showNewPresetInput: false,
             renamePresetName: '',
             showRenamePresetInput: false,
-            showPresetHint: false,
+            pendingPresetTransfer: 0,
 
             // 当前配置分类
             activeWorkspaceSection: 'selectors',
@@ -150,6 +151,17 @@ window.ConfigTab = {
         };
     },
     computed: {
+        workspaceSections() {
+            return [
+                { id: 'selectors', title: '元素选择器', subtitle: '定位关键网页元素', heading: '定义网页的关键位置', description: '先配置输入框、发送按钮和回复容器，再按需补充辅助元素。' },
+                { id: 'input', title: '输入处理', subtitle: '附件与长文本', heading: '你要给 AI 发送什么？', description: '普通文字无需额外设置。发文件、发长文时，再开启相应能力。' },
+                { id: 'response', title: '响应解析', subtitle: '提取与流式输出', heading: '把网页回复转换为 API 响应', description: '配置响应提取与流式输出策略，匹配当前站点的生成方式。' },
+                { id: 'media', title: '媒体提取', subtitle: '图片、音频与视频', heading: '你想收到什么内容？', description: '接收 AI 回复里的媒体内容。上传文件请到「输入处理」。' },
+                { id: 'workflow', title: '请求工作流', subtitle: '编排自动化步骤', heading: '串起一次完整的请求', description: '编排输入、发送、等待与提取动作，为当前预设定义执行顺序。' },
+                { id: 'advanced', title: '高级功能', subtitle: '会话隔离与自愈', heading: '遇到问题，再按需开启', description: '登录互相影响、输入不稳定、消息没发出？只处理你正在遇到的那一项。' }
+            ];
+        },
+        activeWorkspaceMeta() { return this.workspaceSections.find(s => s.id === this.activeWorkspaceSection) || this.workspaceSections[0]; },
         // 🆕 当前预设的配置数据
         presetConfig() {
             if (!this.currentConfig) return null;
@@ -319,6 +331,49 @@ window.ConfigTab = {
         }
     },
     methods: {
+        stagePresetOperation(kind, name) {
+            if (!this.pendingPresetTransfer) return false;
+            const presets = this.currentConfig.presets, old = this.selectedPreset;
+            if (['create','rename'].includes(kind) && (!window.PresetTransferSupport.safeName(name) || Object.hasOwn(presets,name))) {
+                alert('请输入有效且未使用的预设名称。'); return true;
+            }
+            this.flushMutableSectionDrafts();
+            if (kind === 'create') { presets[name] = JSON.parse(JSON.stringify(presets[old])); this.selectedPreset = name; }
+            if (kind === 'rename') { presets[name] = presets[old]; delete presets[old]; this.selectedPreset = name; }
+            if (kind === 'delete') { delete presets[old]; this.selectedPreset = Object.keys(presets)[0]; }
+            if (kind === 'default' || (['rename','delete'].includes(kind) && this.defaultPreset === old)) {
+                this.defaultPreset = this.selectedPreset; this.currentConfig.default_preset = this.selectedPreset;
+            }
+            this.pendingPresetTransfer++;
+            this.availablePresets = Object.keys(presets); this.ensurePresetMutableSections();
+            this.showNewPresetInput = false; this.showRenamePresetInput = false;
+            this.newPresetName = ''; this.renamePresetName = '';
+            alert('预设草稿已更新，请点击「保存配置」完成保存。');
+            return true;
+        },
+        beginPresetRename() {
+            this.showRenamePresetInput = true; this.renamePresetName = this.selectedPreset;
+            this.showNewPresetInput = false; this.newPresetName = '';
+            this.$nextTick(() => { this.$refs.renamePresetInput?.focus(); this.$refs.renamePresetInput?.select(); });
+        },
+        applyPresetTransfer(payload) {
+            if (payload.domain !== this.currentDomain) return;
+            this.flushMutableSectionDrafts();
+            this.pendingPresetTransfer++;
+            if (!this.currentConfig.presets) {
+                const legacy = JSON.parse(JSON.stringify(this.currentConfig));
+                Object.keys(this.currentConfig).forEach(k => delete this.currentConfig[k]);
+                this.currentConfig.presets = { [this.selectedPreset || '主预设']: legacy };
+                this.currentConfig.default_preset = this.selectedPreset || '主预设';
+            }
+            Object.entries(payload.presets).forEach(([name, config]) => {
+                this.currentConfig.presets[name] = config;
+            });
+            if (payload.settings) Object.entries(payload.settings).forEach(([key,value]) => { this.currentConfig[key] = value; });
+            this.availablePresets = Object.keys(this.currentConfig.presets);
+            if (payload.select) this.selectedPreset = payload.select;
+            this.ensurePresetMutableSections();
+        },
         buildAuthHeaders(extraHeaders = {}) {
             const token = String(window.getDashboardAuthToken ? window.getDashboardAuthToken() : '').trim();
             const headers = { ...extraHeaders };
@@ -1562,7 +1617,7 @@ window.ConfigTab = {
                     { timeoutMs: 10000 }
                 );
                 if (domain !== this.currentDomain) return;
-                this.availablePresets = data.presets || ['主预设'];
+                this.availablePresets = [...new Set([...(data.presets || ['主预设']), ...Object.keys(this.currentConfig?.presets || {})])];
                 const apiDefault = data.default_preset;
                 if (apiDefault && this.availablePresets.includes(apiDefault)) {
                     this.defaultPreset = apiDefault;
@@ -1598,14 +1653,15 @@ window.ConfigTab = {
 
         switchPreset(presetName) {
             this.selectedPreset = presetName;
-            // 触发父组件重新加载该预设的配置
-            this.$emit('reload-config');
+            // All preset drafts already belong to currentConfig; fetching here loses unsaved imports.
+            this.ensurePresetMutableSections();
         },
 
         async setDefaultPreset() {
             if (!this.currentDomain || !this.selectedPreset) return;
             const domain = this.currentDomain;
             const preset = this.selectedPreset;
+            if (this.stagePresetOperation('default')) return;
             try {
                 await this.fetchJson(
                     '/api/presets/' + encodeURIComponent(domain) + '/default',
@@ -1618,7 +1674,7 @@ window.ConfigTab = {
                 );
                 if (domain !== this.currentDomain || preset !== this.selectedPreset) return;
                 this.defaultPreset = preset;
-                this.$emit('reload-config');
+                this.currentConfig.default_preset = preset;
                 alert('✅ 默认预设已设置为 "' + preset + '"（仅本地覆盖）');
             } catch (e) {
                 if (domain !== this.currentDomain || preset !== this.selectedPreset) return;
@@ -1632,7 +1688,9 @@ window.ConfigTab = {
             if (!this.currentDomain) return;
             const domain = this.currentDomain;
             const sourcePreset = this.selectedPreset;
-
+            if (this.stagePresetOperation('create', name)) return;
+            this.flushMutableSectionDrafts();
+            const sourceDraft = JSON.parse(JSON.stringify(this.presetConfig));
             try {
                 await this.fetchJson(
                     '/api/presets/' + encodeURIComponent(domain),
@@ -1649,10 +1707,9 @@ window.ConfigTab = {
                 if (domain !== this.currentDomain) return;
                 this.newPresetName = '';
                 this.showNewPresetInput = false;
-                await this.loadPresets();
-                if (domain !== this.currentDomain) return;
+                this.currentConfig.presets[name] = sourceDraft;
+                this.availablePresets = Object.keys(this.currentConfig.presets);
                 this.selectedPreset = name;
-                this.$emit('reload-config');
                 alert('✅ 预设 "' + name + '" 已创建（克隆自 "' + sourcePreset + '"）');
             } catch (e) {
                 if (domain !== this.currentDomain) return;
@@ -1673,6 +1730,7 @@ window.ConfigTab = {
 
             const domain = this.currentDomain;
             const oldName = this.selectedPreset;
+            if (this.stagePresetOperation('rename', newName)) return;
             try {
                 await this.fetchJson(
                     '/api/presets/' + encodeURIComponent(domain) + '/rename',
@@ -1689,10 +1747,15 @@ window.ConfigTab = {
                 if (domain !== this.currentDomain || oldName !== this.selectedPreset) return;
                 this.showRenamePresetInput = false;
                 this.renamePresetName = '';
-                await this.loadPresets();
-                if (domain !== this.currentDomain) return;
+                this.flushMutableSectionDrafts();
+                if (this.currentConfig.presets && Object.hasOwn(this.currentConfig.presets, oldName)) {
+                    this.currentConfig.presets[newName] = this.currentConfig.presets[oldName];
+                    delete this.currentConfig.presets[oldName];
+                }
+                if (this.currentConfig.default_preset === oldName) this.currentConfig.default_preset = newName;
+                if (this.defaultPreset === oldName) this.defaultPreset = newName;
+                this.availablePresets = this.availablePresets.map(n => n === oldName ? newName : n);
                 this.selectedPreset = newName;
-                this.$emit('reload-config');
                 alert('✅ 预设已重命名为 "' + newName + '"');
             } catch (e) {
                 if (domain !== this.currentDomain || oldName !== this.selectedPreset) return;
@@ -1711,6 +1774,7 @@ window.ConfigTab = {
 
             const domain = this.currentDomain;
             const preset = this.selectedPreset;
+            if (this.stagePresetOperation('delete')) return;
             try {
                 await this.fetchJson(
                     '/api/presets/' + encodeURIComponent(domain) + '/' + encodeURIComponent(preset),
@@ -1722,10 +1786,12 @@ window.ConfigTab = {
                 );
 
                 if (domain !== this.currentDomain || preset !== this.selectedPreset) return;
+                this.flushMutableSectionDrafts();
+                delete this.currentConfig.presets[preset];
                 await this.loadPresets();
                 if (domain !== this.currentDomain) return;
+                this.currentConfig.default_preset = this.defaultPreset;
                 this.selectedPreset = this.defaultPreset || this.availablePresets[0] || '主预设';
-                this.$emit('reload-config');
                 alert('✅ 预设已删除');
             } catch (e) {
                 if (domain !== this.currentDomain || preset !== this.selectedPreset) return;
@@ -1737,6 +1803,7 @@ window.ConfigTab = {
         currentDomain: {
             handler(newDomain) {
                 this.resetConfigCompareState();
+                this.pendingPresetTransfer = 0;
                 if (newDomain) {
                     // 切换站点时强制按站点默认预设初始化
                     this.selectedPreset = '';
@@ -1791,14 +1858,15 @@ window.ConfigTab = {
                 <div class="config-preset-card bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg shadow-sm px-4 py-3">
                     <div class="config-preset-toolbar flex items-center justify-between flex-wrap gap-3">
                         <div class="config-preset-meta flex items-center gap-3">
-                            <span class="config-preset-label">预设</span>
-                            <select v-model="selectedPreset"
+                            <span class="config-preset-label studio-tip" tabindex="0" data-tip="同一站点可以保存多套设置，在标签页池为各标签页选择不同预设。"><span v-html="$icons.folderOpen"></span>当前预设</span>
+                            <select v-model="selectedPreset" aria-label="当前预设"
                                     @change="switchPreset(selectedPreset)"
                                     :disabled="presetLoading"
                                     class="border dark:border-gray-600 px-3 py-1.5 rounded-md text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent min-w-[150px]">
+                                <option v-if="presetLoading && !availablePresets.length" value="">读取预设中…</option>
                                 <option v-for="p in availablePresets" :key="p" :value="p">{{ p }}</option>
                             </select>
-                            <span class="config-preset-count">共 {{ availablePresets.length }} 个</span>
+                            <span class="config-preset-count">{{ presetLoading ? '读取中…' : '共 ' + availablePresets.length + ' 个' }}</span>
                             <span class="config-preset-chip" :title="'未手动指定预设的标签页会使用默认预设'">
                                 默认 · {{ defaultPreset || '主预设' }}
                             </span>
@@ -1826,7 +1894,7 @@ window.ConfigTab = {
 
                             <!-- 重命名预设：行内输入 -->
                             <template v-else-if="showRenamePresetInput">
-                                <input v-model="renamePresetName"
+                                <input ref="renamePresetInput" aria-label="新的预设名称" v-model="renamePresetName"
                                        @keyup.enter="renamePreset"
                                        @keyup.escape="showRenamePresetInput = false; renamePresetName = ''"
                                        :placeholder="'重命名 ' + selectedPreset"
@@ -1850,19 +1918,17 @@ window.ConfigTab = {
                                         class="preset-btn">
                                     设为默认
                                 </button>
-                                <button @click="showNewPresetInput = true; showRenamePresetInput = false; renamePresetName = ''"
+                                <button title="复制当前预设的设置，创建一份新的预设。" @click="showNewPresetInput = true; showRenamePresetInput = false; renamePresetName = ''"
                                         class="preset-btn">
                                     <span v-html="$icons.plusCircle"></span>新建预设
                                 </button>
+                                <button type="button" class="preset-btn" :disabled="!selectedPreset" @click="beginPresetRename"><span v-html="$icons.pencil"></span>重命名</button>
+                                <preset-transfer :domain="currentDomain" :site="currentConfig" :preset="selectedPreset" :prepare="flushMutableSectionDrafts" :disabled="presetLoading" @apply="applyPresetTransfer"></preset-transfer>
                                 <details class="preset-more">
-                                    <summary title="更多操作" aria-label="更多操作"><span v-html="$icons.ellipsisVertical"></span></summary>
+                                    <summary class="preset-btn" aria-label="预设工具">预设工具<span v-html="$icons.chevronDown"></span></summary>
                                     <div class="preset-more-pop">
-                                        <button @click="showRenamePresetInput = true; renamePresetName = selectedPreset; showNewPresetInput = false; newPresetName = ''; $event.currentTarget.closest('details').open = false"
-                                                :disabled="!selectedPreset">
-                                            <span v-html="$icons.pencil"></span>重命名预设
-                                        </button>
-                                        <button @click="$event.currentTarget.closest('details').open = false; openConfigCompare()">
-                                            <span v-html="$icons.arrowPathRoundedSquare"></span>对比 main 分支
+                                        <button title="读取 Git main 分支中的已提交配置并对比；不会自动覆盖当前草稿。" @click="$event.currentTarget.closest('details').open = false; openConfigCompare()">
+                                            <span v-html="$icons.arrowPathRoundedSquare"></span>与仓库版本对比
                                         </button>
                                         <hr class="preset-more-sep">
                                         <button class="is-danger"
@@ -1875,27 +1941,23 @@ window.ConfigTab = {
                                 </details>
                             </template>
 
-                            <button type="button"
-                                    class="preset-hint-toggle"
-                                    @click="showPresetHint = !showPresetHint">
-                                说明<span v-html="showPresetHint ? $icons.chevronUp : $icons.chevronDown"></span>
-                            </button>
+
                         </div>
                     </div>
-                    <p v-show="showPresetHint" class="config-preset-hint text-xs text-gray-400 dark:text-gray-500 mt-2">
-                        新建预设会克隆当前选中的预设配置。在标签页池中可为不同标签页选择不同预设。未手动指定时会自动使用“默认预设”。“对比 main”会读取 Git main 分支里已提交的 config/sites.json，不会把你当前工作区未提交的改动算进去。
-                    </p>
+
                 </div>
 
-                <nav class="uwa-config-section-nav" aria-label="配置分类">
-                    <button type="button" :class="{ 'is-active': activeWorkspaceSection === 'selectors' }" @click="activeWorkspaceSection = 'selectors'">元素选择器</button>
-                    <button type="button" :class="{ 'is-active': activeWorkspaceSection === 'media' }" @click="activeWorkspaceSection = 'media'">媒体提取</button>
-                    <button type="button" :class="{ 'is-active': activeWorkspaceSection === 'response' }" @click="activeWorkspaceSection = 'response'">响应解析</button>
-                    <button type="button" :class="{ 'is-active': activeWorkspaceSection === 'input' }" @click="activeWorkspaceSection = 'input'">输入处理</button>
-                    <button type="button" :class="{ 'is-active': activeWorkspaceSection === 'advanced' }" @click="activeWorkspaceSection = 'advanced'">高级功能</button>
-                    <button type="button" :class="{ 'is-active': activeWorkspaceSection === 'workflow' }" @click="activeWorkspaceSection = 'workflow'">请求工作流</button>
-                </nav>
-
+                <label class="site-section-select">配置目录<select v-model="activeWorkspaceSection" aria-label="移动端配置分类"><option v-for="(section, index) in workspaceSections" :key="section.id" :value="section.id">{{ String(index + 1).padStart(2, '0') }} · {{ section.title }}</option></select></label>
+                <div class="site-edit-layout">
+                    <aside class="site-config-outline">
+                        <p>配置目录</p>
+                        <nav class="uwa-config-section-nav" aria-label="配置分类">
+                            <button v-for="(section, index) in workspaceSections" :key="section.id" type="button" :class="{ 'is-active': activeWorkspaceSection === section.id }" :aria-pressed="activeWorkspaceSection === section.id" @click="activeWorkspaceSection = section.id"><span class="site-section-number">{{ String(index + 1).padStart(2, '0') }}</span><span><strong>{{ section.title }}</strong><small>{{ section.subtitle }}</small></span><i v-html="$icons.arrowRight"></i></button>
+                        </nav>
+                        <div class="site-outline-note"><span v-html="$icons.bookOpen"></span><strong>按需配置，不必全部填写</strong><p>先把核心元素定位好，再根据站点能力逐步扩展。</p></div>
+                    </aside>
+                    <div class="site-config-content">
+                        <header class="site-section-intro"><span>{{ String(workspaceSections.findIndex(s => s.id === activeWorkspaceSection) + 1).padStart(2, '0') }} / 配置预设</span><h3>{{ activeWorkspaceMeta.heading }}</h3><p>{{ activeWorkspaceMeta.description }}</p></header>
                 <!-- 选择器面板 -->
                 <selector-panel v-if="presetConfig" v-show="activeWorkspaceSection === 'selectors'" class="config-fixed-panel"
                     :selectors="presetConfig.selectors || {}"
@@ -1942,20 +2004,14 @@ window.ConfigTab = {
                     @update:collapsed="collapsedPanels.promptPadding = $event"
                 />
                 <!-- 高级功能面板 -->
-                <div v-show="activeWorkspaceSection === 'advanced'" class="config-advanced-panel config-fixed-panel bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg shadow-sm">
-                    <div class="px-4 py-3 border-b dark:border-gray-700 flex items-center gap-2">
-                        <h3 class="font-semibold text-gray-900 dark:text-white">高级功能</h3>
-                        <span class="text-sm text-gray-500 dark:text-gray-400">
-                            (独立 Cookie:
-                            <span :class="siteAdvancedConfig.independent_cookies ? 'text-green-500' : 'text-gray-400'">
-                                {{ siteAdvancedConfig.independent_cookies ? '已启用' : '未启用' }}
-                            </span>)
-                        </span>
-                    </div>
-                    <div class="p-4 space-y-4">
-                        <p class="text-xs text-gray-400 dark:text-gray-500">
-                            适合像 arena.ai 这类需要多匿名会话的站点。
-                        </p>
+<div v-show="activeWorkspaceSection === 'advanced'" class="config-advanced-panel config-fixed-panel cap-panel"><div class="cap-legacy-header"></div><div class="cap-feature-stack"><p class="cap-module-note">这里的修改会自动保存。</p><section class="cap-card" :class="{ 'is-enabled': siteAdvancedConfig.independent_cookies }" aria-label="隔离登录会话"><div class="cap-card-header"><span class="cap-icon" v-html="$icons.folderOpen"></span><div class="cap-copy"><div class="cap-title-row"><h4>隔离登录会话</h4><span class="cap-scope">整个站点</span></div><p>让不同标签页各用各的登录状态，避免多个账号互相影响。</p></div><label class="cap-switch"><span class="cap-state" :class="{ 'is-on': siteAdvancedConfig.independent_cookies }">{{ siteAdvancedConfig.independent_cookies ? '已开启' : '已关闭' }}</span><input role="switch" aria-label="隔离登录会话"
+                                    type="checkbox"
+                                    class="cap-switch-input"
+                                    :checked="siteAdvancedConfig.independent_cookies"
+                                    :disabled="advancedConfigSaving"
+                                    @change="updateIndependentCookies($event.target.checked, $event)"
+                                ><i aria-hidden="true"></i></label></div><p class="cap-warning">开启后，新会话不继承原登录状态，可能需要重新登录。</p><details class="cap-settings"><summary><span><strong>管理会话与接管规则</strong><small>需要多账号或匿名环境时使用。</small></span><span class="cap-chevron" v-html="$icons.chevronDown"></span></summary><div class="cap-settings-body">
+
                         <details class="group">
                             <summary class="text-xs text-blue-500 dark:text-blue-400 cursor-pointer select-none">
                                 查看说明
@@ -1970,16 +2026,7 @@ window.ConfigTab = {
                         </details>
 
                         <div class="flex items-center justify-between">
-                            <label class="flex items-center gap-3 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
-                                <input
-                                    type="checkbox"
-                                    class="rounded"
-                                    :checked="siteAdvancedConfig.independent_cookies"
-                                    :disabled="advancedConfigSaving"
-                                    @change="updateIndependentCookies($event.target.checked, $event)"
-                                >
-                                <span>独立 Cookie 标签页</span>
-                            </label>
+
                         </div>
 
                         <label class="flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400 cursor-pointer">
@@ -2010,24 +2057,16 @@ window.ConfigTab = {
                             </button>
                         </div>
 
-                        <div class="border-t dark:border-gray-700 pt-4 space-y-3">
-                            <div>
-                                <div class="text-sm font-medium text-gray-900 dark:text-white">输入框稳定等待</div>
-                                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                                    在执行 <code>FILL_INPUT</code> 前，额外等待输入框节点连续稳定几次。适合解决点完 <code>new_chat_btn</code> 后输入框偶发重建、导致后续粘贴时序不稳的问题。
-                                </p>
-                            </div>
-
-                            <label class="flex items-center gap-3 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
-                                <input
+                        </div></details></section><section class="cap-card" :class="{ 'is-enabled': siteAdvancedConfig.input_box_stability_wait_enabled }" aria-label="等待输入框就绪"><div class="cap-card-header"><span class="cap-icon" v-html="$icons.timer"></span><div class="cap-copy"><div class="cap-title-row"><h4>等待输入框就绪</h4><span class="cap-scope">当前预设</span></div><p>新建对话后输入框会重建？等它稳定下来，再填写消息。</p></div><label class="cap-switch"><span class="cap-state" :class="{ 'is-on': siteAdvancedConfig.input_box_stability_wait_enabled }">{{ siteAdvancedConfig.input_box_stability_wait_enabled ? '已开启' : '已关闭' }}</span><input role="switch" aria-label="等待输入框就绪"
                                     type="checkbox"
-                                    class="rounded"
+                                    class="cap-switch-input"
                                     :checked="siteAdvancedConfig.input_box_stability_wait_enabled"
                                     :disabled="advancedConfigSaving"
                                     @change="updateInputStabilityWaitEnabled($event.target.checked)"
-                                >
-                                <span>启用输入框稳定等待</span>
-                            </label>
+                                ><i aria-hidden="true"></i></label></div><details class="cap-settings"><summary><span><strong>调整等待规则</strong><small>只有偶发填入失败、输入位置丢失时再调整。</small></span><span class="cap-chevron" v-html="$icons.chevronDown"></span></summary><div class="cap-settings-body">
+
+
+
 
                             <label class="flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400 cursor-pointer">
                                 <input
@@ -2080,26 +2119,16 @@ window.ConfigTab = {
                             <p class="text-[11px] text-gray-400 dark:text-gray-500">
                                 这里的规则会作为旧会话 URL 的兜底匹配；留空则只用启发式判断。
                             </p>
-                        </div>
-
-                        <div class="border-t dark:border-gray-700 pt-4 space-y-3">
-                            <div>
-                                <div class="text-sm font-medium text-gray-900 dark:text-white">发送内容确认与自愈</div>
-                                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                                    点击 <code>send_btn</code> 后，确认输入框已清空或明显缩短；未确认时触发当前工作流重试。
-                                </p>
-                            </div>
-
-                            <label class="flex items-center gap-3 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
-                                <input
+                        </div></details></section><section class="cap-card" :class="{ 'is-enabled': siteAdvancedConfig.send_confirmation_check_enabled }" aria-label="发送失败时自动恢复"><div class="cap-card-header"><span class="cap-icon" v-html="$icons.arrowPath"></span><div class="cap-copy"><div class="cap-title-row"><h4>发送失败时自动恢复</h4><span class="cap-scope">当前预设</span></div><p>消息没有真正发出时，确认状态并尝试恢复。</p></div><label class="cap-switch"><span class="cap-state" :class="{ 'is-on': siteAdvancedConfig.send_confirmation_check_enabled }">{{ siteAdvancedConfig.send_confirmation_check_enabled ? '已开启' : '已关闭' }}</span><input role="switch" aria-label="发送失败时自动恢复"
                                     type="checkbox"
-                                    class="rounded"
+                                    class="cap-switch-input"
                                     :checked="siteAdvancedConfig.send_confirmation_check_enabled"
                                     :disabled="advancedConfigSaving"
                                     @change="updateSendConfirmationCheckEnabled($event.target.checked)"
-                                >
-                                <span>启用发送确认自愈（当前预设）</span>
-                            </label>
+                                ><i aria-hidden="true"></i></label></div><details class="cap-settings"><summary><span><strong>调整确认与重试</strong><small>设置确认超时，以及重试时是否新建对话。</small></span><span class="cap-chevron" v-html="$icons.chevronDown"></span></summary><div class="cap-settings-body">
+
+
+
 
                             <label class="flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400">
                                 <span>确认超时</span>
@@ -2126,9 +2155,7 @@ window.ConfigTab = {
                                 >
                                 <span>重试轮跳过新建对话（适用于 429 或过盾自愈）</span>
                             </label>
-                        </div>
-                    </div>
-                </div>
+                        </div></details></section></div></div>
                 <!-- 工作流面板 -->
                 <workflow-panel v-if="presetConfig" v-show="activeWorkspaceSection === 'workflow'" class="config-fixed-panel"
                     :workflow="presetConfig.workflow || []"
@@ -2144,6 +2171,9 @@ window.ConfigTab = {
                     @action-change="$emit('action-change', $event)"
                     @show-templates="$emit('show-templates')"
                 />
+
+                    </div>
+                </div>
 
                 <div v-if="showConfigCompareDialog"
                      data-config-compare-root

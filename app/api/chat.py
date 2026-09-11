@@ -24,7 +24,7 @@ from typing import Optional, Any, Dict, List, Callable, AsyncIterator
 
 from fastapi import APIRouter, Request, HTTPException, Header, Depends
 from fastapi.responses import StreamingResponse, JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.core.config import _request_context, get_logger, SSEFormatter
 from app.core import get_browser
@@ -453,6 +453,17 @@ def _validate_image_inputs(messages: list) -> None:
 
 class ChatRequest(BaseModel):
     """聊天请求模型"""
+    workflow_variables: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator('workflow_variables')
+    @classmethod
+    def validate_workflow_variables(cls, value):
+        from app.core.workflow.flow_runtime import validate_inputs, FlowValidationError
+        try:
+            return validate_inputs(value)
+        except FlowValidationError as exc:
+            raise ValueError(str(exc)) from exc
+
     model: str = Field(default="未知")
     messages: list = Field(...)
     stream: Optional[bool] = Field(default=False)
@@ -472,6 +483,17 @@ class ChatRequest(BaseModel):
 
 class ResponsesRequest(BaseModel):
     """Responses API 请求模型（兼容 Codex / OpenAI Responses wire format）"""
+    workflow_variables: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator('workflow_variables')
+    @classmethod
+    def validate_workflow_variables(cls, value):
+        from app.core.workflow.flow_runtime import validate_inputs, FlowValidationError
+        try:
+            return validate_inputs(value)
+        except FlowValidationError as exc:
+            raise ValueError(str(exc)) from exc
+
     model: str = Field(default="未知")
     input: Optional[Any] = Field(default="")
     instructions: Optional[str] = Field(default=None)
@@ -1046,6 +1068,7 @@ def _responses_input_to_messages(body: ResponsesRequest) -> List[Dict[str, Any]]
 
 def _responses_request_to_chat_request(body: ResponsesRequest, *, stream: bool) -> ChatRequest:
     return ChatRequest(
+        workflow_variables=body.workflow_variables,
         model=body.model,
         messages=_responses_input_to_messages(body),
         stream=stream,
@@ -2425,6 +2448,7 @@ async def _stream_with_lifecycle(
                     task_id=ctx.request_id,
                     stop_checker=ctx.should_stop,
                     requested_model=body.model,
+                    **({"workflow_variables": body.workflow_variables} if body.workflow_variables else {}),
                 )
 
                 for chunk in gen:
@@ -2780,6 +2804,7 @@ def _execute_browser_non_stream_messages(
     request_id: str,
     stop_checker=None,
     requested_model: Optional[str] = None,
+    workflow_variables: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     payload = None
     for chunk in browser.execute_workflow(
@@ -2789,6 +2814,7 @@ def _execute_browser_non_stream_messages(
         stop_checker=stop_checker,
         allow_media_postprocess=get_tool_calling_allow_media_postprocess(),
         requested_model=requested_model,
+        **({"workflow_variables": workflow_variables} if workflow_variables else {}),
     ):
         payload = chunk
 
@@ -2833,6 +2859,7 @@ async def _run_tool_calling_async(
                 request_id=request_id,
                 stop_checker=stop_checker,
                 requested_model=body.model,
+                **({"workflow_variables": body.workflow_variables} if body.workflow_variables else {}),
             )
         )
         if isinstance(tracked_worker_state.get("ctx"), RequestContext):

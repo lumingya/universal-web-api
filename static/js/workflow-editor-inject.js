@@ -47,7 +47,7 @@
     // 🔧 后端 API 地址（从注入时传入，或使用默认值）
     const BALL_SIZE = 32;
     const BALL_RADIUS = BALL_SIZE / 2;
-    const TEST_DIRECT_FETCH_TIMEOUT_MS = 1200;
+    const TEST_DIRECT_FETCH_TIMEOUT_MS = 60000;
     const TEST_ACTIVITY_TIMEOUT_MS = 60000;
     const getApiBase = () => window.__WORKFLOW_EDITOR_API_BASE__ || 'http://127.0.0.1:9099';
     const getCurrentTabId = () => window.__WORKFLOW_EDITOR_TAB_ID__ || '';
@@ -469,6 +469,7 @@
 
   function findElement(selector) {
     if (!selector) return null;
+    if (window.WorkflowPageGuide) return window.WorkflowPageGuide.resolve(selector).element || null;
     try {
       const elements = document.querySelectorAll(selector);
       return elements.length > 0 ? elements[elements.length - 1] : null;
@@ -691,7 +692,103 @@
       return action;
   }
 
+  let treeStudio = null, treeHost = null, treeDock = null;
+  let treeTestVariables = {}, treeTestPrompt = null;
+  let pageGuide = null, editorMode = 'page', pickReturnMode = null;
+  let treeDragCleanup = null, dockDragCleanup = null;
+  function showEditorMode(mode = editorMode, path = null) {
+    if (state.testExecution.pendingCount > 0) return;
+    editorMode = mode; state.isVisible = true;
+    if (treeHost) treeHost.style.display = mode === 'canvas' || !pageGuide ? '' : 'none';
+    pageGuide?.show(mode === 'page');
+    if (treeDock) { treeDock.textContent = "◎ 页面步骤 · 收起面板"; treeDock.title = "拖动移动入口；点击只收起面板，保留页面标记"; }
+    if (path && treeStudio) {
+      treeStudio.selected = path; treeStudio.tab = 'flow'; treeStudio.render();
+      pageGuide?.select(path, mode === 'page');
+    }
+  }
+  function receiveTreeResult(trace, message, success) {
+    treeStudio?.showTrace(trace || [], message || '', success);
+    pageGuide?.result(trace || [], message || '', success);
+  }
+  function applyEditorSaveAck(payload) {
+    if (!payload) return;
+    // A save acknowledgement must not overwrite edits made while it was pending.
+    state.siteConfig = {...(state.siteConfig || {}),
+      workflow: treeStudio ? treeStudio.getWorkflow() : (payload.workflow || []),
+      selectors: treeStudio ? {...treeStudio.selectors} : {...(payload.selectors || {})}};
+    pageGuide?.savedAs(payload.workflow || [], payload.selectors || {});
+    pageGuide?.notify('提交的配置已保存。若仍显示「有修改」，请保存后续编辑。');
+  }
+  function mountTreeStudio() {
+    if (!window.WorkflowStudio) return false;
+    pageGuide?.destroy(); treeDragCleanup?.(); dockDragCleanup?.();
+    treeStudio?.destroy(); treeHost?.remove(); treeDock?.remove();
+    treeHost = document.createElement('div');
+    treeHost.id = 'wfe-tree-studio';
+    treeHost.style.cssText = 'position:fixed;right:18px;bottom:62px;width:min(1120px,calc(100vw - 36px));max-height:84vh;overflow:auto;z-index:2147483645;border-radius:14px;box-shadow:0 16px 65px #0003';
+    document.body.appendChild(treeHost);
+    treeDock = document.createElement('button'); treeDock.id = 'wfe-editor-dock'; treeDock.textContent = '◎ 页面操作 · 拖动移动';
+    treeDock.title = '拖动移动入口，点击收起或展开页面操作';
+    treeDock.style.cssText = 'position:fixed;right:18px;bottom:16px;z-index:2147483645;border:1px solid #5d6b4d;background:#5d6b4d;color:#fffdf8;padding:10px 16px;border-radius:9px;font:13px system-ui;cursor:grab;touch-action:none;user-select:none';
+    treeDock.onclick = () => state.isVisible ? collapseEditor() : showEditorMode('page');
+    document.body.appendChild(treeDock);
+    treeStudio = window.WorkflowStudio.mount(treeHost, {
+      workflow: state.siteConfig.workflow, selectors: state.siteConfig.selectors, injected: true,
+      onChange: workflow => { state.siteConfig.workflow = workflow; if (pageGuide) { pageGuide.trace = []; pageGuide.refresh(); } },
+      onSelectorsChange: selectors => { state.siteConfig.selectors = selectors; pageGuide?.refresh(); },
+      onSelect: path => { if (pageGuide) { pageGuide.selected = path; pageGuide.refresh(); } },
+      onLocate: path => showEditorMode('page', path),
+      onPageView: () => showEditorMode('page'),
+      onClose: () => pageGuide ? showEditorMode('page') : hideEditor(), onSave: doSave,
+      onValidate: workflow => {
+        enqueueBackendAction('validate_workflow', {workflow}, {trackTestStatus:false});
+        showToast('结构检查已提交到本地控制台。', 'info', 1800);
+      },
+      onTest: payload => {
+        state.testModel = payload.model; treeTestVariables = payload.workflow_variables; treeTestPrompt = payload.prompt ?? null;
+        runWorkflowTest().catch(error => { receiveTreeResult([], error.message || String(error), false); showToast(error.message || String(error), 'error'); });
+      },
+      onPick: callback => {
+        if (pageGuide) {
+          pickReturnMode = editorMode; editorMode = 'page'; treeHost.style.display = 'none';
+          pageGuide.show(true); pageGuide.startPick(treeStudio.selected, callback); return;
+        }
+        treeHost.style.display = 'none';
+        const proxy = {config:{}, clearWarning(){}, locateToElement(){callback(this.config.selector);}};
+        startPicker(proxy);
+      },
+      request: async (action, payload) => {
+        // Import validation is local to avoid target-site CORS. Authoritative
+        // recursive validation still runs before every save/test in the backend.
+        if (action !== 'validate') throw Error('请通过本地控制台执行此操作');
+        let count=0; window.WorkflowStudio.walk(payload.workflow, () => {if(++count>1000)throw Error('节点不能超过 1000');});
+        return {valid:true,nodes:count};
+      }
+    });
+    if (window.WorkflowPageGuide) {
+      treeHost.setAttribute('data-draggable', '');
+      treeDragCleanup = window.WorkflowPageGuide.draggable(treeHost, event =>
+        event.composedPath().some(node => node.classList?.contains('head')) &&
+        !event.composedPath().some(node => ['BUTTON','INPUT','SELECT','TEXTAREA','A'].includes(node.tagName)));
+      dockDragCleanup = window.WorkflowPageGuide.draggable(treeDock, () => state.testExecution.pendingCount === 0);
+      pageGuide = window.WorkflowPageGuide.mount({
+        studio: treeStudio, editorElements: () => [treeHost, treeDock],
+        onHide: collapseEditor, onSave: doSave,
+        onAdvanced: path => showEditorMode('canvas', path),
+        onTest: () => { showEditorMode('canvas'); treeStudio.tab = 'test'; treeStudio.render(); },
+        onTrace: () => { showEditorMode('canvas'); treeStudio.tab = 'test'; treeStudio.render(); },
+        onSelect: path => { treeStudio.selected = path; },
+        onPickEnd: () => { const mode = pickReturnMode; pickReturnMode = null; if (mode && state.isVisible) showEditorMode(mode); }
+      });
+    }
+    toolbar?.style.setProperty('display','none');
+    showEditorMode(pageGuide ? 'page' : 'canvas');
+    return true;
+  }
+
   function buildWorkflowPayload(stepSubset = null) {
+    if (treeStudio) return { workflow: treeStudio.getWorkflow(), selectors: {...(state.siteConfig?.selectors || {})} };
     if (!state.siteConfig) {
       state.siteConfig = { selectors: {}, workflow: [] };
     }
@@ -890,6 +987,17 @@
         el('div', { className: 'wfe-test-status-dot' }),
         testingStatusText
       ]);
+      if (pageGuide) {
+        const cancel = el('button', {id:'wfe-cancel-test', textContent:'停止测试', title:'停止后续步骤，已发生的网页操作不会撤销',
+          style:{pointerEvents:'auto',cursor:'pointer',border:'1px solid #9ca88e',borderRadius:'6px',padding:'5px 10px',background:'#f7f3ea',color:'#33402c'}});
+        cancel.addEventListener('click', event => {
+          event.preventDefault(); event.stopPropagation();
+          window.__WORKFLOW_EDITOR_TEST_CANCELLED__ = true;
+          cancel.disabled = true; cancel.textContent = '正在停止…';
+          updateTestingStatus('已请求停止，等待当前浏览器调用结束；已执行操作不会撤销。');
+        });
+        testingStatus.appendChild(cancel);
+      }
       document.body.appendChild(testingStatus);
     } else {
       testingStatus.classList.remove('wfe-hidden');
@@ -916,6 +1024,8 @@
       }
     }
     state.testExecution.pendingCount += 1;
+    pageGuide?.setTesting(true);
+    if (treeDock) treeDock.style.display = 'none';
     showTestingStatus(state.testExecution.statusText);
     startTestWatchdog();
     console.debug('[WorkflowEditor] suspendEditorForTest', {
@@ -935,6 +1045,8 @@
       && state.testExecution.shouldRestoreVisible;
 
     if (state.testExecution.pendingCount === 0) {
+      pageGuide?.setTesting(false);
+      if (treeDock) treeDock.style.display = '';
       hideTestingStatus();
     }
 
@@ -950,12 +1062,14 @@
   }
 
   async function runWorkflowTest(stepSubset = null) {
-    const steps = Array.isArray(stepSubset) ? stepSubset : state.steps;
+    const steps = treeStudio ? treeStudio.getWorkflow() : (Array.isArray(stepSubset) ? stepSubset : state.steps);
     if (!steps.length) {
       showToast('当前没有可测试的步骤', 'error');
       return;
     }
 
+    window.__WORKFLOW_EDITOR_TEST_CANCELLED__ = false;
+    window.__WORKFLOW_EDITOR_TEST_RUN_ID__ = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
     const payload = buildWorkflowPayload(steps);
     const domain = window.location.hostname;
     const presetName = getCurrentPresetName();
@@ -979,7 +1093,7 @@
       domain,
       tab_id: getCurrentTabId(),
       preset_name: presetName,
-      prompt: getWorkflowPromptFromPayload(payload),
+      prompt: treeTestPrompt !== null ? treeTestPrompt : getWorkflowPromptFromPayload(payload),
       workflow: payload.workflow,
       selectors: payload.selectors,
       stealth: !!siteConfig.stealth,
@@ -988,7 +1102,10 @@
       file_paste: siteConfig.file_paste || {},
       // 修复：补上 model / model_catalog，否则 SELECT_MODEL 在测试里必然 early return
       model: String(state.testModel || '').trim(),
-      model_catalog: siteConfig.model_catalog || {}
+      model_catalog: siteConfig.model_catalog || {},
+      workflow_variables: treeTestVariables,
+      visual_feedback: !!pageGuide,
+      visual_run_id: window.__WORKFLOW_EDITOR_TEST_RUN_ID__
     };
 
     console.debug('[WorkflowEditor] runWorkflowTest', {
@@ -1018,6 +1135,7 @@
       });
 
       const result = await response.json().catch(() => ({}));
+      receiveTreeResult(result.trace, result.message || result.detail, !!result.success);
       if (!response.ok || !result.success) {
         throw new Error(result.detail || result.message || `HTTP ${response.status}`);
       }
@@ -1039,10 +1157,14 @@
         throw error;
       }
 
-      const action = enqueueBackendAction('test_workflow', requestPayload);
-      console.debug('[WorkflowEditor] switched to bridge mode', { actionId: action.id, message, isDirectTimeout });
-      showToast('测试请求已提交，等待本地控制台执行。', 'info', 2200);
-      return action;
+      // The server may already be executing this POST. Never automatically
+      // replay it through the bridge after timeout/network/CORS uncertainty.
+      window.__WORKFLOW_EDITOR_TEST_CANCELLED__ = true;
+      const uncertain = '暂时无法确认测试结果，未重复执行。请在本地控制台查看；等待期间编辑器保持隐藏。';
+      updateTestingStatus(uncertain, 'error');
+      pageGuide?.notify(uncertain, true);
+      showToast(uncertain, 'error', 5000);
+      return null;
     } finally {
       if (timeoutId) {
         window.clearTimeout(timeoutId);
@@ -1832,10 +1954,18 @@
     pickOverlay?.remove();
     pickTip?.remove();
     document.removeEventListener('keydown', onPickKey);
+    if (treeHost && state.isVisible && !pageGuide) treeHost.style.display = '';
   }
 
     // ========== 小球管理 ==========
     function addBall(type, config = {}) {
+        if (treeStudio) {
+            const action = ({MODEL:'SELECT_MODEL',INPUT:'FILL_INPUT',READ:'STREAM_WAIT',KEY:'KEY_PRESS',SCRIPT:'JS_EXEC'})[type] || type;
+            const workflow = treeStudio.getWorkflow();
+            const node = window.WorkflowStudio.defaultNode(action);
+            workflow.push(node); treeStudio.setWorkflow(workflow); state.siteConfig.workflow = workflow; pageGuide?.refresh();
+            return node;
+        }
         const seq = state.steps.length + 1;
 
         // 默认位置：错开排列
@@ -1895,24 +2025,30 @@
     }
   }
 
-  function clearAll() {
+  function clearAll(resetTree = true) {
+    if (resetTree && treeStudio) { treeStudio.setWorkflow([]); state.siteConfig.workflow = []; pageGuide?.refresh(); }
     state.steps.forEach(b => b.destroy());
     state.steps = [];
   }
 
   function exportConfig() {
+    if (treeStudio) return buildWorkflowPayload();
     return state.steps.map(b => b.toJSON());
   }
 
     // ========== 🔧 加载现有配置（读取实际延迟）==========
     function loadFromConfig(config) {
-        clearAll();
+        clearAll(false);
         state.siteConfig = {
             ...(config || {}),
             selectors: { ...((config && config.selectors) || {}) },
             workflow: Array.isArray(config?.workflow) ? config.workflow : []
         };
 
+        // Full tree is the single source of truth. Never reconstruct nested
+        // workflows from legacy ball indices or the preserved-steps side list.
+        state.preservedSteps = [];
+        if (mountTreeStudio()) return;
         const workflow = state.siteConfig.workflow;
 
         // 修复：每次加载都重置保留区，避免跨预设残留
@@ -2282,11 +2418,7 @@
 
             if (response.ok) {
                 const result = await response.json();
-                state.siteConfig = {
-                    ...state.siteConfig,
-                    selectors,
-                    workflow: newWorkflow
-                };
+                applyEditorSaveAck({selectors, workflow:newWorkflow});
                 alert(`✅ 保存成功！\n\n已更新 ${steps.length} 个步骤到 ${domain} / ${presetName}${preservedNote}`);
                 console.log('[WorkflowEditor] 保存结果:', result);
             } else {
@@ -2346,14 +2478,30 @@
     }
 
   function showEditor() {
+    if (state.testExecution.pendingCount > 0) return;
     state.isVisible = true;
+    if (treeHost) treeHost.style.display = editorMode === 'canvas' || !pageGuide ? '' : 'none';
+    pageGuide?.show(editorMode === 'page');
     toolbar?.classList.remove('wfe-hidden');
     state.steps.forEach(b => b.setHidden(false));
     refreshToolbarMeta();
   }
 
+  // User-facing collapse retains markers; the legacy API hide() remains a full hide.
+  function collapseEditor() {
+    hideEditor();
+    pageGuide?.show(false, {keepMarkers:true});
+    if (treeDock) {
+      treeDock.textContent = pageGuide?.markersEnabled ? '◎ 展开步骤 · 标记保留' : '◎ 展开步骤 · 标记隐藏';
+      treeDock.title = '点击展开步骤面板，或拖动移动入口';
+      treeDock.focus({preventScroll:true});
+    }
+  }
+
   function hideEditor() {
     state.isVisible = false;
+    if (treeHost) treeHost.style.display = 'none';
+    pageGuide?.show(false);
     toolbar?.classList.add('wfe-hidden');
     state.steps.forEach(b => b.setHidden(true));
     hideMenu();
@@ -2416,29 +2564,36 @@
     clear: clearAll,
     export: exportConfig,
     show: showEditor,
+    showPage: () => showEditorMode('page'),
+    showStudio: () => showEditorMode('canvas'),
     hide: hideEditor,
-    getSteps: () => state.steps.map(b => b.toJSON()),
+    getSteps: () => treeStudio ? treeStudio.getWorkflow() : state.steps.map(b => b.toJSON()),
     handleBackendStatus: (actionId, phase, message) => {
       const normalizedActionId = String(actionId || '');
+      if (normalizedActionId && state.testExecution.pendingCount > 0 && !state.pendingBackendActions.has(normalizedActionId)) return;
       if (normalizedActionId) {
         state.testExecution.actionId = normalizedActionId;
+      }
+      if (String(phase || '').startsWith('step:')) {
+        const raw = String(phase).slice(5);
+        try { const detail = JSON.parse(raw); pageGuide?.progress(detail.path, detail); }
+        catch (_) { pageGuide?.progress(raw); }
       }
       const text = String(message || '').trim() || getTestingStatusText();
       console.debug('[WorkflowEditor] backend status', { actionId: normalizedActionId, phase, message: text });
       updateTestingStatus(text, phase === 'running' ? 'info' : '', phase === 'running' ? 1800 : 0);
     },
-    handleBackendResult: (actionId, success, message) => {
+    handleBackendResult: (actionId, success, message, trace = []) => {
+      if (actionId && state.testExecution.pendingCount > 0 && !state.pendingBackendActions.has(String(actionId))) return;
       const action = actionId ? state.pendingBackendActions.get(String(actionId)) : null;
       if (actionId) {
         state.pendingBackendActions.delete(String(actionId));
       }
+      if (action?.type === 'validate_workflow') { treeStudio?.message(message, !success); pageGuide?.notify(message, !success); }
+      else if (action?.type === 'test_workflow' || !action) receiveTreeResult(trace, message, success);
       if (action?.type === 'save_workflow' && success) {
-        state.siteConfig = {
-          ...(state.siteConfig || {}),
-          selectors: { ...((action.payload && action.payload.selectors) || {}) },
-          workflow: Array.isArray(action?.payload?.workflow) ? action.payload.workflow : []
-        };
-      } else {
+        applyEditorSaveAck(action.payload);
+      } else if (action?.type === 'test_workflow' || !action) {
         touchTestActivity();
         resumeEditorAfterTest();
       }
@@ -2457,6 +2612,9 @@
       );
     },
     destroy: () => {
+      if (state.testExecution.pendingCount > 0) window.__WORKFLOW_EDITOR_TEST_CANCELLED__ = true;
+      pageGuide?.destroy(); pageGuide = null; treeDragCleanup?.(); dockDragCleanup?.();
+      treeStudio?.destroy(); treeHost?.remove(); treeDock?.remove(); treeStudio = treeHost = treeDock = null;
       hideMenu();
       endPicker();
       state.steps.slice().forEach(ball => removeBall(ball));

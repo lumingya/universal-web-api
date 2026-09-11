@@ -38,16 +38,21 @@ def test_vue_panel_renders_and_edits_real_controls(page):
       app.config.globalProperties.$icons={chevronDown:'',chevronUp:''};
       window.testConfig=app.mount('#app').config;
     }""")
-    assert page.get_by_text("通用附件管线", exact=True).is_visible()
-    page.get_by_label("最多附件数").fill("6")
-    page.get_by_label("最多附件数").press("Tab")
-    page.get_by_label("允许的 MIME / 扩展名").fill("image/*, .pdf")
-    page.get_by_label("允许的 MIME / 扩展名").press("Tab")
-    page.get_by_label("上传错误 CSS 选择器", exact=False).fill(".upload-error\n.failed-file")
-    page.get_by_label("上传错误 CSS 选择器", exact=False).press("Tab")
+    assert page.get_by_role("heading", name="发送附件", exact=True).is_visible()
+    assert not page.get_by_label("一次最多几个文件").is_visible()
+    before = page.evaluate("JSON.stringify(window.testConfig)")
+    page.get_by_text("调整文件限制", exact=True).click()
+    assert before == page.evaluate("JSON.stringify(window.testConfig)"), "opening settings must not mutate configuration"
+    page.get_by_label("一次最多几个文件").fill("6")
+    page.get_by_label("一次最多几个文件").press("Tab")
+    page.get_by_label("允许哪些文件（可选）").fill("image/*, .pdf")
+    page.get_by_label("允许哪些文件（可选）").press("Tab")
+    page.get_by_text("上传兼容与错误识别", exact=True).click()
+    page.get_by_label("网页上的上传错误提示", exact=False).fill(".upload-error\n.failed-file")
+    page.get_by_label("网页上的上传错误提示", exact=False).press("Tab")
     page.get_by_role("button", name="浏览器原生拖拽上移").click()
     # Styled toggle uses a visually hidden input; click its actual label.
-    page.locator('label[title="允许当前预设上传附件"]').click()
+    page.get_by_role("switch", name="发送附件", exact=True).uncheck()
     state = page.evaluate("window.testConfig")
     assert state["attachments"]["max_count"] == 6
     assert state["attachments"]["allowed_types"] == ["image/*", ".pdf"]
@@ -118,3 +123,66 @@ def test_actual_dom_never_accepts_failed_pending_or_input_only_upload(page, tmp_
         uploader.upload(path)
     assert page.evaluate("window.uploadCalls") == 1
     assert uploader.tainted
+
+
+def test_media_disclosures_preserve_values_and_use_readable_policy_labels(page):
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    page.set_content('<main id="app"></main>')
+    page.add_script_tag(path=str(ROOT / "static/vendor/vue.global.prod.js"))
+    page.add_script_tag(path=str(ROOT / "static/js/components/panels/ImageConfigPanel.js"))
+    page.evaluate("""() => {
+      window.fetch = async () => ({ok:true,json:async()=>({presets:[],available:false})});
+      const app=Vue.createApp({components:{panel:window.ImageConfigPanel},
+        data:()=>({config:{selector:'.answer img',max_size_mb:10,modalities:{
+          image:{enabled:true,run_policy:'on_signal',late_wait_timeout_seconds:61},
+          audio:{enabled:false,run_policy:'disabled'},video:false}},changes:0}),
+        template:'<panel :image-config="config" :collapsed="false" @update-image-config="config=$event;changes++" />'});
+      app.config.globalProperties.$icons={};window.mediaTest=app.mount('#app');
+    }""")
+    assert page.locator('input:not([type="checkbox"]):visible,select:visible,textarea:visible').count() == 0
+    before = page.evaluate("JSON.stringify(window.mediaTest.config)")
+    image = page.locator('section[aria-label="接收图片"]')
+    image.get_by_text("配置图片提取", exact=True).click()
+    assert page.evaluate("window.mediaTest.changes") == 0
+    assert page.evaluate("JSON.stringify(window.mediaTest.config)") == before
+    assert image.locator('input[placeholder="img"]').input_value() == '.answer img'
+    policy = image.locator('select').first
+    assert '发现媒体信号时提取' in policy.inner_text()
+    policy.select_option('generic_only')
+    assert page.evaluate("window.mediaTest.config.modalities.image.run_policy") == 'generic_only'
+    image.get_by_role('switch', name='接收图片', exact=True).uncheck()
+    assert policy.is_disabled()
+    assert page.evaluate("window.mediaTest.config.selector") == '.answer img'
+    assert page.evaluate("window.mediaTest.config.modalities.image.late_wait_timeout_seconds") == 61
+    image.get_by_role('switch', name='接收图片', exact=True).check()
+    assert not policy.is_disabled()
+    # Collapse/reopen must retain the same editor node, with no synthetic change event.
+    image.locator('input[placeholder="img"]').evaluate("e=>e.dataset.retained='yes'")
+    changes = page.evaluate('window.mediaTest.changes')
+    image.get_by_text('配置图片提取', exact=True).click()
+    image.get_by_text('配置图片提取', exact=True).click()
+    assert image.locator('input[placeholder="img"]').get_attribute('data-retained') == 'yes'
+    assert page.evaluate('window.mediaTest.changes') == changes
+    assert not errors
+
+
+def test_prompt_adaptation_is_opt_in_and_independent(page):
+    page.set_content('<main id="app"></main>')
+    page.add_script_tag(path=str(ROOT / "static/vendor/vue.global.prod.js"))
+    page.add_script_tag(path=str(ROOT / "static/js/components/panels/PromptPaddingPanel.js"))
+    page.evaluate("""() => {
+      const app=Vue.createApp({components:{panel:window.PromptPaddingPanel},
+        data:()=>({config:{enabled:false,random_insert_enabled:false,random_insert_chars:'abc'}}),
+        template:'<panel :prompt-padding-config="config" :collapsed="false" />'});
+      app.config.globalProperties.$icons={};window.paddingTest=app.mount('#app');
+    }""")
+    assert page.locator('input:visible').count() == 0
+    before = page.evaluate('JSON.stringify(window.paddingTest.config)')
+    page.get_by_text('特殊站点：调整提示词', exact=True).click()
+    assert page.evaluate('JSON.stringify(window.paddingTest.config)') == before
+    assert page.get_by_text('随机插入字符会改变原文。', exact=False).is_visible()
+    page.get_by_label('在提示词中随机插入字符', exact=True).check()
+    assert page.evaluate('window.paddingTest.config.random_insert_enabled') is True
+    assert page.evaluate('window.paddingTest.config.enabled') is False
+    assert page.evaluate('window.paddingTest.config.random_insert_chars') == 'abc'

@@ -42,7 +42,8 @@ window.RequestMonitorTab = {
             analyticsRange: '7d',
             trendRange: '24h',
             showSystemLoad: false,
-            rankingDimension: 'domain'
+            rankingDimension: 'domain',
+            monitorView: 'requests'
         }
     },
     created() {
@@ -818,9 +819,11 @@ window.RequestMonitorTab = {
             this.currentPage = normalized
         },
         openRecord(record) {
+            this.detailReturnFocus = document.activeElement
             this.selectedRecord = this.resolveRecordForDetail(record, record)
             this.showErrorStack = false
             this.expandedTextBlocks = {}
+            this.$nextTick(() => this.$el.querySelector('.ops-request-drawer button')?.focus())
             const key = this.detailKey(this.selectedRecord || record)
             if (record && key && record.has_detail && !record.detail_loaded) {
                 this.$emit('load-detail', key)
@@ -830,6 +833,20 @@ window.RequestMonitorTab = {
             this.selectedRecord = null
             this.showErrorStack = false
             this.expandedTextBlocks = {}
+            this.$nextTick(() => this.detailReturnFocus?.focus())
+        },
+        handleDetailKeydown(event) {
+            if (event.key === 'Escape') {
+                event.preventDefault()
+                this.closeRecord()
+                return
+            }
+            if (event.key !== 'Tab') return
+            const controls = Array.from(event.currentTarget.querySelectorAll('button,textarea,input,select,[tabindex="0"]'))
+                .filter(el => !el.disabled && el.getClientRects().length)
+            const first = controls[0], last = controls[controls.length - 1]
+            if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
+            if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
         },
         formatDurationMs(value) {
             const ms = Number(value || 0)
@@ -1095,16 +1112,16 @@ window.RequestMonitorTab = {
         }
     },
     template: `
-        <div class="request-monitor-workspace min-h-full bg-slate-50 px-4 py-5 text-slate-900 dark:bg-slate-950 dark:text-slate-100 sm:px-6">
+        <div class="request-monitor-workspace ops-monitor min-h-full bg-slate-50 px-4 py-5 text-slate-900 dark:bg-slate-950 dark:text-slate-100 sm:px-6">
             <section class="uwa-page uwa-monitor-page">
                 <header class="uwa-page-header uwa-monitor-header">
                     <div>
                         <p class="uwa-eyebrow">ACTIVITY</p>
                         <h1>请求监控</h1>
-                        <p>追踪模型路由、响应耗时、Token 消耗与异常详情。</p>
+                        <p>从一次请求开始，了解响应、用量与异常。</p>
                     </div>
                     <div class="uwa-page-actions">
-                        <button type="button" class="uwa-button" @click="showSystemLoad = !showSystemLoad"><span v-html="$icons.server"></span>系统负载</button>
+                        <button type="button" class="uwa-button" @click="showSystemLoad = !showSystemLoad" :aria-expanded="showSystemLoad"><span v-html="$icons.server"></span>系统负载</button>
                         <button type="button" class="uwa-button" @click="refresh" :disabled="loading"><span v-html="$icons.arrowPath"></span>{{ loading ? '刷新中' : '刷新' }}</button>
                     </div>
                 </header>
@@ -1119,7 +1136,117 @@ window.RequestMonitorTab = {
 
                 <div v-if="error" class="uwa-inline-error">{{ error }}</div>
 
-                <div class="uwa-analytics-toolbar">
+                <nav class="ops-view-tabs" aria-label="监控视图">
+                    <button type="button" :class="{'is-active':monitorView==='requests'}" :aria-pressed="monitorView==='requests'" @click="monitorView='requests'"><span v-html="$icons.documentText"></span>请求记录<small>{{ formatNumber(sortedRecords.length) }}</small></button>
+                    <button type="button" :class="{'is-active':monitorView==='analytics'}" :aria-pressed="monitorView==='analytics'" @click="monitorView='analytics'"><span v-html="$icons.chartBar"></span>用量分析</button>
+                    <span class="ops-view-note">{{ liveCountsAvailable ? '实时状态与保留历史' : '当前保留的请求历史' }}</span>
+                </nav>
+                <div v-show="monitorView==='requests'" class="ops-requests-view">
+                    <section class="ops-monitor-summary" aria-label="请求状态概览">
+                        <article class="ops-stat is-live"><span>正在执行<i v-html="$icons.activity"></i></span><strong>{{ liveCountsAvailable || runningCount ? runningCount : '—' }}<em>个请求</em></strong><small>{{ liveCountsAvailable ? '实时状态 · 排队 ' + queuedCount + ' 个' : '实时统计未启用，仅显示历史样本状态' }}</small></article>
+                        <article class="ops-stat"><span>当前统计样本<i v-html="$icons.documentText"></i></span><strong>{{ formatNumber(baseRecords.length) }}</strong><small>{{ successCount }} 成功 · {{ Math.max(0,failureCount-cancelledCount) }} 失败 · {{ cancelledCount }} 取消</small></article>
+                        <article class="ops-stat"><span>样本成功率<i v-html="$icons.checkCircle"></i></span><strong>{{ baseRecords.length ? globalSuccessRate + '%' : '—' }}</strong><small>基于当前保留的请求样本</small></article>
+                        <article class="ops-stat"><span>成功请求平均耗时<i v-html="$icons.timer"></i></span><strong>{{ baseRecords.length ? formatDurationMs(avgDuration) : '—' }}</strong><small>P95（全部样本）{{ baseRecords.length ? formatDurationMs(p95Duration) : '—' }}</small></article>
+                    </section>
+                    <section class="ops-history-panel" aria-label="请求历史">
+                        <div class="ops-history-heading"><div><h2>请求记录</h2><p>点击一条记录，查看输入输出与执行详情。</p></div><span>当前保留 {{ formatNumber(sortedRecords.length) }} / {{ formatNumber(retentionLimit) }}</span></div>
+                <div class="uwa-request-filters">
+                    <label class="uwa-search-field"><span v-html="$icons.magnifyingGlass"></span><input v-model="query" type="search" aria-label="搜索请求" autocomplete="off" placeholder="搜索模型、域名或请求 ID"></label>
+                    <div class="uwa-segmented uwa-status-tabs">
+                        <button type="button" :class="{ 'is-active': statusFilter === 'all' }" @click="statusFilter = 'all'">全部 {{ baseRecords.length }}</button>
+                        <button type="button" :class="{ 'is-active': statusFilter === 'success' }" @click="statusFilter = 'success'">成功 {{ successCount }}</button>
+                        <button type="button" :class="{ 'is-active': statusFilter === 'failed' }" @click="statusFilter = 'failed'">失败 {{ Math.max(0, failureCount - cancelledCount) }}</button>
+                        <button type="button" :class="{ 'is-active': statusFilter === 'cancelled' }" @click="statusFilter = 'cancelled'">取消 {{ cancelledCount }}</button>
+                    </div>
+                    <label class="uwa-filter-toggle"><input v-model="includeMultimodal" type="checkbox"><i></i><span>包含多模态</span></label>
+                </div>
+
+                <div class="uwa-request-table-wrap">
+                    <div class="uwa-request-table-header">
+                        <span>状态</span><span>模型 / 路由</span><span>端点</span><span>输入 / 输出</span><span>耗时</span><span>时间</span><span></span>
+                    </div>
+                    <button v-for="record in visibleRecords" :key="record.__historyKey" type="button" class="uwa-request-row" :class="{'is-cancelled':record.status==='cancelled'}" @click="openRecord(record)">
+                        <!-- 修复：后端保证 finished_at 恒非空，原「流式响应」分支恒不成立，已删除死条件 -->
+                        <span class="uwa-request-status" :class="statusTone(record)"><i></i><strong>{{ record.__statusText }}</strong></span>
+                        <span class="uwa-request-route"><strong>{{ record.model || record.preset_name || '未知' }}</strong><small>{{ record.__domain }}<template v-if="record.route_group"> · {{ record.route_group }}</template><template v-if="record.is_multimodal"> · 多模态</template></small></span>
+                        <code>{{ record.endpoint || record.request_type || '-' }}</code>
+                        <span>{{ formatTokenNumber(record.token_estimate ? record.token_estimate.prompt : 0) }} / {{ formatTokenNumber(record.token_estimate ? record.token_estimate.response : 0) }}</span>
+                        <strong>{{ record.__durationText }}</strong>
+                        <time>{{ formatTime(record.started_at || record.created_at) }}</time>
+                        <span class="uwa-row-arrow" v-html="$icons.arrowRight"></span>
+                    </button>
+                    <div v-if="!visibleRecords.length" class="uwa-request-empty ops-history-empty"><span v-html="$icons.documentText"></span><strong>{{ loading ? '正在加载请求记录' : (error && !sortedRecords.length ? '暂时无法读取请求记录' : (query || statusFilter !== 'all' || !includeMultimodal ? '没有匹配的请求' : '这里记录每一次响应')) }}</strong><p>{{ query || statusFilter !== 'all' || !includeMultimodal ? '试试其他关键词，或清除筛选条件。' : '完成首个 API 请求后，可以在这里回看耗时、输入输出与异常。' }}</p><button v-if="query || statusFilter !== 'all' || !includeMultimodal" type="button" class="ops-text-button" @click="query='';statusFilter='all';includeMultimodal=true">清除筛选</button></div>
+                    <nav v-if="filteredRecords.length" class="uwa-pagination" aria-label="请求历史分页">
+                        <span>第 {{ currentPage }} / {{ totalPages }} 页 · 共 {{ filteredRecords.length }} 条 · 保留上限 {{ formatNumber(retentionLimit) }}</span>
+                        <div>
+                            <button type="button" class="uwa-page-button is-prev" @click="goToPage(currentPage - 1)" :disabled="currentPage <= 1" title="上一页" aria-label="上一页"><span v-html="$icons.arrowRight"></span></button>
+                            <template v-for="item in paginationItems" :key="item.key">
+                                <span v-if="!item.page" class="uwa-page-ellipsis">{{ item.label }}</span>
+                                <button v-else type="button" :class="['uwa-page-button', { 'is-active': item.page === currentPage }]" @click="goToPage(item.page)" :aria-current="item.page === currentPage ? 'page' : null">{{ item.label }}</button>
+                            </template>
+                            <button type="button" class="uwa-page-button" @click="goToPage(currentPage + 1)" :disabled="currentPage >= totalPages" title="下一页" aria-label="下一页"><span v-html="$icons.arrowRight"></span></button>
+                        </div>
+                    </nav>
+                </div>
+                    </section>
+                    <details class="ops-trend-disclosure"><summary><span v-html="$icons.chartBar"></span><div><strong>流量趋势与站点分布</strong><small>从时间、站点与模型维度了解请求变化</small></div><span class="ops-chevron" v-html="$icons.chevronDown"></span></summary>                <section class="uwa-monitor-overview">
+                    <div class="uwa-trend-panel">
+                        <div class="uwa-panel-heading">
+                            <div><h2>请求趋势 <strong>{{ trendTotal }}</strong><span>次</span></h2><p>基于当前请求历史的真实时间分布</p></div>
+                            <div class="uwa-segmented" aria-label="趋势时间范围">
+                                <button type="button" :class="{ 'is-active': trendRange === '1h' }" @click="trendRange = '1h'">1 小时</button>
+                                <button type="button" :class="{ 'is-active': trendRange === '24h' }" @click="trendRange = '24h'">24 小时</button>
+                                <button type="button" :class="{ 'is-active': trendRange === '7d' }" @click="trendRange = '7d'">7 天</button>
+                            </div>
+                        </div>
+                        <div class="uwa-trend-chart">
+                            <svg viewBox="0 0 800 240" role="img" aria-label="请求数量趋势图" preserveAspectRatio="none">
+                                <line x1="20" y1="60" x2="780" y2="60"></line>
+                                <line x1="20" y1="115" x2="780" y2="115"></line>
+                                <line x1="20" y1="170" x2="780" y2="170"></line>
+                                <polygon :points="trendAreaPoints"></polygon>
+                                <polyline :points="trendLinePoints"></polyline>
+                                <circle v-for="(bucket, index) in trendBuckets" :key="index"
+                                        :cx="20 + index * (760 / Math.max(1, trendBuckets.length - 1))"
+                                        :cy="205 - (bucket.total / trendMax) * 160" r="4"></circle>
+                            </svg>
+                            <div class="uwa-trend-labels"><span>{{ trendLabels[0] }}</span><span>{{ trendLabels[1] }}</span><span>{{ trendLabels[2] }}</span></div>
+                            <div class="uwa-trend-health-legend" aria-label="请求结果图例">
+                                <span><i class="is-success"></i>成功 {{ trendSuccessTotal }}</span>
+                                <span><i class="is-failed"></i>失败 {{ trendFailureTotal }}</span>
+                                <span><i class="is-idle"></i>无请求时段</span>
+                            </div>
+                            <div class="uwa-trend-health" aria-label="分时段请求健康度">
+                                <div v-for="(bucket, index) in trendBuckets" :key="'health-' + index" :title="trendBucketTitle(bucket)" :class="{ 'is-idle': !bucket.total }">
+                                    <i class="is-success" :style="{ width: trendBucketSuccessWidth(bucket) }"></i><i class="is-failed"></i>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <aside class="uwa-domain-ranking">
+                        <div class="uwa-panel-heading">
+                            <div><h2>{{ rankingDimension === 'model' ? '模型用量' : '站点请求量' }}</h2><p>当前样本 · Top 10</p></div>
+                            <div class="uwa-ranking-tabs" aria-label="排行维度">
+                                <button type="button" :class="{ 'is-active': rankingDimension === 'domain' }" @click="rankingDimension = 'domain'">站点</button>
+                                <button type="button" :class="{ 'is-active': rankingDimension === 'model' }" @click="rankingDimension = 'model'">模型</button>
+                            </div>
+                        </div>
+                        <div v-if="rankingStats.length" class="uwa-domain-list">
+                            <div v-for="item in rankingStats" :key="item.key" class="uwa-domain-row">
+                                <span class="uwa-domain-avatar">{{ item.label.charAt(0).toUpperCase() }}</span>
+                                <div><strong :title="item.label">{{ item.label }}</strong><small>{{ item.meta }}</small><i><b :style="{ width: (item.total / maxRankingTotal * 100) + '%' }"></b></i></div>
+                                <span>{{ item.total }}</span>
+                            </div>
+                        </div>
+                        <div v-else class="uwa-domain-empty">暂无排行数据</div>
+                    </aside>
+                </section>
+
+</details>
+                    <div class="ops-retention-note"><span>样本 Token {{ formatTokenNumber(sampleTokens) }} · 保留容量 {{ retentionUsage }}%</span><span>历史样本统计不等于服务累计用量</span></div>
+                </div>
+                <div v-show="monitorView==='analytics'" class="ops-analytics-view">                <div class="uwa-analytics-toolbar">
                     <div>
                         <p class="uwa-eyebrow">USAGE ANALYTICS</p>
                         <h2>Token 用量分析</h2>
@@ -1134,8 +1261,8 @@ window.RequestMonitorTab = {
 
                 <div class="uwa-token-kpis" aria-label="Token 用量概览">
                     <article class="is-total"><span class="uwa-token-kpi-icon" v-html="$icons.activity"></span><small>总 Token</small><strong>{{ formatTokenNumber(cumulativeTokens) }}</strong><p>累计服务用量</p></article>
-                    <article class="is-input"><span class="uwa-token-kpi-icon" v-html="$icons.arrowDownTray"></span><small>输入 Token</small><strong>{{ formatTokenNumber(systemStats.total_input_tokens) }}</strong><p>{{ inputRatio }}% 的累计用量</p></article>
-                    <article class="is-output"><span class="uwa-token-kpi-icon" v-html="$icons.arrowUpTray"></span><small>输出 Token</small><strong>{{ formatTokenNumber(systemStats.total_output_tokens) }}</strong><p>{{ outputRatio }}% 的累计用量</p></article>
+                    <article class="is-input"><span class="uwa-token-kpi-icon" v-html="$icons.arrowDownTray"></span><small>输入 Token</small><strong>{{ formatTokenNumber(systemStats.total_input_tokens) }}</strong><p>{{ cumulativeTokens ? inputRatio + '% 的累计用量' : '暂无累计用量' }}</p></article>
+                    <article class="is-output"><span class="uwa-token-kpi-icon" v-html="$icons.arrowUpTray"></span><small>输出 Token</small><strong>{{ formatTokenNumber(systemStats.total_output_tokens) }}</strong><p>{{ cumulativeTokens ? outputRatio + '% 的累计用量' : '暂无累计用量' }}</p></article>
                     <article class="is-calls"><span class="uwa-token-kpi-icon" v-html="$icons.chartBar"></span><small>模型调用</small><strong>{{ formatNumber(systemStats.total_requests) }}</strong><p>当前样本 {{ formatNumber(analyticsSampleTotals.calls) }} 次</p></article>
                 </div>
 
@@ -1207,107 +1334,7 @@ window.RequestMonitorTab = {
                     </aside>
                 </section>
 
-                <div class="uwa-monitor-kpis" aria-label="请求概览">
-                    <div><span>历史样本</span><strong>{{ formatNumber(sortedRecords.length) }}</strong><small>当前 {{ formatNumber(sortedRecords.length) }} / 上限 {{ formatNumber(retentionLimit) }}</small></div>
-                    <div><span>保留容量</span><strong>{{ retentionUsage }}%</strong><small>新增请求将继续保留至 {{ formatNumber(retentionLimit) }} 条</small></div>
-                    <div><span>样本 Token</span><strong>{{ formatTokenNumber(sampleTokens) }}</strong><small>当前历史估算用量</small></div>
-                    <div><span>样本成功率</span><strong>{{ globalSuccessRate }}%</strong><small>{{ successCount }} 成功 · {{ failureCount }} 未成功</small></div>
-                    <div><span>响应耗时</span><strong>{{ formatDurationMs(avgDuration) }}</strong><small>P95 {{ formatDurationMs(p95Duration) }}</small></div>
-                    <div><span>正在执行</span><strong>{{ runningCount }}</strong><small>实时状态 · 排队 {{ queuedCount }}</small></div>
-                </div>
-
-                <section class="uwa-monitor-overview">
-                    <div class="uwa-trend-panel">
-                        <div class="uwa-panel-heading">
-                            <div><h2>请求趋势 <strong>{{ trendTotal }}</strong><span>次</span></h2><p>基于当前请求历史的真实时间分布</p></div>
-                            <div class="uwa-segmented" aria-label="趋势时间范围">
-                                <button type="button" :class="{ 'is-active': trendRange === '1h' }" @click="trendRange = '1h'">1 小时</button>
-                                <button type="button" :class="{ 'is-active': trendRange === '24h' }" @click="trendRange = '24h'">24 小时</button>
-                                <button type="button" :class="{ 'is-active': trendRange === '7d' }" @click="trendRange = '7d'">7 天</button>
-                            </div>
-                        </div>
-                        <div class="uwa-trend-chart">
-                            <svg viewBox="0 0 800 240" role="img" aria-label="请求数量趋势图" preserveAspectRatio="none">
-                                <line x1="20" y1="60" x2="780" y2="60"></line>
-                                <line x1="20" y1="115" x2="780" y2="115"></line>
-                                <line x1="20" y1="170" x2="780" y2="170"></line>
-                                <polygon :points="trendAreaPoints"></polygon>
-                                <polyline :points="trendLinePoints"></polyline>
-                                <circle v-for="(bucket, index) in trendBuckets" :key="index"
-                                        :cx="20 + index * (760 / Math.max(1, trendBuckets.length - 1))"
-                                        :cy="205 - (bucket.total / trendMax) * 160" r="4"></circle>
-                            </svg>
-                            <div class="uwa-trend-labels"><span>{{ trendLabels[0] }}</span><span>{{ trendLabels[1] }}</span><span>{{ trendLabels[2] }}</span></div>
-                            <div class="uwa-trend-health-legend" aria-label="请求结果图例">
-                                <span><i class="is-success"></i>成功 {{ trendSuccessTotal }}</span>
-                                <span><i class="is-failed"></i>失败 {{ trendFailureTotal }}</span>
-                                <span><i class="is-idle"></i>无请求时段</span>
-                            </div>
-                            <div class="uwa-trend-health" aria-label="分时段请求健康度">
-                                <div v-for="(bucket, index) in trendBuckets" :key="'health-' + index" :title="trendBucketTitle(bucket)" :class="{ 'is-idle': !bucket.total }">
-                                    <i class="is-success" :style="{ width: trendBucketSuccessWidth(bucket) }"></i><i class="is-failed"></i>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <aside class="uwa-domain-ranking">
-                        <div class="uwa-panel-heading">
-                            <div><h2>{{ rankingDimension === 'model' ? '模型用量' : '站点请求量' }}</h2><p>当前样本 · Top 10</p></div>
-                            <div class="uwa-ranking-tabs" aria-label="排行维度">
-                                <button type="button" :class="{ 'is-active': rankingDimension === 'domain' }" @click="rankingDimension = 'domain'">站点</button>
-                                <button type="button" :class="{ 'is-active': rankingDimension === 'model' }" @click="rankingDimension = 'model'">模型</button>
-                            </div>
-                        </div>
-                        <div v-if="rankingStats.length" class="uwa-domain-list">
-                            <div v-for="item in rankingStats" :key="item.key" class="uwa-domain-row">
-                                <span class="uwa-domain-avatar">{{ item.label.charAt(0).toUpperCase() }}</span>
-                                <div><strong :title="item.label">{{ item.label }}</strong><small>{{ item.meta }}</small><i><b :style="{ width: (item.total / maxRankingTotal * 100) + '%' }"></b></i></div>
-                                <span>{{ item.total }}</span>
-                            </div>
-                        </div>
-                        <div v-else class="uwa-domain-empty">暂无排行数据</div>
-                    </aside>
-                </section>
-
-                <div class="uwa-request-filters">
-                    <label class="uwa-search-field"><span v-html="$icons.magnifyingGlass"></span><input v-model="query" type="search" autocomplete="off" placeholder="搜索模型、域名或请求 ID"></label>
-                    <div class="uwa-segmented uwa-status-tabs">
-                        <button type="button" :class="{ 'is-active': statusFilter === 'all' }" @click="statusFilter = 'all'">全部 {{ baseRecords.length }}</button>
-                        <button type="button" :class="{ 'is-active': statusFilter === 'success' }" @click="statusFilter = 'success'">成功 {{ successCount }}</button>
-                        <button type="button" :class="{ 'is-active': statusFilter === 'failed' }" @click="statusFilter = 'failed'">失败 {{ Math.max(0, failureCount - cancelledCount) }}</button>
-                        <button type="button" :class="{ 'is-active': statusFilter === 'cancelled' }" @click="statusFilter = 'cancelled'">取消 {{ cancelledCount }}</button>
-                    </div>
-                    <label class="uwa-filter-toggle"><input v-model="includeMultimodal" type="checkbox"><i></i><span>包含多模态</span></label>
-                </div>
-
-                <div class="uwa-request-table-wrap">
-                    <div class="uwa-request-table-header">
-                        <span>状态</span><span>模型 / 路由</span><span>端点</span><span>输入 / 输出</span><span>耗时</span><span>时间</span><span></span>
-                    </div>
-                    <button v-for="record in visibleRecords" :key="record.__historyKey" type="button" class="uwa-request-row" @click="openRecord(record)">
-                        <!-- 修复：后端保证 finished_at 恒非空，原「流式响应」分支恒不成立，已删除死条件 -->
-                        <span class="uwa-request-status" :class="statusTone(record)"><i></i><strong>{{ record.__statusText }}</strong></span>
-                        <span class="uwa-request-route"><strong>{{ record.model || record.preset_name || '未知' }}</strong><small>{{ record.__domain }}<template v-if="record.route_group"> · {{ record.route_group }}</template><template v-if="record.is_multimodal"> · 多模态</template></small></span>
-                        <code>{{ record.endpoint || record.request_type || '-' }}</code>
-                        <span>{{ formatTokenNumber(record.token_estimate ? record.token_estimate.prompt : 0) }} / {{ formatTokenNumber(record.token_estimate ? record.token_estimate.response : 0) }}</span>
-                        <strong>{{ record.__durationText }}</strong>
-                        <time>{{ formatTime(record.started_at || record.created_at) }}</time>
-                        <span class="uwa-row-arrow" v-html="$icons.arrowRight"></span>
-                    </button>
-                    <div v-if="!visibleRecords.length" class="uwa-request-empty">{{ query || statusFilter !== 'all' ? '没有匹配的请求' : '暂无请求历史' }}</div>
-                    <nav v-if="filteredRecords.length" class="uwa-pagination" aria-label="请求历史分页">
-                        <span>第 {{ currentPage }} / {{ totalPages }} 页 · 共 {{ filteredRecords.length }} 条 · 保留上限 {{ formatNumber(retentionLimit) }}</span>
-                        <div>
-                            <button type="button" class="uwa-page-button is-prev" @click="goToPage(currentPage - 1)" :disabled="currentPage <= 1" title="上一页" aria-label="上一页"><span v-html="$icons.arrowRight"></span></button>
-                            <template v-for="item in paginationItems" :key="item.key">
-                                <span v-if="!item.page" class="uwa-page-ellipsis">{{ item.label }}</span>
-                                <button v-else type="button" :class="['uwa-page-button', { 'is-active': item.page === currentPage }]" @click="goToPage(item.page)" :aria-current="item.page === currentPage ? 'page' : null">{{ item.label }}</button>
-                            </template>
-                            <button type="button" class="uwa-page-button" @click="goToPage(currentPage + 1)" :disabled="currentPage >= totalPages" title="下一页" aria-label="下一页"><span v-html="$icons.arrowRight"></span></button>
-                        </div>
-                    </nav>
-                </div>
+</div>
             </section>
             <div class="mx-auto max-w-7xl space-y-5">
                 <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1555,7 +1582,7 @@ window.RequestMonitorTab = {
 
             <!-- 请求详情抽屉 -->
             <div v-if="selectedRecord"
-                 class="fixed inset-0 z-50 flex justify-end bg-slate-950/55 p-3 backdrop-blur-sm"
+                 class="ops-request-drawer fixed inset-0 z-50 flex justify-end bg-slate-950/55 p-3 backdrop-blur-sm" role="dialog" aria-modal="true" aria-label="请求详情" @keydown="handleDetailKeydown"
                  @click.self="closeRecord">
                 <aside class="flex h-full w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900">
                     <div class="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4 dark:border-slate-700">
@@ -1582,7 +1609,7 @@ window.RequestMonitorTab = {
 
                     <div class="flex-1 overflow-auto px-5 py-4">
                         <div v-if="!selectedRecord.success"
-                             class="mb-4 rounded-2xl border border-rose-200 bg-rose-50/90 p-4 text-rose-800 shadow-sm dark:border-rose-500/30 dark:bg-rose-950/30 dark:text-rose-100">
+                             class="ops-error-summary mb-4 rounded-2xl border border-rose-200 bg-rose-50/90 p-4 text-rose-800 shadow-sm dark:border-rose-500/30 dark:bg-rose-950/30 dark:text-rose-100">
                             <div class="flex flex-wrap items-center justify-between gap-3">
                                 <div>
                                     <div class="text-[11px] text-rose-500 dark:text-rose-300">错误码</div>
@@ -1602,6 +1629,15 @@ window.RequestMonitorTab = {
                             <pre v-if="showErrorStack" class="mt-3 max-h-64 overflow-auto rounded-xl bg-white/80 p-3 text-xs leading-5 text-rose-900 dark:bg-slate-950/50 dark:text-rose-100">{{ selectedRecord.error_stack || selectedRecord.error_message || '暂无错误栈' }}</pre>
                         </div>
 
+                        <details v-if="selectedRecord.workflow_trace && selectedRecord.workflow_trace.length" class="rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+                            <summary class="cursor-pointer text-sm font-semibold">工作流执行轨迹 · {{ selectedRecord.workflow_trace.length }} 条</summary>
+                            <p class="mt-2 text-xs text-gray-500">仅记录路径与状态，不记录变量值、选择器和请求内容。</p>
+                            <div class="max-h-64 overflow-auto mt-3 text-xs space-y-2">
+                                <div v-for="(entry, index) in selectedRecord.workflow_trace" :key="index" class="flex flex-wrap gap-3 border-b dark:border-gray-700 pb-2">
+                                    <code>{{ entry.path }}</code><span>{{ entry.action }}</span><strong>{{ entry.status }}</strong><span v-if="entry.branch">{{ entry.branch }}</span><span v-if="entry.attempt">#{{ entry.attempt }}</span>
+                                </div>
+                            </div>
+                        </details>
                         <!-- 详情属性网格 (修改为 5 列，展示输入和输出 Token) -->
                         <div class="mb-4 grid gap-3 sm:grid-cols-5">
                             <div class="rounded-2xl border border-slate-200 bg-slate-50/80 p-3 dark:border-slate-700 dark:bg-slate-950/40">

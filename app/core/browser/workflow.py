@@ -18,6 +18,7 @@ from app.utils.site_url import extract_remote_site_domain, tab_url_matches
 from app.utils.attachments import attachment_scope, AttachmentError, has_attachments
 from app.core.page_lifecycle import BACKGROUND_WAKE_CDP_TIMEOUT
 from app.core.workflow import WorkflowExecutor
+from app.core.workflow.flow_runtime import FlowProgram, has_control_flow, validate_workflow, capture_page_state
 from app.core.workflow.error_handlers import (
     get_workflow_retry_handler,
     is_retriable_workflow_error,
@@ -476,6 +477,7 @@ class BrowserWorkflowMixin:
         workflow_priority: Optional[int] = None,
         allow_media_postprocess: bool = True,
         requested_model: Optional[str] = None,
+        workflow_variables: Optional[Dict[str, Any]] = None,
     ) -> Generator[str, None, None]:
         """
         工作流执行入口（v2.0 改进版）
@@ -526,6 +528,7 @@ class BrowserWorkflowMixin:
                     workflow_priority=workflow_priority,
                     allow_media_postprocess=allow_media_postprocess,
                     requested_model=requested_model,
+                    **({"workflow_variables": workflow_variables} if workflow_variables else {}),
                 )
             else:
                 yield from self._execute_workflow_non_stream(
@@ -535,6 +538,7 @@ class BrowserWorkflowMixin:
                     workflow_priority=workflow_priority,
                     allow_media_postprocess=allow_media_postprocess,
                     requested_model=requested_model,
+                    **({"workflow_variables": workflow_variables} if workflow_variables else {}),
                 )
         
         finally:
@@ -561,6 +565,7 @@ class BrowserWorkflowMixin:
         workflow_priority: Optional[int] = None,
         allow_media_postprocess: bool = True,
         requested_model: Optional[str] = None,
+        workflow_variables: Optional[Dict[str, Any]] = None,
     ) -> Generator[str, None, None]:
         """使用指定编号的标签页执行工作流"""
         is_valid, error_msg, sanitized_messages = MessageValidator.validate(messages)
@@ -606,6 +611,7 @@ class BrowserWorkflowMixin:
                     workflow_priority=workflow_priority,
                     allow_media_postprocess=allow_media_postprocess,
                     requested_model=requested_model,
+                    **({"workflow_variables": workflow_variables} if workflow_variables else {}),
                 )
             else:
                 yield from self._execute_workflow_non_stream(
@@ -616,6 +622,7 @@ class BrowserWorkflowMixin:
                     workflow_priority=workflow_priority,
                     allow_media_postprocess=allow_media_postprocess,
                     requested_model=requested_model,
+                    **({"workflow_variables": workflow_variables} if workflow_variables else {}),
                 )
         
         finally:
@@ -643,6 +650,7 @@ class BrowserWorkflowMixin:
         allow_media_postprocess: bool = True,
         allocation_mode: Optional[str] = None,
         requested_model: Optional[str] = None,
+        workflow_variables: Optional[Dict[str, Any]] = None,
     ) -> Generator[str, None, None]:
         """使用指定域名路由匹配的标签页执行工作流。"""
         is_valid, error_msg, sanitized_messages = MessageValidator.validate(messages)
@@ -712,6 +720,7 @@ class BrowserWorkflowMixin:
                     workflow_priority=workflow_priority,
                     allow_media_postprocess=allow_media_postprocess,
                     requested_model=requested_model,
+                    **({"workflow_variables": workflow_variables} if workflow_variables else {}),
                 )
             else:
                 yield from self._execute_workflow_non_stream(
@@ -722,6 +731,7 @@ class BrowserWorkflowMixin:
                     workflow_priority=workflow_priority,
                     allow_media_postprocess=allow_media_postprocess,
                     requested_model=requested_model,
+                    **({"workflow_variables": workflow_variables} if workflow_variables else {}),
                 )
 
         finally:
@@ -749,6 +759,7 @@ class BrowserWorkflowMixin:
         allow_media_postprocess: bool = True,
         allocation_mode: Optional[str] = None,
         requested_model: Optional[str] = None,
+        workflow_variables: Optional[Dict[str, Any]] = None,
     ) -> Generator[str, None, None]:
         """Execute a workflow on an atomically acquired route-group member."""
         is_valid, error_msg, sanitized_messages = MessageValidator.validate(messages)
@@ -781,6 +792,7 @@ class BrowserWorkflowMixin:
                 timeout=60,
                 allocation_mode=allocation_mode,
                 requested_model=requested_model,
+                **({"workflow_variables": workflow_variables} if workflow_variables else {}),
             )
             if session is None:
                 yield self.formatter.pack_error(
@@ -807,6 +819,7 @@ class BrowserWorkflowMixin:
                     workflow_priority=workflow_priority,
                     allow_media_postprocess=allow_media_postprocess,
                     requested_model=requested_model,
+                    **({"workflow_variables": workflow_variables} if workflow_variables else {}),
                 )
             else:
                 yield from self._execute_workflow_non_stream(
@@ -817,6 +830,7 @@ class BrowserWorkflowMixin:
                     workflow_priority=workflow_priority,
                     allow_media_postprocess=allow_media_postprocess,
                     requested_model=requested_model,
+                    **({"workflow_variables": workflow_variables} if workflow_variables else {}),
                 )
         finally:
             if session:
@@ -843,6 +857,7 @@ class BrowserWorkflowMixin:
         allow_media_postprocess: bool = True,
         resolved_tab_index: Optional[int] = None,
         requested_model: Optional[str] = None,
+        workflow_variables: Optional[Dict[str, Any]] = None,
     ) -> Generator[str, None, None]:
         """使用标签页完整 URL 严格匹配的唯一标签页执行工作流。"""
         is_valid, error_msg, sanitized_messages = MessageValidator.validate(messages)
@@ -929,6 +944,7 @@ class BrowserWorkflowMixin:
                     workflow_priority=workflow_priority,
                     allow_media_postprocess=allow_media_postprocess,
                     requested_model=requested_model,
+                    **({"workflow_variables": workflow_variables} if workflow_variables else {}),
                 )
             else:
                 yield from self._execute_workflow_non_stream(
@@ -939,6 +955,7 @@ class BrowserWorkflowMixin:
                     workflow_priority=workflow_priority,
                     allow_media_postprocess=allow_media_postprocess,
                     requested_model=requested_model,
+                    **({"workflow_variables": workflow_variables} if workflow_variables else {}),
                 )
 
         finally:
@@ -988,6 +1005,7 @@ class BrowserWorkflowMixin:
         *,
         preset_name: Optional[str],
         requested_model: Optional[str],
+        workflow_variables: Optional[Dict[str, Any]] = None,
     ) -> List[PromptChunk]:
         """Build a chunk plan from the same final prompt used by the workflow."""
         try:
@@ -1041,6 +1059,7 @@ class BrowserWorkflowMixin:
         workflow_priority: Optional[int] = None,
         allow_media_postprocess: bool = True,
         requested_model: Optional[str] = None,
+        workflow_variables: Optional[Dict[str, Any]] = None,
         _prepared_prompt: Optional[str] = None,
         _skip_chunk_planning: bool = False,
         _chunk_continuation: bool = False,
@@ -1052,6 +1071,7 @@ class BrowserWorkflowMixin:
                 messages,
                 preset_name=preset_name,
                 requested_model=requested_model,
+                **({"workflow_variables": workflow_variables} if workflow_variables else {}),
             )
             if len(chunk_plan) > 1:
                 for chunk in chunk_plan:
@@ -1064,6 +1084,7 @@ class BrowserWorkflowMixin:
                         workflow_priority=workflow_priority,
                         allow_media_postprocess=(allow_media_postprocess if is_final_chunk else False),
                         requested_model=requested_model,
+                        **({"workflow_variables": workflow_variables} if workflow_variables else {}),
                         _prepared_prompt=chunk.prompt,
                         _skip_chunk_planning=True,
                         _chunk_continuation=chunk.index > 1,
@@ -1109,6 +1130,7 @@ class BrowserWorkflowMixin:
                     workflow_priority=workflow_priority,
                     allow_media_postprocess=allow_media_postprocess,
                     requested_model=requested_model,
+                    **({"workflow_variables": workflow_variables} if workflow_variables else {}),
                     _prepared_prompt=_prepared_prompt,
                     _chunk_continuation=_chunk_continuation,
                     _include_message_images=_include_message_images,
@@ -1122,6 +1144,7 @@ class BrowserWorkflowMixin:
                         if (
                             not saw_content
                             and attempt < max_terminal_retries
+                            and not getattr(session, "_workflow_structured_active", False)
                             and is_terminal_error
                             and self._is_retriable_stream_terminal_error_chunk(chunk)
                             and not (stop_checker or self._should_stop_checker)()
@@ -1524,6 +1547,7 @@ class BrowserWorkflowMixin:
         workflow_priority: Optional[int] = None,
         allow_media_postprocess: bool = True,
         requested_model: Optional[str] = None,
+        workflow_variables: Optional[Dict[str, Any]] = None,
         _prepared_prompt: Optional[str] = None,
         _chunk_continuation: bool = False,
         _include_message_images: bool = True,
@@ -1648,6 +1672,9 @@ class BrowserWorkflowMixin:
             str(selectors.get("input_box", "") or ""),
         )
         workflow = site_config.get("workflow", [])
+        session._workflow_structured_active = bool(has_control_flow(workflow) or workflow_variables)
+        if has_control_flow(workflow):
+            validate_workflow(workflow)
         stealth_mode = site_config.get("stealth", False)
         force_new_conversation = bool(BrowserConstants.get("FORCE_NEW_CONVERSATION"))
         conversation_threshold = self._get_conversation_timeout_threshold()
@@ -2001,7 +2028,11 @@ class BrowserWorkflowMixin:
         if initial_workflow_url and "challenges.cloudflare.com" not in initial_workflow_url and "challenge-platform" not in initial_workflow_url and initial_workflow_url.startswith("http"):
             setattr(session, "_request_occupied_url", initial_workflow_url)
 
+        flow_program = None
+
         def _combined_stop_checker() -> bool:
+            if flow_program is not None and time.monotonic() > flow_program.deadline:
+                return True
             if effective_stop_checker():
                 return True
             if command_engine is not None and command_engine.workflow_interrupt_requested(session):
@@ -2039,9 +2070,17 @@ class BrowserWorkflowMixin:
         media_dom_baseline: Optional[Dict[str, Any]] = None
         media_dom_baseline_captured = False
         arena_result_baseline_captured = False
+        flow_program = None
         
         try:
             with executor.workflow_execution_scope():
+                if has_control_flow(workflow) or workflow_variables:
+                    flow_program = FlowProgram(
+                        workflow, context=context, inputs=workflow_variables,
+                        capture=lambda spec, target: capture_page_state(executor, spec, target, flow_program.variables),
+                        stop_checker=effective_stop_checker,
+                    )
+                    workflow = flow_program.steps
                 step_index = 0
                 workflow_total = len(workflow)
                 while step_index < len(workflow):
@@ -2060,7 +2099,27 @@ class BrowserWorkflowMixin:
                             )
                             break
 
-                    step = workflow[step_index]
+                    if flow_program is not None:
+                        try:
+                            step_index = flow_program.next_leaf(step_index)
+                        except Exception as flow_error:
+                            workflow_aborted = True
+                            yield self.formatter.pack_error(str(flow_error), code="workflow_control_failed")
+                            break
+                        if step_index >= len(workflow):
+                            break
+                        try:
+                            step, flow_selector = flow_program.prepare_leaf(step_index, selectors)
+                        except Exception as flow_error:
+                            resumed = flow_program.recover(flow_error, min(step_index, len(workflow) - 1))
+                            if resumed is not None:
+                                step_index = resumed
+                                continue
+                            workflow_aborted = True
+                            yield self.formatter.pack_error(str(flow_error), code="workflow_control_failed")
+                            break
+                    else:
+                        step = workflow[step_index]
                     if command_engine is not None:
                         command_engine.update_workflow_runtime_step(session, step_index, step)
 
@@ -2103,7 +2162,7 @@ class BrowserWorkflowMixin:
 
                             stream_index = None
                             try:
-                                if executor.page_looks_generating(selectors.get("send_btn", "")):
+                                if flow_program is None and executor.page_looks_generating(selectors.get("send_btn", "")):
                                     stream_index = self._find_next_stream_step_index(workflow, step_index)
                             except Exception:
                                 stream_index = None
@@ -2116,10 +2175,9 @@ class BrowserWorkflowMixin:
                                 step_index = stream_index
                                 continue
 
-                            resume_index = self._find_resume_step_after_interrupt(
-                                workflow,
-                                step_index,
-                            )
+                            resume_index = (self._find_resume_step_after_interrupt(
+                                workflow, step_index,
+                            ) if flow_program is None else step_index)
                             if resume_index != step_index:
                                 logger.info(
                                     f"[{session.id}] 外部验证后跳过清理/停止步骤，"
@@ -2158,7 +2216,7 @@ class BrowserWorkflowMixin:
                         step_index += 1
                         continue
 
-                    selector = selectors.get(target_key, '')
+                    selector = flow_selector if flow_program is not None else selectors.get(target_key, '')
                     if action_upper in {"STREAM_WAIT", "STREAM_OUTPUT", "PAGE_FETCH"}:
                         self._emit_request_block(
                             request_blocks,
@@ -2203,6 +2261,15 @@ class BrowserWorkflowMixin:
                     # 修复：补入 SELECT_MODEL。执行器 executor_actions.py 对空 selector 有硬编码兜底，
                     # 且编辑器测试路径无此校验，漏配会导致"测试通过、生产报 缺少配置: model_select_btn"
                     if not selector and action not in ("WAIT", "KEY_PRESS", "COORD_CLICK", "COORD_SCROLL", "JS_EXEC", "READONLY_HINT", "PAGE_FETCH", "SELECT_MODEL"):
+                        if flow_program is not None:
+                            if optional:
+                                flow_program._record(step, "skipped", reason="missing_selector_optional")
+                            else:
+                                resumed = flow_program.recover(WorkflowError(f"缺少配置: {target_key}"), step_index)
+                                if resumed is not None:
+                                    step_index = resumed
+                                    continue
+                                workflow_aborted = True
                         if optional:
                             logger.debug(
                                 f"{step_tag} 跳过: "
@@ -2270,15 +2337,18 @@ class BrowserWorkflowMixin:
                     try:
                         chunk_count = 0
                         delta_chars = 0
-                        for chunk in executor.execute_step(
+                        step_events = executor.execute_step(
                             action=action,
                             selector=selector,
                             target_key=target_key,
                             value=param_value,
                             optional=optional,
-                            context=context,
+                            context=flow_program.leaf_context(step) if flow_program is not None else context,
                             execution=execution_policy,
-                        ):
+                        )
+                        if flow_program is not None:
+                            step_events = flow_program.events(step_events, step_index)
+                        for chunk in step_events:
                             chunk_count += 1
                             delta_content = self._extract_stream_delta_content(chunk)
                             if delta_content:
@@ -2369,6 +2439,14 @@ class BrowserWorkflowMixin:
                         )
                         break
                     except (ElementNotFoundError, WorkflowError) as e:
+                        if flow_program is not None:
+                            resumed = flow_program.recover(e, step_index)
+                            if resumed is not None:
+                                step_index = resumed
+                                continue
+                            workflow_aborted = True
+                            yield self.formatter.pack_error(str(e), code="workflow_step_failed")
+                            break
                         step_elapsed = time.perf_counter() - step_started_at
                         logger.warning(
                             f"{step_tag} 中断: "
@@ -2410,6 +2488,14 @@ class BrowserWorkflowMixin:
                                     yield self.formatter.pack_error(err_str)
                         break
                     except Exception as e:
+                        if flow_program is not None:
+                            resumed = flow_program.recover(e, step_index)
+                            if resumed is not None:
+                                step_index = resumed
+                                continue
+                            workflow_aborted = True
+                            yield self.formatter.pack_error(str(e), code="workflow_step_failed")
+                            break
                         step_elapsed = time.perf_counter() - step_started_at
                         if effective_stop_checker():
                             logger.info(f"[{session.id}] 取消后忽略步骤异常: {e}")
@@ -2682,6 +2768,15 @@ class BrowserWorkflowMixin:
                 yield self.formatter.pack_error(f"系统错误: {str(e)}")
             yield self.formatter.pack_finish()
         finally:
+            if flow_program is not None:
+                try:
+                    from app.services.request_manager import request_manager
+                    request_manager.append_workflow_trace(
+                        str(getattr(session, "_bound_request_id", "") or ""),
+                        flow_program.trace,
+                    )
+                except Exception:
+                    pass
             if executor is not None:
                 try:
                     executor.cleanup_after_workflow()
@@ -2708,6 +2803,7 @@ class BrowserWorkflowMixin:
         workflow_priority: Optional[int] = None,
         allow_media_postprocess: bool = True,
         requested_model: Optional[str] = None,
+        workflow_variables: Optional[Dict[str, Any]] = None,
     ) -> Generator[str, None, None]:
         """非流式工作流执行"""
         collected_content = []
@@ -2722,6 +2818,7 @@ class BrowserWorkflowMixin:
             workflow_priority=workflow_priority,
             allow_media_postprocess=allow_media_postprocess,
             requested_model=requested_model,
+            **({"workflow_variables": workflow_variables} if workflow_variables else {}),
         )
 
         try:

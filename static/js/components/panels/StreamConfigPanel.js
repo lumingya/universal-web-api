@@ -382,26 +382,20 @@ window.StreamConfigPanel = {
         }
     },
     template: `
-        <div class="bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg shadow-sm">
+        <div class="cap-panel cap-response-panel bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg shadow-sm">
             <!-- 标题栏 -->
             <div class="px-4 py-3 border-b dark:border-gray-700 flex justify-between items-center cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
                  @click="toggle">
                 <div class="flex items-center gap-2">
                     <span class="w-4 inline-flex justify-center text-gray-500 dark:text-gray-400" v-html="collapsed ? $icons.chevronDown : $icons.chevronUp"></span>
-                    <h3 class="font-semibold text-gray-900 dark:text-white">网络监听模式</h3>
+                    <h3 class="font-semibold text-gray-900 dark:text-white">从哪里读取回复</h3>
                     <span v-if="isNetworkMode" class="text-xs font-medium px-2 py-0.5 rounded bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400">已启用</span>
                     <span v-else class="text-xs font-medium px-2 py-0.5 rounded bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400">DOM 流式</span>
-                </div>
-                <div class="flex items-center" @click.stop>
-                    <label class="toggle-label scale-90 !m-0">
-                        <input type="checkbox" :checked="isNetworkMode" @change="toggleNetworkMode" class="sr-only peer">
-                        <div class="toggle-bg"></div>
-                    </label>
                 </div>
             </div>
 
             <!-- 内容 -->
-            <div v-show="!collapsed" class="p-4 space-y-4">
+            <div v-show="!collapsed" class="p-4 space-y-4"><div class="cap-response-explainer"><span class="cap-icon" v-html="$icons.documentArrowDown"></span><div><h4>{{ isNetworkMode ? '正在读取网络响应' : '正在读取网页上显示的回复' }}</h4><p>{{ isNetworkMode ? '适合保留代码、公式等原始内容，需要正确的请求匹配和解析器。' : '观察页面文字的变化来返回回复。首次适配站点时，可以先沿用这种方式。' }}</p><small>开启开关后读取网络响应，关闭则读取页面内容；切换可能影响现有回复解析。</small></div><label class="cap-switch"><span class="cap-state">{{ isNetworkMode ? '网络读取' : '网页读取' }}</span><input role="switch" type="checkbox" aria-label="从网络读取回复" :checked="isNetworkMode" @change="toggleNetworkMode" class="cap-switch-input"><i aria-hidden="true"></i></label></div>
                 <div v-if="!guideExpanded">
                     <button @click="guideExpanded = true" type="button" class="dashboard-guide-toggle dashboard-guide-toggle--violet">
                         <span>网络模式引导</span>
@@ -448,8 +442,8 @@ window.StreamConfigPanel = {
                 </div>
 
                 <!-- 网络模式配置 -->
-                <div v-if="isNetworkMode" class="space-y-4 border-t dark:border-gray-700 pt-4">
-                    <div class="rounded-lg border border-slate-200/70 bg-slate-50/80 p-4 dark:border-slate-700 dark:bg-slate-900/40 space-y-4">
+                <details v-if="isNetworkMode" class="cap-settings"><summary><span><strong>配置网络响应识别</strong><small>先指定请求关键词，再选择解析器。</small></span><span class="cap-chevron" v-html="$icons.chevronDown"></span></summary><div class="cap-settings-body">
+                    <details class="cap-technical"><summary><span><strong>请求发送方式（高级）</strong><small>网页工作流或页面接口直发；仅在明确需要更换发送方式时设置。</small></span><span class="cap-chevron" v-html="$icons.chevronDown"></span></summary><div class="cap-settings-body"><div class="rounded-lg border border-slate-200/70 bg-slate-50/80 p-4 dark:border-slate-700 dark:bg-slate-900/40 space-y-4">
                         <div class="text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center gap-2">
                             <span>🚀</span>
                             <span>发送方式</span>
@@ -502,7 +496,7 @@ window.StreamConfigPanel = {
                                 </template>
                             </div>
                         </div>
-                    </div>
+                    </div></div></details>
 
                     <div>
                         <button v-if="!networkStepsExpanded"
@@ -584,7 +578,7 @@ window.StreamConfigPanel = {
                         </div>
                     </div>
 
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <details class="cap-technical"><summary><span><strong>响应不完整、等待太久或重复发送？</strong><small>流匹配、超时与重试的排查参数。</small></span><span class="cap-chevron" v-html="$icons.chevronDown"></span></summary><div class="cap-settings-body"><div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
                             <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">流目标匹配模式</label>
                             <select :value="networkConfig.stream_match_mode"
@@ -736,7 +730,7 @@ window.StreamConfigPanel = {
                             </div>
                         </div>
                     </div>
-                </div>
+                </div></details></div></details>
 
                 <!-- DOM 模式说明 -->
                 <div v-else class="dashboard-mini-card">
@@ -756,7 +750,7 @@ window.StreamConfigPanel = {
                 </div>
 
                 <!-- 通用配置 -->
-                <div class="border-t dark:border-gray-700 pt-4">
+                <details class="cap-troubleshoot"><summary><span><strong>回复一直不结束？</strong><small>调整一次对话最多允许等待的时间。</small></span><span class="cap-chevron" v-html="$icons.chevronDown"></span></summary><div class="cap-settings-body">
                     <div class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">通用配置</div>
                     <div class="grid grid-cols-1 gap-4">
                         <div>
@@ -771,7 +765,7 @@ window.StreamConfigPanel = {
                             </p>
                         </div>
                     </div>
-                </div>
+                </div></details>
             </div>
         </div>
     `

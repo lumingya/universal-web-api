@@ -18,7 +18,7 @@ class WorkflowEditorInjector:
     """工作流编辑器注入器"""
     
     _script_cache: Optional[str] = None
-    _script_mtime: float = 0
+    _script_mtime: Optional[tuple[int, ...]] = None
 
     @staticmethod
     def _build_js_assignment(var_name: str, value) -> str:
@@ -34,11 +34,13 @@ class WorkflowEditorInjector:
             raise FileNotFoundError(f"编辑器脚本不存在: {script_path}")
         
         # 检查文件是否有变化
-        current_mtime = script_path.stat().st_mtime
+        shared_path = script_path.with_name("workflow-studio.js")
+        guide_path = script_path.with_name("workflow-page-guide.js")
+        current_mtime = (script_path.stat().st_mtime_ns, shared_path.stat().st_mtime_ns, guide_path.stat().st_mtime_ns)
         
         if cls._script_cache is None or current_mtime != cls._script_mtime:
             with open(script_path, 'r', encoding='utf-8') as f:
-                cls._script_cache = f.read()
+                cls._script_cache = shared_path.read_text(encoding="utf-8") + "\n" + guide_path.read_text(encoding="utf-8") + "\n" + f.read()
             cls._script_mtime = current_mtime
             logger.info(f"已加载编辑器脚本: {len(cls._script_cache)} 字符 (mtime: {current_mtime})")
         

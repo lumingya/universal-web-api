@@ -1856,6 +1856,9 @@ class ConfigEngine:
     def set_preset_workflow(self, domain: str, workflow: List,
                             preset_name: str = None) -> bool:
         """设置指定预设的工作流配置"""
+        from app.core.workflow.flow_runtime import has_control_flow, validate_workflow
+        if has_control_flow(workflow):
+            validate_workflow(workflow)
         self.refresh_if_changed()
         data = self._get_site_data(domain, preset_name)
         if data is None:
