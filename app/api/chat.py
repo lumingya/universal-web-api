@@ -23,7 +23,8 @@ from collections import OrderedDict
 from typing import Optional, Any, Dict, List, Callable, AsyncIterator
 
 from fastapi import APIRouter, Request, HTTPException, Header, Depends
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse as StarletteStreamingResponse
+from app.api.streaming_response import RequestStreamingResponse as StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from app.core.config import _request_context, get_logger, SSEFormatter
@@ -37,6 +38,7 @@ from app.services.request_manager import (
 )
 from app.services.request_lifecycle import (
     TrackedWorkerExecutionCancelled,
+    request_finalization,
     get_max_request_execute_time_sec,
     cleanup_worker_thread_after_request,
     mark_request_hard_timeout,
@@ -280,7 +282,7 @@ def _is_absolute_request_timeout_error(error: Any) -> bool:
 def _format_tool_calling_error(error: Any) -> tuple[str, str]:
     if _is_absolute_request_timeout_error(error):
         return "请求执行超过最大绝对超时，已强制中断", "absolute_request_timeout"
-    return f"执行错误: {error}", "tool_calling_failed"
+    return f"执行错误: {error}", str(getattr(error, "code", None) or "tool_calling_failed")
 
 
 async def _run_tracked_tool_calling_worker(
@@ -1893,7 +1895,7 @@ async def _stream_responses_compat(
                 _failed_response(_decode_json_response(chat_response)),
             )
             return
-        if not isinstance(chat_response, StreamingResponse):
+        if not isinstance(chat_response, StarletteStreamingResponse):
             raise RuntimeError("responses_backing_request_unexpected_response_type")
 
         async for raw_chunk in _iter_backing_chunks(chat_response):
@@ -2315,6 +2317,11 @@ async def chat_completions(
                 tools=body.tools,
                 functions=body.functions,
             )
+    except asyncio.CancelledError:
+        ctx.request_cancel("coroutine_cancelled")
+        with request_finalization(ctx):
+            pass
+        raise
     except Exception:
         request_manager.finish_request(ctx, success=False)
         raise
@@ -2329,7 +2336,8 @@ async def chat_completions(
                         "Cache-Control": "no-cache, no-transform",
                         "Connection": "keep-alive",
                         "X-Accel-Buffering": "no"
-                    }
+                    },
+                    request_context=ctx,
                 )
             return await _non_stream_tool_calling_with_lifecycle(request, body, ctx)
 
@@ -2341,7 +2349,8 @@ async def chat_completions(
                     "Cache-Control": "no-cache, no-transform",
                     "Connection": "keep-alive",
                     "X-Accel-Buffering": "no"
-                }
+                },
+                request_context=ctx,
             )
         else:
             return await _non_stream_with_lifecycle(request, body, ctx)
@@ -2574,8 +2583,11 @@ async def _stream_with_lifecycle(
                 error_message = _extract_stream_error_message(emit_chunk or outgoing_chunk)
                 if error_message:
                     logger.error(f"流式响应返回错误事件: {error_message}")
-                    request_manager.capture_error(ctx, error_message, code="stream_error")
-                    ctx.mark_failed(error_message)
+                    error_code = next((str(payload["error"].get("code") or "stream_error")
+                                       for payload in iter_openai_sse_payloads(emit_chunk or outgoing_chunk)
+                                       if isinstance(payload.get("error"), dict)), "stream_error")
+                    request_manager.capture_error(ctx, error_message, code=error_code)
+                    ctx.mark_failed(error_code)
                     done_chunk = _pack_done()
                     request_manager.capture_response_chunk(ctx, done_chunk)
                     yield done_chunk
@@ -2665,6 +2677,10 @@ async def _stream_with_lifecycle(
         if not ctx.should_stop() and ctx.status == RequestStatus.RUNNING:
             ctx.mark_completed()
 
+    except GeneratorExit:
+        if not ctx.is_terminal():
+            ctx.request_cancel("stream_closed")
+        raise
     except asyncio.CancelledError:
         logger.debug("协程取消")
         ctx.request_cancel("coroutine_cancelled")
@@ -2673,38 +2689,37 @@ async def _stream_with_lifecycle(
     except Exception as e:
         logger.error(f"异常: {e}")
         request_manager.capture_error(ctx, e, code="internal_error")
-        ctx.mark_failed(str(e))
+        ctx.mark_failed(str(getattr(e, "code", None) or e))
         yield _pack_error(f"执行错误: {str(e)}", "internal_error")
         yield _pack_done()
 
     finally:
-        if worker_thread and worker_thread.is_alive():
-            await cleanup_worker_thread_after_request(
-                worker_thread,
-                ctx,
-                completed=ctx.status == RequestStatus.COMPLETED,
-                cancel_reason="cleanup",
-                join_timeout=5.0,
-                retire_reason="worker_cleanup_timeout",
-                completed_join_timeout=0.5,
-            )
+        with request_finalization(ctx, request_context_token):
+            if worker_thread and worker_thread.is_alive():
+                await cleanup_worker_thread_after_request(
+                    worker_thread,
+                    ctx,
+                    completed=ctx.status == RequestStatus.COMPLETED,
+                    cancel_reason="cleanup",
+                    join_timeout=5.0,
+                    retire_reason="worker_cleanup_timeout",
+                    completed_join_timeout=0.5,
+                )
 
-        if chunk_queue is not None:
-            try:
-                while not chunk_queue.empty():
-                    chunk_queue.get_nowait()
-            except Exception:
-                pass
+            if chunk_queue is not None:
+                try:
+                    while not chunk_queue.empty():
+                        chunk_queue.get_nowait()
+                except Exception:
+                    pass
 
-        if disconnect_task:
-            disconnect_task.cancel()
-            try:
-                await disconnect_task
-            except asyncio.CancelledError:
-                pass
+            if disconnect_task:
+                disconnect_task.cancel()
+                try:
+                    await disconnect_task
+                except asyncio.CancelledError:
+                    pass
 
-        request_manager.finish_request(ctx, success=(ctx.status == RequestStatus.COMPLETED))
-        _request_context.reset(request_context_token)
 
 
 async def _non_stream_with_lifecycle(
@@ -2824,7 +2839,8 @@ def _execute_browser_non_stream_messages(
     data = decode_browser_non_stream_payload(payload)
     if "error" in data:
         error = data.get("error") or {}
-        raise RuntimeError(str(error.get("message") or "browser_execution_failed"))
+        from app.services.error_metadata import BrowserExecutionError
+        raise BrowserExecutionError(error)
     return data
 
 
@@ -2944,37 +2960,37 @@ async def _complete_tool_calling_with_lifecycle(
         if str(e) == "tool_calling_cancelled" and ctx.should_stop():
             raise asyncio.CancelledError()
         logger.error(f"tool_calling_failed: {e}")
-        request_manager.capture_error(ctx, e, code="tool_calling_failed")
-        ctx.mark_failed(str(e))
+        request_manager.capture_error(ctx, e, code=getattr(e, "code", "tool_calling_failed"))
+        ctx.mark_failed(str(getattr(e, "code", None) or e))
         raise
     except asyncio.CancelledError:
         ctx.request_cancel("coroutine_cancelled")
         raise asyncio.CancelledError()
     except Exception as e:
         logger.error(f"tool_calling_failed: {e}")
-        request_manager.capture_error(ctx, e, code="tool_calling_failed")
-        ctx.mark_failed(str(e))
+        request_manager.capture_error(ctx, e, code=getattr(e, "code", "tool_calling_failed"))
+        ctx.mark_failed(str(getattr(e, "code", None) or e))
         raise
     finally:
-        if disconnect_task:
-            disconnect_task.cancel()
-            try:
-                await disconnect_task
-            except asyncio.CancelledError:
-                pass
-        worker_thread = worker_state.get("thread")
-        if isinstance(worker_thread, threading.Thread) and worker_thread.is_alive():
-            await cleanup_worker_thread_after_request(
-                worker_thread,
-                ctx,
-                completed=ctx.status == RequestStatus.COMPLETED,
-                cancel_reason="cleanup",
-                join_timeout=5.0,
-                retire_reason="worker_cleanup_timeout",
-            )
-        worker_state["thread"] = None
-        worker_state["label"] = None
-        request_manager.finish_request(ctx, success=(ctx.status == RequestStatus.COMPLETED))
+        with request_finalization(ctx):
+            if disconnect_task:
+                disconnect_task.cancel()
+                try:
+                    await disconnect_task
+                except asyncio.CancelledError:
+                    pass
+            worker_thread = worker_state.get("thread")
+            if isinstance(worker_thread, threading.Thread) and worker_thread.is_alive():
+                await cleanup_worker_thread_after_request(
+                    worker_thread,
+                    ctx,
+                    completed=ctx.status == RequestStatus.COMPLETED,
+                    cancel_reason="cleanup",
+                    join_timeout=5.0,
+                    retire_reason="worker_cleanup_timeout",
+                )
+            worker_state["thread"] = None
+            worker_state["label"] = None
 
 
 async def _non_stream_tool_calling_with_lifecycle(
@@ -3063,6 +3079,10 @@ async def _stream_tool_calling_with_lifecycle(
                 break
             yield chunk
             await asyncio.sleep(0)
+    except GeneratorExit:
+        if not ctx.is_terminal():
+            ctx.request_cancel("stream_closed")
+        raise
     except asyncio.CancelledError:
         if _is_genuine_task_cancellation():
             raise
@@ -3076,12 +3096,13 @@ async def _stream_tool_calling_with_lifecycle(
         yield _pack_error(message, code)
         yield _pack_done()
     finally:
-        if response_task is not None and not response_task.done():
-            response_task.cancel()
-            try:
-                await response_task
-            except asyncio.CancelledError:
-                pass
+        with request_finalization(ctx):
+            if response_task is not None and not response_task.done():
+                response_task.cancel()
+                try:
+                    await response_task
+                except asyncio.CancelledError:
+                    pass
 
 
 def _pack_error(

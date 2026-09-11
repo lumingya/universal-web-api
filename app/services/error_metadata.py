@@ -417,3 +417,12 @@ def build_error_response(
         status_code=metadata.status_code,
         headers=response_headers,
     )
+
+
+class BrowserExecutionError(RuntimeError):
+    """An upstream browser failure is not assistant text for tool parsing."""
+    def __init__(self, error):
+        error = error if isinstance(error, dict) else {"message": str(error)}
+        self.code = str(error.get("code") or "browser_execution_failed")
+        self.message = str(error.get("message") or self.code)
+        super().__init__(self.message)

@@ -78,6 +78,10 @@ _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
   ];
 
   const defaultPendingSelectors = [
+    "[data-upload-state='uploading']",
+    "[data-upload-state='processing']",
+    "[data-upload-state='reading']",
+    "[data-upload-state='pending']",
     "progress",
     "[role='progressbar']",
     "[aria-busy='true']",
@@ -97,10 +101,18 @@ _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
     "sending",
     "processing",
     "preparing",
+    "reading",
+    "parsing",
+    "解析中",
+    "正在解析",
+    "正在上传",
+    "正在处理",
     "analyzing",
     "generating",
-    "\u8bfb\u53d6",
-    "\u5206\u6790",
+    "读取中",
+    "正在读取",
+    "分析中",
+    "正在分析",
     "\u5904\u7406\u4e2d",
     "\u4e0a\u4f20\u4e2d",
     "\u751f\u6210\u4e2d",
@@ -219,13 +231,9 @@ _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
     if (!node || !node.tagName) return "";
     const parts = [lower(node.tagName || "")];
     const cls = compactText(node.className || "", 80);
-    const aria = compactText(node.getAttribute && node.getAttribute("aria-label"), 60);
     const role = compactText(node.getAttribute && node.getAttribute("role"), 40);
-    const title = compactText(node.getAttribute && node.getAttribute("title"), 60);
     if (cls) parts.push("class=" + cls);
-    if (aria) parts.push("aria=" + aria);
     if (role) parts.push("role=" + role);
-    if (title) parts.push("title=" + title);
     return parts.join("|");
   }
 
@@ -300,30 +308,25 @@ _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
     return document.body;
   }
 
-  function getRootStatusText(root, input) {
-    if (!root) return "";
-    try {
-      const clone = root.cloneNode(true);
-      const removalSelectors = [
-        "textarea",
-        "input",
-        "[contenteditable='true']",
-        "[role='textbox']",
-        ".ql-editor",
-      ];
-      for (const selector of removalSelectors) {
-        try {
-          clone.querySelectorAll(selector).forEach((node) => node.remove());
-        } catch (error) {}
-      }
-      const text = String(clone.innerText || clone.textContent || "");
-      if (text.trim()) return text;
-    } catch (error) {}
+  function matchesMarker(text, word) {
+    const haystack = lower(text);
+    const needle = lower(word).trim();
+    if (!needle) return false;
+    if (!/^[a-z0-9 _-]+$/i.test(needle)) return haystack.includes(needle);
+    let pos = haystack.indexOf(needle);
+    while (pos >= 0) {
+      const before = haystack[pos - 1] || "";
+      const after = haystack[pos + needle.length] || "";
+      if (!/[a-z0-9_]/i.test(before) && !/[a-z0-9_]/i.test(after)) return true;
+      pos = haystack.indexOf(needle, pos + 1);
+    }
+    return false;
+  }
 
-    const raw = String((root && (root.innerText || root.textContent)) || "");
-    const inputText = getInputText(input).trim();
-    if (!inputText) return raw;
-    return raw.replace(inputText, " ");
+  function nodeIdentity(node) {
+    if (!monitor.nodeIds) { monitor.nodeIds = new WeakMap(); monitor.nextNodeId = 0; }
+    if (!monitor.nodeIds.has(node)) monitor.nodeIds.set(node, ++monitor.nextNodeId);
+    return String(monitor.nodeIds.get(node));
   }
 
   function collectState(opts) {
@@ -356,85 +359,85 @@ _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
 
     const attachmentSelector = joinSelectors(attachmentSelectors);
     const pendingSelector = joinSelectors(pendingSelectors);
+    const inputExclusions = "textarea,input,[contenteditable],[role='textbox'],.ql-editor";
+    const contentExclusions = joinSelectors(mergeUnique([
+      "[hidden]", "[aria-hidden='true']", "[inert]", "[class*='mirror']",
+      "[class*='file-name']", "[class*='filename']", ".fileitem-file-name", ".fileitem-file-name-text",
+      "[class*='preview-content']", "[class*='preview-text']", "[class*='file-content']",
+      "[class*='document-content']", "[class*='message-content']", "[class*='history']",
+      "pre", "code"
+    ], opts && opts.contentExclusionSelectors));
     const isVisibleNode = (node) => {
-      if (!node) return false;
-      try {
-        let cur = node;
-        while (cur && cur !== root && cur !== document.body) {
-          const style = window.getComputedStyle ? window.getComputedStyle(cur) : null;
-          if (style) {
-            if (style.display === "none" || style.visibility === "hidden") return false;
-            if (Number(style.opacity || 1) <= 0.05) return false;
-          }
-          cur = cur.parentElement;
-        }
-        return true;
-      } catch (error) {
-        return true;
+      if (!node || !node.isConnected) return false;
+      for (let cur = node; cur; cur = cur.parentElement) {
+        const style = window.getComputedStyle(cur);
+        if (cur.hidden || cur.getAttribute("aria-hidden") === "true" || style.display === "none" ||
+            style.visibility === "hidden" || style.visibility === "collapse" || Number(style.opacity) <= 0.05) return false;
       }
+      return true;
     };
-    const uploadNodes = (root && attachmentSelector) ? Array.from(root.querySelectorAll(attachmentSelector)) : [];
-    const pendingNodes = (root && pendingSelector) ? Array.from(root.querySelectorAll(pendingSelector)).filter(isVisibleNode) : [];
+    const eligible = (node) => !!node && isVisibleNode(node) &&
+      !node.closest(inputExclusions) && !node.closest(contentExclusions) &&
+      !(input && node.contains(input));
+    const queryAll = (selector) => {
+      try { return root && selector ? Array.from(root.querySelectorAll(selector)) : []; }
+      catch (_) { return []; }
+    };
+    const candidates = queryAll(attachmentSelector).filter(node => eligible(node) &&
+      !node.matches("[role='status'],[role='progressbar'],progress") &&
+      !/(?:^|[ _-])(status|name|filename|progress|loading|icon|content|text)(?:$|[ _-])/i.test(String(node.className || "")));
+    // Prefer the innermost card, but never count its image as another file.
+    const cards = candidates.filter(node => !candidates.some(child =>
+      child !== node && node.contains(child) && lower(child.tagName) !== "img"));
+    const uploadNodes = cards.filter(node => !cards.some(parent => parent !== node && parent.contains(node)));
+    const inCard = node => candidates.some(card => card === node || card.contains(node));
+    const pendingNodes = queryAll(pendingSelector).filter(eligible);
+    if (root && root !== document.body && root !== document.documentElement && isVisibleNode(root) &&
+        root.getAttribute("aria-busy") === "true") pendingNodes.push(root);
     const errorSelector = joinSelectors(mergeUnique(
       ["[data-upload-state='error']", "[data-upload-state='failed']"], opts && opts.errorSelectors));
-    let uploadErrorCount = 0;
-    try { uploadErrorCount = root && errorSelector ? Array.from(root.querySelectorAll(errorSelector)).filter(isVisibleNode).length : 0; } catch (_) {}
-    const fileInputs = Array.from((root || document).querySelectorAll("input[type='file']"));
-    const fileInputCount = fileInputs.reduce((sum, inputNode) => {
-      try {
-        return sum + (((inputNode.files && inputNode.files.length) || 0));
-      } catch (error) {
-        return sum;
+    const errorNodes = queryAll(errorSelector).filter(eligible);
+    const uploadErrorCount = errorNodes.length;
+    const statusSelector = joinSelectors(mergeUnique([
+      "[role='status']", "[aria-live]", "[class*='status']", "[data-upload-state]"
+    ], opts && opts.statusSelectors));
+    const explicitStatus = joinSelectors(opts && opts.statusSelectors);
+    const statusNodes = queryAll(statusSelector).filter(node => eligible(node) && (
+      inCard(node) || (explicitStatus && node.matches(explicitStatus))));
+    const statusText = node => {
+      const parts = [];
+      const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        const parent = walker.currentNode.parentElement;
+        if (eligible(parent)) parts.push(walker.currentNode.textContent);
       }
-    }, 0);
-
-    const rawRootText = getRootStatusText(root, input);
-    const rootText = lower(rawRootText);
-    const rawAttachmentText = uploadNodes
-      .map((node) =>
-        [
-          node.textContent,
-          node.getAttribute && node.getAttribute("aria-label"),
-          node.getAttribute && node.getAttribute("title"),
-          node.getAttribute && node.getAttribute("data-testid"),
-          node.getAttribute && node.getAttribute("data-test-id"),
-          node.getAttribute && node.getAttribute("alt"),
-        ]
-          .filter(Boolean)
-          .join(" ")
-      )
-      .join("\n");
+      return parts.join(" ").trim();
+    };
+    const statusEvidence = statusNodes.map(node => {
+      const text = statusText(node);
+      return {source: "attachment_status", node: nodeIdentity(node),
+        markers: effectiveBusyWords.filter(word => matchesMarker(text, word))};
+    }).filter(item => item.markers.length);
+    const matchedBusyWords = [...new Set(statusEvidence.flatMap(item => item.markers))].slice(0, 8);
+    const pendingText = statusEvidence.length > 0;
+    const fileInputs = queryAll("input[type='file']");
+    const fileInputCount = fileInputs.reduce((sum, node) => sum + ((node.files && node.files.length) || 0), 0);
+    // Names are used only for presence reconciliation, never busy detection.
+    const rawAttachmentText = uploadNodes.map(node => {
+      const clone = node.cloneNode(true);
+      clone.querySelectorAll("textarea,input,[contenteditable],pre,code,[class*='preview-content'],[class*='preview-text'],[class*='file-content'],[class*='mirror']").forEach(child => child.remove());
+      return String(clone.textContent || "").slice(0, 2048);
+    }).join("\n");
     const attachmentText = lower(rawAttachmentText);
-    const previewCount = uploadNodes.filter((node) => {
-      try {
-        if (!node || !node.tagName) return false;
-        const tag = String(node.tagName || "").toLowerCase();
-        if (tag === "img") {
-          const src = String(node.getAttribute("src") || "");
-          return src.startsWith("blob:") || src.startsWith("data:image");
-        }
-        return !!node.querySelector("img[src^='blob:'], img[src^='data:image']");
-      } catch (error) {
-        return false;
-      }
-    }).length;
-
-    const fingerprint = uploadNodes
-      .slice(0, 24)
-      .map((node) => {
-        try {
-          const tag = lower(node.tagName || "");
-          const cls = lower(node.className || "");
-          const text = lower(node.textContent || "").slice(0, 48);
-          const alt = lower((node.getAttribute && node.getAttribute("alt")) || "");
-          const src = lower((node.getAttribute && node.getAttribute("src")) || "").slice(0, 48);
-          return [tag, cls, text, alt, src].join("#");
-        } catch (error) {
-          return "";
-        }
-      })
-      .filter(Boolean)
-      .join("|");
+    const previewCount = uploadNodes.filter(node => lower(node.tagName) === "img" ||
+      node.querySelector("img[src^='blob:'],img[src^='data:image']")).length;
+    const attachmentIds = uploadNodes.map(nodeIdentity);
+    const fingerprint = attachmentIds.join("|");
+    const progressFingerprint = pendingNodes.map(node => [nodeIdentity(node),
+      node.getAttribute("value"), node.getAttribute("aria-valuenow"), node.getAttribute("data-upload-state")].join(":")).join("|") +
+      JSON.stringify(statusEvidence);
+    // Deliberately do not clone/read the composer Prompt (which can be megabytes).
+    const rootText = "";
 
     const sendMeta = sendBtn
       ? lower(
@@ -450,11 +453,6 @@ _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
         )
       : "";
 
-    const matchedBusyWords = effectiveBusyWords.filter((word) => {
-      const needle = lower(word);
-      return needle && rootText.includes(needle);
-    }).slice(0, 8);
-
     const matchedDisabledMarkers = disabledMarkers.filter((word) => {
       const needle = lower(word);
       return needle && sendMeta.includes(needle);
@@ -467,14 +465,19 @@ _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
     );
     const sendBusy = !!sendBtn && (
       sendBtn.getAttribute("aria-busy") === "true" ||
-      includesAny(sendMeta, effectiveBusyWords)
+      effectiveBusyWords.some(word => matchesMarker(sendMeta, word))
     );
 
-    const pendingText = matchedBusyWords.length > 0;
+
 
     return {
       ok: true,
-      rootFound: !!root,
+      evidenceVersion: 2,
+      rootIdentity: root ? nodeIdentity(root) : "",
+      statusEvidence,
+      attachmentIds,
+      progressFingerprint,
+      rootFound: !!root && root !== document.body && root !== document.documentElement,
       inputFound: !!input,
       sendFound: !!sendBtn,
       uploadErrorCount,
@@ -492,8 +495,8 @@ _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
       rootSummary: describeNode(root),
       inputSummary: describeNode(input),
       sendSummary: describeNode(sendBtn),
-      rootTextSample: compactText(rawRootText, 160),
-      attachmentTextSample: compactText(rawAttachmentText, 160),
+      rootTextSample: "",
+      attachmentTextSample: "",
       matchedBusyWords,
       matchedDisabledMarkers,
       pendingNodeSummary: pendingNodes.slice(0, 4).map(describeNode).filter(Boolean),
@@ -508,7 +511,7 @@ _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
     const matchedExpectedName = expected.some(
       (needle) =>
         needle &&
-        (state.attachmentText.includes(needle) || state.rootText.includes(needle))
+        state.attachmentText.includes(needle)
     );
 
     const freshPreview = state.attachmentCount > baseline.attachmentCount ||
@@ -530,11 +533,12 @@ _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
       state.sendDisabled !== baseline.sendDisabled ||
       state.sendBusy !== baseline.sendBusy;
 
-    const attachmentObserved =
-      attachmentChanged ||
-      newExpectedName ||
-      ((mutationCount || 0) > 0 &&
-        (pendingChanged || sendTransition || state.attachmentCount > 0 || state.previewCount > 0));
+    const attachmentObserved = attachmentChanged || newExpectedName || pendingChanged;
+    const newIds = (state.attachmentIds || []).filter(id => !(baseline.attachmentIds || []).includes(id));
+    const expectedCount = expected.length;
+    const batchComplete = !expectedCount || newIds.length >= expectedCount ||
+      (newExpectedName && expected.every(name => state.attachmentText.includes(name)) &&
+       state.attachmentCount >= expectedCount);
 
     const observationReasons = [];
     if (attachmentChanged) observationReasons.push("attachment_changed");
@@ -545,6 +549,8 @@ _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
 
     return {
       matchedExpectedName,
+      batchComplete,
+      currentAttachmentCount: newIds.length,
       freshPreview: freshPreview || newExpectedName,
       attachmentChanged,
       pendingChanged,
@@ -661,6 +667,7 @@ _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
     const now = Date.now();
 
     return Object.assign({}, state, derived, {
+      trackingValid: !!monitor.baseline && state.rootIdentity === baseline.rootIdentity,
       baselineAttachmentCount: Number(baseline.attachmentCount || 0),
       baselinePreviewCount: Number(baseline.previewCount || 0),
       baselineFileInputCount: Number(baseline.fileInputCount || 0),
@@ -786,6 +793,8 @@ class AttachmentMonitor:
             "attachmentSelectors": self._config_list("attachment_selectors"),
             "pendingSelectors": self._config_list("pending_selectors"),
             "errorSelectors": self._config_list("error_selectors"),
+            "statusSelectors": self._config_list("status_selectors"),
+            "contentExclusionSelectors": self._config_list("content_exclusion_selectors"),
             "busyTextMarkers": self._config_list("busy_text_markers"),
             "ignoredBusyTextMarkers": self._config_list("ignored_busy_text_markers"),
             "sendButtonDisabledMarkers": self._config_list("send_button_disabled_markers"),
@@ -907,15 +916,8 @@ class AttachmentMonitor:
             safe_state.get("attachmentObserved")
             or safe_state.get("attachmentChanged")
             or safe_state.get("pendingChanged")
-            or safe_state.get("sendTransition")
-            or int(safe_state.get("mutationCount", 0) or 0) > 0
-            or attachment_present
         )
-        uploading = bool(
-            int(safe_state.get("pendingCount", 0) or 0) > 0
-            or bool(safe_state.get("pendingText"))
-            or bool(safe_state.get("sendBusy"))
-        )
+        uploading = cls._busy_state(safe_state)
         ready = cls._is_ready_state(safe_state, require_send_enabled=require_send_enabled)
 
         if require_attachment_present and not attachment_present:
@@ -931,22 +933,21 @@ class AttachmentMonitor:
         }
 
     @staticmethod
+    def _busy_state(state: Dict[str, Any]) -> bool:
+        # V2 pendingText is exclusively scoped status evidence. Legacy snapshots
+        # with an unexplained pending flag remain conservative, never promoted.
+        return bool(int(state.get("pendingCount", 0) or 0) > 0
+                    or state.get("pendingText") or state.get("sendBusy"))
+
+    @staticmethod
     def _is_ready_state(state: Dict[str, Any], require_send_enabled: bool) -> bool:
-        if int(state.get("uploadErrorCount", 0) or 0) > 0:
+        if not state or state.get("ok") is False or state.get("rootFound") is False or state.get("trackingValid") is False:
             return False
-        pending_count = int(state.get("pendingCount", 0) or 0)
-        pending_text = bool(state.get("pendingText"))
-        attachment_present = AttachmentMonitor._attachment_present(state)
-        corroborated_pending_text = pending_text and (
-            pending_count > 0
-            or bool(state.get("sendBusy"))
-            or bool(state.get("sendDisabled"))
-            or attachment_present
-        )
-        pending = pending_count > 0 or corroborated_pending_text
-        if pending or bool(state.get("sendBusy")):
+        if int(state.get("uploadErrorCount", 0) or 0) > 0 or AttachmentMonitor._busy_state(state):
             return False
-        if require_send_enabled and bool(state.get("sendFound")) and bool(state.get("sendDisabled")):
+        if state.get("batchComplete") is False:
+            return False
+        if require_send_enabled and (state.get("sendFound") is False or state.get("sendDisabled")):
             return False
         return True
 
@@ -972,18 +973,12 @@ class AttachmentMonitor:
             "sendTransition",
             "attachmentObserved",
             "attachmentFingerprint",
-            "rootText",
-            "attachmentText",
+            "progressFingerprint",
+            "batchComplete",
         )
         for key in comparable_keys:
             if previous.get(key) != current.get(key):
                 return True
-
-        try:
-            if int(current.get("mutationCount", 0) or 0) > int(previous.get("mutationCount", 0) or 0):
-                return True
-        except Exception:
-            return True
 
         return False
 
@@ -1007,6 +1002,11 @@ class AttachmentMonitor:
             f"idle_ms={int(state.get('idleMs', 0) or 0)}"
         ]
 
+        if state.get("evidenceVersion"):
+            parts.append(f"evidence_version={state['evidenceVersion']}")
+        sources = sorted({item.get("source", "unknown") for item in state.get("statusEvidence", []) if isinstance(item, dict)})
+        if sources:
+            parts.append(f"busy_sources={sources}")
         matched_busy = state.get("matchedBusyWords") or []
         if matched_busy:
             parts.append(f"busy_words={matched_busy}")
@@ -1030,10 +1030,6 @@ class AttachmentMonitor:
         mutation_types = str(state.get("lastMutationSummary") or "").strip()
         if mutation_types:
             parts.append(f"mutation_types={mutation_types}")
-
-        root_text = str(state.get("rootTextSample") or "").strip()
-        if root_text and (bool(state.get("pendingText")) or int(state.get("attachmentCount", 0) or 0) == 0):
-            parts.append(f"root_text={root_text!r}")
 
         send_summary = str(state.get("sendSummary") or "").strip()
         if send_summary:
@@ -1061,6 +1057,14 @@ class AttachmentMonitor:
             return "no_state"
 
         reasons = []
+        if state.get("ok") is False:
+            reasons.append("monitor_unavailable")
+        if state.get("rootFound") is False:
+            reasons.append("composer_scope_missing")
+        if state.get("trackingValid") is False:
+            reasons.append("composer_replaced_or_tracking_lost")
+        if require_send_enabled and state.get("sendFound") is False:
+            reasons.append("send_button_missing")
         phase_flags = cls.derive_phase_flags(
             state,
             require_send_enabled=require_send_enabled,
@@ -1069,6 +1073,10 @@ class AttachmentMonitor:
         )
         attachment_present = bool(phase_flags.get("attachment_present"))
 
+        if int(state.get("uploadErrorCount", 0) or 0):
+            reasons.append("upload_rejected")
+        if state.get("batchComplete") is False:
+            reasons.append("batch_incomplete")
         if require_attachment_present and not attachment_present:
             reasons.append("attachment_missing")
 
@@ -1083,13 +1091,7 @@ class AttachmentMonitor:
 
         if bool(state.get("pendingText")):
             busy_words = state.get("matchedBusyWords") or []
-            pending_text_blocks = (
-                int(state.get("pendingCount", 0) or 0) > 0
-                or bool(state.get("sendBusy"))
-                or bool(state.get("sendDisabled"))
-                or attachment_present
-            )
-            prefix = "pending_text_blocking" if pending_text_blocks else "pending_text_raw"
+            prefix = "pending_text_blocking" if cls._busy_state(state) else "pending_text_raw"
             if busy_words:
                 reasons.append(f"{prefix}:{busy_words}")
             else:
@@ -1204,9 +1206,13 @@ class AttachmentMonitor:
             previous_state = dict(last_state or {})
             state = self.snapshot(expected_names)
             if not state:
-                # Never infer stability from a stale snapshot after the observer is lost.
+                # Unknown is not a stale READY snapshot and must obey all deadlines.
                 stable_since = None
-                time.sleep(min(check_interval, max(0, hard_deadline - time.monotonic())))
+                last_state = {**last_state, "ok": False, "trackingValid": False}
+                remaining = min(idle_deadline, activity_deadline, hard_deadline) - time.monotonic()
+                if remaining <= 0:
+                    break
+                time.sleep(min(check_interval, remaining))
                 continue
             last_state = state
             if int(state.get("uploadErrorCount", 0) or 0) > 0:
@@ -1223,25 +1229,10 @@ class AttachmentMonitor:
             observed = bool(last_state.get("attachmentObserved"))
             if observed:
                 observed_once = True
-                activity_deadline = min(hard_deadline, now + max(0.5, wait_timeout))
 
             activity_seen = activity_seen or observed or bool(last_state.get("pendingChanged")) or bool(
                 last_state.get("sendTransition")
             ) or int(last_state.get("mutationCount", 0) or 0) > 0
-
-            active_pending = (
-                int(last_state.get("pendingCount", 0) or 0) > 0
-                or bool(last_state.get("pendingText"))
-                or bool(last_state.get("sendBusy"))
-            )
-
-            if active_pending and (observed_once or activity_seen):
-                last_progress_at = now
-                idle_deadline = min(hard_deadline, now + max(0.5, idle_timeout))
-
-            if activity_seen and not progress:
-                if active_pending:
-                    activity_deadline = min(hard_deadline, now + max(0.5, check_interval * 2.0))
 
             phase_flags = self.derive_phase_flags(
                 last_state,

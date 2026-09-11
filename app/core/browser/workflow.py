@@ -301,6 +301,10 @@ class BrowserWorkflowMixin:
             if current_task_id and current_task_id != expected_task_id:
                 ownership_lost = True
                 detail = f"current_task={current_task_id}"
+            elif session_status == "error" and current_task_id == expected_task_id:
+                # The task still owns this tab. Its failure must stop execution,
+                # not be overwritten by a synthetic ownership-loss cancellation.
+                return True
             elif session_status in {"error", "closed"}:
                 ownership_lost = True
                 detail = f"status={session_status}"
@@ -2445,7 +2449,7 @@ class BrowserWorkflowMixin:
                                 step_index = resumed
                                 continue
                             workflow_aborted = True
-                            yield self.formatter.pack_error(str(e), code="workflow_step_failed")
+                            yield self.formatter.pack_error(str(e), code=str(e) if str(e).startswith("attachment") else "workflow_step_failed")
                             break
                         step_elapsed = time.perf_counter() - step_started_at
                         logger.warning(
@@ -2473,6 +2477,9 @@ class BrowserWorkflowMixin:
                             if err_str in {
                                 "new_chat_transition_timeout",
                                 "send_unconfirmed",
+                                "attachment_upload_unconfirmed",
+                                "attachment_upload_rejected",
+                                "attachment_monitor_unavailable",
                                 "arena_direct_unexpected_battle_redirect",
                                 "arena_send_no_target",
                             }:
@@ -2486,6 +2493,10 @@ class BrowserWorkflowMixin:
                                 workflow_aborted = True
                                 if chunk_count == 0:
                                     yield self.formatter.pack_error(err_str)
+                            else:
+                                workflow_aborted = True
+                                if chunk_count == 0:
+                                    yield self.formatter.pack_error(err_str, code=err_str if err_str.startswith("attachment") else "workflow_step_failed")
                         break
                     except Exception as e:
                         if flow_program is not None:
@@ -2494,7 +2505,7 @@ class BrowserWorkflowMixin:
                                 step_index = resumed
                                 continue
                             workflow_aborted = True
-                            yield self.formatter.pack_error(str(e), code="workflow_step_failed")
+                            yield self.formatter.pack_error(str(e), code=str(e) if str(e).startswith("attachment") else "workflow_step_failed")
                             break
                         step_elapsed = time.perf_counter() - step_started_at
                         if effective_stop_checker():
@@ -2766,7 +2777,6 @@ class BrowserWorkflowMixin:
             if not (effective_stop_checker()):
                 logger.error(f"[{session.id}] 工作流执行异常: {e}", exc_info=True)
                 yield self.formatter.pack_error(f"系统错误: {str(e)}")
-            yield self.formatter.pack_finish()
         finally:
             if flow_program is not None:
                 try:
@@ -2792,7 +2802,9 @@ class BrowserWorkflowMixin:
                     )
                 except Exception as e:
                     logger.debug(f"[{session.id}] 工作流运行时清理失败（忽略）: {e}")
-            yield self.formatter.pack_finish()
+        # Never yield in finally: closing a cancelled generator must run all
+        # cleanup and release its tab without "generator ignored GeneratorExit".
+        yield self.formatter.pack_finish()
 
     def _execute_workflow_non_stream(
         self, 
@@ -2856,6 +2868,12 @@ class BrowserWorkflowMixin:
             with contextlib.suppress(Exception):
                 stream.close()
         
+        if not error_data:
+            failure = getattr(session, "_workflow_failure", None)
+            if isinstance(failure, dict) and failure.get("task_id") == str(getattr(session, "current_task_id", "") or ""):
+                error_data = {"error": {"message": failure["message"], "code": failure["code"], "type": "execution_error"}}
+            elif stop_checker and stop_checker():
+                error_data = {"error": {"message": "工作流已中止", "code": "request_cancelled", "type": "execution_error"}}
         if error_data:
             yield json.dumps(error_data, ensure_ascii=False)
         else:

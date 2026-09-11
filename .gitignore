@@ -176,3 +176,13 @@ scripts/custom/
 # Readable workflow and ordered multi-case regression
 !tests/test_workflow_multi_case.py
 !tests/test_workflow_readable_ui.py
+
+# Atomic text input encoding regression
+!tests/test_text_input_atomic.py
+
+# Streaming disconnect cleanup and cancellation storm regression
+!tests/test_cancel_storm_regressions.py
+
+!tests/test_proxy_disconnect_regressions.py
+!tests/test_proxy_api_cancellation.py
+!tests/test_attachment_evidence_regressions.py

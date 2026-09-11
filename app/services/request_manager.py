@@ -85,116 +85,98 @@ def _browser_int(
 # ================= 客户端高频取消防抖熔断器 =================
 
 class CancelStormGuard:
+    """Bound rapid zero-output abort loops without delaying normal requests.
+
+    Cleanup correctness is the primary protection. As a second line of defense,
+    four transport cancellations in five seconds open a five-second circuit for
+    that client only. Rejected retries create no workflow/request record. This is
+    not an authorization boundary or a global/DDoS rate limiter.
     """
-    客户端高频异常取消防抖与熔断保护器
-    
-    核心目标：
-    当外部客户端（如 SillyTavern 插件/手机网络瞬断）因异常断开陷入毫秒级死循环重发（Cancel Storm）时，
-    通过识别“短时间内连续零 Token 产出的异常取消”，对该客户端后续连环涌入的请求施加微小的平滑冷却（0.3s~0.5s），
-    从而彻底粉碎连环重试死循环，同时为局域网/移动端 TCP 建连提供稳定性窗口。
-    
-    设计原则：
-    1. 100% 零误伤：正常的单次请求、正常完成的请求、以及已有内容产出的手动终止，延迟严格为 0 秒。
-    2. 自动恢复：只要有请求成功完成或产出 Token，或者超过静默窗口（如 2 秒），计数器自动重置。
-    3. 线程安全：多协程/多线程并发安全。
-    """
-    def __init__(self, window_sec: float = 2.0, max_backoff_sec: float = 0.5):
-        self.window_sec = window_sec
-        self.max_backoff_sec = max_backoff_sec
+    def __init__(self, window_sec: float = 5.0, max_backoff_sec: float = 0.5,
+                 threshold: int = 4, cooldown_sec: float = 5.0, max_clients: int = 2048):
+        self.window_sec = max(.1, float(window_sec))
+        self.max_backoff_sec = max_backoff_sec  # Legacy constructor compatibility.
+        self.threshold = max(2, int(threshold))
+        self.cooldown_sec = max(.1, float(cooldown_sec))
+        self.max_clients = max(1, int(max_clients))
         self._lock = threading.Lock()
-        self._cancel_records: Dict[str, List[float]] = {}
+        self._cancel_records = OrderedDict()
+        self._blocked_until = {}
 
     def get_client_fingerprint(self, request: Any = None, auth_header: Optional[str] = None) -> str:
-        """从 FastAPI Request 对象或 Header 提取客户端指纹"""
-        parts = []
-        if request is not None:
-            client = getattr(request, "client", None)
-            host = getattr(client, "host", None) if client else None
-            if host:
-                parts.append(str(host))
-            headers = getattr(request, "headers", {})
-            auth = headers.get("authorization") or headers.get("x-api-key") or auth_header
-            if auth:
-                parts.append(str(auth)[-16:])
-            user_agent = headers.get("user-agent")
-            if user_agent:
-                parts.append(str(user_agent)[:32])
-        if not parts and auth_header:
-            parts.append(str(auth_header)[-16:])
-        return ":".join(parts) if parts else "default_client"
+        client = getattr(request, 'client', None)
+        headers = getattr(request, 'headers', {}) or {}
+        parts = [str(getattr(client, 'host', '') or ''),
+                 str(headers.get('authorization') or headers.get('x-api-key') or auth_header or ''),
+                 str(headers.get('user-agent') or '')]
+        # Never log token fragments, raw credentials, or request content. Do not
+        # trust arbitrary X-Forwarded-For values as a client-controlled bypass.
+        return hashlib.sha256(json.dumps(parts, ensure_ascii=True).encode()).hexdigest()[:24]
 
     def _prune_expired_unlocked(self, now: float):
-        """定期裁剪全局已过期的空记录，防止海量一次性客户端指纹导致字典内存泄漏"""
-        expired_keys = [
-            k for k, v in self._cancel_records.items()
-            if not v or (now - v[-1] > self.window_sec)
-        ]
-        for k in expired_keys:
-            self._cancel_records.pop(k, None)
+        for key, records in list(self._cancel_records.items()):
+            if self._blocked_until.get(key, 0) > now:
+                continue
+            if not records or now - records[-1] > self.window_sec:
+                self._cancel_records.pop(key, None)
+                self._blocked_until.pop(key, None)
 
-    def record_cancel(self, fingerprint: str, has_output: bool = False, reason: str = "unknown"):
-        """
-        记录一次取消事件。
-        只有未产生有效 Token 产出的异常取消（如 coroutine_cancelled, client_disconnected）才计入风暴。
-        """
+    def record_cancel(self, fingerprint: str, has_output: bool = False, reason: str = 'unknown'):
         if not fingerprint:
             return
-
         if has_output:
             self.record_success(fingerprint)
             return
-
-        if reason not in {"coroutine_cancelled", "client_disconnected", "unknown", "cleanup"}:
+        if reason not in {'coroutine_cancelled', 'client_disconnected', 'stream_closed', 'unknown', 'cleanup'}:
             return
-
         now = time.monotonic()
+        opened = False
         with self._lock:
-            if len(self._cancel_records) > 500:
-                self._prune_expired_unlocked(now)
-
-            records = self._cancel_records.setdefault(fingerprint, [])
+            if self._blocked_until.get(fingerprint, 0) > now:
+                return  # Already in-flight failures must not extend the cooldown indefinitely.
+            self._prune_expired_unlocked(now)
+            records = self._cancel_records.pop(fingerprint, [])
             records = [t for t in records if now - t <= self.window_sec]
             records.append(now)
-            self._cancel_records[fingerprint] = records
+            self._cancel_records[fingerprint] = records[-self.threshold:]
+            if len(records) >= self.threshold:
+                self._blocked_until[fingerprint] = now + self.cooldown_sec
+                opened = True
+            while len(self._cancel_records) > self.max_clients:
+                key, _ = self._cancel_records.popitem(last=False)
+                self._blocked_until.pop(key, None)
+        if opened:
+            logger.warning(
+                f'[CANCEL_STORM_GUARD] client={fingerprint[:12]} '
+                f'{self.window_sec:g}s 内 {self.threshold} 次零输出异常取消；'
+                f'冷却 {self.cooldown_sec:g}s，后续请求返回 429 / Retry-After，不启动网页工作流'
+            )
 
     def record_success(self, fingerprint: str):
-        """成功产出 Token 或正常结束时清空风暴记录"""
-        if not fingerprint:
-            return
         with self._lock:
             self._cancel_records.pop(fingerprint, None)
+            self._blocked_until.pop(fingerprint, None)
 
     async def maybe_backoff(self, fingerprint: str) -> float:
-        """
-        检查当前客户端是否正在经历高频异常取消风暴。
-        若是，施加阶梯式防抖延迟以打破死循环，并加入微量随机扰动防止并发羊群效应。
-        返回施加的延迟秒数。
-        """
-        if not fingerprint:
-            return 0.0
-
+        """Compatibility entry point: reject an open circuit instead of queuing sleeps."""
+        from fastapi import HTTPException
         now = time.monotonic()
         with self._lock:
-            records = self._cancel_records.get(fingerprint, [])
-            records = [t for t in records if now - t <= self.window_sec]
-            if records:
-                self._cancel_records[fingerprint] = records
-            else:
+            until = self._blocked_until.get(fingerprint, 0)
+            remaining = until - now
+            if until and remaining <= 0:
+                self._blocked_until.pop(fingerprint, None)
                 self._cancel_records.pop(fingerprint, None)
-            cancel_count = len(records)
-
-        if cancel_count < 2:
-            return 0.0
-
-        jitter = random.uniform(0.0, 0.05)
-        backoff = min(self.max_backoff_sec, 0.25 + (cancel_count - 2) * 0.1) + jitter
-        logger.warning(
-            f"[CANCEL_STORM_GUARD] 客户端 [{fingerprint}] 在 {self.window_sec:.1f}s 内连续发生 {cancel_count} 次零产出异常取消，"
-            f"施加 {backoff:.2f}s 防抖平滑缓冲以阻断死循环"
-        )
-        await asyncio.sleep(backoff)
-        return backoff
-
+        if remaining > 0:
+            retry_after = max(1, math.ceil(remaining))
+            raise HTTPException(
+                status_code=429,
+                detail={'error': {'code': 'client_cancel_storm', 'type': 'rate_limit_error',
+                                 'message': '检测到连续零输出取消，请停止自动重试并在冷却后重试。',
+                                 'retry_after_seconds': retry_after}},
+                headers={'Retry-After': str(retry_after)},
+            )
+        return 0.0
 
 cancel_storm_guard = CancelStormGuard()
 
@@ -265,6 +247,8 @@ class RequestContext:
 
     def mark_running(self, tab_id: str = None):
         with self._lock:
+            if self.status in (RequestStatus.COMPLETED, RequestStatus.CANCELLED, RequestStatus.FAILED):
+                return
             self.started_at = time.time()
             self.started_at_monotonic = time.monotonic()
             self.last_activity_at = self.started_at
@@ -2271,8 +2255,14 @@ class RequestManager:
         for req_id, ctx in list(self._requests.items()):
             snapshot = ctx.snapshot(now)
             status = snapshot["status"]
+            # Keep a live worker discoverable by ownership/recovery even when
+            # its HTTP request has already reached a terminal state.
+            worker = getattr(ctx, "worker_thread", None)
+            worker_alive = isinstance(worker, threading.Thread) and worker.is_alive()
             # 已终态的可以删除
             if snapshot["is_terminal"]:
+                if worker_alive:
+                    continue
                 if over_capacity and len(self._requests) - len(to_delete) > self._max_history:
                     to_delete.append(req_id)
                     history_contexts.append(ctx)
@@ -2285,7 +2275,8 @@ class RequestManager:
                         f"[{req_id}] 僵尸请求 (无活动 {now - active_at:.0f}s, 运行 {now - started:.0f}s)，强制清理"
                     )
                     ctx.mark_failed("zombie_timeout")
-                    to_delete.append(req_id)
+                    if not worker_alive:
+                        to_delete.append(req_id)
                     history_contexts.append(ctx)
             elif status == RequestStatus.QUEUED:
                 queued_at = snapshot["created_at"] or now
@@ -2294,7 +2285,8 @@ class RequestManager:
                         f"[{req_id}] 排队请求超时 (等待 {now - queued_at:.0f}s)，强制清理"
                     )
                     ctx.mark_failed("queued_timeout")
-                    to_delete.append(req_id)
+                    if not worker_alive:
+                        to_delete.append(req_id)
                     history_contexts.append(ctx)
 
         # 批量删除
@@ -2385,22 +2377,22 @@ class RequestManager:
         except Exception as e:
             logger.debug(f"写入请求监控历史失败: {e}")
 
-        # 终态统一上报 cancel_storm_guard 防抖熔断器
-        client_fp = getattr(ctx, "client_fp", "")
-        if client_fp:
-            try:
-                has_output = bool(int(ctx.monitor.get("response_tokens") or 0) > 0)
-                if ctx.status == RequestStatus.COMPLETED or has_output:
-                    cancel_storm_guard.record_success(client_fp)
-                elif ctx.status in (RequestStatus.CANCELLED, RequestStatus.FAILED) or ctx.cancel_reason:
-                    cancel_storm_guard.record_cancel(
-                        client_fp,
-                        has_output=has_output,
-                        reason=str(ctx.cancel_reason or "coroutine_cancelled"),
-                    )
-            except Exception as e:
-                logger.debug(f"更新 cancel_storm_guard 状态异常: {e}")
-    
+        # Count a terminal request once, not every cleanup/wrapper invocation.
+        # Partial text, tool text and media are real output; empty SSE keepalives are not.
+        with ctx._lock:
+            reported = getattr(ctx, '_cancel_storm_reported', False)
+            ctx._cancel_storm_reported = True
+            client_fp = ctx.client_fp
+            has_output = bool(ctx.monitor.get('has_response_text') or
+                              ctx.monitor.get('has_response_media') or
+                              int(ctx.monitor.get('response_tokens') or 0) > 0)
+            status, reason = ctx.status, str(ctx.cancel_reason or '')
+        if client_fp and not reported:
+            if status == RequestStatus.COMPLETED or has_output:
+                cancel_storm_guard.record_success(client_fp)
+            elif status == RequestStatus.CANCELLED:
+                cancel_storm_guard.record_cancel(client_fp, has_output=False, reason=reason)
+
     def cancel_request(self, request_id: str, reason: str = "manual") -> bool:
         """取消指定请求"""
         with self._requests_lock:

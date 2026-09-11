@@ -545,6 +545,8 @@ class AttachmentMonitorConfig(TypedDict, total=False):
     root_selectors: List[str]
     attachment_selectors: List[str]
     pending_selectors: List[str]
+    status_selectors: List[str]
+    content_exclusion_selectors: List[str]
     busy_text_markers: List[str]
     ignored_busy_text_markers: List[str]
     send_button_disabled_markers: List[str]
@@ -1117,6 +1119,8 @@ def validate_site_config(config: Dict[str, Any]) -> bool:
                 "root_selectors",
                 "attachment_selectors",
                 "pending_selectors",
+                "status_selectors",
+                "content_exclusion_selectors",
                 "busy_text_markers",
                 "ignored_busy_text_markers",
                 "send_button_disabled_markers",
@@ -1255,6 +1259,8 @@ def validate_site_config(config: Dict[str, Any]) -> bool:
                 "root_selectors",
                 "attachment_selectors",
                 "pending_selectors",
+                "status_selectors",
+                "content_exclusion_selectors",
                 "busy_text_markers",
                 "ignored_busy_text_markers",
                 "send_button_disabled_markers",

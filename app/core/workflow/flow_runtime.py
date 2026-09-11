@@ -491,13 +491,16 @@ class FlowProgram:
         error = None
         try:
             for chunk in iterator:
-                self._check(transition=False)
                 try:
                     payload = json.loads(str(chunk).removeprefix("data: ").strip())
                 except (ValueError, TypeError): payload = None
                 if isinstance(payload, dict) and payload.get("error"):
                     error = payload["error"]
+                    if isinstance(error, dict) and str(error.get("code", "")).startswith("attachment"):
+                        raise WorkflowError(error["code"])
+                    self._check(transition=False)
                     continue  # A recovered failure must never leak an error SSE to the client.
+                self._check(transition=False)
                 self.output_emitted = True
                 for frame in self.tries: frame["output"] = True
                 yield chunk
@@ -511,7 +514,6 @@ class FlowProgram:
 
     def recover(self, error, index):
         self._record(self.steps[index], "failed", error_type=type(error).__name__)
-        self._check()
         if self.output_emitted:
             return None
         if isinstance(error, (FlowValidationError, FlowLimitError, WorkflowCancelledError)):
@@ -519,6 +521,7 @@ class FlowProgram:
         message = str(error)
         if message.startswith(("stream_terminal_error:", "attachment", "file_paste_length_error", "workflow_cancelled")) or message in {"new_chat_transition_timeout", "send_unconfirmed", "arena_send_no_target", "stream_recovery_exhausted", "arena_direct_unexpected_battle_redirect"}:
             return None
+        self._check()
         for frame in reversed(self.tries):
             policy = frame["policy"]
             allowed = policy.get("errors", ["*"])

@@ -1270,6 +1270,12 @@ class WorkflowExecutor(
                 raise
             if error_code.startswith("attachment"):
                 if self.session is not None and (getattr(self._attachment_uploader, "tainted", False) or self._attachment_uploader.completed_paths):
+                    # Keep the cause with its owner before ERROR stops control flow.
+                    self.session._workflow_failure = {
+                        "task_id": str(getattr(self.session, "current_task_id", "") or ""),
+                        "code": error_code,
+                        "message": "附件未能完整上传，已停止发送。",
+                    }
                     self.session.mark_error(error_code)
                 yield self.formatter.pack_error(
                     "附件未能完整上传，已停止发送。请检查类型限制、上传入口和就绪探针。",

@@ -3,6 +3,8 @@ Helpers for request execution lifetime, worker cleanup, and tab retirement.
 """
 
 import asyncio
+import anyio
+from contextlib import contextmanager
 import os
 import queue
 import threading
@@ -10,7 +12,7 @@ import time
 from typing import Any, Callable, Dict, Optional
 
 from app.core.config import BrowserConstants, _request_context, get_logger
-from app.services.request_manager import RequestContext
+from app.services.request_manager import RequestContext, RequestStatus, request_manager
 
 
 logger = get_logger("REQUEST.LIFECYCLE")
@@ -23,6 +25,33 @@ WORKER_QUEUE_CANCEL_PUT_BLOCK_SEC = 0.01
 WORKER_QUEUE_WAIT_BACKOFF_FACTOR = 1.8
 COMPLETED_WORKER_FAST_JOIN_SEC = 0.5
 COMPLETED_WORKER_RETIRE_GRACE_SEC = 30.0
+
+
+@contextmanager
+def request_finalization(ctx: RequestContext, context_token=None):
+    """Shield only bounded cleanup, never browser execution, from ASGI cancellation.
+
+    Synchronous finalization is guaranteed even if cleanup raises or a second raw
+    asyncio Task.cancel() interrupts it. A request is not retried here.
+    """
+    try:
+        with anyio.CancelScope(shield=True):
+            yield
+    finally:
+        try:
+            with ctx._lock:
+                already_finalized = getattr(ctx, '_lifecycle_finalized', False)
+                ctx._lifecycle_finalized = True
+            if not already_finalized:
+                request_manager.finish_request(ctx, success=(ctx.status == RequestStatus.COMPLETED))
+        finally:
+            if context_token is not None:
+                try:
+                    _request_context.reset(context_token)
+                except (ValueError, RuntimeError):
+                    # Explicit close usually runs in the original response context;
+                    # generator finalization during shutdown may use another one.
+                    logger.debug("Request context already released or finalized in another context")
 
 
 class TrackedWorkerExecutionCancelled(Exception):
@@ -281,6 +310,7 @@ async def run_tracked_blocking_call(
     )
     worker_state["thread"] = worker_thread
     worker_state["label"] = label
+    ctx.worker_thread = worker_thread
 
     def _clear_finished_worker_state() -> None:
         if worker_state.get("thread") is worker_thread:
@@ -453,6 +483,21 @@ def schedule_completed_worker_retire_check(
     ).start()
 
 
+async def _wait_for_worker_exit(worker_thread: threading.Thread, timeout: float) -> None:
+    """Bound cleanup wall time without queueing joins in the shared executor.
+
+    A saturated default executor must not postpone cleanup or starve the next
+    request's route discovery. is_alive() is nonblocking; cancellation is still
+    allowed here, and callers shield only this bounded cleanup window.
+    """
+    deadline = time.monotonic() + max(0.0, timeout)
+    while worker_thread.is_alive():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        await asyncio.sleep(min(.02, remaining))
+
+
 async def cleanup_worker_thread_after_request(
     worker_thread: Optional[threading.Thread],
     ctx: RequestContext,
@@ -476,7 +521,12 @@ async def cleanup_worker_thread_after_request(
             fast_join = max(0.0, float(completed_join_timeout or 0.0))
         except Exception:
             fast_join = COMPLETED_WORKER_FAST_JOIN_SEC
-        await asyncio.to_thread(worker_thread.join, timeout=fast_join)
+        try:
+            await _wait_for_worker_exit(worker_thread, fast_join)
+        except asyncio.CancelledError:
+            if worker_thread.is_alive():
+                schedule_completed_worker_retire_check(worker_thread, ctx, retire_reason, delay_sec=completed_retire_delay)
+            raise
         if worker_thread.is_alive():
             logger.warning(
                 f"[{ctx.request_id}] completed request worker cleanup is still running; "
@@ -497,7 +547,12 @@ async def cleanup_worker_thread_after_request(
         timeout = max(0.0, float(join_timeout or 0.0))
     except Exception:
         timeout = 5.0
-    await asyncio.to_thread(worker_thread.join, timeout=timeout)
+    try:
+        await _wait_for_worker_exit(worker_thread, timeout)
+    except asyncio.CancelledError:
+        if worker_thread.is_alive():
+            schedule_completed_worker_retire_check(worker_thread, ctx, retire_reason, delay_sec=timeout)
+        raise
     if worker_thread.is_alive():
         retire_bound_tab_after_worker_leak(ctx, retire_reason)
         return True

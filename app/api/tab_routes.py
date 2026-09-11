@@ -21,7 +21,8 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Request, HTTPException, Depends, Header, Query
 from fastapi.params import Param
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import JSONResponse
+from app.api.streaming_response import RequestStreamingResponse as StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from app.core.config import _request_context, atomic_write_json, get_logger, SSEFormatter
@@ -35,6 +36,7 @@ from app.services.request_manager import (
 )
 from app.services.request_lifecycle import (
     TrackedWorkerExecutionCancelled,
+    request_finalization,
     cleanup_worker_thread_after_request,
     get_max_request_execute_time_sec,
     mark_request_hard_timeout,
@@ -2290,6 +2292,7 @@ async def _chat_with_resolved_tab(
                 _stream_tool_calling_with_tab_index(request, body, ctx, tab_index),
                 media_type="text/event-stream",
                 headers=_build_stream_headers(headers),
+                request_context=ctx,
             )
         response = await _non_stream_tool_calling_with_tab_index(request, body, ctx, tab_index)
         response.headers.update(headers)
@@ -2300,6 +2303,7 @@ async def _chat_with_resolved_tab(
             _stream_with_tab_index(request, body, ctx, tab_index),
             media_type="text/event-stream",
             headers=_build_stream_headers(headers),
+            request_context=ctx,
         )
 
     response = await _non_stream_with_tab_index(request, body, ctx, tab_index)
@@ -2335,6 +2339,7 @@ async def _chat_with_exact_url(
                 ),
                 media_type="text/event-stream",
                 headers=_build_stream_headers(headers),
+                request_context=ctx,
             )
         response = await _non_stream_tool_calling_with_exact_url(
             request,
@@ -2357,6 +2362,7 @@ async def _chat_with_exact_url(
             ),
             media_type="text/event-stream",
             headers=_build_stream_headers(headers),
+            request_context=ctx,
         )
 
     response = await _non_stream_with_exact_url(
@@ -2400,6 +2406,7 @@ async def _chat_with_route_domain(
                 ),
                 media_type="text/event-stream",
                 headers=_build_stream_headers(headers),
+                request_context=ctx,
             )
         response = await _non_stream_tool_calling_with_route_domain(
             request,
@@ -2424,6 +2431,7 @@ async def _chat_with_route_domain(
             ),
             media_type="text/event-stream",
             headers=_build_stream_headers(headers),
+            request_context=ctx,
         )
 
     response = await _non_stream_with_route_domain(
@@ -2874,6 +2882,9 @@ async def chat_with_exact_tab_url_and_preset(
     if not route_token:
         raise HTTPException(status_code=400, detail="URL 路由无效")
 
+    client_fp = cancel_storm_guard.get_client_fingerprint(request)
+    await cancel_storm_guard.maybe_backoff(client_fp)
+
     browser = get_browser(auto_connect=False)
     tab_info = _resolve_target_tab(
         browser,
@@ -2897,7 +2908,7 @@ async def chat_with_exact_tab_url_and_preset(
         preset_name=resolved_preset_name,
     )
 
-    ctx = request_manager.create_request()
+    ctx = request_manager.create_request(client_fp=client_fp)
     try:
         raw_input_len = sum(len(str(msg.get("content") or "")) for msg in body.messages if isinstance(msg, dict))
         logger.info(f"[DIAG] 接收到的原始请求 messages 总字符长度: {raw_input_len} 字符, 消息数: {len(body.messages)}")
@@ -3081,8 +3092,11 @@ async def _stream_with_tab_index(
                 error_message = _extract_stream_error_message(emit_chunk or outgoing_chunk)
                 if error_message:
                     logger.error(f"流式响应返回错误事件(tab={tab_index}): {error_message}")
-                    request_manager.capture_error(ctx, error_message, code="stream_error")
-                    ctx.mark_failed(error_message)
+                    error_code = next((str(payload["error"].get("code") or "stream_error")
+                                       for payload in iter_openai_sse_payloads(emit_chunk or outgoing_chunk)
+                                       if isinstance(payload.get("error"), dict)), "stream_error")
+                    request_manager.capture_error(ctx, error_message, code=error_code)
+                    ctx.mark_failed(error_code)
                     done_chunk = _pack_done()
                     request_manager.capture_response_chunk(ctx, done_chunk)
                     done_emitted = True
@@ -3142,6 +3156,10 @@ async def _stream_with_tab_index(
         if not ctx.should_stop() and ctx.status == RequestStatus.RUNNING:
             ctx.mark_completed()
 
+    except GeneratorExit:
+        if not ctx.is_terminal():
+            ctx.request_cancel("stream_closed")
+        raise
     except asyncio.CancelledError:
         ctx.request_cancel("coroutine_cancelled")
         raise
@@ -3149,35 +3167,34 @@ async def _stream_with_tab_index(
     except Exception as e:
         logger.error(f"异常: {e}")
         request_manager.capture_error(ctx, e, code="internal_error")
-        ctx.mark_failed(str(e))
+        ctx.mark_failed(str(getattr(e, "code", None) or e))
         done_emitted = True
         yield _pack_error(f"执行错误: {str(e)}", "internal_error")
         yield _pack_done()
 
     finally:
-        await _cleanup_route_worker_thread(
-            worker_thread,
-            ctx,
-            fast_returned_on_audio=fast_returned_on_audio,
-            done_emitted=done_emitted,
-        )
+        with request_finalization(ctx, request_context_token):
+            await _cleanup_route_worker_thread(
+                worker_thread,
+                ctx,
+                fast_returned_on_audio=fast_returned_on_audio,
+                done_emitted=done_emitted,
+            )
 
-        if chunk_queue is not None:
-            try:
-                while not chunk_queue.empty():
-                    chunk_queue.get_nowait()
-            except:
-                pass
+            if chunk_queue is not None:
+                try:
+                    while not chunk_queue.empty():
+                        chunk_queue.get_nowait()
+                except:
+                    pass
 
-        if disconnect_task:
-            disconnect_task.cancel()
-            try:
-                await disconnect_task
-            except asyncio.CancelledError:
-                pass
+            if disconnect_task:
+                disconnect_task.cancel()
+                try:
+                    await disconnect_task
+                except asyncio.CancelledError:
+                    pass
 
-        request_manager.finish_request(ctx, success=(ctx.status == RequestStatus.COMPLETED))
-        _reset_stream_request_context(request_context_token)
 
 
 async def _non_stream_with_tab_index(
@@ -3418,8 +3435,11 @@ async def _stream_with_route_domain(
                 if error_message:
                     route_label = f"route_group={route_group_id}" if route_group_id else f"route_domain={route_domain}"
                     logger.error(f"流式响应返回错误事件({route_label}): {error_message}")
-                    request_manager.capture_error(ctx, error_message, code="stream_error")
-                    ctx.mark_failed(error_message)
+                    error_code = next((str(payload["error"].get("code") or "stream_error")
+                                       for payload in iter_openai_sse_payloads(emit_chunk or outgoing_chunk)
+                                       if isinstance(payload.get("error"), dict)), "stream_error")
+                    request_manager.capture_error(ctx, error_message, code=error_code)
+                    ctx.mark_failed(error_code)
                     done_chunk = _pack_done()
                     request_manager.capture_response_chunk(ctx, done_chunk)
                     done_emitted = True
@@ -3480,6 +3500,10 @@ async def _stream_with_route_domain(
         if not ctx.should_stop() and ctx.status == RequestStatus.RUNNING:
             ctx.mark_completed()
 
+    except GeneratorExit:
+        if not ctx.is_terminal():
+            ctx.request_cancel("stream_closed")
+        raise
     except asyncio.CancelledError:
         ctx.request_cancel("coroutine_cancelled")
         raise
@@ -3487,35 +3511,34 @@ async def _stream_with_route_domain(
     except Exception as e:
         logger.error(f"异常: {e}")
         request_manager.capture_error(ctx, e, code="internal_error")
-        ctx.mark_failed(str(e))
+        ctx.mark_failed(str(getattr(e, "code", None) or e))
         done_emitted = True
         yield _pack_error(f"执行错误: {str(e)}", "internal_error")
         yield _pack_done()
 
     finally:
-        await _cleanup_route_worker_thread(
-            worker_thread,
-            ctx,
-            fast_returned_on_audio=fast_returned_on_audio,
-            done_emitted=done_emitted,
-        )
+        with request_finalization(ctx, request_context_token):
+            await _cleanup_route_worker_thread(
+                worker_thread,
+                ctx,
+                fast_returned_on_audio=fast_returned_on_audio,
+                done_emitted=done_emitted,
+            )
 
-        if chunk_queue is not None:
-            try:
-                while not chunk_queue.empty():
-                    chunk_queue.get_nowait()
-            except:
-                pass
+            if chunk_queue is not None:
+                try:
+                    while not chunk_queue.empty():
+                        chunk_queue.get_nowait()
+                except:
+                    pass
 
-        if disconnect_task:
-            disconnect_task.cancel()
-            try:
-                await disconnect_task
-            except asyncio.CancelledError:
-                pass
+            if disconnect_task:
+                disconnect_task.cancel()
+                try:
+                    await disconnect_task
+                except asyncio.CancelledError:
+                    pass
 
-        request_manager.finish_request(ctx, success=(ctx.status == RequestStatus.COMPLETED))
-        _reset_stream_request_context(request_context_token)
 
 
 async def _non_stream_with_route_domain(
@@ -3744,8 +3767,11 @@ async def _stream_with_exact_url(
                 error_message = _extract_stream_error_message(emit_chunk or outgoing_chunk)
                 if error_message:
                     logger.error(f"流式响应返回错误事件(exact_url={exact_url}): {error_message}")
-                    request_manager.capture_error(ctx, error_message, code="stream_error")
-                    ctx.mark_failed(error_message)
+                    error_code = next((str(payload["error"].get("code") or "stream_error")
+                                       for payload in iter_openai_sse_payloads(emit_chunk or outgoing_chunk)
+                                       if isinstance(payload.get("error"), dict)), "stream_error")
+                    request_manager.capture_error(ctx, error_message, code=error_code)
+                    ctx.mark_failed(error_code)
                     done_chunk = _pack_done()
                     request_manager.capture_response_chunk(ctx, done_chunk)
                     done_emitted = True
@@ -3805,6 +3831,10 @@ async def _stream_with_exact_url(
         if not ctx.should_stop() and ctx.status == RequestStatus.RUNNING:
             ctx.mark_completed()
 
+    except GeneratorExit:
+        if not ctx.is_terminal():
+            ctx.request_cancel("stream_closed")
+        raise
     except asyncio.CancelledError:
         ctx.request_cancel("coroutine_cancelled")
         raise
@@ -3812,35 +3842,34 @@ async def _stream_with_exact_url(
     except Exception as e:
         logger.error(f"异常: {e}")
         request_manager.capture_error(ctx, e, code="internal_error")
-        ctx.mark_failed(str(e))
+        ctx.mark_failed(str(getattr(e, "code", None) or e))
         done_emitted = True
         yield _pack_error(f"执行错误: {str(e)}", "internal_error")
         yield _pack_done()
 
     finally:
-        await _cleanup_route_worker_thread(
-            worker_thread,
-            ctx,
-            fast_returned_on_audio=fast_returned_on_audio,
-            done_emitted=done_emitted,
-        )
+        with request_finalization(ctx, request_context_token):
+            await _cleanup_route_worker_thread(
+                worker_thread,
+                ctx,
+                fast_returned_on_audio=fast_returned_on_audio,
+                done_emitted=done_emitted,
+            )
 
-        if chunk_queue is not None:
-            try:
-                while not chunk_queue.empty():
-                    chunk_queue.get_nowait()
-            except:
-                pass
+            if chunk_queue is not None:
+                try:
+                    while not chunk_queue.empty():
+                        chunk_queue.get_nowait()
+                except:
+                    pass
 
-        if disconnect_task:
-            disconnect_task.cancel()
-            try:
-                await disconnect_task
-            except asyncio.CancelledError:
-                pass
+            if disconnect_task:
+                disconnect_task.cancel()
+                try:
+                    await disconnect_task
+                except asyncio.CancelledError:
+                    pass
 
-        request_manager.finish_request(ctx, success=(ctx.status == RequestStatus.COMPLETED))
-        _reset_stream_request_context(request_context_token)
 
 
 async def _non_stream_with_exact_url(
@@ -3947,7 +3976,8 @@ def _execute_browser_non_stream_for_tab(
     data = decode_browser_non_stream_payload(payload)
     if "error" in data:
         error = data.get("error") or {}
-        raise RuntimeError(str(error.get("message") or "browser_execution_failed"))
+        from app.services.error_metadata import BrowserExecutionError
+        raise BrowserExecutionError(error)
     return data
 
 
@@ -3990,7 +4020,8 @@ def _execute_browser_non_stream_for_route_domain(
     data = decode_browser_non_stream_payload(payload)
     if "error" in data:
         error = data.get("error") or {}
-        raise RuntimeError(str(error.get("message") or "browser_execution_failed"))
+        from app.services.error_metadata import BrowserExecutionError
+        raise BrowserExecutionError(error)
     return data
 
 
@@ -4026,7 +4057,8 @@ def _execute_browser_non_stream_for_exact_url(
     data = decode_browser_non_stream_payload(payload)
     if "error" in data:
         error = data.get("error") or {}
-        raise RuntimeError(str(error.get("message") or "browser_execution_failed"))
+        from app.services.error_metadata import BrowserExecutionError
+        raise BrowserExecutionError(error)
     return data
 
 
@@ -4053,7 +4085,7 @@ def _is_absolute_request_timeout_error(error: Any) -> bool:
 def _format_route_tool_calling_error(error: Any) -> tuple[str, str]:
     if _is_absolute_request_timeout_error(error):
         return "请求执行超过最大绝对超时，已强制中断", "absolute_request_timeout"
-    return f"执行错误: {error}", "tool_calling_failed"
+    return f"执行错误: {error}", str(getattr(error, "code", None) or "tool_calling_failed")
 
 
 async def _run_tracked_route_tool_calling_worker(
@@ -4347,21 +4379,21 @@ async def _complete_tool_calling_with_tab_index(
         raise
     except Exception as e:
         logger.error(f"tool_calling_failed(tab={tab_index}): {e}")
-        request_manager.capture_error(ctx, e, code="tool_calling_failed")
-        ctx.mark_failed(str(e))
+        request_manager.capture_error(ctx, e, code=getattr(e, "code", "tool_calling_failed"))
+        ctx.mark_failed(str(getattr(e, "code", None) or e))
         raise
     finally:
-        if disconnect_task:
-            disconnect_task.cancel()
-            try:
-                await disconnect_task
-            except asyncio.CancelledError:
-                pass
-        worker_thread = worker_state.get("thread")
-        await _cleanup_route_worker_thread(worker_thread, ctx)
-        worker_state["thread"] = None
-        worker_state["label"] = None
-        request_manager.finish_request(ctx, success=(ctx.status == RequestStatus.COMPLETED))
+        with request_finalization(ctx):
+            if disconnect_task:
+                disconnect_task.cancel()
+                try:
+                    await disconnect_task
+                except asyncio.CancelledError:
+                    pass
+            worker_thread = worker_state.get("thread")
+            await _cleanup_route_worker_thread(worker_thread, ctx)
+            worker_state["thread"] = None
+            worker_state["label"] = None
 
 
 async def _complete_tool_calling_with_route_domain(
@@ -4414,21 +4446,21 @@ async def _complete_tool_calling_with_route_domain(
     except Exception as e:
         route_label = f"route_group={route_group_id}" if route_group_id else f"route_domain={route_domain}"
         logger.error(f"tool_calling_failed({route_label}): {e}")
-        request_manager.capture_error(ctx, e, code="tool_calling_failed")
-        ctx.mark_failed(str(e))
+        request_manager.capture_error(ctx, e, code=getattr(e, "code", "tool_calling_failed"))
+        ctx.mark_failed(str(getattr(e, "code", None) or e))
         raise
     finally:
-        if disconnect_task:
-            disconnect_task.cancel()
-            try:
-                await disconnect_task
-            except asyncio.CancelledError:
-                pass
-        worker_thread = worker_state.get("thread")
-        await _cleanup_route_worker_thread(worker_thread, ctx)
-        worker_state["thread"] = None
-        worker_state["label"] = None
-        request_manager.finish_request(ctx, success=(ctx.status == RequestStatus.COMPLETED))
+        with request_finalization(ctx):
+            if disconnect_task:
+                disconnect_task.cancel()
+                try:
+                    await disconnect_task
+                except asyncio.CancelledError:
+                    pass
+            worker_thread = worker_state.get("thread")
+            await _cleanup_route_worker_thread(worker_thread, ctx)
+            worker_state["thread"] = None
+            worker_state["label"] = None
 
 
 async def _complete_tool_calling_with_exact_url(
@@ -4478,21 +4510,21 @@ async def _complete_tool_calling_with_exact_url(
         raise
     except Exception as e:
         logger.error(f"tool_calling_failed(exact_url={exact_url}): {e}")
-        request_manager.capture_error(ctx, e, code="tool_calling_failed")
-        ctx.mark_failed(str(e))
+        request_manager.capture_error(ctx, e, code=getattr(e, "code", "tool_calling_failed"))
+        ctx.mark_failed(str(getattr(e, "code", None) or e))
         raise
     finally:
-        if disconnect_task:
-            disconnect_task.cancel()
-            try:
-                await disconnect_task
-            except asyncio.CancelledError:
-                pass
-        worker_thread = worker_state.get("thread")
-        await _cleanup_route_worker_thread(worker_thread, ctx)
-        worker_state["thread"] = None
-        worker_state["label"] = None
-        request_manager.finish_request(ctx, success=(ctx.status == RequestStatus.COMPLETED))
+        with request_finalization(ctx):
+            if disconnect_task:
+                disconnect_task.cancel()
+                try:
+                    await disconnect_task
+                except asyncio.CancelledError:
+                    pass
+            worker_thread = worker_state.get("thread")
+            await _cleanup_route_worker_thread(worker_thread, ctx)
+            worker_state["thread"] = None
+            worker_state["label"] = None
 
 
 async def _non_stream_tool_calling_with_tab_index(
@@ -4641,6 +4673,13 @@ async def _stream_tool_calling_with_tab_index(
                 break
             yield chunk
             await asyncio.sleep(0)
+    except GeneratorExit:
+        if not ctx.is_terminal():
+            ctx.request_cancel("stream_closed")
+        raise
+    except asyncio.CancelledError:
+        ctx.request_cancel("coroutine_cancelled")
+        raise
     except Exception as e:
         message, code = _format_route_tool_calling_error(e)
         ctx.mark_failed(message)
@@ -4649,12 +4688,13 @@ async def _stream_tool_calling_with_tab_index(
         yield _pack_error(message, code)
         yield _pack_done()
     finally:
-        if response_task is not None and not response_task.done():
-            response_task.cancel()
-            try:
-                await response_task
-            except asyncio.CancelledError:
-                pass
+        with request_finalization(ctx):
+            if response_task is not None and not response_task.done():
+                response_task.cancel()
+                try:
+                    await response_task
+                except asyncio.CancelledError:
+                    pass
 
 
 async def _stream_tool_calling_with_route_domain(
@@ -4718,6 +4758,13 @@ async def _stream_tool_calling_with_route_domain(
                 break
             yield chunk
             await asyncio.sleep(0)
+    except GeneratorExit:
+        if not ctx.is_terminal():
+            ctx.request_cancel("stream_closed")
+        raise
+    except asyncio.CancelledError:
+        ctx.request_cancel("coroutine_cancelled")
+        raise
     except Exception as e:
         message, code = _format_route_tool_calling_error(e)
         ctx.mark_failed(message)
@@ -4726,12 +4773,13 @@ async def _stream_tool_calling_with_route_domain(
         yield _pack_error(message, code)
         yield _pack_done()
     finally:
-        if response_task is not None and not response_task.done():
-            response_task.cancel()
-            try:
-                await response_task
-            except asyncio.CancelledError:
-                pass
+        with request_finalization(ctx):
+            if response_task is not None and not response_task.done():
+                response_task.cancel()
+                try:
+                    await response_task
+                except asyncio.CancelledError:
+                    pass
 
 
 async def _stream_tool_calling_with_exact_url(
@@ -4793,6 +4841,13 @@ async def _stream_tool_calling_with_exact_url(
                 break
             yield chunk
             await asyncio.sleep(0)
+    except GeneratorExit:
+        if not ctx.is_terminal():
+            ctx.request_cancel("stream_closed")
+        raise
+    except asyncio.CancelledError:
+        ctx.request_cancel("coroutine_cancelled")
+        raise
     except Exception as e:
         message, code = _format_route_tool_calling_error(e)
         ctx.mark_failed(message)
@@ -4801,12 +4856,13 @@ async def _stream_tool_calling_with_exact_url(
         yield _pack_error(message, code)
         yield _pack_done()
     finally:
-        if response_task is not None and not response_task.done():
-            response_task.cancel()
-            try:
-                await response_task
-            except asyncio.CancelledError:
-                pass
+        with request_finalization(ctx):
+            if response_task is not None and not response_task.done():
+                response_task.cancel()
+                try:
+                    await response_task
+                except asyncio.CancelledError:
+                    pass
 
 
 # ================= 预设管理 API =================

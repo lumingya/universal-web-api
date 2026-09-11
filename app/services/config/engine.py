@@ -3191,6 +3191,8 @@ class ConfigEngine:
             "root_selectors",
             "attachment_selectors",
             "pending_selectors",
+            "status_selectors",
+            "content_exclusion_selectors",
             "busy_text_markers",
             "ignored_busy_text_markers",
             "send_button_disabled_markers",

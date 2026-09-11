@@ -554,9 +554,13 @@ async def disable_dashboard_cache(request, call_next):
     if guard is not None:
         async with guard.track_request() as admitted:
             if not admitted:
-                # Do not reject arrivals during a handoff.  The launcher proxy
-                # retries this request when the new backend instance is ready.
-                await guard.wait_for_handoff()
+                # Explicit pre-admission acknowledgement: the launcher may
+                # buffer/retry ONLY this response, never an ambiguous POST EOF.
+                return Response(status_code=503, headers={
+                    "X-UWA-Restart-Handoff": "pending",
+                    "Retry-After": "1",
+                    "Connection": "close",
+                })
             return await _call_next_without_dashboard_cache(request, call_next)
     return await _call_next_without_dashboard_cache(request, call_next)
 

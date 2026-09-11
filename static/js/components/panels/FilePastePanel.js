@@ -81,6 +81,8 @@ window.FilePastePanel = {
                 root_selectors: [],
                 attachment_selectors: [],
                 pending_selectors: [],
+                status_selectors: [],
+                content_exclusion_selectors: [],
                 busy_text_markers: [],
                 ignored_busy_text_markers: [],
                 send_button_disabled_markers: [],
@@ -303,6 +305,8 @@ window.FilePastePanel = {
             const listFields = [
                 'attachment_selectors',
                 'pending_selectors',
+                'status_selectors',
+                'content_exclusion_selectors',
                 'busy_text_markers',
                 'send_button_disabled_markers',
                 'ignored_busy_text_markers',
@@ -699,7 +703,7 @@ window.FilePastePanel = {
                                     rows="5"
                                     placeholder="[class*='attachment']&#10;.upload-preview"
                                     class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm font-mono bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent"></textarea>
-                                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">每行一个 selector，命中后会被视为“附件已挂上页面”。</p>
+                                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">每行一个 selector，选择独立附件卡片，不要选择包含输入框的大容器；嵌套图片不会重复计数。</p>
                             </div>
                             <div>
                                 <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">上传中 selector</label>
@@ -722,7 +726,7 @@ window.FilePastePanel = {
                                     rows="5"
                                     placeholder="uploading&#10;处理中&#10;解析中"
                                     class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm font-mono bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent"></textarea>
-                                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">会同时用于附件区域文本和发送按钮 busy 文案匹配。</p>
+                                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">只匹配附件状态提示和发送按钮，不扫描提示词、文件名或文件预览正文。</p>
                             </div>
                             <div>
                                 <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">发送按钮灰态 token</label>
@@ -736,6 +740,21 @@ window.FilePastePanel = {
                             </div>
                         </div>
 
+                        <div v-show="!sectionCollapsed.advancedRules" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">附件状态提示区域（可选）
+                                <textarea :value="attachmentMonitorDrafts ? (attachmentMonitorDrafts.status_selectors ?? '') : ''"
+                                    @input="updateAttachmentMonitorListField('status_selectors', $event.target.value)" rows="3" placeholder=".attachment-status"
+                                    class="mt-1 w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm font-mono bg-white dark:bg-gray-700"></textarea>
+                                <span class="block mt-1 text-xs font-normal text-gray-500">只选择显示“读取中 / 上传中”等状态的小区域，不要选择整张卡片或输入框。</span>
+                            </label>
+                            <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">不参与附件检测的内容区域（可选）
+                                <textarea :value="attachmentMonitorDrafts ? (attachmentMonitorDrafts.content_exclusion_selectors ?? '') : ''"
+                                    @input="updateAttachmentMonitorListField('content_exclusion_selectors', $event.target.value)" rows="3" placeholder=".document-preview-content"
+                                    class="mt-1 w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm font-mono bg-white dark:bg-gray-700"></textarea>
+                                <span class="block mt-1 text-xs font-normal text-gray-500">补充站点特有的正文镜像或文件内容预览区域；隐藏内容、输入框和常见文件名区域已自动排除。</span>
+                            </label>
+                        </div>
+
                         <div v-show="!sectionCollapsed.advancedRules">
                             <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">忽略忙碌文本 / token</label>
                             <textarea
@@ -744,7 +763,7 @@ window.FilePastePanel = {
                                 rows="3"
                                 placeholder="thinking"
                                 class="w-full border dark:border-gray-600 px-3 py-2 rounded-md text-sm font-mono bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-400 focus:border-transparent"></textarea>
-                            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">用于排除输入区固定开关或标签文案，避免被误判成附件仍在处理。</p>
+                            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">仅用于排除站点特有的状态词。正文与文件名会自动排除，不需要在这里逐个添加。</p>
                         </div>
 
                         <div v-show="!sectionCollapsed.advancedRules">

@@ -16,7 +16,8 @@ import uuid
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse as StarletteStreamingResponse
+from app.api.streaming_response import RequestStreamingResponse as StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.api import chat as chat_api
@@ -1574,9 +1575,10 @@ def _wrap_openai_response_as_anthropic(
     body: AnthropicMessageRequest,
     request_id: str,
 ) -> JSONResponse | StreamingResponse:
-    if isinstance(response, StreamingResponse):
+    if isinstance(response, StarletteStreamingResponse):
         return StreamingResponse(
             _anthropic_stream_from_openai(response, body.model, body.stop_sequences),
+            request_context=getattr(response, 'request_context', None),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",

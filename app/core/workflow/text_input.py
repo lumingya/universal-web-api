@@ -7,6 +7,7 @@ app/core/workflow/text_input.py - 文本输入处理
 - 剪贴板模式输入（隐身模式专用）
 """
 
+import base64
 import re
 import os
 import time

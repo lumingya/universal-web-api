@@ -15,6 +15,7 @@ import hashlib
 import os
 import shutil
 import socket
+import select
 import socketserver
 import subprocess
 import sys
@@ -651,26 +652,74 @@ class _RestartHandoffProxyHandler(socketserver.BaseRequestHandler):
         rewritten_headers = "\r\n".join(header_lines).rstrip("\r\n") + "\r\nConnection: close\r\n\r\n"
         return rewritten_headers.encode("iso-8859-1") + bytes(payload[header_end:])
 
+    def _client_disconnected(self) -> bool:
+        # One HTTP request per connection. Never leave an old backend running
+        # merely because it has not produced its first response byte yet.
+        try:
+            readable, _, _ = select.select([self.request], [], [], 0)
+            if not readable:
+                return False
+            return not self.request.recv(1, socket.MSG_PEEK)
+        except OSError:
+            return True
+
     def _forward_when_backend_ready(self, payload: bytes) -> None:
         deadline = time.monotonic() + 120.0
         while time.monotonic() < deadline:
+            if self._client_disconnected():
+                return
             try:
-                with socket.create_connection(("127.0.0.1", self.server.backend_port), timeout=1.0) as backend:
+                backend = socket.create_connection(("127.0.0.1", self.server.backend_port), timeout=1.0)
+            except OSError:
+                # Connection not established: no request could have executed.
+                time.sleep(0.15)
+                continue
+            with backend:
+                try:
                     backend.settimeout(300.0)
+                    if self._client_disconnected():
+                        return
                     backend.sendall(payload)
                     if self._relay_response(backend):
                         return
-            except (ConnectionError, OSError, socket.timeout):
-                time.sleep(0.15)
+                except OSError:
+                    # A partial send, backend reset, or CLIENT write error is
+                    # ambiguous. Never replay a possibly executed POST.
+                    return
+            # Only an explicit pre-admission handoff response permits replay.
+            time.sleep(0.15)
 
     def _relay_response(self, backend: socket.socket) -> bool:
-        sent_response = False
-        while True:
+        header = bytearray()
+        headers_sent = False
+        deadline = time.monotonic() + 300.0
+        while time.monotonic() < deadline:
+            if self._client_disconnected():
+                return True
+            readable, _, _ = select.select([backend], [], [], 0.1)
+            if not readable:
+                continue
             chunk = backend.recv(self._BUFFER_SIZE)
             if not chunk:
-                return sent_response
-            self.request.sendall(chunk)
-            sent_response = True
+                return True  # EOF after dispatch is NOT permission to retry.
+            deadline = time.monotonic() + 300.0
+            if not headers_sent:
+                header.extend(chunk)
+                boundary = header.find(b"\r\n\r\n")
+                if boundary < 0:
+                    if len(header) > self._BUFFER_SIZE:
+                        return True
+                    continue
+                lines = bytes(header[:boundary]).split(b"\r\n")
+                status = lines[0].split()
+                handoff = any(line.lower().strip() == b"x-uwa-restart-handoff: pending" for line in lines[1:])
+                if len(status) >= 2 and status[1] == b"503" and handoff:
+                    return False
+                self.request.sendall(header)
+                headers_sent = True
+            else:
+                self.request.sendall(chunk)
+        return True
 
 
 def _start_restart_handoff_proxy(host: str, public_port: int, backend_port: int):

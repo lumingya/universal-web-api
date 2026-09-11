@@ -66,6 +66,12 @@
         "description": "停止/打断大模型输出的按钮",
         "enabled": true,
         "required": false
+      },
+      {
+        "key": "composer_root",
+        "description": "当前消息编辑区根节点，限定附件输入框和就绪观察范围",
+        "enabled": false,
+        "required": false
       }
     ]
   },
@@ -904,8 +910,9 @@
             "value": {
               "title": "申明",
               "text": "网页的主题必须是中文主题，否则会报错找不到元素，gemini其他预设同理！",
-              "tone": "warning"
-            }
+              "tone": "danger"
+            },
+            "flow_version": 2
           },
           {
             "action": "GROUP",
@@ -2796,9 +2803,9 @@
           "error_hint_text": "输入文本长度超过限制，已中止发送",
           "reacquire_input_after_upload": false,
           "post_upload_input_selector": "",
-          "post_upload_settle": 0.0,
+          "post_upload_settle": 0,
           "upload_signal_timeout": 2.5,
-          "upload_signal_grace": 3.0,
+          "upload_signal_grace": 3,
           "state_probe": {
             "enabled": false,
             "code": ""
@@ -2808,7 +2815,7 @@
             "post_click_observe_window": 2.4,
             "pre_retry_probe_window": 0.18,
             "retry_observe_window": 1.2,
-            "attachment_observe_window": 8.0,
+            "attachment_observe_window": 8,
             "max_retry_count": 2,
             "retry_interval": 0.6,
             "retry_cooldown_window": 1.5,
@@ -2852,8 +2859,8 @@
             "require_attachment_present": true,
             "require_upload_signal_before_ready": false,
             "continue_once_on_unconfirmed_send": true,
-            "idle_timeout": 3.0,
-            "hard_max_wait": 90.0
+            "idle_timeout": 3,
+            "hard_max_wait": 90
           }
         },
         "prompt_padding": {
