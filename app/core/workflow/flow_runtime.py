@@ -17,7 +17,7 @@ from typing import Any
 
 from app.core.config import WorkflowError, WorkflowCancelledError
 
-CONTROL_ACTIONS = frozenset({"SET", "CAPTURE", "IF", "GROUP", "GUARD", "TRY", "LABEL"})
+CONTROL_ACTIONS = frozenset({"SET", "CAPTURE", "IF", "SWITCH", "GROUP", "GUARD", "TRY", "LABEL"})
 LEAF_ACTIONS = frozenset({"FILL_INPUT", "SELECT_MODEL", "CLICK", "COORD_CLICK", "COORD_SCROLL", "STREAM_WAIT", "STREAM_OUTPUT", "KEY_PRESS", "WAIT", "JS_EXEC", "READONLY_HINT", "PAGE_FETCH"})
 OPS = {"eq", "ne", "contains", "starts_with", "ends_with", "matches", "exists", "not_exists", "gt", "gte", "lt", "lte", "in"}
 TRANSFORMS = {"trim", "lower", "upper", "string", "number", "boolean", "urlencode", "css_escape", "json"}
@@ -123,6 +123,18 @@ def validate_workflow(workflow):
                     raise FlowValidationError("捕获超时需为 0–30 秒")
             if action in {"IF", "GUARD"}:
                 _condition_valid(v.get("condition"))
+            if action == "SWITCH":
+                cases = v.get("cases")
+                if not isinstance(cases, list) or not 1 <= len(cases) <= 32:
+                    raise FlowValidationError("多分支需要 1–32 个有序情况")
+                for case in cases:
+                    if not isinstance(case, dict):
+                        raise FlowValidationError("情况必须是对象")
+                    if "label" in case and (not isinstance(case["label"], str) or len(case["label"]) > 160):
+                        raise FlowValidationError("情况名称必须是 160 字以内的文本")
+                    _condition_valid(case.get("condition"))
+                    walk(case.get("steps", []), depth + 1)
+                walk(v.get("default", []), depth + 1)
             if action == "IF":
                 walk(v.get("then", []), depth + 1)
                 walk(v.get("else", []), depth + 1)
@@ -326,6 +338,19 @@ class FlowProgram:
                 self.steps[test]["to"] = len(self.steps)
                 self._compile(v.get("else", []), p + ".else", group_end)
                 self.steps[jump]["to"] = self._emit("merge", p)
+            elif action == "SWITCH":
+                test = self._emit("switch", p, cases=[])
+                exits = []
+                for case_index, case in enumerate(v["cases"]):
+                    branch = f"case_{case_index}"
+                    self.steps[test]["cases"].append({"condition": case["condition"], "to": len(self.steps), "branch": branch})
+                    self._compile(case.get("steps", []), p + "." + branch, group_end)
+                    exits.append(self._emit("jump", p))
+                self.steps[test]["default_to"] = len(self.steps)
+                self._compile(v.get("default", []), p + ".default", group_end)
+                merge = self._emit("merge", p)
+                for exit_index in exits:
+                    self.steps[exit_index]["to"] = merge
             elif action == "GROUP":
                 ref = {}
                 enter = self._emit("enter", p, variables=v.get("variables", {}), end=ref)
@@ -381,6 +406,15 @@ class FlowProgram:
                     result = self.variables.condition(step["condition"])
                     self._record(step, "branch", branch="then" if result else "else")
                     if not result: next_index = step["to"]
+                elif op == "switch":
+                    next_index = step["default_to"]
+                    branch = "default"
+                    for case in step["cases"]:
+                        self._check()
+                        if self.variables.condition(case["condition"]):
+                            next_index, branch = case["to"], case["branch"]
+                            break
+                    self._record(step, "branch", branch=branch)
                 elif op == "guard":
                     if self.variables.condition(step["condition"]):
                         next_index = step.get("to", (step["end"]["index"] if step.get("end") is not None else len(self.steps)))

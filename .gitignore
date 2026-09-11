@@ -165,3 +165,14 @@ scripts/custom/
 # Scoped preset transfer regression
 !tests/test_preset_transfer.py
 !tests/browser_preset_transfer.py
+
+# Shipped site workflow upgrade and admission regression
+!/scripts/upgrade_gemini_deepseek.py
+!tests/test_site_workflow_upgrade.py
+!tests/test_site_discovery.py
+
+!tests/browser_upgraded_sites.py
+
+# Readable workflow and ordered multi-case regression
+!tests/test_workflow_multi_case.py
+!tests/test_workflow_readable_ui.py

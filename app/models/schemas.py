@@ -26,7 +26,7 @@ ActionType = Literal[
     "JS_EXEC",
     "READONLY_HINT",
     "PAGE_FETCH",
-    "SET", "CAPTURE", "IF", "GROUP", "GUARD", "TRY", "LABEL",
+    "SET", "CAPTURE", "IF", "SWITCH", "GROUP", "GUARD", "TRY", "LABEL",
 ]
 
 # ================= 选择器字段名称 =================

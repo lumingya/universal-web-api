@@ -13,6 +13,7 @@ import os
 import re
 import time
 from app.core.config import get_logger
+from app.utils.site_discovery import admitted_selectors
 from typing import Dict, Optional
 from urllib import request, error
 
@@ -373,10 +374,14 @@ class AIAnalyzer:
                 
                 response = self._request_ai(prompt)
                 if response:
-                    selectors = self._extract_json(response)
-                    if selectors:
-                        logger.info("✅ AI 分析成功")
-                        return selectors
+                    analysis = self._extract_json(response)
+                    if analysis is not None:
+                        selectors = admitted_selectors(analysis)
+                        if selectors:
+                            logger.info("✅ 已确认 AI 聊天页并识别到专用定位器")
+                            return selectors
+                        logger.info("未确认 AI 聊天界面或缺少专用回复容器，不自动收录")
+                        return None
                 
                 logger.warning(f"第 {attempt + 1} 次分析失败")
             
@@ -589,7 +594,10 @@ class AIAnalyzer:
             json_keys = self._build_default_json_keys()
         
         lines = [
-            "You are a web scraping expert. Analyze this AI chat interface HTML to identify critical elements.",
+            "You are a web interface classifier. First determine whether this is an AI CONVERSATION interface; do not assume every page is a chat app.",
+            "Return {\"is_chat_site\": false} for search engines, search results, login/consent pages, articles, ordinary forms, and pages with insufficient evidence.",
+            "A textarea, submit button, generic div, or the word AI alone is NOT evidence of an AI conversation interface.",
+            "Only for a genuine AI chat page with a composer and a specific assistant-reply container, return is_chat_site: true and the selector keys below. Do not invent selectors for missing elements.",
             "",
             "## CRITICAL RULES:",
             "1. **Uniqueness is Key**: Ensure selectors matches ONLY the intended element.",
@@ -608,7 +616,7 @@ class AIAnalyzer:
             selector_list,
             "",
             "## REQUIRED OUTPUT (JSON ONLY):",
-            "Return a JSON object with these keys:",
+            "Return a JSON object with boolean is_chat_site plus these keys ONLY when is_chat_site is true:",
             json_keys,
             "",
             "## HTML:",

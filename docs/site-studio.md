@@ -133,3 +133,8 @@ UWA_BASE_URL=http://127.0.0.1:8000 python tests/browser_site_capabilities.py
 工作流自身的「导入工作流 / 导出工作流」仅转移动作与流程定位器；新导出的片段带 `kind: workflow` 标识，预设导入面板会提示去正确的流程入口，而不会误将其替换成完整预设。
 
 验证：`python -m pytest -q tests/test_preset_transfer.py`，以及服务启动后的 `python tests/browser_preset_transfer.py`。浏览器测试拦截所有配置写入，覆盖居中/展开/关闭、单预设完整导出与回导、草稿切换/重命名/保存、非法工作流拒绝、合并跳过同名、手机与暗色；截图使用合成工作流，不代表登录 AI 实站的自动化验证。
+
+
+## 自动收录策略
+
+未知页面的通用回退不再成为站点配置；搜索和登录页优先排除，其他页面需明确识别为 AI 聊天页且输入/回复定位匹配 HTML，才会自动加入。手动添加和导入仍保留。详见 [Gemini / DeepSeek 升级与过滤说明](migrations/gemini-deepseek-v2.md)。

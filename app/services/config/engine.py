@@ -39,6 +39,7 @@ from app.models.schemas import (
 from app.services.extractor_manager import extractor_manager
 from app.services.parser_manager import parser_manager
 from app.utils.site_rules import derive_site_card_id, get_site_rule
+from app.utils.site_discovery import automatic_discovery_allowed, specific_chat_selectors, selectors_match_chat_html
 from app.core.request_transport import (
     get_default_request_transport_config,
     normalize_request_transport_config,
@@ -1969,6 +1970,10 @@ class ConfigEngine:
             self._cache.set(cache_key, result)
             return copy.deepcopy(result)
 
+        if not automatic_discovery_allowed(domain):
+            logger.info(f"跳过非聊天站点的自动收录: {domain}（已有手动配置不受影响）")
+            return None
+
         resolved_html = ""
         if callable(html_content):
             try:
@@ -1984,9 +1989,9 @@ class ConfigEngine:
             clean_html = self.html_cleaner.clean(resolved_html)
             selectors = self.ai_analyzer.analyze(clean_html)
 
-            if selectors:
+            if specific_chat_selectors(selectors):
                 selectors = self.validator.validate(selectors)
-
+            if selectors_match_chat_html(selectors, clean_html):
                 new_preset: SiteConfig = {
                     "selectors": selectors,
                     "workflow": DEFAULT_WORKFLOW,
@@ -2025,15 +2030,9 @@ class ConfigEngine:
             "prompt_padding": get_default_prompt_padding_config(),
         }
 
-        self.sites[domain] = {
-            "default_preset": DEFAULT_PRESET_NAME,
-            "presets": {
-                DEFAULT_PRESET_NAME: fallback_preset
-            }
-        }
-        if not self._save_config():
-            logger.warning(f"⚠️ 回退配置保存失败，仅保留在当前运行内存: {domain}")
-
+        # A generic fallback is only for this caller. It is not proof that this
+        # domain hosts an AI chat product, and must never enter the site catalog.
+        logger.info(f"通用回退仅用于当前请求，未自动添加站点: {domain}")
         return copy.deepcopy(fallback_preset)
 
     def delete_site_config(self, domain: str) -> bool:

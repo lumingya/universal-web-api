@@ -63,6 +63,9 @@ def _normalize_rule(rule: Any) -> Dict[str, Any]:
     if isinstance(guide_priority, (int, float)) and not isinstance(guide_priority, bool):
         normalized["guide_priority"] = int(guide_priority)
 
+    if isinstance(rule.get("auto_discovery"), bool):
+        normalized["auto_discovery"] = rule["auto_discovery"]
+
     if "stealth_default" in rule:
         normalized["stealth_default"] = bool(rule.get("stealth_default"))
 

@@ -32,7 +32,7 @@
     <link rel="stylesheet" href="/static/css/dashboard-reference.css?v=3.2.7">
     <link rel="stylesheet" href="/static/css/onboarding-guide.css?v=1.0.0">
     <link rel="stylesheet" href="/static/css/dashboard-dark.css?v=1.1.5">
-    <link rel="stylesheet" href="/static/css/site-studio.css?v=3.1.0">
+    <link rel="stylesheet" href="/static/css/site-studio.css?v=3.1.1">
     <link rel="stylesheet" href="/static/css/operations-studio.css?v=1.0.1">
 
     <!-- 图标定义 -->
@@ -320,6 +320,7 @@
                             <button type="button" class="site-library-compare" @click="openMainCompareSummaryDialog"><span v-html="$icons.arrowPathRoundedSquare"></span>配置对比</button>
                             <button type="button" class="uwa-icon-button" @click="refreshStatus" aria-label="刷新状态" title="刷新状态"><span v-html="$icons.arrowPath"></span></button>
                         </div>
+                        <p class="site-discovery-note">仅自动收录识别成功的 AI 聊天页；搜索页、登录页和通用回退不会加入。自定义站点仍可手动添加。</p>
                         <div class="site-library-grid">
                             <article v-for="domain in librarySites" :key="domain" class="site-library-card">
                                 <details class="site-card-menu preset-more"><summary :aria-label="siteDisplayName(domain) + ' 站点操作'"><span v-html="$icons.ellipsisVertical"></span></summary><div class="preset-more-pop"><button type="button" @click="exportSingleSite(domain); $event.currentTarget.closest('details').open = false"><span v-html="$icons.arrowUpTray"></span>导出站点</button><button type="button" class="is-danger" @click="$event.currentTarget.closest('details').open = false; confirmDelete(domain)"><span v-html="$icons.trash"></span>删除站点</button></div></details>

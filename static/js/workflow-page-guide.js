@@ -29,11 +29,13 @@
     SET: "设置变量",
     CAPTURE: "读取页面状态",
     IF: "判断条件",
+    SWITCH: "按情况处理",
     GROUP: "步骤组",
     GUARD: "跳过 / 跳转",
     TRY: "重试与兜底",
     LABEL: "跳转锚点",
   };
+  const nodeTitle = n => n.action === "READONLY_HINT" ? window.WorkflowStudio.hintData(n).title : (n.label || names[n.action] || n.action);
   const targeted = new Set([
     "CLICK",
     "FILL_INPUT",
@@ -48,6 +50,7 @@
     else: "否则",
     steps: "组内",
     fallback: "失败兜底",
+    default: "其他情况",
   };
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(Math.max(lo, hi), v));
   const inRect = (x, y, r) =>
@@ -395,8 +398,8 @@
       return path
         .split(".")
         .slice(1, -1)
-        .filter((p) => branches[p])
-        .map((p) => branches[p])
+        .filter((p) => branches[p] || /^case_\d+$/.test(p))
+        .map((p) => branches[p] || "情况 " + (Number(p.slice(5))+1))
         .join(" / ");
     }
     describe(n) {
@@ -420,6 +423,7 @@
           "执行自定义脚本，影响取决于脚本内容。这里不会假装它有一个固定点击位置；请在编排检查器中查看脚本。",
         PAGE_FETCH: "通过页面发出网络请求，没有固定点击位置。",
         IF: "根据条件选择一侧分支。列表是设计顺序，两侧不会同时执行；真实路径以测试轨迹为准。",
+        SWITCH: "从上到下检查情况，只执行第一个符合的分支；都不符合则执行其他情况。页面序号是设计顺序，不代表所有分支都会执行。",
         GROUP: "按顺序执行组内步骤，并建立局部变量作用域。",
         TRY: "尝试执行组内步骤，按配置重试或走失败兜底；两条路径不是连续执行。",
         SET: "赋值、映射或转换变量；不操作网页。",
@@ -441,7 +445,7 @@
         rows
           .map(
             (r) =>
-              `<div class="row ${r.path === this.selected ? "active" : ""}" data-row="${r.path}"><button class="number ${this.canTarget(r.node) || coords.has(r.node.action) ? "draggable" : ""}" ${this.canTarget(r.node) || coords.has(r.node.action) ? `data-pin="${r.path}" data-end="start"` : ""} data-select="${r.path}" aria-label="第 ${r.number} 步${this.canTarget(r.node) || coords.has(r.node.action) ? "，拖到网页目标" : ""}">${r.number}</button><button class="select" data-select="${r.path}"><strong>${esc(r.node.label || names[r.node.action] || r.node.action)}</strong><small>${esc(this.crumb(r.path) || r.node.action)}${this.trace.some((t) => t.path === r.path) ? " · " + esc(this.trace.filter((t) => t.path === r.path).at(-1).status) : ""}</small></button></div>`,
+              `<div class="row ${r.path === this.selected ? "active" : ""}" data-row="${r.path}"><button class="number ${this.canTarget(r.node) || coords.has(r.node.action) ? "draggable" : ""}" ${this.canTarget(r.node) || coords.has(r.node.action) ? `data-pin="${r.path}" data-end="start"` : ""} data-select="${r.path}" aria-label="第 ${r.number} 步${this.canTarget(r.node) || coords.has(r.node.action) ? "，拖到网页目标" : ""}">${r.number}</button><button class="select" data-select="${r.path}"><strong>${esc(nodeTitle(r.node))}</strong><small>${esc(this.crumb(r.path) || r.node.action)}${this.trace.some((t) => t.path === r.path) ? " · " + esc(this.trace.filter((t) => t.path === r.path).at(-1).status) : ""}</small></button></div>`,
           )
           .join("") ||
         '<p class="explain">还没有步骤。点击「分支与变量」添加动作，或导入现有工作流。</p>';
@@ -486,14 +490,10 @@
           "</textarea></label>";
       if (n.action === "READONLY_HINT")
         fields =
-          '<p class="explain">' +
-          esc(
-            typeof n.value === "string"
-              ? n.value
-              : JSON.stringify(n.value || ""),
-          ) +
+          '<p class="explain hint-content" style="white-space:pre-wrap">' +
+          esc(window.WorkflowStudio.hintData(n).text) +
           "</p>";
-      el.innerHTML = `<h3>${row.number}. ${esc(n.label || names[n.action] || n.action)}</h3><p class="explain">${esc(this.describe(n))}</p>${this.canTarget(n) ? `<p class="explain target-status">${esc(this.targetMessage(loc))}</p><button data-command="locate">◎ 定位目标</button> <button data-command="pick">重新选取元素</button><details><summary>技术细节 · 当前定位器</summary><code>${esc(this.selector(n) || "尚未绑定")}</code></details>` : ""}${coords.has(n.action) ? '<button data-command="pick">在页面指定' + (n.action === "COORD_SCROLL" ? "起点" : "坐标") + "</button>" : ""}${fields}<button data-command="edit">编辑这一步的更多设置 ↗</button>`;
+      el.innerHTML = `<h3>${row.number}. ${esc(nodeTitle(n))}</h3><p class="explain">${esc(this.describe(n))}</p>${this.canTarget(n) ? `<p class="explain target-status">${esc(this.targetMessage(loc))}</p><button data-command="locate">◎ 定位目标</button> <button data-command="pick">重新选取元素</button><details><summary>技术细节 · 当前定位器</summary><code>${esc(this.selector(n) || "尚未绑定")}</code></details>` : ""}${coords.has(n.action) ? '<button data-command="pick">在页面指定' + (n.action === "COORD_SCROLL" ? "起点" : "坐标") + "</button>" : ""}${fields}<button data-command="edit">编辑这一步的更多设置 ↗</button>`;
     }
     updateDirty() {
       const dirty =

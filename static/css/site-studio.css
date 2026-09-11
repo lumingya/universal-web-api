@@ -492,3 +492,5 @@
  .transfer-feedback { width:250px; right:auto; left:-80px; }
  #app.site-studio-active .transfer-menu .preset-more-pop { width:min(285px,80vw); left:-95px; right:auto; }
 }
+
+#app.site-studio-active .site-discovery-note { margin: -4px 0 18px; color: var(--uwa-muted); font-size: 11px; line-height: 1.7; }

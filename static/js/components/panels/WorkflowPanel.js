@@ -84,7 +84,7 @@ window.WorkflowPanel = {
         };
     },
     computed: {
-        hasStructuredFlow() { return this.workflow.some(s => ['SET','CAPTURE','IF','GROUP','GUARD','TRY','LABEL'].includes(s.action)); },
+        hasStructuredFlow() { return this.workflow.some(s => ['SET','CAPTURE','IF','SWITCH','GROUP','GUARD','TRY','LABEL'].includes(s.action)); },
         isArenaPreset() {
             const domain = String(this.currentDomain || '').trim().toLowerCase();
             return domain === 'arena.ai' || domain.endsWith('.arena.ai');
@@ -1137,7 +1137,7 @@ window.WorkflowPanel = {
                     </div>
                 </div>
 
-                <workflow-studio ref="flowStudio" :workflow="workflow" :selectors="selectors" @change="replaceStudioWorkflow" @selectors-change="replaceStudioSelectors"></workflow-studio>
+                <workflow-studio ref="flowStudio" :workflow="workflow" :selectors="selectors" @change="replaceStudioWorkflow" @selectors-change="replaceStudioSelectors" @open-real-test="launchVisualEditor"></workflow-studio>
                 <button v-if="!hasStructuredFlow" type="button" @click="legacyDetails = !legacyDetails" class="text-xs text-gray-500 dark:text-gray-400 hover:underline">
                     {{ legacyDetails ? '收起旧版详细参数' : '兼容工具：打开旧版详细参数编辑器' }}
                 </button>

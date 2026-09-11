@@ -1,0 +1,905 @@
+{
+  "chat.deepseek.com": {
+    "presets": {
+      "专家模式": {
+        "selectors": {
+          "input_box": "textarea",
+          "send_btn": "div.bf38813a div[role='button'].ds-button--primary, div.bf38813a > div > div[role='button'], div:has(textarea) div[role='button'].ds-button--primary, div.ds-button.ds-button--primary[role='button']",
+          "upload_btn": "div.bf38813a > div[role='button']",
+          "file_input": "input[type='file']",
+          "result_container": "css:div.ds-markdown",
+          "new_chat_btn": "div._5a8ac7a",
+          "generating_indicator": "css:._7436101.bcc55ca1",
+          "专家": "div[data-model-type=\"expert\"]"
+        },
+        "stream_config": {
+          "mode": "network",
+          "hard_timeout": 300,
+          "network": {
+            "listen_pattern": "api/v0/chat/completion",
+            "parser": "deepseek",
+            "silence_threshold": 3,
+            "response_interval": 0.5
+          }
+        },
+        "workflow": [
+          {
+            "action": "GROUP",
+            "label": "准备新对话",
+            "value": {
+              "variables": {},
+              "steps": [
+                {
+                  "action": "CLICK",
+                  "target": "new_chat_btn",
+                  "optional": true,
+                  "value": null,
+                  "label": "新建对话（入口不存在时沿用当前会话）"
+                }
+              ]
+            }
+          },
+          {
+            "action": "GROUP",
+            "label": "只在需要时切换模式",
+            "value": {
+              "variables": {
+                "mode_target": "专家",
+                "selected_selector": "div[data-model-type=\"expert\"][aria-pressed=\"true\"], div[data-model-type=\"expert\"][aria-selected=\"true\"], div[data-model-type=\"expert\"][data-state=\"active\"], div[data-model-type=\"expert\"][data-state=\"checked\"]"
+              },
+              "steps": [
+                {
+                  "action": "CAPTURE",
+                  "target": "",
+                  "label": "读取目标模式的选中标记",
+                  "value": {
+                    "name": "mode_selected",
+                    "source": "exists",
+                    "timeout": 0.2,
+                    "selector": "{selected_selector}"
+                  }
+                },
+                {
+                  "action": "IF",
+                  "label": "未确认选中时选择一次",
+                  "value": {
+                    "condition": {
+                      "left": "{mode_selected}",
+                      "op": "eq",
+                      "right": false
+                    },
+                    "then": [
+                      {
+                        "action": "CLICK",
+                        "target": "{mode_target}",
+                        "optional": false,
+                        "value": null,
+                        "label": "选择目标模式（缺少入口则停止）"
+                      }
+                    ],
+                    "else": []
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "action": "GROUP",
+            "label": "发送并读取回复",
+            "value": {
+              "variables": {},
+              "steps": [
+                {
+                  "action": "FILL_INPUT",
+                  "target": "input_box",
+                  "optional": false,
+                  "value": null,
+                  "label": "填写本次请求"
+                },
+                {
+                  "action": "KEY_PRESS",
+                  "target": "Enter",
+                  "optional": false,
+                  "value": null,
+                  "label": "回车发送"
+                },
+                {
+                  "action": "STREAM_WAIT",
+                  "target": "result_container",
+                  "optional": false,
+                  "value": null,
+                  "label": "监听并读取回复"
+                }
+              ]
+            }
+          }
+        ],
+        "stealth": false,
+        "image_extraction": {
+          "enabled": false,
+          "modalities": {
+            "image": {
+              "enabled": false,
+              "run_policy": "disabled",
+              "quick_probe_timeout_seconds": 1,
+              "late_wait_timeout_seconds": 45,
+              "blind_wait_timeout_seconds": 1
+            },
+            "audio": {
+              "enabled": false,
+              "run_policy": "disabled",
+              "quick_probe_timeout_seconds": 1,
+              "capture_timeout_seconds": 12
+            },
+            "video": {
+              "enabled": false,
+              "run_policy": "disabled",
+              "quick_probe_timeout_seconds": 1,
+              "late_wait_timeout_seconds": 90
+            }
+          },
+          "selector": "img",
+          "audio_selector": "audio, audio source",
+          "video_selector": "video, video source",
+          "container_selector": null,
+          "force_postprocess": false,
+          "debounce_seconds": 2,
+          "wait_for_load": true,
+          "load_timeout_seconds": 5,
+          "download_blobs": true,
+          "max_size_mb": 10,
+          "canvas_export_mime": "image/jpeg",
+          "canvas_export_quality": 0.88,
+          "src_allow_patterns": [],
+          "mode": "all",
+          "audio_capture_enabled": true,
+          "audio_capture_mute_playback": true,
+          "audio_capture_preload_enabled": true,
+          "audio_capture_reload_before_workflow": false,
+          "audio_capture_preserve_graph": true,
+          "audio_capture_terminal_settle_seconds": 0.35,
+          "audio_trigger_selector": "",
+          "audio_trigger_labels": [
+            "朗读",
+            "语音朗读",
+            "收听",
+            "read aloud",
+            "listen",
+            "tts",
+            "voice"
+          ],
+          "audio_capture_max_wait_seconds": 12,
+          "audio_capture_min_wait_seconds": 2,
+          "audio_capture_hard_max_wait_seconds": 45,
+          "audio_capture_estimated_chars_per_second": 4.8,
+          "audio_capture_wait_padding_seconds": 1.2,
+          "audio_network_capture": {
+            "enabled": false,
+            "timeout_seconds": 2.5,
+            "transport": "page_websocket_probe",
+            "url_patterns": [
+              "voicegenie",
+              "speech",
+              "audio",
+              "tts"
+            ],
+            "extractor": "voicegenie_ogg_pages",
+            "settle_seconds": 0.35,
+            "max_payload_bytes": 10485760
+          },
+          "audio_browser_tts_fallback": {
+            "enabled": false,
+            "provider": "doubao_samantha",
+            "speaker": "2",
+            "speech_rate": 0,
+            "pitch": 0,
+            "format": "aac",
+            "timeout_seconds": 30,
+            "pc_version": "3.20.2",
+            "aid": "497858",
+            "real_aid": "497858",
+            "language": "zh",
+            "device_platform": "web",
+            "pkg_type": "release_version",
+            "region": "CN",
+            "sys_region": "CN",
+            "use_olympus_account": "1",
+            "samantha_web": "1"
+          },
+          "audio_capture_poll_seconds": 0.25,
+          "audio_capture_silence_seconds": 1.2,
+          "audio_capture_activity_threshold": 0.006,
+          "audio_capture_activity_silence_seconds": 0.65
+        },
+        "file_paste": {
+          "enabled": true,
+          "threshold": 163840,
+          "temp_file_type": "chunk",
+          "hint_text": "完全专注于文件内容",
+          "txt_hint_text": "完全专注于文件内容",
+          "pdf_hint_text": "完全专注于文件内容",
+          "error_hint_text": "输入文本长度超过限制，已中止发送",
+          "reacquire_input_after_upload": false,
+          "post_upload_input_selector": "",
+          "post_upload_settle": 0.0,
+          "upload_signal_timeout": 2.5,
+          "upload_signal_grace": 3.0,
+          "state_probe": {
+            "enabled": false,
+            "code": ""
+          },
+          "send_confirmation": {
+            "attachment_sensitivity": "high",
+            "post_click_observe_window": 2.4,
+            "pre_retry_probe_window": 0.18,
+            "retry_observe_window": 1.2,
+            "attachment_observe_window": 8.0,
+            "max_retry_count": 2,
+            "retry_interval": 0.6,
+            "retry_cooldown_window": 1.5,
+            "retry_action": "click_send_btn",
+            "retry_key_combo": "Enter",
+            "retry_on_unconfirmed_send": true,
+            "accept_attachment_change": false,
+            "accept_attachment_disappear": false,
+            "accept_probe_confirmation": true,
+            "retry_block_on_stop_button": true,
+            "retry_block_if_generating": true,
+            "trust_network_activity": true,
+            "trust_generating_indicator": true,
+            "trust_send_disabled_with_input_shrink": true
+          },
+          "attachment_monitor": {
+            "root_selectors": [
+              "div:has(> div > div > textarea)",
+              "div:has(textarea):not(._020ab5b):not(._24fad49)",
+              "div._77cefa5",
+              "div.aaff8b8f"
+            ],
+            "attachment_selectors": [
+              ".ds-animated-size-item",
+              "div[class*='d5fa3d1b']",
+              "div:has(> img[src^='blob:'])",
+              "img[src^='blob:']",
+              ".b40079d7 ._6d1b417 > div",
+              ".c8b3f8a6"
+            ],
+            "pending_selectors": [],
+            "busy_text_markers": [
+              "上传中",
+              "loading",
+              "processing"
+            ],
+            "send_button_disabled_markers": [
+              "disabled",
+              "ds-button--disabled"
+            ],
+            "require_attachment_present": true,
+            "require_upload_signal_before_ready": false,
+            "continue_once_on_unconfirmed_send": true,
+            "idle_timeout": 3.0,
+            "hard_max_wait": 90.0
+          }
+        },
+        "prompt_padding": {
+          "enabled": false,
+          "marker_text": "测试号，无实际意义",
+          "segments_per_side": 12,
+          "random_insert_enabled": false,
+          "random_insert_chars": ""
+        }
+      },
+      "快速模式": {
+        "selectors": {
+          "input_box": "textarea",
+          "send_btn": "div.bf38813a div[role='button'].ds-button--primary, div.bf38813a > div > div[role='button'], div:has(textarea) div[role='button'].ds-button--primary, div.ds-button.ds-button--primary[role='button']",
+          "upload_btn": "div.bf38813a > div[role='button']",
+          "file_input": "input[type='file']",
+          "result_container": "css:div.ds-markdown",
+          "new_chat_btn": "div._5a8ac7a",
+          "generating_indicator": "css:._7436101.bcc55ca1",
+          "快速": "div[data-model-type=\"default\"]"
+        },
+        "stream_config": {
+          "mode": "network",
+          "hard_timeout": 300,
+          "network": {
+            "listen_pattern": "api/v0/chat/completion",
+            "parser": "deepseek",
+            "silence_threshold": 3,
+            "response_interval": 0.5
+          }
+        },
+        "workflow": [
+          {
+            "action": "GROUP",
+            "label": "准备新对话",
+            "value": {
+              "variables": {},
+              "steps": [
+                {
+                  "action": "CLICK",
+                  "target": "new_chat_btn",
+                  "optional": true,
+                  "value": null,
+                  "label": "新建对话（入口不存在时沿用当前会话）"
+                }
+              ]
+            }
+          },
+          {
+            "action": "GROUP",
+            "label": "只在需要时切换模式",
+            "value": {
+              "variables": {
+                "mode_target": "快速",
+                "selected_selector": "div[data-model-type=\"default\"][aria-pressed=\"true\"], div[data-model-type=\"default\"][aria-selected=\"true\"], div[data-model-type=\"default\"][data-state=\"active\"], div[data-model-type=\"default\"][data-state=\"checked\"]"
+              },
+              "steps": [
+                {
+                  "action": "CAPTURE",
+                  "target": "",
+                  "label": "读取目标模式的选中标记",
+                  "value": {
+                    "name": "mode_selected",
+                    "source": "exists",
+                    "timeout": 0.2,
+                    "selector": "{selected_selector}"
+                  }
+                },
+                {
+                  "action": "IF",
+                  "label": "未确认选中时选择一次",
+                  "value": {
+                    "condition": {
+                      "left": "{mode_selected}",
+                      "op": "eq",
+                      "right": false
+                    },
+                    "then": [
+                      {
+                        "action": "CLICK",
+                        "target": "{mode_target}",
+                        "optional": false,
+                        "value": null,
+                        "label": "选择目标模式（缺少入口则停止）"
+                      }
+                    ],
+                    "else": []
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "action": "GROUP",
+            "label": "发送并读取回复",
+            "value": {
+              "variables": {},
+              "steps": [
+                {
+                  "action": "FILL_INPUT",
+                  "target": "input_box",
+                  "optional": false,
+                  "value": null,
+                  "label": "填写本次请求"
+                },
+                {
+                  "action": "KEY_PRESS",
+                  "target": "Enter",
+                  "optional": false,
+                  "value": null,
+                  "label": "回车发送"
+                },
+                {
+                  "action": "STREAM_WAIT",
+                  "target": "result_container",
+                  "optional": false,
+                  "value": null,
+                  "label": "监听并读取回复"
+                }
+              ]
+            }
+          }
+        ],
+        "stealth": false,
+        "image_extraction": {
+          "enabled": false,
+          "modalities": {
+            "image": {
+              "enabled": false,
+              "run_policy": "disabled",
+              "quick_probe_timeout_seconds": 1,
+              "late_wait_timeout_seconds": 45,
+              "blind_wait_timeout_seconds": 1
+            },
+            "audio": {
+              "enabled": false,
+              "run_policy": "disabled",
+              "quick_probe_timeout_seconds": 1,
+              "capture_timeout_seconds": 12
+            },
+            "video": {
+              "enabled": false,
+              "run_policy": "disabled",
+              "quick_probe_timeout_seconds": 1,
+              "late_wait_timeout_seconds": 90
+            }
+          },
+          "selector": "img",
+          "audio_selector": "audio, audio source",
+          "video_selector": "video, video source",
+          "container_selector": null,
+          "force_postprocess": false,
+          "debounce_seconds": 2,
+          "wait_for_load": true,
+          "load_timeout_seconds": 5,
+          "download_blobs": true,
+          "max_size_mb": 10,
+          "canvas_export_mime": "image/jpeg",
+          "canvas_export_quality": 0.88,
+          "src_allow_patterns": [],
+          "mode": "all",
+          "audio_capture_enabled": true,
+          "audio_capture_mute_playback": true,
+          "audio_capture_preload_enabled": true,
+          "audio_capture_reload_before_workflow": false,
+          "audio_capture_preserve_graph": true,
+          "audio_capture_terminal_settle_seconds": 0.35,
+          "audio_trigger_selector": "",
+          "audio_trigger_labels": [
+            "朗读",
+            "语音朗读",
+            "收听",
+            "read aloud",
+            "listen",
+            "tts",
+            "voice"
+          ],
+          "audio_capture_max_wait_seconds": 12,
+          "audio_capture_min_wait_seconds": 2,
+          "audio_capture_hard_max_wait_seconds": 45,
+          "audio_capture_estimated_chars_per_second": 4.8,
+          "audio_capture_wait_padding_seconds": 1.2,
+          "audio_network_capture": {
+            "enabled": false,
+            "timeout_seconds": 2.5,
+            "transport": "page_websocket_probe",
+            "url_patterns": [
+              "voicegenie",
+              "speech",
+              "audio",
+              "tts"
+            ],
+            "extractor": "voicegenie_ogg_pages",
+            "settle_seconds": 0.35,
+            "max_payload_bytes": 10485760
+          },
+          "audio_browser_tts_fallback": {
+            "enabled": false,
+            "provider": "doubao_samantha",
+            "speaker": "2",
+            "speech_rate": 0,
+            "pitch": 0,
+            "format": "aac",
+            "timeout_seconds": 30,
+            "pc_version": "3.20.2",
+            "aid": "497858",
+            "real_aid": "497858",
+            "language": "zh",
+            "device_platform": "web",
+            "pkg_type": "release_version",
+            "region": "CN",
+            "sys_region": "CN",
+            "use_olympus_account": "1",
+            "samantha_web": "1"
+          },
+          "audio_capture_poll_seconds": 0.25,
+          "audio_capture_silence_seconds": 1.2,
+          "audio_capture_activity_threshold": 0.006,
+          "audio_capture_activity_silence_seconds": 0.65
+        },
+        "file_paste": {
+          "enabled": true,
+          "threshold": 2621440,
+          "temp_file_type": "txt",
+          "hint_text": "完全专注于文件内容",
+          "txt_hint_text": "完全专注于文件内容",
+          "pdf_hint_text": "完全专注于文件内容",
+          "error_hint_text": "输入文本长度超过限制，已中止发送",
+          "reacquire_input_after_upload": false,
+          "post_upload_input_selector": "",
+          "post_upload_settle": 0.0,
+          "upload_signal_timeout": 2.5,
+          "upload_signal_grace": 3.0,
+          "state_probe": {
+            "enabled": false,
+            "code": ""
+          },
+          "send_confirmation": {
+            "attachment_sensitivity": "high",
+            "post_click_observe_window": 2.4,
+            "pre_retry_probe_window": 0.18,
+            "retry_observe_window": 1.2,
+            "attachment_observe_window": 8.0,
+            "max_retry_count": 2,
+            "retry_interval": 0.6,
+            "retry_cooldown_window": 1.5,
+            "retry_action": "click_send_btn",
+            "retry_key_combo": "Enter",
+            "retry_on_unconfirmed_send": true,
+            "accept_attachment_change": false,
+            "accept_attachment_disappear": false,
+            "accept_probe_confirmation": true,
+            "retry_block_on_stop_button": true,
+            "retry_block_if_generating": true,
+            "trust_network_activity": true,
+            "trust_generating_indicator": true,
+            "trust_send_disabled_with_input_shrink": true
+          },
+          "attachment_monitor": {
+            "root_selectors": [
+              "div:has(> div > div > textarea)",
+              "div:has(textarea):not(._020ab5b):not(._24fad49)",
+              "div._77cefa5",
+              "div.aaff8b8f"
+            ],
+            "attachment_selectors": [
+              ".ds-animated-size-item",
+              "div[class*='d5fa3d1b']",
+              "div:has(> img[src^='blob:'])",
+              "img[src^='blob:']",
+              ".b40079d7 ._6d1b417 > div",
+              ".c8b3f8a6"
+            ],
+            "pending_selectors": [],
+            "busy_text_markers": [
+              "上传中",
+              "loading",
+              "processing"
+            ],
+            "send_button_disabled_markers": [
+              "disabled",
+              "ds-button--disabled"
+            ],
+            "require_attachment_present": true,
+            "require_upload_signal_before_ready": false,
+            "continue_once_on_unconfirmed_send": true,
+            "idle_timeout": 3.0,
+            "hard_max_wait": 90.0
+          }
+        },
+        "prompt_padding": {
+          "enabled": false,
+          "marker_text": "测试号，无实际意义",
+          "segments_per_side": 12,
+          "random_insert_enabled": false,
+          "random_insert_chars": ""
+        }
+      },
+      "实验性预设-此预设可能增加封号风险": {
+        "selectors": {
+          "input_box": "textarea",
+          "send_btn": "div.bf38813a div[role='button'].ds-button--primary, div.bf38813a > div > div[role='button'], div:has(textarea) div[role='button'].ds-button--primary, div.ds-button.ds-button--primary[role='button']",
+          "upload_btn": "div.bf38813a > div[role='button']",
+          "file_input": "input[type='file']",
+          "result_container": "css:div.ds-markdown",
+          "new_chat_btn": "div._5a8ac7a",
+          "generating_indicator": "css:._7436101.bcc55ca1",
+          "专家": "div[data-model-type=\"expert\"]"
+        },
+        "stream_config": {
+          "mode": "network",
+          "hard_timeout": 300,
+          "request_transport": {
+            "mode": "page_fetch",
+            "profile": "deepseek_completion",
+            "options": {
+              "model_type": "expert",
+              "context_mode": "full_prompt",
+              "search_enabled": "auto",
+              "thinking_enabled": "auto",
+              "fallback_mode": "workflow",
+              "client_version": "2.0.0",
+              "app_version": "2.0.0"
+            }
+          },
+          "network": {
+            "listen_pattern": "api/v0/chat/completion",
+            "parser": "deepseek",
+            "silence_threshold": 3,
+            "response_interval": 0.5
+          }
+        },
+        "workflow": [
+          {
+            "action": "GROUP",
+            "label": "准备新对话",
+            "value": {
+              "variables": {},
+              "steps": [
+                {
+                  "action": "CLICK",
+                  "target": "new_chat_btn",
+                  "optional": true,
+                  "value": null,
+                  "label": "新建对话（入口不存在时沿用当前会话）"
+                }
+              ]
+            }
+          },
+          {
+            "action": "GROUP",
+            "label": "只在需要时切换模式",
+            "value": {
+              "variables": {
+                "mode_target": "专家",
+                "selected_selector": "div[data-model-type=\"expert\"][aria-pressed=\"true\"], div[data-model-type=\"expert\"][aria-selected=\"true\"], div[data-model-type=\"expert\"][data-state=\"active\"], div[data-model-type=\"expert\"][data-state=\"checked\"]"
+              },
+              "steps": [
+                {
+                  "action": "CAPTURE",
+                  "target": "",
+                  "label": "读取目标模式的选中标记",
+                  "value": {
+                    "name": "mode_selected",
+                    "source": "exists",
+                    "timeout": 0.2,
+                    "selector": "{selected_selector}"
+                  }
+                },
+                {
+                  "action": "IF",
+                  "label": "未确认选中时选择一次",
+                  "value": {
+                    "condition": {
+                      "left": "{mode_selected}",
+                      "op": "eq",
+                      "right": false
+                    },
+                    "then": [
+                      {
+                        "action": "CLICK",
+                        "target": "{mode_target}",
+                        "optional": false,
+                        "value": null,
+                        "label": "选择目标模式（缺少入口则停止）"
+                      }
+                    ],
+                    "else": []
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "action": "READONLY_HINT",
+            "target": "",
+            "optional": false,
+            "value": {
+              "title": "实验性预设说明",
+              "text": "当前预设会保留“新对话 / 切到专家模式”等前置步骤，并把页面直发显示为独立步骤。若检测到图片、文件或直发失败，则会自动回退到后续原工作流发送方式。",
+              "tone": "info"
+            }
+          },
+          {
+            "action": "GROUP",
+            "label": "发送并读取回复",
+            "value": {
+              "variables": {},
+              "steps": [
+                {
+                  "action": "PAGE_FETCH",
+                  "target": "",
+                  "optional": true,
+                  "value": null,
+                  "label": "尝试页面直发（成功则跳过后续填写与回车）"
+                },
+                {
+                  "action": "FILL_INPUT",
+                  "target": "input_box",
+                  "optional": false,
+                  "value": null,
+                  "label": "填写本次请求"
+                },
+                {
+                  "action": "KEY_PRESS",
+                  "target": "Enter",
+                  "optional": false,
+                  "value": null,
+                  "label": "回车发送"
+                },
+                {
+                  "action": "STREAM_WAIT",
+                  "target": "result_container",
+                  "optional": false,
+                  "value": null,
+                  "label": "监听并读取回复"
+                }
+              ]
+            }
+          }
+        ],
+        "stealth": false,
+        "image_extraction": {
+          "enabled": false,
+          "modalities": {
+            "image": {
+              "enabled": false,
+              "run_policy": "disabled",
+              "quick_probe_timeout_seconds": 1,
+              "late_wait_timeout_seconds": 45,
+              "blind_wait_timeout_seconds": 1
+            },
+            "audio": {
+              "enabled": false,
+              "run_policy": "disabled",
+              "quick_probe_timeout_seconds": 1,
+              "capture_timeout_seconds": 12
+            },
+            "video": {
+              "enabled": false,
+              "run_policy": "disabled",
+              "quick_probe_timeout_seconds": 1,
+              "late_wait_timeout_seconds": 90
+            }
+          },
+          "selector": "img",
+          "audio_selector": "audio, audio source",
+          "video_selector": "video, video source",
+          "container_selector": null,
+          "force_postprocess": false,
+          "debounce_seconds": 2,
+          "wait_for_load": true,
+          "load_timeout_seconds": 5,
+          "download_blobs": true,
+          "max_size_mb": 10,
+          "canvas_export_mime": "image/jpeg",
+          "canvas_export_quality": 0.88,
+          "src_allow_patterns": [],
+          "mode": "all",
+          "audio_capture_enabled": true,
+          "audio_capture_mute_playback": true,
+          "audio_capture_preload_enabled": true,
+          "audio_capture_reload_before_workflow": false,
+          "audio_capture_preserve_graph": true,
+          "audio_capture_terminal_settle_seconds": 0.35,
+          "audio_trigger_selector": "",
+          "audio_trigger_labels": [
+            "朗读",
+            "语音朗读",
+            "收听",
+            "read aloud",
+            "listen",
+            "tts",
+            "voice"
+          ],
+          "audio_capture_max_wait_seconds": 12,
+          "audio_capture_min_wait_seconds": 2,
+          "audio_capture_hard_max_wait_seconds": 45,
+          "audio_capture_estimated_chars_per_second": 4.8,
+          "audio_capture_wait_padding_seconds": 1.2,
+          "audio_network_capture": {
+            "enabled": false,
+            "timeout_seconds": 2.5,
+            "transport": "page_websocket_probe",
+            "url_patterns": [
+              "voicegenie",
+              "speech",
+              "audio",
+              "tts"
+            ],
+            "extractor": "voicegenie_ogg_pages",
+            "settle_seconds": 0.35,
+            "max_payload_bytes": 10485760
+          },
+          "audio_browser_tts_fallback": {
+            "enabled": false,
+            "provider": "doubao_samantha",
+            "speaker": "2",
+            "speech_rate": 0,
+            "pitch": 0,
+            "format": "aac",
+            "timeout_seconds": 30,
+            "pc_version": "3.20.2",
+            "aid": "497858",
+            "real_aid": "497858",
+            "language": "zh",
+            "device_platform": "web",
+            "pkg_type": "release_version",
+            "region": "CN",
+            "sys_region": "CN",
+            "use_olympus_account": "1",
+            "samantha_web": "1"
+          },
+          "audio_capture_poll_seconds": 0.25,
+          "audio_capture_silence_seconds": 1.2,
+          "audio_capture_activity_threshold": 0.006,
+          "audio_capture_activity_silence_seconds": 0.65
+        },
+        "file_paste": {
+          "enabled": true,
+          "threshold": 163840,
+          "temp_file_type": "txt",
+          "hint_text": "完全专注于文件内容",
+          "txt_hint_text": "完全专注于文件内容",
+          "pdf_hint_text": "完全专注于文件内容",
+          "error_hint_text": "输入文本长度超过限制，已中止发送",
+          "reacquire_input_after_upload": false,
+          "post_upload_input_selector": "",
+          "post_upload_settle": 0.0,
+          "upload_signal_timeout": 2.5,
+          "upload_signal_grace": 3.0,
+          "state_probe": {
+            "enabled": false,
+            "code": ""
+          },
+          "send_confirmation": {
+            "attachment_sensitivity": "high",
+            "post_click_observe_window": 2.4,
+            "pre_retry_probe_window": 0.18,
+            "retry_observe_window": 1.2,
+            "attachment_observe_window": 8.0,
+            "max_retry_count": 2,
+            "retry_interval": 0.6,
+            "retry_cooldown_window": 1.5,
+            "retry_action": "click_send_btn",
+            "retry_key_combo": "Enter",
+            "retry_on_unconfirmed_send": true,
+            "accept_attachment_change": false,
+            "accept_attachment_disappear": false,
+            "accept_probe_confirmation": true,
+            "retry_block_on_stop_button": true,
+            "retry_block_if_generating": true,
+            "trust_network_activity": true,
+            "trust_generating_indicator": true,
+            "trust_send_disabled_with_input_shrink": true
+          },
+          "attachment_monitor": {
+            "root_selectors": [
+              "div:has(> div > div > textarea)",
+              "div:has(textarea):not(._020ab5b):not(._24fad49)",
+              "div._77cefa5",
+              "div.aaff8b8f"
+            ],
+            "attachment_selectors": [
+              ".ds-animated-size-item",
+              "div[class*='d5fa3d1b']",
+              "div:has(> img[src^='blob:'])",
+              "img[src^='blob:']",
+              ".b40079d7 ._6d1b417 > div",
+              ".c8b3f8a6"
+            ],
+            "pending_selectors": [],
+            "busy_text_markers": [
+              "上传中",
+              "loading",
+              "processing"
+            ],
+            "send_button_disabled_markers": [
+              "disabled",
+              "ds-button--disabled"
+            ],
+            "require_attachment_present": true,
+            "require_upload_signal_before_ready": false,
+            "continue_once_on_unconfirmed_send": true,
+            "idle_timeout": 3.0,
+            "hard_max_wait": 90.0
+          }
+        },
+        "prompt_padding": {
+          "enabled": false,
+          "marker_text": "测试号，无实际意义",
+          "segments_per_side": 12,
+          "random_insert_enabled": false,
+          "random_insert_chars": ""
+        }
+      }
+    },
+    "default_preset": "专家模式",
+    "advanced": {
+      "independent_cookies": false,
+      "independent_cookies_auto_takeover": false
+    }
+  }
+}

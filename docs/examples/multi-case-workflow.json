@@ -1,0 +1,98 @@
+{
+  "workflow": [
+    {
+      "action": "READONLY_HINT",
+      "value": {
+        "title": "按页面情况处理 · 演示流程",
+        "text": "示例不发送消息。请先替换演示定位器，再在合成页面或测试页面验证。",
+        "tone": "info"
+      }
+    },
+    {
+      "action": "GROUP",
+      "label": "根据菜单状态选择下一步",
+      "value": {
+        "variables": {
+          "desired": "Pro"
+        },
+        "steps": [
+          {
+            "action": "CAPTURE",
+            "label": "读取菜单当前状态",
+            "value": {
+              "name": "menu_state",
+              "source": "attribute",
+              "attribute": "data-menu-state",
+              "selector": "[data-menu-state]"
+            }
+          },
+          {
+            "action": "SWITCH",
+            "label": "遇到不同情况，采取不同操作",
+            "value": {
+              "cases": [
+                {
+                  "label": "菜单关闭：先展开，再选择",
+                  "condition": {
+                    "left": "{menu_state}",
+                    "op": "eq",
+                    "right": "closed"
+                  },
+                  "steps": [
+                    {
+                      "action": "CLICK",
+                      "target": "mode_menu",
+                      "label": "展开菜单"
+                    },
+                    {
+                      "action": "CLICK",
+                      "selector": "[data-mode=\"{desired}\"]",
+                      "label": "选择期望选项"
+                    }
+                  ]
+                },
+                {
+                  "label": "菜单已打开：直接选择",
+                  "condition": {
+                    "left": "{menu_state}",
+                    "op": "eq",
+                    "right": "open"
+                  },
+                  "steps": [
+                    {
+                      "action": "CLICK",
+                      "selector": "[data-mode=\"{desired}\"]",
+                      "label": "选择期望选项"
+                    }
+                  ]
+                },
+                {
+                  "label": "已选好：保持当前状态",
+                  "condition": {
+                    "left": "{menu_state}",
+                    "op": "eq",
+                    "right": "selected"
+                  },
+                  "steps": []
+                }
+              ],
+              "default": [
+                {
+                  "action": "READONLY_HINT",
+                  "value": {
+                    "title": "尚未识别的状态",
+                    "text": "示例在这里结束，不继续点击。请确认状态读取方式，并补充对应情况。",
+                    "tone": "warning"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "selectors": {
+    "mode_menu": "[data-mode-menu]"
+  }
+}
