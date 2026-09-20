@@ -511,6 +511,15 @@ const BROWSER_CONSTANTS_SCHEMA = {
                 desc: '留空表示捕获全部解析器；填 deepseek、qwen 这类 ID 时只捕获指定解析器。',
                 type: 'text',
                 default: ''
+            },
+            NETWORK_DEBUG_CAPTURE_MAX_TOTAL_MB: {
+                label: '调试目录最大容量',
+                unit: 'MB',
+                desc: 'logs/network_parser_debug 目录允许占用的最大磁盘空间，超过后自动删除最早生成的调试文件。',
+                type: 'number',
+                min: 5,
+                step: 5,
+                default: 50
             }
         }
     },

@@ -531,7 +531,45 @@ class WorkflowExecutorActionMixin:
                         };
                     }
                     let element = null;
-                    try { element = document.querySelector(String(probe.selector || '')); } catch (error) {}
+                    let raw = String(probe.selector || '').trim();
+                    const lower = raw.toLowerCase();
+                    let isExplicitCss = false;
+                    let isExplicitXpath = false;
+                    if (lower.startsWith('css:')) {
+                        raw = raw.slice(4).trim();
+                        isExplicitCss = true;
+                    } else if (lower.startsWith('xpath:')) {
+                        raw = raw.slice(6).trim();
+                        isExplicitXpath = true;
+                    }
+                    if (!raw) {
+                        return {
+                            target: probe.target,
+                            state: String(probe.state || 'present'),
+                            present: false,
+                            visible: false,
+                            matched: false,
+                            reason: 'missing_selector'
+                        };
+                    }
+                    try {
+                        if (isExplicitXpath || raw.startsWith('/') || raw.startsWith('(')) {
+                            const res = document.evaluate(raw, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+                            element = res ? res.singleNodeValue : null;
+                        } else if (isExplicitCss) {
+                            element = document.querySelector(raw);
+                        } else {
+                            try {
+                                element = document.querySelector(raw);
+                            } catch (cssErr) {
+                                const res = document.evaluate(raw, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+                                element = res ? res.singleNodeValue : null;
+                            }
+                        }
+                    } catch (err) {}
+                    if (element && element.nodeType !== 1) {
+                        element = element.parentElement || element.ownerElement || null;
+                    }
                     const present = !!element;
                     let visible = false;
                     if (element) {

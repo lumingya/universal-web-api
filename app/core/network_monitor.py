@@ -21,6 +21,7 @@ from app.core.config import (
     SSEFormatter,
     BrowserConstants,
     sanitize_sensitive_data,
+    DEFAULT_LOG_DIR,
 )
 from app.core.background_image_downloader import (
     background_image_downloader,
@@ -29,6 +30,91 @@ from app.core.background_image_downloader import (
     normalize_remote_image_url,
 )
 from app.core.parsers import ParserRegistry, ResponseParser
+
+
+def trim_network_parser_debug_dir(
+    target_dir: Optional[Path] = None,
+    max_total_bytes: Optional[int] = None,
+    exclude_paths: Optional[Any] = None,
+) -> int:
+    """确保 logs/network_parser_debug 目录的总占用不超过 max_total_bytes（默认 50MB）。
+    超过阈值时按时间先后顺序（st_mtime 升序）自动删除最早的文件。
+
+    Returns:
+        删除的文件数量。
+    """
+    if target_dir is None:
+        target_dir = (DEFAULT_LOG_DIR / "network_parser_debug").resolve()
+    else:
+        target_dir = Path(target_dir).resolve()
+
+    if not target_dir.exists() or not target_dir.is_dir():
+        return 0
+
+    if max_total_bytes is None:
+        try:
+            mb = int(BrowserConstants.get("NETWORK_DEBUG_CAPTURE_MAX_TOTAL_MB"))
+            max_total_bytes = max(1, mb) * 1024 * 1024
+        except Exception:
+            max_total_bytes = 50 * 1024 * 1024
+
+    exclude_set = set()
+    if exclude_paths:
+        for p in exclude_paths:
+            try:
+                exclude_set.add(Path(p).resolve())
+            except Exception:
+                pass
+
+    try:
+        file_entries = []
+        total_size = 0
+        for entry in target_dir.iterdir():
+            if not entry.is_file():
+                continue
+            try:
+                st = entry.stat()
+                file_entries.append((st.st_mtime, entry.name, st.st_size, entry))
+                total_size += st.st_size
+            except OSError:
+                continue
+
+        if total_size <= max_total_bytes:
+            return 0
+
+        # 按修改时间升序排序（最早的文件排在最前面），次关键字为文件名
+        file_entries.sort(key=lambda x: (x[0], x[1]))
+
+        deleted_count = 0
+        freed_bytes = 0
+
+        for mtime, name, size, file_path in file_entries:
+            if total_size <= max_total_bytes:
+                break
+            try:
+                resolved = file_path.resolve()
+            except Exception:
+                resolved = file_path
+            if resolved in exclude_set:
+                continue
+            try:
+                file_path.unlink(missing_ok=True)
+                total_size -= size
+                freed_bytes += size
+                deleted_count += 1
+            except OSError as unlink_exc:
+                logger.debug(f"[NetworkMonitor] 删除旧调试文件失败 ({name}): {unlink_exc}")
+
+        if deleted_count > 0:
+            logger.info(
+                f"[NetworkMonitor] network_parser_debug 目录超过容量限制 "
+                f"({max_total_bytes / (1024 * 1024):.1f}MB)，已自动删除 {deleted_count} 个最早的历史文件，"
+                f"释放 {freed_bytes / (1024 * 1024):.2f}MB，当前总大小 {total_size / (1024 * 1024):.2f}MB"
+            )
+        return deleted_count
+    except Exception as exc:
+        logger.debug(f"[NetworkMonitor] 清理 network_parser_debug 失败: {exc}")
+        return 0
 
 
 def _debug_preview(value: Any, limit: int = 240) -> str:
@@ -1700,7 +1786,7 @@ class NetworkMonitor:
             if extra_payload:
                 payload["diagnostics"] = sanitize_sensitive_data(dict(extra_payload))
 
-            dump_dir = Path("logs") / "network_parser_debug"
+            dump_dir = (DEFAULT_LOG_DIR / "network_parser_debug").resolve()
             dump_dir.mkdir(parents=True, exist_ok=True)
             filename = (
                 f"{self._debug_capture_session_key}_{self._debug_capture_counter:03d}_"
@@ -1721,6 +1807,14 @@ class NetworkMonitor:
                 f"({dump_path}, stage={capture_stage}, parser={parser_id}, "
                 f"body_len={len(raw_body_text)}, truncated={truncated})",
                 interval_sec=3.0,
+            )
+            active_excludes = {dump_path}
+            if self._debug_trace_path is not None:
+                active_excludes.add(self._debug_trace_path)
+            trim_network_parser_debug_dir(
+                target_dir=dump_dir,
+                max_total_bytes=self._get_network_debug_capture_max_total_bytes(),
+                exclude_paths=active_excludes,
             )
         except Exception as exc:
             logger.debug(f"[NetworkMonitor] 写入网络解析调试快照失败: {exc}")
@@ -1825,12 +1919,17 @@ class NetworkMonitor:
             if extra_payload:
                 payload["extra"] = sanitize_sensitive_data(dict(extra_payload))
 
-            dump_dir = Path("logs") / "network_parser_debug"
+            dump_dir = (DEFAULT_LOG_DIR / "network_parser_debug").resolve()
             dump_dir.mkdir(parents=True, exist_ok=True)
             if self._debug_trace_path is None:
                 self._debug_trace_path = dump_dir / f"{self._debug_capture_session_key}_trace_{parser_id or 'unknown'}.jsonl"
                 logger.debug(
                     f"[NetworkMonitor] 网络解析 trace 已启用 ({self._debug_trace_path})"
+                )
+                trim_network_parser_debug_dir(
+                    target_dir=dump_dir,
+                    max_total_bytes=self._get_network_debug_capture_max_total_bytes(),
+                    exclude_paths={self._debug_trace_path},
                 )
             with self._debug_trace_path.open("a", encoding="utf-8", newline="\n") as handle:
                 handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
@@ -1898,6 +1997,14 @@ class NetworkMonitor:
             return str(BrowserConstants.get("NETWORK_DEBUG_CAPTURE_PARSER_FILTER") or "").strip().lower()
         except Exception:
             return ""
+
+    @staticmethod
+    def _get_network_debug_capture_max_total_bytes() -> int:
+        try:
+            mb = int(BrowserConstants.get("NETWORK_DEBUG_CAPTURE_MAX_TOTAL_MB"))
+            return max(1, mb) * 1024 * 1024
+        except Exception:
+            return 50 * 1024 * 1024
         
     def _expire_stale_preserved_listener(self) -> None:
         """修复#3b：处理上一轮因可恢复错误（429/403/503）保留下来的监听。

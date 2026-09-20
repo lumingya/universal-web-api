@@ -317,3 +317,70 @@ def test_arena_pre_send_interrupt_aborts_when_cancelled_during_cooldown():
     res = executor._wait_for_send_idle_before_action("button.send")
     assert res is False
 
+
+def test_click_verification_probe_supports_xpath_and_css_prefixes():
+    executor = WorkflowExecutorActionMixin.__new__(WorkflowExecutorActionMixin)
+    recorded = {}
+
+    class _CaptureScriptTab:
+        @staticmethod
+        def run_js(script, argument, timeout):
+            recorded["script"] = script
+            recorded["argument"] = argument
+            return [
+                {"target": p["target"], "state": p["state"], "present": True, "visible": True, "matched": True}
+                for p in argument["probes"]
+            ]
+
+    executor.tab = _CaptureScriptTab()
+    executor._selectors = {
+        "xpath_target": "//gem-menu-item[contains(., '3.8 Flash')]",
+        "css_target": "css:button[aria-label='发送']",
+    }
+
+    result = executor._probe_click_verification_conditions([
+        {"target": "xpath_target", "state": "visible"},
+        {"target": "css_target", "state": "visible"},
+        {"target": "//direct/xpath", "state": "present"},
+    ])
+
+    assert len(result) == 3
+    assert all(r["matched"] for r in result)
+    assert "document.evaluate" in recorded["script"]
+    assert "lower.startsWith('xpath:')" in recorded["script"]
+    assert "element.ownerElement" in recorded["script"]
+    assert "if (!raw)" in recorded["script"]
+    assert recorded["argument"]["probes"] == [
+        {"target": "xpath_target", "selector": "//gem-menu-item[contains(., '3.8 Flash')]", "state": "visible"},
+        {"target": "css_target", "selector": "css:button[aria-label='发送']", "state": "visible"},
+        {"target": "//direct/xpath", "selector": "//direct/xpath", "state": "present"},
+    ]
+
+
+def test_click_verification_probe_handles_empty_prefixed_selectors():
+    executor = WorkflowExecutorActionMixin.__new__(WorkflowExecutorActionMixin)
+    recorded = {}
+
+    class _CaptureTab:
+        @staticmethod
+        def run_js(script, argument, timeout):
+            recorded["script"] = script
+            recorded["argument"] = argument
+            return []
+
+    executor.tab = _CaptureTab()
+    executor._selectors = {
+        "empty_xpath": "xpath:   ",
+        "empty_css": "CSS:   ",
+    }
+    executor._probe_click_verification_conditions([
+        {"target": "empty_xpath", "state": "absent"},
+        {"target": "empty_css", "state": "hidden"},
+    ])
+    assert "if (!raw)" in recorded["script"]
+    assert "reason: 'missing_selector'" in recorded["script"]
+    assert recorded["argument"]["probes"] == [
+        {"target": "empty_xpath", "selector": "xpath:", "state": "absent"},
+        {"target": "empty_css", "selector": "CSS:", "state": "hidden"},
+    ]
+

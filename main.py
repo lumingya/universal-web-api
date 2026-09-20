@@ -394,12 +394,18 @@ async def lifespan(app: FastAPI):
     _install_asyncio_exception_filter()
     logger.info("=" * 60)
     logger.info("Universal Web-to-API 服务启动中...")       
-    # 启动时清理临时文件目录
+    # 启动时清理临时文件目录与调试日志目录
     try:
         from app.utils.file_paste import cleanup_temp_dir
         cleanup_temp_dir()
     except Exception as e:
         logger.debug(f"临时目录清理跳过: {e}")
+
+    try:
+        from app.core.network_monitor import trim_network_parser_debug_dir
+        trim_network_parser_debug_dir()
+    except Exception as e:
+        logger.debug(f"网络解析调试目录清理跳过: {e}")
     logger.info(f"监听地址: http://{AppConfig.get_host()}:{AppConfig.get_port()}")
     logger.info(f"调试模式: {AppConfig.is_debug()}")
     logger.info(f"浏览器端口: {AppConfig.get_browser_port()}")

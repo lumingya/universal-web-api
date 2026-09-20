@@ -887,7 +887,7 @@
           "message_wrapper": null,
           "generating_indicator": ".blue-circle.stop-icon mat-icon[data-mat-icon-name=\"stop\"]",
           "点击模型选择": "//button[@data-test-id='bard-mode-menu-button']",
-          "选择模型": "//gem-menu-item[contains(., '3.7 Flash')]",
+          "选择模型": "//gem-menu-item[contains(., '3.8 Flash') or contains(., '3.7 Flash')]",
           "临时对话按钮": "//button[@aria-label='临时对话']"
         },
         "stream_config": {
@@ -984,8 +984,8 @@
             "label": "只在需要时切换模型",
             "value": {
               "variables": {
-                "model_label": "3.7 Flash",
-                "desired_pattern": "(?i)(?<![\\w.])3\\.7\\s*Flash(?![\\w-])"
+                "model_label": "3.8 Flash",
+                "desired_pattern": "(?i)^\\s*(?:3\\.[78]\\s+)?Flash\\s*$"
               },
               "steps": [
                 {
@@ -1431,7 +1431,7 @@
             "value": {
               "variables": {
                 "model_label": "3.1 Pro",
-                "desired_pattern": "(?i)(?<![\\w.])3\\.1\\s*Pro(?![\\w-])"
+                "desired_pattern": "(?i)^\\s*(?:3\\.1\\s+)?Pro\\s*$"
               },
               "steps": [
                 {
@@ -1760,7 +1760,7 @@
           "message_wrapper": null,
           "generating_indicator": ".blue-circle.stop-icon mat-icon[data-mat-icon-name=\"stop\"]",
           "点击模型选择": "//button[@data-test-id='bard-mode-menu-button']",
-          "选择模型": "//gem-menu-item[contains(., '3.1 Flash-Lite')]",
+          "选择模型": "//gem-menu-item[contains(., '3.5 Flash-Lite') or contains(., '3.5 Flash Lite') or contains(., '3.1 Flash-Lite') or contains(., '3.1 Flash Lite')]",
           "临时对话按钮": "//button[@aria-label='临时对话']"
         },
         "stream_config": {
@@ -1856,8 +1856,8 @@
             "label": "只在需要时切换模型",
             "value": {
               "variables": {
-                "model_label": "3.1 Flash-Lite",
-                "desired_pattern": "(?i)(?<![\\w.])3\\.1\\s*Flash\\-Lite(?![\\w-])"
+                "model_label": "3.5 Flash-Lite",
+                "desired_pattern": "(?i)^\\s*(?:3\\.[15]\\s+)?Flash[\\s-]?Lite\\s*$"
               },
               "steps": [
                 {
@@ -2186,7 +2186,7 @@
           "message_wrapper": null,
           "generating_indicator": ".blue-circle.stop-icon mat-icon[data-mat-icon-name=\"stop\"]",
           "点击模型选择": "//button[@data-test-id='bard-mode-menu-button']",
-          "选择模型": "//gem-menu-item[contains(., '3.7 Flash')]",
+          "选择模型": "//gem-menu-item[contains(., '3.8 Flash') or contains(., '3.7 Flash')]",
           "临时对话按钮": "//button[@aria-label='临时对话']"
         },
         "stream_config": {
@@ -2282,8 +2282,8 @@
             "label": "只在需要时切换模型",
             "value": {
               "variables": {
-                "model_label": "3.7 Flash",
-                "desired_pattern": "(?i)(?<![\\w.])3\\.7\\s*Flash(?![\\w-])"
+                "model_label": "3.8 Flash",
+                "desired_pattern": "(?i)^\\s*(?:3\\.[78]\\s+)?Flash\\s*$"
               },
               "steps": [
                 {

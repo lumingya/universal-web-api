@@ -249,7 +249,7 @@ try:
 
     def _listener_trim_stream_debug_dir_v1(path):
         max_total = _listener_stream_int_v1(
-            'DRISSION_STREAM_DEBUG_MAX_TOTAL_BYTES', 100 * 1024 * 1024,
+            'DRISSION_STREAM_DEBUG_MAX_TOTAL_BYTES', 50 * 1024 * 1024,
             5 * 1024 * 1024, 2 * 1024 * 1024 * 1024,
         )
         try:

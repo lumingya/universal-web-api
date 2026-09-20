@@ -50,7 +50,8 @@ def test_only_requested_sites_and_workflows_change_and_upgrade_is_repeatable():
         assert set(AFTER[domain]['presets'])==set(BEFORE[domain]['presets'])
         for name,old in BEFORE[domain]['presets'].items():
             new=AFTER[domain]['presets'][name]
-            assert {k:v for k,v in old.items() if k!='workflow'}=={k:v for k,v in new.items() if k!='workflow'}
+            assert {k:v for k,v in old.items() if k not in {'workflow', 'selectors'}}=={k:v for k,v in new.items() if k not in {'workflow', 'selectors'}}
+            assert {k:v for k,v in old['selectors'].items() if k != '选择模型'}=={k:v for k,v in new['selectors'].items() if k != '选择模型'}
             assert validate_workflow(new['workflow'])['version']==2
             assert sum(n['action']=='GROUP' for n in new['workflow'])==3
             assert not any(n['action']=='WAIT' for n in walk(new['workflow']))
@@ -198,3 +199,34 @@ def test_deepseek_main_never_changes_page_model_and_sends_once(ui_page,selected)
     assert ui_page.evaluate('clicks.filter(x=>x==="expert").length')==0
     assert ui_page.locator('#expert').get_attribute('aria-selected')==str(selected).lower()
     assert ui_page.evaluate('sent')==1
+
+
+def test_gemini_regex_boundary_and_menu_text_matrix():
+    import re
+    presets = AFTER[GEMINI]['presets']
+    flash_pat = next(n for n in presets['3.7flash']['workflow'] if n.get('label')=='只在需要时切换模型')['value']['variables']['desired_pattern']
+    lite_pat = next(n for n in presets['3.5 flash lite']['workflow'] if n.get('label')=='只在需要时切换模型')['value']['variables']['desired_pattern']
+    pro_pat = next(n for n in presets['3.1 pro']['workflow'] if n.get('label')=='只在需要时切换模型')['value']['variables']['desired_pattern']
+
+    # Flash assertions:
+    assert re.search(flash_pat, "3.8 Flash")
+    assert re.search(flash_pat, "Flash")
+    assert re.search(flash_pat, "3.7 Flash")
+    assert not re.search(flash_pat, "Flash Lite")
+    assert not re.search(flash_pat, "Flash-Lite")
+    assert not re.search(flash_pat, "3.5 Flash Lite")
+    assert not re.search(flash_pat, "2.0 Flash")
+
+    # Lite assertions:
+    assert re.search(lite_pat, "Flash Lite")
+    assert re.search(lite_pat, "Flash-Lite")
+    assert re.search(lite_pat, "3.5 Flash-Lite")
+    assert re.search(lite_pat, "3.5 Flash Lite")
+    assert not re.search(lite_pat, "3.8 Flash")
+    assert not re.search(lite_pat, "Flash")
+
+    # Pro assertions:
+    assert re.search(pro_pat, "3.1 Pro")
+    assert re.search(pro_pat, "Pro")
+    assert not re.search(pro_pat, "3.0 Pro")
+    assert not re.search(pro_pat, "Upgrade to Pro")

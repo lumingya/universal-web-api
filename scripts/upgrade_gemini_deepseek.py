@@ -50,8 +50,22 @@ def gemini(name, preset):
     model_match = re.search(r"contains\(\.,\s*'([^']+)'\)", preset['selectors']['选择模型'])
     if not model_match:
         raise ValueError('Cannot infer model from existing selector; refusing to guess')
-    model = model_match.group(1)
-    pattern = r'(?i)(?<![\w.])' + re.escape(model).replace(r'\ ', r'\s*') + r'(?![\w-])'
+    raw_model = model_match.group(1)
+    if 'Flash-Lite' in raw_model or name == '3.5 flash lite':
+        model = '3.5 Flash-Lite'
+        preset['selectors']['选择模型'] = "//gem-menu-item[contains(., '3.5 Flash-Lite') or contains(., '3.5 Flash Lite') or contains(., '3.1 Flash-Lite') or contains(., '3.1 Flash Lite')]"
+        pattern = r'(?i)^\s*(?:3\.[15]\s+)?Flash[\s-]?Lite\s*$'
+    elif 'Flash' in raw_model or name in {'3.7flash', '3.7 非隐私对话'}:
+        model = '3.8 Flash'
+        preset['selectors']['选择模型'] = "//gem-menu-item[contains(., '3.8 Flash') or contains(., '3.7 Flash')]"
+        pattern = r'(?i)^\s*(?:3\.[78]\s+)?Flash\s*$'
+    elif 'Pro' in raw_model or name == '3.1 pro':
+        model = '3.1 Pro'
+        preset['selectors']['选择模型'] = "//gem-menu-item[contains(., '3.1 Pro')]"
+        pattern = r'(?i)^\s*(?:3\.1\s+)?Pro\s*$'
+    else:
+        model = raw_model
+        pattern = r'(?i)(?<![\w.])' + re.escape(model).replace(r'\ ', r'\s*') + r'(?![\w-])'
     prepare = group('准备新对话与隐私模式', [
         click('new_chat_btn', '新建对话（不再重复按快捷键）'),
         branch('此预设需要临时对话', '{temporary_chat}', 'eq', True, [
@@ -131,10 +145,11 @@ if __name__=='__main__':
     sys.path.insert(0, str(ROOT))
     from app.core.workflow.flow_runtime import validate_workflow
     path=ROOT/'config/sites.json'
-    original=json.loads(path.read_text())
+    original=json.loads(path.read_text(encoding='utf-8'))
     changed=upgrade(original)
     for domain in ('gemini.google.com','chat.deepseek.com'):
         for name,preset in changed[domain]['presets'].items():
             validate_workflow(preset['workflow'])
             print(domain,name,'→',len(preset['workflow']),'top-level stages')
-    path.write_text(json.dumps(changed,ensure_ascii=False,indent=2)+'\n')
+    with open(path, 'w', encoding='utf-8', newline='\n') as f:
+        f.write(json.dumps(changed, ensure_ascii=False, indent=2) + '\n')
