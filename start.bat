@@ -4,6 +4,7 @@ setlocal EnableExtensions EnableDelayedExpansion
 set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
 set "UWAPI_DOTENV_OVERRIDE=1"
+set "UWAPI_IS_RESTART="
 
 REM ===============================
 REM Universal Web-to-API 启动脚本
@@ -66,6 +67,7 @@ if not defined SCHEDULED_RESTART_ENABLED set "SCHEDULED_RESTART_ENABLED=false"
 if not defined SCHEDULED_RESTART_INTERVAL_SECONDS set "SCHEDULED_RESTART_INTERVAL_SECONDS=10800"
 if not defined SCHEDULED_RESTART_DRAIN_TIMEOUT_SECONDS set "SCHEDULED_RESTART_DRAIN_TIMEOUT_SECONDS=1800"
 if not defined SCHEDULED_RESTART_TAB_STATE_POLICY set "SCHEDULED_RESTART_TAB_STATE_POLICY=preserve"
+if not defined AUTO_OPEN_BROWSER set "AUTO_OPEN_BROWSER=true"
 
 REM 让 Python requests 与浏览器复用代理。socks5h 让代理负责 DNS，避免 R2
 REM 域名在本地 fake-DNS / 直连 DNS 下解析失败。
@@ -712,6 +714,7 @@ if !EXIT_CODE! equ 3 (
     echo    检测到配置更新，正在重启服务...
     echo ========================================
     timeout /t 2 /nobreak >nul
+    set "UWAPI_IS_RESTART=1"
     findstr /r /i "^[ ]*SCHEDULED_RESTART_ENABLED[ ]*=[ ]*true[ ]*$" ".env" >nul 2>&1
     if !errorlevel! equ 0 (
         REM 此轮配置刚开启守护时，切换到 start.py 以接管重启期间的端口代理。
@@ -726,6 +729,7 @@ echo.
 echo [ERROR] 服务异常退出 (退出码: !EXIT_CODE!)
 echo [INFO] 3 秒后自动重启...
 timeout /t 3 /nobreak >nul
+set "UWAPI_IS_RESTART=1"
 goto :SERVICE_LOOP
 
 REM ===============================

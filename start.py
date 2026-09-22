@@ -65,6 +65,7 @@ ENV_DEFAULTS = {
     "SCHEDULED_RESTART_INTERVAL_SECONDS": "10800",
     "SCHEDULED_RESTART_DRAIN_TIMEOUT_SECONDS": "1800",
     "SCHEDULED_RESTART_TAB_STATE_POLICY": "preserve",
+    "AUTO_OPEN_BROWSER": "true",
 }
 
 REQUIRED_PROJECT_FILES = [
@@ -594,6 +595,96 @@ def _debug_port_ready(port: int) -> bool:
         return False
 
 
+def _inspect_headless_or_windowless_browser(port: int, timeout: float = 0.5) -> Optional[dict[str, str]]:
+    """
+    探测指定端口的 Chromium 浏览器是否处于无头(Headless)或无窗口/缺少页面标签页状态。
+    返回 None 表示不是无头（或者端口未开放/非 Chromium）。
+    """
+    import json
+    import urllib.request
+
+    port_int = int(port)
+    # 显式使用空 ProxyHandler，避免系统或环境变量代理(如 HTTP_PROXY)拦截 loopback 探测
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+    # 1. 检查进程启动参数 (若 psutil 可用，优先确认是否明确声明了 --headless 或 --no-startup-window)
+    cmd_has_headless = False
+    cmd_has_no_startup_window = False
+    try:
+        import psutil
+        target_arg = f"--remote-debugging-port={port_int}"
+        for proc in psutil.process_iter(["pid", "cmdline"]):
+            try:
+                cmdline_list = proc.info.get("cmdline") or []
+                # 过滤 Chromium 子进程（renderer/gpu/utility 等子进程必然包含 --type=，主进程不包含）
+                if any(str(arg).startswith("--type=") for arg in cmdline_list):
+                    continue
+                cmdline = " ".join(cmdline_list)
+                if target_arg in cmdline:
+                    cmd_lower = cmdline.lower()
+                    if "--headless" in cmd_lower:
+                        cmd_has_headless = True
+                    if "--no-startup-window" in cmd_lower:
+                        cmd_has_no_startup_window = True
+                    if cmd_has_headless and cmd_has_no_startup_window:
+                        break
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    if cmd_has_headless:
+        return {"reason": "headless_arg", "detail": "浏览器启动参数显式包含 --headless"}
+
+    # 2. 检查 /json/version
+    version_url = f"http://127.0.0.1:{port_int}/json/version"
+    try:
+        req = urllib.request.Request(version_url, headers={"User-Agent": "UWAPI-Diagnostics"})
+        with opener.open(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="ignore"))
+    except Exception:
+        return None
+
+    browser_desc = str(data.get("Browser", "") or "")
+    user_agent = str(data.get("User-Agent", "") or "")
+    if "headless" in browser_desc.lower() or "headless" in user_agent.lower():
+        return {
+            "reason": "headless",
+            "detail": f"检测到无头浏览器 ({browser_desc or user_agent})",
+        }
+
+    # 3. 检查 /json 目标列表 (targets)
+    targets_url = f"http://127.0.0.1:{port_int}/json"
+    try:
+        req = urllib.request.Request(targets_url, headers={"User-Agent": "UWAPI-Diagnostics"})
+        with opener.open(req, timeout=timeout) as resp:
+            targets = json.loads(resp.read().decode("utf-8", errors="ignore"))
+            if isinstance(targets, list):
+                pages = [
+                    t for t in targets
+                    if isinstance(t, dict) and str(t.get("type", "")).lower() == "page"
+                ]
+                if not pages:
+                    if cmd_has_no_startup_window:
+                        return {
+                            "reason": "no_startup_window",
+                            "detail": "浏览器带有 --no-startup-window 参数且当前无前台可视页面",
+                        }
+                    other_types = sorted(list({
+                        str(t.get("type", "unknown"))
+                        for t in targets if isinstance(t, dict) and t.get("type")
+                    }))
+                    detail_types = ", ".join(other_types) if other_types else "无任何活动目标"
+                    return {
+                        "reason": "no_pages",
+                        "detail": f"无可视标签页（当前后台目标: {detail_types}）",
+                    }
+    except Exception:
+        pass
+
+    return None
+
+
 class _RestartHandoffProxy(socketserver.ThreadingTCPServer):
     """Small TCP relay which buffers a request while the child service restarts."""
 
@@ -870,6 +961,28 @@ def _launch_browser_if_needed() -> None:
     _log(f"[INFO] 浏览器配置目录: {profile_dir}")
 
     if _debug_port_ready(browser_port):
+        headless_probe = None
+        for attempt in range(3):
+            headless_probe = _inspect_headless_or_windowless_browser(browser_port)
+            if not headless_probe:
+                break
+            # 明确的 --headless 或无头标识无需重试
+            if headless_probe.get("reason") in {"headless", "headless_arg"}:
+                break
+            # 若仅是暂时未检测到 page 目标，等待 0.4s 重试（给新打开的浏览器创建主页留出缓冲）
+            if attempt < 2:
+                time.sleep(0.4)
+
+        if headless_probe:
+            _log(f"[WARN] 检测到端口 {browser_port} 已被占用，但该浏览器处于无头或无窗口状态（{headless_probe['detail']}）！")
+            _log("[WARN] 受控模式需要前台可视浏览器窗口，当前无头进程会导致服务无法正常接管。")
+            _log("[WARN] 解决方案：请在任务管理器中关闭/结束后台残留的浏览器进程，再重新运行启动器！")
+            _log()
+            raise RuntimeError(
+                f"检测到端口 {browser_port} 上的浏览器处于无头/无窗口状态（{headless_probe['detail']}）。"
+                "请先结束该后台浏览器进程后重试。"
+            )
+
         _log("[WARN] Debug 端口已被占用，将复用现有浏览器实例")
         _log("[WARN] 浏览器启动参数只在新进程生效；如需应用内存节省模式，请先关闭现有浏览器")
         if _focus_browser_window_for_port(browser_port):
@@ -998,9 +1111,12 @@ def _find_backend_port(public_port: int) -> int:
 
 
 def _run_service_loop(*, public_port: int | None = None, backend_port: int | None = None) -> int:
+    is_restart = False
     while True:
         _load_env_file(PROJECT_DIR / ".env")
         child_env = _build_service_env()
+        if is_restart:
+            child_env["UWAPI_IS_RESTART"] = "1"
         if backend_port is not None:
             child_env["APP_HOST"] = "127.0.0.1"
             child_env["APP_PORT"] = str(backend_port)
@@ -1016,6 +1132,7 @@ def _run_service_loop(*, public_port: int | None = None, backend_port: int | Non
             _log()
             _log("[INFO] 服务已停止")
             return 0
+        is_restart = True
         if completed.returncode == 3:
             _log()
             _log("========================================")

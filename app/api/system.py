@@ -278,6 +278,12 @@ def _schedule_service_restart(delay_seconds: float = 1.0) -> None:
         logger.warning("配置已更新，服务即将重启...")
         logger.warning("=" * 60)
 
+        try:
+            from app.services.restart_guard import mark_service_restart
+            mark_service_restart()
+        except Exception:
+            pass
+
         import os
         os._exit(3)
 
@@ -2502,6 +2508,11 @@ async def switch_version(
                 import time as _time
                 logger.warning(f"版本切换成功: {tag}，2 秒后重启服务")
                 _time.sleep(2.0)
+                try:
+                    from app.services.restart_guard import mark_service_restart
+                    mark_service_restart()
+                except Exception:
+                    pass
                 import os as _os
                 _os._exit(3)
         except Exception as exc:

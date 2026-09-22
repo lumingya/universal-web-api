@@ -191,6 +191,10 @@ class AppConfig:
     @staticmethod
     def get_browser_port() -> int:
         return AppConfig._env_int("BROWSER_PORT", 9222)
+
+    @staticmethod
+    def is_auto_open_browser_enabled() -> bool:
+        return AppConfig._env_bool("AUTO_OPEN_BROWSER", True)
     
     # ===== Dashboard 配置 =====
     @staticmethod

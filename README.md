@@ -172,6 +172,7 @@ Invoke-RestMethod 'http://127.0.0.1:8199/v1/chat/completions' -Method Post -Cont
 | `PROXY_ENABLED` / `PROXY_ADDRESS` / `PROXY_BYPASS` | 按需 | HTTP/SOCKS5 代理及绕过列表。 |
 | `PROFILE_CLEAN_ENABLED` | `false` | 是否在启动时清理受控浏览器缓存；需要保留调试数据时保持关闭。 |
 | `SCHEDULED_RESTART_ENABLED` | `false` | 定时平滑重启服务。长请求较多时请合理设置排空超时。 |
+| `AUTO_OPEN_BROWSER` | `true` | 是否在首次启动时自动打开教程页与受控引导页；服务重启时始终自动跳过。 |
 
 站点规则、提取器、解析器、图片预设等 JSON 配置也可在控制面板中编辑。修改前建议使用设置页的备份功能，并保留 `chrome_profile`、`config`、`.env` 和 `logs` 的副本。
 

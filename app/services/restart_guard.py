@@ -10,12 +10,45 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
 
 ActivityProbe = Callable[[], int]
 RestartCallback = Callable[[], Awaitable[None] | None]
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+RESTART_MARKER_FILE = PROJECT_ROOT / ".restart_marker"
+ENV_RESTART_FLAG = "UWAPI_IS_RESTART"
+RESTART_MARKER_TTL_SECONDS = 60.0
+
+
+def mark_service_restart() -> None:
+    """Record that the current process is terminating for a restart."""
+    os.environ[ENV_RESTART_FLAG] = "1"
+    try:
+        RESTART_MARKER_FILE.touch(exist_ok=True)
+    except Exception:
+        pass
+
+
+def consume_service_restart_mark() -> bool:
+    """Check and clear any restart markers. Return True if this process was launched as a restart."""
+    import time
+    env_val = os.environ.pop(ENV_RESTART_FLAG, None)
+    is_restart = str(env_val or "").strip().lower() in ("1", "true", "yes")
+
+    if RESTART_MARKER_FILE.exists():
+        try:
+            mtime = RESTART_MARKER_FILE.stat().st_mtime
+            if (time.time() - mtime) <= RESTART_MARKER_TTL_SECONDS:
+                is_restart = True
+            RESTART_MARKER_FILE.unlink(missing_ok=True)
+        except Exception:
+            pass
+    return is_restart
 
 
 class RestartGuard:

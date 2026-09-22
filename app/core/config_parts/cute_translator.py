@@ -666,6 +666,14 @@ def _cuteify_error_message(logger_name: str, message_text: str) -> str:
         return text
 
     # 高频具体错误
+    headless_match = re.match(r"^检测到受控浏览器(?:（端口 (\d+)）)?处于无头或无窗口模式: (.+?)。受控模式需要有界面的正常浏览器，请关闭该后台进程后用启动器重新拉起$", text, re.S)
+    if headless_match:
+        port_label = f"{headless_match.group(1)} 端口" if headless_match.group(1) else "受控端口"
+        return (
+            f"小鹿发现 {port_label} 虽然有浏览器，但它是悄悄藏在后台的无头/无窗口浏览器喵（{headless_match.group(2)}）。"
+            "小鹿需要有界面的正常浏览器才能工作，请关闭后台残留的浏览器进程后用启动器重新拉起喵！"
+        )
+
     browser_connect_fail = re.match(r"^浏览器连接失败: (.+)$", text, re.S)
     if browser_connect_fail:
         return (

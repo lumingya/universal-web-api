@@ -50,6 +50,9 @@ class BrowserCore(
         self._last_watchdog_session_alive: Optional[bool] = None
         self._last_watchdog_health: Optional[str] = None
         self._last_debug_port_error: str = ""
+        self._last_headless_diagnosis: Optional[str] = None
+        self._last_headless_log_at: float = 0.0
+        self._connect_retry_after: float = 0.0
         self._get_tabs_retry_after: float = 0.0
         self._last_get_tabs_fallback_log_at: float = 0.0
         

@@ -68,6 +68,11 @@ def _get_scheduled_restart_active_work() -> int:
 
 
 def _exit_for_scheduled_restart() -> None:
+    try:
+        from app.services.restart_guard import mark_service_restart
+        mark_service_restart()
+    except Exception:
+        pass
     logger.warning("定时守护已排空工作流，服务将重启（浏览器和标签页保持不变）")
     os._exit(3)
 
@@ -166,6 +171,15 @@ def _get_local_startup_base_url() -> str:
     return f"http://{_resolve_local_startup_host()}:{AppConfig.get_port()}"
 
 
+def _get_tab_url(tab) -> str:
+    try:
+        if isinstance(tab, dict):
+            return str(tab.get("url") or "").strip()
+        return str(getattr(tab, "url", "") or "").strip()
+    except Exception:
+        return ""
+
+
 def _count_existing_remote_pages(browser) -> int:
     """只统计真实远程网页，排除空白页、本地页、扩展页等内部标签。"""
     from app.utils.site_url import extract_remote_site_domain
@@ -178,11 +192,7 @@ def _count_existing_remote_pages(browser) -> int:
         return 0
 
     for tab in tabs:
-        try:
-            url = str(getattr(tab, "url", "") or "").strip()
-        except Exception:
-            url = ""
-
+        url = _get_tab_url(tab)
         if not url or url in _STARTUP_EMPTY_URLS:
             continue
 
@@ -195,11 +205,42 @@ def _count_existing_remote_pages(browser) -> int:
     return count
 
 
-def _get_tab_url(tab) -> str:
+def _has_existing_meaningful_pages(browser) -> bool:
+    """检查浏览器是否已经存在有意义的页面（包括已打开的引导页、控制面板或远程网页），避免重复开窗口。"""
     try:
-        return str(getattr(tab, "url", "") or "").strip()
-    except Exception:
-        return ""
+        tabs = browser.get_tabs() or []
+    except Exception as e:
+        logger.debug(f"读取浏览器标签页失败: {e}")
+        return False
+
+    from urllib.parse import urlparse
+    from app.utils.site_url import extract_remote_site_domain
+
+    base_url = _get_local_startup_base_url().lower()
+
+    for tab in tabs:
+        url = _get_tab_url(tab)
+        if not url or url in _STARTUP_EMPTY_URLS:
+            continue
+        lowered_url = url.lower()
+        if "controlled-browser-guide.html" in lowered_url or "tutorial/index.html" in lowered_url:
+            return True
+        if base_url in lowered_url:
+            return True
+
+        try:
+            parsed = urlparse(lowered_url)
+            host = (parsed.hostname or "").strip().lower()
+            if host in ("127.0.0.1", "localhost", "0.0.0.0", "::1"):
+                path = parsed.path or ""
+                if path in ("", "/", "/dashboard", "/docs", "/redoc") or path.startswith("/static/"):
+                    return True
+        except Exception:
+            pass
+
+        if extract_remote_site_domain(url):
+            return True
+    return False
 
 
 def _find_startup_blank_tab_id(browser) -> str:
@@ -220,8 +261,14 @@ def _find_startup_blank_tab_id(browser) -> str:
     return ""
 
 
-def _should_open_startup_pages(browser) -> bool:
+def _should_open_startup_pages(browser, is_restart: bool = False) -> bool:
+    if is_restart:
+        return False
+    if not AppConfig.is_auto_open_browser_enabled():
+        return False
     try:
+        if _has_existing_meaningful_pages(browser):
+            return False
         return _count_existing_remote_pages(browser) == 0
     except Exception as e:
         logger.debug(f"检查标签页状态失败: {e}")
@@ -249,6 +296,7 @@ def _open_controlled_browser_page_non_blocking(
     page_name: str,
     initial_delay_sec: float = 1.0,
     startup_blank_tab_id: str = "",
+    is_restart: bool = False,
 ):
     """Navigate the controlled browser only if the captured startup blank page is still available."""
 
@@ -259,6 +307,16 @@ def _open_controlled_browser_page_non_blocking(
             if not _wait_for_local_page(page_url):
                 logger.warning(f"[startup] {page_name}未就绪，跳过自动打开: {page_url}")
                 return
+
+            # 如果受控浏览器已存在该页面或引导页，直接跳过，避免重复开窗口
+            try:
+                for t in browser.get_tabs() or []:
+                    t_url = _get_tab_url(t)
+                    if page_url in t_url or "controlled-browser-guide.html" in t_url:
+                        logger.info(f"[startup] 受控浏览器已存在引导页，跳过重复打开: {page_name}")
+                        return
+            except Exception:
+                pass
 
             target_tab = None
             startup_tab_id = str(startup_blank_tab_id or "").strip()
@@ -272,14 +330,14 @@ def _open_controlled_browser_page_non_blocking(
 
                 current_url = ""
                 try:
-                    current_url = str(getattr(target_tab, "url", "") or "")
+                    current_url = _get_tab_url(target_tab)
                 except Exception:
                     current_url = ""
                 if current_url not in _STARTUP_EMPTY_URLS:
                     logger.info(f"[startup] 启动时的空白页已被使用，跳过打开{page_name}")
                     return
             else:
-                if not _should_open_startup_pages(browser):
+                if not _should_open_startup_pages(browser, is_restart=is_restart):
                     logger.info(f"[startup] 受控浏览器已离开空白页，跳过打开{page_name}")
                     return
 
@@ -299,15 +357,9 @@ def _open_controlled_browser_page_non_blocking(
                         )
                         logger.info(f"[startup] {page_name}已在受控浏览器新标签页打开: {page_url}")
                         return
-                    except Exception:
-                        target_tab = None
-
-                try:
-                    target_tab = target_tab or browser.get_latest_tab()
-                except Exception:
-                    target_tab = target_tab or None
-                if target_tab is None:
-                    return
+                    except Exception as exc:
+                        logger.warning(f"[startup] 受控浏览器新建引导页标签失败: {exc}")
+                        return
 
             target_tab.get(page_url)
             logger.info(f"[startup] {page_name}已在受控浏览器打开: {page_url}")
@@ -419,15 +471,23 @@ async def lifespan(app: FastAPI):
         logger.debug(f"[startup] 版本检查启动失败: {e}")
 
     # main.py 中 lifespan 函数的浏览器检查部分
+    try:
+        from app.services.restart_guard import consume_service_restart_mark
+        is_restart = consume_service_restart_mark()
+    except Exception:
+        is_restart = False
 
     try:
-        
         browser = get_browser(auto_connect=False)
         health = await asyncio.to_thread(browser.health_check)
     
         if health["connected"]:
             startup_blank_tab_id = _capture_startup_blank_tab_id(browser)
-            if _should_open_startup_pages(browser):
+            if is_restart:
+                logger.info("✅ 浏览器已连接 (检测到服务重启，跳过自动打开教程与引导页)")
+            elif not AppConfig.is_auto_open_browser_enabled():
+                logger.info("✅ 浏览器已连接 (AUTO_OPEN_BROWSER=false，跳过自动打开教程与引导页)")
+            elif _should_open_startup_pages(browser, is_restart=is_restart):
                 try:
                     base_url = _get_local_startup_base_url()
                     tutorial_url = f"{base_url}/static/tutorial/index.html"
@@ -445,6 +505,7 @@ async def lifespan(app: FastAPI):
                         page_name="受控浏览器引导页",
                         initial_delay_sec=0.8,
                         startup_blank_tab_id=startup_blank_tab_id,
+                        is_restart=is_restart,
                     )
                 except Exception as e:
                     logger.warning(f"⚠️ 无法打开教程页: {e}")
