@@ -12,7 +12,9 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
+import re
 import shutil
 import socket
 import select
@@ -595,6 +597,150 @@ def _debug_port_ready(port: int) -> bool:
         return False
 
 
+def _check_chromium_debug_endpoint(port: int, timeout: float = 0.5) -> tuple[bool, dict[str, Any]]:
+    """
+    检查指定端口是否为可响应且合法的 Chromium 远程调试端点。
+    返回 (is_chromium, version_info)。
+    """
+    version_url = f"http://127.0.0.1:{int(port)}/json/version"
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        req = urllib.request.Request(version_url, headers={"User-Agent": "UWAPI-Diagnostics"})
+        with opener.open(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="ignore"))
+            if isinstance(data, dict) and ("Browser" in data or "webSocketDebuggerUrl" in data):
+                return True, data
+    except Exception:
+        pass
+    return False, {}
+
+
+def _get_port_processes(port: int) -> list[dict[str, Any]]:
+    """获取占用指定 TCP 端口（处于 LISTENING 状态）的进程信息列表。"""
+    port_int = int(port)
+    pids: set[int] = set()
+
+    # 1. 在 Windows 上优先使用 netstat -ano（支持 IPv4 与 IPv6 Dual-stack 监听）
+    if sys.platform == "win32":
+        try:
+            output = subprocess.check_output(
+                ["netstat", "-ano"],
+                text=True,
+                errors="ignore",
+                stderr=subprocess.DEVNULL,
+            )
+            pattern = re.compile(
+                rf"^\s*TCP\s+\[?[\w\.:]+\]?:({port_int})\s+\S+\s+LISTENING\s+(\d+)",
+                re.IGNORECASE | re.MULTILINE,
+            )
+            for match in pattern.finditer(output):
+                try:
+                    pids.add(int(match.group(2)))
+                except (ValueError, TypeError):
+                    pass
+        except Exception:
+            pass
+
+    # 2. 尝试使用 psutil 获取连接
+    if not pids:
+        try:
+            import psutil
+            for conn in psutil.net_connections(kind="tcp"):
+                if conn.status == psutil.CONN_LISTEN and conn.laddr and conn.laddr.port == port_int:
+                    if conn.pid:
+                        pids.add(conn.pid)
+        except Exception:
+            pass
+
+    # 3. 获取进程详情
+    results = []
+    for pid in sorted(pids):
+        if pid <= 0:
+            continue
+        info = {"pid": pid, "name": f"PID:{pid}", "cmdline": ""}
+        try:
+            import psutil
+            proc = psutil.Process(pid)
+            info["name"] = proc.name()
+            try:
+                cmd = proc.cmdline()
+                info["cmdline"] = " ".join(cmd) if cmd else ""
+            except Exception:
+                pass
+        except Exception:
+            pass
+        results.append(info)
+    return results
+
+
+def _terminate_port_processes(port: int, procs: list[dict[str, Any]]) -> bool:
+    """终止占用指定端口的进程及其子进程树，并等待端口完全释放。"""
+    pids = [p["pid"] for p in procs if p.get("pid", 0) > 0]
+    if not pids:
+        return not _debug_port_ready(port)
+
+    for pid in pids:
+        if sys.platform == "win32":
+            try:
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(pid)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+            except Exception:
+                pass
+        else:
+            try:
+                import signal
+                os.kill(pid, getattr(signal, "SIGKILL", 9))
+            except Exception:
+                pass
+        try:
+            import psutil
+            proc = psutil.Process(pid)
+            for child in proc.children(recursive=True):
+                try:
+                    child.kill()
+                except Exception:
+                    pass
+            proc.kill()
+        except Exception:
+            pass
+
+    # 轮询等待端口释放（最多 5 秒）
+    for _ in range(10):
+        time.sleep(0.5)
+        if not _debug_port_ready(port):
+            return True
+    return False
+
+
+def _is_interactive() -> bool:
+    """安全检查当前环境是否为可交互终端（防御 sys.stdin 为 None）。"""
+    try:
+        return bool(sys.stdin and hasattr(sys.stdin, "isatty") and sys.stdin.isatty())
+    except Exception:
+        return False
+
+
+def _ask_user_yes_no(prompt: str, default: bool = False) -> bool:
+    """在交互式终端中询问用户 (y/n)，返回 True 表示确认终止。"""
+    if not _is_interactive():
+        return default
+    try:
+        reply = input(prompt).strip().lower()
+        if not reply:
+            return default
+        return reply in ("y", "yes")
+    except EOFError:
+        _log()
+        return default
+    except KeyboardInterrupt:
+        _log()
+        raise
+
+
 def _inspect_headless_or_windowless_browser(port: int, timeout: float = 0.5) -> Optional[dict[str, str]]:
     """
     探测指定端口的 Chromium 浏览器是否处于无头(Headless)或无窗口/缺少页面标签页状态。
@@ -960,30 +1106,76 @@ def _launch_browser_if_needed() -> None:
     profile_dir.mkdir(parents=True, exist_ok=True)
     _log(f"[INFO] 浏览器配置目录: {profile_dir}")
 
-    if _debug_port_ready(browser_port):
+    while _debug_port_ready(browser_port):
+        port_procs = _get_port_processes(browser_port)
+        proc_desc = ", ".join(f"{p['name']} (PID: {p['pid']})" for p in port_procs) if port_procs else "未知进程"
+
+        is_chromium, _ = _check_chromium_debug_endpoint(browser_port)
         headless_probe = None
-        for attempt in range(3):
-            headless_probe = _inspect_headless_or_windowless_browser(browser_port)
-            if not headless_probe:
-                break
-            # 明确的 --headless 或无头标识无需重试
-            if headless_probe.get("reason") in {"headless", "headless_arg"}:
-                break
-            # 若仅是暂时未检测到 page 目标，等待 0.4s 重试（给新打开的浏览器创建主页留出缓冲）
-            if attempt < 2:
-                time.sleep(0.4)
+        if is_chromium:
+            for attempt in range(3):
+                headless_probe = _inspect_headless_or_windowless_browser(browser_port)
+                if not headless_probe:
+                    break
+                # 明确的 --headless 或无头标识无需重试
+                if headless_probe.get("reason") in {"headless", "headless_arg"}:
+                    break
+                # 若仅是暂时未检测到 page 目标，等待 0.4s 重试（给新打开的浏览器创建主页留出缓冲）
+                if attempt < 2:
+                    time.sleep(0.4)
 
-        if headless_probe:
-            _log(f"[WARN] 检测到端口 {browser_port} 已被占用，但该浏览器处于无头或无窗口状态（{headless_probe['detail']}）！")
-            _log("[WARN] 受控模式需要前台可视浏览器窗口，当前无头进程会导致服务无法正常接管。")
-            _log("[WARN] 解决方案：请在任务管理器中关闭/结束后台残留的浏览器进程，再重新运行启动器！")
-            _log()
-            raise RuntimeError(
-                f"检测到端口 {browser_port} 上的浏览器处于无头/无窗口状态（{headless_probe['detail']}）。"
-                "请先结束该后台浏览器进程后重试。"
+        # 场景 1：端口被占用，但不是正常的受控前台浏览器（非 Chromium 调试服务，或处于无头/无窗口状态）
+        if not is_chromium or headless_probe:
+            if not is_chromium:
+                reason = "该端口被其他非 Chromium 调试服务占用"
+            else:
+                reason = f"该浏览器处于无头或无窗口状态（{headless_probe['detail']}）"
+
+            _log(f"[WARN] 检测到浏览器端口 {browser_port} 已被占用，但无法作为受控前台浏览器使用！")
+            _log(f"[WARN] 状态原因: {reason}")
+            _log(f"[WARN] 占用进程: {proc_desc}")
+
+            if not _is_interactive():
+                raise RuntimeError(
+                    f"检测到端口 {browser_port} 被占用（{proc_desc}，{reason}）。"
+                    "当前处于非交互环境，无法询问用户，请手动结束占用进程后重试。"
+                )
+
+            should_kill = _ask_user_yes_no(
+                f"是否终止占用端口 {browser_port} 的进程？(y/N): ",
+                default=False,
             )
+            if should_kill:
+                _log(f"[INFO] 正在终止占用端口 {browser_port} 的进程 ({proc_desc})...")
+                if _terminate_port_processes(browser_port, port_procs):
+                    _log(f"[OK] 进程已终止，端口 {browser_port} 已释放。准备重新启动受控浏览器...")
+                    _log()
+                    break
+                else:
+                    _log(f"[ERROR] 终止进程后，端口 {browser_port} 仍被占用，请检查权限或手动在任务管理器中结束。")
+                    raise RuntimeError(f"端口 {browser_port} 无法释放，本次启动中止。")
+            else:
+                _log("[INFO] 已取消操作，本次启动中止。")
+                raise SystemExit(1)
 
-        _log("[WARN] Debug 端口已被占用，将复用现有浏览器实例")
+        # 场景 2：已有正常的前台可视 Chromium 实例
+        _log(f"[WARN] Debug 端口已被占用（进程: {proc_desc}）")
+        if _is_interactive():
+            should_kill = _ask_user_yes_no(
+                f"检测到已有运行中的浏览器，是否终止它并全新启动？(y/N, 默认复用): ",
+                default=False,
+            )
+            if should_kill:
+                _log(f"[INFO] 正在终止现有浏览器进程 ({proc_desc})...")
+                if _terminate_port_processes(browser_port, port_procs):
+                    _log(f"[OK] 现有浏览器已关闭，端口 {browser_port} 已释放。准备全新启动浏览器...")
+                    _log()
+                    break
+                else:
+                    _log(f"[ERROR] 关闭现有浏览器失败，端口 {browser_port} 仍被占用。")
+                    raise RuntimeError(f"端口 {browser_port} 无法释放，本次启动中止。")
+
+        _log("[WARN] 将复用现有浏览器实例")
         _log("[WARN] 浏览器启动参数只在新进程生效；如需应用内存节省模式，请先关闭现有浏览器")
         if _focus_browser_window_for_port(browser_port):
             _log("[INFO] 已唤起现有浏览器窗口")
@@ -1053,8 +1245,10 @@ def _launch_browser_if_needed() -> None:
             return
         time.sleep(1.0)
 
+    port_procs = _get_port_processes(browser_port)
+    proc_hint = f"（当前该端口被以下进程占用: {', '.join(f'{p['name']}(PID:{p['pid']})' for p in port_procs)}）" if port_procs else ""
     raise RuntimeError(
-        f"未检测到远程调试端口 {browser_port}，为避免服务误连到错误浏览器，本次启动已中止。"
+        f"未检测到远程调试端口 {browser_port}{proc_hint}，为避免服务误连到错误浏览器，本次启动已中止。"
     )
 
 

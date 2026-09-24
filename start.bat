@@ -521,13 +521,75 @@ if /I "!PROFILE_CLEAN_ENABLED!"=="true" (
 )
 
 REM Reuse an existing debugging browser when the port is already ready.
+:CHECK_BROWSER_PORT
 call :check_debug_port
 if "!DEBUG_PORT_OK!"=="1" (
+    set "PORT_PID="
+    for /f "tokens=5" %%a in ('netstat -ano 2^>nul ^| findstr /r /c:":!BROWSER_PORT! .*LISTENING"') do (
+        if not defined PORT_PID set "PORT_PID=%%a"
+    )
+
+    set "IS_CHROMIUM_PORT=0"
+    powershell -NoProfile -Command "try { $r = Invoke-RestMethod -Uri 'http://127.0.0.1:%BROWSER_PORT%/json/version' -TimeoutSec 1; if ($r.Browser -or $r.webSocketDebuggerUrl) { exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>&1
+    if !errorlevel! equ 0 set "IS_CHROMIUM_PORT=1"
+
+    if "!IS_CHROMIUM_PORT!"=="0" (
+        echo [WARN] 检测到浏览器端口 !BROWSER_PORT! 已被其他非浏览器进程占用 ^(PID: !PORT_PID!^)
+        set "KILL_PORT_CHOICE=N"
+        set "DO_KILL=0"
+        set /p "KILL_PORT_CHOICE=是否终止该占用进程并启动受控浏览器？(y/N): "
+        if /i "!KILL_PORT_CHOICE!"=="Y" set "DO_KILL=1"
+        if /i "!KILL_PORT_CHOICE!"=="YES" set "DO_KILL=1"
+        if "!DO_KILL!"=="1" (
+            echo [INFO] 正在终止进程 !PORT_PID!...
+            if defined PORT_PID taskkill /F /T /PID !PORT_PID! >nul 2>&1
+            timeout /t 1 /nobreak >nul
+            call :check_debug_port
+            if "!DEBUG_PORT_OK!"=="1" (
+                echo [ERROR] 终止后端口仍被占用，请手动关闭后重试
+                pause
+                exit /b 1
+            )
+            echo [OK] 端口已释放，继续启动新浏览器
+            goto :START_BROWSER
+        ) else (
+            echo [INFO] 已取消操作，本次启动中止
+            pause
+            exit /b 1
+        )
+    )
+
+    if defined PORT_PID (
+        echo [WARN] 检测到浏览器端口 !BROWSER_PORT! 已有运行中的浏览器 ^(PID: !PORT_PID!^)
+    ) else (
+        echo [WARN] 检测到浏览器端口 !BROWSER_PORT! 已被占用
+    )
+    set "KILL_PORT_CHOICE=N"
+    set "DO_KILL=0"
+    set /p "KILL_PORT_CHOICE=是否终止现有浏览器并全新启动？(y/N, 默认复用现有浏览器): "
+    if /i "!KILL_PORT_CHOICE!"=="Y" set "DO_KILL=1"
+    if /i "!KILL_PORT_CHOICE!"=="YES" set "DO_KILL=1"
+    if "!DO_KILL!"=="1" (
+        echo [INFO] 正在终止进程 !PORT_PID!...
+        if defined PORT_PID taskkill /F /T /PID !PORT_PID! >nul 2>&1
+        timeout /t 1 /nobreak >nul
+        call :check_debug_port
+        if "!DEBUG_PORT_OK!"=="1" (
+            echo [ERROR] 终止后端口仍被占用，请手动关闭后重试
+            pause
+            exit /b 1
+        )
+        echo [OK] 端口已释放，继续启动新浏览器
+        goto :START_BROWSER
+    )
+
     echo [WARN] Debug port already in use, reuse existing browser instance.
     echo [WARN] Browser launch flags only apply to a new process; close the existing browser to apply memory saver mode.
     echo [OK] Debug port ready - !BROWSER_PORT!
     goto :BROWSER_READY
 )
+
+:START_BROWSER
 
 echo [INFO] 正在查找可用的 Chromium 内核浏览器...
 
