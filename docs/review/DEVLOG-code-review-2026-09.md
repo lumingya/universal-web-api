@@ -40,7 +40,7 @@
 
 - [x] 克隆仓库、确认推送权限、建立开发日志
 - [x] M1 仓库卫生与配置（.env.example / .gitignore / README / VERSION / requirements）
-- [ ] M2 静态分析 + 现有单元测试运行结果
+- [x] M2 静态分析 + 现有单元测试运行结果（排除真实浏览器；详情见 §5）
 - [ ] M3 安全：认证与中间件（main.py / app/api/deps.py / CORS / 管理接口）——已核查默认值、主要路由及 CORS；待补测
 - [ ] M4 安全：命令引擎（CMD_ALLOW_UNSAFE_PYTHON_COMMANDS 等）、updater、文件/路径处理、SSRF——命令/解析器与更新器初查完成，其他待查
 - [ ] M5 核心请求链路：chat.py / anthropic_routes.py / streaming_response.py / request_manager.py
@@ -67,8 +67,14 @@
 | H4 | P3 | `main.py`, `app/core/stream_monitor.py`, `static/js/dashboard-schema.js` | 约 40 个文件混用 CRLF/LF，无 `.gitattributes`，增加噪音 diff 与跨平台维护成本；统一 EOL（须先检查各脚本依赖）。 | 已核对 |
 | H5 | P3 | `assets/*.png`, `static/*.png`, `static/images/logo.svg` | 多组字节相同的图片复制到 assets/static，logo SVG 约 792KB，另有较大截图；可用单一资源引用/压缩资源。 | 已核对 |
 | H6 | P3 | `requirements.txt:6-7`, `requirements-dev.txt` | FastAPI `<0.110`/Uvicorn `<0.30` 较旧，升级应配合测试与锁定依赖。FastAPI 0.109.2 要求 Starlette `>=0.36.3,<0.37`，不在 CVE-2025-62727 的 0.39–0.49.0 受影响范围，**不将该 CVE 误报于当前约束**；dev 依赖包含 Playwright，本轮禁止安装。 | 已核对 |
+| B1 | P2 | `app/utils/site_discovery.py:9-18`, `config/site_rules.json:1-22`, `app/services/config/engine.py:1973-1989`, `tests/test_site_discovery.py:18-25,72-76` | 出厂站点规则没有 google.com/bing.com/baidu.com 等 `auto_discovery=false`，默认返回 true；搜索页被当未知聊天站点尝试提取/AI 分析（9 个纯逻辑用例失败），可误用通用工作流。建议补充精确域名阻止规则、保留 gemini.google.com 等子域的可用性。 | 隔离测试复现 |
+| T1 | P2 | `tests/test_arena_auto_battle_command.py:71-81`, `tests/test_arena_command_persistence.py:1-15`, `tests/test_workflow_js_exec_integration.py:99-123`, `tests/test_media_stream_image_precedence.py:508-515`, `app/services/arena_model_catalog.py:18-22,128-140` | 测试硬依赖被 `.gitignore` 排除的 `config/commands*.json`、`custom_scripts/examples/arena_payload_interceptor.js`、`config/arena_model_catalog.local.json` 或不存在的 `js/arena-conversation-image-window.user.js`；干净克隆中约 64 个失败主要由缺失 fixture 引起，不能当作产品回归。应提供可分发的最小 fixture 或将这类测试标记为本地集成测试。 | 隔离测试复现 |
+| T2 | P3 | `requirements-dev.txt:1-4`, `tests/test_cancel_storm_regressions.py:340-364` | 纯逻辑测试依赖 `httpx`（ASGITransport），dev requirements 未声明；初轮 1 例报 `ModuleNotFoundError`，仅补装 `httpx` 后该例通过。可拆出不含 Playwright 的 tests extra。 | 隔离测试复现 |
+| H7 | P3 | `app/utils/model_routing.py:7,213`, `start.py:602,620,678,746` | 延迟注解下 5 处 `Optional` / `Any` 未导入；普通调用未必报错，但 `typing.get_type_hints` 实测分别触发 NameError，静态检查持续报 F821。 | 静态检查 + 轻量复现 |
 
 ## 5. 工作流水
 
 - 2026-09-25：部分克隆完成；确认 token 具备 push 权限（dry-run 通过）；确认 updater 仅走 Releases；建立本日志。
 - 2026-09-25 / M1：核对 `.env.example`、三份 README、requirements、ignore 规则、已跟踪缓存与换行；记录 H1–H6。同期初查 149 个 API 路由（AST 粗计，6 个未声明 Depends 的路由需逐项判定），并核实认证/CORS、Python 命令与解析器动态 import、启动代理、媒体/健康路由，记录 S1–S7；M3/M4 尚未完成。PyPI 元数据确认 FastAPI 0.109.2 限制 Starlette `<0.37.0`。本阶段只读审查，未做侵入式验证、未修改业务代码。
+- 2026-09-25 / M2：生产依赖及 `ruff`/`pyflakes`/`pytest`/`httpx` 安装到工作区外 `/home/user/.venv`；**未安装 Playwright/Chromium**。Python 226 文件用 `tokenize.open` + AST 语法检查均通过（`text_filter.py` 首字节有 BOM，直接按 UTF-8 文本喂给 AST 的一次假阳性已排除）；`node --check` 静态 JS 33 文件通过。Ruff `--target-version py313 --select F821,F822,F823,E9` 报 5 个 F821（H7）；pyflakes 全量原始诊断 419 行，多为重导出/未使用变量，不等于 419 个 bug。首轮 `unittest` 57 例：34 通过、6 失败、17 错误；其中失败/错误都指向缺失本地命令和 JS 示例。仅选无私有 fixture 的两组用例 15/15 通过。
+- 2026-09-25 / M2（续）：排除 3 个真实 Chromium 测试文件和两处浏览器 fixture（未启动浏览器）的 pytest 初轮：**548 passed、74 failed、9 deselected**（10.15s）。归因：64 个缺失/过期本地 fixture（T1）、9 个站点自动发现断言失败（B1）、1 个 dev 依赖缺失（T2）。仅补装 `httpx` 后 T2 对应用例通过；过滤上述已知失效用例的独立干净子集 **544 passed、30 deselected**（8.17s）。所有测试生成的临时目录及忽略的 `config/commands.json`、`config/request_history.json`、`config/app_stats.json` 均已删除；无业务代码变更。
