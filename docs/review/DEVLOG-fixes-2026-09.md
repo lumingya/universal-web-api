@@ -42,7 +42,7 @@ P3 清单（顺序即执行顺序，完成一项勾一项，每项独立提交�
 - [x] H2 README 版本与 CHANGELOG 链接
 - [x] H3 .gitignore 规则清理
 - [x] H11 受跟踪配置中的具体 Arena 会话 URL
-- [ ] H5 重复/超大图片资源
+- [x] H5 重复/超大图片资源
 - [ ] H6 依赖升级计划（只出计划与约束调整，不做大版本跳跃）
 - [ ] H4 换行符统一（放最后，单独提交，降低与 main 合并冲突）
 
@@ -524,3 +524,14 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
   用占位 URL 反而会被当成真实路由去打开，所以不用占位符）。其余键不动，JSON 按原格式（indent=2、ensure_ascii=False）写回，diff 只涉及这两个键。
 - ⚠️ 维护者若本地正在用这些分组：旧值可用 `git show 9ab1b11:config/browser_config.json` 找回，建议之后放在本地、不再提交。
 - 测试：p3 新增 1 项（分发配置不含 `/c/<uuid>` 会话 URL，route_groups 为空）。
+
+### H5 图片重复 / logo.svg 过大 ✅（P3）
+
+- 删除 `assets/tutorial-dashboard-overview.png`、`assets/workflow-visualization.png`：与 `static/` 下同名文件字节完全相同（sha1 一致），
+  且全仓库只引用 `static/` 版本（教程页、update_preserve）。`assets/` 其余两张图保留。
+- `static/images/logo.svg`（VTracer 描摹，1407 条 path）无损压缩 **792,262 → 525,032 字节（-34%，gzip 289KB → 192KB）**：
+  scour（4 位有效数字、去 XML 声明/注释）+ 去掉 no-op `translate(0)` + 把 1373 个 `translate(x,y)` 烘焙进路径起点
+  （起点 `m` 改 `M` 后补 `l` 保持后续隐式坐标为相对）。保留 `width/height=640`，未加 viewBox（不改变现有缩放行为）。
+- 视觉校验：cairosvg 在 640/128/32 px 渲染逐像素对比，平均差 ≤0.38/255、最大 9/255（抗锯齿级）；ImageMagick 渲染 PSNR 同样极高。
+  PNG 用 Pillow 无损重编码只省 3~5%，不值得改动二进制历史，未做。临时文件已删除。
+- 测试：p3 新增 1 项（已跟踪图片无字节重复；logo < 600KB 且尺寸属性不变）。

@@ -417,3 +417,28 @@ def test_h11_shipped_browser_config_has_no_personal_sessions():
     cfg = json.loads(raw)
     assert cfg["tab_pool"]["route_groups"] == []
     assert isinstance(cfg["tab_pool"]["excluded_urls"], list)
+
+
+# ---------------------------------------------------------------------------
+# H5 · 图片资源无字节重复，logo.svg 已无损压缩
+# ---------------------------------------------------------------------------
+
+def test_h5_no_duplicate_tracked_images_and_logo_optimized():
+    import hashlib
+
+    root = Path(__file__).resolve().parents[1]
+    out = _git("ls-files")
+    assert out.returncode == 0
+    seen = {}
+    for rel in out.stdout.splitlines():
+        if rel.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico")):
+            path = root / rel
+            if not path.exists():
+                continue
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            assert digest not in seen, f"{rel} duplicates {seen.get(digest)}"
+            seen[digest] = rel
+    logo = root / "static" / "images" / "logo.svg"
+    assert logo.stat().st_size < 600 * 1024
+    head = logo.read_text(encoding="utf-8")[:200]
+    assert 'width="640"' in head and 'height="640"' in head
