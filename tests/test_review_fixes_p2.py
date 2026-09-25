@@ -351,3 +351,88 @@ def test_s11_pin_is_scoped_to_call(monkeypatch, local_http_server):
         assert requests.get(url, timeout=5).status_code == 200
     with pytest.raises(requests.exceptions.ConnectionError):
         requests.get(url, timeout=5)
+
+
+# ---------------------------------------------------------------------------
+# S10 · 图片比对 / C2PA 读取第三方图片：受限抓取器 + 字节 / 像素预算
+# ---------------------------------------------------------------------------
+
+class _TabRecorder:
+    def __init__(self):
+        self.js_calls = []
+        self.url = "https://page.example/chat"
+
+    def run_js(self, script, *args):
+        self.js_calls.append(args)
+        return ""
+
+
+def test_s10_private_url_is_rejected_without_browser_fallback(monkeypatch):
+    from app.utils import image_validation, remote_resource
+
+    monkeypatch.setattr(remote_resource, "_resolve_addresses", lambda host: ("10.0.0.5",))
+    called = []
+    monkeypatch.setattr(remote_resource.requests, "get", lambda *a, **k: called.append(a))
+    tab = _TabRecorder()
+    assert image_validation.read_image_bytes(tab, "http://intranet.example/secret.png") == b""
+    assert called == []
+    # 只有取 location.href 的那次 run_js，没有浏览器 fetch 兜底
+    assert all(not args for args in tab.js_calls)
+
+
+def test_s10_remote_download_is_byte_limited(monkeypatch):
+    from app.utils import image_validation
+
+    class Resp:
+        status_code = 200
+        headers = {}
+        closed = False
+
+        def iter_content(self, chunk_size=65536):
+            for _ in range(100):
+                yield b"x" * 65536
+
+        def close(self):
+            Resp.closed = True
+
+    monkeypatch.setattr(image_validation, "MAX_VALIDATION_IMAGE_BYTES", 200_000)
+    monkeypatch.setattr(image_validation, "get_public_remote_resource", lambda *a, **k: Resp())
+    assert image_validation._read_remote_image_limited("https://cdn.example/a.png", {}, 5) == b""
+    assert Resp.closed
+
+
+def test_s10_declared_oversize_is_skipped(monkeypatch):
+    from app.utils import image_validation
+
+    class Resp:
+        status_code = 200
+        headers = {"Content-Length": str(10 ** 9)}
+
+        def iter_content(self, chunk_size=65536):
+            raise AssertionError("must not read body")
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(image_validation, "get_public_remote_resource", lambda *a, **k: Resp())
+    assert image_validation._read_remote_image_limited("https://cdn.example/a.png", {}, 5) == b""
+
+
+def test_s10_data_uri_budget_and_pixel_budget(monkeypatch):
+    import base64 as b64
+    import io
+
+    from PIL import Image
+
+    from app.utils import image_validation
+
+    monkeypatch.setattr(image_validation, "MAX_VALIDATION_IMAGE_BYTES", 1000)
+    big = "data:image/png;base64," + b64.b64encode(b"a" * 5000).decode()
+    assert image_validation.read_image_bytes(None, big) == b""
+    assert image_validation.read_uploaded_image_bytes(big) == b""
+
+    buf = io.BytesIO()
+    Image.new("RGB", (40, 40), "white").save(buf, format="PNG")
+    monkeypatch.setattr(image_validation, "MAX_VALIDATION_IMAGE_PIXELS", 100)
+    sig = image_validation.image_signatures(buf.getvalue())
+    assert sig["sha256"] and sig["pixel_sha256"] is None and sig["dhash"] is None

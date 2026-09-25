@@ -98,7 +98,7 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - [x] B2 旧版顶层数组历史恢复丢失
 - [x] B1 搜索引擎主域被自动发现
 - [x] B3 Responses 内存历史无字节预算
-- [ ] S10 图片比对 / C2PA 直取外部 URL
+- [x] S10 图片比对 / C2PA 直取外部 URL
 - [x] S11 DNS 校验后连接重解析
 - [ ] S4 回环 IP 当作授权
 - [ ] S5 定时重启代理容量 / 协议
@@ -256,3 +256,13 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - 测试：p2 新增 2 项，用本地 HTTP 服务：
   - 校验返回 127.0.0.1、主机名是 `.invalid`（系统 DNS 解析不了）→ 请求成功，Host 头是原主机名。用 stash 验证过：旧代码下这项失败。
   - pin 只在调用期间有效，退出后同一 URL 连接失败。
+
+### S10 图片比对 / C2PA 直取外部 URL ✅
+
+- `app/utils/image_validation.py`（`arena_gpt_image_command` 的 C2PA 检测也经由这里的 `read_image_bytes`）：
+  - 不再裸调 `requests.get`，改用 `get_public_remote_resource`：逐跳私网/重定向校验，加上 S11 的 DNS pinning；Referer 只发往图片原始 origin。
+  - 流式读取，上限 `MAX_VALIDATION_IMAGE_BYTES`=20MiB。Content-Length 超限时不读 body，读取中途超限就中止并 close。
+  - `UnsafeRemoteResourceError` 直接返回空，**不再退回浏览器 fetch**（否则等于绕过同一道校验）。浏览器 fetch 兜底（blob: 或普通网络错误时）也加了字节上限，JS 端和 Python 端都查。
+  - data URI（生成图片及上传参考图）先按 base64 长度预估大小，超预算就不解码。
+  - `image_signatures` 解码前检查头部尺寸（40MP / 边长 16384），超限只保留字节 sha256，不做像素或 dHash 计算，防解压炸弹。
+- 测试：p2 新增 4 项（私网 URL 被拒且无浏览器兜底、流式字节上限、声明超限不读 body、data URI 与像素预算）。
