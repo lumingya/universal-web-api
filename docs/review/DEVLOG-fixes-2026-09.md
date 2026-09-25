@@ -38,7 +38,7 @@ P3 清单（顺序即执行顺序，完成一项勾一项，每项独立提交�
 - [x] T2 requirements-dev 缺 httpx
 - [x] S14 遗留教程搜索框 innerHTML
 - [x] S7 公开引导/健康接口信息最小化
-- [ ] H14 站点/完整备份导入无大小上限
+- [x] H14 站点/完整备份导入无大小上限
 - [ ] H2 README 版本与 CHANGELOG 链接
 - [ ] H3 .gitignore 规则清理
 - [ ] H11 受跟踪配置中的具体 Arena 会话 URL
@@ -491,3 +491,10 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
   控制面板登录前需要的 `dashboard_auth_enabled` 保留。错误令牌也只是降级为最小响应，不返回 401。特权 → 原详细响应。
 - `GET /api/startup/controlled-browser-guide-data`：非特权 → 403；引导页/教程页前端本身在失败时回落内置默认站点列表。
 - README 接口表注明行为。测试：p3 新增 9 项（远程匿名最小且不连浏览器、503 保留、本机详情、本机+转发头视为远程、三种令牌、错误令牌不 401、引导数据）。
+
+### H14 站点/完整备份导入无大小上限 ✅（P3）
+
+- `static/js/dashboard-methods.js`：新增 `SITE_CONFIG_IMPORT_MAX_BYTES = 8 MiB`、`SETTINGS_BACKUP_IMPORT_MAX_BYTES = 32 MiB`
+  与 `importFileSizeError()`；`handleImportFile` / `handleSettingsBackupImportFile` 在 `FileReader` 读取前检查 `file.size`，
+  超限给出中文提示并重置 input；顺带补 `reader.onerror` 提示。（当前 `config/` 全量约 400KB，上限余量充足。）
+- 校验：`node --check` 通过。测试：p3 新增 2 项（源码顺序断言 + node 执行 helper）。

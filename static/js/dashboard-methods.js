@@ -5,6 +5,18 @@
     const ENV_CONFIG_SCHEMA = window.ENV_CONFIG_SCHEMA || {}
     const DASHBOARD_TOKEN_STORAGE_KEY = 'dashboard_token'
     const LEGACY_API_TOKEN_STORAGE_KEY = 'api_token'
+    // H14：导入文件大小上限（整个文件读进内存再 JSON.parse，超大文件会卡死页面）。
+    // 正常站点配置 / 完整备份都在数百 KB 级，上限留足余量。
+    const SITE_CONFIG_IMPORT_MAX_BYTES = 8 * 1024 * 1024
+    const SETTINGS_BACKUP_IMPORT_MAX_BYTES = 32 * 1024 * 1024
+
+    function importFileSizeError(file, maxBytes, label) {
+        const size = Number(file && file.size) || 0
+        if (size <= maxBytes) return ''
+        const mb = (n) => (n / 1024 / 1024).toFixed(n >= 10 * 1024 * 1024 ? 0 : 1)
+        return `${label}过大（${mb(size)} MiB），上限 ${mb(maxBytes)} MiB`
+    }
+    window.importFileSizeError = importFileSizeError
 
     function formatGitCompareErrorText(error) {
         const raw = String((error && error.message) || error || '').trim()
@@ -1177,9 +1189,23 @@
             const file = event.target.files[0];
             if (!file) return;
 
+            const sizeError = importFileSizeError(file, SITE_CONFIG_IMPORT_MAX_BYTES, '配置文件');
+            if (sizeError) {
+                this.notify(sizeError, 'error');
+                this.singleSiteImportTargetDomain = '';
+                this.forceSingleSiteImport = false;
+                event.target.value = '';
+                return;
+            }
+
             this.importFileName = file.name;
 
             const reader = new FileReader();
+            reader.onerror = () => {
+                this.notify('读取导入文件失败', 'error');
+                this.singleSiteImportTargetDomain = '';
+                this.forceSingleSiteImport = false;
+            };
             reader.onload = (e) => {
                 try {
                     const config = JSON.parse(e.target.result);
@@ -1585,7 +1611,17 @@
             const file = event.target.files[0];
             if (!file) return;
 
+            const sizeError = importFileSizeError(file, SETTINGS_BACKUP_IMPORT_MAX_BYTES, '备份文件');
+            if (sizeError) {
+                this.notify('完整备份导入失败: ' + sizeError, 'error');
+                event.target.value = '';
+                return;
+            }
+
             const reader = new FileReader();
+            reader.onerror = () => {
+                this.notify('完整备份导入失败: 读取文件出错', 'error');
+            };
             reader.onload = async (e) => {
                 try {
                     const payload = JSON.parse(e.target.result);

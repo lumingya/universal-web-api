@@ -319,3 +319,37 @@ def test_s7_guide_data_local_ok_remote_forbidden(monkeypatch):
     resp, _ = _s7_get(monkeypatch, "/api/startup/controlled-browser-guide-data", "203.0.113.9",
                       headers={"Authorization": "Bearer t"}, env={"AUTH_TOKEN": "t"})
     assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# H14 · 站点配置 / 完整备份导入有文件大小上限
+# ---------------------------------------------------------------------------
+
+def test_h14_import_handlers_check_file_size():
+    js = (Path(__file__).resolve().parents[1] / "static" / "js" / "dashboard-methods.js").read_text(encoding="utf-8")
+    assert "SITE_CONFIG_IMPORT_MAX_BYTES" in js and "SETTINGS_BACKUP_IMPORT_MAX_BYTES" in js
+    for handler, const in (("handleImportFile(event)", "SITE_CONFIG_IMPORT_MAX_BYTES"),
+                           ("handleSettingsBackupImportFile(event)", "SETTINGS_BACKUP_IMPORT_MAX_BYTES")):
+        body = js.split(handler, 1)[1]
+        assert body.index(f"importFileSizeError(file, {const}") < body.index("new FileReader()")
+
+
+def test_h14_size_error_helper_behaviour():
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not installed")
+    root = Path(__file__).resolve().parents[1]
+    script = (
+        "global.window={};global.localStorage={getItem(){return null}};"
+        f"require({json.dumps(str(root / 'static/js/dashboard-methods.js'))});"
+        "const f=window.importFileSizeError;"
+        "console.log(JSON.stringify([f({size:1024},8*1024*1024,'配置文件'),f({size:9*1024*1024},8*1024*1024,'配置文件')]));"
+    )
+    out = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stderr
+    ok, too_big = json.loads(out.stdout.strip().splitlines()[-1])
+    assert ok == ""
+    assert "过大" in too_big and "8" in too_big
