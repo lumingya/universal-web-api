@@ -91,7 +91,7 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - [x] B3 Responses 内存历史无字节预算
 - [x] S10 图片比对 / C2PA 直取外部 URL
 - [x] S11 DNS 校验后连接重解析
-- [ ] S4 回环 IP 当作授权
+- [x] S4 回环 IP 当作授权
 - [ ] S5 定时重启代理容量 / 协议
 - [ ] S6 媒体路由无认证与转码资源
 - [ ] S3 解析器安装立即 import
@@ -417,3 +417,39 @@ HTTP 栈会**重新解析一次**。攻击者控制该域名的 DNS（TTL=0）�
 用的就是 `read_image_bytes`，一并被加固，无需单独改。
 `command_engine_actions.py:2313` 的 `requests.get` 打的是本机 Clash 管理 API
 （`127.0.0.1:9090`，管理员配置），属预期的内网调用，不纳入本项。
+
+### 2026-09-25 · S4（回环 IP 当作授权）
+
+`app/api/browser_routes.py` 的 `POST /api/browser/open-profile-url`
+只检查 `request.client.host` 是否回环、不要求任何令牌。
+本机反向代理 / 隧道（nginx `proxy_pass`、frp、ngrok）会把外来请求
+以回环地址转交进来，这个检查就完全失效。
+
+**一个重要的取舍**：不能直接套用 S13 的 `verify_admin_access`。
+该接口是由第三方 AI 站点页面上的 Link Drawer 用户脚本**跨源**调用的，
+`verify_admin_access` 里的同源检查会把正常功能打死。
+所以改为针对「回环即授权」这个假设本身加固：
+
+1. **核实代理链** —— `app/api/deps.py` 新增 `request_looks_proxied()` 与
+   `FORWARDING_HEADERS`。带任何转发头的请求一律 403：
+   我们无法核实这条链，就不能承认它是本机调用。空值头不算（避免误伤）。
+2. **强制管理认证** —— 配置了 `DASHBOARD_AUTH_TOKEN` 就必须出示
+   （Bearer 或 X-API-Key，`secrets.compare_digest` 比较）。
+   逃生阀 `BROWSER_OPEN_URL_ALLOW_UNAUTHENTICATED_LOCAL=true` 给
+   无法携带令牌的 Link Drawer 用。未配置令牌时维持原「仅本机」开箱即用行为。
+3. **限制目标 URL** —— 这些链接会带着用户既有 Cookie 在**用户自己的浏览器**里打开，
+   所以默认拒绝内网 / 本机 / 云元数据目标：`_host_is_internal()` 对 IP 字面量用
+   `ipaddress.is_global`，对域名用后缀表（`localhost` / `.local` / `.internal` /
+   `.lan` / `.home.arpa`）与元数据主机名集合。**故意不做 DNS 解析**——
+   保持判定确定、无额外延迟，也避免又引入一个重绑定面。
+   同时拒绝内嵌凭据的 URL（`user:pass@`）。逃生阀
+   `BROWSER_OPEN_URL_ALLOW_INTERNAL_TARGETS=true`。
+
+`.env.example` 已补上这两项及其说明。
+
+**验证**：新增 `tests/test_open_profile_url_hardening.py`（40 项）。
+测试踩坑：**不能用 starlette 的 `TestClient`** —— 本仓库锁定的 httpx 版本与其不兼容
+（`Client.__init__() got an unexpected keyword argument 'app'`），
+而且它的默认客户端地址是字符串 `"testclient"`，根本不是回环。
+改用 `httpx.ASGITransport(app=app, client=(...))` + `asyncio.run` 的 `_call()` helper。
+全量 `697 passed, 64 failed`，无新增失败。

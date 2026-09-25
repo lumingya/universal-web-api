@@ -133,6 +133,41 @@ def client_is_loopback(request: Optional[Request]) -> bool:
         return False
 
 
+#: 表明请求经过了反向代理/隧道的转发头。出现其中任何一个，
+#: 「客户端地址是回环」这件事就不再代表「调用方真的在本机」（修复 S4）。
+FORWARDING_HEADERS = (
+    "x-forwarded-for",
+    "x-forwarded-host",
+    "x-forwarded-proto",
+    "x-forwarded-port",
+    "x-real-ip",
+    "forwarded",
+    "cf-connecting-ip",
+    "true-client-ip",
+    "x-client-ip",
+)
+
+
+def request_looks_proxied(request: Optional[Request]) -> bool:
+    """请求是否带有代理转发痕迹。
+
+    修复 S4：本机反向代理或隧道（frp / ngrok / nginx proxy_pass）会把外来请求
+    以回环地址转交给应用，于是「仅允许本机调用」的判断被完全绕过。
+    对于把回环当作授权依据的接口，检测到转发头就必须拒绝——
+    我们无法核实转发链，只能认定来源不可信。
+    """
+    if request is None:
+        return False
+    headers = getattr(request, "headers", None) or {}
+    for name in FORWARDING_HEADERS:
+        try:
+            if str(headers.get(name) or "").strip():
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def _request_origin_is_same(request: Optional[Request]) -> bool:
     """跨源判定：没有 Origin 视为同源（非浏览器客户端），有则必须与 Host 完全一致。"""
     if request is None:
