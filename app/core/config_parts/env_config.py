@@ -308,6 +308,26 @@ class AppConfig:
                 "请把 CORS_ORIGINS 限定为确切来源，或设置 CORS_ENABLED=false。"
             )
 
+        # 4) 修复 S2 / S3：把「在服务进程内执行任意代码」的能力与对外绑定组合起来，
+        #    等于把远程代码执行直接挂到网络上。这两个开关本身是合法的运维功能，
+        #    但必须与「只有可信主体能连上」这个前提绑定。
+        for flag, description in (
+            (
+                "CMD_ALLOW_UNSAFE_PYTHON_COMMANDS",
+                "命令引擎的 Python 脚本会以非沙箱模式执行（可访问完整 builtins 与浏览器对象）",
+            ),
+            (
+                "PARSER_INSTALL_ENABLED",
+                "运行时解析器安装会把任意源码写入 app/core/parsers/ 并立即 import",
+            ),
+        ):
+            if public_bind and parse_bool_literal(os.getenv(flag)) is True:
+                errors.append(
+                    f"{flag}=true 与对外绑定（APP_HOST={AppConfig.get_host()}）同时开启："
+                    f"{description}，等于把远程代码执行暴露到网络上。"
+                    f"请把 APP_HOST 改回 127.0.0.1，或关闭 {flag}。"
+                )
+
         return errors
 
     @staticmethod

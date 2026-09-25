@@ -656,3 +656,41 @@ Authorization / X-API-Key / **`?token=`** 三种方式 —— 查询参数是标
 
 **验证**：`./scripts/run_logic_tests.sh` → **801 passed, 64 skipped, 0 failed**。
 至此干净克隆上「0 失败」成为可执行的判据，后续回归一眼可见，不必再做基线对比。
+
+### 2026-09-25 · S2（自定义代码非安全沙箱）— 收尾
+
+S2 是**信任边界审查**，不是一个能「修好」的缺陷：命令引擎的 Python/JS
+本来就是让运维在服务进程里跑自己的代码。按既定方针以
+「文档化缓解 + 默认收紧 + 组合禁止」收尾。
+
+**1. 组合禁止（新增的唯一行为变更）**
+
+`AppConfig.collect_security_config_errors()` 增加第 4 组检查：
+`CMD_ALLOW_UNSAFE_PYTHON_COMMANDS=true` 或 `PARSER_INSTALL_ENABLED=true`
+与**非回环 `APP_HOST`** 同时出现时，**拒绝启动**。
+
+理由：这两个开关本身是合法功能，单机自用完全正常（已用测试锁定回环场景不拦）；
+真正致命的是它们与对外绑定的组合 —— 那等于把远程代码执行挂到网络上。
+逃生阀仍是 `UWA_ALLOW_INSECURE_STARTUP=true`。
+
+**2. 文档化信任边界**
+
+新建 `docs/SECURITY-TRUST-BOUNDARIES.md`，明确写清：
+
+- 本项目假定「能配置命令 / 能安装解析器的人 = 能在服务器上执行任意代码的人」；
+- 受限模式是**误操作防护**，不是安全边界 —— 脚本与主服务同进程，
+  上下文里注入了标签页会话等高权限对象，属性链绕行无法靠 AST 白名单堵死；
+- JS 经 CDP 执行，天然拥有页面全部能力，**不存在也不打算存在隔离**；
+- 多租户 / 不可信投稿脚本场景**当前架构不支持**，需要独立低权限进程或容器。
+
+**3. 默认收紧（本轮此前已完成）**
+
+`.env.example` 中 `CMD_ALLOW_UNSAFE_PYTHON_COMMANDS=false`、
+`PARSER_INSTALL_ENABLED=false`（S3）。
+
+**验证**：`tests/test_security_hardening_fixes.py` 新增
+`TestUnsafeCodeExecutionStartupGate`（8 项，模块共 42 项）。
+其中 `test_trust_boundary_doc_exists_and_states_the_limit` 看似在「测文档」，
+但 S2 的缓解措施本身就是这份文档 —— 如果它被删掉或被改成「我们有沙箱」，
+那才是真正的回归，所以值得用断言钉住。
+`./scripts/run_logic_tests.sh` → **809 passed, 64 skipped, 0 failed**。
