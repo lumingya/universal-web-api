@@ -91,7 +91,8 @@ def _fresh_manager(tmp_path, monkeypatch):
 
 
 def test_history_saves_are_debounced_and_flushed(tmp_path, monkeypatch):
-    monkeypatch.setenv("REQUEST_HISTORY_SAVE_DEBOUNCE_SEC", "0.5")
+    # 防抖窗口留足余量：25 次调度约 0.25s，全量测试负载下曾超过 0.5s 导致偶发失败
+    monkeypatch.setenv("REQUEST_HISTORY_SAVE_DEBOUNCE_SEC", "2.0")
     mgr = _fresh_manager(tmp_path, monkeypatch)
     writes = []
     real_save = mgr._save_history
@@ -105,7 +106,10 @@ def test_history_saves_are_debounced_and_flushed(tmp_path, monkeypatch):
         mgr._schedule_history_save()
         time.sleep(0.01)
     assert writes == []  # still inside the debounce window
-    time.sleep(1.0)
+    deadline = time.time() + 5.0
+    while not writes and time.time() < deadline:
+        time.sleep(0.05)
+    time.sleep(0.2)
     assert len(writes) == 1
     data = json.loads((tmp_path / "config" / "request_history.json").read_text(encoding="utf-8"))
     assert len(data["records"]) == 25
