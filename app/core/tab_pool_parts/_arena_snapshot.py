@@ -249,4 +249,16 @@ return (() => {
 })()
 """.strip()
 
-__all__ = ["_ARENA_STORE_SNAPSHOT_JS"]
+# P0-2：轮询用的 JSON 版本。页面内 JSON.stringify 后只回传一个字符串，
+# 不会在渲染进程里留下 RemoteObject，也省掉 DrissionPage 额外的一次序列化往返。
+# 原常量保留（命令沙箱脚本可能依赖它返回 dict）。调用方用 json.loads 解码。
+_ARENA_STORE_SNAPSHOT_JSON_JS = (
+    "function(){"
+    "const __uwapiResult = (function(){\n"
+    + _ARENA_STORE_SNAPSHOT_JS
+    + "\n}).apply(this, arguments);"
+    "return JSON.stringify(__uwapiResult === undefined ? null : __uwapiResult);"
+    "}"
+)
+
+__all__ = ["_ARENA_STORE_SNAPSHOT_JS", "_ARENA_STORE_SNAPSHOT_JSON_JS"]

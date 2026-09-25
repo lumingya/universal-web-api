@@ -10,6 +10,10 @@ from typing import Optional, List, Dict, Any, TYPE_CHECKING
 
 from DrissionPage import Chromium, ChromiumPage, ChromiumOptions
 from app.core.config import logger, BrowserConstants, BrowserConnectionError, SSEFormatter
+from app.core import cdp_hygiene
+
+# P0-2 / P0-4：运行期 CDP 卫生补丁（释放 run_js 对象结果、Network.enable 缓冲上限）
+cdp_hygiene.install()
 
 if TYPE_CHECKING:
     from .main import BrowserCore

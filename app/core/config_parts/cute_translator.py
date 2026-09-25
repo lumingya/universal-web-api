@@ -1496,3 +1496,54 @@ def _cuteify_debug_message(logger_name: str, message_text: str) -> str:
 
     return raw_text
 
+
+# --------------------------------------------------------------------------- #
+# P0-7：惰性 + LRU 缓存的展示层翻译入口
+# 规则函数是纯函数（只依赖 logger 名、原文与 CUTE_MODE 开关），相同日志反复出现时
+# 直接命中缓存；日志记录只在真正被 handler 渲染时才调用本函数（见 log_formatters）。
+# --------------------------------------------------------------------------- #
+from functools import lru_cache as _lru_cache
+
+_CUTE_DISPATCH = {
+    "INFO": "info",
+    "SUCCESS": "info",
+    "STREAM": "info",
+    "NETWORK": "info",
+    "DEBUG": "debug",
+    "WARNING": "warning",
+    "ERROR": "error",
+    "CRITICAL": "error",
+}
+
+
+_CUTE_CACHE_MAX_TEXT = 512  # 只缓存短消息：缓存上限约 1024 × 512 字符，内存可控
+
+
+@_lru_cache(maxsize=1024)
+def _cuteify_cached(kind: str, logger_name: str, message_text: str, info_mode: bool, debug_mode: bool) -> str:
+    if kind == "info":
+        return _cuteify_info_message(logger_name, message_text)
+    if kind == "debug":
+        return _cuteify_debug_message(logger_name, message_text)
+    if kind == "warning":
+        return _cuteify_warning_message(logger_name, message_text)
+    if kind == "error":
+        return _cuteify_error_message(logger_name, message_text)
+    return message_text
+
+
+def cuteify_display_message(level_key: str, logger_name: str, message_text: str) -> str:
+    """按日志级别选择翻译规则；结果带 LRU 缓存。"""
+    text = str(message_text or "")
+    kind = _CUTE_DISPATCH.get(str(level_key or "").upper())
+    if not text or kind is None:
+        return text
+    info_mode = bool(BrowserConstants.get("LOG_INFO_CUTE_MODE"))
+    debug_mode = bool(BrowserConstants.get("LOG_DEBUG_CUTE_MODE"))
+    if (kind == "debug" and not debug_mode) or (kind != "debug" and not info_mode):
+        return text
+    if len(text) > 4000:  # 规则函数对超长文本本来就原样返回
+        return text
+    if len(text) > _CUTE_CACHE_MAX_TEXT:
+        return _cuteify_cached.__wrapped__(kind, str(logger_name or ""), text, info_mode, debug_mode)
+    return _cuteify_cached(kind, str(logger_name or ""), text, info_mode, debug_mode)

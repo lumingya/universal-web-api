@@ -8,6 +8,7 @@ import time
 import uuid
 from typing import Any, Dict, Generator
 
+from app.core.cdp_hygiene import decode_js_json
 from app.core.config import logger
 from app.core.network_monitor import NetworkMonitorError, NetworkMonitorTimeout
 from app.core.parsers import ParserRegistry
@@ -192,9 +193,10 @@ class KimiPageFetchCapture(PageFetchCapture):
             since = max(0, int(since_length or 0))
         except Exception:
             since = 0
+        # P0-2：结果在页面内 JSON.stringify，只回传字符串，不留 RemoteObject
         state = self.tab.run_js(
             """
-            return (function(token, sinceLength) {
+            return JSON.stringify((function(token, sinceLength) {
               const cap = window.__KIMI_CAPTURE__;
               if (!cap) {
                 return { installed: false, found: false };
@@ -228,11 +230,12 @@ class KimiPageFetchCapture(PageFetchCapture):
                 startedAt: target ? (target.startedAt || 0) : 0,
                 lastChunkAt: target ? (target.lastChunkAt || 0) : 0
               };
-            })(arguments[0], arguments[1]);
+            })(arguments[0], arguments[1]));
             """,
             self._capture_token or "",
             since,
         )
+        state = decode_js_json(state, {})
         return state if isinstance(state, dict) else {}
 
     def _clear_page_capture_buffer(self) -> None:

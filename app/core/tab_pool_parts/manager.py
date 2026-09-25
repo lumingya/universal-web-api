@@ -26,6 +26,7 @@ from app.utils.tab_route_groups import (
 )
 
 from ._utils import _looks_like_transient_local_debug_error, _should_skip_pool_url
+from .idle_maintenance import IdleMaintenanceConfig, schedule_idle_maintenance
 from .network import _GlobalNetworkInterceptionManager
 from .recovery import TabQuarantineEntry, TabRecoveryService
 from .session import TabSession, TabStatus
@@ -215,6 +216,7 @@ class TabPoolManager:
             self.IDLE_MEMORY_PURGE_MIN_SEC,
             self._to_float(os.getenv("BROWSER_IDLE_MEMORY_PURGE_INTERVAL_SEC"), 180.0),
         )
+        self._idle_maintenance_config = IdleMaintenanceConfig.from_env()
         self._global_network_monitor: Optional[_GlobalNetworkInterceptionManager] = None
         if self._global_network_enabled:
             self._global_network_monitor = _GlobalNetworkInterceptionManager(
@@ -223,6 +225,7 @@ class TabPoolManager:
                 listen_pattern=self._global_network_listen_pattern,
                 wait_timeout=self._global_network_wait_timeout,
                 retry_delay=self._global_network_retry_delay,
+                res_types=BrowserConstants.get("GLOBAL_NETWORK_INTERCEPTION_RES_TYPES"),
             )
             try:
                 from app.services.arena_tab_listener import register_arena_tab_listener
@@ -2452,7 +2455,16 @@ class TabPoolManager:
             self._cleanup_unhealthy_tabs()
 
         self._schedule_idle_memory_purge()
+        self._schedule_idle_maintenance()
         return changed
+
+    def _schedule_idle_maintenance(self) -> int:
+        """P0-3 / P0-6：空闲标签页 CDP 会话回收与冻结（在 maintenance 线程池执行）。"""
+        try:
+            return schedule_idle_maintenance(self, getattr(self, "_idle_maintenance_config", None))
+        except Exception as e:
+            logger.debug(f"[TabPool] idle maintenance scheduling failed: {e}")
+            return 0
 
     def _schedule_idle_memory_purge(self) -> bool:
         """Request best-effort JS GC for long-idle tabs without holding pool locks."""

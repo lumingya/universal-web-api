@@ -433,6 +433,7 @@ DEFAULT_BROWSER_CONSTANTS: Dict[str, Any] = {
     "GLOBAL_NETWORK_INTERCEPTION_LISTEN_PATTERN": "http",
     "GLOBAL_NETWORK_INTERCEPTION_WAIT_TIMEOUT": 0.5,
     "GLOBAL_NETWORK_INTERCEPTION_RETRY_DELAY": 1.0,
+    "GLOBAL_NETWORK_INTERCEPTION_RES_TYPES": "XHR,Fetch,EventSource,Document",
     "NETWORK_DEBUG_CAPTURE_ENABLED": False,
     "NETWORK_DEBUG_CAPTURE_MAX_BODY_CHARS": 50000,
     "NETWORK_DEBUG_CAPTURE_MAX_FILES_PER_REQUEST": 3,
@@ -1557,21 +1558,46 @@ import os as _os
 import psutil as _psutil
 
 
+def _panel_memory_metric() -> str:
+    """PANEL_MEMORY_METRIC: fast（默认）| uss | rss。"""
+    value = str(_os.getenv("PANEL_MEMORY_METRIC", "fast") or "fast").strip().lower()
+    return value if value in {"fast", "uss", "rss"} else "fast"
+
+
 def _get_process_private_memory_bytes(proc: _psutil.Process) -> int:
-    """优先读取进程私有内存，避免多进程浏览器按 RSS 累加后虚高。"""
-    try:
-        full_info = proc.memory_full_info()
-        for attr_name in ("uss", "private", "private_bytes"):
-            value = getattr(full_info, attr_name, None)
-            if isinstance(value, (int, float)) and value > 0:
-                return int(value)
-    except (_psutil.NoSuchProcess, _psutil.AccessDenied, AttributeError):
-        pass
+    """估算进程私有内存，避免多进程浏览器按 RSS 累加后虚高。
+
+    P0-7：默认不再调用 memory_full_info()（USS 需要读 smaps / 逐页扫描，
+    对几十个 Chrome 进程每次采样开销很大），改用 memory_info() 里已有的廉价字段：
+      - Windows：private（提交的私有内存）
+      - Linux：rss - shared（statm，近似私有常驻内存）
+      - 其他平台：rss
+    PANEL_MEMORY_METRIC=uss 恢复旧的 USS 统计；=rss 直接用 RSS。
+    """
+    metric = _panel_memory_metric()
+    if metric == "uss":
+        try:
+            full_info = proc.memory_full_info()
+            for attr_name in ("uss", "private", "private_bytes"):
+                value = getattr(full_info, attr_name, None)
+                if isinstance(value, (int, float)) and value > 0:
+                    return int(value)
+        except (_psutil.NoSuchProcess, _psutil.AccessDenied, AttributeError):
+            pass
 
     try:
-        return int(proc.memory_info().rss)
+        info = proc.memory_info()
     except (_psutil.NoSuchProcess, _psutil.AccessDenied, AttributeError):
         return 0
+    rss = int(getattr(info, "rss", 0) or 0)
+    if metric == "fast":
+        private = getattr(info, "private", None)
+        if isinstance(private, (int, float)) and private > 0:
+            return int(private)
+        shared = getattr(info, "shared", None)
+        if isinstance(shared, (int, float)) and 0 <= shared < rss:
+            return int(rss - shared)
+    return rss
 
 
 def _collect_process_tree_memory_bytes(proc: _psutil.Process, seen_pids: set[int]) -> int:
@@ -2211,11 +2237,17 @@ def _get_fresh_system_stats_payload() -> Optional[Dict[str, Any]]:
     now = time.monotonic()
     cached_payload = _SYSTEM_STATS_CACHE.get("payload") or {}
     if now < float(_SYSTEM_STATS_CACHE.get("expires_at", 0.0) or 0.0):
-        return dict(cached_payload)
+        payload = dict(cached_payload)
+        # 进程/内存采样缓存 5s；请求计数很便宜，保持实时
+        payload.update(_get_live_request_counts())
+        payload["total_requests"] = int(getattr(request_manager, "total_requests", 0) or 0)
+        payload["total_input_tokens"] = int(getattr(request_manager, "total_input_tokens", 0) or 0)
+        payload["total_output_tokens"] = int(getattr(request_manager, "total_output_tokens", 0) or 0)
+        return payload
     return None
 
 
-def _get_system_stats_payload_cached(ttl_seconds: float = 2.0) -> Dict[str, Any]:
+def _get_system_stats_payload_cached(ttl_seconds: float = 5.0) -> Dict[str, Any]:
     fresh_payload = _get_fresh_system_stats_payload()
     if fresh_payload is not None:
         return fresh_payload
@@ -2264,7 +2296,7 @@ def _get_system_stats_payload_cached(ttl_seconds: float = 2.0) -> Dict[str, Any]
             "queued_count": live_counts["queued_count"],
         }
         _SYSTEM_STATS_CACHE["payload"] = payload
-        _SYSTEM_STATS_CACHE["expires_at"] = now + max(0.8, float(ttl_seconds or 2.0))
+        _SYSTEM_STATS_CACHE["expires_at"] = now + max(0.8, float(ttl_seconds or 5.0))
         return dict(payload)
 
 

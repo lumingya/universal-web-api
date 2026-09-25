@@ -194,6 +194,7 @@ STREAM_CAPTURE_SNIPPET = r"""
 try:
     _codecs_v1 = __import__('codecs')
     _copy_v1 = __import__('copy')
+    _threading_v1 = __import__('threading')
     _os_v1 = __import__('os')
     _orig_listener_set_callback_v1 = Listener._set_callback
     _orig_listener_pause_v1 = Listener.pause
@@ -204,15 +205,96 @@ try:
     _orig_listener_loading_failed_v1 = Listener._loading_failed
     _orig_data_packet_init_v1 = DataPacket.__init__
 
-    def _data_packet_init_stream_v1(self, tab_id, target):
-        _orig_data_packet_init_v1(self, tab_id, target)
-        self._stream = {
+    class _ListenerStreamStateV1(dict):
+        # P0-4: fullText is accumulated as a list of parts and joined only when
+        # read (once per poll) instead of copying the whole body on every chunk.
+        # _uwapi_stream_lock_v2: the CDP event thread appends while monitor
+        # threads read; without the lock a read that merges parts could replace
+        # the list and drop chunks appended in between (reproduced).
+        __slots__ = ('_parts', '_lock')
+
+        def __init__(self, *args, **kwargs):
+            self._lock = _threading_v1.Lock()
+            dict.__init__(self, *args, **kwargs)
+            base = dict.get(self, 'fullText', '') or ''
+            base = base if isinstance(base, str) else str(base)
+            self._parts = [base] if base else []
+            dict.__setitem__(self, 'fullText', base)
+
+        def append_text(self, text):
+            if text:
+                with self._lock:
+                    self._parts.append(text)
+
+        def full_text_length(self):
+            with self._lock:
+                return sum(len(part) for part in self._parts)
+
+        def _joined(self):
+            with self._lock:
+                parts = self._parts
+                if len(parts) > 1:
+                    joined = ''.join(parts)
+                    self._parts = [joined]
+                    dict.__setitem__(self, 'fullText', joined)
+                    return joined
+                current = parts[0] if parts else ''
+                if dict.get(self, 'fullText') is not current:
+                    dict.__setitem__(self, 'fullText', current)
+                return current
+
+        def __getitem__(self, key):
+            if key == 'fullText':
+                return self._joined()
+            return dict.__getitem__(self, key)
+
+        def get(self, key, default=None):
+            if key == 'fullText':
+                return self._joined()
+            return dict.get(self, key, default)
+
+        def __setitem__(self, key, value):
+            if key == 'fullText':
+                value = '' if value is None else value
+                with self._lock:
+                    self._parts = [value] if value else []
+                    dict.__setitem__(self, key, value)
+                return
+            dict.__setitem__(self, key, value)
+
+        def setdefault(self, key, default=None):
+            if key == 'fullText':
+                return self._joined()
+            return dict.setdefault(self, key, default)
+
+        def items(self):
+            self._joined()
+            return dict.items(self)
+
+        def values(self):
+            self._joined()
+            return dict.values(self)
+
+        def copy(self):
+            self._joined()
+            return dict(dict.items(self))
+
+        def __reduce_ex__(self, protocol):
+            self._joined()
+            return (dict, (dict(dict.items(self)),))
+
+    def _new_listener_stream_state_v1():
+        return _ListenerStreamStateV1({
             'chunks': [],
             'chunk_count': 0,
             'fullText': '',
             'complete': False,
             'truncated': False,
-        }
+        })
+
+    def _data_packet_init_stream_v1(self, tab_id, target):
+        _orig_data_packet_init_v1(self, tab_id, target)
+        self._stream = _new_listener_stream_state_v1()
         self._stream_enabled = False
         self._stream_emitted = False
         self._stream_decoder = _codecs_v1.getincrementaldecoder('utf-8')('ignore')
@@ -220,14 +302,22 @@ try:
     def _listener_stream_dict_v1(packet):
         stream = getattr(packet, '_stream', None)
         if not isinstance(stream, dict):
-            stream = {
-                'chunks': [],
-                'chunk_count': 0,
-                'fullText': '',
-                'complete': False,
-                'truncated': False,
-            }
+            stream = _new_listener_stream_state_v1()
             packet._stream = stream
+        elif not isinstance(stream, _ListenerStreamStateV1):
+            stream = _ListenerStreamStateV1(stream)
+            packet._stream = stream
+        else:
+            # hot path (every chunk): keys were created with the state object;
+            # do not touch fullText here, reading it would force a join.
+            for key, default in (('complete', False), ('truncated', False)):
+                if not dict.__contains__(stream, key):
+                    dict.__setitem__(stream, key, default)
+            if not dict.__contains__(stream, 'chunks'):
+                dict.__setitem__(stream, 'chunks', [])
+            if not dict.__contains__(stream, 'chunk_count'):
+                dict.__setitem__(stream, 'chunk_count', len(stream['chunks']))
+            return stream
         stream.setdefault('chunks', [])
         stream.setdefault('chunk_count', len(stream['chunks']))
         stream.setdefault('fullText', '')
@@ -365,9 +455,9 @@ try:
         )
         if len(chunks) > max_chunks:
             del chunks[:-max_chunks]
-        current = str(stream.get('fullText', '') or '')
-        stream['fullText'] = current + text
-        packet._raw_body = stream['fullText']
+        # fullText is joined lazily; packet._raw_body is set once in finalize
+        # (DataPacket.response caches the body at first access anyway).
+        stream.append_text(text)
         packet._base64_body = False
         return text
 
@@ -629,7 +719,9 @@ def has_stream_capture_patch(content):
             "def _listener_stream_debug_v1",
             "DRISSION_STREAM_DEBUG_ENABLED",
             "DRISSION_STREAM_CAPTURE_MAX_RECENT_CHUNKS",
-            "stream['fullText'] = current + text",
+            "class _ListenerStreamStateV1(dict)",
+            "stream.append_text(text)",
+            "_uwapi_stream_lock_v2",
         )
     ) and "DRISSION_STREAM_CAPTURE_MAX_CHARS" not in content
 

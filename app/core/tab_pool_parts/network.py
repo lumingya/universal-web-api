@@ -6,6 +6,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from app.core.config import logger
 
 from ._arena_snapshot import _ARENA_STORE_SNAPSHOT_JS
+from .idle_maintenance import note_network_activity
 from .session import TabSession
 
 
@@ -43,10 +44,14 @@ class _GlobalNetworkInterceptionManager:
         listen_pattern: str = "http",
         wait_timeout: float = 0.5,
         retry_delay: float = 1.0,
+        res_types: Any = None,
     ):
         self._get_session = get_session_fn
         self._is_shutdown = is_shutdown_fn
         self._listen_pattern = str(listen_pattern or "http").strip() or "http"
+        # P0-4：只捕获 API 类资源。补丁版 DrissionPage 会对每个命中的包附加
+        # streamResourceContent 并缓存响应体，放开到脚本/图片/样式会显著增加内存与 CPU。
+        self._res_types = self.parse_res_types(res_types)
         self._wait_timeout = max(0.1, float(wait_timeout or 0.5))
         self._retry_delay = max(0.2, float(retry_delay or 1.0))
         self._workers: Dict[str, _GlobalNetworkWorker] = {}
@@ -258,7 +263,18 @@ class _GlobalNetworkInterceptionManager:
         except Exception:
             pass
 
+        cls._reset_listener_res_type(listener)
         return True
+
+    @staticmethod
+    def _reset_listener_res_type(listener: Any) -> None:
+        """tab.listen 是共享对象：让出时把资源类型过滤恢复为“全部”，
+        避免工作流/命令脚本里不带 res_type 的 listen.start() 继承全局监听的过滤。"""
+        try:
+            if getattr(listener, "_res_type", True) is not True:
+                listener._res_type = True
+        except Exception:
+            pass
 
     @staticmethod
     def _safe_clear_listener(tab: Any, session_id: str, reason: str) -> bool:
@@ -396,6 +412,36 @@ class _GlobalNetworkInterceptionManager:
         self._forget_worker_if_current(worker)
         return True
 
+    DEFAULT_RES_TYPES = ("XHR", "Fetch", "EventSource", "Document")
+
+    @classmethod
+    def parse_res_types(cls, value: Any) -> Any:
+        """``None`` → default API types; ``*``/``all``/``True`` → no filter."""
+        if value is None:
+            return tuple(cls.DEFAULT_RES_TYPES)
+        if value is True:
+            return True
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return tuple(cls.DEFAULT_RES_TYPES)
+            if text.lower() in {"*", "all", "true", "any"}:
+                return True
+            items = [part.strip() for part in text.replace(";", ",").split(",")]
+        elif isinstance(value, (list, tuple, set)):
+            items = [str(part).strip() for part in value]
+        else:
+            return tuple(cls.DEFAULT_RES_TYPES)
+        items = [item for item in items if item]
+        return tuple(items) if items else tuple(cls.DEFAULT_RES_TYPES)
+
+    def _start_listen(self, tab: Any) -> None:
+        try:
+            tab.listen.start(self._listen_pattern, res_type=self._res_types)
+        except TypeError:
+            # 简化的测试替身 / 旧版 Listener 不支持 res_type
+            tab.listen.start(self._listen_pattern)
+
     def start_for_session(self, session: TabSession) -> bool:
         if not session:
             return False
@@ -512,7 +558,7 @@ class _GlobalNetworkInterceptionManager:
                     try:
                         # 复用连接，降低对 CDP session 的额外占用
                         tab.listen._reuse_driver = True
-                        tab.listen.start(self._listen_pattern)
+                        self._start_listen(tab)
                         listening = True
                         last_listener_clear_at = time.monotonic()
                         events_since_listener_clear = 0
@@ -553,6 +599,7 @@ class _GlobalNetworkInterceptionManager:
                 if stop_event.is_set() or self._is_shutdown():
                     break
 
+                note_network_activity(session)
                 event = self._extract_event(response)
                 self._dispatch_event(session, event)
                 self._dispatch_response_listeners(session, response, event, stop_event)

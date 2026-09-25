@@ -868,7 +868,11 @@ class NetworkMonitor:
         self._reset_prefetched_responses()
         self._reset_stream_chunk_merge_cache()
         self.tab.listen._reuse_driver = True
-        self.tab.listen.start(self._listen_pattern)
+        try:
+            # tab.listen 与全局监听共享：显式 res_type=True，避免继承全局监听的资源类型过滤
+            self.tab.listen.start(self._listen_pattern, res_type=True)
+        except TypeError:
+            self.tab.listen.start(self._listen_pattern)
         if not self._listen_is_active():
             raise NetworkMonitorError("监听启动后未进入活动状态")
         self._pre_started = True

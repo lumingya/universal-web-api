@@ -8,6 +8,8 @@ v5.5 修改：
 - 新增 _image_config 配置支持
 """
 
+import json
+import os
 import re
 import time
 from typing import Generator, Optional, Callable, Tuple, Dict, List, Any
@@ -26,6 +28,13 @@ from app.core.extractors.deep_mode import DeepBrowserExtractor
 from app.core.stream_observer import (
     StreamObserver,
     get_stream_observer_factories,
+)
+from app.core.cdp_hygiene import decode_js_json
+from app.core.stream_snapshot import (
+    SNAPSHOT_JS,
+    build_snapshot_config,
+    decode_snapshot,
+    image_lists,
 )
 from app.models.schemas import is_modality_enabled
 
@@ -442,6 +451,9 @@ class StreamMonitor:
         self._stream_recovery_refresh_attempts = 0
         self._observers: List[StreamObserver] = list(observers or [])
         self._text_filters: List[Callable[[str], str]] = [self._filter_gemini_image_placeholders]
+        # P0-1：页面内一次性快照（1 次 CDP 往返，无 RemoteObject 泄漏）
+        self._page_snapshot_enabled = self._resolve_page_snapshot_enabled()
+        self._page_snapshot_failures = 0
 
     def register_observer(self, observer: StreamObserver) -> Callable[[], None]:
         """注册流式监听观察者。"""
@@ -814,7 +826,7 @@ class StreamMonitor:
                     const contentTop = Math.round(rect.top - scRect.top + scScrollTop);
                     const contentBottom = Math.round(rect.bottom - scRect.top + scScrollTop);
 
-                    return {
+                    return JSON.stringify({
                         top: Number(rect && rect.top || 0) + Number(window.scrollY || 0),
                         bottom: Number(rect && rect.bottom || 0) + Number(window.scrollY || 0),
                         contentTop,
@@ -825,9 +837,12 @@ class StreamMonitor:
                         turnIndex,
                         isReverse,
                         side
-                    };
+                    });
                     """
-                ) or {}
+                )
+                score = decode_js_json(score, {}) or {}
+                if not isinstance(score, dict):
+                    score = {}
                 bottom = float(score.get("contentBottom") or score.get("bottom") or 0)
                 left = float(score.get("left") or 0)
                 area = float(score.get("width") or 0) * float(score.get("height") or 0)
@@ -1180,7 +1195,221 @@ class StreamMonitor:
         else:
             logger.warning("[Exit] 未检测到 AI 回复，退出监控")
 
+    # ================= P0-1：页面内快照（快速路径） =================
+
+    PAGE_SNAPSHOT_MAX_FAILURES = 3
+    PAGE_SNAPSHOT_JS_TIMEOUT = 3.0
+
+    def _resolve_page_snapshot_enabled(self) -> bool:
+        configured = (self._stream_config or {}).get("page_snapshot")
+        if configured is not None:
+            if isinstance(configured, str):
+                return configured.strip().lower() in {"1", "true", "yes", "on"}
+            return bool(configured)
+        raw = os.getenv("STREAM_PAGE_SNAPSHOT_ENABLED")
+        if raw is None:
+            return True
+        return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+    def _page_snapshot_supported(self) -> bool:
+        if not getattr(self, "_page_snapshot_enabled", False):
+            return False
+        if int(getattr(self, "_page_snapshot_failures", 0) or 0) >= self.PAGE_SNAPSHOT_MAX_FAILURES:
+            return False
+        # 页面内快照内联的是 DeepBrowserExtractor 的提取逻辑；自定义提取器走原路径
+        if type(self.extractor) is not DeepBrowserExtractor:
+            return False
+        tab = self.tab
+        if getattr(tab, "_uwapi_page_snapshot_ok", False):
+            return True
+        try:
+            from DrissionPage._pages.chromium_base import ChromiumBase
+
+            return isinstance(tab, ChromiumBase)
+        except Exception:
+            return False
+
+    @staticmethod
+    def _empty_snapshot() -> Dict[str, Any]:
+        return {
+            'groups_count': 0,
+            'anchor': None,
+            'text': '',
+            'text_len': 0,
+            'is_generating': False,
+            'image_count': 0,
+            'has_images': False,
+            'image_urls': [],
+            'image_references': [],
+            'page_image_urls': [],
+            'page_image_references': [],
+        }
+
+    def _note_page_snapshot_failure(self, reason: str) -> None:
+        self._page_snapshot_failures = int(getattr(self, "_page_snapshot_failures", 0) or 0) + 1
+        if self._page_snapshot_failures >= self.PAGE_SNAPSHOT_MAX_FAILURES:
+            logger.warning(
+                "[StreamMonitor] 页面内快照连续失败，本次请求回退到逐元素轮询 "
+                f"(reason={reason[:160]})"
+            )
+        else:
+            logger.debug(f"[StreamMonitor] 页面内快照不可用，本轮回退: {reason[:160]}")
+
+    def _run_page_snapshot(self, selector: str, prefer_anchor: Optional[str]) -> Optional[Dict[str, Any]]:
+        """Run the in-page snapshot. ``None`` means the caller must fall back."""
+        if not self._page_snapshot_supported():
+            return None
+        image_config = getattr(self, "_image_config", {}) or {}
+        page_selector = str(image_config.get("selector") or "img").strip() or "img"
+        config = build_snapshot_config(
+            selector,
+            prefer_anchor=prefer_anchor,
+            column=self._get_latest_visual_column(),
+            with_images=self._should_probe_dom_images(),
+            with_page_images=bool(self._expect_image_output),
+            page_image_selector=page_selector,
+            baseline_token=str(image_config.get("request_baseline_token") or ""),
+            baseline_property=str(image_config.get("request_baseline_property") or ""),
+            exclude_existing=bool(image_config.get("request_baseline_exclude_existing_nodes")),
+        )
+        if config is None:
+            self._note_page_snapshot_failure(f"unsupported selector: {selector!r}")
+            return None
+        try:
+            raw = self.tab.run_js(
+                SNAPSHOT_JS,
+                json.dumps(config, ensure_ascii=False),
+                timeout=self.PAGE_SNAPSHOT_JS_TIMEOUT,
+            )
+        except Exception as exc:
+            # 页面刷新/导航中的瞬时错误：本轮交给原路径（它自己会吞掉异常）
+            logger.debug(f"[StreamMonitor] 页面内快照执行异常，本轮回退: {exc}")
+            return None
+        data = decode_snapshot(raw)
+        if data is None:
+            detail = ""
+            if isinstance(raw, str) and raw.startswith("{"):
+                try:
+                    detail = str(json.loads(raw).get("error") or "")
+                except Exception:
+                    detail = ""
+            self._note_page_snapshot_failure(detail or f"invalid response type={type(raw).__name__}")
+            return None
+        self._page_snapshot_failures = 0
+        return data
+
+    def _snapshot_from_page_data(
+        self,
+        data: Dict[str, Any],
+        *,
+        count_requires_target: bool,
+        log_empty_last: bool = False,
+    ) -> Dict[str, Any]:
+        result = self._empty_snapshot()
+        total = int(data.get("n", 0) or 0)
+        if total <= 0:
+            return result
+        if not count_requires_target:
+            result['groups_count'] = total
+
+        if data.get("blocked"):
+            column = self._get_latest_visual_column()
+            opposite_side = "left" if column == "right" else "right"
+            logger.debug(
+                f"[latest_visual_reply] 本轮最新消息中未找到目标侧({column})容器，相反侧({opposite_side})存在但不可误取"
+            )
+            return result
+        if not data.get("found"):
+            return result
+
+        selected = data.get("selected")
+        if isinstance(selected, dict):
+            column = self._get_latest_visual_column()
+            try:
+                bottom = float(selected.get("bottom") or 0.0)
+                left = float(selected.get("left") or 0.0)
+            except (TypeError, ValueError):
+                bottom, left = 0.0, 0.0
+            index = int(selected.get("index", 0) or 0)
+            current_log_info = (index, column, f"{bottom:.1f}", f"{left:.1f}", total)
+            if self._last_visual_reply_log_info != current_log_info:
+                self._last_visual_reply_log_info = current_log_info
+                logger.debug(
+                    "[latest_visual_reply] 选中视觉最新回复容器: "
+                    f"index={index}, column={column}, bottom={bottom:.1f}, left={left:.1f}, total={total}"
+                )
+
+        text = str(data.get("text") or "")
+        if log_empty_last and not text.strip() and total >= 2:
+            logger.debug(f"[Empty Last] 目标元素为空，共 {total} 个元素")
+
+        result['groups_count'] = total
+        result['anchor'] = data.get("anchor") or None
+        result['text'] = text
+        result['text_len'] = len(text)
+
+        if "images" in data:
+            count, urls, refs = image_lists(data.get("images"))
+            info = self._normalize_image_info({"count": count, "urls": urls, "references": refs})
+            result['image_count'] = int(info.get('count', 0) or 0)
+            result['has_images'] = bool(result['image_count'] > 0)
+            result['image_urls'] = list(info.get('urls') or [])
+            result['image_references'] = list(info.get('references') or [])
+
+        if self._expect_image_output:
+            page_info = data.get("pageImages") if isinstance(data.get("pageImages"), dict) else {}
+            normalized = self._normalize_page_image_info(page_info)
+            result['page_image_urls'] = list(normalized.get('urls') or [])
+            result['page_image_references'] = list(normalized.get('references') or [])
+
+        result['is_generating'] = bool(data.get("generating", False))
+        return result
+
+    @staticmethod
+    def _normalize_image_info(info: Dict[str, Any]) -> Dict[str, Any]:
+        info = info or {}
+        urls = _normalize_snapshot_image_urls(info.get("urls") or [])
+        references = sorted(
+            {
+                key
+                for key in (
+                    _snapshot_image_reference_key(value)
+                    for value in (info.get("references") or info.get("urls") or [])
+                )
+                if key
+            }
+        )
+        return {
+            "count": max(int(info.get("count", 0) or 0), len(urls)),
+            "urls": urls,
+            "references": references,
+        }
+
+    @staticmethod
+    def _normalize_page_image_info(info: Dict[str, Any]) -> Dict[str, Any]:
+        info = info or {}
+        return {
+            "urls": _normalize_snapshot_image_urls(info.get("urls") or []),
+            "references": sorted(
+                {
+                    key
+                    for key in (
+                        _snapshot_image_reference_key(value)
+                        for value in (info.get("references") or info.get("urls") or [])
+                    )
+                    if key
+                }
+            ),
+        }
+
     def _get_latest_message_snapshot(self, selector: str) -> dict:
+        """取最后一个节点快照（优先页面内一次性快照，失败时回退逐元素路径）"""
+        data = self._run_page_snapshot(selector, None)
+        if data is not None:
+            return self._snapshot_from_page_data(data, count_requires_target=True)
+        return self._legacy_latest_message_snapshot(selector)
+
+    def _legacy_latest_message_snapshot(self, selector: str) -> dict:
         """取最后一个节点快照（v5.5：包含图片检测）"""
         result = {
             'groups_count': 0, 
@@ -1234,6 +1463,17 @@ class StreamMonitor:
         return result
 
     def _get_snapshot_prefer_anchor(self, selector: str, prefer_anchor: Optional[str]) -> dict:
+        """按锚点锁定读取目标元素（优先页面内一次性快照，失败时回退逐元素路径）"""
+        data = self._run_page_snapshot(selector, prefer_anchor)
+        if data is not None:
+            return self._snapshot_from_page_data(
+                data,
+                count_requires_target=False,
+                log_empty_last=True,
+            )
+        return self._legacy_snapshot_prefer_anchor(selector, prefer_anchor)
+
+    def _legacy_snapshot_prefer_anchor(self, selector: str, prefer_anchor: Optional[str]) -> dict:
         """按锚点锁定读取目标元素（v5.5：包含图片检测）"""
         result = {
             'groups_count': 0, 
@@ -1319,31 +1559,18 @@ class StreamMonitor:
                 if (/^https?:\\/\\//i.test(src)) urls.push(src);
             } catch {}
         }
-        return { count: sources.size, urls, references };
+        return JSON.stringify({ count: sources.size, urls, references });
         """
         image_config = getattr(self, "_image_config", {}) or {}
-        info = element.run_js(
+        info = decode_js_json(element.run_js(
             script,
             str(image_config.get("request_baseline_token") or ""),
             str(image_config.get("request_baseline_property") or ""),
             bool(image_config.get("request_baseline_exclude_existing_nodes")),
-        ) or {}
-        urls = _normalize_snapshot_image_urls(info.get("urls") or [])
-        references = sorted(
-            {
-                key
-                for key in (
-                    _snapshot_image_reference_key(value)
-                    for value in (info.get("references") or info.get("urls") or [])
-                )
-                if key
-            }
-        )
-        return {
-            "count": max(int(info.get("count", 0) or 0), len(urls)),
-            "urls": urls,
-            "references": references,
-        }
+        ), {}) or {}
+        if not isinstance(info, dict):
+            info = {}
+        return self._normalize_image_info(info)
 
     def _extract_page_image_info(self) -> Dict[str, Any]:
         selector = str(self._image_config.get("selector") or "img").strip() or "img"
@@ -1373,32 +1600,23 @@ class StreamMonitor:
                         if (/^https?:\\/\\//i.test(src)) urls.push(src);
                     } catch {}
                 }
-                return {
+                return JSON.stringify({
                     urls: Array.from(new Set(urls)).slice(-256),
                     references: Array.from(new Set(references)).slice(-256),
-                };
+                });
                 """,
                 selector,
                 str(self._image_config.get("request_baseline_token") or ""),
                 str(self._image_config.get("request_baseline_property") or ""),
                 bool(self._image_config.get("request_baseline_exclude_existing_nodes")),
-            ) or {}
+            )
+            info = decode_js_json(info, {}) or {}
+            if not isinstance(info, dict):
+                info = {}
         except Exception:
             return {"urls": [], "references": []}
 
-        return {
-            "urls": _normalize_snapshot_image_urls(info.get("urls") or []),
-            "references": sorted(
-                {
-                    key
-                    for key in (
-                        _snapshot_image_reference_key(value)
-                        for value in (info.get("references") or info.get("urls") or [])
-                    )
-                    if key
-                }
-            ),
-        }
+        return self._normalize_page_image_info(info)
 
     @staticmethod
     def _snapshot_has_new_image(
@@ -1565,6 +1783,10 @@ class StreamMonitor:
 
     def _get_active_turn_text(self, selector: str) -> str:
         """回退：取最后一个元素的文本"""
+        data = self._run_page_snapshot(selector, None)
+        if data is not None:
+            snap = self._snapshot_from_page_data(data, count_requires_target=True)
+            return str(snap.get('text') or '').strip()
         try:
             eles = self.finder.find_all(selector, timeout=1)
             if not eles:

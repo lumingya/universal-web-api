@@ -241,7 +241,26 @@ def _normalize_log_display_expression(logger_name: str, message: str) -> str:
     return text
 
 
+def _resolve_pending_display_text(record: logging.LogRecord) -> None:
+    """SecureLogger 只标记 codex_display_pending；第一次渲染时才做喵化翻译并缓存。"""
+    if not getattr(record, "codex_display_pending", False):
+        return
+    record.codex_display_pending = False
+    original = str(getattr(record, "codex_original_message_text", "") or "")
+    try:
+        from .cute_translator import cuteify_display_message
+
+        record.codex_display_message_text = cuteify_display_message(
+            str(getattr(record, "codex_kind", "") or record.levelname or ""),
+            str(getattr(record, "codex_logger_name", "") or record.name or ""),
+            original,
+        )
+    except Exception:
+        record.codex_display_message_text = original
+
+
 def _record_display_message(record: logging.LogRecord) -> str:
+    _resolve_pending_display_text(record)
     message = str(getattr(record, "codex_display_message_text", "") or "")
     if not message:
         message = str(record.getMessage() or "")

@@ -163,16 +163,9 @@ class SecureLogger:
             return
         request_id = _request_context.get() or "SYSTEM"
         original_message_text = str(msg or "")
-        display_message_text = original_message_text
         upper_level_key = str(level_key or "").upper()
-        if upper_level_key in ("INFO", "SUCCESS", "STREAM", "NETWORK"):
-            display_message_text = _cuteify_info_message(self._name, original_message_text)
-        elif upper_level_key == "DEBUG":
-            display_message_text = _cuteify_debug_message(self._name, original_message_text)
-        elif upper_level_key == "WARNING":
-            display_message_text = _cuteify_warning_message(self._name, original_message_text)
-        elif upper_level_key in ("ERROR", "CRITICAL"):
-            display_message_text = _cuteify_error_message(self._name, original_message_text)
+        # P0-7：展示层翻译（cute_translator）改为惰性：由 handler 渲染时经
+        # log_formatters._record_display_message 计算一次并缓存到 record 上。
         self._logger.log(
             level,
             original_message_text,
@@ -182,8 +175,8 @@ class SecureLogger:
                 "codex_logger_name": self._name,
                 "codex_message": original_message_text,
                 "codex_original_message_text": original_message_text,
-                "codex_display_message_text": display_message_text,
-                "codex_kind": str(level_key or "").upper(),
+                "codex_display_pending": True,
+                "codex_kind": upper_level_key,
             },
         )
 

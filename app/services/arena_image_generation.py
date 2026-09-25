@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import uuid
 from dataclasses import dataclass
 from io import BytesIO
@@ -445,12 +446,33 @@ def evaluate_arena_direct_generation_state(
         })(arguments[0], arguments[1], arguments[2]);
     """
     try:
-        data = tab.run_js(script, baseline_depth, current_prompt, stop_selector)
+        data = _decode_js_result(
+            tab.run_js(_json_js(script), baseline_depth, current_prompt, stop_selector)
+        )
         if isinstance(data, dict) and data.get("status"):
             return data
     except Exception as exc:
         logger.debug(f"evaluate_arena_direct_generation_state 异常: {exc}")
     return None
+
+
+def _json_js(script: str) -> str:
+    """P0-2: stringify a polled script's result in-page (no RemoteObject leak)."""
+    from app.core.cdp_hygiene import wrap_js_json
+
+    return wrap_js_json(script)
+
+
+def _decode_js_result(raw: Any) -> Any:
+    """Decode a JSON string from :func:`_json_js`; keep non-JSON values as-is."""
+    if isinstance(raw, str):
+        text = raw.strip()
+        if text[:1] in ("{", "[", '"') or text in ("null", "true", "false"):
+            try:
+                return json.loads(text)
+            except ValueError:
+                return raw
+    return raw
 
 
 def get_arena_generation_status(
@@ -566,15 +588,21 @@ def get_arena_generation_status(
 
         const still_generating = Boolean(has_stop || (has_generating_text && has_spin_canvas));
 
-        return {
+        return JSON.stringify({
             has_stop: Boolean(has_stop),
             has_generating_text: Boolean(has_generating_text),
             has_spin_canvas: Boolean(has_spin_canvas),
             still_generating: Boolean(still_generating),
-        };
+        });
     """
     try:
         result = tab.run_js(script, selector)
+        if isinstance(result, str):
+            # P0-2：页面内 JSON.stringify，避免 RemoteObject 泄漏
+            try:
+                result = json.loads(result)
+            except ValueError:
+                result = None
     except Exception:
         return {
             "has_stop": False,
@@ -667,12 +695,12 @@ def capture_arena_result_baseline(
         })(arguments[0], arguments[1], arguments[2]);
     """
     try:
-        result = tab.run_js(
-            script,
+        result = _decode_js_result(tab.run_js(
+            _json_js(script),
             result_selector,
             token,
             ARENA_RESULT_BASELINE_PROPERTY,
-        ) or {}
+        )) or {}
     except Exception:
         return None
     if not isinstance(result, dict) or not bool(result.get("ok")):
@@ -781,7 +809,7 @@ class ArenaImageGenerationGuard:
         try:
             if self.result_selector or self.baseline_token or self.baseline_property:
                 result = self.tab.run_js(
-                    script,
+                    _json_js(script),
                     self.result_selector,
                     self.baseline_token,
                     self.baseline_property,
@@ -789,9 +817,10 @@ class ArenaImageGenerationGuard:
             else:
                 # Preserve compatibility with lightweight tab doubles and
                 # older wrappers whose run_js accepts only the script.
-                result = self.tab.run_js(script)
+                result = self.tab.run_js(_json_js(script))
         except Exception:
             return None
+        result = _decode_js_result(result)
         if isinstance(result, dict):
             code = str(result.get("code") or "").strip()
             text = str(result.get("text") or "").strip()

@@ -62,6 +62,8 @@ ENV_DEFAULTS = {
     # Opt-in because background freezing can delay site-specific periodic commands.
     # Set BROWSER_MEMORY_SAVER=true after validating the target sites.
     "BROWSER_MEMORY_SAVER": "false",
+    # Optional Chromium process model: per-site | limit:N (empty = Chromium default)
+    "BROWSER_PROCESS_MODEL": "",
     "PROFILE_CLEAN_ENABLED": "false",
     "SCHEDULED_RESTART_ENABLED": "false",
     "SCHEDULED_RESTART_INTERVAL_SECONDS": "10800",
@@ -1099,6 +1101,29 @@ def _resolve_browser_path() -> str:
     return ""
 
 
+def _browser_process_model_args(raw_value: str) -> list:
+    """BROWSER_PROCESS_MODEL（P0-7，可选）：
+    - 空 / default：Chromium 默认（每个站点实例一个渲染进程）
+    - per-site：--process-per-site，同站点的标签页共用渲染进程
+    - limit:N：--renderer-process-limit=N
+    实测可省 10%～20% 内存；同站点标签页共用进程后会互相拖慢，高并发时不要开。
+    """
+    value = str(raw_value or "").strip().lower()
+    if not value or value in {"default", "none", "off", "false", "0"}:
+        return []
+    if value in {"per-site", "per_site", "process-per-site"}:
+        return ["--process-per-site"]
+    if value.startswith("limit:") or value.startswith("limit="):
+        try:
+            limit = int(value[6:].strip())
+        except ValueError:
+            limit = 0
+        if limit >= 1:
+            return [f"--renderer-process-limit={limit}"]
+    _log(f"[WARN] 无法识别 BROWSER_PROCESS_MODEL={raw_value!r}，已忽略（可选 per-site / limit:N）")
+    return []
+
+
 def _launch_browser_if_needed() -> None:
     _section("准备 Chromium 内核浏览器")
     browser_port = int(os.getenv("BROWSER_PORT", "9222") or "9222")
@@ -1213,6 +1238,12 @@ def _launch_browser_if_needed() -> None:
             "--disable-features=CalculateNativeWinOcclusion,AutomaticTabDiscarding,TabFreeze,IntensiveWakeUpThrottling",
         ]
         _log("[INFO] Chromium 常驻后台模式已启用（BROWSER_MEMORY_SAVER=false）")
+
+    process_model_args = _browser_process_model_args(os.getenv("BROWSER_PROCESS_MODEL", ""))
+    for extra_arg in process_model_args:
+        browser_args.insert(-1, extra_arg)
+    if process_model_args:
+        _log(f"[INFO] Chromium 进程模型: {' '.join(process_model_args)}（并发标签页较多时不建议开启）")
 
     profile_name = str(os.getenv("BROWSER_PROFILE_NAME", "") or "").strip()
     if profile_name:

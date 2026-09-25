@@ -143,7 +143,15 @@ class CommandEngine(CommandEngineRuntimeMixin, CommandEngineResultsMixin, Comman
         memory_saver_enabled = str(
             os.getenv("BROWSER_MEMORY_SAVER", "false")
         ).strip().lower() in {"1", "true", "yes", "y", "on"}
-        keepalive_default = "false" if memory_saver_enabled else "true"
+        # P0-6：开启空闲冻结时，周期 keepalive 会不断唤醒标签页，默认关闭
+        # （显式设置 CMD_PERIODIC_KEEPALIVE_ENABLED 仍以用户为准）。
+        try:
+            from app.core.tab_pool_parts.idle_maintenance import is_idle_freeze_enabled
+
+            idle_freeze_enabled = is_idle_freeze_enabled()
+        except Exception:
+            idle_freeze_enabled = False
+        keepalive_default = "false" if (memory_saver_enabled or idle_freeze_enabled) else "true"
         self._periodic_keepalive_enabled = str(
             os.getenv("CMD_PERIODIC_KEEPALIVE_ENABLED", keepalive_default)
         ).strip().lower() in {"1", "true", "yes", "y", "on"}
@@ -360,6 +368,9 @@ class CommandEngine(CommandEngineRuntimeMixin, CommandEngineResultsMixin, Comman
     def _mark_session_closed_if_disconnected(self, session: 'TabSession', error: Any, reason: str) -> bool:
         if not self._looks_like_page_disconnected_error(error):
             return False
+        if getattr(session, "_cdp_recycle_in_progress", False):
+            # P0-3：空闲 CDP 会话回收期间的短暂断开不是标签页关闭
+            return True
         try:
             if hasattr(session, "mark_closed"):
                 session.mark_closed(reason)
@@ -428,6 +439,13 @@ class CommandEngine(CommandEngineRuntimeMixin, CommandEngineResultsMixin, Comman
         """
         if self._is_session_closed(session):
             return
+        # P0-6：page_check / keepalive 之前先解除空闲冻结（与唤醒节流无关，必须执行）
+        try:
+            from app.core.tab_pool_parts.idle_maintenance import resume_if_frozen
+
+            resume_if_frozen(session, reason=reason or "wake_tab")
+        except Exception:
+            pass
         if not self._wake_tab_before_page_check:
             return
         if self._is_page_check_backing_off(session):

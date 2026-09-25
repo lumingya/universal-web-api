@@ -138,6 +138,42 @@ def _extract_arena_image_items(
     return items
 
 
+class _LmarenaScanState:
+    """LmarenaParser 增量扫描的累计状态（只覆盖已提交的完整行 + 本次半行）。"""
+
+    __slots__ = (
+        "content", "reasoning", "done", "error", "line_count", "prefix_counts",
+        "unknown_prefix_count", "non_protocol_line_count", "parse_errors",
+        "committed_len", "committed_raw",
+    )
+
+    def __init__(self) -> None:
+        self.content = ""
+        self.reasoning = ""
+        self.done = False
+        self.error = None
+        self.line_count = 0
+        self.prefix_counts: Dict[str, int] = {}
+        self.unknown_prefix_count = 0
+        self.non_protocol_line_count = 0
+        self.parse_errors: list[Dict[str, Any]] = []
+        self.committed_len = 0
+        self.committed_raw = ""
+
+    def copy(self) -> "_LmarenaScanState":
+        other = _LmarenaScanState()
+        for name in self.__slots__:
+            setattr(other, name, getattr(self, name))
+        other.prefix_counts = dict(self.prefix_counts)
+        other.parse_errors = list(self.parse_errors)
+        return other
+
+    def add_parse_error(self, item: Dict[str, Any]) -> None:
+        self.parse_errors.append(item)
+        if len(self.parse_errors) > 16:
+            del self.parse_errors[:-8]
+
+
 class LmarenaParser(ResponseParser):
     """
     Arena.ai 响应解析器
@@ -154,6 +190,7 @@ class LmarenaParser(ResponseParser):
         self._seen_image_refs: set[str] = set()
         self._last_debug_summary: Dict[str, Any] = {}
         self._last_debug_raw_signature = ""
+        self._inc_state: "_LmarenaScanState | None" = None
 
     @staticmethod
     def _content_delta(
@@ -186,6 +223,103 @@ class LmarenaParser(ResponseParser):
         # emitting it wholesale would duplicate the response already sent.
         return "", accumulated
 
+    # ============ 增量扫描（P0-5） ============
+
+    # 置为 False 时每次整段解析（与旧实现逐字节一致），用于回归对照
+    _INCREMENTAL = True
+
+    def _scan_response(self, raw_response: str) -> tuple["_LmarenaScanState", list]:
+        """返回 (扫描状态, 本次新发现的图片)。"""
+        images: list[Dict[str, Any]] = []
+        if not self._INCREMENTAL:
+            # 旧行为：整段修复 mojibake 后逐行解析
+            scan = _LmarenaScanState()
+            self._scan_lines(self._fix_mojibake(raw_response), scan, images)
+            return scan, images
+
+        cached = getattr(self, "_inc_state", None)
+        if cached is not None and cached.committed_len <= len(raw_response) and raw_response.startswith(cached.committed_raw):
+            scan = cached.copy()
+            offset = cached.committed_len
+        else:
+            scan = _LmarenaScanState()
+            offset = 0
+
+        last_newline = raw_response.rfind("\n", offset)
+        if last_newline >= offset:
+            committed_end = last_newline + 1
+            # 完整行一定以 ASCII 换行结尾，不会截断多字节序列，可以按段修复 mojibake
+            self._scan_lines(self._fix_mojibake(raw_response[offset:committed_end]), scan, images)
+            scan.committed_len = committed_end
+            scan.committed_raw = raw_response[:committed_end]
+            self._inc_state = scan.copy()
+            offset = committed_end
+        elif cached is None or scan.committed_len == 0:
+            self._inc_state = None
+
+        tail = raw_response[offset:]
+        if tail:
+            self._scan_lines(self._fix_mojibake(tail), scan, images)
+        return scan, images
+
+    def _scan_lines(self, text: str, scan: "_LmarenaScanState", images: list) -> None:
+        content_parts: list[str] = []
+        reasoning_parts: list[str] = []
+        for line in text.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            scan.line_count += 1
+
+            colon_idx = line.find(":")
+            if colon_idx < 1:
+                scan.non_protocol_line_count += 1
+                continue
+
+            prefix = line[:colon_idx]
+            payload = line[colon_idx + 1:]
+            if prefix in self._PROTOCOL_PREFIXES:
+                scan.prefix_counts[prefix] = scan.prefix_counts.get(prefix, 0) + 1
+            else:
+                scan.unknown_prefix_count += 1
+
+            if prefix == "a0":
+                text_chunk = self._parse_text_chunk(payload)
+                if text_chunk is not None:
+                    content_parts.append(text_chunk)
+                else:
+                    scan.add_parse_error({"prefix": prefix, "payload_preview": payload[:160]})
+
+            elif prefix in {"ag", "bg"}:
+                text_chunk = self._parse_text_chunk(payload)
+                if text_chunk is not None:
+                    reasoning_parts.append(text_chunk)
+                else:
+                    scan.add_parse_error({"prefix": prefix, "payload_preview": payload[:160]})
+
+            elif prefix == "a2":
+                images.extend(
+                    _extract_arena_image_items(
+                        payload,
+                        self._seen_image_refs,
+                        source="lmarena_stream",
+                    )
+                )
+
+            elif prefix == "ad":
+                if self._is_finish_signal(payload):
+                    scan.done = True
+
+            elif prefix in {"ae", "a3"}:
+                error_msg = self._parse_error(payload)
+                if error_msg:
+                    scan.error = error_msg
+                    scan.done = True
+        if content_parts:
+            scan.content += "".join(content_parts)
+        if reasoning_parts:
+            scan.reasoning += "".join(reasoning_parts)
+
     # ============ 对外接口 ============
 
     def parse_chunk(self, raw_response: str) -> Dict[str, Any]:
@@ -208,79 +342,18 @@ class LmarenaParser(ResponseParser):
 
         debug_raw_signature = self._debug_body_signature(raw_response)
 
-        # 修复双重 UTF-8 编码（mojibake）
-        raw_response = self._fix_mojibake(raw_response)
-
         try:
-            content_parts: list[str] = []
-            reasoning_parts: list[str] = []
-            images: list[Dict[str, Any]] = []
-            done = False
-            line_count = 0
-            prefix_counts: Dict[str, int] = {}
-            unknown_prefix_count = 0
-            non_protocol_line_count = 0
-            parse_errors: list[Dict[str, Any]] = []
-
-            for line in raw_response.split("\n"):
-                line = line.strip()
-                if not line:
-                    continue
-                line_count += 1
-
-                colon_idx = line.find(":")
-                if colon_idx < 1:
-                    non_protocol_line_count += 1
-                    continue
-
-                prefix = line[:colon_idx]
-                payload = line[colon_idx + 1:]
-                if prefix in self._PROTOCOL_PREFIXES:
-                    prefix_counts[prefix] = prefix_counts.get(prefix, 0) + 1
-                else:
-                    unknown_prefix_count += 1
-
-                if prefix == "a0":
-                    text = self._parse_text_chunk(payload)
-                    if text is not None:
-                        content_parts.append(text)
-                    else:
-                        parse_errors.append({
-                            "prefix": prefix,
-                            "payload_preview": payload[:160],
-                        })
-
-                elif prefix in {"ag", "bg"}:
-                    text = self._parse_text_chunk(payload)
-                    if text is not None:
-                        reasoning_parts.append(text)
-                    else:
-                        parse_errors.append({
-                            "prefix": prefix,
-                            "payload_preview": payload[:160],
-                        })
-
-                elif prefix == "a2":
-                    images.extend(
-                        _extract_arena_image_items(
-                            payload,
-                            self._seen_image_refs,
-                            source="lmarena_stream",
-                        )
-                    )
-
-                elif prefix == "ad":
-                    if self._is_finish_signal(payload):
-                        done = True
-
-                elif prefix in {"ae", "a3"}:
-                    error_msg = self._parse_error(payload)
-                    if error_msg:
-                        result["error"] = error_msg
-                        done = True
-
-            new_content = "".join(content_parts)
-            new_reasoning = "".join(reasoning_parts)
+            # P0-5：增量解析。网络监听每次传入的是“不断增长的完整响应体”，旧实现
+            # 每次都整段 split + json.loads，一个 160KB 的回答流累计要花数秒 CPU。
+            # 这里把“已以换行结尾的完整行”的解析结果缓存下来，只解析新增部分；
+            # 末尾未结束的半行每次重新解析、不入缓存。响应体不是上次的前缀扩展
+            # （换了一条流）时回退为整段解析。
+            scan, images = self._scan_response(raw_response)
+            done = scan.done
+            if scan.error:
+                result["error"] = scan.error
+            new_content = scan.content
+            new_reasoning = scan.reasoning
 
             if new_content:
                 delta, next_accumulated = self._content_delta(self._accumulated, new_content)
@@ -299,10 +372,10 @@ class LmarenaParser(ResponseParser):
             result["done"] = done
             self._last_debug_summary = {
                 "raw_body_len": len(raw_response),
-                "line_count": line_count,
-                "prefix_counts": prefix_counts,
-                "unknown_prefix_count": unknown_prefix_count,
-                "non_protocol_line_count": non_protocol_line_count,
+                "line_count": scan.line_count,
+                "prefix_counts": dict(scan.prefix_counts),
+                "unknown_prefix_count": scan.unknown_prefix_count,
+                "non_protocol_line_count": scan.non_protocol_line_count,
                 "content_candidate_len": len(new_content),
                 "emitted_content_len": len(str(result.get("content") or "")),
                 "accumulated_len": len(self._accumulated),
@@ -312,13 +385,15 @@ class LmarenaParser(ResponseParser):
                 "done": bool(done),
                 "error": str(result.get("error") or ""),
                 "image_count": len(images),
-                "parse_errors": parse_errors[-8:],
+                "parse_errors": scan.parse_errors[-8:],
+                "incremental_offset": scan.committed_len if self._INCREMENTAL else 0,
             }
             self._last_debug_raw_signature = debug_raw_signature
 
         except Exception as e:
             logger.debug(f"[LmarenaParser] 解析异常: {e}")
             result["error"] = str(e)
+            self._inc_state = None
             self._last_debug_summary = {
                 "raw_body_len": len(raw_response),
                 "exception": str(e),
@@ -334,6 +409,7 @@ class LmarenaParser(ResponseParser):
         self._seen_image_refs.clear()
         self._last_debug_summary = {}
         self._last_debug_raw_signature = ""
+        self._inc_state = None
 
     def should_abort_on_error(self) -> bool:
         """当 Arena 返回 ae: 或 a3: 等错误协议行时，立即终止工作流。"""

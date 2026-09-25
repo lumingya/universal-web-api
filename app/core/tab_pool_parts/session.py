@@ -256,6 +256,28 @@ class TabSession:
             return self._debug_summary_unlocked()
 
     def acquire(self, task_id: str) -> bool:
+        if not self._acquire_request_unlocked_entry(task_id):
+            return False
+        self._resume_after_acquire("acquire")
+        return True
+
+    def acquire_for_command(self, task_id: str) -> bool:
+        """Acquire tab for command execution without incrementing request counter."""
+        if not self._acquire_command_unlocked_entry(task_id):
+            return False
+        self._resume_after_acquire("acquire_for_command")
+        return True
+
+    def _resume_after_acquire(self, reason: str) -> None:
+        """P0-6：被空闲冻结的标签页在交给调用方之前恢复为 active。"""
+        try:
+            from .idle_maintenance import resume_if_frozen
+
+            resume_if_frozen(self, reason=reason)
+        except Exception as e:
+            logger.debug(f"[{self.id}] resume frozen tab failed: {e}")
+
+    def _acquire_request_unlocked_entry(self, task_id: str) -> bool:
         with self._lock:
             if self.status != TabStatus.IDLE or self._termination_in_progress:
                 return False
@@ -283,8 +305,7 @@ class TabSession:
             )
             return True
 
-    def acquire_for_command(self, task_id: str) -> bool:
-        """Acquire tab for command execution without incrementing request counter."""
+    def _acquire_command_unlocked_entry(self, task_id: str) -> bool:
         with self._lock:
             if self.status != TabStatus.IDLE or self._termination_in_progress:
                 return False

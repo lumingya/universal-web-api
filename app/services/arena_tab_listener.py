@@ -38,7 +38,12 @@ def is_explicit_arena_direct_url(url: Any) -> bool:
         return False
 
 
-from app.core.tab_pool_parts._arena_snapshot import _ARENA_STORE_SNAPSHOT_JS
+from app.core.tab_pool_parts._arena_snapshot import (
+    _ARENA_STORE_SNAPSHOT_JS,
+    _ARENA_STORE_SNAPSHOT_JSON_JS,
+)
+from app.core.cdp_hygiene import decode_js_json
+from app.core.tab_pool_parts.idle_maintenance import note_network_activity
 
 
 class ArenaTabListener:
@@ -256,8 +261,10 @@ class ArenaTabListener:
                 tab = getattr(session, "tab", None) if session is not None else None
                 if tab is None:
                     return
+                # P0-6：翻牌轮询期间视为活跃，避免被空闲冻结
+                note_network_activity(session)
                 try:
-                    snapshot = tab.run_js(_ARENA_STORE_SNAPSHOT_JS)
+                    snapshot = decode_js_json(tab.run_js(_ARENA_STORE_SNAPSHOT_JSON_JS))
                 except Exception as e:
                     if not is_page_refresh_error(e):
                         logger.debug_throttled(

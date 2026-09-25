@@ -6,6 +6,7 @@ chance that background visibility checks pause site scripts.
 
 from __future__ import annotations
 
+import json
 import time
 from typing import Any
 
@@ -174,7 +175,7 @@ def install_visibility_emulation(tab: Any, owner: Any = None, *, reason: str = "
         phase_started = time.perf_counter()
         try:
             state = tab.run_js(
-                "return {hidden: !!document.hidden, visibilityState: document.visibilityState || '', hasFocus: !!(document.hasFocus && document.hasFocus()), wasDiscarded: !!document.wasDiscarded};",
+                "return JSON.stringify({hidden: !!document.hidden, visibilityState: document.visibilityState || '', hasFocus: !!(document.hasFocus && document.hasFocus()), wasDiscarded: !!document.wasDiscarded});",
                 timeout=BACKGROUND_WAKE_JS_TIMEOUT,
             )
         finally:
@@ -183,6 +184,12 @@ def install_visibility_emulation(tab: Any, owner: Any = None, *, reason: str = "
                 "visibility.state_probe",
                 time.perf_counter() - phase_started,
             )
+        if isinstance(state, str):
+            # P0-2：页面内 JSON.stringify，避免 RemoteObject 泄漏
+            try:
+                state = json.loads(state)
+            except ValueError:
+                state = None
         if isinstance(state, dict):
             return (state.get("hidden") is False) and (str(state.get("visibilityState") or "").lower() == "visible")
         return False

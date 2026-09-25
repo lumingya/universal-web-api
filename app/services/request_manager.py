@@ -8,6 +8,7 @@ v2.0 改动：
 """
 
 import asyncio
+import atexit
 import threading
 import json
 import os
@@ -39,6 +40,21 @@ _DATA_URI_PATTERN = re.compile(
 _LONG_BASE64_PATTERN = re.compile(
     r"(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{8192,}={0,2}(?![A-Za-z0-9+/])"
 )
+# 两个模式合并为一次扫描（先匹配 data URI，再匹配裸 base64），供惰性截断使用
+_MEDIA_BLOB_PATTERN = re.compile(
+    "(?:" + _DATA_URI_PATTERN.pattern + ")|(?:" + _LONG_BASE64_PATTERN.pattern + ")",
+    re.IGNORECASE,
+)
+# 最短匹配长度的上界（data URI 前缀 + 1024 / 裸 base64 8192），用于限定搜索窗口
+_MEDIA_BLOB_MIN_MATCH_SLACK = 8192 + 256
+_MEDIA_PLACEHOLDER = "[图片占位符]"
+
+
+def _history_save_debounce_sec() -> float:
+    try:
+        return max(0.0, min(60.0, float(os.getenv("REQUEST_HISTORY_SAVE_DEBOUNCE_SEC", "5") or 5)))
+    except (TypeError, ValueError):
+        return 5.0
 
 
 def _get_positive_int_env(name: str, default: int) -> int:
@@ -425,6 +441,9 @@ class RequestManager:
         self._history_save_requested = False
         self._stats_save_worker: Optional[threading.Thread] = None
         self._history_save_worker: Optional[threading.Thread] = None
+        # P0-7：历史落盘去抖（REQUEST_HISTORY_SAVE_DEBOUNCE_SEC，默认 5s），进程退出时强制刷盘
+        self._history_flush_event = threading.Event()
+        atexit.register(self.flush_pending_saves)
 
         self.total_requests = 0
         self.total_input_tokens = 0
@@ -467,10 +486,9 @@ class RequestManager:
                     "total_input_tokens": self.total_input_tokens,
                     "total_output_tokens": self.total_output_tokens,
                 }
+                # 原子替换即可保证文件完整；不再每次 fsync（Windows 上单次可达数十 ms）
                 with open(tmp_path, "w", encoding="utf-8") as f:
                     json.dump(payload, f)
-                    f.flush()
-                    os.fsync(f.fileno())
                 os.replace(tmp_path, self._stats_file)
         except Exception as e:
             try:
@@ -576,8 +594,6 @@ class RequestManager:
                         ensure_ascii=False,
                         separators=(",", ":"),
                     )
-                    f.flush()
-                    os.fsync(f.fileno())
                 os.replace(tmp_path, self._history_file)
         except Exception as e:
             try:
@@ -628,12 +644,34 @@ class RequestManager:
 
     def _run_history_save_worker(self) -> None:
         while True:
+            # 去抖：窗口内的多次更新合并为一次整文件重写；flush_pending_saves 可提前唤醒
+            delay = _history_save_debounce_sec()
+            if delay > 0 and not self._history_flush_event.is_set():
+                self._history_flush_event.wait(delay)
             with self._save_schedule_lock:
                 if not self._history_save_requested:
                     self._history_save_worker = None
                     return
                 self._history_save_requested = False
             self._save_history()
+
+    def flush_pending_saves(self, timeout: float = 5.0) -> None:
+        """立即写出尚在去抖窗口内的历史 / 统计（atexit 与关闭流程调用）。"""
+        self._history_flush_event.set()
+        try:
+            for worker in (self._history_save_worker, self._stats_save_worker):
+                if worker is not None and worker.is_alive() and worker is not threading.current_thread():
+                    worker.join(timeout)
+            with self._save_schedule_lock:
+                pending_history = self._history_save_requested and not (
+                    self._history_save_worker and self._history_save_worker.is_alive()
+                )
+                if pending_history:
+                    self._history_save_requested = False
+            if pending_history:
+                self._save_history()
+        finally:
+            self._history_flush_event.clear()
 
     @staticmethod
     def _sanitize_text_for_storage(value: Any, max_chars: int = 80000) -> str:
@@ -644,13 +682,42 @@ class RequestManager:
         if "[内容已截断，原始长度" in text:
             return text
 
-        # 修复#3a：使用模块级预编译正则，避免每次调用重复编译
-        text = _DATA_URI_PATTERN.sub("[图片占位符]", text)
-        text = _LONG_BASE64_PATTERN.sub("[图片占位符]", text)
+        max_chars = max(0, int(max_chars))
+        # 短文本：一次替换即可
+        if len(text) <= max_chars + _MEDIA_BLOB_MIN_MATCH_SLACK:
+            text = _MEDIA_BLOB_PATTERN.sub(_MEDIA_PLACEHOLDER, text)
+            if len(text) > max_chars:
+                return text[:max_chars] + f"\n\n[内容已截断，原始长度 {len(text)} 字符]"
+            return text
 
-        if len(text) > max_chars:
-            return text[:max_chars] + f"\n\n[内容已截断，原始长度 {len(text)} 字符]"
-        return text
+        # P0-7：长文本（prompt 可达 1M 字）不再“先整段跑正则再截断”：
+        # 边替换边输出，凑够 max_chars 即停止扫描。图片后面的文字仍会保留
+        # （与整段替换的结果一致，只是不再处理截断点之后的内容）。
+        total_len = len(text)
+        parts: List[str] = []
+        out_len = 0
+        pos = 0
+        while pos < total_len and out_len <= max_chars:
+            budget = max_chars - out_len + 1
+            window_end = min(total_len, pos + budget + _MEDIA_BLOB_MIN_MATCH_SLACK)
+            match = _MEDIA_BLOB_PATTERN.search(text, pos, window_end)
+            if match is None or match.start() >= pos + budget:
+                chunk = text[pos:min(total_len, pos + budget)]
+                parts.append(chunk)
+                out_len += len(chunk)
+                pos += len(chunk)
+                continue
+            # 窗口可能截断了匹配：从匹配起点重新做一次不设上界的 match，跳过完整的媒体块
+            full = _MEDIA_BLOB_PATTERN.match(text, match.start()) or match
+            prefix = text[pos:match.start()]
+            parts.append(prefix)
+            parts.append(_MEDIA_PLACEHOLDER)
+            out_len += len(prefix) + len(_MEDIA_PLACEHOLDER)
+            pos = max(full.end(), match.start() + 1)
+        result = "".join(parts)
+        if pos < total_len or len(result) > max_chars:
+            return result[:max_chars] + f"\n\n[内容已截断，原始长度 {total_len} 字符]"
+        return result
 
     @classmethod
     def _sanitize_for_storage(cls, value: Any, max_depth: int = 6) -> Any:
