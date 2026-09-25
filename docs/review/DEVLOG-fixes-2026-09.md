@@ -544,3 +544,11 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
   失败原因是新版 Starlette 不再把发送异常包进 ExceptionGroup，清理断言都成立。
   → 放宽 `tests/test_cancel_storm_regressions.py` 的异常类型断言为 `(BaseExceptionGroup, OSError)`，新旧版都能通过。临时 venv 已删除。
 - `requirements.txt` 未改动（按计划分阶段做）。
+
+### H4 换行符统一 ⏸（P3，等待用户决定）
+
+- 现状（`git ls-files --eol`）：242 LF / 39 CRLF / 40 混合 / 9 二进制；无 `.gitattributes`。
+- 风险：若现在整文件规范化（`.gitattributes` + `git add --renormalize .`），会改动约 79 个文件的每一行，
+  其中大部分 origin/main 也在改 → 合并时大面积冲突。单加 `* text=auto` 而不重新规范化，又会让这些文件在所有人的工作区里显示为「已修改」。
+- 所以 P3 其余 16 项已全部完成，H4 暂停，请用户选择执行时机/方式。
+
