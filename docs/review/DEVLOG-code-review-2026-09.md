@@ -46,7 +46,7 @@
 - [x] M5 核心请求链路：chat.py / anthropic_routes.py / streaming_response.py / request_manager.py——核查认证委派、流关闭/取消、Responses 状态与请求历史，轻量复现 B2–B4
 - [x] M6 标签页池：tab_pool_parts/*（manager / session / recovery / idle_maintenance）——检查锁与取消/恢复路径；用无浏览器桩验证冻结恢复失败和非有限配置值
 - [x] M7 浏览器与工作流：core/browser/*、core/workflow/*、stream_monitor、network_monitor——核查控制流边界、流监听与调试持久化；复现 mtime 缓存及布尔字符串误判
-- [ ] M8 服务层：tool_calling*、config engine、command_engine*
+- [x] M8 服务层：tool_calling*、config engine、command_engine*——实际主类验证损坏命令配置回退、校验 URL 正则回溯开销并识别未使用存储 mixin
 - [ ] M9 前端：static/js（XSS / v-html / 大文件）
 - [ ] M10 汇总报告 `docs/review/CODE_REVIEW_REPORT.md`
 
@@ -86,6 +86,9 @@
 | B7 | P3 | `app/core/workflow/script_loader.py:173-194`, `tests/test_workflow_script_loader.py:130-157` | JS 脚本热加载只按浮点 mtime 判断缓存命中；内容替换但 mtime 不变（恢复时间戳/低分辨率文件系统/快速覆盖）时会执行旧脚本，且测试只覆盖 mtime 改变。建议 `st_mtime_ns+size` 并对更新接口显式清缓存；极端同大小同时间需 hash。 | 临时脚本文件复现：盘上内容 `later`、缓存仍返回 `first`；临时目录已自动删除 |
 | H10 | P3 | `app/core/stream_monitor.py:1706-1732,1768-1779` | `_is_arena_page`、`_arena_native_stop_present` 两次定义，前一版松散子串判断被后一版域名解析与独立检测器覆盖；清理死代码与重复维护面，保留后一版的域名边界。 | 静态确认；运行时以前一版已被覆盖为前提，不宣称当前主机校验失效 |
 | H11 | P3 | `config/browser_config.json:320-369` | 已跟踪的默认浏览器配置包含多组具体 Arena 会话 URL/标签页编号，不适合作为通用模板，公开仓库中还可能泄露用户曾使用的会话标识。建议用示例占位组与本地不跟踪的覆盖文件替换，必要时清理历史。 | 静态确认 5 组路由数据；未访问这些 URL、未验证是否能读取内容 |
+| B8 | P2 | `app/services/command_engine.py:1352-1378,1654-1674` | 外部改写 `commands.json` 时，短暂无效 JSON 被解析为 `[]`，热刷新直接将**上一轮有效命令缓存清空**并推进 mtime，还将原有 `run_js_file` 动作认作禁用、生成清理列表；命令临时全失效，浏览器在线时还可能撤销注入。应在错误时保留 last-known-good，区分合法空列表与解析失败，避免据此清理运行态；文件恢复后再刷新。 | 使用真实 `CommandEngine` 与临时 JSON 文件，1 条命令 → 损坏 JSON → 0 条且捕获 1 条待清理动作；**仅 mock 掉清理执行，未运行浏览器或观察在线注入** |
+| H12 | P2（优化/风险） | `app/services/command_engine_results.py:637-653,655-663` | 网络异常触发器允许配置 regex URL 匹配，直接用标准库 `re.search()` 且无模式复杂度、输入长度或匹配超时限制；嵌套量词会指数回溯，频繁事件可阻塞命令检查线程。建议参考工作流已有 `regex.search(..., timeout=0.025)` 做预编译/超时，限制模式和 URL 长度，并拒绝超时规则。 | 仅 12、16、19 个 `a` 的短 URL 合成输入量测约 0.0005/0.0057/0.046s；未进行长串或压力测试，真实影响依环境/模式而异 |
+| H13 | P3 | `app/services/command_engine_storage.py:22-335`, `app/services/command_engine.py:60,1340-1380,1654-1674` | `CommandEngineStorageMixin` 在项目内没有被 `CommandEngine` 继承或导入，存储/CRUD 的很多方法却与主类重复，易使后续修复只落在未运行代码中（初次试验也因此需改用生产主类验证）。建议合并、删除或明确弃用该模块并加主类覆盖测试。 | 静态类继承/调用核对，无产品运行错误主张 |
 
 ## 5. 工作流水
 
@@ -98,3 +101,4 @@
 - 2026-09-25 / M5：阅读 OpenAI / Anthropic 接口的认证委派、SSE 响应关闭与请求生命周期：已实现断连时主动关闭异步生成器、线程工作队列限背压及绝对执行超时，未把这些保护误报为缺陷。隔离小文件测试（不运行浏览器）证实历史旧数组读入丢失（B2）；Responses 默认启用内存存储且连续两轮重复保留完整会话（B3）；构造 `n=3` 可接受但单选择输出（B4）。`chat.py` 六个 Arena 错误辅助函数重复定义（H8）。临时目录及导入生成的忽略配置已清理。
 - 2026-09-25 / M6：核对 `TabPoolManager` 的获取/释放条件队列、独立 acquire executor 与取消后回收、Session 状态门禁、隔离恢复服务的超时槽、空闲冻结/CDP 回收逻辑；已存在 0.25s 取消轮询及冻结前检查页面隐藏，不把无真实浏览器实验的状态竞态当成已发生事故。仅用抛错 CDP 桩证明解冻失败仍交付会话（B5），仅用临时 env 值证明配置 inf 可使构造失败（B6）。等待队列未总量限流作为优化风险 H9 记录，不做压力测试；无截图或浏览器下载。
 - 2026-09-25 / M7：查阅浏览器媒体/工作流、`flow_runtime.py` 条件与变量解析、`script_loader.py` 路径控制及缓存、DOM/网络流监听。控制流有节点/深度/字节和执行转换预算，正则有 25ms 限时，网络监听有预取容量及调试目录上限，脚本路径解析会限制在指定目录；不能笼统报告缺少这些防护。发现跟踪的 `browser_config.json` 与代码/前端默认开关不一致，默认启用原始响应调试捕获（S12），并携带具体会话 URL（H11）；轻量文件实验确认仅 mtime 缓存导致热更新可能陈旧（B7）；流监听重复方法只记录为维护问题（H10）。无真实浏览器、网络页面或 PNG 截图。
+- 2026-09-25 / M8：查阅工具调用同步/异步修复轮次（默认 2、上限 5）、Schema 本地引用/形状/有限数检查及消息格式；这些已有防护不作为缺失报告。核查配置引擎 JSON 错误时热重载保留旧状态、原子保存与本地覆盖快照。命令引擎另有损坏命令文件导致运行缓存归零（B8），实际主类临时文件复现并在清理动作处用 mock 截断；**最初用未继承的 `CommandEngineStorageMixin` 实验只用于提示死代码，最终证据来自生产主类**。命令网络 URL regex 无超时（H12），短 URL 小样本显示回溯增长；存储 mixin 未使用（H13）。所有临时文件由 TemporaryDirectory 清理，无浏览器/耗内存测试。
