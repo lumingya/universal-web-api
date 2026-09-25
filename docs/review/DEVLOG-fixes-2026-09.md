@@ -28,7 +28,7 @@ T1 以 skip + `local_fixture` 标记代替恢复本地文件。原则：**不要
 
 P3 清单（顺序即执行顺序，完成一项勾一项，每项独立提交）：
 
-- [ ] B6 `BROWSER_CDP_RECYCLE_AFTER_REQUESTS=inf` OverflowError
+- [x] B6 `BROWSER_CDP_RECYCLE_AFTER_REQUESTS=inf` OverflowError
 - [ ] B7 脚本热加载 mtime 相同内容替换仍返回旧脚本
 - [ ] B4 `n>1` 只返回 1 个 choice
 - [ ] H7 未导入的类型注解（F821）
@@ -425,3 +425,9 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
   - `-m "not local_fixture"`：648 passed, 63 deselected。
   - 对比修改前：原先通过的 647 项全部仍通过，另有 1 项转为通过；其余 63 项从失败变为跳过。
   - `/tmp/baseline_failures.txt` 已清空，此后任何失败都算新增。
+
+### B6 非有限数值配置 OverflowError ✅（P3）
+
+- `app/core/tab_pool_parts/idle_maintenance.py::_env_float`：`math.isfinite` 校验，inf/-inf/nan/1e400 → 警告并用默认值（禁用仍用 0）；
+  新增 `_env_int` 包装，`BROWSER_CDP_RECYCLE_AFTER_REQUESTS` / `_DOM_NODES` 改用它。
+- 测试：新建 `tests/test_review_fixes_p3.py`，B6 共 6 项。
