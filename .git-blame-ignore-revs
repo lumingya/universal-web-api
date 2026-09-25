@@ -1,0 +1,5 @@
+# git blame 时跳过的纯格式化提交。
+# GitHub 网页上的 blame 会自动读取本文件；本地启用：git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# R0-6：统一换行符（.gitattributes + git add --renormalize .，纯行尾变更）
+b26378101ff2d0ec481d33f6885cd698f84621bd
