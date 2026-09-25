@@ -59,3 +59,23 @@ async def adapter_health(site: str, preset: Optional[str] = None, authenticated:
     except Exception as exc:  # 浏览器未连接等
         logger.warning(f"适配器巡检失败: {exc}")
         raise HTTPException(status_code=503, detail=f"巡检失败：{exc}") from exc
+
+
+@router.get("/api/adapters/lint")
+async def adapter_lint(site: str, authenticated: bool = Depends(verify_auth)):
+    """R1-7：静态检查站点各预设选择器的脆弱度（不访问浏览器，不修改配置）。"""
+    from app.services.config_engine import config_engine
+    from app.services.selector_quality import lint_selector
+
+    config = config_engine.sites.get(site)
+    if not isinstance(config, dict):
+        raise HTTPException(status_code=404, detail=f"未知站点: {site}")
+    presets = {}
+    for name, preset in (config.get("presets") or {}).items():
+        rows = [
+            {"key": key, **lint_selector(selector)}
+            for key, selector in ((preset or {}).get("selectors") or {}).items()
+            if isinstance(selector, str) and selector.strip()
+        ]
+        presets[name] = sorted(rows, key=lambda row: row["score"])
+    return {"site": site, "presets": presets}

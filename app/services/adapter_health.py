@@ -17,6 +17,7 @@ import time
 from typing import Any, Dict, Iterable, List, Optional, Protocol
 
 from app.core.config import get_logger
+from app.services.selector_quality import fallback_suggestions, lint_selector
 
 logger = get_logger("ADAPTER_HEALTH")
 
@@ -70,9 +71,13 @@ def evaluate_preset(probe: Probe, preset: Dict[str, Any], definitions: Iterable[
             continue
         count = probe.count(selector)
         status = "invalid" if count < 0 else ("missing" if count == 0 else "ok")
-        row = {"key": key, "selector": selector, "count": max(count, 0), "status": status, "required": key in required}
+        row = {"key": key, "selector": selector, "count": max(count, 0), "status": status, "required": key in required,
+               "quality": lint_selector(selector)}
         if status == "missing" and key in _HINTS:
             row["hint"] = _HINTS[key]
+        if status != "ok" and key in required:
+            # R1-7：运行时找不到配置的元素时会尝试这些回退选择器；命中的可作为修复起点
+            row["suggestions"] = fallback_suggestions(key, probe)
         rows.append(row)
 
     by_key = {row["key"]: row for row in rows}
