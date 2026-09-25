@@ -105,7 +105,7 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - [x] S6 媒体路由无认证与转码资源
 - [x] S3 解析器安装立即 import
 - [ ] H9 标签页等待队列无总量上限
-- [ ] H12 网络事件 URL 正则回溯
+- [x] H12 网络事件 URL 正则回溯
 
 ## 4. 修复记录
 
@@ -332,3 +332,14 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
   - 安全示例和全部内置解析器通过。
   - 默认关闭，非法开关值同样视为关闭。
   - 模块路径白名单。
+
+### H12 网络事件 URL 正则回溯 ✅
+
+- `app/services/command_engine_results.py::_matches_url_rule`：
+  - 正则改用 `regex` 模块，timeout 设为 25ms。它已经是依赖，工作流的 `matches` 用的也是同一预算。
+  - 超时按“不匹配”处理，并打 warning。
+  - 模式上限 512 字符，超过就按关键词匹配；URL 最多取前 8192 字符参与匹配。
+  - 无效正则时，通配回退也走同一个带预算的匹配器，其余语义不变。
+- 测试：p2 新增 2 项：
+  - 灾难性模式 `(a+)+$`、`(a|aa)*c` 在 5000 字符 URL 上 1 秒内返回 False。用 stash 验证过：旧代码在 100 秒 timeout 内都没跑完。
+  - 常规正则、忽略大小写、通配回退、关键词、超长模式的语义保持不变。

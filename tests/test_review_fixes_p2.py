@@ -888,3 +888,38 @@ def test_s3_config_module_must_be_inside_parser_package(monkeypatch):
             mgr._load_parser_entry("p", {"module": bad, "class": "C"})
     mgr._load_parser_entry("p", {"module": "app.core.parsers.mimo_runtime_parser", "class": "MimoParser"})
     assert loaded == ["app.core.parsers.mimo_runtime_parser"]
+
+
+# ---------------------------------------------------------------------------
+# H12 · 网络事件 URL 正则：25ms 求值预算 + 模式/输入长度上限
+# ---------------------------------------------------------------------------
+
+def _results_mixin():
+    from app.services import command_engine_results as cer
+
+    cls = next(v for v in vars(cer).values()
+               if isinstance(v, type) and hasattr(v, "_matches_url_rule") and v.__module__ == cer.__name__)
+    return object.__new__(cls)
+
+
+def test_h12_catastrophic_regex_is_time_bounded():
+    m = _results_mixin()
+    url = "https://x.example/" + "a" * 5000 + "!"
+    started = time.perf_counter()
+    assert m._matches_url_rule(url, r"(a+)+$", "regex") is False
+    assert m._matches_url_rule(url, r"(a|aa)*c", "regex") is False
+    assert time.perf_counter() - started < 1.0
+
+
+def test_h12_regex_semantics_preserved():
+    m = _results_mixin()
+    url = "https://chat.example.com/api/Conversation?id=1"
+    assert m._matches_url_rule(url, r"/api/conversation", "regex") is True
+    assert m._matches_url_rule(url, r"^https://chat\.example\.com/api/\w+", "regex") is True
+    assert m._matches_url_rule(url, r"/api/other", "regex") is False
+    # 无效正则 → 通配回退 → 关键词
+    assert m._matches_url_rule(url, "*.example.com/api*", "regex") is True
+    assert m._matches_url_rule(url, "*.other.com/api*", "regex") is False
+    assert m._matches_url_rule(url, "conversation", "keyword") is True
+    # 超长模式按关键词处理，不交给正则引擎
+    assert m._matches_url_rule(url, "(" * 600, "regex") is False

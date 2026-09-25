@@ -634,22 +634,47 @@ class CommandEngineResultsMixin:
         simplified = raw.strip("* ").strip()
         return simplified[:120]
 
+    # H12：网络事件 URL 正则的求值预算（与工作流 matches 运算符一致：25ms）
+    URL_REGEX_MAX_PATTERN = 512
+    URL_REGEX_MAX_INPUT = 8192
+    URL_REGEX_TIMEOUT_SEC = 0.025
+
+    @classmethod
+    def _bounded_regex_search(cls, pattern: str, url: str) -> Optional[bool]:
+        """带超时的正则匹配：返回 True/False；模式无效返回 None；超时视为不匹配。"""
+        import regex as _regex
+
+        try:
+            return bool(_regex.search(
+                pattern,
+                url[: cls.URL_REGEX_MAX_INPUT],
+                flags=_regex.IGNORECASE,
+                timeout=cls.URL_REGEX_TIMEOUT_SEC,
+            ))
+        except TimeoutError:
+            logger.warning(f"[CMD] URL 正则超过 25ms 求值预算，按不匹配处理: {pattern[:120]}")
+            return False
+        except _regex.error:
+            return None
+
     def _matches_url_rule(self, url: str, pattern: str, mode: str) -> bool:
         if not pattern:
             return True
         if mode == "regex":
-            try:
-                return bool(re.search(pattern, url, flags=re.IGNORECASE))
-            except re.error:
-                logger.warning(f"[CMD] 无效正则，回退通配/关键词匹配: {pattern}")
-                wildcard = str(pattern).replace(".", r"\.").replace("*", ".*")
-                try:
-                    return bool(re.search(wildcard, url, flags=re.IGNORECASE))
-                except re.error:
-                    pass
-                simplified = str(pattern).replace("*", "").strip()
-                if simplified:
-                    return simplified.lower() in url.lower()
+            if len(pattern) > self.URL_REGEX_MAX_PATTERN:
+                logger.warning(f"[CMD] URL 正则超过 {self.URL_REGEX_MAX_PATTERN} 字符，按关键词匹配")
+                return pattern.lower() in url.lower()
+            matched = self._bounded_regex_search(pattern, url)
+            if matched is not None:
+                return matched
+            logger.warning(f"[CMD] 无效正则，回退通配/关键词匹配: {pattern}")
+            wildcard = str(pattern).replace(".", r"\.").replace("*", ".*")
+            matched = self._bounded_regex_search(wildcard, url)
+            if matched is not None:
+                return matched
+            simplified = str(pattern).replace("*", "").strip()
+            if simplified:
+                return simplified.lower() in url.lower()
         return pattern.lower() in url.lower()
 
     def _matches_network_trigger(self, trigger: Dict[str, Any], event: Dict[str, Any]) -> bool:
