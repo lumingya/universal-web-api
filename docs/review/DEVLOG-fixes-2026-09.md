@@ -4,6 +4,22 @@
 > 防止上下文压缩或沙盒重启后丢失信息。上一阶段（只审查不改代码）的日志见
 > `docs/review/DEVLOG-code-review-2026-09.md`。
 
+## ✅ 状态：P1 + P2 全部完成（分支 `fix/review-p1-p2-b`）
+
+- P1：S13、S1、H1、S8、S9、S12；P2：B8、B5、B2、B1、B3、S10、S11、S4、S5、S6、S3、H9、H12、T1。每一项在下文「4. 修复记录」里都有文件、决策、验证方式的记录。
+- 全量测试：修复前 524 passed / 73 failed（其中 9 项是 B1 规格测试，64 项是 T1 fixture 缺失）；现在 **648 passed / 63 skipped / 0 failed**。
+  新增回归测试：`tests/test_review_fixes_p1.py`（58 项）和 `tests/test_review_fixes_p2.py`。
+- 行为变化中需要合并方留意的新开关（都已写进 `.env.example`）：
+  - `RESPONSES_STATE_MAX_ENTRY_MB` / `RESPONSES_STATE_MAX_TOTAL_MB`
+  - `RESTART_PROXY_MAX_CONNECTIONS` / `RESTART_PROXY_MAX_BUFFER_MB`
+  - `MEDIA_REQUIRE_AUTH`（默认 false）
+  - `MEDIA_TRANSCODE_*`
+  - `TAB_ACQUIRE_MAX_WAITERS`
+  - `PARSER_INSTALL_ENABLED`（默认 false）
+- 没做 / 有意保留的：
+  - S2（信任边界设计项，按范围排除）。
+  - 媒体文件名熵偏低（`时间戳_uuid8`），见 S6 记录，留给 P3。
+
 ## 0. 恢复指引（上下文丢失 / 沙盒重启后先看这里）
 
 > ⚠️ **分支约定（2026-09-25 用户确认）**：发现另一会话在并行往 `main` 推同一批修复（`c8006cd`、`06f8103`…）。
