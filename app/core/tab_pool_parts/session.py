@@ -255,27 +255,63 @@ class TabSession:
         with self._lock:
             return self._debug_summary_unlocked()
 
+    # B5：解冻失败后的冷却期，期间 acquire 直接跳过该会话，避免每次都卡 2 秒 CDP 超时
+    _RESUME_FAILURE_BACKOFF_SEC = 10.0
+
     def acquire(self, task_id: str) -> bool:
+        if self._resume_recently_failed():
+            return False
         if not self._acquire_request_unlocked_entry(task_id):
             return False
-        self._resume_after_acquire("acquire")
+        if not self._resume_after_acquire("acquire"):
+            self._rollback_failed_acquire(task_id, request_mode=True)
+            return False
         return True
 
     def acquire_for_command(self, task_id: str) -> bool:
         """Acquire tab for command execution without incrementing request counter."""
+        if self._resume_recently_failed():
+            return False
         if not self._acquire_command_unlocked_entry(task_id):
             return False
-        self._resume_after_acquire("acquire_for_command")
+        if not self._resume_after_acquire("acquire_for_command"):
+            self._rollback_failed_acquire(task_id, request_mode=False)
+            return False
         return True
 
-    def _resume_after_acquire(self, reason: str) -> None:
-        """P0-6：被空闲冻结的标签页在交给调用方之前恢复为 active。"""
+    def _resume_recently_failed(self) -> bool:
+        if not getattr(self, "_uwapi_frozen", False):
+            return False
+        failed_at = float(getattr(self, "_uwapi_resume_failed_at", 0.0) or 0.0)
+        return bool(failed_at) and (time.time() - failed_at) < self._RESUME_FAILURE_BACKOFF_SEC
+
+    def _resume_after_acquire(self, reason: str) -> bool:
+        """P0-6：被空闲冻结的标签页在交给调用方之前恢复为 active。
+
+        B5：返回该会话是否可交付——解冻失败（仍处于冻结态）返回 False。
+        """
         try:
             from .idle_maintenance import resume_if_frozen
 
             resume_if_frozen(self, reason=reason)
         except Exception as e:
             logger.debug(f"[{self.id}] resume frozen tab failed: {e}")
+        return not bool(getattr(self, "_uwapi_frozen", False))
+
+    def _rollback_failed_acquire(self, task_id: str, *, request_mode: bool) -> None:
+        """B5：解冻失败时撤销本次占用，把会话退回 IDLE（保留冻结标记），不交付给调用方。"""
+        with self._lock:
+            if self.status != TabStatus.BUSY or str(self.current_task_id or "") != str(task_id or ""):
+                return
+            self.status = TabStatus.IDLE
+            self.current_task_id = None
+            if request_mode and self.request_count > 0:
+                self.request_count -= 1
+            self._clear_health_cache_unlocked()
+        logger.warning(
+            f"[{self.id}] 标签页解冻失败，本次不交付该会话（task={task_id}），"
+            f"{self._RESUME_FAILURE_BACKOFF_SEC:.0f}s 内跳过"
+        )
 
     def _acquire_request_unlocked_entry(self, task_id: str) -> bool:
         with self._lock:

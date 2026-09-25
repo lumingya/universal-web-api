@@ -94,7 +94,7 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 ### 第二批
 
 - [x] B8 命令配置损坏时清空运行缓存
-- [ ] B5 解冻失败仍交付标签页
+- [x] B5 解冻失败仍交付标签页
 - [ ] B2 旧版顶层数组历史恢复丢失
 - [ ] B1 搜索引擎主域被自动发现
 - [ ] B3 Responses 内存历史无字节预算
@@ -202,3 +202,16 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - `command_engine_storage.py` 是未被继承的死代码（H13，P3），**未改**。
 - 验证：`tests/test_review_fixes_p2.py::test_b8_*`（损坏 JSON/错误结构均保留旧命令且无清理动作、同一损坏文件不重复读、
   修复后切换并产生清理动作（对照）、合法空配置仍会清空）。该用例在修复前代码上失败（已 stash 验证）。
+
+### B5 解冻失败仍交付标签页 ✅
+
+- `app/core/tab_pool_parts/idle_maintenance.py::resume_if_frozen`：CDP `Page.setWebLifecycleState=active` 失败时**不再**
+  在 `finally` 清除 `_uwapi_frozen`，改记 `_uwapi_resume_failed_at`；成功时才清冻结标志并清零失败时间。
+- `app/core/tab_pool_parts/session.py`：
+  - `_resume_after_acquire()` 返回「是否可交付」（调用后仍冻结 → False）。
+  - `acquire()` / `acquire_for_command()`：解冻失败 → `_rollback_failed_acquire()` 退回 IDLE、清 task、请求模式回退
+    `request_count`，返回 False（manager 会去试下一个会话）。
+  - 解冻失败后 10s 冷却期（`_RESUME_FAILURE_BACKOFF_SEC`）内 acquire 直接跳过，避免每次卡 2s CDP 超时。
+  - **决策**：没有把会话标成 ERROR——冻结失败多为瞬时 CDP 问题，冷却后重试即可；真正死掉的标签页由既有健康检查处理。
+- 验证：p2 新增 3 项（假 CDP 抛错 → acquire False/IDLE/计数不变/保留冻结；冷却期内不发 CDP；恢复后可交付；
+  命令模式不动 request_count；未冻结会话不发 CDP）。

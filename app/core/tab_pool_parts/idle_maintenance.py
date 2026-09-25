@@ -372,9 +372,15 @@ def resume_if_frozen(session: Any, reason: str = "") -> bool:
             )
         finally:
             _restore_focus_emulation(session, tab)
-            setattr(session, "_uwapi_frozen", False)
-            setattr(session, "_uwapi_freeze_token", "")
-            setattr(session, "_uwapi_last_resumed_at", time.time())
+            if ok:
+                setattr(session, "_uwapi_frozen", False)
+                setattr(session, "_uwapi_freeze_token", "")
+                setattr(session, "_uwapi_last_resumed_at", time.time())
+                setattr(session, "_uwapi_resume_failed_at", 0.0)
+            else:
+                # B5：解冻失败时保留「待确认冻结」状态，调用方据此拒绝交付该会话；
+                # 旧实现无条件清除冻结标志，acquire() 会把仍冻结的页面当作可用标签页交出去。
+                setattr(session, "_uwapi_resume_failed_at", time.time())
         frozen_at = float(getattr(session, "_uwapi_frozen_at", 0.0) or 0.0)
         if ok:
             logger.debug(

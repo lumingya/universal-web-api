@@ -83,3 +83,70 @@ def test_b8_corrupt_commands_json_keeps_last_known_good(tmp_path, monkeypatch):
         assert engine._commands_cache == []
     finally:
         engine.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# B5 · 解冻失败不交付 BUSY 标签页
+# ---------------------------------------------------------------------------
+
+class _FakeCdpTab:
+    def __init__(self, fail: bool):
+        self.fail = fail
+        self.calls = []
+
+    def run_cdp(self, method, **params):
+        self.calls.append((method, params))
+        if method == "Page.setWebLifecycleState" and self.fail:
+            raise RuntimeError("synthetic CDP failure")
+        return {}
+
+
+def _frozen_session(fail: bool):
+    from app.core.tab_pool_parts.session import TabSession
+
+    session = TabSession(id="tab-b5", tab=_FakeCdpTab(fail))
+    session._uwapi_frozen = True
+    session._uwapi_frozen_at = time.time() - 120
+    return session
+
+
+def test_b5_unfreeze_failure_does_not_hand_out_session():
+    from app.core.tab_pool_parts.session import TabStatus
+
+    session = _frozen_session(fail=True)
+    assert session.acquire("task-1") is False
+    assert session.status == TabStatus.IDLE
+    assert session.current_task_id is None
+    assert session.request_count == 0
+    assert session._uwapi_frozen is True            # 保留待确认冻结态
+
+    # 冷却期内直接跳过，不再发 CDP
+    calls_before = len(session.tab.calls)
+    assert session.acquire_for_command("cmd-1") is False
+    assert len(session.tab.calls) == calls_before
+
+    # 冷却期过后 CDP 恢复正常 → 可正常交付并清除冻结
+    session._uwapi_resume_failed_at = time.time() - 60
+    session.tab.fail = False
+    assert session.acquire("task-2") is True
+    assert session.status == TabStatus.BUSY
+    assert session._uwapi_frozen is False
+    assert session.request_count == 1
+
+
+def test_b5_command_acquire_rolls_back_without_touching_request_count():
+    from app.core.tab_pool_parts.session import TabStatus
+
+    session = _frozen_session(fail=True)
+    session.request_count = 7
+    assert session.acquire_for_command("cmd-1") is False
+    assert session.status == TabStatus.IDLE and session.request_count == 7
+
+
+def test_b5_unfrozen_session_acquire_is_unchanged():
+    from app.core.tab_pool_parts.session import TabSession, TabStatus
+
+    session = TabSession(id="tab-ok", tab=_FakeCdpTab(fail=True))
+    assert session.acquire("task") is True
+    assert session.status == TabStatus.BUSY
+    assert session.tab.calls == []   # 未冻结时不发任何 CDP
