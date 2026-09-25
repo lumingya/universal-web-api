@@ -865,11 +865,17 @@ async def media_file(
         media_path = source_path
         media_type = _guess_media_mime(media_path)
 
+    # S8/S9：出口加固。白名单媒体才可 inline；历史遗留的 .svg/.html 等一律强制下载，
+    # 并附带 nosniff + sandbox CSP，防止在应用同源执行脚本。
+    from app.utils.media_safety import resolve_media_delivery, safe_media_response_headers
+
+    media_type, disposition = resolve_media_delivery(media_path, media_type)
     return FileResponse(
         media_path,
         media_type=media_type,
         filename=media_path.name,
-        content_disposition_type="inline",
+        content_disposition_type=disposition,
+        headers=safe_media_response_headers(),
     )
 # ================= 注册 API 路由（在 Dashboard 之后）=================
 
@@ -885,7 +891,26 @@ if Path("static").exists():
 # 🆕 挂载图片下载目录
 download_images_dir = Path("download_images")
 download_images_dir.mkdir(exist_ok=True)  # 自动创建目录
-app.mount("/download_images", StaticFiles(directory="download_images"), name="download_images")
+class HardenedMediaStaticFiles(StaticFiles):
+    """S8/S9：/download_images 出口加固——非白名单扩展名强制下载，统一 nosniff + sandbox CSP。"""
+
+    def file_response(self, full_path, stat_result, scope, status_code=200):
+        from app.utils.media_safety import resolve_media_delivery, safe_media_response_headers
+
+        response = super().file_response(full_path, stat_result, scope, status_code)
+        media_type, disposition = resolve_media_delivery(Path(str(full_path)))
+        if disposition == "attachment":
+            response.media_type = media_type
+            response.headers["content-type"] = media_type
+            response.headers["content-disposition"] = (
+                'attachment; filename="' + Path(str(full_path)).name.replace('"', '').replace('\\', '') + '"'
+            )
+        for key, value in safe_media_response_headers().items():
+            response.headers[key] = value
+        return response
+
+
+app.mount("/download_images", HardenedMediaStaticFiles(directory="download_images"), name="download_images")
 logger.info(f"📁 图片下载目录: {download_images_dir.absolute()}")
 
 

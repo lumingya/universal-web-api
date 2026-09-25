@@ -87,8 +87,8 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - [x] S13 备份接口泄露 `.env` 密钥 + 前端导出本地令牌
 - [x] S1 控制面默认开放（认证默认关 + CORS `*`）
 - [x] H1 `.env.example` 诱导不安全部署
-- [ ] S8 SVG 以同源活动内容落盘/提供
-- [ ] S9 音视频响应头 + `.html` 后缀落盘
+- [x] S8 SVG 以同源活动内容落盘/提供
+- [x] S9 音视频响应头 + `.html` 后缀落盘
 - [ ] S12 默认开启的响应调试抓取
 
 ### 第二批
@@ -158,3 +158,25 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - 验证：p1 测试增至 24 项（Origin 判定矩阵 10 例、主应用跨源 GET/POST/预检均 403 且无 ACAO、占位符 fail-closed、
   启动检查矩阵、lifespan 拒绝含 handoff 场景、启动器可独立加载检查模块、模板无重复键/无示例秘密/可直接通过检查）。
   全量 548 passed / 73 failed（基线同集合）。
+
+### S8 SVG 同源活动内容 + S9 音视频 HTML 落盘 ✅（同一链路，同一提交）
+
+- 新增 `app/utils/media_safety.py`（单一事实源）：图片/音频/视频 MIME→扩展名白名单、
+  `choose_media_extension(kind, content_type, url)`（活动 MIME 拒绝 → 映射 → 仅采纳同类白名单 URL 后缀 → 类别默认；
+  MIME 大类与 kind 不符也拒绝）、`looks_like_active_content()`（文件头以 `<` 开头 / UTF-16 BOM 即判活动内容）、
+  `resolve_media_delivery()`（出口：非白名单扩展名 → `application/octet-stream` + `attachment`）、
+  `safe_media_response_headers()`（`nosniff` + `sandbox; default-src 'none'; img-src/media-src 'self'` CSP）。
+- `app/core/browser/media.py`：
+  - 音视频 `_persist_remote_media_urls_to_local`：扩展名不再取 `urlparse(url).path` 后缀（S9 根因），
+    首个 chunk 写盘前嗅探，命中抛 `unsafe_media_content` 走原有清理分支（删半截文件、保留远程链接）。
+  - 前台图片回退：删掉 `"image/svg+xml": ".svg"`（S8 根因），`is_active_content_mime` 拦截，
+    内容嗅探为标记语言时不落盘、继续走截图回退。
+  - data URI：`image/svg+xml`/`text/html` 等 MIME 或内容嗅探命中 → 不落盘（保留原 data_uri）。
+- `app/core/extractors/media_extractor.py`：网络音频捕获落盘前同样嗅探。
+- `main.py`：`/media/{filename}` 走 `resolve_media_delivery` + 加固头；`/download_images` 改挂
+  `HardenedMediaStaticFiles`（覆写 `file_response`）。**出口加固必要**：目录里可能已有旧版落盘的 .svg/.html。
+  **决策**：不加 `Cross-Origin-Resource-Policy`——跨站聊天前端（如 localhost:8000）需要 `<img>` 引用这些链接。
+- `background_image_downloader.py` 未改（本来就拒绝 SVG 且有魔数校验，属报告「不要误报」项）。
+- 验证：p1 测试增至 43 项（白名单矩阵 9 例、嗅探、`video/custom`+`clip.html`+HTML 不落盘且无残留、
+  真实 mp4 带 .html 后缀落盘为 .mp4、SVG data URI 与谎报 png 的 SVG 均不落盘、遗留 .svg/.html 经 ASGI
+  取回为 octet-stream+attachment+nosniff+sandbox、png 仍 inline）。全量 567 passed / 73 failed（基线同集合）。

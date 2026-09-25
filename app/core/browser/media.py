@@ -29,6 +29,14 @@ from app.core.background_image_downloader import (
     normalize_remote_image_url,
 )
 from app.utils.remote_resource import get_public_remote_resource
+from app.utils.media_safety import (
+    IMAGE_EXT_BY_MIME,
+    AUDIO_EXT_BY_MIME,
+    VIDEO_EXT_BY_MIME,
+    choose_media_extension,
+    is_active_content_mime,
+    looks_like_active_content,
+)
 from app.utils.site_url import extract_remote_site_domain
 from app.utils.image_validation import filter_reference_images
 from app.core.tab_pool import TabSession
@@ -2069,21 +2077,7 @@ class BrowserMediaMixin:
         save_dir.mkdir(exist_ok=True)
         max_bytes = max(1, int(max_size_mb)) * 1024 * 1024
 
-        ext_map = {
-            "audio/aac": ".aac",
-            "audio/mpeg": ".mp3",
-            "audio/mp3": ".mp3",
-            "audio/wav": ".wav",
-            "audio/x-wav": ".wav",
-            "audio/ogg": ".ogg",
-            "audio/webm": ".webm",
-            "audio/webm;codecs=opus": ".webm",
-            "audio/mp4": ".m4a",
-            "video/mp4": ".mp4",
-            "video/webm": ".webm",
-            "video/ogg": ".ogv",
-            "video/quicktime": ".mov",
-        }
+        # S8/S9：扩展名统一由 app.utils.media_safety 白名单决定（不再使用本地 ext_map / URL 后缀）
 
         cookies_dict, headers = build_image_download_request_context(tab, accept="*/*")
         partition_key = build_image_download_partition(cookies_dict, headers)
@@ -2171,19 +2165,27 @@ class BrowserMediaMixin:
                     result.append(item)
                     continue
 
-                ext = ext_map.get(content_type)
+                # S9：扩展名只来自白名单；远端 URL 的 .html/.svg 后缀永远不会被采用
+                ext = choose_media_extension(media_type, content_type, url)
                 if not ext:
-                    path_ext = Path(urlparse(url).path).suffix.lower()
-                    ext = path_ext or (".mp4" if media_type == "video" else ".mp3")
+                    logger.warning(f"{media_type} 响应类型不安全，保留远程链接: {content_type or 'unknown'}")
+                    result.append(item)
+                    continue
 
                 filename = f"{int(time.time())}_{uuid.uuid4().hex[:8]}{ext}"
                 filepath = save_dir / filename
 
                 written = 0
+                sniffed = False
                 with filepath.open("wb") as handle:
                     for chunk in response.iter_content(chunk_size=1024 * 64):
                         if not chunk:
                             continue
+                        if not sniffed:
+                            sniffed = True
+                            # 谎报 Content-Type（如 video/custom）但实际是 HTML/SVG 的响应在写盘前拦截
+                            if looks_like_active_content(chunk[:1024]):
+                                raise ValueError("unsafe_media_content")
                         written += len(chunk)
                         if written > max_bytes:
                             raise ValueError(f"media_too_large:{written}")
@@ -2429,16 +2431,8 @@ class BrowserMediaMixin:
         out_dir.mkdir(exist_ok=True)
 
         selector = image_config.get("selector", "img")
-        ext_map = {
-            "image/jpeg": ".jpg",
-            "image/jpg": ".jpg",
-            "image/png": ".png",
-            "image/webp": ".webp",
-            "image/gif": ".gif",
-            "image/bmp": ".bmp",
-            "image/svg+xml": ".svg",
-            "image/avif": ".avif",
-        }
+        # S8：不再接受 image/svg+xml（与后台下载器一致），扩展名来自统一白名单
+        ext_map = dict(IMAGE_EXT_BY_MIME)
 
         scoped_selector = str(selector or "img").strip() or "img"
         # Arena 图片卡片在流结束后才会补上动画 class；此时严格的预设 selector
@@ -2709,14 +2703,17 @@ class BrowserMediaMixin:
 
                 if response.status_code == 200:
                     content_type = str(response.headers.get('Content-Type') or '').split(";", 1)[0].strip().lower()
-                    if 'image' not in content_type:
+                    if 'image' not in content_type or is_active_content_mime(content_type):
                         logger.debug(f"下载内容无效: type: {content_type or 'unknown'}")
                     else:
                         read_started_at = time.monotonic()
                         content = self._read_response_bytes_with_limit(response, max_image_bytes)
                         read_finished_at = time.monotonic()
 
-                        if len(content) > 1000:
+                        if len(content) > 1000 and looks_like_active_content(content[:1024]):
+                            # S8：Content-Type 声称图片但内容是 SVG/HTML 标记 → 不落盘，走截图回退
+                            logger.debug(f"下载内容疑似活动文档，拒绝落盘: type: {content_type}")
+                        elif len(content) > 1000:
                             ext = ext_map.get(content_type, ext)
                             filename = f"{base_name}{ext}"
                             out_path = out_dir / filename
@@ -2859,27 +2856,7 @@ class BrowserMediaMixin:
         except (TypeError, ValueError):
             max_bytes = 10 * 1024 * 1024
 
-        ext_map = {
-            "image/jpeg": ".jpg",
-            "image/jpg": ".jpg",
-            "image/png": ".png",
-            "image/webp": ".webp",
-            "image/gif": ".gif",
-            "image/bmp": ".bmp",
-            "audio/aac": ".aac",
-            "audio/mpeg": ".mp3",
-            "audio/mp3": ".mp3",
-            "audio/wav": ".wav",
-            "audio/x-wav": ".wav",
-            "audio/ogg": ".ogg",
-            "audio/webm": ".webm",
-            "audio/webm;codecs=opus": ".webm",
-            "audio/mp4": ".m4a",
-            "video/mp4": ".mp4",
-            "video/webm": ".webm",
-            "video/ogg": ".ogv",
-            "video/quicktime": ".mov",
-        }
+        ext_map = {**IMAGE_EXT_BY_MIME, **AUDIO_EXT_BY_MIME, **VIDEO_EXT_BY_MIME}
 
         result = []
         for item in media_items:
@@ -2895,6 +2872,9 @@ class BrowserMediaMixin:
             try:
                 header, b64_data = data_uri.split(",", 1)
                 mime = header.split(";", 1)[0].split(":", 1)[1].lower()
+                if is_active_content_mime(mime):
+                    # S8：data:image/svg+xml / text/html 等不落盘到同源目录
+                    raise ValueError(f"unsafe_data_uri_mime:{mime}")
                 ext = ext_map.get(mime, ".png")
                 compact_b64 = "".join(str(b64_data or "").split())
                 padding = compact_b64.count("=")
@@ -2904,6 +2884,8 @@ class BrowserMediaMixin:
                 media_bytes = base64.b64decode(compact_b64)
                 if len(media_bytes) > max_bytes:
                     raise ValueError(f"data_uri_too_large:{len(media_bytes)}")
+                if looks_like_active_content(media_bytes[:1024]):
+                    raise ValueError("unsafe_data_uri_content")
             except (ValueError, IndexError, binascii.Error) as e:
                 logger.warning(f"data uri 解析失败，保留原媒体数据: {e}")
                 result.append(item)

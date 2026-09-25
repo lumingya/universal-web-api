@@ -3109,6 +3109,11 @@ class MediaExtractor:
         payload = bytes(body_bytes)
         if not payload:
             return None
+        from app.utils.media_safety import looks_like_active_content
+        if looks_like_active_content(payload[:1024]):
+            # S9：捕获到的「音频」实为 HTML/SVG 等标记内容时不落盘到同源目录
+            logger.warning("网络音频内容疑似活动文档，已拒绝落盘")
+            return None
 
         mime = str(event.get("mime") or "audio/ogg").strip().lower() or "audio/ogg"
         ext_map = {

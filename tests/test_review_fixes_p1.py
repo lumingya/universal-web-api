@@ -274,3 +274,144 @@ def test_env_example_is_safe_to_copy():
     for key, value in env.items():
         if hs.is_secret_env_key(key):
             assert value == "", f"模板不应包含示例秘密值: {key}"
+
+
+# ---------------------------------------------------------------------------
+# S8 / S9 · 活动内容落盘与同源提供
+# ---------------------------------------------------------------------------
+
+from app.utils import media_safety as ms  # noqa: E402
+
+SVG_PAYLOAD = b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>' + b" " * 1200
+HTML_PAYLOAD = b"<!doctype html><html><script>alert(document.domain)</script></html>" + b" " * 1200
+
+
+@pytest.mark.parametrize("kind,ctype,url,expected", [
+    ("video", "video/custom", "https://cdn.example/clip.html", ".mp4"),   # S9 复现用例
+    ("video", "video/mp4", "https://cdn.example/clip.html", ".mp4"),
+    ("audio", "audio/x-unknown", "https://cdn.example/a.svg", ".mp3"),
+    ("audio", "audio/x-unknown", "https://cdn.example/a.flac", ".flac"),
+    ("image", "image/svg+xml", "https://cdn.example/x.svg", None),        # S8
+    ("image", "text/html", "https://cdn.example/x.png", None),
+    ("video", "image/png", "https://cdn.example/x.mp4", None),            # 大类不符
+    ("image", "image/jpeg", None, ".jpg"),
+    ("other", "video/mp4", None, None),
+])
+def test_choose_media_extension_whitelist(kind, ctype, url, expected):
+    assert ms.choose_media_extension(kind, ctype, url) == expected
+
+
+def test_looks_like_active_content_sniffing():
+    assert ms.looks_like_active_content(SVG_PAYLOAD)
+    assert ms.looks_like_active_content(b"\xef\xbb\xbf  \n<HTML>")
+    assert ms.looks_like_active_content(b"<?xml version='1.0'?><svg/>")
+    assert not ms.looks_like_active_content(b"\x89PNG\r\n\x1a\n....")
+    assert not ms.looks_like_active_content(b"\x00\x00\x00\x18ftypmp42")
+    assert not ms.looks_like_active_content(b"ID3\x03\x00")
+
+
+def _fake_response(content_type, body):
+    class Response:
+        status_code = 200
+        headers = {"Content-Type": content_type}
+
+        def iter_content(self, chunk_size=65536):
+            yield body
+
+        def close(self):
+            return None
+
+    return Response()
+
+
+@pytest.fixture
+def media_mixin(tmp_path, monkeypatch):
+    from app.core.browser import media as media_module
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(media_module, "build_image_download_request_context",
+                        lambda _tab, accept="*/*": ({}, {"Accept": accept}))
+    return media_module
+
+
+def test_s9_html_disguised_as_video_is_not_persisted(media_mixin, tmp_path, monkeypatch):
+    monkeypatch.setattr(media_mixin, "get_public_remote_resource",
+                        lambda url, **kw: _fake_response("video/custom", HTML_PAYLOAD))
+    item = {"kind": "url", "media_type": "video", "url": "https://cdn.example/clip.html"}
+    result = media_mixin.BrowserMediaMixin()._persist_remote_media_urls_to_local([item], tab=object())
+    assert result[0]["url"] == item["url"]          # 保留远程链接
+    saved = list((tmp_path / "download_images").glob("*"))
+    assert saved == []                              # 未落盘，且失败清理生效
+
+
+def test_s9_real_video_with_html_suffix_is_saved_as_mp4(media_mixin, tmp_path, monkeypatch):
+    monkeypatch.setattr(media_mixin, "get_public_remote_resource",
+                        lambda url, **kw: _fake_response("video/custom", b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 64))
+    item = {"kind": "url", "media_type": "video", "url": "https://cdn.example/clip.html"}
+    result = media_mixin.BrowserMediaMixin()._persist_remote_media_urls_to_local([item], tab=object())
+    assert result[0]["url"].startswith("/media/") and result[0]["url"].endswith(".mp4")
+    assert [p.suffix for p in (tmp_path / "download_images").glob("*")] == [".mp4"]
+
+
+def test_s8_svg_data_uri_is_not_persisted(media_mixin, tmp_path):
+    import base64
+    svg_uri = "data:image/svg+xml;base64," + base64.b64encode(SVG_PAYLOAD).decode()
+    lying_uri = "data:image/png;base64," + base64.b64encode(SVG_PAYLOAD).decode()
+    items = [{"kind": "data_uri", "media_type": "image", "data_uri": svg_uri},
+             {"kind": "data_uri", "media_type": "image", "data_uri": lying_uri}]
+    result = media_mixin.BrowserMediaMixin()._persist_data_uri_media_to_local(items)
+    assert [r["kind"] for r in result] == ["data_uri", "data_uri"]
+    assert list((tmp_path / "download_images").glob("*")) == []
+
+
+def test_s8_foreground_image_fallback_no_longer_maps_svg():
+    source = (Path(__file__).resolve().parents[1] / "app/core/browser/media.py").read_text(encoding="utf-8")
+    assert '"image/svg+xml": ".svg"' not in source
+    assert "image/svg+xml" not in ms.IMAGE_EXT_BY_MIME
+
+
+@pytest.mark.parametrize("name,expected_type,expected_disp", [
+    ("legacy.svg", "application/octet-stream", "attachment"),
+    ("legacy.html", "application/octet-stream", "attachment"),
+    ("ok.png", "image/png", "inline"),
+    ("ok.mp4", "video/mp4", "inline"),
+])
+def test_media_delivery_policy(name, expected_type, expected_disp):
+    assert ms.resolve_media_delivery(Path(name)) == (expected_type, expected_disp)
+
+
+def test_served_media_is_hardened_for_legacy_active_files():
+    import main
+    from httpx import ASGITransport, AsyncClient
+
+    base = Path("download_images")
+    base.mkdir(exist_ok=True)
+    names = {"_review_s8_legacy.svg": SVG_PAYLOAD, "_review_s9_legacy.html": HTML_PAYLOAD,
+             "_review_ok.png": b"\x89PNG\r\n\x1a\n" + b"\x00" * 32}
+    for name, data in names.items():
+        (base / name).write_bytes(data)
+    try:
+        async def run():
+            async with AsyncClient(transport=ASGITransport(app=main.app),
+                                   base_url="http://127.0.0.1:8199") as c:
+                return {
+                    "static_svg": await c.get("/download_images/_review_s8_legacy.svg"),
+                    "media_html": await c.get("/media/_review_s9_legacy.html"),
+                    "static_html": await c.get("/download_images/_review_s9_legacy.html"),
+                    "png": await c.get("/download_images/_review_ok.png"),
+                }
+
+        res = asyncio.run(run())
+        for key in ("static_svg", "media_html", "static_html"):
+            r = res[key]
+            assert r.status_code == 200
+            assert r.headers["content-type"].startswith("application/octet-stream"), key
+            assert r.headers["content-disposition"].startswith("attachment"), key
+            assert r.headers["x-content-type-options"] == "nosniff"
+            assert "sandbox" in r.headers["content-security-policy"]
+        png = res["png"]
+        assert png.headers["content-type"] == "image/png"
+        assert png.headers["x-content-type-options"] == "nosniff"
+    finally:
+        for name in names:
+            (base / name).unlink(missing_ok=True)
