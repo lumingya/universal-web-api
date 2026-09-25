@@ -1,0 +1,12 @@
+{
+  "parser": "aistudio",
+  "synthetic": true,
+  "source": "按 aistudio_parser.py 注释记录的 GenerateContent 嵌套数组格式合成",
+  "description": "思考块 + 两个正文块（第二块 level2[1]=1）+ 统计块",
+  "raw": "[[[[[[[null, \"**Thinking about units**\", null, null, null, null, null, null, null, null, null, null, 1]]]]]], [[[[[[null, \"你好\"]]]]]], [[[[[[null, \"，世界！\"]]], 1]]], [null, null, null, [1727000000, 5, 7]]]",
+  "expected": {
+    "content": "你好，世界！",
+    "reasoning_content": "**Thinking about units**",
+    "done": true
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "parser": "deepseek",
+  "synthetic": true,
+  "source": "按 deepseek_parser.py 注释记录的 fragments/p-o-v 补丁格式合成",
+  "description": "THINK 片段不进正文，RESPONSE 片段为正文，status=FINISHED 结束",
+  "raw": "data: {\"v\": {\"response\": {\"message_id\": 2, \"parent_id\": 1, \"role\": \"ASSISTANT\", \"thinking_enabled\": true, \"fragments\": [{\"id\": 1, \"type\": \"THINK\", \"content\": \"嗯，\", \"references\": []}], \"status\": \"WIP\"}}}\n\ndata: {\"p\": \"response/fragments/-1/content\", \"o\": \"APPEND\", \"v\": \"先想一下\"}\n\ndata: {\"v\": \"。\"}\n\ndata: {\"p\": \"response/fragments\", \"o\": \"APPEND\", \"v\": [{\"id\": 2, \"type\": \"RESPONSE\", \"content\": \"答案\", \"references\": []}]}\n\ndata: {\"p\": \"response/fragments/-1/content\", \"v\": \"是 42。\"}\n\ndata: {\"p\": \"response/status\", \"o\": \"SET\", \"v\": \"FINISHED\"}\n\nevent: finish\ndata: {}\n\n",
+  "expected": {
+    "content": "答案是 42。",
+    "done": true
+  }
+}

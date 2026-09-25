@@ -1,0 +1,11 @@
+{
+  "parser": "chatgpt",
+  "synthetic": true,
+  "source": "按 chatgpt_parser.py 注释记录的 v1 delta 编码合成",
+  "description": "v1 delta 编码：add 快照 + append + 隐式续写 + patch + [DONE]",
+  "raw": "event: delta_encoding\ndata: \"v1\"\n\nevent: delta\ndata: {\"p\": \"\", \"o\": \"add\", \"v\": {\"message\": {\"id\": \"m_syn\", \"author\": {\"role\": \"assistant\"}, \"content\": {\"content_type\": \"text\", \"parts\": [\"\"]}, \"status\": \"in_progress\", \"metadata\": {}}, \"conversation_id\": \"c_syn\"}, \"c\": 0}\n\nevent: delta\ndata: {\"p\": \"/message/content/parts/0\", \"o\": \"append\", \"v\": \"Hello\"}\n\nevent: delta\ndata: {\"v\": \", world\"}\n\nevent: delta\ndata: {\"p\": \"\", \"o\": \"patch\", \"v\": [{\"p\": \"/message/content/parts/0\", \"o\": \"append\", \"v\": \"!\"}, {\"p\": \"/message/status\", \"o\": \"replace\", \"v\": \"finished_successfully\"}]}\n\ndata: [DONE]\n\n",
+  "expected": {
+    "content": "Hello, world!",
+    "done": true
+  }
+}

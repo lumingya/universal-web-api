@@ -1,0 +1,11 @@
+{
+  "parser": "gemini",
+  "synthetic": true,
+  "source": "按 gemini_parser.py 注释记录的 StreamGenerate 格式合成",
+  "description": "每块返回从头开始的累积文本，di/af.httprm 块结束",
+  "raw": ")]}'\n\n90\n[[\"wrb.fr\", null, \"[null, [\\\"c_syn\\\", \\\"r_syn\\\"], null, null, [[\\\"rc_syn\\\", [\\\"你好\\\"]]]]\"]]\n93\n[[\"wrb.fr\", null, \"[null, [\\\"c_syn\\\", \\\"r_syn\\\"], null, null, [[\\\"rc_syn\\\", [\\\"你好，世界\\\"]]]]\"]]\n94\n[[\"wrb.fr\", null, \"[null, [\\\"c_syn\\\", \\\"r_syn\\\"], null, null, [[\\\"rc_syn\\\", [\\\"你好，世界！\\\"]]]]\"]]\n42\n[[\"di\", 42], [\"af.httprm\", 41, \"-123\", 7]]\n",
+  "expected": {
+    "content": "你好，世界！",
+    "done": true
+  }
+}

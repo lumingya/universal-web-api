@@ -1,0 +1,11 @@
+{
+  "parser": "glm",
+  "synthetic": true,
+  "source": "按 glm_parser.py 注释记录的 assistant/stream SSE 格式合成",
+  "description": "text 为全文快照，parts status=finish 结束",
+  "raw": "data: {\"id\": \"syn\", \"conversation_id\": \"conv_syn\", \"status\": \"init\", \"parts\": [{\"id\": \"p1\", \"logic_id\": \"l1\", \"role\": \"assistant\", \"status\": \"init\", \"content\": [{\"type\": \"text\", \"text\": \"你好\", \"status\": \"init\"}]}]}\n\ndata: {\"id\": \"syn\", \"conversation_id\": \"conv_syn\", \"status\": \"init\", \"parts\": [{\"id\": \"p1\", \"logic_id\": \"l1\", \"role\": \"assistant\", \"status\": \"init\", \"content\": [{\"type\": \"text\", \"text\": \"你好，我是\", \"status\": \"init\"}]}]}\n\ndata: {\"id\": \"syn\", \"conversation_id\": \"conv_syn\", \"status\": \"finish\", \"parts\": [{\"id\": \"p1\", \"logic_id\": \"l1\", \"role\": \"assistant\", \"status\": \"finish\", \"content\": [{\"type\": \"text\", \"text\": \"你好，我是 GLM。\", \"status\": \"finish\"}]}]}\n\n",
+  "expected": {
+    "content": "你好，我是 GLM。",
+    "done": true
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "parser": "qwen",
+  "synthetic": true,
+  "source": "按 qwen_parser.py 注释记录的 /api/v2/chat/completions SSE 格式合成",
+  "description": "thinking_summary 后输出 answer，status=finished 结束",
+  "raw": "data: {\"response.created\": {\"chat_id\": \"chat_syn\", \"response_id\": \"resp_syn\"}}\n\ndata: {\"choices\": [{\"delta\": {\"role\": \"assistant\", \"content\": \"\", \"phase\": \"thinking_summary\", \"extra\": {\"summary_thought\": {\"content\": [\"分析用户的问题\"]}}}}]}\n\ndata: {\"choices\": [{\"delta\": {\"role\": \"assistant\", \"content\": \"你好\", \"phase\": \"answer\", \"status\": \"typing\"}}]}\n\ndata: {\"choices\": [{\"delta\": {\"content\": \"，世界！\", \"phase\": \"answer\", \"status\": \"typing\"}}]}\n\ndata: {\"choices\": [{\"delta\": {\"content\": \"\", \"phase\": \"answer\", \"status\": \"finished\"}}]}\n\n",
+  "expected": {
+    "content": "你好，世界！",
+    "done": true
+  }
+}

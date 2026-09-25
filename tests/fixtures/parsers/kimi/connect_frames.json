@@ -1,0 +1,11 @@
+{
+  "parser": "kimi",
+  "synthetic": true,
+  "source": "按 kimi_parser.py 注释记录的 Connect(+json) 分帧格式合成",
+  "description": "Connect 分帧：set + append + MESSAGE_STATUS_COMPLETED",
+  "raw": "\u0000\u0000\u0000\u0000Y{\"op\": \"set\", \"mask\": \"block.text\", \"block\": {\"id\": \"b1\", \"text\": {\"content\": \"你好\"}}}\u0000\u0000\u0000\u0000l{\"op\": \"append\", \"mask\": \"block.text.content\", \"block\": {\"id\": \"b1\", \"text\": {\"content\": \"，我是 Kimi\"}}}\u0000\u0000\u0000\u0000a{\"op\": \"append\", \"mask\": \"block.text.content\", \"block\": {\"id\": \"b1\", \"text\": {\"content\": \"。\"}}}\u0000\u0000\u0000\u0000Z{\"op\": \"set\", \"mask\": \"message.status\", \"message\": {\"status\": \"MESSAGE_STATUS_COMPLETED\"}}\u0000\u0000\u0000\u0000\f{\"done\": {}}",
+  "expected": {
+    "content": "你好，我是 Kimi。",
+    "done": true
+  }
+}
