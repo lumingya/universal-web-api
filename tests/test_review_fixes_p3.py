@@ -186,3 +186,16 @@ def test_h10_is_arena_page_uses_strict_matcher(url, expected):
     fake = SimpleNamespace(tab=SimpleNamespace(url=url))
     assert StreamMonitor._is_arena_page(fake) == is_arena_page_url(url)
     assert StreamMonitor._is_arena_page(fake) is expected
+
+
+# ---------------------------------------------------------------------------
+# H13 · 未被引用的存储 mixin 已删除，CRUD 只在 CommandEngine 中维护
+# ---------------------------------------------------------------------------
+
+def test_h13_dead_storage_mixin_removed():
+    root = Path(__file__).resolve().parents[1]
+    assert not (root / "app" / "services" / "command_engine_storage.py").exists()
+    from app.services.command_engine import CommandEngine
+
+    for name in ("_save_commands", "_load_commands", "add_command", "update_command", "delete_command"):
+        assert callable(getattr(CommandEngine, name, None)), name

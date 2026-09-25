@@ -34,7 +34,7 @@ P3 清单（顺序即执行顺序，完成一项勾一项，每项独立提交�
 - [x] H7 未导入的类型注解（F821）
 - [x] H8 chat.py 重复定义的 Arena 辅助函数
 - [x] H10 stream_monitor 重复方法
-- [ ] H13 未使用的 command_engine_storage mixin
+- [x] H13 未使用的 command_engine_storage mixin
 - [ ] T2 requirements-dev 缺 httpx
 - [ ] S14 遗留教程搜索框 innerHTML
 - [ ] S7 公开引导/健康接口信息最小化
@@ -464,3 +464,9 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
   与内联 JS 版 `_arena_native_stop_present`；保留实际生效的后一版（`is_arena_page_url` 严格主机匹配 / `is_visible_arena_stop`）→ 行为不变。
   （`_arena_image_guard` 的两处是 property + setter，属正常写法，未动。）
 - 测试：p3 新增 5 项（AST 唯一性 + 严格 URL 匹配参数化）。
+
+### H13 未使用的 command_engine_storage mixin ✅（P3）
+
+- `git grep` 确认 `app/services/command_engine_storage.py`（`CommandEngineStorageMixin`）在代码、打包脚本、文档中均无引用，
+  `CommandEngine` 自带全部同名方法 → 直接删除，避免有人修补错文件。
+- 测试：p3 新增 1 项（文件不存在 + CommandEngine 仍有 CRUD 方法）。
