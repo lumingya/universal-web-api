@@ -1703,34 +1703,6 @@ class StreamMonitor:
             logger.warning(f"[Image Recovery] 图片停滞恢复刷新失败（继续等待）: {exc}")
             return False
 
-    def _is_arena_page(self) -> bool:
-        url = str(getattr(self.tab, "url", "") or "").lower()
-        return "lmarena.ai" in url or "arena.ai" in url or "lmsys.org" in url
-
-    def _arena_native_stop_present(self) -> bool:
-        """Return whether Arena's native Stop button is currently visible."""
-        if not self._is_arena_page():
-            return False
-        try:
-            res = self.tab.run_js(
-                """
-                return ((sel) => {
-                    const els = Array.from(document.querySelectorAll(sel));
-                    for (const el of els) {
-                        if (!(el instanceof Element) || !el.isConnected) continue;
-                        const r = el.getBoundingClientRect();
-                        const s = getComputedStyle(el);
-                        if (r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden') return true;
-                    }
-                    return false;
-                })(arguments[0])
-                """,
-                self.ARENA_NATIVE_STOP_SELECTOR,
-            )
-            return bool(res)
-        except Exception:
-            return False
-
     def _refresh_interrupted_stream_page(self) -> bool:
         if not self._is_arena_page():
             logger.debug("[Stream Recovery] 非 Arena 页面跳过断流刷新")

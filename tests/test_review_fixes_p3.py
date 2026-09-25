@@ -156,3 +156,33 @@ def test_h8_arena_helpers_defined_once():
         "_arena_prompt_rejection_response", "_arena_non_retryable_response",
     ):
         assert names.count(helper) == 1, helper
+
+
+# ---------------------------------------------------------------------------
+# H10 · stream_monitor 不再有被覆盖的重复方法（保留后一版严格实现）
+# ---------------------------------------------------------------------------
+
+def test_h10_stream_monitor_methods_defined_once():
+    import ast
+
+    src = (Path(__file__).resolve().parents[1] / "app" / "core" / "stream_monitor.py").read_text(encoding="utf-8")
+    cls = next(n for n in ast.parse(src).body if isinstance(n, ast.ClassDef) and n.name == "StreamMonitor")
+    names = [n.name for n in cls.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    assert names.count("_is_arena_page") == 1
+    assert names.count("_arena_native_stop_present") == 1
+
+
+@pytest.mark.parametrize("url,expected", [
+    ("https://lmarena.ai/c/abc", True),
+    ("https://arena.ai/c/abc", True),
+    ("https://notarena.ai.evil.example/", False),
+    ("https://example.com/?next=lmarena.ai", False),
+])
+def test_h10_is_arena_page_uses_strict_matcher(url, expected):
+    from types import SimpleNamespace
+
+    from app.core.stream_monitor import StreamMonitor, is_arena_page_url
+
+    fake = SimpleNamespace(tab=SimpleNamespace(url=url))
+    assert StreamMonitor._is_arena_page(fake) == is_arena_page_url(url)
+    assert StreamMonitor._is_arena_page(fake) is expected

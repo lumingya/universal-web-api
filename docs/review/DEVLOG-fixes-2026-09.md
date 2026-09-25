@@ -33,7 +33,7 @@ P3 清单（顺序即执行顺序，完成一项勾一项，每项独立提交�
 - [x] B4 `n>1` 只返回 1 个 choice
 - [x] H7 未导入的类型注解（F821）
 - [x] H8 chat.py 重复定义的 Arena 辅助函数
-- [ ] H10 stream_monitor 重复方法
+- [x] H10 stream_monitor 重复方法
 - [ ] H13 未使用的 command_engine_storage mixin
 - [ ] T2 requirements-dev 缺 httpx
 - [ ] S14 遗留教程搜索框 innerHTML
@@ -457,3 +457,10 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - 删除 `app/api/chat.py` 前一组 6 个被后文覆盖、从未生效的定义（`_is_arena_prompt_rejection` 等），保留实际生效的后一组 → **运行时行为零变化**。
   顺带去掉后一组里与模块级导入重复的 `ARENA_PROMPT_REJECTED_CODE` 局部导入（同一对象，已验证）。模块级兼容别名导入保留。
 - pyflakes 的 redefinition 告警从 6+1 降为仅剩与本项无关的局部 `import copy`。测试：p3 新增 1 项（AST 确认各只定义一次）。
+
+### H10 stream_monitor 重复方法 ✅（P3）
+
+- `app/core/stream_monitor.py`：删除 `StreamMonitor` 中被后文覆盖的前一版 `_is_arena_page`（子串匹配，`notarena.ai.evil` 也会命中）
+  与内联 JS 版 `_arena_native_stop_present`；保留实际生效的后一版（`is_arena_page_url` 严格主机匹配 / `is_visible_arena_stop`）→ 行为不变。
+  （`_arena_image_guard` 的两处是 property + setter，属正常写法，未动。）
+- 测试：p3 新增 5 项（AST 唯一性 + 严格 URL 匹配参数化）。
