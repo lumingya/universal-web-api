@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import copy
+import hashlib
 import json
 import os
 import re
@@ -19,9 +20,26 @@ from typing import Any, Dict, List, Optional
 
 from app.core.config import get_logger
 from app.core.config import atomic_write_json
+from app.core.config_parts.env_config import parse_bool_literal
 from app.core.parsers import ParserRegistry
 
 logger = get_logger("PARSER_MGR")
+
+
+class ParserInstallDisabledError(PermissionError):
+    """运行时解析器安装未被显式启用（修复 S3）。"""
+
+
+def parser_install_enabled() -> bool:
+    """运行时解析器安装是否被显式启用。
+
+    修复 S3：安装一个解析器 = 把任意 Python 源码写进
+    `app/core/parsers/` 然后**立刻 import 它**，等同于在服务进程里
+    以完整权限执行这段代码。报告确认目前没有 HTTP 接口直接暴露安装能力，
+    但这条路径与 S2（不可信主体编写代码）的信任边界相连，
+    默认必须关闭，由管理员显式开启。
+    """
+    return bool(parse_bool_literal(os.getenv("PARSER_INSTALL_ENABLED")))
 
 
 class ParserConfigManager:
@@ -160,6 +178,18 @@ class ParserConfigManager:
         return copy.deepcopy(config) if isinstance(config, dict) else None
 
     def install_parser_package(self, payload: Dict[str, Any], overwrite: bool = False) -> Dict[str, Any]:
+        """安装一个运行时解析器包。
+
+        **这是受信任管理员专用操作，不是沙箱。** 源码会被写入
+        `app/core/parsers/` 并立刻导入，从此以服务进程的完整权限运行。
+        默认关闭，需显式设置 `PARSER_INSTALL_ENABLED=true`。
+        """
+        if not parser_install_enabled():
+            raise ParserInstallDisabledError(
+                "运行时解析器安装已默认关闭。该操作会在服务进程内执行任意代码，"
+                "确认来源可信后再设置 PARSER_INSTALL_ENABLED=true 启用。"
+            )
+
         normalized = self._normalize_parser_package(payload)
         parser_id = normalized["parser_id"]
         module_name = normalized["module_name"]
@@ -204,8 +234,19 @@ class ParserConfigManager:
 
         self.PARSER_DIR.mkdir(parents=True, exist_ok=True)
 
+        source_sha256 = hashlib.sha256(
+            normalized["source_code"].encode("utf-8", errors="replace")
+        ).hexdigest()
+        # 审计留痕：谁在什么时候装了什么内容，事后可核对文件是否被改动过
+        logger.warning(
+            f"安装运行时解析器（将在本进程内以完整权限执行）: id={parser_id}, "
+            f"module={normalized['module_path']}, class={normalized['class_name']}, "
+            f"bytes={len(normalized['source_code'])}, sha256={source_sha256}"
+        )
+
         entry = {
             "id": parser_id,
+            "source_sha256": source_sha256,
             "name": normalized["name"],
             "description": normalized["description"],
             "module": normalized["module_path"],
@@ -328,8 +369,39 @@ class ParserConfigManager:
             "source_code": source_code,
         }
 
-    @staticmethod
-    def _validate_parser_source(source_code: str, class_name: str, filename: str) -> None:
+    #: 允许出现在模块顶层的语句类型（修复 S3）。
+    #: 目标是压掉「import 一下就跑起来」的副作用，而**不是**一个沙箱：
+    #: 类方法体内仍然可以写任何代码，只是要等到解析器真正被调用时才会执行。
+    _ALLOWED_TOP_LEVEL_NODES = (
+        ast.Import,
+        ast.ImportFrom,
+        ast.ClassDef,
+        ast.FunctionDef,
+        ast.AsyncFunctionDef,
+        ast.Assign,
+        ast.AnnAssign,
+        ast.AugAssign,
+        ast.If,          # 典型的 if TYPE_CHECKING / if __name__ 守卫
+        ast.Try,         # 典型的可选依赖 import 回退
+        ast.Pass,
+    )
+
+    @classmethod
+    def _validate_top_level_statements(cls, tree: ast.Module) -> None:
+        for node in tree.body:
+            # 模块 docstring / 字符串字面量表达式放行
+            if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
+                continue
+            if isinstance(node, cls._ALLOWED_TOP_LEVEL_NODES):
+                continue
+            raise ValueError(
+                f"解析器源码第 {getattr(node, 'lineno', '?')} 行存在模块顶层可执行语句"
+                f"（{type(node).__name__}）。请把逻辑放进类或函数体内，"
+                "避免在 import 阶段产生副作用。"
+            )
+
+    @classmethod
+    def _validate_parser_source(cls, source_code: str, class_name: str, filename: str) -> None:
         try:
             tree = ast.parse(source_code, filename=filename)
         except SyntaxError as exc:
@@ -338,6 +410,10 @@ class ParserConfigManager:
         class_names = {node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)}
         if class_name not in class_names:
             raise ValueError(f"解析器源码里没有找到类: {class_name}")
+
+        # 修复 S3：降低 import 期副作用。注意这**不是**安全边界，
+        # 只是把「装上就跑」收窄成「被调用才跑」，给审查留出窗口。
+        cls._validate_top_level_statements(tree)
 
         try:
             compile(source_code, filename, "exec")
@@ -348,4 +424,9 @@ class ParserConfigManager:
 parser_manager = ParserConfigManager()
 
 
-__all__ = ["ParserConfigManager", "parser_manager"]
+__all__ = [
+    "ParserConfigManager",
+    "ParserInstallDisabledError",
+    "parser_install_enabled",
+    "parser_manager",
+]

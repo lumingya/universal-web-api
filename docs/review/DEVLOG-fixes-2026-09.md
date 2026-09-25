@@ -94,7 +94,7 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - [x] S4 回环 IP 当作授权
 - [x] S5 定时重启代理容量 / 协议
 - [x] S6 媒体路由无认证与转码资源
-- [ ] S3 解析器安装立即 import
+- [x] S3 解析器安装立即 import
 - [x] H9 标签页等待队列无总量上限
 - [x] H12 网络事件 URL 正则回溯
 
@@ -588,3 +588,35 @@ Authorization / X-API-Key / **`?token=`** 三种方式 —— 查询参数是标
 **验证**：新增 `tests/test_restart_handoff_proxy.py`（22 项），
 用假 socket 驱动 handler，不开真实监听端口、不起子进程。
 全量 `764 passed, 64 failed`，无新增失败。
+
+### 2026-09-25 · S3（解析器安装立即 import）
+
+`app/services/parser_manager.py`。`install_parser_package()` 校验完语法与类名后，
+把源码写进 `app/core/parsers/` 并**立刻 import** —— 等同于在服务进程内
+以完整权限执行这段代码。
+
+报告已确认「未发现直接暴露安装 API」（本轮 grep 复核：`install_parser_package`
+在 `app/` 内无任何调用方），所以这是一条**潜在**路径，与 S2 的信任边界相连。
+按既定方针以「默认收紧 + 文档化」收尾：
+
+1. **默认关闭** —— 新增 `parser_install_enabled()` / `ParserInstallDisabledError`，
+   需显式 `PARSER_INSTALL_ENABLED=true`。开关在**解析 payload 之前**生效
+   （否则畸形输入会先抛别的错误，掩盖掉「功能已关闭」这个事实）。
+   用 `parse_bool_literal` 严格解析，`"false"` 不会被当成真。
+2. **压掉 import 期副作用** —— `_validate_top_level_statements()` 限制模块顶层
+   只能出现 import / 类 / 函数 / 赋值 / `if` 守卫 / `try` 回退 / docstring。
+   顶层的裸调用（`os.system(...)`、`__import__(...).run(...)`）与
+   `for` / `while` / `with` 一律拒绝，报错带行号。
+3. **审计留痕** —— 安装时按 WARNING 级别记录 id / module / class / 字节数 /
+   源码 SHA-256，并把 `source_sha256` 写进 `config/parsers.json` 条目，
+   事后可核对文件是否被改动过。
+
+**必须诚实说明的边界**：这**不是沙箱**。类方法体内仍可写任何代码，
+只是从「装上就跑」收窄成「被调用才跑」，给人工审查留出窗口。
+代码注释、docstring 与 `.env.example` 里都写明了这一点，避免后来者误以为有隔离保证。
+真正的隔离（独立进程 / 权限降级 / 资源限额）属更大改造，不在本批次。
+
+**验证**：新增 `tests/test_parser_install_gate.py`（37 项），
+包含「方法体内不受限制」这条**反向**断言 —— 明确记录当前边界，
+防止后来者误读成安全沙箱。
+全量 `801 passed, 64 failed`，无新增失败。
