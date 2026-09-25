@@ -39,10 +39,10 @@
 ## 3. 进度清单
 
 - [x] 克隆仓库、确认推送权限、建立开发日志
-- [ ] M1 仓库卫生与配置（.env.example / .gitignore / README / VERSION / requirements）
+- [x] M1 仓库卫生与配置（.env.example / .gitignore / README / VERSION / requirements）
 - [ ] M2 静态分析 + 现有单元测试运行结果
-- [ ] M3 安全：认证与中间件（main.py / app/api/deps.py / CORS / 管理接口）
-- [ ] M4 安全：命令引擎（CMD_ALLOW_UNSAFE_PYTHON_COMMANDS 等）、updater、文件/路径处理、SSRF
+- [ ] M3 安全：认证与中间件（main.py / app/api/deps.py / CORS / 管理接口）——已核查默认值、主要路由及 CORS；待补测
+- [ ] M4 安全：命令引擎（CMD_ALLOW_UNSAFE_PYTHON_COMMANDS 等）、updater、文件/路径处理、SSRF——命令/解析器与更新器初查完成，其他待查
 - [ ] M5 核心请求链路：chat.py / anthropic_routes.py / streaming_response.py / request_manager.py
 - [ ] M6 标签页池：tab_pool_parts/*（manager / session / recovery / idle_maintenance）
 - [ ] M7 浏览器与工作流：core/browser/*、core/workflow/*、stream_monitor、network_monitor
@@ -54,8 +54,21 @@
 
 | ID | 严重度 | 位置 | 摘要 | 状态 |
 | --- | --- | --- | --- | --- |
-| （待 M1 起填写） | | | | |
+| S1 | P1 | `app/core/config_parts/env_config.py:159-188`, `main.py:603-616`, `.env.example:21,59,66-69,134` | 管理认证默认关闭、CORS 默认 `*`；复制模板还绑定 `0.0.0.0` 且布尔占位值实际上为 false。跨源页面/局域网调用控制接口存在高风险；建议默认关闭跨源、管理令牌必选（非本机绑定时 fail-closed）、限制 Host/Origin。浏览器本地网络策略会影响可利用性。 | 静态确认；需环境隔离下复现 |
+| S2 | P1 | `app/services/command_engine_actions.py:2427-2590,3054-3106`, `app/services/config/engine.py:3312`, `app/services/parser_manager.py:162-227`, `app/core/parsers/registry.py:101-106` | Python 命令的 AST 名单只拦截直接危险调用；别名和传入的高权限对象可绕开，解析器安装会写入并 import 用户源码。此“沙箱”不能作为不可信代码边界；隔离进程/容器并移除危险对象，或只允许可信管理者使用。JS 命令也能访问浏览器上下文。 | 静态确认；未执行攻击代码 |
+| S3 | P2 | `app/services/parser_manager.py:162-227,331-345` | 解析器安装功能仅校验语法/类名，不约束代码行为，会立即 import 执行；目前未找到直接对外安装路由，是 S2 传入对象间接暴露的代码安装原语。 | 静态确认；未执行 |
+| S4 | P2 | `app/api/browser_routes.py:119-129`, `start.py:836-844,905-922` | `/api/browser/open-profile-url` 不要求令牌，仅检查 `request.client.host` 回环；经本机反代/隧道/重启代理访问时后端看到的来源可能为回环，可在受控浏览器用户目录打开 URL。须使用认证和来源限制，不能仅依赖 IP。 | 静态确认；未联调 |
+| S5 | P2 | `start.py:836-892,905-961,1400-1405` | 定时重启开启时的 TCP handoff proxy 无并发上限；每个连接可缓冲 64MB；仅按 Content-Length 读取，chunked/Expect 等请求兼容性不完整，错误被吞。代理后端统一回环地址还影响来源判断。 | 静态确认；仅在重启守护开启时 |
+| S6 | P2 | `main.py:728-737,804-825,839-841` | `/media/{filename}`、`/download_images/*` 无认证；可读下载目录文件；media 转码由请求触发（60s，无并发/同键去重），有 CPU/存储放大风险。路径边界校验本身正确。 | 静态确认；未压测 |
+| S7 | P3 | `main.py:376-406,689-698`, `app/api/system.py:789-815` | 无认证的启动引导数据返回站点目录；`/health` 暴露版本、浏览器端口/池状态、运行中的 request/tab ID、认证开关，还可能在健康检查时尝试连接浏览器。考虑仅返回简化健康状态。 | 静态确认 |
+| H1 | P1 | `.env.example:7-69,100-138`, `app/core/config_parts/env_config.py:111-116,159-171` | 模板重复配置项；`AUTH_ENABLED`/`DASHBOARD_AUTH_ENABLED` 填占位值会解析为 false，且包含 `0.0.0.0`、`APP_DEBUG=true`、CORS `*`、不安全 Python 命令等危险示例；代理、隧道、版本值亦带个人环境痕迹。应重做安全模板与校验。 | 已核对 |
+| H2 | P3 | `README.md:21`, `README.en.md:21`, `README.zh-CN.md:21`, `VERSION:1` | 三份 README 仍写 2.9.8 并链接不存在的 CHANGELOG_CURRENT.md；实际 VERSION=3.0.0。 | 已核对 |
+| H3 | P3 | `.gitignore:52,77,102-188`, `config/marketplace_cache.json` | 已跟踪的 marketplace_cache.json 仍被 ignore；tests 白名单含 4 个不存在的用例，且没有覆盖全部已跟踪测试；scripts 忽略规则有重叠。建议清理规则及按需 `git rm --cached` 缓存。 | 已核对 |
+| H4 | P3 | `main.py`, `app/core/stream_monitor.py`, `static/js/dashboard-schema.js` | 约 40 个文件混用 CRLF/LF，无 `.gitattributes`，增加噪音 diff 与跨平台维护成本；统一 EOL（须先检查各脚本依赖）。 | 已核对 |
+| H5 | P3 | `assets/*.png`, `static/*.png`, `static/images/logo.svg` | 多组字节相同的图片复制到 assets/static，logo SVG 约 792KB，另有较大截图；可用单一资源引用/压缩资源。 | 已核对 |
+| H6 | P3 | `requirements.txt:6-7`, `requirements-dev.txt` | FastAPI `<0.110`/Uvicorn `<0.30` 较旧，升级应配合测试与锁定依赖。FastAPI 0.109.2 要求 Starlette `>=0.36.3,<0.37`，不在 CVE-2025-62727 的 0.39–0.49.0 受影响范围，**不将该 CVE 误报于当前约束**；dev 依赖包含 Playwright，本轮禁止安装。 | 已核对 |
 
 ## 5. 工作流水
 
 - 2026-09-25：部分克隆完成；确认 token 具备 push 权限（dry-run 通过）；确认 updater 仅走 Releases；建立本日志。
+- 2026-09-25 / M1：核对 `.env.example`、三份 README、requirements、ignore 规则、已跟踪缓存与换行；记录 H1–H6。同期初查 149 个 API 路由（AST 粗计，6 个未声明 Depends 的路由需逐项判定），并核实认证/CORS、Python 命令与解析器动态 import、启动代理、媒体/健康路由，记录 S1–S7；M3/M4 尚未完成。PyPI 元数据确认 FastAPI 0.109.2 限制 Starlette `<0.37.0`。本阶段只读审查，未做侵入式验证、未修改业务代码。
