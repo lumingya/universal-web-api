@@ -620,3 +620,39 @@ Authorization / X-API-Key / **`?token=`** 三种方式 —— 查询参数是标
 包含「方法体内不受限制」这条**反向**断言 —— 明确记录当前边界，
 防止后来者误读成安全沙箱。
 全量 `801 passed, 64 failed`，无新增失败。
+
+### 2026-09-25 · T1（干净克隆测试资源不全）
+
+干净克隆下约 64 项失败，原因**全部**是缺少未跟踪的本地资源，
+另有 10 个模块在导入阶段 `import playwright` 直接让整个收集中断
+（一次 ImportError 就让 `pytest tests` 全盘失败）。
+这些都不是产品回归，但混在结果里会把真正的回归淹掉 —— 本轮每做一项修复
+都得靠 `comm` 对比 73 行基线，正是这个问题的直接代价。
+
+**新建 `tests/conftest.py`**：
+
+1. `collect_ignore` —— 未安装 playwright 时，从收集阶段剔除那 10 个浏览器模块。
+   **按依赖是否存在动态决定**：本地装了 playwright 就照常收集。
+2. `pytest_collection_modifyitems` —— 依赖未跟踪资源的用例自动 `skip`，
+   skip 原因里写清楚缺哪个文件、并指向报告的 T1 条目。
+   资源表 `_LOCAL_RESOURCE_REQUIREMENTS` 把三组资源与用例前缀显式对应：
+   - `config/commands.local.json` → arena 命令持久化 / auto-battle 相关用例
+   - `js/arena-conversation-image-window.user.js` → 媒体流图片优先级的那 1 项
+   - `custom_scripts/examples/arena_payload_interceptor.js` → 工作流脚本加载
+3. 注册 `requires_local_fixtures` / `requires_browser` 两个 marker。
+
+**关键取舍**：前缀表里**精确到单个用例**，不是整模块跳过。
+最初图省事按模块跳，结果把 `test_arena_auto_battle_command.py` 等模块里
+**22 个本来能过的纯逻辑用例**也一并跳掉了（801 → 779）。改成逐用例列举后恢复。
+
+**踩坑（转义）**：参数化用例 `test_rate_limit_text_triggers_immediate_proxy_rotation`
+的参数含 U+2019，pytest 报告里显示成 `\u2019`，而 `item.nodeid` 里是原字符，
+写进 Python 源码时又会被当成转义序列再解析一次 —— 三层转义怎么写都对不上。
+最后**去掉参数部分、只用不带 `[...]` 的前缀**覆盖全部三个变体，干净利落。
+
+**新建 `scripts/run_logic_tests.sh`**：CI / 干净克隆的入口，取代本轮临时用的
+`/tmp/runtests.sh`（后者把 10 个 playwright 文件硬编码进 `--ignore`，
+现在这层判断已经进了 conftest，不必再维护两份名单）。
+
+**验证**：`./scripts/run_logic_tests.sh` → **801 passed, 64 skipped, 0 failed**。
+至此干净克隆上「0 失败」成为可执行的判据，后续回归一眼可见，不必再做基线对比。
