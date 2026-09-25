@@ -8,7 +8,12 @@ schemas.py - 数据模型和 API Schema 定义
 """
 
 import copy
-from typing import TypedDict, List, Optional, Literal, Dict, Any, Union, NotRequired
+from typing import TypedDict, List, Optional, Literal, Dict, Any, Union
+
+try:  # Python 3.11+
+    from typing import NotRequired
+except ImportError:  # Python 3.10（最低支持版本，见 start.py MIN_PYTHON）
+    from typing_extensions import NotRequired
 from pydantic import BaseModel, ConfigDict
 
 # ================= 动作类型 =================
