@@ -47,7 +47,7 @@
 - [x] M6 标签页池：tab_pool_parts/*（manager / session / recovery / idle_maintenance）——检查锁与取消/恢复路径；用无浏览器桩验证冻结恢复失败和非有限配置值
 - [x] M7 浏览器与工作流：core/browser/*、core/workflow/*、stream_monitor、network_monitor——核查控制流边界、流监听与调试持久化；复现 mtime 缓存及布尔字符串误判
 - [x] M8 服务层：tool_calling*、config engine、command_engine*——实际主类验证损坏命令配置回退、校验 URL 正则回溯开销并识别未使用存储 mixin
-- [ ] M9 前端：static/js（XSS / v-html / 大文件）
+- [x] M9 前端：static/js（XSS / v-html / 大文件）——验证完整备份导出敏感项、遗留教程搜索 DOM 注入及无大小限制导入
 - [ ] M10 汇总报告 `docs/review/CODE_REVIEW_REPORT.md`
 
 ## 4. 发现列表（按发现顺序追加；严重度：P0 严重 / P1 高 / P2 中 / P3 低）
@@ -89,6 +89,9 @@
 | B8 | P2 | `app/services/command_engine.py:1352-1378,1654-1674` | 外部改写 `commands.json` 时，短暂无效 JSON 被解析为 `[]`，热刷新直接将**上一轮有效命令缓存清空**并推进 mtime，还将原有 `run_js_file` 动作认作禁用、生成清理列表；命令临时全失效，浏览器在线时还可能撤销注入。应在错误时保留 last-known-good，区分合法空列表与解析失败，避免据此清理运行态；文件恢复后再刷新。 | 使用真实 `CommandEngine` 与临时 JSON 文件，1 条命令 → 损坏 JSON → 0 条且捕获 1 条待清理动作；**仅 mock 掉清理执行，未运行浏览器或观察在线注入** |
 | H12 | P2（优化/风险） | `app/services/command_engine_results.py:637-653,655-663` | 网络异常触发器允许配置 regex URL 匹配，直接用标准库 `re.search()` 且无模式复杂度、输入长度或匹配超时限制；嵌套量词会指数回溯，频繁事件可阻塞命令检查线程。建议参考工作流已有 `regex.search(..., timeout=0.025)` 做预编译/超时，限制模式和 URL 长度，并拒绝超时规则。 | 仅 12、16、19 个 `a` 的短 URL 合成输入量测约 0.0005/0.0057/0.046s；未进行长串或压力测试，真实影响依环境/模式而异 |
 | H13 | P3 | `app/services/command_engine_storage.py:22-335`, `app/services/command_engine.py:60,1340-1380,1654-1674` | `CommandEngineStorageMixin` 在项目内没有被 `CommandEngine` 继承或导入，存储/CRUD 的很多方法却与主类重复，易使后续修复只落在未运行代码中（初次试验也因此需改用生产主类验证）。建议合并、删除或明确弃用该模块并加主类覆盖测试。 | 静态类继承/调用核对，无产品运行错误主张 |
+| S13 | P1 | `app/api/system.py:79-113,293-315,948-952`, `static/js/dashboard-methods.js:1602-1648`, `app/core/config_parts/env_config.py:159-188` | `GET /api/settings/backup` 原样返回 `.env` 所有键值（可能包含密钥/令牌），默认未启用认证且 CORS `*`；属于 S1 的**具体高价值只读泄露点**。即使启用认证，前端“完整导出”还把浏览器本地仪表板令牌以 `dashboard_token` 和 `api_token` **两份明文**写入下载的 JSON，界面没有敏感数据警告。应为备份接口强制鉴权/禁止跨源，默认剔除密钥并提供单独加密备份选项，不自动导出浏览器本地令牌。 | ASGITransport 模拟 .env 返回**纯合成**密钥，未授权跨源 GET=200/CORS `*` 且响应含合成键值；Node VM 用合成 token 确认 UI 同时写两字段；未读取/输出任何真实令牌 |
+| S14 | P3（低可利用性） | `static/tutorial/index.html:1534-1540`, `static/js/components/panels/{SelectorPanel,StreamConfigPanel}.js:120-131,252-266` | 遗留教程页仍由设置页入口打开；其搜索无结果提示直接将 `searchInput.value` 插入 `innerHTML`，缺 HTML 转义。输入恶意 HTML 时可形成同源 DOM 注入/自输入 XSS；目前未发现 URL 查询或远程数据自动写入该输入，**不可宣称可远程无交互利用**。使用 `textContent` 或实体编码、清理旧页面。 | Node VM 仅执行这段输入事件回调，合成 `<img onerror>` 字符串原样进入 innerHTML 字符串；无浏览器、未观察脚本执行 |
+| H14 | P3（优化） | `static/js/dashboard-methods.js:1173-1207,1583-1599`, `static/js/components/panels/PresetTransfer.js:207-211`, `static/js/workflow-studio.js:897-901` | 仪表板的站点/完整备份文件导入无 `file.size` 限制，直接 `FileReader.readAsText` + `JSON.parse`，而预设/工作流导入分别限制 4MiB/1MiB。巨大用户选取文件可使页面卡顿或内存抬升；建议统一上限、流式/分段解析并提示文件过大。 | 静态对照；未加载大文件或压力测试 |
 
 ## 5. 工作流水
 
@@ -102,3 +105,4 @@
 - 2026-09-25 / M6：核对 `TabPoolManager` 的获取/释放条件队列、独立 acquire executor 与取消后回收、Session 状态门禁、隔离恢复服务的超时槽、空闲冻结/CDP 回收逻辑；已存在 0.25s 取消轮询及冻结前检查页面隐藏，不把无真实浏览器实验的状态竞态当成已发生事故。仅用抛错 CDP 桩证明解冻失败仍交付会话（B5），仅用临时 env 值证明配置 inf 可使构造失败（B6）。等待队列未总量限流作为优化风险 H9 记录，不做压力测试；无截图或浏览器下载。
 - 2026-09-25 / M7：查阅浏览器媒体/工作流、`flow_runtime.py` 条件与变量解析、`script_loader.py` 路径控制及缓存、DOM/网络流监听。控制流有节点/深度/字节和执行转换预算，正则有 25ms 限时，网络监听有预取容量及调试目录上限，脚本路径解析会限制在指定目录；不能笼统报告缺少这些防护。发现跟踪的 `browser_config.json` 与代码/前端默认开关不一致，默认启用原始响应调试捕获（S12），并携带具体会话 URL（H11）；轻量文件实验确认仅 mtime 缓存导致热更新可能陈旧（B7）；流监听重复方法只记录为维护问题（H10）。无真实浏览器、网络页面或 PNG 截图。
 - 2026-09-25 / M8：查阅工具调用同步/异步修复轮次（默认 2、上限 5）、Schema 本地引用/形状/有限数检查及消息格式；这些已有防护不作为缺失报告。核查配置引擎 JSON 错误时热重载保留旧状态、原子保存与本地覆盖快照。命令引擎另有损坏命令文件导致运行缓存归零（B8），实际主类临时文件复现并在清理动作处用 mock 截断；**最初用未继承的 `CommandEngineStorageMixin` 实验只用于提示死代码，最终证据来自生产主类**。命令网络 URL regex 无超时（H12），短 URL 小样本显示回溯增长；存储 mixin 未使用（H13）。所有临时文件由 TemporaryDirectory 清理，无浏览器/耗内存测试。
+- 2026-09-25 / M9：统计前端 HTML 插入点与 `v-html`：Vue 组件里的显式 `v-html` 均为静态 `$icons` SVG，用户/服务端数据多使用模板插值，现代教程和受控浏览器引导页在拼接 `innerHTML` 前已有实体编码，不作全站无防护断言。发现未授权的完整备份 GET 会原样响应 .env（合成环境模拟跨源读取），前端导出还复制浏览器本地令牌明文两次（S13）；遗留教程搜索无结果文案直接拼接未经编码的搜索词（S14，自输入风险）；站点/完整备份导入缺文件大小限制（H14）。用 Node VM 假对象演示写入点，无 Chromium、浏览器执行或真实密钥采集。
