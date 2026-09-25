@@ -89,7 +89,7 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - [x] B2 旧版顶层数组历史恢复丢失
 - [x] B1 搜索引擎主域被自动发现
 - [x] B3 Responses 内存历史无字节预算
-- [ ] S10 图片比对 / C2PA 直取外部 URL
+- [x] S10 图片比对 / C2PA 直取外部 URL
 - [x] S11 DNS 校验后连接重解析
 - [ ] S4 回环 IP 当作授权
 - [ ] S5 定时重启代理容量 / 协议
@@ -412,3 +412,8 @@ HTTP 栈会**重新解析一次**。攻击者控制该域名的 DNS（TTL=0）�
 测试踩坑：`203.0.113.0/24` 是 TEST-NET-3 保留段，`ip.is_global` 为 False，
 不能拿来当「公网地址」样例，已改用 `93.184.216.34`。
 全量 `657 passed, 64 failed`，无新增失败。
+
+**覆盖确认**：C2PA 那条链路（`app/services/arena_gpt_image_command.py:608/642`）
+用的就是 `read_image_bytes`，一并被加固，无需单独改。
+`command_engine_actions.py:2313` 的 `requests.get` 打的是本机 Clash 管理 API
+（`127.0.0.1:9090`，管理员配置），属预期的内网调用，不纳入本项。
