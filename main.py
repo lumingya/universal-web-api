@@ -486,7 +486,13 @@ async def lifespan(app: FastAPI):
         logger.debug(f"临时目录清理跳过: {e}")
 
     try:
-        from app.core.network_monitor import trim_network_parser_debug_dir
+        # 修复 S12：除总量上限外，按保留期清理历史响应调试快照，
+        # 避免旧版本默认开启时留下的聊天正文长期留存在磁盘上。
+        from app.core.network_monitor import (
+            purge_expired_network_parser_debug_files,
+            trim_network_parser_debug_dir,
+        )
+        purge_expired_network_parser_debug_files()
         trim_network_parser_debug_dir()
     except Exception as e:
         logger.debug(f"网络解析调试目录清理跳过: {e}")

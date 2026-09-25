@@ -20,6 +20,8 @@ from app.core.config import (
     logger,
     SSEFormatter,
     BrowserConstants,
+    _browser_constant_bool,
+    _browser_constant_int,
     sanitize_sensitive_data,
     DEFAULT_LOG_DIR,
 )
@@ -30,6 +32,75 @@ from app.core.background_image_downloader import (
     normalize_remote_image_url,
 )
 from app.core.parsers import ParserRegistry, ResponseParser
+
+
+_NETWORK_DEBUG_CAPTURE_WARNED = False
+
+
+def _warn_network_debug_capture_once() -> None:
+    """抓取开启时给出一次醒目提示（修复 S12）。
+
+    该功能会把上游响应正文片段（可能含完整聊天内容、附件元数据）落到磁盘。
+    默认关闭；显式打开时必须让用户知道自己在往磁盘写什么、以及保留多久。
+    """
+    global _NETWORK_DEBUG_CAPTURE_WARNED
+    if _NETWORK_DEBUG_CAPTURE_WARNED:
+        return
+    _NETWORK_DEBUG_CAPTURE_WARNED = True
+    logger.warning(
+        "⚠️  NETWORK_DEBUG_CAPTURE_ENABLED=true：上游响应正文片段会写入 "
+        f"logs/network_parser_debug（保留 {get_network_debug_capture_retention_hours()} 小时）。"
+        "其中可能包含完整聊天内容，排障完成后请及时关闭并清理该目录。"
+    )
+
+
+def get_network_debug_capture_retention_hours() -> int:
+    """调试快照保留时长（小时），0 表示不做时间清理。"""
+    try:
+        return max(0, _browser_constant_int("NETWORK_DEBUG_CAPTURE_RETENTION_HOURS", 24))
+    except Exception:
+        return 24
+
+
+def purge_expired_network_parser_debug_files(
+    target_dir: Optional[Path] = None,
+    retention_hours: Optional[int] = None,
+) -> int:
+    """按时间清理过期的响应调试快照（修复 S12：原先只有总量上限，没有保留期）。
+
+    Returns:
+        删除的文件数量。
+    """
+    if target_dir is None:
+        target_dir = (DEFAULT_LOG_DIR / "network_parser_debug").resolve()
+    else:
+        target_dir = Path(target_dir).resolve()
+
+    if not target_dir.exists() or not target_dir.is_dir():
+        return 0
+
+    hours = get_network_debug_capture_retention_hours() if retention_hours is None else int(retention_hours)
+    if hours <= 0:
+        return 0
+
+    cutoff = time.time() - hours * 3600
+    deleted = 0
+    try:
+        for entry in target_dir.iterdir():
+            if not entry.is_file():
+                continue
+            try:
+                if entry.stat().st_mtime < cutoff:
+                    entry.unlink()
+                    deleted += 1
+            except OSError:
+                continue
+    except OSError:
+        return deleted
+
+    if deleted:
+        logger.debug(f"[NetworkMonitor] 已清理 {deleted} 个过期的响应调试快照（保留 {hours}h）")
+    return deleted
 
 
 def trim_network_parser_debug_dir(
@@ -1974,10 +2045,19 @@ class NetworkMonitor:
 
     @staticmethod
     def _is_network_debug_capture_enabled() -> bool:
+        """响应调试抓取开关（修复 S12）。
+
+        旧实现用 `bool(BrowserConstants.get(...))`，字符串 `"false"` 是非空字符串，
+        `bool("false")` 为 True —— 于是「关掉」的配置反而把聊天响应正文写进了
+        `logs/network_parser_debug`。这里改用严格布尔解析，且默认关闭。
+        """
         try:
-            return bool(BrowserConstants.get("NETWORK_DEBUG_CAPTURE_ENABLED"))
+            enabled = _browser_constant_bool("NETWORK_DEBUG_CAPTURE_ENABLED", False)
         except Exception:
             return False
+        if enabled:
+            _warn_network_debug_capture_once()
+        return enabled
 
     @staticmethod
     def _get_network_debug_capture_max_body_chars() -> int:

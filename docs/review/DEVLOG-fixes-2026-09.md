@@ -78,7 +78,7 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - [x] H1 `.env.example` 诱导不安全部署
 - [x] S8 SVG 以同源活动内容落盘/提供
 - [x] S9 音视频响应头 + `.html` 后缀落盘
-- [ ] S12 默认开启的响应调试抓取
+- [x] S12 默认开启的响应调试抓取
 
 ### 第二批
 
@@ -193,3 +193,33 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
   `application/octet-stream` + `attachment` + `nosniff`。
 - 同时验证「正常 mp4 仍能正常落盘为 `/media/xxx.mp4`」，避免过度拦截。
 - 全量：`583 passed, 73 failed`，失败集合与基线逐行相同（无回归）。
+
+### 2026-09-25 · S12（默认响应调试抓取泄露聊天内容）
+
+**根因有两层**，缺一不可：
+
+1. `config/browser_config.json` 里跟踪的 `NETWORK_DEBUG_CAPTURE_ENABLED` 是 `true`
+   —— 全新克隆开箱即在写响应正文。
+2. `NetworkMonitor._is_network_debug_capture_enabled()` 用 `bool(BrowserConstants.get(...))`
+   判断。`bool("false") is True`，所以**把它配成字符串 `"false"` 反而是打开**。
+   用户以为关掉了，实际没有。
+
+**改动文件**
+
+- `config/browser_config.json`：`NETWORK_DEBUG_CAPTURE_ENABLED` → `false`；
+  新增 `NETWORK_DEBUG_CAPTURE_RETENTION_HOURS: 24`。
+- `app/core/network_monitor.py`：
+  - `_is_network_debug_capture_enabled()` 改用 `_browser_constant_bool(key, False)`（严格布尔、默认关）；
+  - 新增 `_warn_network_debug_capture_once()`：开启时打一次醒目 WARNING，说明写什么、留多久；
+  - 新增 `get_network_debug_capture_retention_hours()` 与
+    `purge_expired_network_parser_debug_files()`——原先**只有**总量上限（50MB），没有保留期，
+    旧版本默认开启留下的聊天正文会长期躺在磁盘上。
+- `main.py` lifespan：启动清理时先 `purge_expired_...` 再 `trim_...`。
+- `app/api/system.py`：`DEFAULT_BROWSER_CONSTANTS` 补 `NETWORK_DEBUG_CAPTURE_RETENTION_HOURS`，
+  让面板能配置它（否则前端改不了）。
+
+**未改动**：脱敏器 `sanitize_sensitive_data` 本身。报告指出它对普通聊天文本无能为力，
+但那是「默认不该抓」的问题，不是脱敏器的缺陷；强行扩大脱敏会误伤正常排障。
+
+**验证**：`tests/test_security_hardening_fixes.py` 新增 5 项（含 `"false"` 字符串解析矩阵、
+过期快照清理、retention=0 时不清理）。全量 `588 passed, 73 failed`，与基线逐行一致。
