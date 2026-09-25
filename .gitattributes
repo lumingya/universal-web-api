@@ -1,0 +1,21 @@
+# R0-6：统一换行符（路线图 N5）。仓库内的文本文件一律存 LF，检出也是 LF；
+# Windows 专用脚本检出为 CRLF。修改本文件的规则后需执行：git add --renormalize .
+* text=auto eol=lf
+
+# cmd 在 LF 换行下解析标签/goto 可能出错，批处理与 PowerShell 脚本保持 CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# 二进制资源：不做换行转换，也不做文本 diff
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.zip binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
