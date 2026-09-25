@@ -923,3 +923,75 @@ def test_h12_regex_semantics_preserved():
     assert m._matches_url_rule(url, "conversation", "keyword") is True
     # 超长模式按关键词处理，不交给正则引擎
     assert m._matches_url_rule(url, "(" * 600, "regex") is False
+
+
+# ---------------------------------------------------------------------------
+# H9 · 标签页 acquire 等待队列总量上限 → 明确 503
+# ---------------------------------------------------------------------------
+
+def _bare_pool(limit):
+    import threading
+    from collections import OrderedDict, deque
+
+    from app.core.tab_pool_parts.manager import TabPoolManager
+
+    pool = object.__new__(TabPoolManager)
+    pool._lock = threading.RLock()
+    pool._condition = threading.Condition(pool._lock)
+    pool._acquire_waiters = deque()
+    pool._index_waiters = {}
+    pool._route_waiters = {}
+    pool._group_waiters = {}
+    pool._waiter_counter = 0
+    pool._max_acquire_waiters = limit
+    pool._queue_full_rejections = OrderedDict()
+    pool.acquire_timeout = 60
+    return pool
+
+
+def test_h9_acquire_rejects_immediately_when_waiter_queue_full():
+    from collections import deque
+
+    pool = _bare_pool(limit=3)
+    pool._acquire_waiters.extend(["a#1", "b#2"])
+    pool._route_waiters["x.com"] = deque(["c#3"])
+    started = time.perf_counter()
+    assert pool.acquire("task-over", timeout=30) is None
+    assert pool.acquire_by_index(1, "task-idx", timeout=30) is None
+    assert pool.acquire_by_route_domain("y.com", "task-route", timeout=30) is None
+    assert time.perf_counter() - started < 1.0
+    assert pool.consume_queue_full_rejection("task-over") is True
+    assert pool.consume_queue_full_rejection("task-over") is False  # 查询即清除
+    assert pool.consume_queue_full_rejection("task-idx") is True
+    assert list(pool._acquire_waiters) == ["a#1", "b#2"]  # 没有把被拒者挂进队列
+    assert "y.com" not in pool._route_waiters
+
+
+def test_h9_limit_zero_disables_and_under_limit_passes():
+    pool = _bare_pool(limit=0)
+    pool._acquire_waiters.extend([f"t#{i}" for i in range(1000)])
+    assert pool._acquire_queue_full("t") is False
+    pool = _bare_pool(limit=5)
+    pool._acquire_waiters.extend(["a#1"])
+    assert pool._acquire_queue_full("t") is False
+    assert pool.consume_queue_full_rejection("t") is False
+
+
+def test_h9_workflow_reports_503_for_queue_full():
+    from app.core.browser.workflow import BrowserWorkflowMixin
+    from app.core.config import SSEFormatter
+    from app.services.error_metadata import resolve_error_metadata
+
+    wf = object.__new__(BrowserWorkflowMixin)
+    wf.formatter = SSEFormatter
+    wf.tab_pool = _bare_pool(limit=1)
+    wf.tab_pool._acquire_waiters.append("busy#1")
+    assert wf.tab_pool.acquire("t-full", timeout=5) is None
+    assert wf._acquire_rejected_queue_full("t-full") is True
+    assert wf._acquire_rejected_queue_full("t-other") is False
+    chunk = wf._pack_acquire_queue_full_error()
+    payload = json.loads(chunk.split("data:", 1)[1].strip())
+    err = payload["error"]
+    assert err["code"] == "tab_queue_full" and err["status_code"] == 503 and err["retryable"] is True
+    meta = resolve_error_metadata(payload)
+    assert meta.status_code == 503

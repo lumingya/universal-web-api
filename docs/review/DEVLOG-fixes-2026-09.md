@@ -104,7 +104,7 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - [x] S5 定时重启代理容量 / 协议
 - [x] S6 媒体路由无认证与转码资源
 - [x] S3 解析器安装立即 import
-- [ ] H9 标签页等待队列无总量上限
+- [x] H9 标签页等待队列无总量上限
 - [x] H12 网络事件 URL 正则回溯
 
 ## 4. 修复记录
@@ -343,3 +343,14 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - 测试：p2 新增 2 项：
   - 灾难性模式 `(a+)+$`、`(a|aa)*c` 在 5000 字符 URL 上 1 秒内返回 False。用 stash 验证过：旧代码在 100 秒 timeout 内都没跑完。
   - 常规正则、忽略大小写、通配回退、关键词、超长模式的语义保持不变。
+
+### H9 标签页等待队列无总量上限 ✅
+
+- 现状核实：`acquire_async` 系列（32 线程 executor）在应用里**没有调用方**。真正的请求路径是 `workflow.py` 在请求线程里同步调用 `tab_pool.acquire*(timeout=60)`，每个等待者都挂进 `_acquire_waiters / _index_waiters / _route_waiters / _group_waiters` 队列，最长 60 秒，总数没有上限。
+- `app/core/tab_pool_parts/manager.py`：
+  - 新增 `TAB_ACQUIRE_MAX_WAITERS`（默认 128，0 表示不限）。`_acquire_queue_full` 统计四类队列的总长度。
+  - 5 个 acquire 路径在挂入队列**之前**检查，满了立即返回 None，不创建空 deque，也不占位。同时把该 task 记进 `_queue_full_rejections`（有界 256）。
+  - `consume_queue_full_rejection(task_id)` 查询后即清除该记录。
+- `app/core/browser/workflow.py`：5 处 `session is None` 分支先判断是否因队列已满被拒。是的话返回 `capacity_error / tab_queue_full / status_code=503 / retryable=true`，不再误报成“标签页不存在”（404 类）或无状态的繁忙提示。
+- `.env.example` 加了说明。
+- 测试：p2 新增 3 项：队列满时三种 acquire 都在 1 秒内拒绝且不挂队、查询即清除；limit=0 不限；工作流错误负载经 `resolve_error_metadata` 解析为 503。

@@ -154,6 +154,12 @@ class TabPoolManager:
         self._group_waiters: Dict[str, deque[str]] = {}
         self._route_group_bindings: Dict[str, Dict[str, str]] = {}
         self._waiter_counter = 0
+        # H9：所有 acquire 等待者（通用 / 按编号 / 按域名 / 按路由组）的总量上限，0 = 不限
+        try:
+            self._max_acquire_waiters = max(0, int(os.getenv("TAB_ACQUIRE_MAX_WAITERS", "128") or 128))
+        except ValueError:
+            self._max_acquire_waiters = 128
+        self._queue_full_rejections: "OrderedDict[str, float]" = OrderedDict()
 
         # 🆕 持久化编号系统
         self._next_persistent_index: int = 1  # 下一个可分配的编号
@@ -2792,6 +2798,45 @@ class TabPoolManager:
             # not have a RequestContext; cancellation lookup must stay best effort.
             return False
 
+    def _total_acquire_waiters(self) -> int:
+        total = len(self._acquire_waiters)
+        for group in (self._index_waiters, self._route_waiters, self._group_waiters):
+            for waiters in group.values():
+                total += len(waiters)
+        return total
+
+    def _acquire_queue_full(self, task_id: str) -> bool:
+        """H9：所有 acquire 等待队列的总量上限（调用方持有 self._condition）。
+
+        满了立即返回 True：调用方直接返回 None，并记下该 task 是「队列满」而不是
+        「没有标签页」，工作流层据此给出明确的 503（可重试）而不是再排 60 秒。
+        """
+        limit = int(getattr(self, "_max_acquire_waiters", 0) or 0)
+        if limit <= 0:
+            return False
+        total = self._total_acquire_waiters()
+        if total < limit:
+            return False
+        rejections = getattr(self, "_queue_full_rejections", None)
+        if rejections is None:
+            rejections = OrderedDict()
+            self._queue_full_rejections = rejections
+        rejections[str(task_id or "")] = time.time()
+        while len(rejections) > 256:
+            rejections.popitem(last=False)
+        logger.warning(
+            f"[TabPool] acquire 等待队列已满（{total}/{limit}），立即拒绝 task={task_id}"
+        )
+        return True
+
+    def consume_queue_full_rejection(self, task_id: str) -> bool:
+        """工作流层查询：该 task 的 acquire 是否因等待队列已满被拒（查询即清除）。"""
+        rejections = getattr(self, "_queue_full_rejections", None)
+        if not rejections:
+            return False
+        with self._condition:
+            return rejections.pop(str(task_id or ""), None) is not None
+
     def _next_waiter_token(self, task_id: str) -> str:
         self._waiter_counter += 1
         base = str(task_id or "task").strip() or "task"
@@ -3434,6 +3479,8 @@ class TabPoolManager:
         first_iteration = True
 
         with self._condition:
+            if self._acquire_queue_full(task_id):
+                return None
             waiter_token = self._next_waiter_token(task_id)
             self._acquire_waiters.append(waiter_token)
             try:
@@ -3577,6 +3624,8 @@ class TabPoolManager:
         deadline = time.time() + timeout
 
         with self._condition:
+            if self._acquire_queue_full(task_id):
+                return None
             waiters = self._route_waiters.setdefault(waiter_key, deque())
             waiter_token = self._next_waiter_token(task_id)
             waiters.append(waiter_token)
@@ -3676,6 +3725,8 @@ class TabPoolManager:
         deadline = time.time() + timeout
 
         with self._condition:
+            if self._acquire_queue_full(task_id):
+                return None
             waiters = self._index_waiters.setdefault(persistent_index, deque())
             waiter_token = self._next_waiter_token(task_id)
             waiters.append(waiter_token)
@@ -3812,6 +3863,8 @@ class TabPoolManager:
         deadline = time.time() + timeout
 
         with self._condition:
+            if self._acquire_queue_full(task_id):
+                return None
             waiters = self._route_waiters.setdefault(target, deque())
             waiter_token = self._next_waiter_token(task_id)
             waiters.append(waiter_token)
@@ -3933,6 +3986,8 @@ class TabPoolManager:
                 logger.warning(f"Route group '{target}' does not exist")
                 return None
 
+            if self._acquire_queue_full(task_id):
+                return None
             waiters = self._group_waiters.setdefault(target, deque())
             waiter_token = self._next_waiter_token(task_id)
             waiters.append(waiter_token)
