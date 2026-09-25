@@ -103,7 +103,7 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - [x] S4 回环 IP 当作授权
 - [x] S5 定时重启代理容量 / 协议
 - [x] S6 媒体路由无认证与转码资源
-- [ ] S3 解析器安装立即 import
+- [x] S3 解析器安装立即 import
 - [ ] H9 标签页等待队列无总量上限
 - [ ] H12 网络事件 URL 正则回溯
 
@@ -313,3 +313,22 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - `.env.example` 为 B3/S5/S6 新增的环境变量补了说明（CRLF 保持不变）。
 - 测试：p2 新增 5 项：鉴权矩阵、真实 app 上的 401/200 切换、5 线程同键只跑 1 次 ffmpeg、全局满载返回 503、源文件超限返回 413。
   - 顺带修了 S5 的 Expect 测试：原先头和体一次性发出，代理已经收齐请求体就不会回 100（这是正确行为），导致测试偶发失败。现在改为按真实客户端的方式等收到 100 再发体。
+
+### S3 解析器安装立即 import ✅
+
+- `app/services/parser_manager.py`：
+  - `install_parser_package` 默认关闭，只有 `PARSER_INSTALL_ENABLED=true` 时才允许安装，非法值视为关闭；关闭时抛 `PermissionError`，连解析包都不做。目前仓库里没有 HTTP 入口会调用它，这个开关是给将来接入口时准备的“可信管理员专用”闸门。
+  - `check_import_time_side_effects(tree)` 做“导入期无副作用”静态约束：
+    - 模块顶层和类体只允许以下内容：import、pass、docstring、函数和类定义、对名字的字面量赋值，以及末尾的 `if __name__ == "__main__"`。
+    - 导入期会被求值的表达式（赋值右侧、默认参数、注解、基类）只能是字面量、名字/属性引用（禁止 `__dunder__`），或白名单纯函数调用：`re.compile`、`set`、`frozenset`、`tuple`、`list`、`dict`、`str.maketrans`、`get_logger`、`logging.getLogger`，且参数也必须满足同样条件。
+    - 装饰器只允许 staticmethod、classmethod、property 及其访问器、abstractmethod、dataclass、cached_property。
+    - 类不允许 metaclass 或关键字参数。
+    - 仓库里现有的 18 个 `*_parser.py` 全部通过（有测试守护），因此不影响正常的解析器写法。
+  - 目标类必须是模块顶层类（以前用 ast.walk，嵌套类也能匹配）。
+  - `_load_parser_entry` 限制 parsers.json 里的 module 必须是 `app.core.parsers.<合法模块名>`，防止借配置导入任意模块。
+  - 模块文档写明：这不是沙箱，解析器方法仍以服务进程权限运行。
+- 测试：p2 新增 11 项：
+  - 8 种导入期执行写法全部被拒：os.system、`__import__`、默认参数调用、自定义装饰器、动态基类、try、推导式读文件、dunder 链。
+  - 安全示例和全部内置解析器通过。
+  - 默认关闭，非法开关值同样视为关闭。
+  - 模块路径白名单。

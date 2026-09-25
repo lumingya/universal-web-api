@@ -801,3 +801,90 @@ def test_s6_transcode_source_size_limit(tmp_path, monkeypatch):
     with pytest.raises(main.HTTPException) as exc:
         main._transcode_media(src, "mp3")
     assert exc.value.status_code == 413
+
+
+# ---------------------------------------------------------------------------
+# S3 · 解析器安装：默认关闭 + 导入期无副作用静态约束 + 模块路径限制
+# ---------------------------------------------------------------------------
+
+_SAFE_PARSER = '''
+"""demo parser"""
+import re
+from typing import Optional
+
+from app.core.parsers.base import ResponseParser
+
+_PATTERN = re.compile(r"data: (.*)")
+
+
+class DemoParser(ResponseParser):
+    NAME = "demo"
+    PATTERNS = ("**/demo/**",)
+
+    @classmethod
+    def build(cls, value: Optional[str] = None) -> "DemoParser":
+        return cls()
+
+    def parse(self, raw):
+        return {"text": raw}
+'''
+
+
+@pytest.mark.parametrize("snippet", [
+    "import os\nos.system('touch /tmp/pwned')\nclass DemoParser: pass\n",
+    "class DemoParser:\n    X = __import__('os').getcwd()\n",
+    "import subprocess\nclass DemoParser:\n    def f(self, x=subprocess.run(['id'])):\n        pass\n",
+    "def deco(f):\n    return f\n@deco\nclass DemoParser: pass\n",
+    "class DemoParser(type('B', (), {})): pass\n",
+    "try:\n    import os\nexcept Exception:\n    pass\nclass DemoParser: pass\n",
+    "class DemoParser:\n    x = [open('/etc/passwd').read() for _ in range(1)]\n",
+    "class DemoParser:\n    x = ().__class__.__bases__\n",
+])
+def test_s3_import_time_side_effects_rejected(snippet):
+    import ast
+
+    from app.services.parser_manager import ParserConfigManager, check_import_time_side_effects
+
+    assert check_import_time_side_effects(ast.parse(snippet))
+    with pytest.raises(ValueError):
+        ParserConfigManager._validate_parser_source(snippet, "DemoParser", "demo.py")
+
+
+def test_s3_safe_parser_and_builtin_parsers_pass():
+    import ast
+    import pathlib
+
+    from app.services.parser_manager import ParserConfigManager, check_import_time_side_effects
+
+    ParserConfigManager._validate_parser_source(_SAFE_PARSER, "DemoParser", "demo.py")
+    for path in pathlib.Path("app/core/parsers").glob("*_parser.py"):
+        assert check_import_time_side_effects(ast.parse(path.read_text(encoding="utf-8"))) == [], path.name
+
+
+def test_s3_install_disabled_by_default(monkeypatch, tmp_path):
+    from app.services import parser_manager as pm
+
+    monkeypatch.delenv("PARSER_INSTALL_ENABLED", raising=False)
+    mgr = object.__new__(pm.ParserConfigManager)
+    mgr._parsers_config, mgr._config = {}, {}
+    monkeypatch.setattr(mgr, "_normalize_parser_package",
+                        lambda payload: pytest.fail("must not even parse the package"), raising=False)
+    with pytest.raises(PermissionError):
+        mgr.install_parser_package({"parser_id": "demo", "source_code": _SAFE_PARSER})
+    monkeypatch.setenv("PARSER_INSTALL_ENABLED", "garbage")
+    with pytest.raises(PermissionError):
+        mgr.install_parser_package({"parser_id": "demo", "source_code": _SAFE_PARSER})
+
+
+def test_s3_config_module_must_be_inside_parser_package(monkeypatch):
+    from app.services import parser_manager as pm
+
+    loaded = []
+    monkeypatch.setattr(pm.ParserRegistry, "load_from_module",
+                        lambda module, cls, pid: loaded.append(module))
+    mgr = object.__new__(pm.ParserConfigManager)
+    for bad in ("os", "app.core.parsers", "app.core.parsers.x.y", "app.core.parsersevil.x", "subprocess"):
+        with pytest.raises(ValueError):
+            mgr._load_parser_entry("p", {"module": bad, "class": "C"})
+    mgr._load_parser_entry("p", {"module": "app.core.parsers.mimo_runtime_parser", "class": "MimoParser"})
+    assert loaded == ["app.core.parsers.mimo_runtime_parser"]

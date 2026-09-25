@@ -23,6 +23,162 @@ from app.core.parsers import ParserRegistry
 
 logger = get_logger("PARSER_MGR")
 
+# ---------------------------------------------------------------------------
+# S3：运行时安装解析器 = 把一段 Python 写进 app/core/parsers 并立即 import。
+# 1) 默认关闭，只有可信管理员显式设置 PARSER_INSTALL_ENABLED=true 才允许；
+# 2) 导入期「无副作用」静态约束：模块顶层 / 类体只允许 import、函数/类定义、
+#    字面量赋值，以及极少数纯函数调用（re.compile 等，且参数必须是字面量）；
+#    装饰器只允许 staticmethod/classmethod/property 等；默认参数必须是字面量。
+#    这样 import 本身不会执行任意代码——解析逻辑只会在解析器被调用时运行；
+# 3) 配置中的模块路径必须位于 app.core.parsers 包内。
+# 这不是沙箱：解析器方法仍以服务进程权限运行，所以安装入口必须只对可信管理员开放。
+# ---------------------------------------------------------------------------
+
+PARSER_INSTALL_ENV = "PARSER_INSTALL_ENABLED"
+PARSER_MODULE_PREFIX = "app.core.parsers."
+
+_IMPORT_TIME_SAFE_CALLS = frozenset({
+    "re.compile", "set", "frozenset", "tuple", "list", "dict", "str.maketrans",
+    "get_logger", "logging.getLogger",
+})
+_SAFE_DECORATORS = frozenset({
+    "staticmethod", "classmethod", "property", "abstractmethod", "abc.abstractmethod",
+    "dataclass", "dataclasses.dataclass", "functools.cached_property", "cached_property",
+})
+
+
+def parser_install_enabled() -> bool:
+    value = str(os.getenv(PARSER_INSTALL_ENV, "") or "").strip().lower()
+    return value in ("true", "1", "yes", "on")
+
+
+def _dotted_name(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        base = _dotted_name(node.value)
+        return f"{base}.{node.attr}" if base else ""
+    return ""
+
+
+def _import_time_value_ok(node: Optional[ast.AST]) -> bool:
+    """导入期会被求值的表达式：只允许字面量/名字引用/白名单纯函数调用。"""
+    if node is None:
+        return True
+    if isinstance(node, (ast.Constant, ast.Name)):
+        return True
+    if isinstance(node, ast.Attribute):
+        return not node.attr.startswith("__") and _import_time_value_ok(node.value)
+    if isinstance(node, (ast.Tuple, ast.List, ast.Set)):
+        return all(_import_time_value_ok(item) for item in node.elts)
+    if isinstance(node, ast.Dict):
+        return all(_import_time_value_ok(k) for k in node.keys if k is not None) and all(
+            _import_time_value_ok(v) for v in node.values
+        )
+    if isinstance(node, ast.UnaryOp):
+        return _import_time_value_ok(node.operand)
+    if isinstance(node, ast.BinOp):
+        return _import_time_value_ok(node.left) and _import_time_value_ok(node.right)
+    if isinstance(node, ast.JoinedStr):
+        return all(_import_time_value_ok(v) for v in node.values)
+    if isinstance(node, ast.FormattedValue):
+        return _import_time_value_ok(node.value)
+    if isinstance(node, ast.Call):
+        if _dotted_name(node.func) not in _IMPORT_TIME_SAFE_CALLS:
+            return False
+        return all(_import_time_value_ok(a) for a in node.args) and all(
+            _import_time_value_ok(k.value) for k in node.keywords
+        )
+    return False
+
+
+def _decorator_ok(node: ast.AST) -> bool:
+    name = _dotted_name(node)
+    if name in _SAFE_DECORATORS:
+        return True
+    # @x.setter / @x.getter / @x.deleter（property 访问器）
+    return isinstance(node, ast.Attribute) and node.attr in {"setter", "getter", "deleter"} and bool(name)
+
+
+def _function_signature_ok(node: ast.AST) -> bool:
+    args = node.args  # type: ignore[attr-defined]
+    defaults = list(args.defaults) + [d for d in args.kw_defaults if d is not None]
+    annotations = [a.annotation for a in (*args.posonlyargs, *args.args, *args.kwonlyargs) if a.annotation]
+    if args.vararg and args.vararg.annotation:
+        annotations.append(args.vararg.annotation)
+    if args.kwarg and args.kwarg.annotation:
+        annotations.append(args.kwarg.annotation)
+    returns = getattr(node, "returns", None)
+    if returns is not None:
+        annotations.append(returns)
+    return all(_import_time_value_ok(d) for d in defaults) and all(
+        _annotation_ok(a) for a in annotations
+    )
+
+
+def _annotation_ok(node: ast.AST) -> bool:
+    # 注解在没有 `from __future__ import annotations` 时也会在导入期求值；
+    # 允许 Name/Attribute/字符串/下标（Optional[str]、Dict[str, Any]）/ | 联合。
+    if isinstance(node, (ast.Constant, ast.Name)):
+        return True
+    if isinstance(node, ast.Attribute):
+        return not node.attr.startswith("__") and _annotation_ok(node.value)
+    if isinstance(node, ast.Subscript):
+        return _annotation_ok(node.value) and _annotation_ok(node.slice)
+    if isinstance(node, (ast.Tuple, ast.List)):
+        return all(_annotation_ok(item) for item in node.elts)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+        return _annotation_ok(node.left) and _annotation_ok(node.right)
+    return False
+
+
+def check_import_time_side_effects(tree: ast.Module) -> List[str]:
+    """返回导入期可能执行任意代码的位置描述；空列表表示通过。"""
+    problems: List[str] = []
+
+    def visit_body(body: List[ast.stmt], where: str) -> None:
+        for index, stmt in enumerate(body):
+            line = getattr(stmt, "lineno", "?")
+            if isinstance(stmt, (ast.Import, ast.ImportFrom, ast.Pass)):
+                continue
+            if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant) and isinstance(stmt.value.value, str):
+                continue  # docstring
+            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if not all(_decorator_ok(d) for d in stmt.decorator_list):
+                    problems.append(f"{where}:{line} 不允许的装饰器")
+                if not _function_signature_ok(stmt):
+                    problems.append(f"{where}:{line} 默认参数/注解必须是字面量")
+                continue
+            if isinstance(stmt, ast.ClassDef):
+                if not all(_decorator_ok(d) for d in stmt.decorator_list):
+                    problems.append(f"{where}:{line} 不允许的类装饰器")
+                if stmt.keywords or not all(isinstance(b, (ast.Name, ast.Attribute)) for b in stmt.bases):
+                    problems.append(f"{where}:{line} 类继承列表只允许名字引用")
+                visit_body(stmt.body, f"class {stmt.name}")
+                continue
+            if isinstance(stmt, ast.Assign):
+                if all(isinstance(t, (ast.Name, ast.Tuple)) for t in stmt.targets) and _import_time_value_ok(stmt.value):
+                    continue
+            if isinstance(stmt, ast.AnnAssign):
+                if isinstance(stmt.target, ast.Name) and _annotation_ok(stmt.annotation) and _import_time_value_ok(stmt.value):
+                    continue
+            if isinstance(stmt, ast.If) and index == len(body) - 1 and where == "module":
+                test = stmt.test
+                # 允许末尾的 `if __name__ == "__main__":`（被 import 时不会执行）
+                if (
+                    isinstance(test, ast.Compare)
+                    and isinstance(test.left, ast.Name)
+                    and test.left.id == "__name__"
+                    and len(test.comparators) == 1
+                    and isinstance(test.comparators[0], ast.Constant)
+                    and test.comparators[0].value == "__main__"
+                ):
+                    continue
+            problems.append(f"{where}:{line} 导入期会执行的语句 ({type(stmt).__name__})")
+
+    visit_body(tree.body, "module")
+    return problems
+
 
 class ParserConfigManager:
     """Manage runtime-installed response parsers."""
@@ -135,6 +291,10 @@ class ParserConfigManager:
         class_name = str(config.get("class") or "").strip()
         if not module_path or not class_name:
             raise ValueError("Parser config is missing module/class")
+        # S3：配置里的模块只能来自解析器包本身，不能借 parsers.json 导入任意模块
+        suffix = module_path[len(PARSER_MODULE_PREFIX):] if module_path.startswith(PARSER_MODULE_PREFIX) else ""
+        if not suffix or not self._NAME_PATTERN.match(suffix):
+            raise ValueError(f"Parser module must be inside {PARSER_MODULE_PREFIX[:-1]}: {module_path}")
         ParserRegistry.load_from_module(module_path, class_name, parser_id)
 
     def list_parsers(self) -> List[Dict[str, Any]]:
@@ -160,6 +320,11 @@ class ParserConfigManager:
         return copy.deepcopy(config) if isinstance(config, dict) else None
 
     def install_parser_package(self, payload: Dict[str, Any], overwrite: bool = False) -> Dict[str, Any]:
+        if not parser_install_enabled():
+            raise PermissionError(
+                f"运行时安装解析器默认关闭（会以服务进程权限执行源码）；"
+                f"仅可信管理员可设置 {PARSER_INSTALL_ENV}=true 后使用"
+            )
         normalized = self._normalize_parser_package(payload)
         parser_id = normalized["parser_id"]
         module_name = normalized["module_name"]
@@ -335,9 +500,15 @@ class ParserConfigManager:
         except SyntaxError as exc:
             raise ValueError(f"解析器源码存在语法错误: {exc}") from exc
 
-        class_names = {node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)}
+        class_names = {node.name for node in tree.body if isinstance(node, ast.ClassDef)}
         if class_name not in class_names:
             raise ValueError(f"解析器源码里没有找到类: {class_name}")
+
+        problems = check_import_time_side_effects(tree)
+        if problems:
+            raise ValueError(
+                "解析器源码在导入期会执行代码，已拒绝安装: " + "; ".join(problems[:5])
+            )
 
         try:
             compile(source_code, filename, "exec")
