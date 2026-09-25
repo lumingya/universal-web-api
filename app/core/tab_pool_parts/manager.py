@@ -35,6 +35,16 @@ from .session import TabSession, TabStatus
 class TabPoolManager:
     """标签页池管理器"""
 
+    # 修复 H9：等待队列容量预算。放在类级别是有意为之——
+    # 测试与部分内部路径会用 `__new__` 绕过 `__init__` 构造实例，
+    # 实例属性缺失时必须仍有可用默认值，不能抛 AttributeError。
+    DEFAULT_MAX_TOTAL_WAITERS = 64
+    DEFAULT_MAX_WAITERS_PER_QUEUE = 32
+    _max_total_waiters: int = DEFAULT_MAX_TOTAL_WAITERS
+    _max_waiters_per_queue: int = DEFAULT_MAX_WAITERS_PER_QUEUE
+    _waiter_rejections: int = 0
+    _last_waiter_rejection_at: float = 0.0
+
     DOMAIN_ABBR_MAP = {
         "chatgpt": "gpt",
         "openai": "gpt",
@@ -154,6 +164,17 @@ class TabPoolManager:
         self._group_waiters: Dict[str, deque[str]] = {}
         self._route_group_bindings: Dict[str, Dict[str, str]] = {}
         self._waiter_counter = 0
+        # 修复 H9：32 个 acquire 工作线程限制的是**并行线程**，不是待执行/等待请求总数。
+        # 等待队列本身完全无界：请求可以无限堆积，每个都占着线程/内存、并把
+        # 实际等待时间推到超时边缘。这里给出总量与单队列两级上限，超限直接快速失败。
+        self._max_total_waiters = self._to_positive_int(
+            os.getenv("TAB_POOL_MAX_WAITERS"), self.DEFAULT_MAX_TOTAL_WAITERS
+        )
+        self._max_waiters_per_queue = self._to_positive_int(
+            os.getenv("TAB_POOL_MAX_WAITERS_PER_KEY"), self.DEFAULT_MAX_WAITERS_PER_QUEUE
+        )
+        self._waiter_rejections = 0
+        self._last_waiter_rejection_at: float = 0.0
 
         # 🆕 持久化编号系统
         self._next_persistent_index: int = 1  # 下一个可分配的编号
@@ -2792,10 +2813,69 @@ class TabPoolManager:
             # not have a RequestContext; cancellation lookup must stay best effort.
             return False
 
+    @staticmethod
+    def _to_positive_int(raw: Any, default: int) -> int:
+        try:
+            value = int(str(raw).strip())
+        except (TypeError, ValueError):
+            return default
+        return value if value > 0 else default
+
     def _next_waiter_token(self, task_id: str) -> str:
         self._waiter_counter += 1
         base = str(task_id or "task").strip() or "task"
         return f"{base}#{self._waiter_counter}"
+
+    def _total_waiters(self) -> int:
+        """当前所有等待队列里的请求总数（调用方必须持有 self._condition）。"""
+        total = len(self._acquire_waiters)
+        for mapping in (self._index_waiters, self._route_waiters, self._group_waiters):
+            for queue in mapping.values():
+                total += len(queue)
+        return total
+
+    def _enqueue_waiter(self, waiters: "deque[str]", task_id: str, queue_label: str) -> Optional[str]:
+        """把请求排进等待队列；超过容量预算时返回 None（修复 H9）。
+
+        两级预算：
+        * 总量 `TAB_POOL_MAX_WAITERS`（默认 64）—— 保护整个池；
+        * 单队列 `TAB_POOL_MAX_WAITERS_PER_KEY`（默认 32）—— 避免某个热点
+          标签页/路由的排队把总预算吃光，饿死其它请求。
+
+        超限时**快速失败而不是继续排队**：排到超时才失败对调用方来说是最坏的结果
+        （既占资源又浪费时间），不如立刻返回，让上层重试或降级。
+        调用方必须持有 `self._condition`。
+        """
+        total = self._total_waiters()
+        per_queue = len(waiters)
+        if total >= self._max_total_waiters or per_queue >= self._max_waiters_per_queue:
+            self._waiter_rejections += 1
+            self._last_waiter_rejection_at = time.time()
+            logger.warning(
+                f"Tab acquire rejected: waiter queue full (task={task_id}, queue={queue_label}, "
+                f"total={total}/{self._max_total_waiters}, "
+                f"queue={per_queue}/{self._max_waiters_per_queue}, rejections={self._waiter_rejections})"
+            )
+            return None
+
+        waiter_token = self._next_waiter_token(task_id)
+        waiters.append(waiter_token)
+        return waiter_token
+
+    def waiter_stats(self) -> Dict[str, Any]:
+        """等待队列的容量与拥塞情况（供监控 / 上层决定是否返回 429 / 503）。"""
+        with self._condition:
+            return {
+                "total_waiters": self._total_waiters(),
+                "max_total_waiters": self._max_total_waiters,
+                "max_waiters_per_queue": self._max_waiters_per_queue,
+                "generic_queue": len(self._acquire_waiters),
+                "index_queues": {k: len(v) for k, v in self._index_waiters.items() if v},
+                "route_queues": {k: len(v) for k, v in self._route_waiters.items() if v},
+                "group_queues": {k: len(v) for k, v in self._group_waiters.items() if v},
+                "rejections": self._waiter_rejections,
+                "last_rejection_at": self._last_waiter_rejection_at,
+            }
 
     @staticmethod
     def _is_waiter_turn(waiters: deque[str], waiter_token: str) -> bool:
@@ -3434,8 +3514,9 @@ class TabPoolManager:
         first_iteration = True
 
         with self._condition:
-            waiter_token = self._next_waiter_token(task_id)
-            self._acquire_waiters.append(waiter_token)
+            waiter_token = self._enqueue_waiter(self._acquire_waiters, task_id, "generic")
+            if waiter_token is None:
+                return None
             try:
                 while True:
                     if self._shutdown:
@@ -3578,8 +3659,11 @@ class TabPoolManager:
 
         with self._condition:
             waiters = self._route_waiters.setdefault(waiter_key, deque())
-            waiter_token = self._next_waiter_token(task_id)
-            waiters.append(waiter_token)
+            waiter_token = self._enqueue_waiter(waiters, task_id, f"exact_url:{waiter_key}")
+            if waiter_token is None:
+                if not waiters:
+                    self._route_waiters.pop(waiter_key, None)
+                return None
             try:
                 while True:
                     if self._shutdown:
@@ -3677,8 +3761,11 @@ class TabPoolManager:
 
         with self._condition:
             waiters = self._index_waiters.setdefault(persistent_index, deque())
-            waiter_token = self._next_waiter_token(task_id)
-            waiters.append(waiter_token)
+            waiter_token = self._enqueue_waiter(waiters, task_id, f"index:{persistent_index}")
+            if waiter_token is None:
+                if not waiters:
+                    self._index_waiters.pop(persistent_index, None)
+                return None
             try:
                 while True:
                     if self._shutdown:
@@ -3813,8 +3900,11 @@ class TabPoolManager:
 
         with self._condition:
             waiters = self._route_waiters.setdefault(target, deque())
-            waiter_token = self._next_waiter_token(task_id)
-            waiters.append(waiter_token)
+            waiter_token = self._enqueue_waiter(waiters, task_id, f"route:{target}")
+            if waiter_token is None:
+                if not waiters:
+                    self._route_waiters.pop(target, None)
+                return None
             try:
                 while True:
                     if self._shutdown:
@@ -3934,8 +4024,11 @@ class TabPoolManager:
                 return None
 
             waiters = self._group_waiters.setdefault(target, deque())
-            waiter_token = self._next_waiter_token(task_id)
-            waiters.append(waiter_token)
+            waiter_token = self._enqueue_waiter(waiters, task_id, f"group:{target}")
+            if waiter_token is None:
+                if not waiters:
+                    self._group_waiters.pop(target, None)
+                return None
             try:
                 while True:
                     if self._shutdown:

@@ -95,7 +95,7 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - [ ] S5 定时重启代理容量 / 协议
 - [x] S6 媒体路由无认证与转码资源
 - [ ] S3 解析器安装立即 import
-- [ ] H9 标签页等待队列无总量上限
+- [x] H9 标签页等待队列无总量上限
 - [x] H12 网络事件 URL 正则回溯
 
 ## 4. 修复记录
@@ -517,3 +517,35 @@ Authorization / X-API-Key / **`?token=`** 三种方式 —— 查询参数是标
 包含「同键并发峰值必须为 1」与「不同键仍能并行」两条对照断言
 （后者防止同键锁把整体吞吐误伤成串行）。
 全量 `725 passed, 64 failed`，无新增失败。
+
+### 2026-09-25 · H9（标签页等待队列无总量上限）
+
+`app/core/tab_pool_parts/manager.py`。32 个 acquire 工作线程限制的是**并行线程数**，
+不是待执行/等待请求总数；五个入队点（generic / exact_url / index / route / group）
+用的都是无界 `deque`，请求可以无限堆积。
+
+**改动**：新增 `_enqueue_waiter(waiters, task_id, queue_label)` 统一接管入队，
+替换掉五处 `_next_waiter_token()` + `append()`：
+
+- **两级预算**：总量 `TAB_POOL_MAX_WAITERS`（默认 64）保护整个池；
+  单队列 `TAB_POOL_MAX_WAITERS_PER_KEY`（默认 32）避免某个热点标签页/路由
+  把总预算吃光饿死其它请求。
+- **快速失败而不是继续排队**：排到超时才失败是最坏结果（既占资源又浪费时间），
+  超限直接返回 `None`，让上层重试或降级。被拒绝的 token 绝不入队。
+- 被拒时若队列为空，顺手把 `setdefault` 新建的空 deque 从字典里删掉，避免泄漏。
+- 新增 `waiter_stats()` 暴露容量/拥塞/拒绝计数，供监控与上层决定 429/503。
+
+**踩坑（重要）**：把限额只写在 `__init__` 里会炸 —— `tests/test_tab_route_groups.py`
+等用例用 `__new__` 绕过 `__init__` 构造 `TabPoolManager`，实例属性缺失时
+`_enqueue_waiter` 直接 `AttributeError`，一次跑挂 8 个既有用例。
+改为**类级别默认值** `DEFAULT_MAX_TOTAL_WAITERS` / `DEFAULT_MAX_WAITERS_PER_QUEUE`
+（`__init__` 里再按环境变量覆盖成实例属性）后全部恢复。
+
+**范围说明**：报告建议「队列过满明确 429/503」。把这个状态一路透到 HTTP 层需要改动
+`connection.py` / `workflow.py` / `command_engine*.py` 等十余个 `acquire*` 调用方
+（它们目前统一把 `None` 当作获取失败），回归面远超本批次。
+这里先落地容量边界与 `waiter_stats()` 可编程判定接口，HTTP 状态码映射留待后续。
+
+**验证**：新增 `tests/test_tab_pool_waiter_budget.py`（17 项），
+含并发入队不突破预算、队列消化后恢复可用、热点队列不饿死其它队列等。
+全量 `742 passed, 64 failed`，无新增失败。
