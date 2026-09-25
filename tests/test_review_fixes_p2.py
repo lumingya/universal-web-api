@@ -621,9 +621,18 @@ def test_s5_proxy_handles_chunked_and_expect(handoff_proxy):
     assert resp.endswith(b"ok")
     assert received[-1].endswith(body)
 
-    resp = _raw(port, [b"POST /e HTTP/1.1\r\nHost: a\r\nContent-Length: 4\r\nExpect: 100-continue\r\n\r\n",
-                       b"abcd"])
-    assert resp.startswith(b"HTTP/1.1 100 Continue\r\n\r\n") and resp.endswith(b"ok")
+    import socket
+
+    # 真实客户端行为：发完头等 100 再发体
+    with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+        s.sendall(b"POST /e HTTP/1.1\r\nHost: a\r\nContent-Length: 4\r\nExpect: 100-continue\r\n\r\n")
+        interim = s.recv(64)
+        assert interim == b"HTTP/1.1 100 Continue\r\n\r\n"
+        s.sendall(b"abcd")
+        resp = bytearray()
+        while chunk := s.recv(65536):
+            resp.extend(chunk)
+    assert bytes(resp).endswith(b"ok")
     assert b"expect:" not in received[-1].lower() and received[-1].endswith(b"abcd")
 
 
@@ -661,3 +670,134 @@ def test_s5_proxy_connection_budget(handoff_proxy):
             s.close()
     time.sleep(0.3)
     assert _raw(port, b"GET / HTTP/1.1\r\nHost: a\r\n\r\n").endswith(b"ok")
+
+
+# ---------------------------------------------------------------------------
+# S6 · 媒体路由可选鉴权 + 转码资源预算（并发上限 / 同键合并 / 源大小）
+# ---------------------------------------------------------------------------
+
+def test_s6_media_auth_policy():
+    from app.utils.media_access import media_request_authorized as ok
+
+    off = {}
+    on = {"MEDIA_REQUIRE_AUTH": "true", "AUTH_TOKEN": "svc-token", "DASHBOARD_AUTH_TOKEN": "dash-token"}
+    remote = "203.0.113.9"
+    assert ok(remote, {}, off) is True  # 默认兼容：不强制
+    assert ok(remote, {}, on) is False
+    assert ok(remote, {"authorization": "Bearer svc-token"}, on) is True
+    assert ok(remote, {"x-api-key": "svc-token"}, on) is True
+    assert ok(remote, {"authorization": "Bearer dash-token"}, on) is True
+    assert ok(remote, {"authorization": "Bearer nope"}, on) is False
+    assert ok("127.0.0.1", {}, on) is True
+    assert ok("127.0.0.1", {"x-forwarded-for": remote}, on) is False
+    assert ok(remote, {}, {"MEDIA_REQUIRE_AUTH": "garbage"}) is False  # 非法值 fail-closed
+    assert ok(remote, {"authorization": "Bearer "}, {"MEDIA_REQUIRE_AUTH": "1", "AUTH_TOKEN": ""}) is False
+
+
+def test_s6_media_routes_require_auth_when_enabled(monkeypatch):
+    import asyncio
+
+    import main
+    from httpx import ASGITransport, AsyncClient
+
+    base = Path("download_images")
+    base.mkdir(exist_ok=True)
+    name = "_review_s6_ok.png"
+    (base / name).write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16)
+    monkeypatch.setenv("MEDIA_REQUIRE_AUTH", "true")
+    monkeypatch.setenv("AUTH_TOKEN", "svc-token-s6")
+    try:
+        async def run(client, headers=None):
+            async with AsyncClient(transport=ASGITransport(app=main.app, client=client),
+                                   base_url="http://127.0.0.1:8199") as c:
+                return [
+                    (await c.get(f"/media/{name}", headers=headers or {})).status_code,
+                    (await c.get(f"/download_images/{name}", headers=headers or {})).status_code,
+                ]
+
+        remote = ("203.0.113.9", 4000)
+        assert asyncio.run(run(remote)) == [401, 401]
+        assert asyncio.run(run(remote, {"Authorization": "Bearer svc-token-s6"})) == [200, 200]
+        assert asyncio.run(run(("127.0.0.1", 5000))) == [200, 200]
+        monkeypatch.setenv("MEDIA_REQUIRE_AUTH", "false")
+        assert asyncio.run(run(remote)) == [200, 200]
+    finally:
+        (base / name).unlink(missing_ok=True)
+
+
+def test_s6_transcode_same_key_is_coalesced(tmp_path, monkeypatch):
+    import threading
+    import time
+    from types import SimpleNamespace
+
+    import main
+    from app.utils.media_access import TranscodeGate
+
+    src = tmp_path / "voice.wav"
+    src.write_bytes(b"wav")
+    monkeypatch.setattr(main.shutil, "which", lambda _n: "ffmpeg")
+    monkeypatch.setattr(main, "_TRANSCODE_GATE", TranscodeGate(max_concurrency=4, queue_timeout=5))
+    runs = []
+
+    def fake_run(cmd, **_kw):
+        runs.append(cmd)
+        time.sleep(0.3)
+        main.Path(cmd[-1]).write_bytes(b"converted")
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr(main.subprocess, "run", fake_run)
+    results = []
+    threads = [threading.Thread(target=lambda: results.append(main._transcode_media(src, "mp3")))
+               for _ in range(5)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(10)
+    assert len(results) == 5 and len(set(results)) == 1
+    assert len(runs) == 1
+
+
+def test_s6_transcode_global_limit_returns_503(tmp_path, monkeypatch):
+    import threading
+    from types import SimpleNamespace
+
+    import main
+    from app.utils.media_access import TranscodeGate
+
+    monkeypatch.setattr(main.shutil, "which", lambda _n: "ffmpeg")
+    monkeypatch.setattr(main, "_TRANSCODE_GATE", TranscodeGate(max_concurrency=1, queue_timeout=0.2))
+    release = threading.Event()
+    started = threading.Event()
+
+    def slow_run(cmd, **_kw):
+        started.set()
+        release.wait(5)
+        main.Path(cmd[-1]).write_bytes(b"converted")
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr(main.subprocess, "run", slow_run)
+    a = tmp_path / "a.wav"
+    b = tmp_path / "b.wav"
+    a.write_bytes(b"a")
+    b.write_bytes(b"b")
+    t = threading.Thread(target=lambda: main._transcode_media(a, "mp3"))
+    t.start()
+    assert started.wait(5)
+    with pytest.raises(main.HTTPException) as exc:
+        main._transcode_media(b, "mp3")
+    assert exc.value.status_code == 503
+    release.set()
+    t.join(5)
+
+
+def test_s6_transcode_source_size_limit(tmp_path, monkeypatch):
+    import main
+
+    monkeypatch.setattr(main.shutil, "which", lambda _n: "ffmpeg")
+    monkeypatch.setenv("MEDIA_TRANSCODE_MAX_SOURCE_MB", "0.001")
+    src = tmp_path / "big.wav"
+    src.write_bytes(b"x" * 5000)
+    monkeypatch.setattr(main.subprocess, "run", lambda *a, **k: pytest.fail("must not transcode"))
+    with pytest.raises(main.HTTPException) as exc:
+        main._transcode_media(src, "mp3")
+    assert exc.value.status_code == 413

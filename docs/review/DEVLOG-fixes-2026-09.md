@@ -102,7 +102,7 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - [x] S11 DNS 校验后连接重解析
 - [x] S4 回环 IP 当作授权
 - [x] S5 定时重启代理容量 / 协议
-- [ ] S6 媒体路由无认证与转码资源
+- [x] S6 媒体路由无认证与转码资源
 - [ ] S3 解析器安装立即 import
 - [ ] H9 标签页等待队列无总量上限
 - [ ] H12 网络事件 URL 正则回溯
@@ -293,3 +293,23 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - 测试：p2 新增 7 项：
   - 3 项 ASGI：隧道/远程被拒；handoff 地址可信、伪造密钥或前置 nginx 被拒；令牌和目标 URL 限制。
   - 4 项起真实代理加假后端：剥离并注入请求头；chunked 与 Expect；走私/超限/预算返回 400/501/413/503/431，且后端零请求、账本归零；连接预算 503 以及释放后恢复。
+
+### S6 媒体路由无认证与转码资源 ✅
+
+- 新增 `app/utils/media_access.py`，这是纯逻辑模块：
+  - `media_request_authorized` 负责鉴权判定。
+  - `TranscodeGate` 提供全局并发名额 `slot()`，以及同键合并 `key()`，后者带引用计数，用完就清理。
+  - 开关 `MEDIA_REQUIRE_AUTH` 的非法取值 fail-closed。
+- 鉴权决策：**默认不强制**，需要显式设置 `MEDIA_REQUIRE_AUTH=true` 才开启。
+  - 原因：生成的 `/media`、`/download_images` 链接会原样写进 OpenAI 兼容响应，第三方聊天前端直接用 `<img src>` 渲染，不会带 Bearer 头。默认开启会破坏主流程。
+  - 开启后接受以下三种之一：服务令牌（Bearer 或 X-API-Key）、面板令牌、严格本机直连。否则返回 401。
+  - 实现方式是 `main.py` 里的 `guard_private_media` 中间件，同时覆盖 `/media` 路由和 `/download_images` 挂载。
+  - 文件名仍是 `时间戳_uuid8`，熵偏低，这点已记下，没有改：改动面太大，放到 P3 讨论。
+- 转码（`main.py::_transcode_media`）：
+  - 先查缓存，然后检查源文件大小上限 `MEDIA_TRANSCODE_MAX_SOURCE_MB`（默认 200），超出返回 413。
+  - 进入同键锁后再查一次缓存，所以同一文件的并发请求只跑一次 ffmpeg。
+  - 全局名额 `MEDIA_TRANSCODE_MAX_CONCURRENCY`（默认 2），排队超过 `MEDIA_TRANSCODE_QUEUE_TIMEOUT_SEC`（默认 10）返回 503 + Retry-After。
+  - ffmpeg 执行部分拆到 `_run_ffmpeg_transcode`，逻辑不变。
+- `.env.example` 为 B3/S5/S6 新增的环境变量补了说明（CRLF 保持不变）。
+- 测试：p2 新增 5 项：鉴权矩阵、真实 app 上的 401/200 切换、5 线程同键只跑 1 次 ffmpeg、全局满载返回 503、源文件超限返回 413。
+  - 顺带修了 S5 的 Expect 测试：原先头和体一次性发出，代理已经收齐请求体就不会回 100（这是正确行为），导致测试偶发失败。现在改为按真实客户端的方式等收到 100 再发体。

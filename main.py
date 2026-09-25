@@ -695,6 +695,22 @@ async def reject_untrusted_origins(request, call_next):
     return await call_next(request)
 
 
+@app.middleware("http")
+async def guard_private_media(request, call_next):
+    """S6：MEDIA_REQUIRE_AUTH=true 时，/media 与 /download_images 需要服务/面板令牌或严格本机访问。"""
+    from app.utils.media_access import is_media_path, media_request_authorized
+
+    if is_media_path(request.url.path):
+        client_host = request.client.host if request.client else None
+        if not media_request_authorized(client_host, request.headers):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "媒体访问需要认证（MEDIA_REQUIRE_AUTH 已开启）"},
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+    return await call_next(request)
+
+
 # ================= Dashboard 路由（优先级最高）=================
 
 @app.get("/", include_in_schema=False)
@@ -789,6 +805,15 @@ def _guess_media_mime(path: Path) -> str:
     return _MEDIA_MIME_OVERRIDES.get(suffix) or mimetypes.guess_type(str(path))[0] or "application/octet-stream"
 
 
+def _new_transcode_gate():
+    from app.utils.media_access import TranscodeGate
+
+    return TranscodeGate.from_env()
+
+
+_TRANSCODE_GATE = _new_transcode_gate()
+
+
 def _transcode_media(path: Path, fmt: str) -> Path:
     spec = _MEDIA_TRANSCODE_FORMATS.get(fmt)
     if not spec:
@@ -798,14 +823,38 @@ def _transcode_media(path: Path, fmt: str) -> Path:
     if not ffmpeg_path:
         raise HTTPException(status_code=503, detail="ffmpeg_not_available")
 
+    from app.utils.media_access import TranscodeBusyError, transcode_max_source_bytes
+
     cache_dir = path.parent / "_transcoded"
     cache_dir.mkdir(exist_ok=True)
     # Include the complete source filename in the cache key.  Different input
     # formats can share a stem (for example voice.wav and voice.ogg).
     out_path = cache_dir / f"{path.name}{spec['ext']}"
-    if out_path.exists() and out_path.stat().st_mtime >= path.stat().st_mtime and out_path.stat().st_size > 0:
-        return out_path
 
+    def _cached() -> bool:
+        return out_path.exists() and out_path.stat().st_mtime >= path.stat().st_mtime and out_path.stat().st_size > 0
+
+    if _cached():
+        return out_path
+    # S6：源文件大小上限、同键合并、全局并发上限（排队超时 503）
+    if path.stat().st_size > transcode_max_source_bytes():
+        raise HTTPException(status_code=413, detail="media_transcode_source_too_large")
+    try:
+        with _TRANSCODE_GATE.key(str(out_path)):
+            if _cached():
+                return out_path
+            with _TRANSCODE_GATE.slot():
+                return _run_ffmpeg_transcode(path, fmt, spec, ffmpeg_path, cache_dir, out_path)
+    except TranscodeBusyError:
+        raise HTTPException(
+            status_code=503,
+            detail="media_transcode_busy",
+            headers={"Retry-After": "5"},
+        )
+
+
+def _run_ffmpeg_transcode(path: Path, fmt: str, spec: Dict[str, Any], ffmpeg_path: str,
+                          cache_dir: Path, out_path: Path) -> Path:
     temp_path = cache_dir / (
         f".{path.name}.{os.getpid()}.{threading.get_ident()}.{time.time_ns()}{spec['ext']}"
     )
