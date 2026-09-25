@@ -1,0 +1,218 @@
+{
+  "schema_version": 1,
+  "site": "aistudio.google.com",
+  "adapter_version": "2026.09.26",
+  "min_app_version": "3.0.0",
+  "config": {
+    "presets": {
+      "主预设": {
+        "selectors": {
+          "input_box": "textarea[formcontrolname=\"promptText\"], textarea.textarea",
+          "send_btn": "ms-run-button button[type=\"submit\"], button.ctrl-enter-submits, button[mattooltipclass=\"run-button-tooltip\"], button[aria-label=\"Run\"]",
+          "result_container": ".chat-turn-container.model ms-text-chunk ms-cmark-node.cmark-node, .chat-turn-container.model ms-prompt-chunk:not(:has(ms-thought-chunk)) ms-cmark-node.cmark-node",
+          "new_chat_btn": "button[aria-label=\"New chat\"], a.playground-link[href*=\"/prompts/new_chat\"]",
+          "confirm_btn": "mat-dialog-actions button.ms-button-primary, .mat-mdc-dialog-actions button.ms-button-primary, .mat-mdc-dialog-actions button, [role=\"dialog\"] button.ms-button-primary",
+          "stop_btn": "ms-run-button button[type=\"button\"], button[aria-label*=\"Stop\" i]",
+          "generating_indicator": "ms-run-button button[type=\"button\"], ms-run-button span.spin",
+          "upload_btn": "button[data-test-id=\"add-media-button\"], button[aria-label*=\"Insert\"]",
+          "file_input": "input[data-test-upload-file-input], input[type=\"file\"].file-input, input[type=\"file\"]",
+          "retry_send_btn": "button.rerun-button, button[aria-label=\"Rerun this turn\"]"
+        },
+        "stream_config": {
+          "mode": "network",
+          "hard_timeout": 300,
+          "network": {
+            "listen_pattern": "GenerateContent",
+            "parser": "aistudio",
+            "silence_threshold": 6,
+            "response_interval": 0.5
+          }
+        },
+        "workflow": [
+          {
+            "action": "CLICK",
+            "target": "new_chat_btn",
+            "optional": true,
+            "value": null
+          },
+          {
+            "action": "WAIT",
+            "target": "",
+            "optional": false,
+            "value": 0.5
+          },
+          {
+            "action": "CLICK",
+            "target": "confirm_btn",
+            "optional": true,
+            "value": null
+          },
+          {
+            "action": "WAIT",
+            "target": "",
+            "optional": false,
+            "value": 0.1
+          },
+          {
+            "action": "CLICK",
+            "target": "input_box",
+            "optional": false,
+            "value": null
+          },
+          {
+            "action": "WAIT",
+            "target": "",
+            "optional": false,
+            "value": 0.1
+          },
+          {
+            "action": "FILL_INPUT",
+            "target": "input_box",
+            "optional": false,
+            "value": null
+          },
+          {
+            "action": "CLICK",
+            "target": "send_btn",
+            "optional": false,
+            "value": null
+          },
+          {
+            "action": "STREAM_WAIT",
+            "target": "result_container",
+            "optional": false,
+            "value": null
+          }
+        ],
+        "stealth": false,
+        "image_extraction": {
+          "enabled": true,
+          "modalities": {
+            "image": {
+              "enabled": true,
+              "run_policy": "on_signal",
+              "quick_probe_timeout_seconds": 1,
+              "late_wait_timeout_seconds": 45,
+              "blind_wait_timeout_seconds": 1
+            },
+            "audio": {
+              "enabled": false,
+              "run_policy": "disabled",
+              "quick_probe_timeout_seconds": 1,
+              "capture_timeout_seconds": 12
+            },
+            "video": {
+              "enabled": false,
+              "run_policy": "disabled",
+              "quick_probe_timeout_seconds": 1,
+              "late_wait_timeout_seconds": 90
+            }
+          },
+          "selector": "img",
+          "audio_selector": "audio, audio source",
+          "video_selector": "video, video source",
+          "container_selector": null,
+          "force_postprocess": false,
+          "debounce_seconds": 2,
+          "wait_for_load": true,
+          "load_timeout_seconds": 5,
+          "download_blobs": true,
+          "max_size_mb": 100,
+          "canvas_export_mime": "image/jpeg",
+          "canvas_export_quality": 0.88,
+          "src_allow_patterns": [],
+          "mode": "all",
+          "audio_capture_enabled": true,
+          "audio_capture_mute_playback": false,
+          "audio_capture_preload_enabled": true,
+          "audio_capture_reload_before_workflow": false,
+          "audio_capture_preserve_graph": true,
+          "audio_capture_terminal_settle_seconds": 0.35,
+          "audio_trigger_selector": "button[aria-label=\"朗读\"], button[aria-label*=\"朗读\"], button[data-dbx-name=\"button\"][aria-label*=\"朗读\"], button.voiceButton-GAZh3G",
+          "audio_trigger_labels": [
+            "朗读",
+            "语音朗读",
+            "收听",
+            "read aloud",
+            "listen",
+            "tts",
+            "voice"
+          ],
+          "audio_capture_max_wait_seconds": 12,
+          "audio_capture_min_wait_seconds": 2,
+          "audio_capture_hard_max_wait_seconds": 45,
+          "audio_capture_estimated_chars_per_second": 4.8,
+          "audio_capture_wait_padding_seconds": 1.2,
+          "audio_network_capture": {
+            "enabled": false,
+            "timeout_seconds": 2.5,
+            "transport": "page_websocket_probe",
+            "url_patterns": [
+              "voicegenie",
+              "speech",
+              "audio",
+              "tts"
+            ],
+            "extractor": "voicegenie_ogg_pages",
+            "settle_seconds": 0.35,
+            "max_payload_bytes": 10485760
+          },
+          "audio_browser_tts_fallback": {
+            "enabled": false,
+            "provider": "doubao_samantha",
+            "speaker": "2",
+            "speech_rate": 0,
+            "pitch": 0,
+            "format": "aac",
+            "timeout_seconds": 30,
+            "pc_version": "3.20.2",
+            "aid": "497858",
+            "real_aid": "497858",
+            "language": "zh",
+            "device_platform": "web",
+            "pkg_type": "release_version",
+            "region": "CN",
+            "sys_region": "CN",
+            "use_olympus_account": "1",
+            "samantha_web": "1"
+          },
+          "audio_capture_poll_seconds": 0.25,
+          "audio_capture_silence_seconds": 1.2,
+          "audio_capture_activity_threshold": 0.006,
+          "audio_capture_activity_silence_seconds": 0.65,
+          "final_target_strategy": "latest_reply"
+        },
+        "file_paste": {
+          "enabled": true,
+          "threshold": 129999,
+          "temp_file_type": "txt",
+          "hint_text": "文件内容为需要回复的上下文，按上下文回复",
+          "txt_hint_text": "文件内容为需要回复的上下文，按上下文回复",
+          "pdf_hint_text": "完全专注于文件内容",
+          "error_hint_text": "输入文本长度超过限制，已中止发送",
+          "reacquire_input_after_upload": false,
+          "post_upload_input_selector": "",
+          "post_upload_settle": 5,
+          "upload_signal_timeout": 2.5,
+          "upload_signal_grace": 3,
+          "state_probe": {
+            "enabled": false,
+            "code": ""
+          }
+        },
+        "prompt_padding": {
+          "enabled": false,
+          "marker_text": "测试号，无实际意义",
+          "segments_per_side": 12,
+          "random_insert_enabled": false,
+          "random_insert_chars": ""
+        }
+      }
+    },
+    "default_preset": "主预设",
+    "advanced": {
+      "independent_cookies": false,
+      "independent_cookies_auto_takeover": false
+    }
+  }
+}

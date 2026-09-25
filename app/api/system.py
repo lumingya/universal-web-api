@@ -292,8 +292,14 @@ def _schedule_service_restart(delay_seconds: float = 1.0) -> None:
     asyncio.create_task(trigger_restart())
 
 
+def _export_sites_config() -> Dict[str, Any]:
+    """R1-2：从 config/sites/ 目录拼出与旧 sites.json 相同结构的字典（备份格式保持不变，旧备份仍可导入）。"""
+    from app.services.config.site_store import load_sites_dict
+
+    return load_sites_dict(config_engine.sites_dir)
+
+
 def _build_settings_backup_bundle() -> Dict[str, Any]:
-    sites_file = Path(config_engine.config_file)
     sites_local_file = Path(config_engine.local_sites_file)
     commands_file = Path(ConfigConstants.COMMANDS_FILE)
     commands_local_file = Path(ConfigConstants.COMMANDS_LOCAL_FILE)
@@ -311,7 +317,7 @@ def _build_settings_backup_bundle() -> Dict[str, Any]:
         "exported_at": int(time.time()),
         "app_version": APP_VERSION,
         "files": {
-            "sites": _read_json_file(sites_file, {}),
+            "sites": _export_sites_config(),
             "sites_local": _read_json_file(sites_local_file, {"default_presets": {}}),
             "commands": _read_json_file(commands_file, {"commands": []}),
             "commands_local": _read_json_file(commands_local_file, {"commands": []}),
@@ -1087,7 +1093,15 @@ async def import_settings_backup(
 
         try:
             if "sites" in files:
-                write_import_json(Path(config_engine.config_file), files["sites"])
+                # R1-2：备份里的 sites 是旧 sites.json 结构；按“整体替换”语义写回 config/sites/ 目录。
+                # 先记住目录里现有的和即将写入的每个文件，失败时由 _restore_file_snapshots 整体回滚。
+                store = config_engine.site_store
+                for site_path in store.site_files():
+                    remember_file(site_path)
+                for site_key in files["sites"]:
+                    remember_file(store.file_for(str(site_key)))
+                with config_engine._io_lock:
+                    store.save(files["sites"])
                 imported_sections.append("sites")
 
             if "sites_local" in files:

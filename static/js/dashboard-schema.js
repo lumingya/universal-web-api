@@ -1093,10 +1093,10 @@ const ENV_CONFIG_SCHEMA = {
         label: '配置文件',
         icon: '📁',
         items: {
-            SITES_CONFIG_FILE: {
-                label: '站点配置文件路径',
+            SITES_CONFIG_DIR: {
+                label: '站点配置目录（每站点一个文件）',
                 type: 'text',
-                default: 'config/sites.json'
+                default: 'config/sites'
             }
         }
     }

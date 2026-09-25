@@ -12,7 +12,8 @@ from app.core.workflow.executor import WorkflowExecutor
 
 ROOT=Path(__file__).resolve().parents[1]
 BEFORE=json.loads((ROOT/'docs/migrations/gemini-deepseek-v2.before.json').read_text())
-AFTER=json.loads((ROOT/'config/sites.json').read_text())
+from tests._sites import shipped_sites, shipped_sites_at
+AFTER=shipped_sites()
 GEMINI='gemini.google.com'
 DEEPSEEK='chat.deepseek.com'
 
@@ -60,7 +61,7 @@ def test_only_requested_sites_and_workflows_change_and_upgrade_is_repeatable():
     module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
     assert module.upgrade(AFTER)==AFTER
     # Existing repository configuration outside the requested sites stays byte-value equivalent.
-    shipped=json.loads(subprocess.check_output(['git','show','HEAD:config/sites.json'],cwd=ROOT))
+    shipped=shipped_sites_at('HEAD')
     for domain,site in AFTER.items():
         if domain not in {GEMINI,DEEPSEEK}:assert site==shipped[domain]
 

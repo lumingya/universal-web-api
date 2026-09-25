@@ -1,0 +1,1756 @@
+{
+  "schema_version": 1,
+  "site": "gemini.google.com",
+  "adapter_version": "2026.09.26",
+  "min_app_version": "3.0.0",
+  "config": {
+    "presets": {
+      "3.7flash": {
+        "selectors": {
+          "input_box": "rich-textarea .ql-editor[contenteditable=\"true\"][role=\"textbox\"]",
+          "send_btn": "button[aria-label=\"发送\"]",
+          "result_container": ".markdown-main-panel, single-image.generated-image",
+          "new_chat_btn": "//span[text()='发起新对话']",
+          "message_wrapper": null,
+          "generating_indicator": ".blue-circle.stop-icon mat-icon[data-mat-icon-name=\"stop\"]",
+          "点击模型选择": "//button[@data-test-id='bard-mode-menu-button']",
+          "选择模型": "//gem-menu-item[contains(., '3.8 Flash') or contains(., '3.7 Flash')]",
+          "临时对话按钮": "//button[@aria-label='临时对话']"
+        },
+        "stream_config": {
+          "mode": "network",
+          "hard_timeout": 600,
+          "network": {
+            "listen_pattern": "StreamGenerate",
+            "stream_match_mode": "regex",
+            "stream_match_pattern": "/_/BardChatUi/data/assistant\\.lamda\\.BardFrontendService/StreamGenerate(?:$|[?#])",
+            "parser": "gemini",
+            "silence_threshold": 6,
+            "response_interval": 1
+          }
+        },
+        "workflow": [
+          {
+            "action": "READONLY_HINT",
+            "target": "",
+            "optional": false,
+            "value": {
+              "title": "申明",
+              "text": "网页的主题必须是中文主题，否则会报错找不到元素，gemini其他预设同理！",
+              "tone": "danger"
+            },
+            "flow_version": 2
+          },
+          {
+            "action": "GROUP",
+            "label": "准备新对话与隐私模式",
+            "value": {
+              "variables": {
+                "temporary_chat": true
+              },
+              "steps": [
+                {
+                  "action": "CLICK",
+                  "target": "new_chat_btn",
+                  "optional": false,
+                  "value": null,
+                  "label": "新建对话（不再重复按快捷键）"
+                },
+                {
+                  "action": "IF",
+                  "label": "此预设需要临时对话",
+                  "value": {
+                    "condition": {
+                      "left": "{temporary_chat}",
+                      "op": "eq",
+                      "right": true
+                    },
+                    "then": [
+                      {
+                        "action": "CAPTURE",
+                        "target": "临时对话按钮",
+                        "label": "读取临时对话开关状态",
+                        "value": {
+                          "name": "temporary_pressed",
+                          "source": "attribute",
+                          "timeout": 2,
+                          "attribute": "aria-pressed",
+                          "default": false
+                        }
+                      },
+                      {
+                        "action": "IF",
+                        "label": "未启用时才开启临时对话",
+                        "value": {
+                          "condition": {
+                            "left": "{temporary_pressed}",
+                            "op": "ne",
+                            "right": "true"
+                          },
+                          "then": [
+                            {
+                              "action": "CLICK",
+                              "target": "临时对话按钮",
+                              "optional": false,
+                              "value": null,
+                              "label": "开启临时对话（不可用则停止，不降级为普通对话）"
+                            }
+                          ],
+                          "else": []
+                        }
+                      }
+                    ],
+                    "else": []
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "action": "GROUP",
+            "label": "只在需要时切换模型",
+            "value": {
+              "variables": {
+                "model_label": "3.8 Flash",
+                "desired_pattern": "(?i)^\\s*(?:3\\.[78]\\s+)?Flash\\s*$"
+              },
+              "steps": [
+                {
+                  "action": "CAPTURE",
+                  "target": "点击模型选择",
+                  "label": "读取工具栏上的当前模型",
+                  "value": {
+                    "name": "current_model",
+                    "source": "text",
+                    "timeout": 2,
+                    "default": ""
+                  }
+                },
+                {
+                  "action": "IF",
+                  "label": "已匹配则保留，否则切换模型",
+                  "value": {
+                    "condition": {
+                      "left": "{current_model}",
+                      "op": "matches",
+                      "right": "{desired_pattern}"
+                    },
+                    "then": [],
+                    "else": [
+                      {
+                        "action": "CAPTURE",
+                        "target": "点击模型选择",
+                        "label": "读取模型菜单是否已展开",
+                        "value": {
+                          "name": "menu_expanded",
+                          "source": "attribute",
+                          "timeout": 2,
+                          "attribute": "aria-expanded",
+                          "default": "false"
+                        }
+                      },
+                      {
+                        "action": "IF",
+                        "label": "菜单关闭时才展开",
+                        "value": {
+                          "condition": {
+                            "left": "{menu_expanded}",
+                            "op": "ne",
+                            "right": "true"
+                          },
+                          "then": [
+                            {
+                              "action": "CLICK",
+                              "target": "点击模型选择",
+                              "optional": false,
+                              "value": null,
+                              "label": "展开模型菜单",
+                              "execution": {
+                                "retry": {
+                                  "enabled": false
+                                },
+                                "verification": {
+                                  "enabled": true,
+                                  "match": "all",
+                                  "timeout": 3,
+                                  "poll_interval": 0.1,
+                                  "conditions": [
+                                    {
+                                      "target": "选择模型",
+                                      "state": "visible"
+                                    }
+                                  ]
+                                }
+                              }
+                            }
+                          ],
+                          "else": []
+                        }
+                      },
+                      {
+                        "action": "CLICK",
+                        "target": "选择模型",
+                        "optional": false,
+                        "value": null,
+                        "label": "选择预设模型，并等待菜单关闭",
+                        "execution": {
+                          "retry": {
+                            "enabled": false
+                          },
+                          "verification": {
+                            "enabled": true,
+                            "match": "all",
+                            "timeout": 3,
+                            "poll_interval": 0.1,
+                            "conditions": [
+                              {
+                                "target": "选择模型",
+                                "state": "hidden"
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "action": "GROUP",
+            "label": "发送并读取回复",
+            "value": {
+              "variables": {},
+              "steps": [
+                {
+                  "action": "FILL_INPUT",
+                  "target": "input_box",
+                  "optional": false,
+                  "value": null,
+                  "label": "填写本次请求"
+                },
+                {
+                  "action": "CLICK",
+                  "target": "send_btn",
+                  "optional": false,
+                  "value": null,
+                  "execution": {
+                    "retry": {
+                      "enabled": true,
+                      "max_attempts": 2,
+                      "interval": 0.3
+                    },
+                    "verification": {
+                      "enabled": true,
+                      "match": "any",
+                      "timeout": 2,
+                      "poll_interval": 0.1,
+                      "conditions": [
+                        {
+                          "target": "send_btn",
+                          "state": "absent"
+                        }
+                      ]
+                    },
+                    "click_mode": "inherit"
+                  },
+                  "label": "发送消息（沿用原发送确认）"
+                },
+                {
+                  "action": "STREAM_WAIT",
+                  "target": "result_container",
+                  "optional": false,
+                  "value": null,
+                  "label": "监听并读取回复"
+                }
+              ]
+            }
+          }
+        ],
+        "stealth": false,
+        "image_extraction": {
+          "enabled": true,
+          "modalities": {
+            "image": {
+              "enabled": true,
+              "run_policy": "on_signal",
+              "quick_probe_timeout_seconds": 1,
+              "late_wait_timeout_seconds": 45,
+              "blind_wait_timeout_seconds": 1
+            },
+            "audio": {
+              "enabled": true,
+              "run_policy": "generic_only",
+              "quick_probe_timeout_seconds": 1,
+              "capture_timeout_seconds": 12
+            },
+            "video": {
+              "enabled": true,
+              "run_policy": "on_signal",
+              "quick_probe_timeout_seconds": 1,
+              "late_wait_timeout_seconds": 300
+            }
+          },
+          "selector": "img",
+          "audio_selector": "generated-music audio, generated-music source, audio, audio source",
+          "video_selector": "generated-music video, video-player video, response-element video, video",
+          "container_selector": "response-element, single-image.generated-image, .generated-image, generated-music, .markdown-main-panel",
+          "force_postprocess": false,
+          "debounce_seconds": 1,
+          "wait_for_load": true,
+          "load_timeout_seconds": 10,
+          "download_blobs": true,
+          "max_size_mb": 50,
+          "canvas_export_mime": "image/jpeg",
+          "canvas_export_quality": 0.88,
+          "src_allow_patterns": [],
+          "mode": "first",
+          "audio_capture_enabled": false,
+          "audio_capture_mute_playback": true,
+          "audio_capture_preload_enabled": true,
+          "audio_capture_reload_before_workflow": false,
+          "audio_capture_preserve_graph": true,
+          "audio_capture_terminal_settle_seconds": 0.35,
+          "audio_trigger_selector": "",
+          "audio_trigger_labels": [
+            "朗读",
+            "语音朗读",
+            "收听",
+            "read aloud",
+            "listen",
+            "tts",
+            "voice"
+          ],
+          "audio_capture_max_wait_seconds": 12,
+          "audio_capture_min_wait_seconds": 2,
+          "audio_capture_hard_max_wait_seconds": 45,
+          "audio_capture_estimated_chars_per_second": 4.8,
+          "audio_capture_wait_padding_seconds": 1.2,
+          "audio_network_capture": {
+            "enabled": false,
+            "timeout_seconds": 2.5,
+            "transport": "page_websocket_probe",
+            "url_patterns": [
+              "voicegenie",
+              "speech",
+              "audio",
+              "tts"
+            ],
+            "extractor": "voicegenie_ogg_pages",
+            "settle_seconds": 0.35,
+            "max_payload_bytes": 10485760
+          },
+          "audio_browser_tts_fallback": {
+            "enabled": false,
+            "provider": "doubao_samantha",
+            "speaker": "2",
+            "speech_rate": 0,
+            "pitch": 0,
+            "format": "aac",
+            "timeout_seconds": 30,
+            "pc_version": "3.20.2",
+            "aid": "497858",
+            "real_aid": "497858",
+            "language": "zh",
+            "device_platform": "web",
+            "pkg_type": "release_version",
+            "region": "CN",
+            "sys_region": "CN",
+            "use_olympus_account": "1",
+            "samantha_web": "1"
+          },
+          "audio_capture_poll_seconds": 0.25,
+          "audio_capture_silence_seconds": 1.2,
+          "audio_capture_activity_threshold": 0.006,
+          "audio_capture_activity_silence_seconds": 0.65
+        },
+        "file_paste": {
+          "enabled": false,
+          "threshold": 80000,
+          "temp_file_type": "txt",
+          "hint_text": "上传的文件内容即为上下文，请据此回复",
+          "txt_hint_text": "上传的文件内容即为上下文，请据此回复",
+          "pdf_hint_text": "完全专注于文件内容",
+          "error_hint_text": "输入文本长度超过限制，已中止发送",
+          "reacquire_input_after_upload": false,
+          "post_upload_input_selector": "",
+          "post_upload_settle": 0,
+          "upload_signal_timeout": 2.5,
+          "upload_signal_grace": 3,
+          "state_probe": {
+            "enabled": false,
+            "code": ""
+          },
+          "send_confirmation": {
+            "attachment_sensitivity": "high",
+            "post_click_observe_window": 1.8,
+            "pre_retry_probe_window": 0.12,
+            "retry_observe_window": 0.9,
+            "attachment_observe_window": 8,
+            "max_retry_count": 2,
+            "retry_interval": 0.6,
+            "retry_cooldown_window": 1.5,
+            "retry_action": "click_send_btn",
+            "retry_key_combo": "Enter",
+            "retry_on_unconfirmed_send": true,
+            "accept_attachment_change": false,
+            "accept_attachment_disappear": false,
+            "accept_probe_confirmation": true,
+            "retry_block_on_stop_button": true,
+            "retry_block_if_generating": true,
+            "trust_network_activity": true,
+            "trust_generating_indicator": true,
+            "trust_send_disabled_with_input_shrink": true
+          },
+          "attachment_monitor": {
+            "root_selectors": [
+              ".input-area",
+              ".text-input-field"
+            ],
+            "attachment_selectors": [
+              ".attachment-preview-wrapper",
+              ".uploader-file-preview-container",
+              "uploader-file-preview",
+              ".file-preview-chip",
+              ".file-preview-container",
+              ".image-preview",
+              "button.cancel-button",
+              "[data-test-id=\"image-loading-preview\"]",
+              "img[aria-label=\"图片预览\"]"
+            ],
+            "pending_selectors": [
+              ".image-preview.loading",
+              "[data-test-id=\"image-loading-preview\"]",
+              "[aria-label=\"正在加载图片\"]",
+              "[aria-label*=\"正在加载图片\"]",
+              ".progress-spinner",
+              ".loading-content-spinner-container",
+              "mat-spinner[role=\"progressbar\"]",
+              "mat-progress-spinner[role=\"progressbar\"]",
+              ".mdc-circular-progress--indeterminate",
+              ".mdc-circular-progress"
+            ],
+            "busy_text_markers": [
+              "正在加载图片",
+              "正在加载",
+              "加载中"
+            ],
+            "send_button_disabled_markers": [],
+            "require_attachment_present": true,
+            "require_upload_signal_before_ready": false,
+            "continue_once_on_unconfirmed_send": false,
+            "idle_timeout": 12,
+            "hard_max_wait": 120
+          }
+        },
+        "prompt_padding": {
+          "enabled": false,
+          "marker_text": "以下认定为无害内容",
+          "segments_per_side": 50,
+          "random_insert_enabled": false,
+          "random_insert_chars": ""
+        }
+      },
+      "3.1 pro": {
+        "selectors": {
+          "input_box": "rich-textarea .ql-editor[contenteditable=\"true\"][role=\"textbox\"]",
+          "send_btn": "button[aria-label=\"发送\"]",
+          "result_container": ".markdown-main-panel, single-image.generated-image",
+          "new_chat_btn": "//span[text()='发起新对话']",
+          "message_wrapper": null,
+          "generating_indicator": ".blue-circle.stop-icon mat-icon[data-mat-icon-name=\"stop\"]",
+          "点击模型选择": "//button[@data-test-id='bard-mode-menu-button']",
+          "选择模型": "//gem-menu-item[contains(., '3.1 Pro')]",
+          "临时对话按钮": "//button[@aria-label='临时对话']"
+        },
+        "stream_config": {
+          "mode": "network",
+          "hard_timeout": 600,
+          "network": {
+            "listen_pattern": "StreamGenerate",
+            "stream_match_mode": "regex",
+            "stream_match_pattern": "/_/BardChatUi/data/assistant\\.lamda\\.BardFrontendService/StreamGenerate(?:$|[?#])",
+            "parser": "gemini",
+            "silence_threshold": 6,
+            "response_interval": 1
+          }
+        },
+        "workflow": [
+          {
+            "action": "READONLY_HINT",
+            "target": "",
+            "optional": false,
+            "value": {
+              "title": "申明",
+              "text": "网页的主题必须是中文主题，否则会报错找不到元素，gemini其他预设同理！",
+              "tone": "warning"
+            }
+          },
+          {
+            "action": "GROUP",
+            "label": "准备新对话与隐私模式",
+            "value": {
+              "variables": {
+                "temporary_chat": true
+              },
+              "steps": [
+                {
+                  "action": "CLICK",
+                  "target": "new_chat_btn",
+                  "optional": false,
+                  "value": null,
+                  "label": "新建对话（不再重复按快捷键）"
+                },
+                {
+                  "action": "IF",
+                  "label": "此预设需要临时对话",
+                  "value": {
+                    "condition": {
+                      "left": "{temporary_chat}",
+                      "op": "eq",
+                      "right": true
+                    },
+                    "then": [
+                      {
+                        "action": "CAPTURE",
+                        "target": "临时对话按钮",
+                        "label": "读取临时对话开关状态",
+                        "value": {
+                          "name": "temporary_pressed",
+                          "source": "attribute",
+                          "timeout": 2,
+                          "attribute": "aria-pressed",
+                          "default": false
+                        }
+                      },
+                      {
+                        "action": "IF",
+                        "label": "未启用时才开启临时对话",
+                        "value": {
+                          "condition": {
+                            "left": "{temporary_pressed}",
+                            "op": "ne",
+                            "right": "true"
+                          },
+                          "then": [
+                            {
+                              "action": "CLICK",
+                              "target": "临时对话按钮",
+                              "optional": false,
+                              "value": null,
+                              "label": "开启临时对话（不可用则停止，不降级为普通对话）"
+                            }
+                          ],
+                          "else": []
+                        }
+                      }
+                    ],
+                    "else": []
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "action": "GROUP",
+            "label": "只在需要时切换模型",
+            "value": {
+              "variables": {
+                "model_label": "3.1 Pro",
+                "desired_pattern": "(?i)^\\s*(?:3\\.1\\s+)?Pro\\s*$"
+              },
+              "steps": [
+                {
+                  "action": "CAPTURE",
+                  "target": "点击模型选择",
+                  "label": "读取工具栏上的当前模型",
+                  "value": {
+                    "name": "current_model",
+                    "source": "text",
+                    "timeout": 2,
+                    "default": ""
+                  }
+                },
+                {
+                  "action": "IF",
+                  "label": "已匹配则保留，否则切换模型",
+                  "value": {
+                    "condition": {
+                      "left": "{current_model}",
+                      "op": "matches",
+                      "right": "{desired_pattern}"
+                    },
+                    "then": [],
+                    "else": [
+                      {
+                        "action": "CAPTURE",
+                        "target": "点击模型选择",
+                        "label": "读取模型菜单是否已展开",
+                        "value": {
+                          "name": "menu_expanded",
+                          "source": "attribute",
+                          "timeout": 2,
+                          "attribute": "aria-expanded",
+                          "default": "false"
+                        }
+                      },
+                      {
+                        "action": "IF",
+                        "label": "菜单关闭时才展开",
+                        "value": {
+                          "condition": {
+                            "left": "{menu_expanded}",
+                            "op": "ne",
+                            "right": "true"
+                          },
+                          "then": [
+                            {
+                              "action": "CLICK",
+                              "target": "点击模型选择",
+                              "optional": false,
+                              "value": null,
+                              "label": "展开模型菜单",
+                              "execution": {
+                                "retry": {
+                                  "enabled": false
+                                },
+                                "verification": {
+                                  "enabled": true,
+                                  "match": "all",
+                                  "timeout": 3,
+                                  "poll_interval": 0.1,
+                                  "conditions": [
+                                    {
+                                      "target": "选择模型",
+                                      "state": "visible"
+                                    }
+                                  ]
+                                }
+                              }
+                            }
+                          ],
+                          "else": []
+                        }
+                      },
+                      {
+                        "action": "CLICK",
+                        "target": "选择模型",
+                        "optional": false,
+                        "value": null,
+                        "label": "选择预设模型，并等待菜单关闭",
+                        "execution": {
+                          "retry": {
+                            "enabled": false
+                          },
+                          "verification": {
+                            "enabled": true,
+                            "match": "all",
+                            "timeout": 3,
+                            "poll_interval": 0.1,
+                            "conditions": [
+                              {
+                                "target": "选择模型",
+                                "state": "hidden"
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "action": "GROUP",
+            "label": "发送并读取回复",
+            "value": {
+              "variables": {},
+              "steps": [
+                {
+                  "action": "FILL_INPUT",
+                  "target": "input_box",
+                  "optional": false,
+                  "value": null,
+                  "label": "填写本次请求"
+                },
+                {
+                  "action": "CLICK",
+                  "target": "send_btn",
+                  "optional": false,
+                  "value": null,
+                  "label": "发送消息（沿用原发送确认）"
+                },
+                {
+                  "action": "STREAM_WAIT",
+                  "target": "result_container",
+                  "optional": false,
+                  "value": null,
+                  "label": "监听并读取回复"
+                }
+              ]
+            }
+          }
+        ],
+        "stealth": false,
+        "image_extraction": {
+          "enabled": true,
+          "modalities": {
+            "image": {
+              "enabled": true,
+              "run_policy": "on_signal",
+              "quick_probe_timeout_seconds": 1,
+              "late_wait_timeout_seconds": 45,
+              "blind_wait_timeout_seconds": 1
+            },
+            "audio": {
+              "enabled": true,
+              "run_policy": "generic_only",
+              "quick_probe_timeout_seconds": 1,
+              "capture_timeout_seconds": 12
+            },
+            "video": {
+              "enabled": true,
+              "run_policy": "on_signal",
+              "quick_probe_timeout_seconds": 1,
+              "late_wait_timeout_seconds": 300
+            }
+          },
+          "selector": "img",
+          "audio_selector": "generated-music audio, generated-music source, audio, audio source",
+          "video_selector": "generated-music video, video-player video, response-element video, video",
+          "container_selector": "response-element, single-image.generated-image, .generated-image, generated-music, .markdown-main-panel",
+          "force_postprocess": false,
+          "debounce_seconds": 1,
+          "wait_for_load": true,
+          "load_timeout_seconds": 10,
+          "download_blobs": true,
+          "max_size_mb": 50,
+          "canvas_export_mime": "image/jpeg",
+          "canvas_export_quality": 0.88,
+          "src_allow_patterns": [],
+          "mode": "first",
+          "audio_capture_enabled": false,
+          "audio_capture_mute_playback": true,
+          "audio_capture_preload_enabled": true,
+          "audio_capture_reload_before_workflow": false,
+          "audio_capture_preserve_graph": true,
+          "audio_capture_terminal_settle_seconds": 0.35,
+          "audio_trigger_selector": "",
+          "audio_trigger_labels": [
+            "朗读",
+            "语音朗读",
+            "收听",
+            "read aloud",
+            "listen",
+            "tts",
+            "voice"
+          ],
+          "audio_capture_max_wait_seconds": 12,
+          "audio_capture_min_wait_seconds": 2,
+          "audio_capture_hard_max_wait_seconds": 45,
+          "audio_capture_estimated_chars_per_second": 4.8,
+          "audio_capture_wait_padding_seconds": 1.2,
+          "audio_network_capture": {
+            "enabled": false,
+            "timeout_seconds": 2.5,
+            "transport": "page_websocket_probe",
+            "url_patterns": [
+              "voicegenie",
+              "speech",
+              "audio",
+              "tts"
+            ],
+            "extractor": "voicegenie_ogg_pages",
+            "settle_seconds": 0.35,
+            "max_payload_bytes": 10485760
+          },
+          "audio_browser_tts_fallback": {
+            "enabled": false,
+            "provider": "doubao_samantha",
+            "speaker": "2",
+            "speech_rate": 0,
+            "pitch": 0,
+            "format": "aac",
+            "timeout_seconds": 30,
+            "pc_version": "3.20.2",
+            "aid": "497858",
+            "real_aid": "497858",
+            "language": "zh",
+            "device_platform": "web",
+            "pkg_type": "release_version",
+            "region": "CN",
+            "sys_region": "CN",
+            "use_olympus_account": "1",
+            "samantha_web": "1"
+          },
+          "audio_capture_poll_seconds": 0.25,
+          "audio_capture_silence_seconds": 1.2,
+          "audio_capture_activity_threshold": 0.006,
+          "audio_capture_activity_silence_seconds": 0.65
+        },
+        "file_paste": {
+          "enabled": false,
+          "threshold": 30000,
+          "temp_file_type": "txt",
+          "hint_text": "完全专注于文件内容",
+          "txt_hint_text": "完全专注于文件内容",
+          "pdf_hint_text": "完全专注于文件内容",
+          "error_hint_text": "输入文本长度超过限制，已中止发送",
+          "reacquire_input_after_upload": false,
+          "post_upload_input_selector": "",
+          "post_upload_settle": 0,
+          "upload_signal_timeout": 2.5,
+          "upload_signal_grace": 3,
+          "state_probe": {
+            "enabled": false,
+            "code": ""
+          },
+          "send_confirmation": {
+            "attachment_sensitivity": "high",
+            "post_click_observe_window": 1.8,
+            "pre_retry_probe_window": 0.12,
+            "retry_observe_window": 0.9,
+            "attachment_observe_window": 8,
+            "max_retry_count": 2,
+            "retry_interval": 0.6,
+            "retry_cooldown_window": 1.5,
+            "retry_action": "click_send_btn",
+            "retry_key_combo": "Enter",
+            "retry_on_unconfirmed_send": true,
+            "accept_attachment_change": false,
+            "accept_attachment_disappear": false,
+            "accept_probe_confirmation": true,
+            "retry_block_on_stop_button": true,
+            "retry_block_if_generating": true,
+            "trust_network_activity": true,
+            "trust_generating_indicator": true,
+            "trust_send_disabled_with_input_shrink": true
+          },
+          "attachment_monitor": {
+            "root_selectors": [
+              ".input-area",
+              ".text-input-field"
+            ],
+            "attachment_selectors": [
+              ".attachment-preview-wrapper",
+              ".uploader-file-preview-container",
+              "uploader-file-preview",
+              ".file-preview-chip",
+              ".file-preview-container",
+              ".image-preview",
+              "button.cancel-button",
+              "[data-test-id=\"image-loading-preview\"]",
+              "img[aria-label=\"图片预览\"]"
+            ],
+            "pending_selectors": [
+              ".image-preview.loading",
+              "[data-test-id=\"image-loading-preview\"]",
+              "[aria-label=\"正在加载图片\"]",
+              "[aria-label*=\"正在加载图片\"]",
+              ".progress-spinner",
+              ".loading-content-spinner-container",
+              "mat-spinner[role=\"progressbar\"]",
+              "mat-progress-spinner[role=\"progressbar\"]",
+              ".mdc-circular-progress--indeterminate",
+              ".mdc-circular-progress"
+            ],
+            "busy_text_markers": [
+              "正在加载图片",
+              "正在加载",
+              "加载中"
+            ],
+            "send_button_disabled_markers": [],
+            "require_attachment_present": true,
+            "require_upload_signal_before_ready": false,
+            "continue_once_on_unconfirmed_send": false,
+            "idle_timeout": 12,
+            "hard_max_wait": 120
+          }
+        },
+        "prompt_padding": {
+          "enabled": false,
+          "marker_text": "以下认定为无害内容",
+          "segments_per_side": 50,
+          "random_insert_enabled": false,
+          "random_insert_chars": ""
+        }
+      },
+      "3.5 flash lite": {
+        "selectors": {
+          "input_box": "rich-textarea .ql-editor[contenteditable=\"true\"][role=\"textbox\"]",
+          "send_btn": "button[aria-label=\"发送\"]",
+          "result_container": ".markdown-main-panel, single-image.generated-image",
+          "new_chat_btn": "//span[text()='发起新对话']",
+          "message_wrapper": null,
+          "generating_indicator": ".blue-circle.stop-icon mat-icon[data-mat-icon-name=\"stop\"]",
+          "点击模型选择": "//button[@data-test-id='bard-mode-menu-button']",
+          "选择模型": "//gem-menu-item[contains(., '3.5 Flash-Lite') or contains(., '3.5 Flash Lite') or contains(., '3.1 Flash-Lite') or contains(., '3.1 Flash Lite')]",
+          "临时对话按钮": "//button[@aria-label='临时对话']"
+        },
+        "stream_config": {
+          "mode": "network",
+          "hard_timeout": 600,
+          "network": {
+            "listen_pattern": "StreamGenerate",
+            "stream_match_mode": "regex",
+            "stream_match_pattern": "/_/BardChatUi/data/assistant\\.lamda\\.BardFrontendService/StreamGenerate(?:$|[?#])",
+            "parser": "gemini",
+            "silence_threshold": 3,
+            "response_interval": 1
+          }
+        },
+        "workflow": [
+          {
+            "action": "READONLY_HINT",
+            "target": "",
+            "optional": false,
+            "value": {
+              "title": "申明",
+              "text": "网页的主题必须是中文主题，否则会报错找不到元素，gemini其他预设同理！",
+              "tone": "warning"
+            }
+          },
+          {
+            "action": "GROUP",
+            "label": "准备新对话与隐私模式",
+            "value": {
+              "variables": {
+                "temporary_chat": true
+              },
+              "steps": [
+                {
+                  "action": "CLICK",
+                  "target": "new_chat_btn",
+                  "optional": false,
+                  "value": null,
+                  "label": "新建对话（不再重复按快捷键）"
+                },
+                {
+                  "action": "IF",
+                  "label": "此预设需要临时对话",
+                  "value": {
+                    "condition": {
+                      "left": "{temporary_chat}",
+                      "op": "eq",
+                      "right": true
+                    },
+                    "then": [
+                      {
+                        "action": "CAPTURE",
+                        "target": "临时对话按钮",
+                        "label": "读取临时对话开关状态",
+                        "value": {
+                          "name": "temporary_pressed",
+                          "source": "attribute",
+                          "timeout": 2,
+                          "attribute": "aria-pressed",
+                          "default": false
+                        }
+                      },
+                      {
+                        "action": "IF",
+                        "label": "未启用时才开启临时对话",
+                        "value": {
+                          "condition": {
+                            "left": "{temporary_pressed}",
+                            "op": "ne",
+                            "right": "true"
+                          },
+                          "then": [
+                            {
+                              "action": "CLICK",
+                              "target": "临时对话按钮",
+                              "optional": false,
+                              "value": null,
+                              "label": "开启临时对话（不可用则停止，不降级为普通对话）"
+                            }
+                          ],
+                          "else": []
+                        }
+                      }
+                    ],
+                    "else": []
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "action": "GROUP",
+            "label": "只在需要时切换模型",
+            "value": {
+              "variables": {
+                "model_label": "3.5 Flash-Lite",
+                "desired_pattern": "(?i)^\\s*(?:3\\.[15]\\s+)?Flash[\\s-]?Lite\\s*$"
+              },
+              "steps": [
+                {
+                  "action": "CAPTURE",
+                  "target": "点击模型选择",
+                  "label": "读取工具栏上的当前模型",
+                  "value": {
+                    "name": "current_model",
+                    "source": "text",
+                    "timeout": 2,
+                    "default": ""
+                  }
+                },
+                {
+                  "action": "IF",
+                  "label": "已匹配则保留，否则切换模型",
+                  "value": {
+                    "condition": {
+                      "left": "{current_model}",
+                      "op": "matches",
+                      "right": "{desired_pattern}"
+                    },
+                    "then": [],
+                    "else": [
+                      {
+                        "action": "CAPTURE",
+                        "target": "点击模型选择",
+                        "label": "读取模型菜单是否已展开",
+                        "value": {
+                          "name": "menu_expanded",
+                          "source": "attribute",
+                          "timeout": 2,
+                          "attribute": "aria-expanded",
+                          "default": "false"
+                        }
+                      },
+                      {
+                        "action": "IF",
+                        "label": "菜单关闭时才展开",
+                        "value": {
+                          "condition": {
+                            "left": "{menu_expanded}",
+                            "op": "ne",
+                            "right": "true"
+                          },
+                          "then": [
+                            {
+                              "action": "CLICK",
+                              "target": "点击模型选择",
+                              "optional": false,
+                              "value": null,
+                              "label": "展开模型菜单",
+                              "execution": {
+                                "retry": {
+                                  "enabled": false
+                                },
+                                "verification": {
+                                  "enabled": true,
+                                  "match": "all",
+                                  "timeout": 3,
+                                  "poll_interval": 0.1,
+                                  "conditions": [
+                                    {
+                                      "target": "选择模型",
+                                      "state": "visible"
+                                    }
+                                  ]
+                                }
+                              }
+                            }
+                          ],
+                          "else": []
+                        }
+                      },
+                      {
+                        "action": "CLICK",
+                        "target": "选择模型",
+                        "optional": false,
+                        "value": null,
+                        "label": "选择预设模型，并等待菜单关闭",
+                        "execution": {
+                          "retry": {
+                            "enabled": false
+                          },
+                          "verification": {
+                            "enabled": true,
+                            "match": "all",
+                            "timeout": 3,
+                            "poll_interval": 0.1,
+                            "conditions": [
+                              {
+                                "target": "选择模型",
+                                "state": "hidden"
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "action": "GROUP",
+            "label": "发送并读取回复",
+            "value": {
+              "variables": {},
+              "steps": [
+                {
+                  "action": "FILL_INPUT",
+                  "target": "input_box",
+                  "optional": false,
+                  "value": null,
+                  "label": "填写本次请求"
+                },
+                {
+                  "action": "CLICK",
+                  "target": "send_btn",
+                  "optional": false,
+                  "value": null,
+                  "label": "发送消息（沿用原发送确认）"
+                },
+                {
+                  "action": "STREAM_WAIT",
+                  "target": "result_container",
+                  "optional": false,
+                  "value": null,
+                  "label": "监听并读取回复"
+                }
+              ]
+            }
+          }
+        ],
+        "stealth": false,
+        "image_extraction": {
+          "enabled": true,
+          "modalities": {
+            "image": {
+              "enabled": true,
+              "run_policy": "on_signal",
+              "quick_probe_timeout_seconds": 1,
+              "late_wait_timeout_seconds": 45,
+              "blind_wait_timeout_seconds": 1
+            },
+            "audio": {
+              "enabled": true,
+              "run_policy": "generic_only",
+              "quick_probe_timeout_seconds": 1,
+              "capture_timeout_seconds": 12
+            },
+            "video": {
+              "enabled": true,
+              "run_policy": "on_signal",
+              "quick_probe_timeout_seconds": 1,
+              "late_wait_timeout_seconds": 300
+            }
+          },
+          "selector": "img",
+          "audio_selector": "generated-music audio, generated-music source, audio, audio source",
+          "video_selector": "generated-music video, video-player video, response-element video, video",
+          "container_selector": "response-element, single-image.generated-image, .generated-image, generated-music, .markdown-main-panel",
+          "force_postprocess": false,
+          "debounce_seconds": 1,
+          "wait_for_load": true,
+          "load_timeout_seconds": 10,
+          "download_blobs": true,
+          "max_size_mb": 50,
+          "canvas_export_mime": "image/jpeg",
+          "canvas_export_quality": 0.88,
+          "src_allow_patterns": [],
+          "mode": "first",
+          "audio_capture_enabled": false,
+          "audio_capture_mute_playback": true,
+          "audio_capture_preload_enabled": true,
+          "audio_capture_reload_before_workflow": false,
+          "audio_capture_preserve_graph": true,
+          "audio_capture_terminal_settle_seconds": 0.35,
+          "audio_trigger_selector": "",
+          "audio_trigger_labels": [
+            "朗读",
+            "语音朗读",
+            "收听",
+            "read aloud",
+            "listen",
+            "tts",
+            "voice"
+          ],
+          "audio_capture_max_wait_seconds": 12,
+          "audio_capture_min_wait_seconds": 2,
+          "audio_capture_hard_max_wait_seconds": 45,
+          "audio_capture_estimated_chars_per_second": 4.8,
+          "audio_capture_wait_padding_seconds": 1.2,
+          "audio_network_capture": {
+            "enabled": false,
+            "timeout_seconds": 2.5,
+            "transport": "page_websocket_probe",
+            "url_patterns": [
+              "voicegenie",
+              "speech",
+              "audio",
+              "tts"
+            ],
+            "extractor": "voicegenie_ogg_pages",
+            "settle_seconds": 0.35,
+            "max_payload_bytes": 10485760
+          },
+          "audio_browser_tts_fallback": {
+            "enabled": false,
+            "provider": "doubao_samantha",
+            "speaker": "2",
+            "speech_rate": 0,
+            "pitch": 0,
+            "format": "aac",
+            "timeout_seconds": 30,
+            "pc_version": "3.20.2",
+            "aid": "497858",
+            "real_aid": "497858",
+            "language": "zh",
+            "device_platform": "web",
+            "pkg_type": "release_version",
+            "region": "CN",
+            "sys_region": "CN",
+            "use_olympus_account": "1",
+            "samantha_web": "1"
+          },
+          "audio_capture_poll_seconds": 0.25,
+          "audio_capture_silence_seconds": 1.2,
+          "audio_capture_activity_threshold": 0.006,
+          "audio_capture_activity_silence_seconds": 0.65
+        },
+        "file_paste": {
+          "enabled": false,
+          "threshold": 30000,
+          "temp_file_type": "txt",
+          "hint_text": "完全专注于文件内容",
+          "txt_hint_text": "完全专注于文件内容",
+          "pdf_hint_text": "完全专注于文件内容",
+          "error_hint_text": "输入文本长度超过限制，已中止发送",
+          "reacquire_input_after_upload": false,
+          "post_upload_input_selector": "",
+          "post_upload_settle": 0,
+          "upload_signal_timeout": 2.5,
+          "upload_signal_grace": 3,
+          "state_probe": {
+            "enabled": false,
+            "code": ""
+          },
+          "send_confirmation": {
+            "attachment_sensitivity": "high",
+            "post_click_observe_window": 1.8,
+            "pre_retry_probe_window": 0.12,
+            "retry_observe_window": 0.9,
+            "attachment_observe_window": 8,
+            "max_retry_count": 2,
+            "retry_interval": 0.6,
+            "retry_cooldown_window": 1.5,
+            "retry_action": "click_send_btn",
+            "retry_key_combo": "Enter",
+            "retry_on_unconfirmed_send": true,
+            "accept_attachment_change": false,
+            "accept_attachment_disappear": false,
+            "accept_probe_confirmation": true,
+            "retry_block_on_stop_button": true,
+            "retry_block_if_generating": true,
+            "trust_network_activity": true,
+            "trust_generating_indicator": true,
+            "trust_send_disabled_with_input_shrink": true
+          },
+          "attachment_monitor": {
+            "root_selectors": [
+              ".input-area",
+              ".text-input-field"
+            ],
+            "attachment_selectors": [
+              ".attachment-preview-wrapper",
+              ".uploader-file-preview-container",
+              "uploader-file-preview",
+              ".file-preview-chip",
+              ".file-preview-container",
+              ".image-preview",
+              "button.cancel-button",
+              "[data-test-id=\"image-loading-preview\"]",
+              "img[aria-label=\"图片预览\"]"
+            ],
+            "pending_selectors": [
+              ".image-preview.loading",
+              "[data-test-id=\"image-loading-preview\"]",
+              "[aria-label=\"正在加载图片\"]",
+              "[aria-label*=\"正在加载图片\"]",
+              ".progress-spinner",
+              ".loading-content-spinner-container",
+              "mat-spinner[role=\"progressbar\"]",
+              "mat-progress-spinner[role=\"progressbar\"]",
+              ".mdc-circular-progress--indeterminate",
+              ".mdc-circular-progress"
+            ],
+            "busy_text_markers": [
+              "正在加载图片",
+              "正在加载",
+              "加载中"
+            ],
+            "send_button_disabled_markers": [],
+            "require_attachment_present": true,
+            "require_upload_signal_before_ready": false,
+            "continue_once_on_unconfirmed_send": false,
+            "idle_timeout": 12,
+            "hard_max_wait": 120
+          }
+        },
+        "prompt_padding": {
+          "enabled": false,
+          "marker_text": "以下认定为无害内容",
+          "segments_per_side": 50,
+          "random_insert_enabled": false,
+          "random_insert_chars": ""
+        }
+      },
+      "3.7 非隐私对话": {
+        "selectors": {
+          "input_box": "rich-textarea .ql-editor[contenteditable=\"true\"][role=\"textbox\"]",
+          "send_btn": "button[aria-label=\"发送\"]",
+          "result_container": ".markdown-main-panel, single-image.generated-image",
+          "new_chat_btn": "//span[text()='发起新对话']",
+          "message_wrapper": null,
+          "generating_indicator": ".blue-circle.stop-icon mat-icon[data-mat-icon-name=\"stop\"]",
+          "点击模型选择": "//button[@data-test-id='bard-mode-menu-button']",
+          "选择模型": "//gem-menu-item[contains(., '3.8 Flash') or contains(., '3.7 Flash')]",
+          "临时对话按钮": "//button[@aria-label='临时对话']"
+        },
+        "stream_config": {
+          "mode": "network",
+          "hard_timeout": 600,
+          "network": {
+            "listen_pattern": "StreamGenerate",
+            "stream_match_mode": "regex",
+            "stream_match_pattern": "/_/BardChatUi/data/assistant\\.lamda\\.BardFrontendService/StreamGenerate(?:$|[?#])",
+            "parser": "gemini",
+            "silence_threshold": 6,
+            "response_interval": 1
+          }
+        },
+        "workflow": [
+          {
+            "action": "READONLY_HINT",
+            "target": "",
+            "optional": false,
+            "value": {
+              "title": "申明",
+              "text": "网页的主题必须是中文主题，否则会报错找不到元素，gemini其他预设同理！",
+              "tone": "warning"
+            }
+          },
+          {
+            "action": "GROUP",
+            "label": "准备新对话与隐私模式",
+            "value": {
+              "variables": {
+                "temporary_chat": false
+              },
+              "steps": [
+                {
+                  "action": "CLICK",
+                  "target": "new_chat_btn",
+                  "optional": false,
+                  "value": null,
+                  "label": "新建对话（不再重复按快捷键）"
+                },
+                {
+                  "action": "IF",
+                  "label": "此预设需要临时对话",
+                  "value": {
+                    "condition": {
+                      "left": "{temporary_chat}",
+                      "op": "eq",
+                      "right": true
+                    },
+                    "then": [
+                      {
+                        "action": "CAPTURE",
+                        "target": "临时对话按钮",
+                        "label": "读取临时对话开关状态",
+                        "value": {
+                          "name": "temporary_pressed",
+                          "source": "attribute",
+                          "timeout": 2,
+                          "attribute": "aria-pressed",
+                          "default": false
+                        }
+                      },
+                      {
+                        "action": "IF",
+                        "label": "未启用时才开启临时对话",
+                        "value": {
+                          "condition": {
+                            "left": "{temporary_pressed}",
+                            "op": "ne",
+                            "right": "true"
+                          },
+                          "then": [
+                            {
+                              "action": "CLICK",
+                              "target": "临时对话按钮",
+                              "optional": false,
+                              "value": null,
+                              "label": "开启临时对话（不可用则停止，不降级为普通对话）"
+                            }
+                          ],
+                          "else": []
+                        }
+                      }
+                    ],
+                    "else": []
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "action": "GROUP",
+            "label": "只在需要时切换模型",
+            "value": {
+              "variables": {
+                "model_label": "3.8 Flash",
+                "desired_pattern": "(?i)^\\s*(?:3\\.[78]\\s+)?Flash\\s*$"
+              },
+              "steps": [
+                {
+                  "action": "CAPTURE",
+                  "target": "点击模型选择",
+                  "label": "读取工具栏上的当前模型",
+                  "value": {
+                    "name": "current_model",
+                    "source": "text",
+                    "timeout": 2,
+                    "default": ""
+                  }
+                },
+                {
+                  "action": "IF",
+                  "label": "已匹配则保留，否则切换模型",
+                  "value": {
+                    "condition": {
+                      "left": "{current_model}",
+                      "op": "matches",
+                      "right": "{desired_pattern}"
+                    },
+                    "then": [],
+                    "else": [
+                      {
+                        "action": "CAPTURE",
+                        "target": "点击模型选择",
+                        "label": "读取模型菜单是否已展开",
+                        "value": {
+                          "name": "menu_expanded",
+                          "source": "attribute",
+                          "timeout": 2,
+                          "attribute": "aria-expanded",
+                          "default": "false"
+                        }
+                      },
+                      {
+                        "action": "IF",
+                        "label": "菜单关闭时才展开",
+                        "value": {
+                          "condition": {
+                            "left": "{menu_expanded}",
+                            "op": "ne",
+                            "right": "true"
+                          },
+                          "then": [
+                            {
+                              "action": "CLICK",
+                              "target": "点击模型选择",
+                              "optional": false,
+                              "value": null,
+                              "label": "展开模型菜单",
+                              "execution": {
+                                "retry": {
+                                  "enabled": false
+                                },
+                                "verification": {
+                                  "enabled": true,
+                                  "match": "all",
+                                  "timeout": 3,
+                                  "poll_interval": 0.1,
+                                  "conditions": [
+                                    {
+                                      "target": "选择模型",
+                                      "state": "visible"
+                                    }
+                                  ]
+                                }
+                              }
+                            }
+                          ],
+                          "else": []
+                        }
+                      },
+                      {
+                        "action": "CLICK",
+                        "target": "选择模型",
+                        "optional": false,
+                        "value": null,
+                        "label": "选择预设模型，并等待菜单关闭",
+                        "execution": {
+                          "retry": {
+                            "enabled": false
+                          },
+                          "verification": {
+                            "enabled": true,
+                            "match": "all",
+                            "timeout": 3,
+                            "poll_interval": 0.1,
+                            "conditions": [
+                              {
+                                "target": "选择模型",
+                                "state": "hidden"
+                              }
+                            ]
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "action": "GROUP",
+            "label": "发送并读取回复",
+            "value": {
+              "variables": {},
+              "steps": [
+                {
+                  "action": "FILL_INPUT",
+                  "target": "input_box",
+                  "optional": false,
+                  "value": null,
+                  "label": "填写本次请求"
+                },
+                {
+                  "action": "CLICK",
+                  "target": "send_btn",
+                  "optional": false,
+                  "value": null,
+                  "execution": {
+                    "retry": {
+                      "enabled": true,
+                      "max_attempts": 2,
+                      "interval": 0.3
+                    },
+                    "verification": {
+                      "enabled": true,
+                      "match": "any",
+                      "timeout": 2,
+                      "poll_interval": 0.1,
+                      "conditions": [
+                        {
+                          "target": "send_btn",
+                          "state": "absent"
+                        }
+                      ]
+                    },
+                    "click_mode": "inherit"
+                  },
+                  "label": "发送消息（沿用原发送确认）"
+                },
+                {
+                  "action": "STREAM_WAIT",
+                  "target": "result_container",
+                  "optional": false,
+                  "value": null,
+                  "label": "监听并读取回复"
+                }
+              ]
+            }
+          }
+        ],
+        "stealth": false,
+        "image_extraction": {
+          "enabled": true,
+          "modalities": {
+            "image": {
+              "enabled": true,
+              "run_policy": "on_signal",
+              "quick_probe_timeout_seconds": 1,
+              "late_wait_timeout_seconds": 45,
+              "blind_wait_timeout_seconds": 1
+            },
+            "audio": {
+              "enabled": true,
+              "run_policy": "generic_only",
+              "quick_probe_timeout_seconds": 1,
+              "capture_timeout_seconds": 12
+            },
+            "video": {
+              "enabled": true,
+              "run_policy": "on_signal",
+              "quick_probe_timeout_seconds": 1,
+              "late_wait_timeout_seconds": 300
+            }
+          },
+          "selector": "img",
+          "audio_selector": "generated-music audio, generated-music source, audio, audio source",
+          "video_selector": "generated-music video, video-player video, response-element video, video",
+          "container_selector": "response-element, single-image.generated-image, .generated-image, generated-music, .markdown-main-panel",
+          "force_postprocess": false,
+          "debounce_seconds": 1,
+          "wait_for_load": true,
+          "load_timeout_seconds": 10,
+          "download_blobs": true,
+          "max_size_mb": 50,
+          "canvas_export_mime": "image/jpeg",
+          "canvas_export_quality": 0.88,
+          "src_allow_patterns": [],
+          "mode": "first",
+          "audio_capture_enabled": false,
+          "audio_capture_mute_playback": true,
+          "audio_capture_preload_enabled": true,
+          "audio_capture_reload_before_workflow": false,
+          "audio_capture_preserve_graph": true,
+          "audio_capture_terminal_settle_seconds": 0.35,
+          "audio_trigger_selector": "",
+          "audio_trigger_labels": [
+            "朗读",
+            "语音朗读",
+            "收听",
+            "read aloud",
+            "listen",
+            "tts",
+            "voice"
+          ],
+          "audio_capture_max_wait_seconds": 12,
+          "audio_capture_min_wait_seconds": 2,
+          "audio_capture_hard_max_wait_seconds": 45,
+          "audio_capture_estimated_chars_per_second": 4.8,
+          "audio_capture_wait_padding_seconds": 1.2,
+          "audio_network_capture": {
+            "enabled": false,
+            "timeout_seconds": 2.5,
+            "transport": "page_websocket_probe",
+            "url_patterns": [
+              "voicegenie",
+              "speech",
+              "audio",
+              "tts"
+            ],
+            "extractor": "voicegenie_ogg_pages",
+            "settle_seconds": 0.35,
+            "max_payload_bytes": 10485760
+          },
+          "audio_browser_tts_fallback": {
+            "enabled": false,
+            "provider": "doubao_samantha",
+            "speaker": "2",
+            "speech_rate": 0,
+            "pitch": 0,
+            "format": "aac",
+            "timeout_seconds": 30,
+            "pc_version": "3.20.2",
+            "aid": "497858",
+            "real_aid": "497858",
+            "language": "zh",
+            "device_platform": "web",
+            "pkg_type": "release_version",
+            "region": "CN",
+            "sys_region": "CN",
+            "use_olympus_account": "1",
+            "samantha_web": "1"
+          },
+          "audio_capture_poll_seconds": 0.25,
+          "audio_capture_silence_seconds": 1.2,
+          "audio_capture_activity_threshold": 0.006,
+          "audio_capture_activity_silence_seconds": 0.65
+        },
+        "file_paste": {
+          "enabled": false,
+          "threshold": 80000,
+          "temp_file_type": "txt",
+          "hint_text": "上传的文件内容即为上下文，请据此回复",
+          "txt_hint_text": "上传的文件内容即为上下文，请据此回复",
+          "pdf_hint_text": "完全专注于文件内容",
+          "error_hint_text": "输入文本长度超过限制，已中止发送",
+          "reacquire_input_after_upload": false,
+          "post_upload_input_selector": "",
+          "post_upload_settle": 0,
+          "upload_signal_timeout": 2.5,
+          "upload_signal_grace": 3,
+          "state_probe": {
+            "enabled": false,
+            "code": ""
+          },
+          "send_confirmation": {
+            "attachment_sensitivity": "high",
+            "post_click_observe_window": 1.8,
+            "pre_retry_probe_window": 0.12,
+            "retry_observe_window": 0.9,
+            "attachment_observe_window": 8,
+            "max_retry_count": 2,
+            "retry_interval": 0.6,
+            "retry_cooldown_window": 1.5,
+            "retry_action": "click_send_btn",
+            "retry_key_combo": "Enter",
+            "retry_on_unconfirmed_send": true,
+            "accept_attachment_change": false,
+            "accept_attachment_disappear": false,
+            "accept_probe_confirmation": true,
+            "retry_block_on_stop_button": true,
+            "retry_block_if_generating": true,
+            "trust_network_activity": true,
+            "trust_generating_indicator": true,
+            "trust_send_disabled_with_input_shrink": true
+          },
+          "attachment_monitor": {
+            "root_selectors": [
+              ".input-area",
+              ".text-input-field"
+            ],
+            "attachment_selectors": [
+              ".attachment-preview-wrapper",
+              ".uploader-file-preview-container",
+              "uploader-file-preview",
+              ".file-preview-chip",
+              ".file-preview-container",
+              ".image-preview",
+              "button.cancel-button",
+              "[data-test-id=\"image-loading-preview\"]",
+              "img[aria-label=\"图片预览\"]"
+            ],
+            "pending_selectors": [
+              ".image-preview.loading",
+              "[data-test-id=\"image-loading-preview\"]",
+              "[aria-label=\"正在加载图片\"]",
+              "[aria-label*=\"正在加载图片\"]",
+              ".progress-spinner",
+              ".loading-content-spinner-container",
+              "mat-spinner[role=\"progressbar\"]",
+              "mat-progress-spinner[role=\"progressbar\"]",
+              ".mdc-circular-progress--indeterminate",
+              ".mdc-circular-progress"
+            ],
+            "busy_text_markers": [
+              "正在加载图片",
+              "正在加载",
+              "加载中"
+            ],
+            "send_button_disabled_markers": [],
+            "require_attachment_present": true,
+            "require_upload_signal_before_ready": false,
+            "continue_once_on_unconfirmed_send": false,
+            "idle_timeout": 12,
+            "hard_max_wait": 120
+          }
+        },
+        "prompt_padding": {
+          "enabled": false,
+          "marker_text": "以下认定为无害内容",
+          "segments_per_side": 50,
+          "random_insert_enabled": false,
+          "random_insert_chars": ""
+        }
+      }
+    },
+    "default_preset": "3.7flash"
+  }
+}

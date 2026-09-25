@@ -115,3 +115,8 @@ custom_scripts/
 /tests/*_local.py
 /tests/_scratch/
 /tests/output/
+
+# R1-2：站点配置迁移备份、回收站与临时文件（config/sites/ 其余内容正常跟踪）
+/config/*.migrated-*.bak
+/config/sites/.trash/
+/config/sites/*.tmp

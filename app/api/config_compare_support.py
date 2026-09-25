@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -190,10 +191,66 @@ def _fetch_failure_text(exc: Exception) -> str:
     return str(exc).strip() or exc.__class__.__name__
 
 
+OFFICIAL_INDEX_RELATIVE_PATH = "config/sites/index.json"
+_OFFICIAL_SITE_FILE_PATTERN = re.compile(r"^[A-Za-z0-9._%~-]+\.json$")
+
+
+def _fetch_official_bytes(url: str, headers: Dict[str, str]):
+    """返回 (response, content)；304 时 content 为 None。调用方负责关闭 response。"""
+    response = get_public_remote_resource(url, headers=headers, timeout=(5, 15), stream=True)
+    if response.status_code == 304:
+        return response, None
+    response.raise_for_status()
+    return response, _read_limited_response(response)
+
+
+def _assemble_official_sites_from_index(repo: str, branch: str, index_bytes: bytes) -> Dict[str, Any]:
+    """R1-2：按 index.json 拉取每个站点文件，校验 file_sha256 后拼回旧 sites.json 结构。"""
+    try:
+        index = json.loads(index_bytes.decode("utf-8-sig"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"官方 index.json 不是有效 JSON：{exc}") from exc
+    entries = index.get("sites") if isinstance(index, dict) else None
+    if not isinstance(entries, dict) or not entries:
+        raise ValueError("官方 index.json 缺少 sites 清单")
+    payload: Dict[str, Any] = {}
+    total = 0
+    for site, entry in entries.items():
+        file_name = str((entry or {}).get("file") or "")
+        expected = str((entry or {}).get("file_sha256") or "").lower()
+        if not _OFFICIAL_SITE_FILE_PATTERN.fullmatch(file_name) or not re.fullmatch(r"[0-9a-f]{64}", expected):
+            raise ValueError(f"官方 index.json 中站点 {site} 的条目无效")
+        url = _official_config_url(repo, branch, f"config/sites/{file_name}")
+        response = None
+        try:
+            response, content = _fetch_official_bytes(
+                url, {"Accept": "application/json", "User-Agent": "Universal-Web-API-Config-Compare/1.0"}
+            )
+        finally:
+            if response is not None:
+                response.close()
+        if content is None:
+            raise ValueError(f"官方站点文件 {file_name} 返回了意外的 304")
+        total += len(content)
+        if total > MAX_OFFICIAL_CONFIG_BYTES:
+            raise ValueError("官方配置文件超过大小限制")
+        if hashlib.sha256(content).hexdigest() != expected:
+            raise ValueError(f"官方站点文件 {file_name} 的 sha256 与 index.json 不一致")
+        envelope = json.loads(content.decode("utf-8-sig"))
+        if not isinstance(envelope, dict) or envelope.get("site") != site or not isinstance(envelope.get("config"), dict):
+            raise ValueError(f"官方站点文件 {file_name} 的内容与 index.json 不符")
+        payload[site] = envelope["config"]
+    return payload
+
+
 def _load_official_sites_config(branch_name: str = "main") -> Dict[str, Any]:
-    """实时校验并读取官方分支配置，网络失败时回退到最近一次有效缓存。"""
+    """实时校验并读取官方分支配置，网络失败时回退到最近一次有效缓存。
+
+    R1-2 起官方配置位于 config/sites/（index.json + 每站点一个文件）；该分支还没有 index.json 时
+    （例如尚未合并拆分的旧 main），回退读取旧的单文件 config/sites.json。
+    """
     branch = str(branch_name or "main").strip() or "main"
-    relative_path = _official_config_relative_path()
+    legacy_path = _official_config_relative_path()
     checked_at = _utc_now_text()
 
     try:
@@ -201,30 +258,43 @@ def _load_official_sites_config(branch_name: str = "main") -> Dict[str, Any]:
     except ValueError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    url = _official_config_url(repo, branch, relative_path)
-
     with _OFFICIAL_CONFIG_CACHE_LOCK:
-        cached = _read_official_config_cache(repo, branch, relative_path)
+        cached = _read_official_config_cache(repo, branch, OFFICIAL_INDEX_RELATIVE_PATH) or _read_official_config_cache(
+            repo, branch, legacy_path
+        )
         cached_meta = dict(cached["metadata"]) if cached else {}
-        headers = {
+        base_headers = {
             "Accept": "application/json",
             "User-Agent": "Universal-Web-API-Config-Compare/1.0",
         }
-        if cached_meta.get("etag"):
-            headers["If-None-Match"] = str(cached_meta["etag"])
-        if cached_meta.get("last_modified"):
-            headers["If-Modified-Since"] = str(cached_meta["last_modified"])
+
+        def conditional_headers(path: str) -> Dict[str, str]:
+            headers = dict(base_headers)
+            if cached_meta.get("path") == path:
+                if cached_meta.get("etag"):
+                    headers["If-None-Match"] = str(cached_meta["etag"])
+                if cached_meta.get("last_modified"):
+                    headers["If-Modified-Since"] = str(cached_meta["last_modified"])
+            return headers
 
         response = None
         try:
-            response = get_public_remote_resource(
-                url,
-                headers=headers,
-                timeout=(5, 15),
-                stream=True,
-            )
+            relative_path = OFFICIAL_INDEX_RELATIVE_PATH
+            url = _official_config_url(repo, branch, relative_path)
+            try:
+                response, content = _fetch_official_bytes(url, conditional_headers(relative_path))
+            except requests.HTTPError as http_exc:
+                status = getattr(getattr(http_exc, "response", None), "status_code", None)
+                if status != 404:
+                    raise
+                if response is not None:
+                    response.close()
+                    response = None
+                relative_path = legacy_path
+                url = _official_config_url(repo, branch, relative_path)
+                response, content = _fetch_official_bytes(url, conditional_headers(relative_path))
 
-            if response.status_code == 304 and cached:
+            if content is None and cached:
                 cached_meta["checked_at"] = checked_at
                 _, meta_path = _cache_paths()
                 _atomic_write_json(meta_path, cached_meta)
@@ -234,10 +304,13 @@ def _load_official_sites_config(branch_name: str = "main") -> Dict[str, Any]:
                     stale=False,
                 )
                 return _build_sites_payload(cached["payload"], source)
+            if content is None:
+                raise ValueError("官方配置返回 304，但本地没有缓存")
 
-            response.raise_for_status()
-            content = _read_limited_response(response)
-            payload = _parse_official_config_bytes(content, relative_path)
+            if relative_path == OFFICIAL_INDEX_RELATIVE_PATH:
+                payload = _assemble_official_sites_from_index(repo, branch, content)
+            else:
+                payload = _parse_official_config_bytes(content, relative_path)
             metadata = {
                 "repository": repo,
                 "branch": branch,

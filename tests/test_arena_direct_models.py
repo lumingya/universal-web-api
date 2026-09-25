@@ -908,8 +908,8 @@ def test_select_model_switches_battle_to_direct_before_selecting(resolved_model)
 
 def test_arena_main_direct_workflow_selects_model_before_filling_prompt():
     from app.services.arena_model_catalog import get_arena_model_catalog
-    sites_path = Path(__file__).parents[1] / "config" / "sites.json"
-    sites = json.loads(sites_path.read_text(encoding="utf-8"))
+    from tests._sites import shipped_sites
+    sites = shipped_sites()
     preset = sites["arena.ai"]["presets"]["主预设-直连模式"]
     actions = [step["action"] for step in preset["workflow"]]
 
@@ -981,8 +981,8 @@ def test_is_arena_direct_url_with_presets():
 
 
 def test_arena_universal_direct_image_preset_workflow():
-    sites_path = Path(__file__).parents[1] / "config" / "sites.json"
-    sites = json.loads(sites_path.read_text(encoding="utf-8"))
+    from tests._sites import shipped_sites
+    sites = shipped_sites()
     preset = sites["arena.ai"]["presets"]["万能直连-通用生图"]
 
     selectors = preset["selectors"]
@@ -1004,8 +1004,8 @@ def test_arena_universal_direct_image_preset_workflow():
 
 
 def test_arena_universal_direct_text_preset_workflow():
-    sites_path = Path(__file__).parents[1] / "config" / "sites.json"
-    sites = json.loads(sites_path.read_text(encoding="utf-8"))
+    from tests._sites import shipped_sites
+    sites = shipped_sites()
     presets = sites.get("arena.ai", {}).get("presets", {})
     if "万能直连-通用文本" not in presets:
         return

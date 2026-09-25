@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "site": "_global",
+  "adapter_version": "2026.09.26",
+  "min_app_version": "3.0.0",
+  "config": {
+    "selector_definitions": [
+      {
+        "key": "input_box",
+        "description": "用户输入文本的输入框（textarea 或 contenteditable 元素）",
+        "enabled": true,
+        "required": true
+      },
+      {
+        "key": "send_btn",
+        "description": "发送消息的按钮（通常是 type=submit 或带有发送图标的按钮）",
+        "enabled": true,
+        "required": true
+      },
+      {
+        "key": "result_container",
+        "description": "AI 回复内容的容器（仅包含 AI 的输出文本，不含用户消息）",
+        "enabled": true,
+        "required": true
+      },
+      {
+        "key": "new_chat_btn",
+        "description": "新建对话的按钮（点击后开始新的对话）",
+        "enabled": true,
+        "required": false
+      },
+      {
+        "key": "message_wrapper",
+        "description": "消息完整容器（包裹单条消息的外层元素，用于多节点拼接）",
+        "enabled": false,
+        "required": false
+      },
+      {
+        "key": "generating_indicator",
+        "description": "生成中指示器（如停止按钮、加载动画，用于检测是否还在输出）",
+        "enabled": false,
+        "required": false
+      },
+      {
+        "key": "upload_btn",
+        "description": "打开文件选择器的上传按钮（点击后通常会弹出原生选文件）",
+        "enabled": false,
+        "required": false
+      },
+      {
+        "key": "file_input",
+        "description": "原生文件输入框（input[type=file]），用于直接注入文件",
+        "enabled": false,
+        "required": false
+      },
+      {
+        "key": "drop_zone",
+        "description": "支持拖拽上传的区域（某些站点不支持粘贴但支持拖拽）",
+        "enabled": false,
+        "required": false
+      },
+      {
+        "key": "retry_send_btn",
+        "description": "重新运行/重试当前回复的按钮（通常是回复卡片顶部的圆形箭头）",
+        "enabled": false,
+        "required": false
+      },
+      {
+        "key": "stop_btn",
+        "description": "停止/打断大模型输出的按钮",
+        "enabled": true,
+        "required": false
+      },
+      {
+        "key": "composer_root",
+        "description": "当前消息编辑区根节点，限定附件输入框和就绪观察范围",
+        "enabled": false,
+        "required": false
+      }
+    ]
+  }
+}

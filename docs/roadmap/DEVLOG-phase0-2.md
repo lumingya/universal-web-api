@@ -6,10 +6,11 @@
 
 ## 当前状态（随时更新）
 
-- 2026-09-26：P3 已合并进 main（`29d9685`），此后 main 冻结，只推本分支。
-- 本地环境已接入（Portal），用户已把工作区范围调整为 `工作区\`。我的专用目录和推送链路见 §2.8。
-- ✅ R0-2（实机 3.10/3.13）；✅ R0-5（沙盒 1068 passed / 96 skipped，实机全量带浏览器测试的结果待补记）。
-- ▶ 下一步：R0-6 行尾统一（`.gitattributes` 加 renormalize），然后是 R0-8 指南，再进入阶段 1。
+- main 冻结，只推本分支。本地环境（Portal）与推送链路见 §2.8。
+- ✅ 阶段 0 已完成：R0-1、R0-2、R0-5、R0-6、R0-8。R0-3/R0-4 暂缓，R0-7 由用户发布。
+  - 实机 Windows 3.13 全量（含 Playwright 与真实浏览器）：1141 passed / 67 skipped / 1 failed。唯一失败是早已存在的 page_guide 滚动用例，见 §4。
+- ✅ R1-1 Schema；✅ R1-2 站点配置彻底拆分，同时让更新器具备「未改动的站点文件直接更新」能力，这是 R1-3 的核心。
+- ▶ 下一步：R1-3 的剩余部分（运行时在线检查和更新适配器，面板入口），然后是 R1-4 解析器金标测试。
 
 ## 1. 用户决策（2026-09-26，必须遵守）
 
@@ -143,14 +144,14 @@ Portal 把用户本机的**一个文件夹**发布成公网 MCP 端点：`https:
 - [ ] **R0-3** CI（GitHub Actions）——**暂缓**，等用户确认。
 - [ ] **R0-4** 自动发包，以及删除 `3.7.5` 标签——**暂缓**，等用户确认。
 - [x] **R0-5** 测试入库（`de48ce3`）：找回 12 个文件；tests/ 改为黑名单；新增 `pyproject.toml`（pytest markers、ruff 基线）；新增 `_playwright.py` 回退到本机浏览器；`_real_browser` 支持 Windows 和 macOS。
-- [ ] **R0-6** H4 行尾统一：用 `.gitattributes` 加 `git add --renormalize .`，单独提交，并登记到 `.git-blame-ignore-revs`。main 已冻结，所以在本分支上做。
+- [x] **R0-6** 行尾统一（`b263781`，纯行尾变更，已登记到 `.git-blame-ignore-revs`）：*.bat/*.cmd/*.ps1 检出为 CRLF，其余文本一律 LF。
 - [—] **R0-7** 发布 3.0.0——不做，由用户发。
-- [ ] **R0-8** 仓库安全：细粒度令牌、规则集、2FA 都需要用户在 GitHub 设置里操作，我只写操作指南。
+- [x] **R0-8** 已写操作指南 `docs/roadmap/REPO-SECURITY-GUIDE.md`；具体设置需要用户在 GitHub 上完成。
 
 ### 阶段 1：适配器工程化
 
-- [ ] **R1-1** 站点适配器 Schema v1 与 `schema_version`，保存和加载时校验。
-- [ ] **R1-2** 彻底拆分 `sites.json`：改为 `config/sites/<域名>.json`，首次启动自动迁移，每个站点带 `adapter_version`、`min_app_version`、`last_verified`。需要同步修改 ConfigEngine、面板、本地覆盖、更新保留逻辑和备份导入导出。
+- [x] **R1-1** Schema v1 已完成（`app/services/config/site_schema.py`）。加载时只告警；保存或导入时拒绝的逻辑放到 R1-6/后续再接入。
+- [x] **R1-2** 彻底拆分已完成（见 §4）：`config/sites/` 目录、自动迁移、`index.json`、更新器逐站点合并、备份导入导出、官方对比读取 index。
 - [ ] **R1-3** 适配器独立更新通道：索引加摘要校验，只更新用户没改过的预设，保留本地覆盖。
 - [ ] **R1-4** 17 个解析器的金标测试，使用合成样本并标注 `synthetic`。
 - [ ] **R1-5** 协议一致性测试：用官方 openai 和 anthropic SDK 对接假浏览器后端。
@@ -242,4 +243,33 @@ Portal 把用户本机的**一个文件夹**发布成公网 MCP 端点：`https:
   - 用户把 Portal 工作区改为上一级的 `工作区\`，并把 `普遍反代` 整体移了进去。移动后旧 worktree 失效，Portal 重启时后台测试也被中断。
   - 沙盒同时发生了重启：`.git/config` 丢失，因此 PAT 也不在了。
   - 处理方式：在 `arena-dev\` 新建独立克隆和两个 venv，清理 `新测试版` 里我的全部痕迹，改用 bundle 加用户本机凭据推送（`~/tools/ship.sh`，详见 §2.8）。
+- **Phase 0 实机验证**（`8f83053`）：Windows 3.13 全量 1141 passed / 67 skipped / 1 failed。
+  - 唯一失败：`test_workflow_page_guide.py::test_scroll_relayout_and_missing_dynamic_target_explanations`。滚动 100px 后引导图钉没有跟着移动（差值 100）。回到拆分前的 `de48ce3` 同样失败，属于早已存在的问题，留到 R2-8 前端工作时排查。
+  - 另外发现并修复两处测试基础设施问题：
+    - main.py 在 Windows 上设置了 Selector 事件循环，导致 Playwright 在全量测试中报 57 个 NotImplementedError，已加 `tests/_playwright.sync_playwright` 包装修复；
+    - 测试脚本里的 PowerShell 变量 `$py` 与参数 `$Py` 在 PowerShell 里是同一个变量（大小写不敏感），已改名。
+  - 一次全量运行卡住：卡在 Playwright `to_have_text` 等 driver 回包，而 driver 进程已不存在。py-spy 定位到了位置，但重跑未复现，暂记为偶发问题。
+- **R1-1**（`93a9f94`）：新增 `site_schema.py`，包含站点、全局、信封三套 schema，报错带路径，未知字段放行；另有 9 个测试。
+- **R1-2**：
+  - 新增 `app/services/config/site_store.py`（SiteStore）：
+    - 目录读写，只重写有变化的文件（两阶段写入）；
+    - 删除的站点移入 `.trash/`；
+    - 损坏文件跳过且永不覆盖，热重载时沿用上一次的配置；
+    - 旧 `sites.json` 自动迁移：目录为空时直接拆分，已有发布文件时按 `merge_site_records` 合并，原文件改名为 `.migrated-*.bak`。
+  - ConfigEngine 只改了四处文件 I/O（加载、变化检测、热重载、保存），热重载改为基于目录签名。
+  - 仓库内置配置拆成 13 个文件，拼回后与原 sites.json **逐项一致**；adapter_version 统一为 2026.09.26，min_app_version 为 3.0.0。
+  - 新增 `scripts/build_sites_index.py`：生成 `config/sites/index.json`（config_sha256 与 file_sha256）；支持 `--check`、`--bump`、`--bump-changed`。
+  - 备份：导出格式不变；导入改为整体替换，失败时逐文件快照回滚。
+  - 官方对比：先拉 index.json，再按 sha256 校验拉取各站点文件；没有 index（旧 main）时回退旧的单文件。
+  - **更新器**：
+    - 先读旧 index，再逐站点处理：新增的直接加入；用户**没改过**的（规范化摘要与旧清单一致）整体替换为新版；改过的保留本地值并补新字段；读不懂的先备份再替换。
+    - 旧版的「本地优先」语义意味着发布里的站点修复永远到不了没改过配置的老用户，现在这个问题解决了。
+  - update_preserve：`sites_config` 选项改为 `config/sites`；旧设置里的 `config/sites.json` 自动映射到它。
+  - 面板设置项与 `.env.example` 改为 `SITES_CONFIG_DIR`；前端的回退显示路径同步更新。
+  - 新增/调整的测试：
+    - test_site_store（17 项）；
+    - test_updater_site_files（6 项）；
+    - test_config_compare_remote 新增 index 布局与 sha 不一致两项；
+    - 5 个直接读 sites.json 的测试改用 `tests/_sites.py`。
+  - 沙盒全量：1105 passed / 141 skipped。
 

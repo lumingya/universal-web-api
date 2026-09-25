@@ -52,6 +52,9 @@ MAX_UPDATE_COMPRESSION_RATIO = 200
 DEFAULT_PRESERVE = get_default_update_preserve_patterns()
 
 SITES_CONFIG_PATH = Path("config") / "sites.json"
+# R1-2：站点配置目录（每站点一个文件）与内置适配器清单
+SITES_DIR_PATH = Path("config") / "sites"
+SITES_INDEX_PATH = SITES_DIR_PATH / "index.json"
 COMMANDS_CONFIG_PATH = Path("config") / "commands.json"
 COMMAND_PRESERVE_FIELDS = ("enabled", "group_name", "last_triggered", "trigger_count")
 BACKUP_EXCLUDE_NAMES = {
@@ -718,6 +721,58 @@ def merge_sites(existing: dict, incoming: dict) -> tuple[dict, dict]:
         "preserved": preserved,
     }
 
+def _site_config_sha256(config) -> str:
+    """与 scripts/build_sites_index.py / site_store.canonical_config_text 相同的规范化摘要。"""
+    text = json.dumps(config, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def load_site_index(path: Path) -> dict:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8-sig"))
+        return payload if isinstance(payload, dict) else {}
+    except Exception:
+        return {}
+
+
+def is_site_file(rel_path: Path) -> bool:
+    return rel_path.parent == SITES_DIR_PATH and rel_path.suffix == ".json" and rel_path.name != SITES_INDEX_PATH.name
+
+
+def merge_site_file(src_path: Path, dst_path: Path, old_index: dict) -> str:
+    """合并单个站点文件（R1-2 / R1-3），返回 added / replaced / merged。
+
+    - 本地没有：直接新增；
+    - 本地配置与上一个发布版清单（旧 index.json）里的 config_sha256 一致，说明用户没改过：整体替换为新版；
+    - 用户改过：沿用 merge_site_records 语义，保留本地值并补入发布版新增字段；
+    - 本地文件无法解析：先另存备份，再替换为新版。
+    """
+    incoming = json.loads(src_path.read_text(encoding="utf-8-sig"))
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+    if not dst_path.exists():
+        shutil.copy2(src_path, dst_path)
+        return "added"
+    try:
+        existing = json.loads(dst_path.read_text(encoding="utf-8-sig"))
+        existing_config = existing["config"]
+    except Exception:
+        backup = dst_path.with_name(dst_path.name + f".unreadable-{time.strftime('%Y%m%d-%H%M%S')}.bak")
+        shutil.copy2(dst_path, backup)
+        shutil.copy2(src_path, dst_path)
+        log_warning(f"本地站点文件无法解析，已备份为 {backup.name} 并替换为新版")
+        return "replaced"
+    site = incoming.get("site")
+    old_entry = ((old_index or {}).get("sites") or {}).get(site) or {}
+    if old_entry.get("config_sha256") and _site_config_sha256(existing_config) == old_entry["config_sha256"]:
+        shutil.copy2(src_path, dst_path)
+        return "replaced"
+    payload = dict(incoming)
+    payload["config"] = merge_site_records(existing_config, incoming.get("config") or {})
+    with open(dst_path, "w", encoding="utf-8", newline="\n") as f:
+        f.write(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+    return "merged"
+
+
 def merge_sites_file(src_path: Path, dst_path: Path):
     """合并站点配置文件，优先保留用户已有站点配置。"""
     incoming = load_sites_config(src_path)
@@ -896,6 +951,9 @@ def extract_and_update(zip_path: Path, project_dir: Path, preserve: list) -> boo
             log_info("应用更新...")
             updated = 0
             skipped = 0
+            # 必须在拷贝新的 index.json 之前读出旧清单：据此判断用户是否改过各站点文件
+            old_site_index = load_site_index(project_dir / SITES_INDEX_PATH)
+            site_stats = {"added": 0, "replaced": 0, "merged": 0}
             
             for src_item in source_dir.rglob('*'):
                 if src_item.is_dir():
@@ -912,6 +970,10 @@ def extract_and_update(zip_path: Path, project_dir: Path, preserve: list) -> boo
                     merge_sites_file(src_item, dst_item)
                     updated += 1
                     continue
+                if is_site_file(rel_path):
+                    site_stats[merge_site_file(src_item, dst_item, old_site_index)] += 1
+                    updated += 1
+                    continue
 
                 if rel_path == COMMANDS_CONFIG_PATH:
                     merge_command_file(src_item, dst_item)
@@ -922,6 +984,11 @@ def extract_and_update(zip_path: Path, project_dir: Path, preserve: list) -> boo
                 shutil.copy2(src_item, dst_item)
                 updated += 1
             
+            if any(site_stats.values()):
+                log_info(
+                    f"站点配置: 新增 {site_stats['added']} 个, 未改动直接更新 {site_stats['replaced']} 个, "
+                    f"本地改过已合并 {site_stats['merged']} 个"
+                )
             log_success(f"更新 {updated} 个文件, 保留 {skipped} 个")
             return True
             

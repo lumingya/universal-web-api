@@ -82,7 +82,7 @@ def _option(
 UPDATE_PRESERVE_OPTIONS: List[Dict[str, Any]] = [
     _option("env_file", ".env", ".env", "环境变量与服务启动参数", "核心配置"),
     _option("config_dir", "config", "config/", "整个配置目录", "核心配置"),
-    _option("sites_config", "config/sites.json", "config/sites.json", "站点默认配置与预设定义", "核心配置"),
+    _option("sites_config", "config/sites", "config/sites/", "站点适配器配置（每站点一个文件，R1-2 起取代 config/sites.json）", "核心配置"),
     _option("commands_config", "config/commands.json", "config/commands.json", "命令定义与默认命令内容", "核心配置"),
     _option("browser_config", "config/browser_config.json", "config/browser_config.json", "浏览器常量配置", "核心配置"),
     _option("extractors_config", "config/extractors.json", "config/extractors.json", "提取器配置", "核心配置"),
@@ -157,6 +157,7 @@ INTERNAL_ALWAYS_PRESERVE: List[str] = [
 ]
 LEGACY_PATTERN_ALIASES = {
     "sites.local.json": "config/sites.local.json",
+    "config/sites.json": "config/sites",  # R1-2：旧设置里勾选的单文件站点配置 -> 新的站点目录
     "commands.local.json": "config/commands.local.json",
     "static/tutorial.html": "static/tutorial",
 }

@@ -101,7 +101,8 @@ def test_grok_ndjson_streaming_path_still_extracts_token_and_final_snapshot():
 
 
 def test_grok_network_pattern_matches_completed_load_responses_endpoint():
-    config = json.loads(Path("config/sites.json").read_text(encoding="utf-8"))
+    from tests._sites import shipped_sites
+    config = shipped_sites()
     pattern = config["grok.com"]["presets"]["主预设"]["stream_config"]["network"][
         "stream_match_pattern"
     ]

@@ -144,12 +144,13 @@ if __name__=='__main__':
     import sys
     sys.path.insert(0, str(ROOT))
     from app.core.workflow.flow_runtime import validate_workflow
-    path=ROOT/'config/sites.json'
-    original=json.loads(path.read_text(encoding='utf-8'))
-    changed=upgrade(original)
+    from app.services.config.site_store import SiteStore
+    # R1-2：站点配置位于 config/sites/（每站点一个文件）；保存后请运行 scripts/build_sites_index.py --bump-changed
+    store=SiteStore(ROOT/'config'/'sites', ROOT/'config'/'sites.json')
+    original=store.load() or {}
+    changed=upgrade(json.loads(json.dumps(original)))
     for domain in ('gemini.google.com','chat.deepseek.com'):
         for name,preset in changed[domain]['presets'].items():
             validate_workflow(preset['workflow'])
             print(domain,name,'→',len(preset['workflow']),'top-level stages')
-    with open(path, 'w', encoding='utf-8', newline='\n') as f:
-        f.write(json.dumps(changed, ensure_ascii=False, indent=2) + '\n')
+    store.save(changed)

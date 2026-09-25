@@ -96,7 +96,7 @@ function saveStoredSitesCache(sites, currentDomain) {
                 main_only_preset: 0,
                 main_only_site: 0
             },
-            mainCompareSummaryPath: 'config/sites.json',
+            mainCompareSummaryPath: 'config/sites/index.json',
             mainCompareSummarySource: {
                 repository: '',
                 branch: 'main',

@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "sites": {
+    "_global": {
+      "file": "_global.json",
+      "adapter_version": "2026.09.26",
+      "min_app_version": "3.0.0",
+      "config_sha256": "69b0f83cd92e808a8d629fec53595e9b30f23b5655f74962e29a1bdda838356a",
+      "file_sha256": "860eeb798ab46d70bc4ba00bfb08ea9b6d12e5e921f8d6a85329a94f80490de3"
+    },
+    "aistudio.google.com": {
+      "file": "aistudio.google.com.json",
+      "adapter_version": "2026.09.26",
+      "min_app_version": "3.0.0",
+      "config_sha256": "af8afd73b3a2d726fd14fd2ddc420538c65a072949059d31823389049b136c25",
+      "file_sha256": "4c7ebd1b4af2c49f0c37878cedb904bac63de4ce8a4d40136860a0d5baede32b"
+    },
+    "aistudio.xiaomimimo.com": {
+      "file": "aistudio.xiaomimimo.com.json",
+      "adapter_version": "2026.09.26",
+      "min_app_version": "3.0.0",
+      "config_sha256": "597bcc9691ccd2bc8ca3338e93a7e9df23262b15e3a731ec2701fa0adab9e6ac",
+      "file_sha256": "7ad802aa7b6d101e7f8defef797ff77e0be4ccab15e22c18ae776a1b19dd9d79"
+    },
+    "arena.ai": {
+      "file": "arena.ai.json",
+      "adapter_version": "2026.09.26",
+      "min_app_version": "3.0.0",
+      "config_sha256": "c8605137eade64c481dc2d524a37bcf131db46bf1b3d91e3f0c3457de230c29d",
+      "file_sha256": "46002768cd8ae83287e45438828ef309b26b085e25c7a824f481a064059d9509"
+    },
+    "chat.deepseek.com": {
+      "file": "chat.deepseek.com.json",
+      "adapter_version": "2026.09.26",
+      "min_app_version": "3.0.0",
+      "config_sha256": "d843776a6cc0f333c4d0f4a5d4093de4295d5e45c949372a83a1969465358370",
+      "file_sha256": "428cc2f4725205befd431fa2f264eb1c2697cdd4ce3461c63462c49f02422108"
+    },
+    "chat.qwen.ai": {
+      "file": "chat.qwen.ai.json",
+      "adapter_version": "2026.09.26",
+      "min_app_version": "3.0.0",
+      "config_sha256": "a6d720247a3981b9713c26a4e65c59047193bc793aa75c60008ea6b1c648a1f0",
+      "file_sha256": "b7417fbd20a7849253501e1b131e61b25f9a169b3f6c0c2a1414bb1e5e8364e0"
+    },
+    "chatglm.cn": {
+      "file": "chatglm.cn.json",
+      "adapter_version": "2026.09.26",
+      "min_app_version": "3.0.0",
+      "config_sha256": "75a9a7e47a6183b5329fa423d9a8ec7726b1a124bb58624d32ebb18b5498bc01",
+      "file_sha256": "801f68a5d14bebb517ab639c8606154f7557105afac43a7ac79c8b0b426cbb8d"
+    },
+    "chatgpt.com": {
+      "file": "chatgpt.com.json",
+      "adapter_version": "2026.09.26",
+      "min_app_version": "3.0.0",
+      "config_sha256": "340d1f8bfdee298a4f8c022806acb17052b166fb24f59b148c3089d62c6c971e",
+      "file_sha256": "ea87ea612f356f8f391814b3f738331f3543dc9e196877277764c71e6600388f"
+    },
+    "claude.ai": {
+      "file": "claude.ai.json",
+      "adapter_version": "2026.09.26",
+      "min_app_version": "3.0.0",
+      "config_sha256": "224bc879d67edae1b872b59ae1f22793265469c1e6995f8ecb4238d17e56dbf0",
+      "file_sha256": "f0c27f78b1d5828fac033165adbce49971792d116667c4fe71c5eb78a61cd2a9"
+    },
+    "gemini.google.com": {
+      "file": "gemini.google.com.json",
+      "adapter_version": "2026.09.26",
+      "min_app_version": "3.0.0",
+      "config_sha256": "e6fba8509ec17ff9137d8ed01337846f9924fe98d6b58643f1aa1571bb72aaa1",
+      "file_sha256": "72b7f2c44cbb81bebdcc74e3b91668d1606c826ac50a35a1b8535a43d07eaccc"
+    },
+    "grok.com": {
+      "file": "grok.com.json",
+      "adapter_version": "2026.09.26",
+      "min_app_version": "3.0.0",
+      "config_sha256": "cb706123756fa874206e01e33a46a55f770b925b2db9bfe5f1ae5336dc27b816",
+      "file_sha256": "f91359b7d7c92c01c1b71c93c849858aca440ffb86c86509b967145284531c11"
+    },
+    "www.doubao.com": {
+      "file": "www.doubao.com.json",
+      "adapter_version": "2026.09.26",
+      "min_app_version": "3.0.0",
+      "config_sha256": "c90b5c0e351c1133dbbec80db1304d56318971c4af50127283b53c2c765a0e09",
+      "file_sha256": "7a30a4a7a2ea765dfe075d2dae33354350108e85f5b766a4c2f58bbd7d41e30a"
+    },
+    "www.kimi.com": {
+      "file": "www.kimi.com.json",
+      "adapter_version": "2026.09.26",
+      "min_app_version": "3.0.0",
+      "config_sha256": "1bfdb732afd6ac51b2071305407b41eb84797c118d2cf4487b36028a7f5e640d",
+      "file_sha256": "59779f02841f36fdc8b3db8235823d6d6822d49f741d5c0a214066a826ea9679"
+    }
+  }
+}

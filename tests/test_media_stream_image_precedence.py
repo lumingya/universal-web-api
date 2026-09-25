@@ -458,8 +458,8 @@ def test_pending_video_text_waits_for_late_video_render(monkeypatch) -> None:
 
 
 def test_all_gemini_presets_wait_on_explicit_video_generation_signal() -> None:
-    sites_path = Path(__file__).resolve().parents[1] / "config" / "sites.json"
-    sites = json.loads(sites_path.read_text(encoding="utf-8"))
+    from tests._sites import shipped_sites
+    sites = shipped_sites()
     presets = sites["gemini.google.com"]["presets"]
 
     assert presets

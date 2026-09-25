@@ -13,6 +13,7 @@ import os
 import copy
 import re
 import threading
+import time
 from app.core.config import get_logger
 from typing import Dict, Optional, List, Any, Set, Union, Callable
 from urllib.parse import urljoin
@@ -45,6 +46,7 @@ from app.core.request_transport import (
     normalize_request_transport_config,
 )
 from .cache import ConfigCache
+from .site_store import SiteStore
 from .managers import GlobalConfigManager, ImagePresetsManager
 from .processors import HTMLCleaner, SelectorValidator, AIAnalyzer
 
@@ -57,7 +59,9 @@ logger = get_logger("CFG_ENG")
 class ConfigConstants:
     """配置引擎常量"""
     _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    # R1-2：站点配置的事实来源是 config/sites/ 目录（每站点一个文件）；CONFIG_FILE 只作为旧版单文件的迁移来源
     CONFIG_FILE = os.getenv("SITES_CONFIG_FILE", os.path.join(_PROJECT_ROOT, "config", "sites.json"))
+    SITES_DIR = os.getenv("SITES_CONFIG_DIR", os.path.join(_PROJECT_ROOT, "config", "sites"))
     SITES_LOCAL_FILE = os.getenv("SITES_LOCAL_FILE", os.path.join(_PROJECT_ROOT, "config", "sites.local.json"))
     COMMANDS_FILE = os.getenv("COMMANDS_CONFIG_FILE", os.path.join(_PROJECT_ROOT, "config", "commands.json"))
     COMMANDS_LOCAL_FILE = os.getenv("COMMANDS_LOCAL_FILE", os.path.join(_PROJECT_ROOT, "config", "commands.local.json"))
@@ -167,10 +171,13 @@ class ConfigEngine:
     """配置引擎主类"""
 
     def __init__(self):
-        self.config_file = ConfigConstants.CONFIG_FILE
+        self.config_file = ConfigConstants.CONFIG_FILE  # 旧版单文件，仅用于自动迁移
+        self.sites_dir = ConfigConstants.SITES_DIR
+        self.site_store = SiteStore(self.sites_dir, self.config_file)
         self.local_sites_file = ConfigConstants.SITES_LOCAL_FILE
         self._io_lock = threading.RLock()
         self.last_mtime = 0.0
+        self.last_signature: tuple = ()
         self.last_local_mtime = 0.0
         self.sites: Dict[str, SiteConfig] = {}
         self._global_default_presets: Dict[str, str] = {}
@@ -204,50 +211,42 @@ class ConfigEngine:
             return self._load_config_locked()
 
     def _load_config_locked(self):
-        """初始化加载配置文件"""
-        if not os.path.exists(self.config_file):
-            logger.info(f"配置文件 {self.config_file} 不存在，将创建新文件")
-            self._apply_local_site_overrides()
-            return
-
+        """初始化加载站点配置（config/sites/ 目录；发现旧版 sites.json 时自动迁移）"""
         try:
-            self.last_mtime = os.path.getmtime(self.config_file)
-
-            with open(self.config_file, "r", encoding="utf-8") as f:
-                content = f.read().strip()
-                if not content:
-                    return
-
-                data = json.loads(content)
-
-                # 提取并加载 _global；缺失时重置为默认全局配置。
-                global_section = data.pop("_global", {})
-                self.global_config.load(global_section if isinstance(global_section, dict) else {})
-
-                # 过滤内部键
-                self.sites = {
-                    k: v for k, v in data.items()
-                    if not k.startswith('_')
-                }
-                self._refresh_global_default_presets_from_sites()
+            data = self.site_store.load()
+            self.last_signature = self.site_store.signature()
+            if data is None:
+                logger.info(f"站点配置目录 {self.sites_dir} 为空，将在首次保存时创建")
                 self._apply_local_site_overrides()
-                logger.debug(f"已加载配置文件: {self.config_file} (mtime: {self.last_mtime})")
+                return
+            self.last_mtime = time.time()
 
-        except json.JSONDecodeError as e:
-            logger.error(f"配置文件格式错误: {e}")
+            # 提取并加载 _global；缺失时重置为默认全局配置。
+            global_section = data.pop("_global", {})
+            self.global_config.load(global_section if isinstance(global_section, dict) else {})
+
+            # 过滤内部键
+            self.sites = {
+                k: v for k, v in data.items()
+                if not k.startswith('_')
+            }
+            self._refresh_global_default_presets_from_sites()
+            self._apply_local_site_overrides()
+            logger.debug(f"已加载站点配置: {self.sites_dir}（{len(self.sites)} 个站点）")
+
         except Exception as e:
             logger.error(f"加载配置失败: {e}")
 
     def refresh_if_changed(self):
         """检查文件是否变化，如果变化则重载"""
-        if not os.path.exists(self.config_file) and not os.path.exists(self.local_sites_file):
+        if not self.site_store.exists() and not os.path.exists(self.local_sites_file):
             return
 
         try:
-            current_mtime = os.path.getmtime(self.config_file) if os.path.exists(self.config_file) else 0.0
+            current_signature = self.site_store.signature()
             current_local_mtime = os.path.getmtime(self.local_sites_file) if os.path.exists(self.local_sites_file) else 0.0
-            if current_mtime != self.last_mtime or current_local_mtime != self.last_local_mtime:
-                logger.debug(f"⚡ 检测到配置文件变化 (new mtime: {current_mtime})")
+            if current_signature != self.last_signature or current_local_mtime != self.last_local_mtime:
+                logger.debug("⚡ 检测到站点配置变化，热重载")
                 self.reload_config()
         except Exception as e:
             logger.error(f"检查文件变化失败: {e}")
@@ -260,19 +259,17 @@ class ConfigEngine:
         """重新加载配置（Hot Reload）"""
         self._cache.invalidate()
 
-        if not os.path.exists(self.config_file):
-            logger.warning("重载失败：配置文件不存在")
+        if not self.site_store.exists():
+            logger.warning("重载失败：站点配置目录为空")
             return
 
         try:
-            mtime = os.path.getmtime(self.config_file)
-
-            with open(self.config_file, "r", encoding="utf-8") as f:
-                content = f.read().strip()
-                if not content:
-                    data = {}
-                else:
-                    data = json.loads(content)
+            previous = {"_global": self.global_config.to_dict(), **self.sites}
+            data = self.site_store.load(previous=previous)
+            if data is None:
+                logger.warning("重载失败：站点配置目录为空")
+                return
+            signature = self.site_store.signature()
 
             # 提取并加载 _global；缺失时重置为默认全局配置。
             global_section = data.pop("_global", {})
@@ -284,7 +281,8 @@ class ConfigEngine:
                 k: v for k, v in data.items()
                 if not k.startswith('_')
             }
-            self.last_mtime = mtime
+            self.last_signature = signature
+            self.last_mtime = time.time()
             self._refresh_global_default_presets_from_sites()
             self._migrate_loaded_config()
             self._apply_local_site_overrides()
@@ -304,8 +302,7 @@ class ConfigEngine:
             return self._save_config_locked()
 
     def _save_config_locked(self) -> bool:
-        """保存配置文件（原子写入版）"""
-        tmp_file = self.config_file + ".tmp"
+        """保存站点配置（只重写有变化的站点文件，每个文件原子替换）"""
         local_snapshot: Optional[tuple[bool, bytes, Dict[str, Any], Dict[str, str]]] = None
         local_overrides_written = False
         default_maps_snapshot = (
@@ -368,33 +365,16 @@ class ConfigEngine:
                 return False
             local_overrides_written = True
 
-            # 步骤 1：写入临时文件
-            with open(tmp_file, "w", encoding="utf-8", newline="\n") as f:
-                json.dump(full_config, f, indent=2, ensure_ascii=False)
-                f.flush()
-                os.fsync(f.fileno())
-
-            # 步骤 2：原子替换
-            os.replace(tmp_file, self.config_file)
-
-            # 更新时间戳
-            try:
-                if os.path.exists(self.config_file):
-                    self.last_mtime = os.path.getmtime(self.config_file)
-            except Exception as e:
-                logger.warning(f"配置已保存但更新时间戳失败: {e}")
+            written = self.site_store.save(full_config)
+            self.last_signature = self.site_store.signature()
+            self.last_mtime = time.time()
 
             self._cache.invalidate()
-            logger.info(f"配置已保存: {self.config_file}")
+            logger.info(f"配置已保存: {self.sites_dir}（重写 {len(written)} 个站点文件）")
             return True
 
         except Exception as e:
             logger.error(f"保存配置失败: {e}")
-            try:
-                if os.path.exists(tmp_file):
-                    os.remove(tmp_file)
-            except Exception:
-                pass
             if local_overrides_written:
                 self._restore_local_site_overrides_locked(local_snapshot)
             self._global_default_presets, self._local_default_presets = default_maps_snapshot

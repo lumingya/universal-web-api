@@ -929,7 +929,7 @@
                     main_only_site: 0,
                     ...(data.counts || {})
                 };
-                this.mainCompareSummaryPath = String(data.path || 'config/sites.json').trim() || 'config/sites.json';
+                this.mainCompareSummaryPath = String(data.path || 'config/sites/index.json').trim() || 'config/sites/index.json';
                 this.mainCompareSummarySource = {
                     repository: '',
                     branch: 'main',
