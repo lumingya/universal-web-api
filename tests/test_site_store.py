@@ -177,6 +177,17 @@ def test_same_filename_collision_gets_unique_name(tmp_path):
 # --------------------------------------------------------------------------- 仓库内置配置与 index
 
 
+def test_index_builder_script_is_tracked_by_git():
+    """scripts/ 默认被 .gitignore 忽略（白名单制）；曾因此漏提交 build_sites_index.py，导致干净克隆里本测试失败。"""
+    import shutil
+    import subprocess
+
+    if not shutil.which("git") or not (ROOT / ".git").exists():
+        pytest.skip("not a git checkout")
+    result = subprocess.run(["git", "check-ignore", "-q", "scripts/build_sites_index.py"], cwd=ROOT)
+    assert result.returncode == 1, "scripts/build_sites_index.py 被 .gitignore 忽略了，请加入 scripts 白名单"
+
+
 def test_shipped_sites_dir_is_the_only_source_and_index_is_current():
     assert not (ROOT / "config" / "sites.json").exists(), "拆分后仓库里不应再有旧的单文件 sites.json"
     sites = shipped_sites()

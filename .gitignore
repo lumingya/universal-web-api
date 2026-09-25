@@ -104,10 +104,11 @@ custom_scripts/
 # 浏览器回归测试生成的截图
 /test-artifacts/
 
-# 本地脚本目录：仅跟踪随仓库发布的两个脚本；其余（含 scripts/custom/、arena_models_cache.json 等运行时缓存）一律本地
+# 本地脚本目录：仅跟踪随仓库发布的脚本（白名单）；其余（含 scripts/custom/、arena_models_cache.json 等运行时缓存）一律本地
 /scripts/*
 !/scripts/bundle_workflow_studio_css.py
 !/scripts/upgrade_gemini_deepseek.py
+!/scripts/build_sites_index.py
 
 # Tests：tests/ 下默认全部跟踪（R0-5）。原先的白名单让 v3.0.0 的 12 个测试从未入库（路线图 N3）。
 # 个人临时脚本或输出请使用下列命名，避免误提交：
