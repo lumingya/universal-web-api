@@ -41,7 +41,7 @@
 - [x] 克隆仓库、确认推送权限、建立开发日志
 - [x] M1 仓库卫生与配置（.env.example / .gitignore / README / VERSION / requirements）
 - [x] M2 静态分析 + 现有单元测试运行结果（排除真实浏览器；详情见 §5）
-- [ ] M3 安全：认证与中间件（main.py / app/api/deps.py / CORS / 管理接口）——已核查默认值、主要路由及 CORS；待补测
+- [x] M3 安全：认证与中间件（main.py / app/api/deps.py / CORS / 管理接口）——路由依赖逐项核对，ASGITransport 进程内验证默认跨源读取及启用认证时的 401/200；不代表真实浏览器联调
 - [ ] M4 安全：命令引擎（CMD_ALLOW_UNSAFE_PYTHON_COMMANDS 等）、updater、文件/路径处理、SSRF——命令/解析器与更新器初查完成，其他待查
 - [ ] M5 核心请求链路：chat.py / anthropic_routes.py / streaming_response.py / request_manager.py
 - [ ] M6 标签页池：tab_pool_parts/*（manager / session / recovery / idle_maintenance）
@@ -54,7 +54,7 @@
 
 | ID | 严重度 | 位置 | 摘要 | 状态 |
 | --- | --- | --- | --- | --- |
-| S1 | P1 | `app/core/config_parts/env_config.py:159-188`, `main.py:603-616`, `.env.example:21,59,66-69,134` | 管理认证默认关闭、CORS 默认 `*`；复制模板还绑定 `0.0.0.0` 且布尔占位值实际上为 false。跨源页面/局域网调用控制接口存在高风险；建议默认关闭跨源、管理令牌必选（非本机绑定时 fail-closed）、限制 Host/Origin。浏览器本地网络策略会影响可利用性。 | 静态确认；需环境隔离下复现 |
+| S1 | P1 | `app/core/config_parts/env_config.py:159-188`, `main.py:603-616`, `.env.example:21,59,66-69,134` | 管理认证默认关闭、CORS 默认 `*`；复制模板还绑定 `0.0.0.0` 且布尔占位值实际上为 false。跨源页面/局域网调用控制接口存在高风险；建议默认关闭跨源、管理令牌必选（非本机绑定时 fail-closed）、限制 Host/Origin。浏览器本地网络策略会影响可利用性。 | 进程内跨来源请求确认 200 且 `Access-Control-Allow-Origin: *`；仅启用后台认证时无令牌 401、带测试令牌 200；未运行真实浏览器 |
 | S2 | P1 | `app/services/command_engine_actions.py:2427-2590,3054-3106`, `app/services/config/engine.py:3312`, `app/services/parser_manager.py:162-227`, `app/core/parsers/registry.py:101-106` | Python 命令的 AST 名单只拦截直接危险调用；别名和传入的高权限对象可绕开，解析器安装会写入并 import 用户源码。此“沙箱”不能作为不可信代码边界；隔离进程/容器并移除危险对象，或只允许可信管理者使用。JS 命令也能访问浏览器上下文。 | 静态确认；未执行攻击代码 |
 | S3 | P2 | `app/services/parser_manager.py:162-227,331-345` | 解析器安装功能仅校验语法/类名，不约束代码行为，会立即 import 执行；目前未找到直接对外安装路由，是 S2 传入对象间接暴露的代码安装原语。 | 静态确认；未执行 |
 | S4 | P2 | `app/api/browser_routes.py:119-129`, `start.py:836-844,905-922` | `/api/browser/open-profile-url` 不要求令牌，仅检查 `request.client.host` 回环；经本机反代/隧道/重启代理访问时后端看到的来源可能为回环，可在受控浏览器用户目录打开 URL。须使用认证和来源限制，不能仅依赖 IP。 | 静态确认；未联调 |
@@ -78,3 +78,4 @@
 - 2026-09-25 / M1：核对 `.env.example`、三份 README、requirements、ignore 规则、已跟踪缓存与换行；记录 H1–H6。同期初查 149 个 API 路由（AST 粗计，6 个未声明 Depends 的路由需逐项判定），并核实认证/CORS、Python 命令与解析器动态 import、启动代理、媒体/健康路由，记录 S1–S7；M3/M4 尚未完成。PyPI 元数据确认 FastAPI 0.109.2 限制 Starlette `<0.37.0`。本阶段只读审查，未做侵入式验证、未修改业务代码。
 - 2026-09-25 / M2：生产依赖及 `ruff`/`pyflakes`/`pytest`/`httpx` 安装到工作区外 `/home/user/.venv`；**未安装 Playwright/Chromium**。Python 226 文件用 `tokenize.open` + AST 语法检查均通过（`text_filter.py` 首字节有 BOM，直接按 UTF-8 文本喂给 AST 的一次假阳性已排除）；`node --check` 静态 JS 33 文件通过。Ruff `--target-version py313 --select F821,F822,F823,E9` 报 5 个 F821（H7）；pyflakes 全量原始诊断 419 行，多为重导出/未使用变量，不等于 419 个 bug。首轮 `unittest` 57 例：34 通过、6 失败、17 错误；其中失败/错误都指向缺失本地命令和 JS 示例。仅选无私有 fixture 的两组用例 15/15 通过。
 - 2026-09-25 / M2（续）：排除 3 个真实 Chromium 测试文件和两处浏览器 fixture（未启动浏览器）的 pytest 初轮：**548 passed、74 failed、9 deselected**（10.15s）。归因：64 个缺失/过期本地 fixture（T1）、9 个站点自动发现断言失败（B1）、1 个 dev 依赖缺失（T2）。仅补装 `httpx` 后 T2 对应用例通过；过滤上述已知失效用例的独立干净子集 **544 passed、30 deselected**（8.17s）。所有测试生成的临时目录及忽略的 `config/commands.json`、`config/request_history.json`、`config/app_stats.json` 均已删除；无业务代码变更。
+- 2026-09-25 / M3：复核 `app/api/deps.py` 的服务与后台双令牌和路由依赖：149 个 APIRoute 中 12 个无 FastAPI 依赖；其中 6 个模型别名路由在函数内手动验服务令牌，另 6 个是 `/`、`/dashboard`、浏览器引导页、`/media/{filename}`、`/health`、`POST /api/browser/open-profile-url`。`httpx.ASGITransport` 进程内测试：默认关闭后台认证时，外来 Origin 的 CORS 预检和 `GET /api/commands` 均返回 200，后者响应允许 `Access-Control-Allow-Origin: *`；临时仅在进程环境中启用后台认证并提供合成令牌后，同一路由无令牌返回 401、带令牌返回 200。无真实浏览器或外部网络访问，未测试浏览器本地网络策略和反向代理拓扑；检查产生的忽略配置已删除。S1、S4、S6、S7 见上。
