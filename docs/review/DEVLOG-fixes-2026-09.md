@@ -43,7 +43,7 @@ P3 清单（顺序即执行顺序，完成一项勾一项，每项独立提交�
 - [x] H3 .gitignore 规则清理
 - [x] H11 受跟踪配置中的具体 Arena 会话 URL
 - [x] H5 重复/超大图片资源
-- [ ] H6 依赖升级计划（只出计划与约束调整，不做大版本跳跃）
+- [x] H6 依赖升级计划（只出计划与约束调整，不做大版本跳跃）
 - [ ] H4 换行符统一（放最后，单独提交，降低与 main 合并冲突）
 
 ## 0. 恢复指引（上下文丢失 / 沙盒重启后先看这里）
@@ -535,3 +535,12 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - 视觉校验：cairosvg 在 640/128/32 px 渲染逐像素对比，平均差 ≤0.38/255、最大 9/255（抗锯齿级）；ImageMagick 渲染 PSNR 同样极高。
   PNG 用 Pillow 无损重编码只省 3~5%，不值得改动二进制历史，未做。临时文件已删除。
 - 测试：p3 新增 1 项（已跟踪图片无字节重复；logo < 600KB 且尺寸属性不变）。
+
+### H6 依赖升级计划 ✅（P3，仅计划）
+
+- 新增 `docs/review/DEPENDENCY_UPGRADE_PLAN.md`：现状表、三条 Starlette CVE 适用性核对（当前 0.36.3 均不适用；
+  **升级时下限必须 ≥0.49.1** 以避开 CVE-2025-62727 的 0.39–0.49.0 区间）、分阶段步骤（先 lock 再升级）、人工冒烟清单、回退。
+- 实测：临时 venv 装 fastapi 0.141.1 / starlette 1.7.0 / uvicorn 0.54.0 跑非浏览器测试：686 通过 / 63 跳过 / 1 失败；
+  失败原因是新版 Starlette 不再把发送异常包进 ExceptionGroup，清理断言都成立。
+  → 放宽 `tests/test_cancel_storm_regressions.py` 的异常类型断言为 `(BaseExceptionGroup, OSError)`，新旧版都能通过。临时 venv 已删除。
+- `requirements.txt` 未改动（按计划分阶段做）。
