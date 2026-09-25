@@ -32,13 +32,27 @@ from app.core.background_image_downloader import (
 from app.core.parsers import ParserRegistry, ResponseParser
 
 
+def _network_debug_capture_retention_seconds() -> float:
+    """S12：调试快照保留期（小时，默认 24；<=0 表示只按容量清理）。"""
+    try:
+        hours = float(BrowserConstants.get("NETWORK_DEBUG_CAPTURE_RETENTION_HOURS"))
+    except Exception:
+        hours = 24.0
+    if hours != hours:  # NaN
+        hours = 24.0
+    return max(0.0, hours) * 3600.0
+
+
 def trim_network_parser_debug_dir(
     target_dir: Optional[Path] = None,
     max_total_bytes: Optional[int] = None,
     exclude_paths: Optional[Any] = None,
+    max_age_seconds: Optional[float] = None,
 ) -> int:
     """确保 logs/network_parser_debug 目录的总占用不超过 max_total_bytes（默认 50MB）。
     超过阈值时按时间先后顺序（st_mtime 升序）自动删除最早的文件。
+    S12：另外删除超过保留期（NETWORK_DEBUG_CAPTURE_RETENTION_HOURS，默认 24h）的快照，
+    避免调试期间写下的响应正文长期留在磁盘上。
 
     Returns:
         删除的文件数量。
@@ -57,6 +71,9 @@ def trim_network_parser_debug_dir(
             max_total_bytes = max(1, mb) * 1024 * 1024
         except Exception:
             max_total_bytes = 50 * 1024 * 1024
+
+    if max_age_seconds is None:
+        max_age_seconds = _network_debug_capture_retention_seconds()
 
     exclude_set = set()
     if exclude_paths:
@@ -79,14 +96,39 @@ def trim_network_parser_debug_dir(
             except OSError:
                 continue
 
+        deleted_count = 0
+        freed_bytes = 0
+
+        if max_age_seconds and max_age_seconds > 0:
+            cutoff = time.time() - float(max_age_seconds)
+            kept_entries = []
+            for entry_tuple in file_entries:
+                mtime, name, size, file_path = entry_tuple
+                try:
+                    resolved = file_path.resolve()
+                except Exception:
+                    resolved = file_path
+                if mtime < cutoff and resolved not in exclude_set:
+                    try:
+                        file_path.unlink(missing_ok=True)
+                        total_size -= size
+                        freed_bytes += size
+                        deleted_count += 1
+                        continue
+                    except OSError as unlink_exc:
+                        logger.debug(f"[NetworkMonitor] 删除过期调试文件失败 ({name}): {unlink_exc}")
+                kept_entries.append(entry_tuple)
+            file_entries = kept_entries
+
         if total_size <= max_total_bytes:
-            return 0
+            if deleted_count > 0:
+                logger.info(
+                    f"[NetworkMonitor] 已删除 {deleted_count} 个超过保留期的网络解析调试快照"
+                )
+            return deleted_count
 
         # 按修改时间升序排序（最早的文件排在最前面），次关键字为文件名
         file_entries.sort(key=lambda x: (x[0], x[1]))
-
-        deleted_count = 0
-        freed_bytes = 0
 
         for mtime, name, size, file_path in file_entries:
             if total_size <= max_total_bytes:
@@ -115,6 +157,20 @@ def trim_network_parser_debug_dir(
     except Exception as exc:
         logger.debug(f"[NetworkMonitor] 清理 network_parser_debug 失败: {exc}")
         return 0
+
+
+_NETWORK_DEBUG_CAPTURE_WARNED = False
+
+
+def _warn_network_debug_capture_enabled_once() -> None:
+    global _NETWORK_DEBUG_CAPTURE_WARNED
+    if _NETWORK_DEBUG_CAPTURE_WARNED:
+        return
+    _NETWORK_DEBUG_CAPTURE_WARNED = True
+    logger.warning(
+        "⚠️ 网络响应调试抓取已开启（NETWORK_DEBUG_CAPTURE_ENABLED）：命中解析器的响应正文片段"
+        "（可能含聊天内容）会写入 logs/network_parser_debug，调试完成后请关闭并清理该目录"
+    )
 
 
 def _debug_preview(value: Any, limit: int = 240) -> str:
@@ -1974,10 +2030,20 @@ class NetworkMonitor:
 
     @staticmethod
     def _is_network_debug_capture_enabled() -> bool:
+        # S12：严格布尔解析。旧实现 bool("false") == True，字符串 "false" 反而开启抓取。
         try:
-            return bool(BrowserConstants.get("NETWORK_DEBUG_CAPTURE_ENABLED"))
+            value = BrowserConstants.get("NETWORK_DEBUG_CAPTURE_ENABLED")
         except Exception:
             return False
+        if isinstance(value, bool):
+            enabled = value
+        elif isinstance(value, (int, float)):
+            enabled = value == 1
+        else:
+            enabled = str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+        if enabled:
+            _warn_network_debug_capture_enabled_once()
+        return enabled
 
     @staticmethod
     def _get_network_debug_capture_max_body_chars() -> int:

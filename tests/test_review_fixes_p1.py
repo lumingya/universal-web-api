@@ -415,3 +415,47 @@ def test_served_media_is_hardened_for_legacy_active_files():
     finally:
         for name in names:
             (base / name).unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# S12 · 默认响应调试抓取
+# ---------------------------------------------------------------------------
+
+def test_tracked_browser_config_disables_network_debug_capture():
+    root = Path(__file__).resolve().parents[1]
+    data = json.loads((root / "config/browser_config.json").read_text(encoding="utf-8"))
+    assert data["NETWORK_DEBUG_CAPTURE_ENABLED"] is False
+
+
+@pytest.mark.parametrize("value,expected", [
+    (False, False), (True, True), ("false", False), ("False", False), ("0", False),
+    ("", False), (None, False), ("off", False), ("true", True), ("on", True), (1, True), (0, False),
+    ("garbage", False),
+])
+def test_network_debug_capture_strict_bool(monkeypatch, value, expected):
+    from app.core import network_monitor as nm
+
+    monkeypatch.setattr(nm.BrowserConstants, "get",
+                        classmethod(lambda cls, key: value if key == "NETWORK_DEBUG_CAPTURE_ENABLED" else None))
+    assert nm.NetworkMonitor._is_network_debug_capture_enabled() is expected
+
+
+def test_network_debug_dir_retention_deletes_expired_snapshots(tmp_path):
+    import os
+    import time as _time
+    from app.core.network_monitor import trim_network_parser_debug_dir
+
+    old = tmp_path / "old.json"
+    new = tmp_path / "new.json"
+    keep = tmp_path / "active.json"
+    for p in (old, new, keep):
+        p.write_text("{}", encoding="utf-8")
+    past = _time.time() - 3 * 3600
+    os.utime(old, (past, past))
+    os.utime(keep, (past, past))
+    deleted = trim_network_parser_debug_dir(
+        target_dir=tmp_path, max_total_bytes=10 * 1024 * 1024,
+        exclude_paths={keep}, max_age_seconds=3600,
+    )
+    assert deleted == 1
+    assert not old.exists() and new.exists() and keep.exists()

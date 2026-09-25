@@ -89,7 +89,7 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - [x] H1 `.env.example` 诱导不安全部署
 - [x] S8 SVG 以同源活动内容落盘/提供
 - [x] S9 音视频响应头 + `.html` 后缀落盘
-- [ ] S12 默认开启的响应调试抓取
+- [x] S12 默认开启的响应调试抓取
 
 ### 第二批
 
@@ -180,3 +180,15 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - 验证：p1 测试增至 43 项（白名单矩阵 9 例、嗅探、`video/custom`+`clip.html`+HTML 不落盘且无残留、
   真实 mp4 带 .html 后缀落盘为 .mp4、SVG data URI 与谎报 png 的 SVG 均不落盘、遗留 .svg/.html 经 ASGI
   取回为 octet-stream+attachment+nosniff+sandbox、png 仍 inline）。全量 567 passed / 73 failed（基线同集合）。
+
+### S12 默认响应调试抓取 ✅（第一批完成）
+
+- `config/browser_config.json`：`NETWORK_DEBUG_CAPTURE_ENABLED` 出厂 `true` → `false`；新增 `NETWORK_DEBUG_CAPTURE_RETENTION_HOURS: 24`。
+- `app/core/network_monitor.py`：
+  - `_is_network_debug_capture_enabled()` 改严格布尔（旧 `bool("false") == True`）；只接受 true/1/yes/on，其余一律关闭。
+  - 首次判定为开启时打一次 WARNING，提示快照含聊天内容、用完关闭并清理。
+  - `trim_network_parser_debug_dir()` 新增 `max_age_seconds`（默认读保留期配置）：启动时和每次写入后删除过期快照
+    （仍排除当前活跃文件），再按容量清理。**决策**：没有尝试更强的正文脱敏——解析器调试本来就需要原始正文，
+    改为「默认关 + 醒目告警 + 限期自动删除」来控制暴露面。
+- `browser_constants.py` / `system.py` 默认值 & `dashboard-schema.js`：补齐保留期配置项；开关说明加隐私警告。
+- 验证：p1 测试 58 项（受跟踪配置为 false、严格布尔 13 例含 `"false"`/`"garbage"`、保留期删除过期但保留活跃文件）。

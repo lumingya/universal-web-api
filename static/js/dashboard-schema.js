@@ -484,7 +484,7 @@ const BROWSER_CONSTANTS_SCHEMA = {
             },
             NETWORK_DEBUG_CAPTURE_ENABLED: {
                 label: '启用响应调试捕获',
-                desc: '命中网络解析器时，只保存少量关键快照到 logs/network_parser_debug，方便开发新解析器，同时避免刷爆磁盘。',
+                desc: '命中网络解析器时，保存少量关键快照到 logs/network_parser_debug，方便开发新解析器。⚠️ 快照含响应正文片段（可能包含聊天内容），仅在调试时开启，用完关闭并清理目录。',
                 type: 'switch',
                 default: false
             },
@@ -520,6 +520,15 @@ const BROWSER_CONSTANTS_SCHEMA = {
                 min: 5,
                 step: 5,
                 default: 50
+            },
+            NETWORK_DEBUG_CAPTURE_RETENTION_HOURS: {
+                label: '调试快照保留时长',
+                unit: '小时',
+                desc: '超过该时长的调试快照在启动和每次写入时自动删除（快照可能含聊天内容）；0 表示只按容量清理。',
+                type: 'number',
+                min: 0,
+                step: 1,
+                default: 24
             }
         }
     },
