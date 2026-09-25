@@ -41,7 +41,7 @@ P3 清单（顺序即执行顺序，完成一项勾一项，每项独立提交�
 - [x] H14 站点/完整备份导入无大小上限
 - [x] H2 README 版本与 CHANGELOG 链接
 - [x] H3 .gitignore 规则清理
-- [ ] H11 受跟踪配置中的具体 Arena 会话 URL
+- [x] H11 受跟踪配置中的具体 Arena 会话 URL
 - [ ] H5 重复/超大图片资源
 - [ ] H6 依赖升级计划（只出计划与约束调整，不做大版本跳跃）
 - [ ] H4 换行符统一（放最后，单独提交，降低与 main 合并冲突）
@@ -515,3 +515,12 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - 校验：`git ls-files -ci --exclude-standard` 为空；check-ignore 抽查本地脚本/本地测试仍被忽略、发布文件不被忽略。
 - 测试：p3 新增 2 项（无「已跟踪却被忽略」文件；白名单条目都存在）。
 - ⚠️ 与 main 合并时 `.gitignore` 若冲突，以本分支结构为准，再把 main 新增的条目并入白名单块即可。
+
+### H11 browser_config.json 含个人 Arena 会话 URL ✅（P3）
+
+- `config/browser_config.json`（随仓库/更新包分发，更新器默认不保留它）的 `tab_pool.excluded_urls` 里有 121 条、
+  `tab_pool.route_groups` 5 组共 25 个成员都是作者本人的 `https://arena.ai/c/<uuid>` 会话。
+  → `excluded_urls` 只保留通用的 `https://arena.ai/image/direct`，`route_groups` 置为 `[]`（空列表即功能默认值；
+  用占位 URL 反而会被当成真实路由去打开，所以不用占位符）。其余键不动，JSON 按原格式（indent=2、ensure_ascii=False）写回，diff 只涉及这两个键。
+- ⚠️ 维护者若本地正在用这些分组：旧值可用 `git show 9ab1b11:config/browser_config.json` 找回，建议之后放在本地、不再提交。
+- 测试：p3 新增 1 项（分发配置不含 `/c/<uuid>` 会话 URL，route_groups 为空）。

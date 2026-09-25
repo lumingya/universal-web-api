@@ -402,3 +402,18 @@ def test_h3_test_whitelist_entries_exist():
         line = line.strip()
         if line.startswith("!tests/") and "*" not in line:
             assert (root / line[1:]).exists(), line
+
+
+# ---------------------------------------------------------------------------
+# H11 · 随仓库分发的 browser_config.json 不含个人 Arena 会话 URL
+# ---------------------------------------------------------------------------
+
+def test_h11_shipped_browser_config_has_no_personal_sessions():
+    import re
+
+    root = Path(__file__).resolve().parents[1]
+    raw = (root / "config" / "browser_config.json").read_text(encoding="utf-8")
+    assert not re.search(r"https?://[^\"]*/c/[0-9a-f]{8}-[0-9a-f]{4}-", raw, re.I)
+    cfg = json.loads(raw)
+    assert cfg["tab_pool"]["route_groups"] == []
+    assert isinstance(cfg["tab_pool"]["excluded_urls"], list)
