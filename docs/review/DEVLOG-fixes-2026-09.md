@@ -88,7 +88,7 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - [x] B5 解冻失败仍交付标签页
 - [x] B2 旧版顶层数组历史恢复丢失
 - [x] B1 搜索引擎主域被自动发现
-- [ ] B3 Responses 内存历史无字节预算
+- [x] B3 Responses 内存历史无字节预算
 - [ ] S10 图片比对 / C2PA 直取外部 URL
 - [ ] S11 DNS 校验后连接重解析
 - [ ] S4 回环 IP 当作授权
@@ -340,3 +340,33 @@ Python 会**先求值参数**，`data` 是列表时 `data.get` 立刻抛 `Attrib
 - 新增 `tests/test_request_history_compat.py`（10 项）：顶层数组、对象格式、
   数组里混入非 dict、token 统计回填、坏 JSON 不抛异常。
 - 全量 `623 passed, 64 failed`，无新增失败；基线文件已更新为 64。
+
+### 2026-09-25 · B3（Responses 内存历史无字节预算 / 无主体隔离）
+
+`app/api/chat.py`。原来只有「1024 条 + 1 小时 TTL」两个上限；
+而 Responses 默认 `store=true`，一条含 base64 图片的历史就可能几十 MB。
+另外状态只按 response id 索引，任何拿到 id 的调用方都能续接他人会话。
+
+**改动**
+
+- 常量新增 `RESPONSES_STATE_MAX_ENTRY_BYTES = 4MiB`、`RESPONSES_STATE_MAX_TOTAL_BYTES = 64MiB`。
+- 条目结构由 `(stored_at, serialized)` 扩展为
+  `(stored_at, subject_key, serialized_or_None, nbytes)`，并维护模块级
+  `_responses_state_total_bytes`。
+- 新增 `_drop_responses_state_locked()` 统一做「弹出 + 扣减字节」，
+  所有淘汰路径（TTL / 条数 / 总字节 / 覆盖写）都走它，避免计数漂移。
+- 新增 `_responses_subject_key(request)`：取 Authorization / X-API-Key 的
+  SHA-256 前 32 位；未启用认证时为 `"anonymous"`（保持单机原语义）。
+  **只存哈希，不存令牌原文。**
+- `_load_responses_state(id, subject_key)`：主体不匹配时返回与「不存在」
+  **完全相同**的 404 —— 否则就成了「这个 id 是否存在」的探测预言机。
+- 超预算条目存「拒绝墓碑」（`serialized=None`）而不是静默丢弃，
+  续接时返回 **413 + 明确说明**，而不是含糊的 404。
+- `_store_responses_state` 的 docstring 里写明了 `store` 默认 true 的留存语义。
+- 三个调用点（`create_response` / `_stream_responses_compat` / 非流式分支）
+  都从 `request` 取主体指纹传入。
+
+**验证**：新增 `tests/test_responses_state_budget.py`（14 项），覆盖主体隔离、
+404 一致性、413 墓碑、总字节淘汰、覆盖写不重复计数、TTL 释放字节、
+`store:false` 不留存、序列化失败不致命。
+全量 `637 passed, 64 failed`，与基线逐行一致。
