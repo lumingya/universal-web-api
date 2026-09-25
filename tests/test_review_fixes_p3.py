@@ -199,3 +199,14 @@ def test_h13_dead_storage_mixin_removed():
 
     for name in ("_save_commands", "_load_commands", "add_command", "update_command", "delete_command"):
         assert callable(getattr(CommandEngine, name, None)), name
+
+
+# ---------------------------------------------------------------------------
+# T2 · 测试用到的 httpx 必须写进 requirements-dev.txt
+# ---------------------------------------------------------------------------
+
+def test_t2_httpx_declared_in_dev_requirements():
+    import re
+
+    text = (Path(__file__).resolve().parents[1] / "requirements-dev.txt").read_text(encoding="utf-8")
+    assert re.search(r"(?m)^httpx\b", text)

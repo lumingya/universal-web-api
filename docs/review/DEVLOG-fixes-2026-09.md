@@ -35,7 +35,7 @@ P3 清单（顺序即执行顺序，完成一项勾一项，每项独立提交�
 - [x] H8 chat.py 重复定义的 Arena 辅助函数
 - [x] H10 stream_monitor 重复方法
 - [x] H13 未使用的 command_engine_storage mixin
-- [ ] T2 requirements-dev 缺 httpx
+- [x] T2 requirements-dev 缺 httpx
 - [ ] S14 遗留教程搜索框 innerHTML
 - [ ] S7 公开引导/健康接口信息最小化
 - [ ] H14 站点/完整备份导入无大小上限
@@ -470,3 +470,8 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - `git grep` 确认 `app/services/command_engine_storage.py`（`CommandEngineStorageMixin`）在代码、打包脚本、文档中均无引用，
   `CommandEngine` 自带全部同名方法 → 直接删除，避免有人修补错文件。
 - 测试：p3 新增 1 项（文件不存在 + CommandEngine 仍有 CRUD 方法）。
+
+### T2 requirements-dev 缺 httpx ✅（P3）
+
+- `requirements-dev.txt` 增加 `httpx>=0.27,<1`（TestClient/ASGITransport 所需；当前环境 0.28.1）。
+  pytest-asyncio 经核实没有测试使用 `pytest.mark.asyncio`，不加。测试：p3 新增 1 项。
