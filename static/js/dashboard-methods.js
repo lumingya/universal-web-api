@@ -1600,12 +1600,10 @@
         },
 
         getDashboardPreferencesBackup() {
-            const dashboardToken = getStoredDashboardToken();
-
+            // S13：备份文件会被下载/转存/分享，浏览器本地保存的面板令牌不再写入备份。
+            // 旧版备份里的 dashboard_token / api_token 仍可在导入时读取（见下方 apply）。
             return {
-                dark_mode: !!this.darkMode,
-                dashboard_token: dashboardToken,
-                api_token: dashboardToken
+                dark_mode: !!this.darkMode
             };
         },
 
@@ -1642,7 +1640,15 @@
                 a.click();
                 URL.revokeObjectURL(url);
 
-                this.notify('完整配置备份已导出', 'success');
+                const redactedKeys = Array.isArray(payload && payload.redacted_env_keys)
+                    ? payload.redacted_env_keys
+                    : [];
+                this.notify(
+                    redactedKeys.length
+                        ? `完整配置备份已导出（已剔除 ${redactedKeys.length} 项令牌/密钥，导入时保留目标机器现值）`
+                        : '完整配置备份已导出',
+                    'success'
+                );
             } catch (error) {
                 this.notify('完整备份导出失败: ' + error.message, 'error');
             }

@@ -5,9 +5,10 @@ app/api/deps.py - API 共享依赖
 import hmac
 from typing import Iterable, Optional
 
-from fastapi import Header, HTTPException
+from fastapi import Header, HTTPException, Request
 
 from app.core.config import AppConfig
+from app.core.http_security import is_trusted_local_request
 
 
 def extract_authorization_token(authorization: Optional[str]) -> str:
@@ -105,3 +106,26 @@ async def verify_dashboard_auth(authorization: Optional[str] = Header(None)) -> 
 async def verify_auth(authorization: Optional[str] = Header(None)) -> bool:
     """向后兼容：默认用于控制面板管理接口。"""
     return await verify_dashboard_auth(authorization)
+
+
+async def verify_sensitive_admin_auth(
+    request: Request,
+    authorization: Optional[str] = Header(None),
+) -> bool:
+    """高敏感管理接口（完整备份导出/导入、打开受控浏览器等）的鉴权。
+
+    - 控制面板认证已启用：必须提供有效令牌（与 verify_dashboard_auth 相同）；
+    - 未启用：不再无条件放行，只接受「直接来自本机回环、未经反代/隧道转发」的请求，
+      其余一律 403，并提示启用 DASHBOARD_AUTH_*。（审查条目 S13 / S4）
+    """
+    if AppConfig.is_dashboard_auth_enabled():
+        verify_dashboard_token(authorization=authorization)
+        return True
+
+    client_host = request.client.host if request.client else None
+    if is_trusted_local_request(client_host, request.headers):
+        return True
+    raise HTTPException(
+        status_code=403,
+        detail="该接口仅允许本机直接访问；远程访问请先启用控制面板认证（DASHBOARD_AUTH_ENABLED / DASHBOARD_AUTH_TOKEN）",
+    )

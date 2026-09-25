@@ -60,6 +60,10 @@ chmod +x /tmp/runtests.sh
 - 64 个：依赖未跟踪的本地 fixture（`config/commands*.json`、本地 JS 脚本等）→ 条目 T1
 - 9 个：`tests/test_site_discovery.py` 站点自动发现断言 → 条目 B1（本轮要修，修完应变绿）
 
+> 2026-09-25 第二会话复核：重新 clone 后基线同为 `524 passed, 73 failed`，失败清单已存 `/tmp/baseline_failures.txt`。
+> 快捷脚本 `/tmp/check.sh` = 跑测 + 与基线 diff（`comm -13`），输出「new failures」段必须为空。
+> 丢失时按下文重建：`/tmp/runtests.sh 2>&1 | grep '^FAILED' | sed 's/^FAILED //; s/ - .*//' | sort`（在 `d663bb7` 上跑）。
+
 判定回归的方法：把当前失败集合与 `/tmp/baseline_failures.txt` 做 diff，只允许减少、不允许新增。
 
 ```bash
@@ -73,7 +77,7 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 
 ### 第一批
 
-- [ ] S13 备份接口泄露 `.env` 密钥 + 前端导出本地令牌
+- [x] S13 备份接口泄露 `.env` 密钥 + 前端导出本地令牌
 - [ ] S1 控制面默认开放（认证默认关 + CORS `*`）
 - [ ] H1 `.env.example` 诱导不安全部署
 - [ ] S8 SVG 以同源活动内容落盘/提供
@@ -99,3 +103,23 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 ## 4. 修复记录
 
 （每完成一项追加：条目 ID、改了哪些文件、做了什么决策、怎么验证的、提交哈希）
+
+### 通用基础设施（多个条目共用）
+
+- 新增 `app/core/http_security.py`：回环判定、Origin 判定、启动期安全检查、备份脱敏、
+  「可信本机请求」判定（识别反代/隧道转发头 + start.py handoff 代理共享密钥）。
+- 新增回归测试 `tests/test_review_fixes_p1.py`（P1）/ `tests/test_review_fixes_p2.py`（P2）；
+  `.gitignore` 用 `!tests/test_review_fixes_*.py` 放行（tests/ 目录默认忽略，只有白名单文件入库）。
+
+### S13 备份泄露密钥 ✅
+
+- `app/core/http_security.py`: `is_secret_env_key` / `redact_env_for_backup`（键名含 TOKEN/SECRET/PASSWORD/API_KEY/COOKIE/
+  CREDENTIAL/AUTH_USER/SESSION 等，或值形如 `scheme://user:pass@host` 的一律剔除）。
+- `app/api/system.py`: 备份 `files.env` 只含安全子集，新增 `secrets_redacted` / `redacted_env_keys`；
+  导入时丢弃 `***` 等占位符，并复用 `_validate_env_config_payload`（此前导入 env 完全不校验，可换行注入）。
+  **决策**：秘密「剔除」而非「打码」——导入时缺失键保持目标 `.env` 现值，不会被占位符覆盖。
+- `app/api/deps.py`: 新增 `verify_sensitive_admin_auth` —— 面板认证开启时校验令牌；未开启时只允许
+  「直接来自回环且无 X-Forwarded-For 等转发头」的请求，否则 403。备份 GET/POST 改用它。
+- `static/js/dashboard-methods.js`: 导出备份不再写 `dashboard_token`/`api_token`；导入旧备份仍兼容读取。
+- 验证：`tests/test_review_fixes_p1.py` 7 项（无授权远端 403、隧道头 403、启用认证无令牌 401、响应不含合成密钥、
+  占位符不覆盖、换行注入 400、前端不导出令牌）。全量：531 passed / 73 failed（与基线相同的 73 项）。
