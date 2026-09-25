@@ -99,7 +99,7 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - [x] B1 搜索引擎主域被自动发现
 - [x] B3 Responses 内存历史无字节预算
 - [ ] S10 图片比对 / C2PA 直取外部 URL
-- [ ] S11 DNS 校验后连接重解析
+- [x] S11 DNS 校验后连接重解析
 - [ ] S4 回环 IP 当作授权
 - [ ] S5 定时重启代理容量 / 协议
 - [ ] S6 媒体路由无认证与转码资源
@@ -243,3 +243,16 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
   - 主体隔离：`_responses_principal_from_request` 取 Bearer / X-API-Key 的 SHA-256 指纹；续接时主体不一致一律 404（不泄露 ID 是否存在）。无令牌时为空串，匿名调用共享命名空间（兼容认证关闭的本机场景）。
   - store 语义保持与 OpenAI 一致：`store` 未给出 = 存储，`store:false` = 不存储。
 - 测试：p2 新增 4 项（超限 413、总量 LRU + 字节计数一致、跨主体 404、store:false）。全量无新增失败（64 基线）。
+
+### S11 DNS 校验后连接重解析 ✅
+
+- `app/utils/remote_resource.py`：
+  - `_validate_fetch_target` 返回 `(url, 已校验地址)`；`_validate_fetch_remote_url` 保留为薄包装。
+  - DNS pinning：给 `urllib3.util.connection.create_connection` 包一层（只装一次），它只查**本线程**登记的 `host → 已校验 IP`。
+    `get_public_remote_resource` 每一跳（含重定向后的重新校验）都用 `_pinned_dns(url, addresses)` 包住 `requests.get`。
+    TCP 连接直接打到校验过的 IP；`HTTPConnection.host` 不变，因此 SNI、证书校验、Host 头都保持原主机名。
+    未登记的主机（其他代码路径、HTTP(S)_PROXY 代理主机）原样放行，代理场景交给可信出网代理解析。
+  - 选这个方案而不是自定义 Session/Adapter，是因为现有测试（以及调用方）都在 monkeypatch `remote_resource.requests.get`，这样保持兼容。
+- 测试：p2 新增 2 项，用本地 HTTP 服务：
+  - 校验返回 127.0.0.1、主机名是 `.invalid`（系统 DNS 解析不了）→ 请求成功，Host 头是原主机名。用 stash 验证过：旧代码下这项失败。
+  - pin 只在调用期间有效，退出后同一 URL 连接失败。

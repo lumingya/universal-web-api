@@ -289,3 +289,65 @@ def test_b3_store_false_keeps_nothing(responses_state):
     chat = responses_state
     chat._store_responses_state("resp_x", [{"role": "user", "content": "hi"}], _payload("ok"), enabled=False)
     assert "resp_x" not in chat._responses_state_by_id
+
+
+# ---------------------------------------------------------------------------
+# S11 · 校验过的 DNS 结果即实际连接地址（DNS pinning），Host/SNI 保持原主机名
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def local_http_server():
+    import http.server
+    import threading
+
+    seen = {}
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            seen["host"] = self.headers.get("Host")
+            body = b"pinned-ok"
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            return None
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server.server_address[1], seen
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_s11_fetch_connects_to_validated_address_not_fresh_dns(monkeypatch, local_http_server):
+    from app.utils import remote_resource
+
+    port, seen = local_http_server
+    # 「校验时」解析结果 = 127.0.0.1（测试用放行）；系统 DNS 根本解析不了 .invalid，
+    # 请求能成功只可能是连接用了校验阶段的地址，而不是重新解析。
+    monkeypatch.setattr(remote_resource, "resolve_public_addresses", lambda host: ("127.0.0.1",))
+    monkeypatch.setenv("NO_PROXY", "*")
+    url = f"http://rebind-check.invalid:{port}/x"
+    response = remote_resource.get_public_remote_resource(url, stream=False)
+    assert response.status_code == 200 and response.content == b"pinned-ok"
+    assert seen["host"] == f"rebind-check.invalid:{port}"
+    # 调用结束后 pin 不残留
+    assert remote_resource._current_pins() == {}
+
+
+def test_s11_pin_is_scoped_to_call(monkeypatch, local_http_server):
+    import requests
+    from app.utils import remote_resource
+
+    port, _seen = local_http_server
+    monkeypatch.setenv("NO_PROXY", "*")
+    url = f"http://scoped-check.invalid:{port}/"
+    with remote_resource._pinned_dns(url, ("127.0.0.1",)):
+        assert requests.get(url, timeout=5).status_code == 200
+    with pytest.raises(requests.exceptions.ConnectionError):
+        requests.get(url, timeout=5)
