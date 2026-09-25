@@ -93,7 +93,7 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - [x] S11 DNS 校验后连接重解析
 - [x] S4 回环 IP 当作授权
 - [ ] S5 定时重启代理容量 / 协议
-- [ ] S6 媒体路由无认证与转码资源
+- [x] S6 媒体路由无认证与转码资源
 - [ ] S3 解析器安装立即 import
 - [ ] H9 标签页等待队列无总量上限
 - [x] H12 网络事件 URL 正则回溯
@@ -480,3 +480,40 @@ HTTP 栈会**重新解析一次**。攻击者控制该域名的 DNS（TTL=0）�
 
 **验证**：新增 `tests/test_bounded_regex.py`（13 项）。
 全量 `710 passed, 64 failed`，无新增失败。
+
+### 2026-09-25 · S6（媒体路由无认证 / 转码资源无预算）
+
+新建 `app/utils/media_guard.py`，`main.py` 接线。
+
+#### 访问控制（默认关闭，显式开关）
+
+`/media/{filename}` 与 `/download_images` 原本完全无认证。
+**但不能简单地默认加上鉴权**：这些 URL 会直接出现在 OpenAI 兼容响应里，
+由浏览器的 `<img src>` / `<audio src>` 加载，而这类标签**无法携带
+Authorization 头**。默认开启就会静默打断所有现有前端。
+
+折中：`MEDIA_ACCESS_REQUIRE_AUTH`（默认 `false`）。开启后接受
+Authorization / X-API-Key / **`?token=`** 三种方式 —— 查询参数是标签场景
+在开启鉴权后还能工作的唯一途径。要求鉴权却没配令牌时 **fail-closed**。
+令牌比较用 `hmac.compare_digest` 并按 UTF-8 编码（沿用修复6 的非 ASCII 处理）。
+
+静态目录这一侧没有 `Request` 对象，所以在 `HardenedMediaStaticFiles.get_response()`
+里从原始 ASGI `scope` 解析头与 query（`_scope_media_access_allowed`）。
+
+#### 转码资源预算
+
+`TranscodeGuard`：
+- **全局并发信号量**（`MEDIA_TRANSCODE_MAX_CONCURRENCY`，默认 2），
+  等待超过 `MEDIA_TRANSCODE_QUEUE_TIMEOUT_SEC`（默认 30s）→ 503 + `Retry-After`。
+- **同键去重锁**：这是关键。原先同一个文件被并发请求 N 次会拉起 N 个 ffmpeg
+  做完全相同的工作；加锁后后到的请求等第一个做完，直接命中磁盘缓存。
+  **先抢 key 锁再抢信号量** —— 否则同一文件的重复请求会先把全局预算吃光。
+- **源文件体积上限**（`MEDIA_TRANSCODE_MAX_SOURCE_MB`，默认 256）→ 413。
+- key 锁用完即从字典移除（`waiters` 计数），不会无界增长。
+
+`.env.example` 已补齐这四项。
+
+**验证**：新增 `tests/test_media_access_guard.py`（15 项），
+包含「同键并发峰值必须为 1」与「不同键仍能并行」两条对照断言
+（后者防止同键锁把整体吞吐误伤成串行）。
+全量 `725 passed, 64 failed`，无新增失败。

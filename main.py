@@ -15,20 +15,28 @@ import threading
 import time
 import webbrowser
 from typing import Any, Dict, Optional
+from urllib.parse import parse_qs
 from urllib.request import urlopen
 from pathlib import Path
 from contextlib import asynccontextmanager
 from app import __version__ as APP_VERSION
 from app.core import get_browser
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse, FileResponse, Response
+from fastapi.responses import JSONResponse, FileResponse, PlainTextResponse, Response
 # ================= 导入配置 =================
 
 from app.core.config import AppConfig, InsecureStartupConfigError, get_logger, get_shared_file_log_handler
 from app.utils.safe_media_types import resolve_media_delivery, safe_media_response_headers
+from app.utils.media_guard import (
+    TranscodeBusyError,
+    TranscodeTooLargeError,
+    media_access_allowed,
+    media_access_requires_auth,
+    transcode_guard,
+)
 from app.services.restart_guard import RestartGuard
 
 # ================= 日志配置 =================
@@ -750,6 +758,28 @@ _MEDIA_MIME_OVERRIDES = {
 }
 
 
+def _scope_media_access_allowed(scope) -> bool:
+    """从原始 ASGI scope 里取出凭据做校验（StaticFiles 拿不到 Request 对象）。"""
+    headers = {}
+    try:
+        for raw_key, raw_value in (scope or {}).get("headers") or []:
+            headers[bytes(raw_key).decode("latin-1").lower()] = bytes(raw_value).decode("latin-1")
+    except Exception:
+        headers = {}
+    query_token = ""
+    try:
+        query_token = parse_qs((scope or {}).get("query_string", b"").decode("latin-1")).get(
+            "token", [""]
+        )[0]
+    except Exception:
+        query_token = ""
+    return media_access_allowed(
+        authorization=headers.get("authorization"),
+        x_api_key=headers.get("x-api-key"),
+        query_token=query_token,
+    )
+
+
 class HardenedMediaStaticFiles(StaticFiles):
     """给 `/download_images` 静态目录统一加固（修复 S8 / S9）。
 
@@ -757,6 +787,13 @@ class HardenedMediaStaticFiles(StaticFiles):
     出口这一层也必须保证它们不会再以同源活动文档的形式被打开：
     白名单之外的扩展名一律降级为 `application/octet-stream` + `attachment`。
     """
+
+    async def get_response(self, path, scope):
+        # 修复 S6：静态媒体目录原本完全无认证。默认仍然放行（兼容 <img src>），
+        # 但开启 MEDIA_ACCESS_REQUIRE_AUTH 后必须出示服务令牌。
+        if media_access_requires_auth() and not _scope_media_access_allowed(scope):
+            return PlainTextResponse("media_unauthorized", status_code=401)
+        return await super().get_response(path, scope)
 
     def file_response(self, full_path, stat_result, scope, status_code=200):
         response = super().file_response(full_path, stat_result, scope, status_code=status_code)
@@ -812,6 +849,13 @@ def _transcode_media(path: Path, fmt: str) -> Path:
     if not ffmpeg_path:
         raise HTTPException(status_code=503, detail="ffmpeg_not_available")
 
+    # 修复 S6：源文件体积上限，避免一个超大文件把 ffmpeg 与磁盘拖死
+    try:
+        transcode_guard.check_source_size(path.stat().st_size)
+    except TranscodeTooLargeError as exc:
+        logger.warning(f"媒体转码被拒绝（源文件过大）: {exc}")
+        raise HTTPException(status_code=413, detail="media_source_too_large")
+
     cache_dir = path.parent / "_transcoded"
     cache_dir.mkdir(exist_ok=True)
     # Include the complete source filename in the cache key.  Different input
@@ -862,18 +906,46 @@ def _transcode_media(path: Path, fmt: str) -> Path:
     return out_path
 
 
+def _transcode_media_guarded(path: Path, fmt: str) -> Path:
+    """在全局并发预算与同键去重锁内执行转码（修复 S6）。"""
+    try:
+        with transcode_guard.slot(f"{path.name}:{fmt}"):
+            return _transcode_media(path, fmt)
+    except TranscodeBusyError:
+        logger.warning(
+            f"媒体转码队列已满（并发上限 {transcode_guard.max_concurrency}）: {path.name} -> {fmt}"
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="media_transcode_busy",
+            headers={"Retry-After": "5"},
+        )
+
+
 @app.get("/media/{filename}", include_in_schema=False)
 async def media_file(
+    request: Request,
     filename: str,
     format: Optional[str] = Query(default=None, pattern="^(mp3|m4a)$"),
+    token: Optional[str] = Query(default=None),
 ):
+    # 修复 S6：可选的媒体鉴权（默认关闭，保持 <img src> 兼容）
+    if not media_access_allowed(
+        authorization=request.headers.get("authorization"),
+        x_api_key=request.headers.get("x-api-key"),
+        query_token=token,
+    ):
+        raise HTTPException(status_code=401, detail="media_unauthorized")
+
     source_path = _resolve_download_media_path(filename)
     requested_format = str(format or "").strip().lower() if isinstance(format, str) else ""
 
     if requested_format:
         # ffmpeg 转码最长可达 60 秒，必须放到线程池执行，
         # 否则会同步阻塞事件循环，冻结所有并发 SSE 流。
-        media_path = await asyncio.to_thread(_transcode_media, source_path, requested_format)
+        media_path = await asyncio.to_thread(
+            _transcode_media_guarded, source_path, requested_format
+        )
         media_type = _MEDIA_TRANSCODE_FORMATS[requested_format]["mime"]
     else:
         media_path = source_path
