@@ -43,3 +43,19 @@ async def apply_adapter_updates(body: ApplyAdapterUpdatesRequest, authenticated:
     from app.services.adapter_updates import default_updater
 
     return _run(lambda: default_updater(body.branch).apply(body.sites, include_conflicts=body.include_conflicts))
+
+
+@router.get("/api/adapters/health")
+async def adapter_health(site: str, preset: Optional[str] = None, authenticated: bool = Depends(verify_auth)):
+    """R1-6：在浏览器里该站点的空闲标签页上巡检选择器（只查 DOM，不输入、不点击、不发送）。"""
+    import asyncio
+
+    from app.services.adapter_health import check_site_health
+
+    try:
+        return await asyncio.to_thread(check_site_health, site, preset)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:  # 浏览器未连接等
+        logger.warning(f"适配器巡检失败: {exc}")
+        raise HTTPException(status_code=503, detail=f"巡检失败：{exc}") from exc
