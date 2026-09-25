@@ -694,3 +694,71 @@ S2 是**信任边界审查**，不是一个能「修好」的缺陷：命令引�
 但 S2 的缓解措施本身就是这份文档 —— 如果它被删掉或被改成「我们有沙箱」，
 那才是真正的回归，所以值得用断言钉住。
 `./scripts/run_logic_tests.sh` → **809 passed, 64 skipped, 0 failed**。
+
+---
+
+## 收尾：验收条件逐条核验（2026-09-25）
+
+对照报告第七节，**P1 + P2 全部 21 项已完成并推送到 `main`**。
+
+| 验收条件（报告原文） | 状态 | 由哪条断言保证 |
+| --- | --- | --- |
+| 无授权 `/api/settings/backup` 返回 401/403 且不回显密钥 | ✅ | `test_security_hardening_fixes.py`（S13） |
+| 非可信 Origin 不得读管理数据 | ✅ | 同上，`verify_admin_access` 跨源 403 |
+| 默认下载文件不含服务端秘密与浏览器本地令牌 | ✅ | 同上（脱敏备份**删除**敏感键而非占位符） |
+| 公开绑定缺认证应拒绝启动 | ✅ | `assert_secure_startup_config` + S1 用例 |
+| 恶意 SVG / `video/custom`+`.html` 不得成为同源内联活动文档 | ✅ | `test_safe_media_types.py`（S8/S9，30 项） |
+| 全新克隆默认不产生响应调试明文；`"false"` 解析为禁用 | ✅ | S12 用例 + `_browser_constant_bool` |
+| 短暂无效命令 JSON 不清空上一版命令，恢复后可正常切换 | ✅ | `test_command_config_hot_reload_safety.py`（B8） |
+| CDP 解冻失败不交付 BUSY 标签 | ✅ | `test_tab_resume_failure_safety.py`（B5） |
+| 顶层数组历史能恢复 | ✅ | `test_request_history_compat.py`（B2） |
+| 搜索引擎主域禁自动发现、指定 AI 子域仍可用 | ✅ | `test_site_discovery.py` 36 项（B1，基线 9 项转绿） |
+| 超限历史/媒体有可预测的拒绝/截断策略和隔离测试 | ✅ | `test_responses_state_budget.py`（B3，413 墓碑）、`test_media_access_guard.py`（S6） |
+| 统一远端媒体/图片抓取策略（S10/S11） | ✅ | `test_remote_fetch_hardening.py`（20 项） |
+| 限制 URL 正则与队列（H12/H9） | ✅ | `test_bounded_regex.py`、`test_tab_pool_waiter_budget.py` |
+| 无需浏览器的 CI 依赖/fixture 自足（T1） | ✅ | `tests/conftest.py` + `scripts/run_logic_tests.sh` |
+
+**不在本次范围**（用户确认的第三批 P3）：H2–H14 中的 H8/H10/H13/H14、
+B4/B6/B7、S14、T2 等。H9 的「HTTP 层 429/503 映射」也留在后续（理由见该节）。
+
+## 最终测试状态
+
+```
+./scripts/run_logic_tests.sh
+→ 809 passed, 64 skipped, 0 failed
+```
+
+64 个 skip 全部是缺少未跟踪本地资源的集成用例，skip 原因里注明了缺哪个文件。
+**干净克隆上「0 failed」现在是可执行的判据** —— 不必再像本轮那样
+每改一项都跟 73 行基线做 `comm` 对比。
+
+### 本轮新增的回归测试（276 项，全绿）
+
+| 文件 | 项数 | 覆盖 |
+| --- | --- | --- |
+| `test_security_hardening_fixes.py` | 42 | S13 / S1 / H1 / S12 / **S2** |
+| `test_safe_media_types.py` | 30 | S8 / S9 |
+| `test_open_profile_url_hardening.py` | 40 | S4 |
+| `test_parser_install_gate.py` | 37 | S3 |
+| `test_restart_handoff_proxy.py` | 22 | S5 |
+| `test_remote_fetch_hardening.py` | 20 | S10 / S11 |
+| `test_tab_pool_waiter_budget.py` | 17 | H9 |
+| `test_media_access_guard.py` | 15 | S6 |
+| `test_responses_state_budget.py` | 14 | B3 |
+| `test_bounded_regex.py` | 13 | H12 |
+| `test_request_history_compat.py` | 10 | B2 |
+| `test_command_config_hot_reload_safety.py` | 8 | B8 |
+| `test_tab_resume_failure_safety.py` | 8 | B5 |
+
+### 新增配置项一览（均已写入 `.env.example`）
+
+`BROWSER_OPEN_URL_ALLOW_UNAUTHENTICATED_LOCAL`、`BROWSER_OPEN_URL_ALLOW_INTERNAL_TARGETS`、
+`MEDIA_ACCESS_REQUIRE_AUTH`、`MEDIA_TRANSCODE_MAX_CONCURRENCY`、
+`MEDIA_TRANSCODE_QUEUE_TIMEOUT_SEC`、`MEDIA_TRANSCODE_MAX_SOURCE_MB`、
+`TAB_POOL_MAX_WAITERS`、`TAB_POOL_MAX_WAITERS_PER_KEY`、
+`RESTART_PROXY_MAX_CONNECTIONS`、`RESTART_PROXY_MAX_REQUEST_MB`、
+`RESTART_PROXY_MAX_TOTAL_BUFFER_MB`、`PARSER_INSTALL_ENABLED`、
+`NETWORK_DEBUG_CAPTURE_RETENTION_HOURS`。
+
+**所有新增开关都遵循同一原则：默认值 = 现有行为或更安全的一侧，
+严格用 `parse_bool_literal` 解析（`"false"` 必须是假），并带逃生阀。**
