@@ -8,9 +8,9 @@ from pathlib import Path
 import pytest
 
 pytest.importorskip("playwright.sync_api")
-from playwright.sync_api import sync_playwright, expect  # noqa: E402
+from playwright.sync_api import expect  # noqa: E402
 
-from tests._playwright import launch_chromium  # noqa: E402
+from tests._playwright import launch_chromium, sync_playwright  # noqa: E402
 
 pytestmark = pytest.mark.browser
 

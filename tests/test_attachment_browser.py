@@ -10,7 +10,7 @@ playwright = pytest.importorskip("playwright.sync_api")
 from app.core.config import WorkflowError
 from app.core.workflow.attachment_monitor import AttachmentMonitor
 from app.core.workflow.attachment_upload import AttachmentUploadCoordinator
-from tests._playwright import launch_chromium
+from tests._playwright import launch_chromium, sync_playwright
 
 pytestmark = pytest.mark.browser
 
@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 @pytest.fixture
 def page():
-    with playwright.sync_playwright() as p:
+    with sync_playwright() as p:
         try:
             browser = launch_chromium(p.chromium, headless=True, args=["--no-sandbox"])
         except playwright.Error as exc:

@@ -37,8 +37,7 @@ def test_atomic_input_does_not_hide_element_failure(raises):
 @pytest.fixture(scope='module')
 def browser():
     pytest.importorskip('playwright.sync_api')
-    from playwright.sync_api import sync_playwright
-    from tests._playwright import launch_chromium
+    from tests._playwright import launch_chromium, sync_playwright
     with sync_playwright() as p:
         browser = launch_chromium(p.chromium)
         yield browser

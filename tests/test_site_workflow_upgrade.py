@@ -118,8 +118,7 @@ def test_deepseek_single_main_preset_keeps_normal_settings_and_only_four_actions
 @pytest.fixture
 def ui_page():
     pytest.importorskip("playwright.sync_api")
-    from playwright.sync_api import sync_playwright
-    from tests._playwright import launch_chromium
+    from tests._playwright import launch_chromium, sync_playwright
     with sync_playwright() as p:
         browser=launch_chromium(p.chromium)
         page=browser.new_page()
