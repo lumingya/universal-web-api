@@ -210,3 +210,17 @@ def test_t2_httpx_declared_in_dev_requirements():
 
     text = (Path(__file__).resolve().parents[1] / "requirements-dev.txt").read_text(encoding="utf-8")
     assert re.search(r"(?m)^httpx\b", text)
+
+
+# ---------------------------------------------------------------------------
+# S14 · 教程页搜索结果 / TOC 拼 innerHTML 前转义
+# ---------------------------------------------------------------------------
+
+def test_s14_tutorial_search_escapes_user_input():
+    html = (Path(__file__).resolve().parents[1] / "static" / "tutorial" / "index.html").read_text(encoding="utf-8")
+    assert "const escHtml=" in html
+    assert "${searchInput.value.trim()}" not in html
+    assert "${escHtml(searchInput.value.trim())}" in html
+    assert "${escHtml(h.textContent)}" in html
+    for raw in ("${s.title}", "${s.subs.slice(0,60)}", "${h.textContent}</a>"):
+        assert raw not in html, raw

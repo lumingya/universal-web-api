@@ -36,7 +36,7 @@ P3 清单（顺序即执行顺序，完成一项勾一项，每项独立提交�
 - [x] H10 stream_monitor 重复方法
 - [x] H13 未使用的 command_engine_storage mixin
 - [x] T2 requirements-dev 缺 httpx
-- [ ] S14 遗留教程搜索框 innerHTML
+- [x] S14 遗留教程搜索框 innerHTML
 - [ ] S7 公开引导/健康接口信息最小化
 - [ ] H14 站点/完整备份导入无大小上限
 - [ ] H2 README 版本与 CHANGELOG 链接
@@ -475,3 +475,9 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 
 - `requirements-dev.txt` 增加 `httpx>=0.27,<1`（TestClient/ASGITransport 所需；当前环境 0.28.1）。
   pytest-asyncio 经核实没有测试使用 `pytest.mark.asyncio`，不加。测试：p3 新增 1 项。
+
+### S14 教程页 innerHTML 注入 ✅（P3）
+
+- `static/tutorial/index.html`：新增 `escHtml`；搜索结果（含**用户输入的查询词**回显、章节标题/分组/小节摘要、href）
+  与 TOC（h3 文本/id）拼 innerHTML 前全部转义。NAV/SITES 为页内常量，未改。
+- 校验：抽取内联脚本 `node --check` 通过；escHtml 对 `<img onerror>` 等输出正确。测试：p3 新增 1 项（源码断言）。

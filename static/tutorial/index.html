@@ -1518,6 +1518,8 @@ const sidebar=document.getElementById('sidebar'),overlay=document.getElementById
 function closeDrawer(){sidebar.classList.remove('open');overlay.classList.remove('on');}
 document.getElementById('menuBtn').addEventListener('click',()=>{sidebar.classList.add('open');overlay.classList.add('on');});
 overlay.addEventListener('click',closeDrawer);
+// S14：拼进 innerHTML 的文本一律转义（搜索框输入是用户可控的，DOM 文本也可能含 < & 等字符）
+const escHtml=v=>String(v==null?'':v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const searchInput=document.getElementById('searchInput'),searchResults=document.getElementById('searchResults');
 function buildIndex(){
   return Array.from(document.querySelectorAll('.doc-section')).map(sec=>{
@@ -1535,7 +1537,7 @@ searchInput.addEventListener('input',()=>{
   const q=searchInput.value.trim().toLowerCase();
   if(!q){searchResults.classList.remove('on');searchResults.innerHTML='';return;}
   const hits=INDEX.filter(s=>s.hay.includes(q)).slice(0,8);
-  searchResults.innerHTML=hits.length?hits.map(s=>`<a class="sb-r" href="#${s.id}"><span class="grp">${s.grp}</span><b>${s.num} · ${s.title}</b><small>${s.subs.slice(0,60)}</small></a>`).join(''):`<div class="sb-none">没有匹配「${searchInput.value.trim()}」的章节</div>`;
+  searchResults.innerHTML=hits.length?hits.map(s=>`<a class="sb-r" href="#${escHtml(s.id)}"><span class="grp">${escHtml(s.grp)}</span><b>${escHtml(s.num)} · ${escHtml(s.title)}</b><small>${escHtml(s.subs.slice(0,60))}</small></a>`).join(''):`<div class="sb-none">没有匹配「${escHtml(searchInput.value.trim())}」的章节</div>`;
   searchResults.classList.add('on');
   searchResults.querySelectorAll('a').forEach(a=>a.addEventListener('click',()=>{searchResults.classList.remove('on');searchInput.value='';closeDrawer();}));
 });
@@ -1549,7 +1551,7 @@ let secObs=null,h3Obs=null,curSec=null;
 function buildTOC(sec){
   const h3s=Array.from(sec.querySelectorAll('h3'));
   h3s.forEach((h,i)=>{if(!h.id)h.id=sec.id+'-s'+i;});
-  tocList.innerHTML=h3s.map(h=>`<a href="#${h.id}" data-h3="${h.id}">${h.textContent}</a>`).join('')||`<a style="color:var(--tx3);pointer-events:none">本节无小节</a>`;
+  tocList.innerHTML=h3s.map(h=>`<a href="#${escHtml(h.id)}" data-h3="${escHtml(h.id)}">${escHtml(h.textContent)}</a>`).join('')||`<a style="color:var(--tx3);pointer-events:none">本节无小节</a>`;
   tocList.querySelectorAll('a[data-h3]').forEach(a=>a.addEventListener('click',closeDrawer));
   if(h3Obs)h3Obs.disconnect();
   h3Obs=new IntersectionObserver(es=>{
