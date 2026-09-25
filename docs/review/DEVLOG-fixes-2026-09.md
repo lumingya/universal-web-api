@@ -93,7 +93,7 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 
 ### 第二批
 
-- [ ] B8 命令配置损坏时清空运行缓存
+- [x] B8 命令配置损坏时清空运行缓存
 - [ ] B5 解冻失败仍交付标签页
 - [ ] B2 旧版顶层数组历史恢复丢失
 - [ ] B1 搜索引擎主域被自动发现
@@ -192,3 +192,13 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
     改为「默认关 + 醒目告警 + 限期自动删除」来控制暴露面。
 - `browser_constants.py` / `system.py` 默认值 & `dashboard-schema.js`：补齐保留期配置项；开关说明加隐私警告。
 - 验证：p1 测试 58 项（受跟踪配置为 false、严格布尔 13 例含 `"false"`/`"garbage"`、保留期删除过期但保留活跃文件）。
+
+### B8 命令配置损坏清空运行缓存 ✅
+
+- `app/services/command_engine.py`：`_read_commands_file()` 返回 `Optional[List]`——JSON 损坏/结构不是 list/IO 异常 → `None`；
+  文件不存在或合法空列表 → `[]`。`_refresh_commands_if_changed()` 遇 `None`：保留 last-known-good、**不推进** `_commands_mtime`、
+  不做 run_js_file 清理；记录 `_commands_failed_mtime`，同一损坏 mtime 不再重复读取/刷日志；文件修好（mtime 变化）自动重载。
+  首次加载即失败时以空配置运行（无 last-known-good 可用）。`_save_commands` 成功时清除失败标记。
+- `command_engine_storage.py` 是未被继承的死代码（H13，P3），**未改**。
+- 验证：`tests/test_review_fixes_p2.py::test_b8_*`（损坏 JSON/错误结构均保留旧命令且无清理动作、同一损坏文件不重复读、
+  修复后切换并产生清理动作（对照）、合法空配置仍会清空）。该用例在修复前代码上失败（已 stash 验证）。

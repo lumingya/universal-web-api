@@ -67,6 +67,8 @@ class CommandEngine(CommandEngineRuntimeMixin, CommandEngineResultsMixin, Comman
         self._commands_local_file = None
         self._commands_mtime = 0.0
         self._commands_local_mtime = 0.0
+        # B8：最近一次「读失败」的命令文件 mtime；同一 mtime 不重复读取/刷错误日志
+        self._commands_failed_mtime: Optional[float] = None
         # (cache_key, compact_text)：page_check 去空白页面文本的单槽缓存
         self._compact_haystack_cache: Optional[tuple] = None
         self._commands_loaded = False
@@ -1349,7 +1351,13 @@ return (function() {
             self._commands_local_file = ConfigConstants.COMMANDS_LOCAL_FILE
         return self._commands_local_file
 
-    def _read_commands_file(self) -> List[Dict]:
+    def _read_commands_file(self) -> Optional[List[Dict]]:
+        """读取命令配置。
+
+        B8：返回 ``None`` 表示「读取失败」（JSON 损坏、结构不对、IO 错误），调用方必须保留
+        last-known-good；只有文件不存在或合法的空列表才返回 ``[]``。旧实现把两者混为 ``[]``，
+        编辑器半写入等短暂损坏会清空全部命令并触发 run_js_file 清理。
+        """
         commands_file = self._get_commands_file()
         commands = []
 
@@ -1368,12 +1376,13 @@ return (function() {
                         entry["advanced_ui"] = self._normalize_advanced_ui(entry.get("advanced_ui"))
                 else:
                     logger.warning(f"命令配置文件格式无效: {commands_file}")
+                    return None
             except json.JSONDecodeError as e:
                 logger.error(f"命令配置文件格式错误: {e}")
-                return []
+                return None
             except Exception as e:
                 logger.error(f"加载命令配置失败: {e}")
-                return []
+                return None
 
         return self._apply_local_command_state(commands)
 
@@ -1664,8 +1673,32 @@ return (function() {
                 or current_mtime != self._commands_mtime
                 or current_local_mtime != self._commands_local_mtime
             ):
+                if (
+                    not force
+                    and self._commands_loaded
+                    and self._commands_failed_mtime is not None
+                    and current_mtime == self._commands_failed_mtime
+                    and current_local_mtime == self._commands_local_mtime
+                ):
+                    # 同一份损坏文件已判定过失败：继续使用 last-known-good，等待文件被修好
+                    return
                 previous_snapshot = copy.deepcopy(self._commands_cache) if self._commands_loaded else []
                 next_snapshot = self._read_commands_file()
+                if next_snapshot is None:
+                    # B8：读失败 ≠ 合法空配置。保留上一版命令与预注入脚本，不推进 mtime、不做清理；
+                    # 记录失败 mtime 以免每次轮询重复读取/刷日志，文件修复（mtime 变化）后自动重载。
+                    self._commands_failed_mtime = current_mtime
+                    if self._commands_loaded:
+                        logger.warning(
+                            f"[CMD] 命令配置读取失败，继续使用上一版 {len(self._commands_cache)} 条命令"
+                            "（修复 commands.json 后将自动重新加载）"
+                        )
+                    else:
+                        # 首次加载就失败：没有 last-known-good，只能以空配置启动，但不标记为已加载成功的 mtime
+                        self._commands_cache = []
+                        self._commands_loaded = True
+                    return
+                self._commands_failed_mtime = None
                 cleanup_actions = self._collect_run_js_file_cleanup_actions(previous_snapshot, next_snapshot)
                 self._commands_cache = next_snapshot
                 self._commands_mtime = current_mtime
@@ -1701,6 +1734,7 @@ return (function() {
                 except Exception as mtime_error:
                     logger.warning(f"命令配置已保存但更新时间戳失败: {mtime_error}")
                 self._commands_loaded = True
+                self._commands_failed_mtime = None
                 self._commands_cache = commands_snapshot
                 cleanup_actions = self._collect_run_js_file_cleanup_actions(previous_snapshot, commands_snapshot)
                 self._cleanup_disabled_run_js_file_actions(cleanup_actions)
