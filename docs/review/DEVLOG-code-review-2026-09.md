@@ -45,7 +45,7 @@
 - [x] M4 安全：命令引擎、updater、媒体落盘/文件路径、SSRF——以 mock 响应+临时目录验证同源 SVG/HTML 落盘与响应头；直接图片请求及 DNS 校验窗口单独记风险，未访问外网/内网目标
 - [x] M5 核心请求链路：chat.py / anthropic_routes.py / streaming_response.py / request_manager.py——核查认证委派、流关闭/取消、Responses 状态与请求历史，轻量复现 B2–B4
 - [x] M6 标签页池：tab_pool_parts/*（manager / session / recovery / idle_maintenance）——检查锁与取消/恢复路径；用无浏览器桩验证冻结恢复失败和非有限配置值
-- [ ] M7 浏览器与工作流：core/browser/*、core/workflow/*、stream_monitor、network_monitor
+- [x] M7 浏览器与工作流：core/browser/*、core/workflow/*、stream_monitor、network_monitor——核查控制流边界、流监听与调试持久化；复现 mtime 缓存及布尔字符串误判
 - [ ] M8 服务层：tool_calling*、config engine、command_engine*
 - [ ] M9 前端：static/js（XSS / v-html / 大文件）
 - [ ] M10 汇总报告 `docs/review/CODE_REVIEW_REPORT.md`
@@ -82,6 +82,10 @@
 | B5 | P2 | `app/core/tab_pool_parts/idle_maintenance.py:346-384`, `app/core/tab_pool_parts/session.py:258-278` | 冻结标签页恢复 CDP 指令报错后，`resume_if_frozen` 返回 false，却在 `finally` 清除 `_uwapi_frozen` 标志；`TabSession.acquire()` 忽略返回值并仍标记 BUSY、返回 true，可能将仍冻结的页面交给请求，后续也不再重试解冻。恢复失败应阻止交付/标为异常并保留待核实状态。 | 假 CDP 抛错的轻量桩复现：acquire=true、status=busy、frozen flag=false；未连接浏览器 |
 | B6 | P3 | `app/core/tab_pool_parts/idle_maintenance.py:69-103`, `app/core/tab_pool_parts/manager.py:219` | 环境变量 `BROWSER_CDP_RECYCLE_AFTER_REQUESTS=inf` 或 DOM_NODES=inf 可通过 `float()` 后执行 `int(inf)` 抛 OverflowError，使创建标签页池失败。配置解析须检查 `math.isfinite()` 并回退默认。 | patch 进程环境复现 OverflowError；默认配置无此问题 |
 | H9 | P2（优化） | `app/core/tab_pool_parts/manager.py:151-155,2882-2905,3436-3483`, `app/services/request_manager.py:2282-2335` | 获取标签页的独立线程池限制 32 个**工作线程**，但待执行任务的 `ThreadPoolExecutor` 内部队列和池的等待队列未设置总量上限；大量并发请求可占住线程/排队 Future，活跃请求也不按历史记录条数被驱逐。建议在 API 入口统一设置最大并发与等待数、早返回 429/503，并监控队列深度。 | 静态容量分析；未进行大量并发压力测试，不作为已复现的耗尽故障 |
+| S12 | P2 | `config/browser_config.json:371-376`, `app/core/config_parts/browser_constants.py:86,219-253`, `app/core/network_monitor.py:1699-1804,1975-1980`, `app/core/config_parts/log_redaction.py:239-311` | 虽然代码/前端默认关闭网络响应调试抓取，**已跟踪的出厂 browser_config.json 却打开** `NETWORK_DEBUG_CAPTURE_ENABLED` 且过滤器为空；命中解析器时会把原始响应正文片段及解析预览写入 `logs/network_parser_debug`（目录上限配置 50MB）。日志净化保护部分令牌/Base64，但正常聊天文本仍可落盘；若配置中填字符串 `"false"`，`bool("false")` 也会错误地启用。应默认禁用调试抓取、要求显式确认隐私及设自动过期/脱敏，严格解析布尔值。 | 实测读取跟踪配置为 true、合成普通聊天文本不会被净化、mock 配置 `"false"` 时启用结果为 true；未使用真实会话或产生调试文件 |
+| B7 | P3 | `app/core/workflow/script_loader.py:173-194`, `tests/test_workflow_script_loader.py:130-157` | JS 脚本热加载只按浮点 mtime 判断缓存命中；内容替换但 mtime 不变（恢复时间戳/低分辨率文件系统/快速覆盖）时会执行旧脚本，且测试只覆盖 mtime 改变。建议 `st_mtime_ns+size` 并对更新接口显式清缓存；极端同大小同时间需 hash。 | 临时脚本文件复现：盘上内容 `later`、缓存仍返回 `first`；临时目录已自动删除 |
+| H10 | P3 | `app/core/stream_monitor.py:1706-1732,1768-1779` | `_is_arena_page`、`_arena_native_stop_present` 两次定义，前一版松散子串判断被后一版域名解析与独立检测器覆盖；清理死代码与重复维护面，保留后一版的域名边界。 | 静态确认；运行时以前一版已被覆盖为前提，不宣称当前主机校验失效 |
+| H11 | P3 | `config/browser_config.json:320-369` | 已跟踪的默认浏览器配置包含多组具体 Arena 会话 URL/标签页编号，不适合作为通用模板，公开仓库中还可能泄露用户曾使用的会话标识。建议用示例占位组与本地不跟踪的覆盖文件替换，必要时清理历史。 | 静态确认 5 组路由数据；未访问这些 URL、未验证是否能读取内容 |
 
 ## 5. 工作流水
 
@@ -93,3 +97,4 @@
 - 2026-09-25 / M4：复核命令引擎受限 Python 执行上下文（含浏览器、配置对象和默认可导入 requests）、解析器动态导入及 updater；`updater.py:828-874` 已限制 ZIP 路径/符号链接/条目数/展开大小/压缩比，下载验 SHA-256 digest，失败会从备份恢复，**不将这些保护误报为缺失**。用无网络 mock 响应和自动清理的微型临时目录分别驱动 SVG 图片前台回退与音视频远程下载：获得 `.svg` 和 `.html`，经 `httpx.ASGITransport` 同源路由实际返回 `200 image/svg+xml`（无 attachment/CSP）与 `200 text/html; charset=utf-8`、`Content-Disposition: inline`（无 CSP）。`read_image_bytes` 的回环 URL 以 mock `requests.get` 证明可达调用点，**未实际连接回环/内网**；公共抓取器 mock DNS 后仍把原主机名交给 requests，重绑定仅按条件性风险报告。所有临时产物与导入生成的忽略配置已删除；未安装/运行浏览器或大文件压力测试。S2、S3、S8–S11 见上。
 - 2026-09-25 / M5：阅读 OpenAI / Anthropic 接口的认证委派、SSE 响应关闭与请求生命周期：已实现断连时主动关闭异步生成器、线程工作队列限背压及绝对执行超时，未把这些保护误报为缺陷。隔离小文件测试（不运行浏览器）证实历史旧数组读入丢失（B2）；Responses 默认启用内存存储且连续两轮重复保留完整会话（B3）；构造 `n=3` 可接受但单选择输出（B4）。`chat.py` 六个 Arena 错误辅助函数重复定义（H8）。临时目录及导入生成的忽略配置已清理。
 - 2026-09-25 / M6：核对 `TabPoolManager` 的获取/释放条件队列、独立 acquire executor 与取消后回收、Session 状态门禁、隔离恢复服务的超时槽、空闲冻结/CDP 回收逻辑；已存在 0.25s 取消轮询及冻结前检查页面隐藏，不把无真实浏览器实验的状态竞态当成已发生事故。仅用抛错 CDP 桩证明解冻失败仍交付会话（B5），仅用临时 env 值证明配置 inf 可使构造失败（B6）。等待队列未总量限流作为优化风险 H9 记录，不做压力测试；无截图或浏览器下载。
+- 2026-09-25 / M7：查阅浏览器媒体/工作流、`flow_runtime.py` 条件与变量解析、`script_loader.py` 路径控制及缓存、DOM/网络流监听。控制流有节点/深度/字节和执行转换预算，正则有 25ms 限时，网络监听有预取容量及调试目录上限，脚本路径解析会限制在指定目录；不能笼统报告缺少这些防护。发现跟踪的 `browser_config.json` 与代码/前端默认开关不一致，默认启用原始响应调试捕获（S12），并携带具体会话 URL（H11）；轻量文件实验确认仅 mtime 缓存导致热更新可能陈旧（B7）；流监听重复方法只记录为维护问题（H10）。无真实浏览器、网络页面或 PNG 截图。
