@@ -6,6 +6,13 @@
 
 ## 0. 恢复指引（上下文丢失 / 沙盒重启后先看这里）
 
+> ⚠️ **分支约定（2026-09-25 用户确认）**：发现另一会话在并行往 `main` 推同一批修复（`c8006cd`、`06f8103`…）。
+> 用户选择：本会话**只推独立分支 `fix/review-p1-p2-b`**，基于 `d663bb7` 独立完成 P1+P2，**不碰 `main`**，
+> 最终由用户对比/择优合并。恢复时：`git checkout fix/review-p1-p2-b && git pull`，推送用
+> `git push origin fix/review-p1-p2-b`。下面第 1 步里的 `origin/main` 对本分支不适用。
+> 沙盒重启会丢 `.git/config`（含 remote 与 user.name/email）和 `/tmp`，需按第 3 步和第 2 节重建。
+
+
 1. `cd /home/user/repo && git log --oneline -5` 确认最新提交点（远端 `origin/main`）。
 2. 读本文件「3. 进度清单」，从第一个未勾选项继续。**不要**重新通读全仓库。
 3. 推送凭据只存在于 `.git/config`（clone URL 内嵌临时 PAT）。沙盒快照**不含** `.git/config`，
