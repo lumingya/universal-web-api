@@ -8,17 +8,14 @@
 
 - main 冻结，只推本分支。本地环境（Portal）与推送链路见 §2.8。
 - ✅ **阶段 0 完成**：R0-1、R0-2、R0-5、R0-6、R0-8。R0-3/R0-4 暂缓，R0-7 由用户发布。
-- ✅ **阶段 1 完成**：R1-1 至 R1-7。
-  - 实机 Windows 3.13（`a7c22f0`）：1217 passed / 67 skipped / 1 failed，唯一失败是早已存在的 page_guide 滚动用例。
-- ▶ **阶段 2 执行顺序**（先低风险、可测试的，再动核心；每项独立提交，并在本机做实机回归）：
-  1. R2-7 可观测性（`/metrics`、请求 ID）
-  2. R2-4 类型化配置（生成 `.env.example`，解决 N9）
-  3. R2-5 SQLite 持久化（自动迁移 JSON）
-  4. R2-2 统一请求模型 ChatJob（有 R1-5 的官方 SDK 一致性测试兜底）
-  5. R2-3 拆解巨型类
-  6. R2-8 前端工程化（包含面板里的适配器更新和巡检入口，用本机 Playwright 截图核对）
-  7. R2-1 BrowserDriver 接口
-  8. R2-6 进程模型拆分
+- ✅ **阶段 1 完成**：R1-1 至 R1-7。实机验证（`43325ec`）：
+  - Windows 3.13：1251 passed / 67 skipped / 1 failed；
+  - Windows 3.10：1241 passed / 76 skipped / 2 failed。
+  - 两次失败都已知：page_guide 滚动用例是早已存在的问题；request_history 防抖测试受全局线程干扰，已在 `92f6850` 修复。
+- ▶ **阶段 2 进行中**：
+  - R2-7 已完成核心部分（`ea8d3cb`：`/metrics`、X-Request-ID）；
+  - 接下来依次是 R2-4 类型化配置、R2-5 SQLite、R2-2 ChatJob、R2-3 拆类、R2-8 前端、R2-1 驱动接口、R2-6 进程模型。
+- 最近一次实机全量测试：`ea8d3cb`，结果见 §4 最后一条。
 
 ## 1. 用户决策（2026-09-26，必须遵守）
 
@@ -174,7 +171,8 @@ Portal 把用户本机的**一个文件夹**发布成公网 MCP 端点：`https:
 - [ ] **R2-4** 类型化配置：以 pydantic-settings 为单一事实源，自动生成 `.env.example`（解决 N9）。
 - [ ] **R2-5** 请求历史、命令结果、统计改用 SQLite（WAL），并自动迁移现有 JSON。
 - [ ] **R2-6** 进程模型：浏览器 worker 与 API 分离。
-- [ ] **R2-7** 可观测性：`/metrics`、结构化日志、贯穿全程的请求 ID、收窄 `except Exception`。
+- [~] **R2-7** 部分完成（`ea8d3cb`）：`/metrics`（Prometheus，无第三方依赖）与 `X-Request-ID`（中间件 + `REQUEST_ID` 上下文变量）已完成。
+  - 待办：日志格式里带上 request_id；收窄 `except Exception`（1454 处）需要按模块逐步进行。
 - [ ] **R2-8** 前端工程化：预编译 Tailwind、改用 ES Modules、拆分 `dashboard-methods.js`、Node 端单测。
 
 ## 3.5 设计记录：R1-1 Schema 与 R1-2 站点配置彻底拆分（实施前定稿，改动时同步更新）
@@ -319,4 +317,15 @@ Portal 把用户本机的**一个文件夹**发布成公网 MCP 端点：`https:
   - 无前缀的 `//…` 选择器按 XPath 处理，因为工作流执行器也是走 document.evaluate。
 - **R1-7**（`695f790`）：新增 `selector_quality`，提供 lint 规则和回退建议，接入巡检报告与 `/api/adapters/lint`。
   - 内置配置统计：193 个选择器中，long_chain 13 个、text_match 13 个、generated_class 3 个。
+- **阶段 1 实机验证**（`43325ec`）：Windows 3.13 结果 1251 passed / 1 failed；3.10 结果 1241 passed / 2 failed。
+  - 失败之一是早已存在的 page_guide 滚动用例。
+  - 另一个是 request_history 防抖测试，排查了两轮：
+    - 第一轮以为是时序问题，把窗口从 0.5s 放宽到 2s（`43325ec`），但仍然失败；
+    - 第二轮定位到真正原因：它断言「全进程没有名为 request-history-save 的线程」，而 R1-5 的一致性测试会让全局 request_manager 产生同名线程。现改为只检查本管理器自己的线程（`92f6850`）。
+- **R2-7**（`ea8d3cb`）：新增 `app/services/metrics.py`：
+  - 纯 ASGI 中间件，不缓冲流式响应，最后注册，因此处于最外层；
+  - 标签使用路由模板，未匹配统一记为 `<unmatched>`；
+  - `/metrics` 的访问规则与 `/health` 详情相同（S7）；
+  - 标签页池指标只读取已连接的 `_browser_instance`，不调用 get_browser，因为那样会创建实例；
+  - 测试时注意：没有浏览器的环境下 `/health` 按设计返回 503。
 
