@@ -39,7 +39,7 @@ P3 清单（顺序即执行顺序，完成一项勾一项，每项独立提交�
 - [x] S14 遗留教程搜索框 innerHTML
 - [x] S7 公开引导/健康接口信息最小化
 - [x] H14 站点/完整备份导入无大小上限
-- [ ] H2 README 版本与 CHANGELOG 链接
+- [x] H2 README 版本与 CHANGELOG 链接
 - [ ] H3 .gitignore 规则清理
 - [ ] H11 受跟踪配置中的具体 Arena 会话 URL
 - [ ] H5 重复/超大图片资源
@@ -498,3 +498,9 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
   与 `importFileSizeError()`；`handleImportFile` / `handleSettingsBackupImportFile` 在 `FileReader` 读取前检查 `file.size`，
   超限给出中文提示并重置 input；顺带补 `reader.onerror` 提示。（当前 `config/` 全量约 400KB，上限余量充足。）
 - 校验：`node --check` 通过。测试：p3 新增 2 项（源码顺序断言 + node 执行 helper）。
+
+### H2 README 版本号/更新日志链接过期 ✅（P3）
+
+- `README.md` / `README.zh-CN.md` / `README.en.md`：版本 2.9.8 → 3.0.0（与 `VERSION` 一致）；已被作者删除的
+  `CHANGELOG_CURRENT.md` 链接改指向仓库中实际存在的 `CHANGELOG-3.0.0.md`（en 版升级说明一处同改）。
+- 测试：p3 新增 3 项（三份 README 的版本号 == VERSION，且所有 `](./xxx)` 相对链接目标存在）——以后发版忘改 README 会被测试拦下。

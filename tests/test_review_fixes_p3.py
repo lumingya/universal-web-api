@@ -353,3 +353,22 @@ def test_h14_size_error_helper_behaviour():
     ok, too_big = json.loads(out.stdout.strip().splitlines()[-1])
     assert ok == ""
     assert "过大" in too_big and "8" in too_big
+
+
+# ---------------------------------------------------------------------------
+# H2 · README 版本号与 VERSION 一致，Markdown 相对链接指向存在的文件
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("readme", ["README.md", "README.zh-CN.md", "README.en.md"])
+def test_h2_readme_version_and_local_links(readme):
+    import re
+
+    root = Path(__file__).resolve().parents[1]
+    path = root / readme
+    if not path.exists():
+        pytest.skip(f"{readme} missing")
+    text = path.read_text(encoding="utf-8")
+    version = (root / "VERSION").read_text(encoding="utf-8").strip()
+    assert f"**{version}**" in text
+    for target in re.findall(r"\]\(\./([^)#\s]+)\)", text):
+        assert (root / target).exists(), f"{readme} -> {target}"

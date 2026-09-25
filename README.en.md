@@ -18,7 +18,7 @@
 
 <br>
 
-> Current release: **2.9.8** (see [`VERSION`](./VERSION) and [`CHANGELOG_CURRENT.md`](./CHANGELOG_CURRENT.md))
+> Current release: **3.0.0** (see [`VERSION`](./VERSION); release notes in [`CHANGELOG-3.0.0.md`](./CHANGELOG-3.0.0.md))
 
 **Universal Web API** is a **local API bridge & debugging tool** designed for developers. It converts AI web services (e.g., ChatGPT, DeepSeek, Claude, Gemini) logged in your local browser into local standard OpenAI/Anthropic-compatible APIs.
 
@@ -211,7 +211,7 @@ Most tests are browser-independent regression tests under [`tests/`](./tests). A
 
 ## 🔄 Upgrading Safely
 
-Before upgrading, back up `config/`, `chrome_profile/`, `.env`, and any custom scripts. The updater preserves user data listed in `UPDATE_PRESERVE` and supports a configurable update whitelist in the dashboard. After upgrading, review [`CHANGELOG_CURRENT.md`](./CHANGELOG_CURRENT.md), rerun the DrissionPage patch when prompted, and send one real smoke-test request before resuming normal traffic.
+Before upgrading, back up `config/`, `chrome_profile/`, `.env`, and any custom scripts. The updater preserves user data listed in `UPDATE_PRESERVE` and supports a configurable update whitelist in the dashboard. After upgrading, review the latest `CHANGELOG-<version>.md` (currently [`CHANGELOG-3.0.0.md`](./CHANGELOG-3.0.0.md)), rerun the DrissionPage patch when prompted, and send one real smoke-test request before resuming normal traffic.
 
 ---
 
