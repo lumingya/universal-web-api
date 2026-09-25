@@ -92,7 +92,7 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - [x] S10 图片比对 / C2PA 直取外部 URL
 - [x] S11 DNS 校验后连接重解析
 - [x] S4 回环 IP 当作授权
-- [ ] S5 定时重启代理容量 / 协议
+- [x] S5 定时重启代理容量 / 协议
 - [x] S6 媒体路由无认证与转码资源
 - [ ] S3 解析器安装立即 import
 - [x] H9 标签页等待队列无总量上限
@@ -549,3 +549,42 @@ Authorization / X-API-Key / **`?token=`** 三种方式 —— 查询参数是标
 **验证**：新增 `tests/test_tab_pool_waiter_budget.py`（17 项），
 含并发入队不突破预算、队列消化后恢复可用、热点队列不饿死其它队列等。
 全量 `742 passed, 64 failed`，无新增失败。
+
+### 2026-09-25 · S5（定时重启代理容量 / 协议）
+
+`start.py` 的 `_RestartHandoffProxy`（仅 `SCHEDULED_RESTART_ENABLED=true` 时启用）。
+
+#### 容量
+
+原来单连接可缓冲 64MB，而 `ThreadingTCPServer` 对并发连接数没有任何约束 ——
+几十个并发请求就能把内存吃光。三级预算：
+
+- `RESTART_PROXY_MAX_CONNECTIONS`（默认 32）：`BoundedSemaphore` 槽位，
+  抢不到（0.5s）就明确回 **503 `handoff_proxy_busy`**，而不是再开一个线程去缓冲。
+- `RESTART_PROXY_MAX_REQUEST_MB`（默认 16，原来写死 64）：单请求上限，超出回 **413**。
+- `RESTART_PROXY_MAX_TOTAL_BUFFER_MB`（默认 128）：新增 `_HandoffBufferBudget`
+  做进程级总缓冲记账（带锁，线程安全）。
+- `request_queue_size = 128`：内核 accept 队列也得有边界。
+
+**易错点**：归还额度必须用「实际预留的字节数」(`self._reserved_bytes`)，
+不能用 `len(payload)` —— 读取失败时 payload 为空但预算已被占用，
+用后者会导致额度永久泄漏。已用 `test_reserved_bytes_are_released_even_when_read_fails` 锁定。
+
+#### 协议
+
+原实现只认 `Content-Length`：
+
+- **`Transfer-Encoding: chunked`** 被当成 `Content-Length: 0`，头部直接转发、
+  正文留在 socket 里，后端要么解析错要么挂住。新增 `_chunked_body_complete()`
+  按分块协议读到结束块（支持 `5;ext=1` 这种带扩展参数的长度行）。
+- **`Expect: 100-continue`** 会双向死等：客户端等 100 才发正文，代理等正文才继续。
+  现在代理先替后端回 `HTTP/1.1 100 Continue`，并在转发时**摘掉 Expect 头**
+  （否则后端会再发一次 100，客户端收到两个 informational 响应）。
+- 非法 `Content-Length` 明确回 400，而不是抛异常静默断连。
+
+**未采纳**：报告建议「优先使用成熟反向代理组件」。引入 nginx/caddy 依赖
+会改变分发方式与部署文档，超出本次修复范围；这里把自研 relay 的边界补齐。
+
+**验证**：新增 `tests/test_restart_handoff_proxy.py`（22 项），
+用假 socket 驱动 handler，不开真实监听端口、不起子进程。
+全量 `764 passed, 64 failed`，无新增失败。

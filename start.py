@@ -833,60 +833,213 @@ def _inspect_headless_or_windowless_browser(port: int, timeout: float = 0.5) -> 
     return None
 
 
+def _handoff_int_env(name: str, default: int) -> int:
+    """读取正整数环境变量；缺失 / 非法 / 非正数一律回落到默认值。"""
+    raw = str(os.getenv(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+class _HandoffBufferBudget:
+    """进程级的「所有连接合计已缓冲字节数」预算（修复 S5）。
+
+    单连接 64MB 上限乘以无限并发 = 无限内存。这里给总量也加一道闸。
+    """
+
+    def __init__(self, max_bytes: int):
+        self._max_bytes = int(max_bytes)
+        self._used = 0
+        self._lock = threading.Lock()
+
+    @property
+    def max_bytes(self) -> int:
+        return self._max_bytes
+
+    @property
+    def used(self) -> int:
+        with self._lock:
+            return self._used
+
+    def reserve(self, delta: int) -> bool:
+        if delta <= 0:
+            return True
+        with self._lock:
+            if self._used + delta > self._max_bytes:
+                return False
+            self._used += delta
+            return True
+
+    def release(self, delta: int) -> None:
+        if delta <= 0:
+            return
+        with self._lock:
+            self._used = max(0, self._used - delta)
+
+
 class _RestartHandoffProxy(socketserver.ThreadingTCPServer):
     """Small TCP relay which buffers a request while the child service restarts."""
 
     allow_reuse_address = True
     daemon_threads = True
+    # 修复 S5：内核 accept 队列也得有边界，否则连接会在 TCP 层无限堆积
+    request_queue_size = 128
 
     def __init__(self, host: str, port: int, backend_port: int):
         self.backend_port = int(backend_port)
+        # 修复 S5：并发连接数与总缓冲字节数两级预算
+        self.max_connections = _handoff_int_env("RESTART_PROXY_MAX_CONNECTIONS", 32)
+        self.connection_slots = threading.BoundedSemaphore(self.max_connections)
+        self.buffer_budget = _HandoffBufferBudget(
+            _handoff_int_env("RESTART_PROXY_MAX_TOTAL_BUFFER_MB", 128) * 1024 * 1024
+        )
         super().__init__((host, int(port)), _RestartHandoffProxyHandler)
 
 
 class _RestartHandoffProxyHandler(socketserver.BaseRequestHandler):
     _BUFFER_SIZE = 64 * 1024
-    _MAX_REQUEST_BYTES = 64 * 1024 * 1024
+    #: 单个请求允许缓冲的最大字节数（修复 S5：原为固定 64MB，且没有总量约束）
+    _MAX_REQUEST_BYTES = 16 * 1024 * 1024
+    #: 等待并发槽位的时间；超时即判定过载
+    _SLOT_ACQUIRE_TIMEOUT = 0.5
+
+    # -- 预算辅助（服务器对象缺失这些属性时退化为「不限制」，便于单测）--
+    def _budget(self):
+        return getattr(self.server, "buffer_budget", None)
+
+    def _max_request_bytes(self) -> int:
+        return _handoff_int_env("RESTART_PROXY_MAX_REQUEST_MB", 16) * 1024 * 1024
+
+    def _send_simple_response(self, status_line: str, body: bytes) -> None:
+        try:
+            self.request.sendall(
+                f"HTTP/1.1 {status_line}\r\n"
+                f"Content-Length: {len(body)}\r\n"
+                "Content-Type: text/plain; charset=utf-8\r\n"
+                "Connection: close\r\n\r\n".encode("iso-8859-1")
+                + body
+            )
+        except OSError:
+            pass
 
     def handle(self) -> None:
+        slots = getattr(self.server, "connection_slots", None)
+        if slots is not None and not slots.acquire(timeout=self._SLOT_ACQUIRE_TIMEOUT):
+            # 修复 S5：过载时明确回 503，而不是无限制地再开一个线程去缓冲 64MB
+            self._send_simple_response("503 Service Unavailable", b"handoff_proxy_busy")
+            return
+        self._reserved_bytes = 0
         try:
             payload = self._read_request()
             if payload:
                 self._forward_when_backend_ready(payload)
         except Exception:
             return
+        finally:
+            # 必须归还**实际预留**的字节数，而不是 len(payload)：
+            # 读取失败时 payload 为空但预算已经被占用，否则会永久泄漏额度。
+            budget = self._budget()
+            if budget is not None and self._reserved_bytes:
+                budget.release(self._reserved_bytes)
+                self._reserved_bytes = 0
+            if slots is not None:
+                slots.release()
+
+    def _recv_into(self, payload: bytearray, limit: int) -> bool:
+        """读一段数据并记账。返回 False 表示对端关闭或超出预算。"""
+        chunk = self.request.recv(self._BUFFER_SIZE)
+        if not chunk:
+            return False
+        payload.extend(chunk)
+        if len(payload) > limit:
+            return False
+        budget = self._budget()
+        if budget is not None:
+            if not budget.reserve(len(chunk)):
+                return False
+            self._reserved_bytes = getattr(self, "_reserved_bytes", 0) + len(chunk)
+        return True
+
+    @staticmethod
+    def _header_value(headers: str, name: str) -> str:
+        needle = f"{name.lower()}:"
+        for line in headers.split("\r\n")[1:]:
+            if line.lower().startswith(needle):
+                return line.split(":", 1)[1].strip()
+        return ""
+
+    @staticmethod
+    def _chunked_body_complete(body: bytes) -> bool:
+        """判断 chunked 请求体是否已收完（读到长度为 0 的结束块）。"""
+        offset = 0
+        while True:
+            line_end = body.find(b"\r\n", offset)
+            if line_end < 0:
+                return False
+            size_token = body[offset:line_end].split(b";", 1)[0].strip()
+            try:
+                size = int(size_token, 16)
+            except ValueError:
+                # 非法分块长度：当作「还没读完」，交给上层的体积/超时预算兜底
+                return False
+            if size == 0:
+                # 结束块之后还有可选的 trailer，以空行收尾
+                return body.find(b"\r\n\r\n", line_end) >= 0 or body.endswith(b"\r\n\r\n")
+            offset = line_end + 2 + size + 2
+            if offset > len(body):
+                return False
 
     def _read_request(self) -> bytes:
         self.request.settimeout(60.0)
+        limit = self._max_request_bytes()
         payload = bytearray()
         while b"\r\n\r\n" not in payload:
-            chunk = self.request.recv(self._BUFFER_SIZE)
-            if not chunk:
-                return b""
-            payload.extend(chunk)
-            if len(payload) > self._MAX_REQUEST_BYTES:
+            if not self._recv_into(payload, limit):
                 return b""
 
         header_end = payload.find(b"\r\n\r\n") + 4
         headers = bytes(payload[:header_end]).decode("iso-8859-1", errors="replace")
-        content_length = 0
-        for line in headers.split("\r\n")[1:]:
-            if line.lower().startswith("content-length:"):
-                content_length = max(0, int(line.split(":", 1)[1].strip()))
-                break
-        target_size = header_end + content_length
-        if target_size > self._MAX_REQUEST_BYTES:
-            return b""
-        while len(payload) < target_size:
-            chunk = self.request.recv(min(self._BUFFER_SIZE, target_size - len(payload)))
-            if not chunk:
+
+        # 修复 S5：原实现只认 Content-Length。带 Expect: 100-continue 的客户端
+        # 会一直等 100 响应而不发正文，代理则一直等正文 —— 双向死等到超时。
+        if "100-continue" in self._header_value(headers, "expect").lower():
+            try:
+                self.request.sendall(b"HTTP/1.1 100 Continue\r\n\r\n")
+            except OSError:
                 return b""
-            payload.extend(chunk)
+
+        transfer_encoding = self._header_value(headers, "transfer-encoding").lower()
+        if "chunked" in transfer_encoding:
+            # 修复 S5：原实现把 chunked 请求当成「Content-Length: 0」直接转发头部，
+            # 正文留在 socket 里，后端要么解析错要么挂住。这里按分块协议读完整。
+            while not self._chunked_body_complete(bytes(payload[header_end:])):
+                if not self._recv_into(payload, limit):
+                    return b""
+        else:
+            raw_length = self._header_value(headers, "content-length")
+            try:
+                content_length = max(0, int(raw_length)) if raw_length else 0
+            except ValueError:
+                self._send_simple_response("400 Bad Request", b"invalid_content_length")
+                return b""
+            target_size = header_end + content_length
+            if target_size > limit:
+                self._send_simple_response("413 Payload Too Large", b"request_too_large")
+                return b""
+            while len(payload) < target_size:
+                if not self._recv_into(payload, limit):
+                    return b""
         # One request per client connection makes the restart boundary explicit
         # and lets us safely replay a request that arrived while draining.
+        # 修复 S5：Expect 头也要摘掉——100 Continue 已经由代理答复过了，
+        # 原样转发会让后端再发一次 100，客户端收到两个 informational 响应。
         header_lines = [
             line for line in headers.split("\r\n")
-            if not line.lower().startswith("connection:")
+            if not line.lower().startswith(("connection:", "expect:"))
         ]
         rewritten_headers = "\r\n".join(header_lines).rstrip("\r\n") + "\r\nConnection: close\r\n\r\n"
         return rewritten_headers.encode("iso-8859-1") + bytes(payload[header_end:])
