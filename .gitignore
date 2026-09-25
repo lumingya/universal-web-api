@@ -142,6 +142,7 @@ tests/*
 !tests/test_operations_studio_ui.py
 !tests/test_preset_transfer.py
 !tests/test_proxy_media_fallback.py
+!tests/test_python_min_version.py
 !tests/test_request_lifecycle_safety.py
 !tests/test_site_discovery.py
 !tests/test_site_studio_ui.py

@@ -19,8 +19,10 @@ set "SCRIPT_DIR="
 REM Prefer the Python launcher when an interpreter is already available.
 REM This avoids CMD argument parsing differences while keeping the legacy bootstrap
 REM below as a fallback for machines that still need Python discovery or install.
+REM The fast path is only taken for Python 3.10+; older interpreters fall through to
+REM the bootstrap below, which reports the version and offers the fixed install.
 if exist "start.py" (
-    python -c "import sys" >nul 2>&1
+    python -c "import sys; sys.exit(sys.version_info < (3, 10))" >nul 2>&1
     if not errorlevel 1 (
         python start.py %*
         exit /b !errorlevel!
@@ -221,7 +223,7 @@ if not defined PYTHON_VERSION (
     goto :CHECK_PYTHON_VERSION
 )
 
-REM 检查版本是否满足要求 (>= 3.8)
+REM 检查版本是否满足要求 (>= 3.10，与 start.py 的 MIN_PYTHON 保持一致)
 set "PY_MAJOR="
 set "PY_MINOR="
 for /f "tokens=1,2 delims=." %%a in ("!PYTHON_VERSION!") do (
@@ -232,14 +234,14 @@ for /f "tokens=1,2 delims=." %%a in ("!PYTHON_VERSION!") do (
 set "VERSION_OK=0"
 if defined PY_MAJOR if defined PY_MINOR (
     if !PY_MAJOR! gtr 3 set "VERSION_OK=1"
-    if !PY_MAJOR! equ 3 if !PY_MINOR! geq 8 set "VERSION_OK=1"
+    if !PY_MAJOR! equ 3 if !PY_MINOR! geq 10 set "VERSION_OK=1"
 )
 
 if "!VERSION_OK!"=="0" (
     echo [ERROR] Python 版本过低
     echo.
     echo    当前版本: Python !PYTHON_VERSION!
-    echo    最低要求: Python 3.8+
+    echo    最低要求: Python 3.10+
     echo.
     echo    建议安装固定版本 Python !PYTHON_INSTALL_VERSION!
     echo.

@@ -269,6 +269,11 @@ def _python_install_url() -> str:
     return f"https://www.python.org/ftp/python/{version}/python-{version}-amd64.exe"
 
 
+# 最低支持的 Python 版本（与 README、start.bat 保持一致；CI 最低版本矩阵也以此为准）
+MIN_PYTHON = (3, 10)
+MIN_PYTHON_TEXT = ".".join(str(part) for part in MIN_PYTHON)
+
+
 def _is_windows_store_python() -> bool:
     if not sys.platform.startswith("win"):
         return False
@@ -281,7 +286,7 @@ def _python_version_ok(python_path: Path) -> bool:
             [
                 str(python_path),
                 "-c",
-                "import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)",
+                f"import sys; raise SystemExit(0 if sys.version_info >= {MIN_PYTHON!r} else 1)",
             ],
             check=False,
             capture_output=True,
@@ -410,10 +415,10 @@ def _check_python_version() -> None:
         if _offer_python_install("检测到 Windows Store Python 占位符"):
             return
         raise RuntimeError("检测到 Windows Store Python 占位符，请关闭应用执行别名或安装完整版 Python")
-    if sys.version_info < (3, 8):
-        if _offer_python_install(f"Python 版本过低: {version}，最低要求 Python 3.8+"):
+    if sys.version_info < MIN_PYTHON:
+        if _offer_python_install(f"Python 版本过低: {version}，最低要求 Python {MIN_PYTHON_TEXT}+"):
             return
-        raise RuntimeError(f"Python 版本过低: {version}，最低要求 Python 3.8+")
+        raise RuntimeError(f"Python 版本过低: {version}，最低要求 Python {MIN_PYTHON_TEXT}+")
     _log(f"[OK] Python {version}")
     _log(f"    路径: {sys.executable}")
     _log()
@@ -1488,7 +1493,11 @@ def _launch_browser_if_needed() -> None:
         time.sleep(1.0)
 
     port_procs = _get_port_processes(browser_port)
-    proc_hint = f"（当前该端口被以下进程占用: {', '.join(f'{p['name']}(PID:{p['pid']})' for p in port_procs)}）" if port_procs else ""
+    proc_hint = ""
+    if port_procs:
+        # 注意：不要在 f-string 里嵌套同种引号（PEP 701 语法仅 3.12+ 可解析，会让 3.10/3.11 直接 SyntaxError）
+        proc_desc = ", ".join(f"{p['name']}(PID:{p['pid']})" for p in port_procs)
+        proc_hint = f"（当前该端口被以下进程占用: {proc_desc}）"
     raise RuntimeError(
         f"未检测到远程调试端口 {browser_port}{proc_hint}，为避免服务误连到错误浏览器，本次启动已中止。"
     )

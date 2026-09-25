@@ -15,6 +15,11 @@ import importlib
 rm_module = importlib.import_module('app.services.request_manager')
 from app.services.request_manager import RequestContext, RequestStatus
 
+try:  # Python 3.11+ 内置；3.10 用 anyio 依赖的 exceptiongroup 回移包（R0-2：最低支持 3.10）
+    _BaseExceptionGroup = BaseExceptionGroup
+except NameError:  # pragma: no cover - 仅 3.10
+    from exceptiongroup import BaseExceptionGroup as _BaseExceptionGroup
+
 
 class ConnectedRequest:
     async def is_disconnected(self):
@@ -129,7 +134,7 @@ def test_asgi_send_interruption_closes_suspended_generator_before_return(monkeyp
         response = RequestStreamingResponse(iterator, media_type='text/event-stream')
         if failure == 'send_error':
             # Starlette <0.37 把发送异常包进 ExceptionGroup；新版（collapsing task group）直接抛原异常。
-            with pytest.raises((BaseExceptionGroup, OSError)):
+            with pytest.raises((_BaseExceptionGroup, OSError)):
                 await response({'type':'http','asgi':{'spec_version':'2.3'}}, receive, send)
         else:
             await response({'type':'http','asgi':{'spec_version':'2.3'}}, receive, send)
