@@ -512,6 +512,15 @@ class ChatRequest(BaseModel):
     max_tokens: Optional[int] = Field(default=None, ge=1)
     n: Optional[int] = Field(default=1, ge=1)
     response_format: Optional[dict] = Field(default=None)
+
+    @field_validator('n')
+    @classmethod
+    def validate_n(cls, value):
+        # B4：网页端一次只产出一个回复，原先接受 n>1 却只返回 1 个 choice（静默降级）。
+        # 现在明确拒绝，客户端可自行并发多次请求。
+        if value is not None and int(value) > 1:
+            raise ValueError("仅支持 n=1（网页端每次只生成一个回复；需要多个结果请并发发起多次请求）")
+        return value
     stop: Optional[Any] = Field(default=None)
     tools: Optional[list] = Field(default=None)
     tool_choice: Optional[Any] = Field(default=None)

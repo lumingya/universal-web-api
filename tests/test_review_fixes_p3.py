@@ -85,3 +85,41 @@ def test_b7_unchanged_file_served_from_cache(tmp_path, monkeypatch):
     assert loader.load_script_content(script) == "cached"
     monkeypatch.setattr(Path, "read_text", lambda *a, **k: pytest.fail("should hit cache"))
     assert loader.load_script_content(script) == "cached"
+
+
+# ---------------------------------------------------------------------------
+# B4 · n>1 明确拒绝而不是静默只回 1 个 choice
+# ---------------------------------------------------------------------------
+
+def test_b4_chat_request_rejects_n_greater_than_one():
+    from pydantic import ValidationError
+
+    from app.api.chat import ChatRequest
+
+    msgs = [{"role": "user", "content": "hi"}]
+    assert ChatRequest(messages=msgs).n == 1
+    assert ChatRequest(messages=msgs, n=1).n == 1
+    assert ChatRequest(messages=msgs, n=None).n is None
+    with pytest.raises(ValidationError) as exc:
+        ChatRequest(messages=msgs, n=3)
+    assert "n=1" in str(exc.value)
+
+
+def test_b4_api_returns_openai_style_422(monkeypatch):
+    import asyncio
+
+    import main
+    from httpx import ASGITransport, AsyncClient
+
+    for name in ("AUTH_ENABLED", "AUTH_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+
+    async def run():
+        async with AsyncClient(transport=ASGITransport(app=main.app), base_url="http://127.0.0.1:8199") as c:
+            return await c.post("/v1/chat/completions",
+                                json={"model": "x", "messages": [{"role": "user", "content": "hi"}], "n": 2})
+
+    resp = asyncio.run(run())
+    assert resp.status_code == 422
+    err = resp.json()["error"]
+    assert err["type"] == "invalid_request_error" and "n=1" in err["message"]

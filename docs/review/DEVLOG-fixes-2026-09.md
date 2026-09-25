@@ -30,7 +30,7 @@ P3 清单（顺序即执行顺序，完成一项勾一项，每项独立提交�
 
 - [x] B6 `BROWSER_CDP_RECYCLE_AFTER_REQUESTS=inf` OverflowError
 - [x] B7 脚本热加载 mtime 相同内容替换仍返回旧脚本
-- [ ] B4 `n>1` 只返回 1 个 choice
+- [x] B4 `n>1` 只返回 1 个 choice
 - [ ] H7 未导入的类型注解（F821）
 - [ ] H8 chat.py 重复定义的 Arena 辅助函数
 - [ ] H10 stream_monitor 重复方法
@@ -438,3 +438,10 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
   `(st_mtime_ns, st_ctime_ns, st_size, st_ino)`（原子替换会换 inode、原地改写会动 ctime/size）；
   另外 mtime 距今 < 2s 的文件不信任缓存直接重读（racy-git 做法，应对粗粒度时间戳文件系统）。
 - 测试：p3 新增 3 项（同 mtime 不同长度、同 mtime 同长度原子替换、未变化命中缓存）；旧代码下前两项失败（stash 验证）。
+
+### B4 n>1 静默降级 ✅（P3）
+
+- 决策：**拒绝**而非实现（网页端一次只生成一个回复，实现 n>1 需并发占多个标签页，代价高且结果不同源）。
+- `app/api/chat.py::ChatRequest` 新增 `validate_n`：`n>1` → ValidationError「仅支持 n=1…」，经 main.py 现有
+  RequestValidationError 处理器返回 **422 + OpenAI 风格 `invalid_request_error`**（与其他参数校验失败一致）；n 缺省/1/null 行为不变。
+- 测试：p3 新增 2 项（模型层 + ASGI 端到端）。
