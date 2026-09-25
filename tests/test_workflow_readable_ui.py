@@ -6,7 +6,13 @@ import json
 import re
 from pathlib import Path
 import pytest
-from playwright.sync_api import sync_playwright, expect
+
+pytest.importorskip("playwright.sync_api")
+from playwright.sync_api import sync_playwright, expect  # noqa: E402
+
+from tests._playwright import launch_chromium  # noqa: E402
+
+pytestmark = pytest.mark.browser
 from app.core.workflow.preview import preview_workflow
 from app.core.workflow.flow_runtime import validate_workflow
 
@@ -27,7 +33,7 @@ FLOW=[
 @pytest.fixture
 def page():
  with sync_playwright() as p:
-  browser=p.chromium.launch()
+  browser=launch_chromium(p.chromium)
   page=browser.new_page(viewport={'width':1320,'height':1040})
   page.set_content('<html><head><meta charset="utf-8"></head><body style="margin:24px;background:#f7f3ea"><button id="old">原按钮</button><button id="new">新按钮</button><div id="studio" style="max-width:1160px;margin:20px auto"></div></body></html>')
   errors=[];page.on('pageerror',lambda e:errors.append(str(e)))

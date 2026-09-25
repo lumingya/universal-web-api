@@ -36,13 +36,16 @@ def test_atomic_input_does_not_hide_element_failure(raises):
 
 @pytest.fixture(scope='module')
 def browser():
+    pytest.importorskip('playwright.sync_api')
     from playwright.sync_api import sync_playwright
+    from tests._playwright import launch_chromium
     with sync_playwright() as p:
-        browser = p.chromium.launch()
+        browser = launch_chromium(p.chromium)
         yield browser
         browser.close()
 
 
+@pytest.mark.browser
 @pytest.mark.parametrize('mode', ['overwrite', 'append'])
 @pytest.mark.parametrize('selector', ['textarea', '[contenteditable]'])
 def test_atomic_input_really_writes_unicode_in_browser(browser, selector, mode):

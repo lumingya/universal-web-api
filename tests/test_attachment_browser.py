@@ -1,5 +1,6 @@
 """Optional real Chromium tests on a local synthetic composer (no AI/login/network).
-Install: pip install playwright; python -m playwright install --with-deps chromium
+Install: pip install playwright (uses the local Chrome/Edge when Playwright's own Chromium is absent,
+see tests/_playwright.py; or: python -m playwright install --with-deps chromium)
 """
 from pathlib import Path
 
@@ -9,6 +10,9 @@ playwright = pytest.importorskip("playwright.sync_api")
 from app.core.config import WorkflowError
 from app.core.workflow.attachment_monitor import AttachmentMonitor
 from app.core.workflow.attachment_upload import AttachmentUploadCoordinator
+from tests._playwright import launch_chromium
+
+pytestmark = pytest.mark.browser
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -17,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def page():
     with playwright.sync_playwright() as p:
         try:
-            browser = p.chromium.launch(headless=True, args=["--no-sandbox"])
+            browser = launch_chromium(p.chromium, headless=True, args=["--no-sandbox"])
         except playwright.Error as exc:
             pytest.skip(f"Chromium unavailable: {str(exc).splitlines()[0]}")
         page = browser.new_page(viewport={"width": 1280, "height": 1000})

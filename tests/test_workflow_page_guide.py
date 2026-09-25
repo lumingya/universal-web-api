@@ -6,7 +6,13 @@ import json
 from pathlib import Path
 
 import pytest
-from playwright.sync_api import sync_playwright, expect
+
+pytest.importorskip("playwright.sync_api")
+from playwright.sync_api import sync_playwright, expect  # noqa: E402
+
+from tests._playwright import launch_chromium  # noqa: E402
+
+pytestmark = pytest.mark.browser
 
 ROOT = Path(__file__).resolve().parents[1]
 HTML = '''<!doctype html><html><head><meta charset="utf-8"><style>
@@ -33,7 +39,7 @@ def bundle():
 @pytest.fixture
 def page():
     with sync_playwright() as p:
-        browser = p.chromium.launch()
+        browser = launch_chromium(p.chromium)
         page = browser.new_page(viewport={'width':1320,'height':1080})
         page.route('**/*',lambda route:route.fulfill(content_type='text/html',body=HTML))
         page.goto('https://example.com/workflow-demo')

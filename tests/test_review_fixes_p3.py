@@ -396,6 +396,7 @@ def test_h3_no_tracked_file_is_ignored():
 
 
 def test_h3_test_whitelist_entries_exist():
+    # R0-5 起 tests/ 改为黑名单（默认全部跟踪），不再有白名单；保留本测试以防有人重新加回失效条目
     root = Path(__file__).resolve().parents[1]
     text = (root / ".gitignore").read_text(encoding="utf-8")
     for line in text.splitlines():

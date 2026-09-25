@@ -1,0 +1,21 @@
+# 仅存放工具配置。本项目不是可安装的 Python 包，运行方式见 README 与 start.py。
+# 最低支持的 Python 版本以 start.py 中的 MIN_PYTHON 为准（当前为 3.10）。
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# 让 `pytest`（不只是 `python -m pytest`）也能导入项目根下的 app/ 与 tests/ 辅助模块
+pythonpath = ["."]
+markers = [
+    "browser: Playwright UI 回归，只加载本地合成页面（没装 playwright 或没有可用 Chromium 时自动 skip；可用 -m \"not browser\" 排除）",
+    "real_browser: 用 DrissionPage 启动临时 Chromium 的真实浏览器测试（临时配置目录、随机端口；没有 Chromium 时自动 skip）",
+    "local_fixture: 依赖未随仓库分发的本地资源，由 tests/conftest.py 自动识别，缺失时自动 skip",
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+extend-exclude = ["venv", "scratch", "tmp", "temp", "chrome_profile", "custom_scripts", "js", "logs"]
+
+[tool.ruff.lint]
+# 最小基线：只启用“出现即是 bug”的规则（语法错误、未定义名称、比较/断言误用等），风格类规则暂不启用。
+select = ["E9", "F63", "F7", "F82"]

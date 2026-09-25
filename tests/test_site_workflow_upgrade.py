@@ -117,9 +117,11 @@ def test_deepseek_single_main_preset_keeps_normal_settings_and_only_four_actions
 
 @pytest.fixture
 def ui_page():
+    pytest.importorskip("playwright.sync_api")
     from playwright.sync_api import sync_playwright
+    from tests._playwright import launch_chromium
     with sync_playwright() as p:
-        browser=p.chromium.launch()
+        browser=launch_chromium(p.chromium)
         page=browser.new_page()
         page.set_default_timeout(1000)
         yield page
@@ -160,6 +162,7 @@ def run_on_page(page,preset):
     return flow
 
 
+@pytest.mark.browser
 @pytest.mark.parametrize('matching,expanded',[(True,False),(False,False),(False,True)])
 def test_gemini_existing_xpath_targets_and_actual_dom_state_branch(ui_page,matching,expanded):
     preset=copy.deepcopy(AFTER[GEMINI]['presets']['3.7flash'])
@@ -185,6 +188,7 @@ def test_gemini_existing_xpath_targets_and_actual_dom_state_branch(ui_page,match
     assert clicks.count('choice')==(0 if matching else 1)
 
 
+@pytest.mark.browser
 @pytest.mark.parametrize('selected',[True,False])
 def test_deepseek_main_never_changes_page_model_and_sends_once(ui_page,selected):
     preset=AFTER[DEEPSEEK]['presets']['主预设']

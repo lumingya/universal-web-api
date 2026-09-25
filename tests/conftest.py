@@ -157,7 +157,16 @@ def pytest_configure(config: pytest.Config) -> None:
     )
 
 
+# R0-5：使用这些夹具的测试会用 DrissionPage 启动临时 Chromium（tests/_real_browser.py），
+# 统一打上 real_browser 标记，便于 `-m "not real_browser"` 快速排除；没有 Chromium 时夹具自己会 skip。
+REAL_BROWSER_FIXTURES = frozenset({"real_page", "headed_page"})
+
+
 def pytest_collection_modifyitems(config: pytest.Config, items) -> None:
+    for item in items:
+        if REAL_BROWSER_FIXTURES.intersection(getattr(item, "fixturenames", ())):
+            item.add_marker(pytest.mark.real_browser)
+
     availability: Dict[str, Optional[bool]] = {}
     for item in items:
         markers = _item_markers(item)
