@@ -6,10 +6,10 @@
 
 ## 当前状态（随时更新）
 
-- 2026-09-26：按用户指示，已把 `fix/review-p1-p2-b` 合并进 main（`29d9685`）。非浏览器测试 691 passed / 63 skipped / 0 failed。**这是我最后一次推 main**，此后 main 冻结。
-- 已记录用户决策（§1）。
-- 已评估本地环境桥接方案 Portal（§2）。**正在等用户决定**：是否在本机安装 Portal，并把 MCP URL 发给我。
-- 下一步：用户确认环境后，按 §3 的顺序从 R0-2 开始。
+- 2026-09-26：P3 已合并进 main（`29d9685`），此后 main 冻结，只推本分支。
+- **本地环境已接入（Portal）**，约定见 §2.8。沙盒负责改代码并推送本分支；用户机器上的 worktree 执行 `git pull` 后跑重型验证。
+- ✅ R0-2 完成，已在实机 3.10 与 3.13 上验证（见 §4）。
+- ▶ 进行中：R0-5（测试入库）。已从用户本地找回 12 个被白名单挡住的测试文件（N3），放在沙盒 `/tmp/recovered`，这个位置不持久，丢失可从用户主工作区 `tests/` 重新下载。
 
 ## 1. 用户决策（2026-09-26，必须遵守）
 
@@ -105,12 +105,30 @@ Portal 把用户本机的**一个文件夹**发布成公网 MCP 端点：`https:
    - 「复制 URL」，把 URL 发给我。
 5. `.portal/` 目录由我在那份克隆的 `.git/info/exclude` 里忽略，不改仓库里的 `.gitignore`。
 
+### 2.8 实际接入情况（2026-09-26，重启或压缩后先看这里）
+
+- Portal 工作区 = 用户的**日常工作副本**：`C:\Users\QIU\Desktop\useful\projects\普遍反代\新测试版`，停在 main，服务正在运行（APP 8199，Chrome 9222，使用 `chrome_profile/`）。**不要改动它的工作区文件，不要切分支，不要占用或重启 8199/9222。**
+  - 已做的唯一改动：在 `.git/info/exclude` 里加了 `/.portal/`。
+  - 另外一次 `git fetch --prune` 清掉了过期的远程跟踪引用 `origin/pr/18`（无害）。以后 fetch 不加 `--prune`。
+- 我的工作目录（都在已被忽略的 `scratch/` 下，可整体删除）：
+  - `scratch/arena-wt`：`git worktree`，分支 `dev/roadmap-phase0-2`，只执行 `git pull --ff-only`，不在本机提交。
+  - `scratch/arena-venv313` 与 `scratch/arena-venv310`：独立 venv，已装 requirements、requirements-dev、ruff。
+  - `scratch/arena-tools/run-tests.ps1 -Py 310|313 [-Target tests/x.py]`：跑非浏览器测试子集。
+  - 清理方法：`git worktree remove scratch/arena-wt`，然后删除上面这些目录。
+- 本机环境：Win11 26200，PowerShell 5.1，非管理员账户 QIU；Python 3.13.6（默认）、3.10.2（`py -3.10`）、3.12.12（uv）；Node 22.18；Chrome 153；C 盘剩余 18.7GB，D 盘剩余 73GB。
+- 注意事项：
+  - PATH 里的 `bash` 是 WSL 的，但没有安装发行版，不可用。只用 PowerShell 或 cmd。
+  - PowerShell 下 `git ... 2>&1` 会产生 NativeCommandError 噪音，改用 `cmd /c "git ... 2>&1"`。
+  - 用 `.bat` 做 python 桩时，不加 `call` 调用不会返回调用方；要编译 exe 桩（`Add-Type -OutputType ConsoleApplication`）。
+- 协作规则文件 `agent_collaboration_rules.md` 是 Codex（后端）与 Antigravity（前端）之间的 `agent-bridge` 协议。项目内的 `.agent_bridge.json` 显示两者自 2026-08 起空闲，没有未读消息。**不要运行 `agent-bridge --read-msgs --mark-read`**，以免把发给它们的消息标成已读。
+- Portal 客户端：沙盒里的 `~/tools/portal.py`。URL 只存放在 `~/.cache/portal/url`，这个目录不进快照；重启后需要用户重新提供 URL。
+
 ## 3. 任务清单（R 编号见路线图 §6）
 
 ### 阶段 0：止血与发布工程
 
 - [x] **R0-1** 合并 `fix/review-p1-p2-b` 进 main（`29d9685`）。删除该分支暂缓。
-- [ ] **R0-2** N1：改写 `start.py` 里只有 3.12+ 能解析的 `proc_hint` f-string；最低版本统一为 3.10，包括 start.bat 快速路径的版本检查、start.bat 回退路径的检查、start.py 自检，以及 README 和 requirements 里的注释。
+- [x] **R0-2** N1 修复，最低 Python 统一为 3.10（`ef423b6`、`85abd38`）。实机 3.10.2 结果：693 passed / 72 skipped；3.13.6 结果：702 passed / 63 skipped。
 - [ ] **R0-3** CI（GitHub Actions）——**暂缓**，等用户确认。
 - [ ] **R0-4** 自动发包，以及删除 `3.7.5` 标签——**暂缓**，等用户确认。
 - [ ] **R0-5** 测试入库：`.gitignore` 的 tests 规则从白名单改为黑名单，补交遗漏的测试；新增 `pyproject.toml`，写入 pytest 配置和 markers。
@@ -147,3 +165,17 @@ Portal 把用户本机的**一个文件夹**发布成公网 MCP 端点：`https:
 - 用户回答了 5 个决策问题，已记入 §1。
 - 评估了 Portal，结论记入 §2：可行，推荐 VS Code 扩展加 ngrok 预留域名，采用混合工作流。
 - 从 main 新建本分支，提交本日志。
+- **R0-2 完成**：
+  - `start.py` 的 `proc_hint` 改为不嵌套同种引号的写法；新增 `MIN_PYTHON=(3,10)`，两处自检从 3.8 提升到 3.10。
+  - `start.bat` 快速路径增加 `sys.exit(sys.version_info < (3, 10))` 检查；回退路径的最低版本从 3.8 改为 3.10。
+  - 新增 `tests/test_python_min_version.py`：
+    - 3.10/3.11 上直接 compile；
+    - 3.12+ 上先用 `ast.parse(feature_version)`，再用 tokenize 检测 PEP 701 写法（实测 feature_version 查不出这种写法）；
+    - 同时校验 start.py 与 start.bat 的最低版本一致。
+  - 实机 3.10 跑测试时发现 **29 个测试模块导入失败**：`app/models/schemas.py` 从 typing 导入了 3.11+ 才有的 `NotRequired`。已改为回退到 `typing_extensions`，并写入 requirements（仅 <3.11）。vermin 全仓扫描确认这是唯一一处 3.11+ 标准库依赖。
+  - `tests/test_cancel_storm_regressions.py` 在 3.10 上改用 `exceptiongroup` 回移包。
+  - 用真实 cmd 验证 start.bat 快速路径：3.10 和 3.13 走快速路径；旧版本（exe 桩返回 1）和没有 Python 时都回落到旧流程。
+  - ruff 的 py38 目标下 E9 检查通过：旧版 Python 执行 start.py 时能看到友好提示，而不是 SyntaxError。
+  - 遗留问题：ruff 报 8 个 F811（重复定义），与版本无关，留给 CI/lint 基线处理。
+- 本地环境接入：握手成功，Portal 1.0.0 提供 14 个工具。建立了 worktree 和两个 venv，详见 §2.8。
+
