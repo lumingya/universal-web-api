@@ -128,7 +128,8 @@ def test_asgi_send_interruption_closes_suspended_generator_before_return(monkeyp
             return {'type':'http.disconnect'}
         response = RequestStreamingResponse(iterator, media_type='text/event-stream')
         if failure == 'send_error':
-            with pytest.raises(BaseExceptionGroup):
+            # Starlette <0.37 把发送异常包进 ExceptionGroup；新版（collapsing task group）直接抛原异常。
+            with pytest.raises((BaseExceptionGroup, OSError)):
                 await response({'type':'http','asgi':{'spec_version':'2.3'}}, receive, send)
         else:
             await response({'type':'http','asgi':{'spec_version':'2.3'}}, receive, send)

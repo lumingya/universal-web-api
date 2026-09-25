@@ -18,7 +18,7 @@
 
 <br>
 
-当前版本：**2.9.8**（以 [`VERSION`](./VERSION) 和 [`CHANGELOG_CURRENT.md`](./CHANGELOG_CURRENT.md) 为准）
+当前版本：**3.0.0**（以 [`VERSION`](./VERSION) 为准，更新内容见 [`CHANGELOG-3.0.0.md`](./CHANGELOG-3.0.0.md)）
 
 **Universal Web API** 是一个专为开发者设计的**本地 API 桥接调试工具**。它能够将您在本地浏览器中已登录并正常使用的 AI 网页端服务（如 ChatGPT, DeepSeek, Claude, Gemini 等）转换为本地标准的 OpenAI/Anthropic 兼容接口。
 

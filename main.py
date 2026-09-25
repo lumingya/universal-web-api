@@ -20,7 +20,7 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 from app import __version__ as APP_VERSION
 from app.core import get_browser
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -751,7 +751,16 @@ async def dashboard():
 
 
 @app.get("/api/startup/controlled-browser-guide-data", include_in_schema=False)
-async def controlled_browser_guide_data():
+async def controlled_browser_guide_data(request: Request):
+    # S7：站点目录只给本机直连（受控浏览器引导页就在本机打开）或带有效令牌的调用者；
+    # 前端（引导页 / 教程页）在请求失败时会回落到内置默认站点列表。
+    from app.utils.diagnostics_access import request_is_privileged
+
+    if not request_is_privileged(request):
+        return JSONResponse(
+            status_code=403,
+            content={"error": {"message": "该接口仅限本机或已认证访问", "type": "permission_error"}},
+        )
     try:
         return JSONResponse(_build_controlled_browser_guide_data())
     except Exception as e:

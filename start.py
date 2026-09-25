@@ -27,6 +27,7 @@ import time
 import urllib.request
 import venv
 from pathlib import Path
+from typing import Any, Optional
 from urllib.parse import urlsplit, urlunsplit
 
 

@@ -13,6 +13,36 @@
   - S6：媒体鉴权支持 `?token=` 查询参数，方便前端 `<img src>` 携带凭据。
 - 完整测试：全部通过，含新增 118 项回归测试全部通过。
 
+> **2026-09-26 合并记录**：`fix/review-p1-p2-b`（含 P3 16/17 项）已按用户指示合并进 `main`；
+> 唯一冲突为本日志，已保留双方内容。合并后非浏览器测试 691 passed / 63 skipped / 0 failed。
+> 剩余 H4（换行符统一）转入路线图阶段 0（R0-6），后续进度见 `docs/roadmap/DEVLOG-phase0-2.md`。
+
+## 🔜 第三阶段：P3（2026-09-25 用户要求继续）
+
+**用户已批准 P2 的三项取舍**：S4 未强制令牌（严格本机直连仍可用）、S6 媒体鉴权默认关闭、
+T1 以 skip + `local_fixture` 标记代替恢复本地文件。原则：**不要把所有接口都改成必须带令牌**，
+否则大量第三方工具不可用——P3 中涉及鉴权的改动（S7）同样遵循“本机/已认证可见详情，其余最小化”。
+
+P3 清单（顺序即执行顺序，完成一项勾一项，每项独立提交）：
+
+- [x] B6 `BROWSER_CDP_RECYCLE_AFTER_REQUESTS=inf` OverflowError
+- [x] B7 脚本热加载 mtime 相同内容替换仍返回旧脚本
+- [x] B4 `n>1` 只返回 1 个 choice
+- [x] H7 未导入的类型注解（F821）
+- [x] H8 chat.py 重复定义的 Arena 辅助函数
+- [x] H10 stream_monitor 重复方法
+- [x] H13 未使用的 command_engine_storage mixin
+- [x] T2 requirements-dev 缺 httpx
+- [x] S14 遗留教程搜索框 innerHTML
+- [x] S7 公开引导/健康接口信息最小化
+- [x] H14 站点/完整备份导入无大小上限
+- [x] H2 README 版本与 CHANGELOG 链接
+- [x] H3 .gitignore 规则清理
+- [x] H11 受跟踪配置中的具体 Arena 会话 URL
+- [x] H5 重复/超大图片资源
+- [x] H6 依赖升级计划（只出计划与约束调整，不做大版本跳跃）
+- [ ] H4 换行符统一（放最后，单独提交，降低与 main 合并冲突）
+
 ## 0. 恢复指引（上下文丢失 / 沙盒重启后先看这里）
 
 > ⚠️ **分支约定（2026-09-25 用户确认）**：发现另一会话在并行往 `main` 推同一批修复（`c8006cd`、`06f8103`…）。
@@ -399,3 +429,130 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - **S4 云元数据域名黑名单**：在 `app/api/browser_routes.py` 的 `_valid_web_url` 中补充 `_METADATA_HOSTS`（`metadata.google.internal`、`instance-data` 等）与内部后缀（`.local`、`.internal`、`.lan`、`.home.arpa`），防止云端元数据通过域名绕过。
 - **S6 媒体访问 `?token=` 支持**：在 `app/utils/media_access.py` 与 `main.py` 中补充对 URL 查询参数 `?token=` 的凭据提取，兼容第三方聊天客户端中无法自定义 Header 的 `<img src>` 标签。
 - **单测隔离加固**：在 `tests/test_review_fixes_p1.py` 中对 CORS 拦截测试增加了 monkeypatch 隔离，防止本地真实 `.env` 干扰测试结果。全量 118 项修复回归测试 100% 通过。
+
+### B6 非有限数值配置 OverflowError ✅（P3）
+
+- `app/core/tab_pool_parts/idle_maintenance.py::_env_float`：`math.isfinite` 校验，inf/-inf/nan/1e400 → 警告并用默认值（禁用仍用 0）；
+  新增 `_env_int` 包装，`BROWSER_CDP_RECYCLE_AFTER_REQUESTS` / `_DOM_NODES` 改用它。
+- 测试：新建 `tests/test_review_fixes_p3.py`，B6 共 6 项。
+
+### B7 脚本热加载同 mtime 替换返回旧脚本 ✅（P3）
+
+- `app/core/workflow/script_loader.py::load_script_content`：缓存签名由浮点 `st_mtime` 改为
+  `(st_mtime_ns, st_ctime_ns, st_size, st_ino)`（原子替换会换 inode、原地改写会动 ctime/size）；
+  另外 mtime 距今 < 2s 的文件不信任缓存直接重读（racy-git 做法，应对粗粒度时间戳文件系统）。
+- 测试：p3 新增 3 项（同 mtime 不同长度、同 mtime 同长度原子替换、未变化命中缓存）；旧代码下前两项失败（stash 验证）。
+
+### B4 n>1 静默降级 ✅（P3）
+
+- 决策：**拒绝**而非实现（网页端一次只生成一个回复，实现 n>1 需并发占多个标签页，代价高且结果不同源）。
+- `app/api/chat.py::ChatRequest` 新增 `validate_n`：`n>1` → ValidationError「仅支持 n=1…」，经 main.py 现有
+  RequestValidationError 处理器返回 **422 + OpenAI 风格 `invalid_request_error`**（与其他参数校验失败一致）；n 缺省/1/null 行为不变。
+- 测试：p3 新增 2 项（模型层 + ASGI 端到端）。
+
+### H7 F821 缺失 Optional/Any 导入 ✅（P3）
+
+- `start.py` 补 `from typing import Any, Optional`；`app/utils/model_routing.py` 补 `Optional`。
+  （两文件均有 `from __future__ import annotations`，运行时不崩，但 `typing.get_type_hints` / 工具链会 NameError。）
+- `pyflakes app main.py start.py` 的 undefined name 清零。测试：p3 新增 1 项（get_type_hints 遍历两模块函数；旧代码失败）。
+
+### H8 chat.py 重复 Arena 辅助函数 ✅（P3）
+
+- 删除 `app/api/chat.py` 前一组 6 个被后文覆盖、从未生效的定义（`_is_arena_prompt_rejection` 等），保留实际生效的后一组 → **运行时行为零变化**。
+  顺带去掉后一组里与模块级导入重复的 `ARENA_PROMPT_REJECTED_CODE` 局部导入（同一对象，已验证）。模块级兼容别名导入保留。
+- pyflakes 的 redefinition 告警从 6+1 降为仅剩与本项无关的局部 `import copy`。测试：p3 新增 1 项（AST 确认各只定义一次）。
+
+### H10 stream_monitor 重复方法 ✅（P3）
+
+- `app/core/stream_monitor.py`：删除 `StreamMonitor` 中被后文覆盖的前一版 `_is_arena_page`（子串匹配，`notarena.ai.evil` 也会命中）
+  与内联 JS 版 `_arena_native_stop_present`；保留实际生效的后一版（`is_arena_page_url` 严格主机匹配 / `is_visible_arena_stop`）→ 行为不变。
+  （`_arena_image_guard` 的两处是 property + setter，属正常写法，未动。）
+- 测试：p3 新增 5 项（AST 唯一性 + 严格 URL 匹配参数化）。
+
+### H13 未使用的 command_engine_storage mixin ✅（P3）
+
+- `git grep` 确认 `app/services/command_engine_storage.py`（`CommandEngineStorageMixin`）在代码、打包脚本、文档中均无引用，
+  `CommandEngine` 自带全部同名方法 → 直接删除，避免有人修补错文件。
+- 测试：p3 新增 1 项（文件不存在 + CommandEngine 仍有 CRUD 方法）。
+
+### T2 requirements-dev 缺 httpx ✅（P3）
+
+- `requirements-dev.txt` 增加 `httpx>=0.27,<1`（TestClient/ASGITransport 所需；当前环境 0.28.1）。
+  pytest-asyncio 经核实没有测试使用 `pytest.mark.asyncio`，不加。测试：p3 新增 1 项。
+
+### S14 教程页 innerHTML 注入 ✅（P3）
+
+- `static/tutorial/index.html`：新增 `escHtml`；搜索结果（含**用户输入的查询词**回显、章节标题/分组/小节摘要、href）
+  与 TOC（h3 文本/id）拼 innerHTML 前全部转义。NAV/SITES 为页内常量，未改。
+- 校验：抽取内联脚本 `node --check` 通过；escHtml 对 `<img onerror>` 等输出正确。测试：p3 新增 1 项（源码断言）。
+
+### S7 公开健康/引导接口信息暴露 ✅（P3）
+
+- 新增 `app/utils/diagnostics_access.py`：特权调用者 = 严格本机直连（复用 S4 `is_trusted_local_request`，有转发头即不算本机）
+  或携带有效 `AUTH_TOKEN` / `DASHBOARD_AUTH_TOKEN`（Bearer / X-API-Key）。**不强制令牌**（遵照用户要求）。
+- `GET /health`：非特权 → 最小响应 `{service, browser:{connected}, config:{auth_enabled, dashboard_auth_enabled}, detail:"restricted", timestamp}`，
+  只读连接标志、**不调用 `browser.health_check()`**（避免匿名请求触发浏览器连接）；200/503 语义保留，探活脚本不受影响；
+  控制面板登录前需要的 `dashboard_auth_enabled` 保留。错误令牌也只是降级为最小响应，不返回 401。特权 → 原详细响应。
+- `GET /api/startup/controlled-browser-guide-data`：非特权 → 403；引导页/教程页前端本身在失败时回落内置默认站点列表。
+- README 接口表注明行为。测试：p3 新增 9 项（远程匿名最小且不连浏览器、503 保留、本机详情、本机+转发头视为远程、三种令牌、错误令牌不 401、引导数据）。
+
+### H14 站点/完整备份导入无大小上限 ✅（P3）
+
+- `static/js/dashboard-methods.js`：新增 `SITE_CONFIG_IMPORT_MAX_BYTES = 8 MiB`、`SETTINGS_BACKUP_IMPORT_MAX_BYTES = 32 MiB`
+  与 `importFileSizeError()`；`handleImportFile` / `handleSettingsBackupImportFile` 在 `FileReader` 读取前检查 `file.size`，
+  超限给出中文提示并重置 input；顺带补 `reader.onerror` 提示。（当前 `config/` 全量约 400KB，上限余量充足。）
+- 校验：`node --check` 通过。测试：p3 新增 2 项（源码顺序断言 + node 执行 helper）。
+
+### H2 README 版本号/更新日志链接过期 ✅（P3）
+
+- `README.md` / `README.zh-CN.md` / `README.en.md`：版本 2.9.8 → 3.0.0（与 `VERSION` 一致）；已被作者删除的
+  `CHANGELOG_CURRENT.md` 链接改指向仓库中实际存在的 `CHANGELOG-3.0.0.md`（en 版升级说明一处同改）。
+- 测试：p3 新增 3 项（三份 README 的版本号 == VERSION，且所有 `](./xxx)` 相对链接目标存在）——以后发版忘改 README 会被测试拦下。
+
+### H3 .gitignore 清理 ✅（P3）
+
+- `config/marketplace_cache.json`：被忽略却仍被跟踪；全仓库已无任何代码引用 marketplace（功能已下线）→ `git rm --cached` 取消跟踪（本地文件保留，规则保留）。
+- scripts 规则：原先 `scripts/`（未锚定）+ `scripts/arena_models_cache.json` + `scripts/custom/` + `!/scripts/` `/scripts/*` 重叠，
+  合并为 `/scripts/*` + 两个随仓库发布脚本的白名单（仓库里只有根目录一个 scripts/，语义不变）。
+- tests 白名单：散落 8 处的 `!tests/...` 合并为一个按字母排序的块；删去 4 个从不存在/已删除的条目
+  （hard_stop_page_lock、attachment_evidence_regressions、proxy_api_cancellation、proxy_disconnect_regressions，origin/main 也没有）。
+- 校验：`git ls-files -ci --exclude-standard` 为空；check-ignore 抽查本地脚本/本地测试仍被忽略、发布文件不被忽略。
+- 测试：p3 新增 2 项（无「已跟踪却被忽略」文件；白名单条目都存在）。
+- ⚠️ 与 main 合并时 `.gitignore` 若冲突，以本分支结构为准，再把 main 新增的条目并入白名单块即可。
+
+### H11 browser_config.json 含个人 Arena 会话 URL ✅（P3）
+
+- `config/browser_config.json`（随仓库/更新包分发，更新器默认不保留它）的 `tab_pool.excluded_urls` 里有 121 条、
+  `tab_pool.route_groups` 5 组共 25 个成员都是作者本人的 `https://arena.ai/c/<uuid>` 会话。
+  → `excluded_urls` 只保留通用的 `https://arena.ai/image/direct`，`route_groups` 置为 `[]`（空列表即功能默认值；
+  用占位 URL 反而会被当成真实路由去打开，所以不用占位符）。其余键不动，JSON 按原格式（indent=2、ensure_ascii=False）写回，diff 只涉及这两个键。
+- ⚠️ 维护者若本地正在用这些分组：旧值可用 `git show 9ab1b11:config/browser_config.json` 找回，建议之后放在本地、不再提交。
+- 测试：p3 新增 1 项（分发配置不含 `/c/<uuid>` 会话 URL，route_groups 为空）。
+
+### H5 图片重复 / logo.svg 过大 ✅（P3）
+
+- 删除 `assets/tutorial-dashboard-overview.png`、`assets/workflow-visualization.png`：与 `static/` 下同名文件字节完全相同（sha1 一致），
+  且全仓库只引用 `static/` 版本（教程页、update_preserve）。`assets/` 其余两张图保留。
+- `static/images/logo.svg`（VTracer 描摹，1407 条 path）无损压缩 **792,262 → 525,032 字节（-34%，gzip 289KB → 192KB）**：
+  scour（4 位有效数字、去 XML 声明/注释）+ 去掉 no-op `translate(0)` + 把 1373 个 `translate(x,y)` 烘焙进路径起点
+  （起点 `m` 改 `M` 后补 `l` 保持后续隐式坐标为相对）。保留 `width/height=640`，未加 viewBox（不改变现有缩放行为）。
+- 视觉校验：cairosvg 在 640/128/32 px 渲染逐像素对比，平均差 ≤0.38/255、最大 9/255（抗锯齿级）；ImageMagick 渲染 PSNR 同样极高。
+  PNG 用 Pillow 无损重编码只省 3~5%，不值得改动二进制历史，未做。临时文件已删除。
+- 测试：p3 新增 1 项（已跟踪图片无字节重复；logo < 600KB 且尺寸属性不变）。
+
+### H6 依赖升级计划 ✅（P3，仅计划）
+
+- 新增 `docs/review/DEPENDENCY_UPGRADE_PLAN.md`：现状表、三条 Starlette CVE 适用性核对（当前 0.36.3 均不适用；
+  **升级时下限必须 ≥0.49.1** 以避开 CVE-2025-62727 的 0.39–0.49.0 区间）、分阶段步骤（先 lock 再升级）、人工冒烟清单、回退。
+- 实测：临时 venv 装 fastapi 0.141.1 / starlette 1.7.0 / uvicorn 0.54.0 跑非浏览器测试：686 通过 / 63 跳过 / 1 失败；
+  失败原因是新版 Starlette 不再把发送异常包进 ExceptionGroup，清理断言都成立。
+  → 放宽 `tests/test_cancel_storm_regressions.py` 的异常类型断言为 `(BaseExceptionGroup, OSError)`，新旧版都能通过。临时 venv 已删除。
+- `requirements.txt` 未改动（按计划分阶段做）。
+
+### H4 换行符统一 ⏸（P3，等待用户决定）
+
+- 现状（`git ls-files --eol`）：242 LF / 39 CRLF / 40 混合 / 9 二进制；无 `.gitattributes`。
+- 风险：若现在整文件规范化（`.gitattributes` + `git add --renormalize .`），会改动约 79 个文件的每一行，
+  其中大部分 origin/main 也在改 → 合并时大面积冲突。单加 `* text=auto` 而不重新规范化，又会让这些文件在所有人的工作区里显示为「已修改」。
+- 所以 P3 其余 16 项已全部完成，H4 暂停，请用户选择执行时机/方式。
+

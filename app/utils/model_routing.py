@@ -4,7 +4,7 @@ model_routing.py - Resolve OpenAI-style model ids to route-domain targets.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from app.utils.site_rules import derive_site_card_id
 from app.utils.site_url import build_route_domain_aliases, get_preferred_route_domain

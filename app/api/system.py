@@ -811,9 +811,41 @@ def _build_selector_top_candidates(elements: list[Dict[str, Any]]) -> list[Dict[
 
 # ================= 健康检查 =================
 
+def _public_health_response() -> JSONResponse:
+    """S7：匿名远程调用者的最小健康响应。
+
+    不调用 ``browser.health_check()``（它会主动连接/重连浏览器），只读当前连接标志；
+    保留控制面板登录前需要的 ``dashboard_auth_enabled``，以及原有 200/503 语义。
+    """
+    try:
+        browser = get_browser(auto_connect=False)
+        connected = bool(getattr(browser, "_connected", False)) and bool(
+            getattr(browser, "browser_handle", None) is not None
+        )
+    except Exception:
+        connected = False
+    dashboard_auth = AppConfig.is_dashboard_auth_enabled()
+    response = {
+        "service": "healthy",
+        "browser": {"connected": connected},
+        "config": {
+            "auth_enabled": dashboard_auth,
+            "dashboard_auth_enabled": dashboard_auth,
+        },
+        "detail": "restricted",
+        "timestamp": int(time.time()),
+    }
+    return JSONResponse(content=response, status_code=200 if connected else 503)
+
+
 @router.get("/health")
-async def health_check():
-    """服务健康检查"""
+async def health_check(request: Request):
+    """服务健康检查（本机直连或带有效令牌时返回详细诊断，否则最小响应）"""
+    from app.utils.diagnostics_access import request_is_privileged
+
+    if not request_is_privileged(request):
+        return _public_health_response()
+
     try:
         browser = get_browser(auto_connect=False)
         browser_health = browser.health_check()

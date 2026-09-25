@@ -18,7 +18,7 @@
 
 <br>
 
-当前版本：**2.9.8**（以 [`VERSION`](./VERSION) 和 [`CHANGELOG_CURRENT.md`](./CHANGELOG_CURRENT.md) 为准）
+当前版本：**3.0.0**（以 [`VERSION`](./VERSION) 为准，更新内容见 [`CHANGELOG-3.0.0.md`](./CHANGELOG-3.0.0.md)）
 
 Universal Web API 是一个运行在本机的 API 桥接与调试工具。它接管浏览器中已经登录的 AI 网页（ChatGPT、DeepSeek、Gemini、Claude 等），将网页对话转换为 OpenAI / Anthropic 兼容接口，供本地客户端调用。
 
@@ -131,7 +131,7 @@ Invoke-RestMethod 'http://127.0.0.1:8199/v1/chat/completions' -Method Post -Cont
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
-| GET | `/health` | 服务与浏览器基础健康检查 |
+| GET | `/health` | 服务与浏览器基础健康检查（匿名远程只返回最小信息；本机直连或带令牌返回详细诊断） |
 | GET | `/v1/models` | 当前标签页/预设暴露的模型目录 |
 | GET | `/v1/provider/capabilities` | 协议、功能和模型能力清单 |
 | GET | `/v1/provider/status` | 浏览器连接、标签页池和请求状态（不含密钥） |

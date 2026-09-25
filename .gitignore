@@ -74,13 +74,9 @@ download_images/
 image/
 tmp/
 scratch/
-scripts/
 
 # Windows folder metadata
 desktop.ini
-
-# Runtime cache
-scripts/arena_models_cache.json
 
 # Agent 协作与网桥配置文件
 agent_collaboration_rules.md
@@ -97,95 +93,70 @@ start_cpolar.py
 # Playwright
 .playwright-cli/
 
-# Tests
-tests/*
-!tests/test_arena_stream_hard_stop_page_lock.py
-!tests/test_browser_profile_identity.py
-!tests/test_command_result_store.py
-!tests/test_command_engine_scheduler_lifecycle.py
-!tests/test_commands_tab_result_races.py
-!tests/test_config_manager_safety.py
-!tests/test_config_compare_remote.py
-!tests/test_config_tab_save_queue.py
-!tests/test_core_review_regressions.py
-!tests/test_workflow_click_verification.py
-!tests/test_request_lifecycle_safety.py
-!tests/test_arena_auto_battle_command.py
-!tests/test_arena_command_persistence.py
-!tests/test_media_transcode_cache.py
-!tests/test_proxy_media_fallback.py
-!tests/test_stream_monitor_image_detection.py
-!tests/test_media_stream_image_precedence.py
-!tests/test_updater_safe_extract.py
-!tests/test_tab_route_groups.py
-!tests/test_tab_route_group_api.py
-!tests/test_arena_direct_models.py
-!tests/test_tool_calling_repairs.py
-!tests/test_input_chunking.py
-!tests/test_grok_parser.py
-!tests/test_workflow_script_loader.py
-!tests/test_workflow_js_exec_integration.py
-!tests/test_command_navigation_dispatch.py
-!tests/test_doubao_parser_images.py
-
 # 自定义与本地工作流扩展脚本
 custom_scripts/
-scripts/custom/
 *.custom.js
 
 # JS 脚本与用户脚本（UserScripts）
 /js/
 *.user.js
 
-# Generic attachment regression tests
-!tests/test_attachments.py
-!tests/test_attachment_ui.py
-!tests/test_attachment_browser.py
-
-# Site configuration workspace regression
-!tests/test_site_studio_ui.py
-!tests/browser_site_capabilities.py
-
-# Operations workspace regression and generated screenshots
-!tests/test_operations_studio_ui.py
-!tests/browser_operations_studio.py
+# 浏览器回归测试生成的截图
 /test-artifacts/
 
-# Structured workflow engine and shared editor regression
-!tests/test_workflow_flow_runtime.py
-!tests/test_workflow_studio_integration.py
-!tests/browser_workflow_studio.py
-
-# Keep only the shared workflow CSS bundler from the otherwise local scripts tree
-!/scripts/
+# 本地脚本目录：仅跟踪随仓库发布的两个脚本；其余（含 scripts/custom/、arena_models_cache.json 等运行时缓存）一律本地
 /scripts/*
 !/scripts/bundle_workflow_studio_css.py
-!tests/test_workflow_page_guide.py
-
-# Scoped preset transfer regression
-!tests/test_preset_transfer.py
-!tests/browser_preset_transfer.py
-
-# Shipped site workflow upgrade and admission regression
 !/scripts/upgrade_gemini_deepseek.py
-!tests/test_site_workflow_upgrade.py
-!tests/test_site_discovery.py
 
-!tests/browser_upgraded_sites.py
-
-# Readable workflow and ordered multi-case regression
-!tests/test_workflow_multi_case.py
-!tests/test_workflow_readable_ui.py
-
-# Atomic text input encoding regression
-!tests/test_text_input_atomic.py
-
-# Streaming disconnect cleanup and cancellation storm regression
-!tests/test_cancel_storm_regressions.py
-
-!tests/test_proxy_disconnect_regressions.py
-!tests/test_proxy_api_cancellation.py
-!tests/test_attachment_evidence_regressions.py
-# 审查问题修复回归测试（docs/review/DEVLOG-fixes-2026-09.md）
-!tests/test_review_fixes_*.py
+# Tests：默认忽略 tests/ 下的本地测试，只跟踪下列白名单（新增要提交的测试请在此登记）
+tests/*
 !tests/conftest.py
+!tests/test_review_fixes_*.py
+!tests/browser_operations_studio.py
+!tests/browser_preset_transfer.py
+!tests/browser_site_capabilities.py
+!tests/browser_upgraded_sites.py
+!tests/browser_workflow_studio.py
+!tests/test_arena_auto_battle_command.py
+!tests/test_arena_command_persistence.py
+!tests/test_arena_direct_models.py
+!tests/test_attachment_browser.py
+!tests/test_attachment_ui.py
+!tests/test_attachments.py
+!tests/test_browser_profile_identity.py
+!tests/test_cancel_storm_regressions.py
+!tests/test_command_engine_scheduler_lifecycle.py
+!tests/test_command_navigation_dispatch.py
+!tests/test_command_result_store.py
+!tests/test_commands_tab_result_races.py
+!tests/test_config_compare_remote.py
+!tests/test_config_manager_safety.py
+!tests/test_config_tab_save_queue.py
+!tests/test_core_review_regressions.py
+!tests/test_doubao_parser_images.py
+!tests/test_grok_parser.py
+!tests/test_input_chunking.py
+!tests/test_media_stream_image_precedence.py
+!tests/test_media_transcode_cache.py
+!tests/test_operations_studio_ui.py
+!tests/test_preset_transfer.py
+!tests/test_proxy_media_fallback.py
+!tests/test_request_lifecycle_safety.py
+!tests/test_site_discovery.py
+!tests/test_site_studio_ui.py
+!tests/test_site_workflow_upgrade.py
+!tests/test_stream_monitor_image_detection.py
+!tests/test_tab_route_group_api.py
+!tests/test_tab_route_groups.py
+!tests/test_text_input_atomic.py
+!tests/test_tool_calling_repairs.py
+!tests/test_updater_safe_extract.py
+!tests/test_workflow_click_verification.py
+!tests/test_workflow_flow_runtime.py
+!tests/test_workflow_js_exec_integration.py
+!tests/test_workflow_multi_case.py
+!tests/test_workflow_page_guide.py
+!tests/test_workflow_readable_ui.py
+!tests/test_workflow_script_loader.py
+!tests/test_workflow_studio_integration.py

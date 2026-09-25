@@ -38,6 +38,7 @@ P0-6  空闲冻结（freeze）
 from __future__ import annotations
 
 import json
+import math
 import os
 import threading
 import time
@@ -72,9 +73,18 @@ def _env_float(name: str, default: float, minimum: float = 0.0) -> float:
         value = float(str(raw).strip()) if raw not in (None, "") else float(default)
     except (TypeError, ValueError):
         value = float(default)
+    if not math.isfinite(value):
+        # B6：inf / nan 不是有效配置（int(inf) 会 OverflowError，nan 让所有比较为假）。
+        # 想要「禁用」请写 0。
+        logger.warning(f"[IdleMaintenance] {name}={raw!r} 不是有限数值，使用默认值 {default}（禁用请设为 0）")
+        value = float(default)
     if value <= 0:
         return 0.0
     return max(minimum, value)
+
+
+def _env_int(name: str, default: int, minimum: int = 0) -> int:
+    return int(_env_float(name, float(default), float(minimum)))
 
 
 @dataclass
@@ -97,9 +107,9 @@ class IdleMaintenanceConfig:
             freeze_require_hidden=_env_bool("BROWSER_IDLE_FREEZE_REQUIRE_HIDDEN", True),
             recycle_enabled=_env_bool("BROWSER_CDP_RECYCLE_ENABLED", True),
             recycle_idle_sec=_env_float("BROWSER_CDP_RECYCLE_IDLE_SEC", 30.0, 10.0) or 30.0,
-            recycle_after_requests=int(_env_float("BROWSER_CDP_RECYCLE_AFTER_REQUESTS", 20, 1)),
+            recycle_after_requests=_env_int("BROWSER_CDP_RECYCLE_AFTER_REQUESTS", 20, 1),
             recycle_interval_sec=_env_float("BROWSER_CDP_RECYCLE_INTERVAL_SEC", 1800.0, 60.0),
-            recycle_dom_nodes=int(_env_float("BROWSER_CDP_RECYCLE_DOM_NODES", 150000, 1000)),
+            recycle_dom_nodes=_env_int("BROWSER_CDP_RECYCLE_DOM_NODES", 150000, 1000),
             dom_check_interval_sec=_env_float("BROWSER_CDP_RECYCLE_DOM_CHECK_SEC", 300.0, 30.0) or 300.0,
         )
 
