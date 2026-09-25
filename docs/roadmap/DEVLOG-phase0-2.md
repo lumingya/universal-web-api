@@ -7,13 +7,18 @@
 ## 当前状态（随时更新）
 
 - main 冻结，只推本分支。本地环境（Portal）与推送链路见 §2.8。
-- ✅ 阶段 0 已完成：R0-1、R0-2、R0-5、R0-6、R0-8。R0-3/R0-4 暂缓，R0-7 由用户发布。
-- ✅ R1-1 Schema。
-- ✅ R1-2 站点配置彻底拆分，更新器同时具备「未改动的站点文件直接更新」能力。
-- ✅ R1-4 解析器金标测试。
-- ✅ R1-5 官方 SDK 协议一致性测试。
-- ▶ 下一步：R1-3 运行时部分（设计见 §3.6），然后 R1-6、R1-7，再进入阶段 2。
-- 实机验证进度：`a7c22f0` 的实机全量测试正在运行（先补装 requirements-dev，再依次跑 3.13 与 3.10），结果待补记。上一次实机失败的原因是 `scripts/build_sites_index.py` 被 .gitignore 白名单漏掉，已在 `beab65c` 修复。
+- ✅ **阶段 0 完成**：R0-1、R0-2、R0-5、R0-6、R0-8。R0-3/R0-4 暂缓，R0-7 由用户发布。
+- ✅ **阶段 1 完成**：R1-1 至 R1-7。
+  - 实机 Windows 3.13（`a7c22f0`）：1217 passed / 67 skipped / 1 failed，唯一失败是早已存在的 page_guide 滚动用例。
+- ▶ **阶段 2 执行顺序**（先低风险、可测试的，再动核心；每项独立提交，并在本机做实机回归）：
+  1. R2-7 可观测性（`/metrics`、请求 ID）
+  2. R2-4 类型化配置（生成 `.env.example`，解决 N9）
+  3. R2-5 SQLite 持久化（自动迁移 JSON）
+  4. R2-2 统一请求模型 ChatJob（有 R1-5 的官方 SDK 一致性测试兜底）
+  5. R2-3 拆解巨型类
+  6. R2-8 前端工程化（包含面板里的适配器更新和巡检入口，用本机 Playwright 截图核对）
+  7. R2-1 BrowserDriver 接口
+  8. R2-6 进程模型拆分
 
 ## 1. 用户决策（2026-09-26，必须遵守）
 
@@ -155,11 +160,11 @@ Portal 把用户本机的**一个文件夹**发布成公网 MCP 端点：`https:
 
 - [x] **R1-1** Schema v1 已完成（`app/services/config/site_schema.py`）。加载时只告警；保存或导入时拒绝的逻辑放到 R1-6/后续再接入。
 - [x] **R1-2** 彻底拆分已完成（见 §4）：`config/sites/` 目录、自动迁移、`index.json`、更新器逐站点合并、备份导入导出、官方对比读取 index。
-- [ ] **R1-3** 适配器独立更新通道：索引加摘要校验，只更新用户没改过的预设，保留本地覆盖。
+- [x] **R1-3** 适配器更新通道完成：发布整包时，更新器逐站点合并（`4d291c4`）；运行时可在线检查和应用（`c7588dc`，`/api/adapters/updates[/apply]`）。面板入口留到 R2-8。
 - [x] **R1-4** 金标测试框架完成（`0d75621`）：8 个此前零测试的解析器都有了合成样本，每个样本按三种方式喂入，共 28 项测试。其余已有测试的解析器可以按需补样本。
 - [x] **R1-5** 协议一致性测试完成（`a7c22f0`）：用官方 openai 3.x 和 anthropic 1.x SDK 覆盖 chat.completions、Responses 与 Messages 三种接口的流式和非流式调用、422 错误映射和 models 列表，共 8 项测试。
-- [ ] **R1-6** 适配器健康巡检：可达性、登录态、关键选择器，全程不发消息。
-- [ ] **R1-7** 选择器韧性：语义锚点、候选列表和打分、Site Studio 给出修复建议。只加机制，不在没有验证的情况下改现有选择器。
+- [x] **R1-6** 健康巡检完成（`ee42d7c`，`/api/adapters/health`）：只查询 DOM，按 broken、degraded、healthy、unreachable 分级。
+- [x] **R1-7** 选择器韧性完成（`695f790`，`/api/adapters/lint`）：静态脆弱度打分，巡检时给出回退命中建议。内置配置共 193 个选择器，没有低于 70 分的。
 
 ### 阶段 2：架构演进（全面落地）
 
@@ -304,4 +309,14 @@ Portal 把用户本机的**一个文件夹**发布成公网 MCP 端点：`https:
   - 首次运行时流式用例失败，原因是假浏览器输出的 chunk 缺少 object/model 字段，与真实格式不符，已修正假实现。
   - anthropic 1.x 改用 `httpx2`，测试会自动适配。
   - requirements-dev.txt 增加 openai 和 anthropic。
+- **R1-3 运行时部分**（`c7588dc`）：
+  - 新增 `AdapterUpdater`，依赖注入，便于测试；`check()` 给出六种状态，`apply()` 默认只应用安全更新。
+  - 冲突需要显式 `include_conflicts`，按本地优先合并。
+  - 每个文件都按 sha256 和 Schema 校验，任何一个不通过就整体中止、不写文件；写入后更新本地安装清单并热重载。
+- **R1-6**（`ee42d7c`）：新增 `adapter_health`，包含纯函数 `evaluate_preset` 和 `DrissionProbe`。
+  - 输入框缺失或选择器无效判为 broken；发送按钮、回复容器缺失只判 degraded，并附出现条件提示。
+  - 标签页借用方式与 `test-selector` 相同。
+  - 无前缀的 `//…` 选择器按 XPath 处理，因为工作流执行器也是走 document.evaluate。
+- **R1-7**（`695f790`）：新增 `selector_quality`，提供 lint 规则和回退建议，接入巡检报告与 `/api/adapters/lint`。
+  - 内置配置统计：193 个选择器中，long_chain 13 个、text_match 13 个、generated_class 3 个。
 
