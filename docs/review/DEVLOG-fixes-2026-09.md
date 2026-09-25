@@ -83,7 +83,7 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 ### 第二批
 
 - [x] B8 命令配置损坏时清空运行缓存
-- [ ] B5 解冻失败仍交付标签页
+- [x] B5 解冻失败仍交付标签页
 - [ ] B2 旧版顶层数组历史恢复丢失
 - [ ] B1 搜索引擎主域被自动发现
 - [ ] B3 Responses 内存历史无字节预算
@@ -257,3 +257,34 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 
 **验证**：新增 `tests/test_command_config_hot_reload_safety.py`（8 项全过）。
 全量 `596 passed, 73 failed`，与基线逐行一致。
+
+### 2026-09-25 · B5（解冻失败仍交付 BUSY 标签页）
+
+**根因**：`idle_maintenance.resume_if_frozen()` 把
+`_uwapi_frozen = False` 放在 `finally` 里无条件执行。CDP 的
+`Page.setWebLifecycleState` 抛错后，页面**实际仍是 frozen**，但标志已清除；
+`TabSession.acquire()` 忽略返回值，照样返回 True 并把 BUSY 会话交出去，
+之后所有 DOM/JS 操作都在一个冻结页面上静默失败。
+
+**改动**
+
+- `app/core/tab_pool_parts/idle_maintenance.py`：`finally` 里只保留
+  `_restore_focus_emulation`；成功才清除 `_uwapi_frozen` / `_uwapi_freeze_token`
+  并重置失败计数；失败则累加 `_uwapi_resume_failures` 与 `_uwapi_resume_failed_at`，
+  保留「待确认冻结」态。
+- `app/core/tab_pool_parts/session.py`：
+  - `_resume_after_acquire()` 改为返回 bool。
+    **判据是 `_uwapi_frozen` 是否已清除，而不是 `resume_if_frozen()` 的返回值**——
+    后者返回 False 有「本来就没冻结」和「解冻失败」两种含义，不能直接用。
+  - `acquire()` / `acquire_for_command()` 在解冻未确认时调用
+    `_rollback_acquire_after_failed_resume()` 并返回 False。
+  - 回滚是**直接改状态**而不是走 `release()`：此刻 status 仍是 BUSY，
+    没有其他线程能介入，而完整 release 会触发页面清理等与本场景无关的副作用。
+  - 连续 `_RESUME_FAILURE_ERROR_THRESHOLD = 3` 次失败 → `mark_error()`，
+    交给既有错误恢复流程，避免坏标签页在池子里无限空转。
+
+**边界**：CDP 恢复正常后下一次 `acquire()` 必须能成功并清零计数（已加测试），
+否则一次瞬时抖动就会永久废掉一个标签页。
+
+**验证**：新增 `tests/test_tab_resume_failure_safety.py`（8 项全过，用 `_FakeTab` 桩）。
+全量 `604 passed, 73 failed`，与基线逐行一致。
