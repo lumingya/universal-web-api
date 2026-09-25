@@ -372,3 +372,33 @@ def test_h2_readme_version_and_local_links(readme):
     assert f"**{version}**" in text
     for target in re.findall(r"\]\(\./([^)#\s]+)\)", text):
         assert (root / target).exists(), f"{readme} -> {target}"
+
+
+# ---------------------------------------------------------------------------
+# H3 · .gitignore 不再忽略已跟踪文件；白名单只列存在的测试
+# ---------------------------------------------------------------------------
+
+def _git(*args):
+    import shutil
+    import subprocess
+
+    if not shutil.which("git"):
+        pytest.skip("git not installed")
+    root = Path(__file__).resolve().parents[1]
+    if not (root / ".git").exists():
+        pytest.skip("not a git checkout")
+    return subprocess.run(["git", *args], cwd=root, capture_output=True, text=True, timeout=30)
+
+
+def test_h3_no_tracked_file_is_ignored():
+    out = _git("ls-files", "-ci", "--exclude-standard")
+    assert out.returncode == 0 and out.stdout.strip() == ""
+
+
+def test_h3_test_whitelist_entries_exist():
+    root = Path(__file__).resolve().parents[1]
+    text = (root / ".gitignore").read_text(encoding="utf-8")
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("!tests/") and "*" not in line:
+            assert (root / line[1:]).exists(), line

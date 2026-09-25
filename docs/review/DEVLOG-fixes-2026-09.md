@@ -40,7 +40,7 @@ P3 清单（顺序即执行顺序，完成一项勾一项，每项独立提交�
 - [x] S7 公开引导/健康接口信息最小化
 - [x] H14 站点/完整备份导入无大小上限
 - [x] H2 README 版本与 CHANGELOG 链接
-- [ ] H3 .gitignore 规则清理
+- [x] H3 .gitignore 规则清理
 - [ ] H11 受跟踪配置中的具体 Arena 会话 URL
 - [ ] H5 重复/超大图片资源
 - [ ] H6 依赖升级计划（只出计划与约束调整，不做大版本跳跃）
@@ -504,3 +504,14 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - `README.md` / `README.zh-CN.md` / `README.en.md`：版本 2.9.8 → 3.0.0（与 `VERSION` 一致）；已被作者删除的
   `CHANGELOG_CURRENT.md` 链接改指向仓库中实际存在的 `CHANGELOG-3.0.0.md`（en 版升级说明一处同改）。
 - 测试：p3 新增 3 项（三份 README 的版本号 == VERSION，且所有 `](./xxx)` 相对链接目标存在）——以后发版忘改 README 会被测试拦下。
+
+### H3 .gitignore 清理 ✅（P3）
+
+- `config/marketplace_cache.json`：被忽略却仍被跟踪；全仓库已无任何代码引用 marketplace（功能已下线）→ `git rm --cached` 取消跟踪（本地文件保留，规则保留）。
+- scripts 规则：原先 `scripts/`（未锚定）+ `scripts/arena_models_cache.json` + `scripts/custom/` + `!/scripts/` `/scripts/*` 重叠，
+  合并为 `/scripts/*` + 两个随仓库发布脚本的白名单（仓库里只有根目录一个 scripts/，语义不变）。
+- tests 白名单：散落 8 处的 `!tests/...` 合并为一个按字母排序的块；删去 4 个从不存在/已删除的条目
+  （hard_stop_page_lock、attachment_evidence_regressions、proxy_api_cancellation、proxy_disconnect_regressions，origin/main 也没有）。
+- 校验：`git ls-files -ci --exclude-standard` 为空；check-ignore 抽查本地脚本/本地测试仍被忽略、发布文件不被忽略。
+- 测试：p3 新增 2 项（无「已跟踪却被忽略」文件；白名单条目都存在）。
+- ⚠️ 与 main 合并时 `.gitignore` 若冲突，以本分支结构为准，再把 main 新增的条目并入白名单块即可。
