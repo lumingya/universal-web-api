@@ -18,6 +18,7 @@ from app.api.cmd_routes import router as cmd_router  # 🆕 命令系统
 from app.api.browser_routes import router as browser_router
 from app.api.provider import router as provider_router
 from app.api.adapter_routes import router as adapter_router  # R1-3 站点适配器在线更新
+from app.api.metrics_routes import router as metrics_router  # R2-7 Prometheus 指标
 
 # 创建主路由器
 router = APIRouter()
@@ -32,3 +33,4 @@ router.include_router(cmd_router)  # 🆕
 router.include_router(browser_router)
 router.include_router(provider_router)
 router.include_router(adapter_router)
+router.include_router(metrics_router)

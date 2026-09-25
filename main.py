@@ -941,6 +941,10 @@ async def media_file(
 from app.api import router as api_router
 app.include_router(api_router)
 
+# R2-7：请求 ID 与 Prometheus 指标。最后注册 = 最外层，覆盖全部请求（纯 ASGI，不缓冲流式响应）
+from app.services.metrics import RequestMetricsMiddleware
+app.add_middleware(RequestMetricsMiddleware)
+
 
 # ================= 挂载静态文件 =================
 
