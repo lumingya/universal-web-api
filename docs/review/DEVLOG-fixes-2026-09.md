@@ -55,6 +55,8 @@ chmod +x /tmp/runtests.sh
 ```
 
 **修复前基线（commit `5f724c5`）：`524 passed, 73 failed`。**
+**B1 修复后基线更新为 64 failed**（9 个站点发现断言已转绿），
+`/tmp/baseline_failures.txt` 已同步刷新。
 73 个失败的构成（与审查报告一致，不是本轮引入的回归）：
 
 - 64 个：依赖未跟踪的本地 fixture（`config/commands*.json`、本地 JS 脚本等）→ 条目 T1
@@ -84,8 +86,8 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 
 - [x] B8 命令配置损坏时清空运行缓存
 - [x] B5 解冻失败仍交付标签页
-- [ ] B2 旧版顶层数组历史恢复丢失
-- [ ] B1 搜索引擎主域被自动发现
+- [x] B2 旧版顶层数组历史恢复丢失
+- [x] B1 搜索引擎主域被自动发现
 - [ ] B3 Responses 内存历史无字节预算
 - [ ] S10 图片比对 / C2PA 直取外部 URL
 - [ ] S11 DNS 校验后连接重解析
@@ -288,3 +290,53 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 
 **验证**：新增 `tests/test_tab_resume_failure_safety.py`（8 项全过，用 `_FakeTab` 桩）。
 全量 `604 passed, 73 failed`，与基线逐行一致。
+
+### 2026-09-25 · B1 + B2（站点自动发现误判 / 旧版历史丢失）
+
+两项都是小而确定的逻辑错误，合并一次提交。
+
+#### B1 搜索引擎主域被自动发现
+
+难点在于要同时满足这组相互冲突的期望（来自已有测试）：
+
+| 必须拒绝 | 必须允许 |
+| --- | --- |
+| `google.com` / `www.google.com` / `WWW.GOOGLE.COM.` | `gemini.google.com` |
+| `google.co.jp` / `www.google.co.uk` | `aistudio.google.com` |
+| `accounts.google.com` | `gemini.com` / `chat.deepseek.com` |
+| `bing.com` / `www.baidu.com` | `google.com.attacker.org` |
+
+所以**不能**简单按 host 精确匹配（覆盖不了 ccTLD），也**不能**「google 全域拒绝」
+（会误伤 gemini/aistudio）。
+
+`app/utils/site_discovery.py` 的做法：
+
+1. `_search_engine_subdomain_labels(host)`：找到 `_SEARCH_ENGINE_LABELS` 里的标签，
+   要求它**后面的标签全是公共后缀样式**（`_is_public_suffix_label`：在短后缀集合里，
+   或 ≤3 个字母）。这样 `google.co.jp` 命中，而 `google.com.attacker.org`
+   因为 `attacker` 不是后缀标签而不命中 → 按普通域名放行。
+2. 返回的是「search 标签之前的子域标签」：`[]` = 主域 → 拒绝；`['www']` → 拒绝；
+   其他子域只在命中 `_NON_CHAT_SUBDOMAIN_LABELS`（accounts/login/mail/...）时拒绝。
+3. **显式规则优先**：`site_rules.json` / `sites.local.json` 里配了 `auto_discovery`
+   就直接用它，启发式只在没有显式配置时兜底。用户仍可手工覆盖。
+
+`config/site_rules.json` 另补了 9 个常见搜索主域的显式 `auto_discovery: false`，
+既是文档也便于用户就地修改。
+
+#### B2 旧版顶层数组历史丢失
+
+`app/services/request_manager.py:_load_history()` 原写法：
+
+```python
+records = data.get("records", data if isinstance(data, list) else [])
+```
+
+Python 会**先求值参数**，`data` 是列表时 `data.get` 立刻抛 `AttributeError`，
+兼容分支根本没机会生效，异常被外层 `except Exception` 吞掉 → 历史恢复 0 条。
+改成先 `isinstance` 分支判断，并对既非 list 也非 dict 的内容打一条 warning。
+
+**验证**
+- `tests/test_site_discovery.py` 36 项全过（基线里 9 个失败全部转绿）。
+- 新增 `tests/test_request_history_compat.py`（10 项）：顶层数组、对象格式、
+  数组里混入非 dict、token 统计回填、坏 JSON 不抛异常。
+- 全量 `623 passed, 64 failed`，无新增失败；基线文件已更新为 64。

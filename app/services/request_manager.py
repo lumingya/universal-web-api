@@ -551,7 +551,18 @@ class RequestManager:
                 return
             with open(self._history_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            records = data.get("records", data if isinstance(data, list) else [])
+            # 修复 B2：旧版历史文件是顶层数组。原来先调用 data.get(...) 再判断类型，
+            # 顶层数组会在兼容分支生效之前就抛 AttributeError，被外层 except 吞掉，
+            # 结果整份历史恢复成 0 条。必须先分支判类型。
+            if isinstance(data, list):
+                records = data
+            elif isinstance(data, dict):
+                records = data.get("records", [])
+            else:
+                logger.warning(
+                    f"请求历史文件格式无法识别（{type(data).__name__}），跳过恢复: {self._history_file}"
+                )
+                records = []
             if isinstance(records, list):
                 raw_records = [item for item in records if isinstance(item, dict)]
                 max_records = self._request_monitor_max_records()

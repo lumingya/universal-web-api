@@ -16,6 +16,33 @@
     },
     "you.com": {
       "stealth_default": true
+    },
+    "google.com": {
+      "auto_discovery": false
+    },
+    "bing.com": {
+      "auto_discovery": false
+    },
+    "baidu.com": {
+      "auto_discovery": false
+    },
+    "yahoo.com": {
+      "auto_discovery": false
+    },
+    "yandex.com": {
+      "auto_discovery": false
+    },
+    "duckduckgo.com": {
+      "auto_discovery": false
+    },
+    "sogou.com": {
+      "auto_discovery": false
+    },
+    "naver.com": {
+      "auto_discovery": false
+    },
+    "ecosia.org": {
+      "auto_discovery": false
     }
   }
 }
