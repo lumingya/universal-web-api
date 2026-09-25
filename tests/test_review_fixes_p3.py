@@ -123,3 +123,19 @@ def test_b4_api_returns_openai_style_422(monkeypatch):
     assert resp.status_code == 422
     err = resp.json()["error"]
     assert err["type"] == "invalid_request_error" and "n=1" in err["message"]
+
+
+# ---------------------------------------------------------------------------
+# H7 · 注解里的 Optional/Any 必须有导入（get_type_hints 不再 NameError）
+# ---------------------------------------------------------------------------
+
+def test_h7_annotations_resolvable():
+    import typing
+
+    import start
+    from app.utils import model_routing
+
+    for mod in (start, model_routing):
+        for obj in vars(mod).values():
+            if callable(obj) and getattr(obj, "__module__", None) == mod.__name__ and not isinstance(obj, type):
+                typing.get_type_hints(obj)  # 旧代码对缺失导入会抛 NameError

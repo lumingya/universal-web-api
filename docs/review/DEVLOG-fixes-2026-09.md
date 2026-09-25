@@ -31,7 +31,7 @@ P3 清单（顺序即执行顺序，完成一项勾一项，每项独立提交�
 - [x] B6 `BROWSER_CDP_RECYCLE_AFTER_REQUESTS=inf` OverflowError
 - [x] B7 脚本热加载 mtime 相同内容替换仍返回旧脚本
 - [x] B4 `n>1` 只返回 1 个 choice
-- [ ] H7 未导入的类型注解（F821）
+- [x] H7 未导入的类型注解（F821）
 - [ ] H8 chat.py 重复定义的 Arena 辅助函数
 - [ ] H10 stream_monitor 重复方法
 - [ ] H13 未使用的 command_engine_storage mixin
@@ -445,3 +445,9 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - `app/api/chat.py::ChatRequest` 新增 `validate_n`：`n>1` → ValidationError「仅支持 n=1…」，经 main.py 现有
   RequestValidationError 处理器返回 **422 + OpenAI 风格 `invalid_request_error`**（与其他参数校验失败一致）；n 缺省/1/null 行为不变。
 - 测试：p3 新增 2 项（模型层 + ASGI 端到端）。
+
+### H7 F821 缺失 Optional/Any 导入 ✅（P3）
+
+- `start.py` 补 `from typing import Any, Optional`；`app/utils/model_routing.py` 补 `Optional`。
+  （两文件均有 `from __future__ import annotations`，运行时不崩，但 `typing.get_type_hints` / 工具链会 NameError。）
+- `pyflakes app main.py start.py` 的 undefined name 清零。测试：p3 新增 1 项（get_type_hints 遍历两模块函数；旧代码失败）。
