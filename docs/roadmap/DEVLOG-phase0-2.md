@@ -15,7 +15,7 @@
 - ▶ **阶段 2 进行中**：
   - R2-7 已完成核心部分（`ea8d3cb`：`/metrics`、X-Request-ID）；
   - 接下来依次是 R2-4 类型化配置、R2-5 SQLite、R2-2 ChatJob、R2-3 拆类、R2-8 前端、R2-1 驱动接口、R2-6 进程模型。
-- 最近一次实机全量测试：`ea8d3cb`，结果见 §4 最后一条。
+- 最近一次实机全量测试（`ea8d3cb`）：Windows 3.13 结果 1257 passed / 67 skipped / 1 failed；3.10 结果 1248 passed / 76 skipped / 1 failed。唯一失败是早已存在的 page_guide 滚动用例。
 
 ## 1. 用户决策（2026-09-26，必须遵守）
 
@@ -328,4 +328,4 @@ Portal 把用户本机的**一个文件夹**发布成公网 MCP 端点：`https:
   - `/metrics` 的访问规则与 `/health` 详情相同（S7）；
   - 标签页池指标只读取已连接的 `_browser_instance`，不调用 get_browser，因为那样会创建实例；
   - 测试时注意：没有浏览器的环境下 `/health` 按设计返回 503。
-
+- **实机验证 `ea8d3cb`**：3.13 结果 1257 passed / 1 failed；3.10 结果 1248 passed / 1 failed。两个版本的唯一失败都是早已存在的 page_guide 滚动用例，防抖测试的修复已生效。
