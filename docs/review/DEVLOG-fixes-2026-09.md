@@ -82,7 +82,7 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 
 ### 第二批
 
-- [ ] B8 命令配置损坏时清空运行缓存
+- [x] B8 命令配置损坏时清空运行缓存
 - [ ] B5 解冻失败仍交付标签页
 - [ ] B2 旧版顶层数组历史恢复丢失
 - [ ] B1 搜索引擎主域被自动发现
@@ -223,3 +223,37 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 
 **验证**：`tests/test_security_hardening_fixes.py` 新增 5 项（含 `"false"` 字符串解析矩阵、
 过期快照清理、retention=0 时不清理）。全量 `588 passed, 73 failed`，与基线逐行一致。
+
+### 2026-09-25 · B8（命令配置损坏清空运行缓存）
+
+**根因**：`_read_commands_file()` 在 JSON 解析失败 / 读取异常时 `return []`，
+与「文件里确实是空命令列表」完全无法区分。于是 `_refresh_commands_if_changed()`
+把缓存换成 0 条、推进 mtime，并据此生成 `run_js_file` 清理动作，
+把已经注入在线标签页的预注入脚本一并撤掉——触发条件只是编辑器保存到一半。
+
+**改动** `app/services/command_engine.py`
+
+- 新增 `_read_commands_file_or_none()`：读失败/格式非法返回 `None`；
+  `_read_commands_file()` 保留为返回 `[]` 的兼容包装（外部契约不变）。
+- 新增实例字段 `_commands_invalid_mtime`：记录已知坏文件的 mtime。
+- `_refresh_commands_if_changed()`：
+  - 读到 `None` 且已有 last-known-good → 保留缓存、**不推进** `_commands_mtime`、
+    不生成清理动作，只 WARNING 一次；
+  - 同一份坏文件后续轮询直接跳过重读（靠 `_commands_invalid_mtime` 判断）；
+  - 首次加载就失败 → 退化为空列表但同样不推进 mtime，修好后能自动加载；
+  - 读成功 → 清空 `_commands_invalid_mtime`。
+- `_save_commands()` 成功后同样清空 `_commands_invalid_mtime`。
+
+**注意保留的行为**：**合法的空列表 `{"commands": []}` 仍然生效并照常生成清理动作**。
+这是本项修复最容易改坏的地方，已单独加测试锁定。
+
+**未改动**：`app/services/command_engine_storage.py` 里那份同名 `_read_commands_file`
+属于未被继承的死代码（报告 H13，P3）。本轮不动它，但要注意**别改错文件**。
+
+**测试限界**：mtime 粒度问题——同一秒内连写两次文件可能 mtime 相同，
+热加载根本不会触发。测试用 `_rewrite()` 显式 `os.utime` 推进 mtime，
+否则测的是「没触发」而不是「触发后的行为」。
+（顺带说明：这也是 B7 在 `script_loader` 上的同类问题，属 P3 未处理。）
+
+**验证**：新增 `tests/test_command_config_hot_reload_safety.py`（8 项全过）。
+全量 `596 passed, 73 failed`，与基线逐行一致。
