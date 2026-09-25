@@ -43,7 +43,7 @@
 - [x] M2 静态分析 + 现有单元测试运行结果（排除真实浏览器；详情见 §5）
 - [x] M3 安全：认证与中间件（main.py / app/api/deps.py / CORS / 管理接口）——路由依赖逐项核对，ASGITransport 进程内验证默认跨源读取及启用认证时的 401/200；不代表真实浏览器联调
 - [x] M4 安全：命令引擎、updater、媒体落盘/文件路径、SSRF——以 mock 响应+临时目录验证同源 SVG/HTML 落盘与响应头；直接图片请求及 DNS 校验窗口单独记风险，未访问外网/内网目标
-- [ ] M5 核心请求链路：chat.py / anthropic_routes.py / streaming_response.py / request_manager.py
+- [x] M5 核心请求链路：chat.py / anthropic_routes.py / streaming_response.py / request_manager.py——核查认证委派、流关闭/取消、Responses 状态与请求历史，轻量复现 B2–B4
 - [ ] M6 标签页池：tab_pool_parts/*（manager / session / recovery / idle_maintenance）
 - [ ] M7 浏览器与工作流：core/browser/*、core/workflow/*、stream_monitor、network_monitor
 - [ ] M8 服务层：tool_calling*、config engine、command_engine*
@@ -75,6 +75,10 @@
 | S9 | P1 | `app/core/browser/media.py:2101-2215`, `app/core/extractors/media_extractor.py:929-945,1006-1080`, `main.py:728-742,804-825` | 音视频落盘仅检查 Content-Type 包含 `audio`/`video`；未知 MIME 从远程 URL 取后缀，未校验实际内容。可控 `clip.html` 伴随 `video/custom` 响应会原样写入 `.html` 并返回 `/media/*.html`，而 FileResponse 依据后缀以 `text/html` + `inline` 发送。需攻击者控制上游媒体地址和其响应、受害者直接访问该链接；若后台认证启用，应用同源执行脚本可能读取仪表板本地令牌。仅允许已知安全音视频扩展名、实测格式并在独立域/强制下载提供。 | mock 远程响应成功落 `.html`；ASGI 进程内 GET 返回 200 `text/html; charset=utf-8` + `inline`，无 CSP；未执行脚本/真实浏览器 |
 | S10 | P2 | `app/utils/image_validation.py:37-121,151-175,272-370`, `app/services/arena_gpt_image_command.py:155-175,608,642` | 图片比对/C2PA 读取第三方页面提取的 URL 时直接 `requests.get`：无公网地址/重定向校验且读取 `response.content` 无尺寸上限；data URI 和浏览器 `arrayBuffer()` 回退亦无限制。需媒体 URL 经目标站页面进入比对流程，可能触发盲 SSRF、内网请求或内存放大。统一复用安全获取器并限制响应、data URI、像素解码规模。常规**输入**图片处理 `app/utils/image_handler.py` 已有校验，不能混为一谈。 | mock 证明回环 URL 被直接交给 requests（无实际内网请求）；未测真实 SSRF/大响应 |
 | S11 | P2（条件性） | `app/utils/remote_resource.py:141-185,206-245` | 公共资源抓取先用 DNS 查询验证地址，再将原始主机名传给 `requests.get()`；连接时可能重新解析，攻击者控制 DNS 时可在验证后切到私网地址。重定向逐次校验、凭据跨域剥离已实现，但不消除验证/连接间竞态。应将实际连接 IP 固定为已验证地址（保持 HTTPS SNI/Host），或在可信出网代理上强制拒绝内网段。 | mock 确认验证发生、传给 HTTP 层的仍是域名；未作真实 DNS 重绑定验证，不宣称已利用 |
+| B2 | P2 | `app/services/request_manager.py:545-573` | 历史读取器试图兼容旧版 JSON **顶层数组**，但先调用 `data.get()`，在 list 上报 AttributeError 后被整体捕获，历史被置空；旧格式升级后监控历史无法恢复。先按 `isinstance(data, list)` 分支取值，再统一校验记录。 | 微型临时文件复现：`{"records":[...]}` 恢复 1 条、等价顶层 `[...]` 恢复 0 条；未触及真实历史 |
+| B3 | P2 | `app/api/chat.py:93-99,539-608,1030-1076,1950-1955,2420-2425` | Responses API 默认 `store=None` 时存储完整请求历史和助手消息；只有 1h/1024 条**数量**上限，无单条/总字节配额，base64 多模态和连续会话会使内存放大。状态全局只按不可预测 response_id 索引、未按客户端隔离；ID 一旦泄露可跨调用续接历史。建议每项/总量预算、媒体内容剥离/摘要，按认证主体隔离，并在文档说明驻留期。 | 小数据两轮存储字符串长度 137→274；未运行压力测试或尝试跨用户访问 |
+| B4 | P3 | `app/api/chat.py:469-475,524-528,2514-2517,2804-2813`, `app/core/config_parts/sse_formatter.py:229` | OpenAI `n` 允许 `>=1`，但请求链未据此生成多条选择；非流式统一构造单条 choices，流式将其只当 stop 处理条件。请求 `n=3` 会静默只得一条，建议验证 `n==1` 时明确拒绝其他值或实现多路执行。README 已笼统说明某些网页不支持的字段会忽略，仍应显式声明此行为。 | 构造 `n=3` 请求模型成功，打包器生成 choices 数=1；未接真实浏览器 |
+| H8 | P3 | `app/api/chat.py:157-193,217-249` | 六个 Arena 错误辅助函数同名定义两次，前者随后被后者覆盖；两套提示词拒绝判断/响应构造实现不完全相同，增加维护漂移和死代码。清理重复定义并保留行为单测。 | 静态确认；无执行回归结论 |
 
 ## 5. 工作流水
 
@@ -84,3 +88,4 @@
 - 2026-09-25 / M2（续）：排除 3 个真实 Chromium 测试文件和两处浏览器 fixture（未启动浏览器）的 pytest 初轮：**548 passed、74 failed、9 deselected**（10.15s）。归因：64 个缺失/过期本地 fixture（T1）、9 个站点自动发现断言失败（B1）、1 个 dev 依赖缺失（T2）。仅补装 `httpx` 后 T2 对应用例通过；过滤上述已知失效用例的独立干净子集 **544 passed、30 deselected**（8.17s）。所有测试生成的临时目录及忽略的 `config/commands.json`、`config/request_history.json`、`config/app_stats.json` 均已删除；无业务代码变更。
 - 2026-09-25 / M3：复核 `app/api/deps.py` 的服务与后台双令牌和路由依赖：149 个 APIRoute 中 12 个无 FastAPI 依赖；其中 6 个模型别名路由在函数内手动验服务令牌，另 6 个是 `/`、`/dashboard`、浏览器引导页、`/media/{filename}`、`/health`、`POST /api/browser/open-profile-url`。`httpx.ASGITransport` 进程内测试：默认关闭后台认证时，外来 Origin 的 CORS 预检和 `GET /api/commands` 均返回 200，后者响应允许 `Access-Control-Allow-Origin: *`；临时仅在进程环境中启用后台认证并提供合成令牌后，同一路由无令牌返回 401、带令牌返回 200。无真实浏览器或外部网络访问，未测试浏览器本地网络策略和反向代理拓扑；检查产生的忽略配置已删除。S1、S4、S6、S7 见上。
 - 2026-09-25 / M4：复核命令引擎受限 Python 执行上下文（含浏览器、配置对象和默认可导入 requests）、解析器动态导入及 updater；`updater.py:828-874` 已限制 ZIP 路径/符号链接/条目数/展开大小/压缩比，下载验 SHA-256 digest，失败会从备份恢复，**不将这些保护误报为缺失**。用无网络 mock 响应和自动清理的微型临时目录分别驱动 SVG 图片前台回退与音视频远程下载：获得 `.svg` 和 `.html`，经 `httpx.ASGITransport` 同源路由实际返回 `200 image/svg+xml`（无 attachment/CSP）与 `200 text/html; charset=utf-8`、`Content-Disposition: inline`（无 CSP）。`read_image_bytes` 的回环 URL 以 mock `requests.get` 证明可达调用点，**未实际连接回环/内网**；公共抓取器 mock DNS 后仍把原主机名交给 requests，重绑定仅按条件性风险报告。所有临时产物与导入生成的忽略配置已删除；未安装/运行浏览器或大文件压力测试。S2、S3、S8–S11 见上。
+- 2026-09-25 / M5：阅读 OpenAI / Anthropic 接口的认证委派、SSE 响应关闭与请求生命周期：已实现断连时主动关闭异步生成器、线程工作队列限背压及绝对执行超时，未把这些保护误报为缺陷。隔离小文件测试（不运行浏览器）证实历史旧数组读入丢失（B2）；Responses 默认启用内存存储且连续两轮重复保留完整会话（B3）；构造 `n=3` 可接受但单选择输出（B4）。`chat.py` 六个 Arena 错误辅助函数重复定义（H8）。临时目录及导入生成的忽略配置已清理。
