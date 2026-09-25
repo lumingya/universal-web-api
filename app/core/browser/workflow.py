@@ -508,6 +508,10 @@ class BrowserWorkflowMixin:
         try:
             session = self.tab_pool.acquire(task_id, timeout=60)
             
+            if session is None and self._acquire_rejected_queue_full(task_id):
+                yield self._pack_acquire_queue_full_error()
+                yield self.formatter.pack_finish()
+                return
             if session is None:
                 yield self.formatter.pack_error(
                     "服务繁忙，请稍后重试",
@@ -590,6 +594,10 @@ class BrowserWorkflowMixin:
         try:
             session = self.tab_pool.acquire_by_index(tab_index, task_id, timeout=60)
             
+            if session is None and self._acquire_rejected_queue_full(task_id):
+                yield self._pack_acquire_queue_full_error()
+                yield self.formatter.pack_finish()
+                return
             if session is None:
                 yield self.formatter.pack_error(
                     f"标签页 #{tab_index} 不可用或不存在",
@@ -690,6 +698,10 @@ class BrowserWorkflowMixin:
                 allocation_mode=allocation_mode,
             )
 
+            if session is None and self._acquire_rejected_queue_full(task_id):
+                yield self._pack_acquire_queue_full_error()
+                yield self.formatter.pack_finish()
+                return
             if session is None:
                 yield self.formatter.pack_error(
                     f"域名路由 '{normalized_route_domain}' 没有可用标签页",
@@ -798,6 +810,10 @@ class BrowserWorkflowMixin:
                 requested_model=requested_model,
                 **({"workflow_variables": workflow_variables} if workflow_variables else {}),
             )
+            if session is None and self._acquire_rejected_queue_full(task_id):
+                yield self._pack_acquire_queue_full_error()
+                yield self.formatter.pack_finish()
+                return
             if session is None:
                 yield self.formatter.pack_error(
                     f"标签页路由组 '{normalized_group_id}' 没有可用成员",
@@ -923,6 +939,10 @@ class BrowserWorkflowMixin:
             else:
                 session = self.tab_pool.acquire_by_exact_url(normalized_exact_url, task_id, timeout=60)
 
+            if session is None and self._acquire_rejected_queue_full(task_id):
+                yield self._pack_acquire_queue_full_error()
+                yield self.formatter.pack_finish()
+                return
             if session is None:
                 yield self.formatter.pack_error(
                     f"URL 路由 '{normalized_exact_url}' 没有唯一可用标签页",
@@ -974,6 +994,23 @@ class BrowserWorkflowMixin:
                     command_engine.schedule_deferred_workflow_commands(session, delay_sec=0.25)
                 except Exception:
                     pass
+
+    def _acquire_rejected_queue_full(self, task_id: str) -> bool:
+        """H9：acquire 返回 None 是否因为等待队列已满（而非没有可用标签页）。"""
+        consume = getattr(self.tab_pool, "consume_queue_full_rejection", None)
+        try:
+            return bool(consume(task_id)) if callable(consume) else False
+        except Exception:
+            return False
+
+    def _pack_acquire_queue_full_error(self) -> str:
+        return self.formatter.pack_error(
+            "服务繁忙：等待标签页的请求已达上限，请稍后重试",
+            error_type="capacity_error",
+            code="tab_queue_full",
+            status_code=503,
+            retryable=True,
+        )
 
     def _bind_request_tab_id(self, task_id: str, session: Optional[TabSession]):
         if not session:

@@ -1600,10 +1600,8 @@
         },
 
         getDashboardPreferencesBackup() {
-            // 修复 S13：备份包过去会把浏览器本地保存的面板令牌以 dashboard_token /
-            // api_token 两个字段明文写进下载文件。备份文件常被随手分享或提交，
-            // 等于直接泄露管理凭据。导出只保留非敏感的界面偏好；
-            // 令牌请在新机器上手动填写（导入逻辑仍兼容旧备份里的字段）。
+            // S13：备份文件会被下载/转存/分享，浏览器本地保存的面板令牌不再写入备份。
+            // 旧版备份里的 dashboard_token / api_token 仍可在导入时读取（见下方 apply）。
             return {
                 dark_mode: !!this.darkMode
             };
@@ -1642,17 +1640,15 @@
                 a.click();
                 URL.revokeObjectURL(url);
 
-                const redacted = Array.isArray(payload && payload.env_redacted_keys)
-                    ? payload.env_redacted_keys
+                const redactedKeys = Array.isArray(payload && payload.redacted_env_keys)
+                    ? payload.redacted_env_keys
                     : [];
-                if (redacted.length) {
-                    this.notify(
-                        '完整配置备份已导出（已剔除 ' + redacted.length + ' 项 .env 密钥，需在目标机器手动填写）',
-                        'success'
-                    );
-                } else {
-                    this.notify('完整配置备份已导出', 'success');
-                }
+                this.notify(
+                    redactedKeys.length
+                        ? `完整配置备份已导出（已剔除 ${redactedKeys.length} 项令牌/密钥，导入时保留目标机器现值）`
+                        : '完整配置备份已导出',
+                    'success'
+                );
             } catch (error) {
                 this.notify('完整备份导出失败: ' + error.message, 'error');
             }

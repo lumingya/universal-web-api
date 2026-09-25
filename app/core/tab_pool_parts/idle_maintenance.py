@@ -373,19 +373,13 @@ def resume_if_frozen(session: Any, reason: str = "") -> bool:
         finally:
             _restore_focus_emulation(session, tab)
             if ok:
-                # 修复 B5：只有确认解冻成功才清除冻结标志。
-                # 原实现把清除动作放在 finally 里，CDP 抛错后标签页实际仍是 frozen，
-                # 但状态显示已解冻，acquire() 照样把它当正常会话交付出去，
-                # 后续所有 DOM/JS 操作都会在一个冻结页面上静默失败。
                 setattr(session, "_uwapi_frozen", False)
                 setattr(session, "_uwapi_freeze_token", "")
                 setattr(session, "_uwapi_last_resumed_at", time.time())
-                setattr(session, "_uwapi_resume_failures", 0)
                 setattr(session, "_uwapi_resume_failed_at", 0.0)
             else:
-                # 保留「待确认冻结」态，交给调用方决定是否交付/回收
-                failures = int(getattr(session, "_uwapi_resume_failures", 0) or 0) + 1
-                setattr(session, "_uwapi_resume_failures", failures)
+                # B5：解冻失败时保留「待确认冻结」状态，调用方据此拒绝交付该会话；
+                # 旧实现无条件清除冻结标志，acquire() 会把仍冻结的页面当作可用标签页交出去。
                 setattr(session, "_uwapi_resume_failed_at", time.time())
         frozen_at = float(getattr(session, "_uwapi_frozen_at", 0.0) or 0.0)
         if ok:

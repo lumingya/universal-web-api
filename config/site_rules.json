@@ -20,28 +20,49 @@
     "google.com": {
       "auto_discovery": false
     },
+    "google.co.jp": {
+      "auto_discovery": false
+    },
+    "google.co.uk": {
+      "auto_discovery": false
+    },
+    "google.com.hk": {
+      "auto_discovery": false
+    },
+    "accounts.google.com": {
+      "auto_discovery": false
+    },
     "bing.com": {
+      "auto_discovery": false
+    },
+    "cn.bing.com": {
       "auto_discovery": false
     },
     "baidu.com": {
       "auto_discovery": false
     },
-    "yahoo.com": {
+    "duckduckgo.com": {
+      "auto_discovery": false
+    },
+    "search.yahoo.com": {
       "auto_discovery": false
     },
     "yandex.com": {
       "auto_discovery": false
     },
-    "duckduckgo.com": {
+    "yandex.ru": {
       "auto_discovery": false
     },
     "sogou.com": {
       "auto_discovery": false
     },
-    "naver.com": {
+    "so.com": {
       "auto_discovery": false
     },
-    "ecosia.org": {
+    "search.brave.com": {
+      "auto_discovery": false
+    },
+    "naver.com": {
       "auto_discovery": false
     }
   }

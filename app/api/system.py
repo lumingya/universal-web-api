@@ -31,7 +31,9 @@ from app.core.config import (
     log_collector,
 )
 from app.core import get_browser, BrowserConnectionError
-from app.api.deps import verify_dashboard_auth as verify_auth, verify_admin_auth
+from app.api.deps import verify_dashboard_auth as verify_auth
+from app.api.deps import verify_sensitive_admin_auth
+from app.core.http_security import redact_env_for_backup, startup_security_errors
 from app.services.config_engine import config_engine, ConfigConstants
 from app.services.command_engine import command_engine
 from app.services.extractor_manager import extractor_manager
@@ -290,47 +292,7 @@ def _schedule_service_restart(delay_seconds: float = 1.0) -> None:
     asyncio.create_task(trigger_restart())
 
 
-# 修复 S13：备份默认不得携带服务端密钥。
-# 命中以下任一提示词的 .env 键都按敏感处理（大小写不敏感）。
-_SECRET_ENV_KEY_HINTS = (
-    "TOKEN", "SECRET", "PASSWORD", "PASSWD", "CREDENTIAL", "COOKIE",
-    "PRIVATE_KEY", "SESSION", "SIGNATURE",
-)
-# 形如 *_API_KEY / *_KEY 的键同样敏感，但要排掉明显不是密钥的配置名。
-_NON_SECRET_KEY_EXCEPTIONS = frozenset({
-    "HELPER_API_KEY_SET",
-})
-
-
-def is_secret_env_key(key: str) -> bool:
-    """判断 .env 键名是否承载凭据。"""
-    name = str(key or "").strip().upper()
-    if not name or name in _NON_SECRET_KEY_EXCEPTIONS:
-        return False
-    if any(hint in name for hint in _SECRET_ENV_KEY_HINTS):
-        return True
-    return name.endswith("_KEY") or name == "KEY"
-
-
-def _split_env_secrets(env_config: Dict[str, Any]) -> tuple[Dict[str, Any], List[str]]:
-    """拆出可安全导出的 .env 项与被剔除的敏感键名。
-
-    被剔除的键是**整项删除**而不是替换成占位符：
-    `_write_env_config_file` 只覆盖 payload 里出现过的键，
-    因此导入这份脱敏备份时，目标机器上的真实密钥会原样保留，
-    而不会被 `***` 之类的占位符污染。
-    """
-    safe: Dict[str, Any] = {}
-    redacted: List[str] = []
-    for key, value in (env_config or {}).items():
-        if is_secret_env_key(key) and str(value or "").strip() != "":
-            redacted.append(key)
-            continue
-        safe[key] = value
-    return safe, sorted(redacted)
-
-
-def _build_settings_backup_bundle(include_secrets: bool = False) -> Dict[str, Any]:
+def _build_settings_backup_bundle() -> Dict[str, Any]:
     sites_file = Path(config_engine.config_file)
     sites_local_file = Path(config_engine.local_sites_file)
     commands_file = Path(ConfigConstants.COMMANDS_FILE)
@@ -338,19 +300,16 @@ def _build_settings_backup_bundle(include_secrets: bool = False) -> Dict[str, An
     browser_config_file = Path("config/browser_config.json")
     extractors_file = Path(extractor_manager.CONFIG_FILE)
 
-    env_config = _load_env_config_from_file()
-    if include_secrets:
-        env_payload: Dict[str, Any] = env_config
-        redacted_keys: List[str] = []
-    else:
-        env_payload, redacted_keys = _split_env_secrets(env_config)
+    # S13：备份文件会被下载、转存、分享，默认绝不包含 .env 中的令牌/密钥/含凭据的代理地址。
+    # 被剔除的键只记录名字，导入时这些键保持目标机器现值不变。
+    safe_env, redacted_env_keys = redact_env_for_backup(_load_env_config_from_file())
 
     return {
         "bundle_version": 1,
+        "secrets_redacted": True,
+        "redacted_env_keys": redacted_env_keys,
         "exported_at": int(time.time()),
         "app_version": APP_VERSION,
-        "contains_secrets": bool(include_secrets),
-        "env_redacted_keys": redacted_keys,
         "files": {
             "sites": _read_json_file(sites_file, {}),
             "sites_local": _read_json_file(sites_local_file, {"default_presets": {}}),
@@ -359,9 +318,22 @@ def _build_settings_backup_bundle(include_secrets: bool = False) -> Dict[str, An
             "browser_constants": _read_json_file(browser_config_file, {}),
             "extractors": _read_json_file(extractors_file, extractor_manager.export_config()),
             "update_preserve": load_update_preserve_settings(),
-            "env": env_payload,
+            "env": safe_env,
         },
     }
+
+
+_REDACTED_PLACEHOLDERS = {"***", "******", "<redacted>", "[redacted]", "__redacted__", "redacted"}
+
+
+def _strip_redacted_env_import(env_payload: Dict[str, Any]) -> Dict[str, Any]:
+    """导入备份时丢弃脱敏占位符，避免把 "***" 之类写回 .env 覆盖真实令牌。"""
+    cleaned: Dict[str, Any] = {}
+    for key, value in env_payload.items():
+        if isinstance(value, str) and value.strip().lower() in _REDACTED_PLACEHOLDERS:
+            continue
+        cleaned[key] = value
+    return cleaned
 
 
 def _validate_settings_backup_files(files: Dict[str, Any]) -> Dict[str, Any]:
@@ -431,7 +403,10 @@ def _validate_settings_backup_files(files: Dict[str, Any]) -> Dict[str, Any]:
     if "env" in files:
         if not isinstance(files["env"], dict):
             raise HTTPException(status_code=400, detail="env 配置格式无效")
-        validated["env"] = files["env"]
+        env_payload = _strip_redacted_env_import(files["env"])
+        # 与 POST /api/settings/env 同一套校验：拦截换行注入、非法键名、认证自锁/公开无认证
+        _validate_env_config_payload(env_payload)
+        validated["env"] = env_payload
 
     return validated
 
@@ -888,8 +863,8 @@ async def clear_logs(authenticated: bool = Depends(verify_auth)):
 # ================= 环境配置 API =================
 
 @router.get("/api/settings/env")
-async def get_env_config(authenticated: bool = Depends(verify_admin_auth)):
-    """读取 .env 文件配置（含密钥明文，强制管理鉴权 —— 修复 S13）"""
+async def get_env_config(authenticated: bool = Depends(verify_auth)):
+    """读取 .env 文件配置"""
     try:
         # 修复：config 结构保持不变（前端只读 data.config）；
         # 另附只读 effective 字段暴露 DASHBOARD_AUTH_* 的实际生效值，前端不会回写它。
@@ -963,11 +938,18 @@ def _validate_env_config_payload(new_config: Dict[str, Any]) -> None:
             detail="启用控制面板认证时必须设置 DASHBOARD_AUTH_TOKEN 或 AUTH_TOKEN"
         )
 
+    # H1 / S1：认证开关必须是合法布尔值；公开监听必须同时启用认证。
+    # 与启动期检查 startup_security_errors 同一套规则，避免保存后服务起不来。
+    merged_env = {str(k): _serialize_env_value(v) for k, v in merged.items()}
+    security_errors = startup_security_errors(env=merged_env)
+    if security_errors:
+        raise HTTPException(status_code=400, detail="；".join(security_errors))
+
 
 @router.post("/api/settings/env")
 async def save_env_config(
     request: Request,
-    authenticated: bool = Depends(verify_admin_auth)
+    authenticated: bool = Depends(verify_auth)
 ):
     """保存 .env 配置"""
     try:
@@ -996,34 +978,10 @@ async def save_env_config(
 
 
 @router.get("/api/settings/backup")
-async def export_settings_backup(
-    include_secrets: bool = False,
-    token_authenticated: bool = Depends(verify_admin_auth),
-):
-    """导出完整配置备份。
-
-    修复 S13：
-    - 始终强制管理鉴权（不再依赖默认关闭的 DASHBOARD_AUTH_ENABLED），跨源请求直接 403；
-    - 默认剔除 `.env` 中的令牌/密钥/密码，仅返回被剔除的键名清单；
-    - `?include_secrets=true` 需要请求方出示真实管理令牌，仅靠本机回环放行不足以导出明文密钥。
-    """
+async def export_settings_backup(authenticated: bool = Depends(verify_sensitive_admin_auth)):
+    """导出完整配置备份。"""
     try:
-        if include_secrets and not token_authenticated:
-            raise HTTPException(
-                status_code=403,
-                detail=(
-                    "导出含密钥的备份需要配置并出示管理令牌"
-                    "（DASHBOARD_AUTH_ENABLED=true + DASHBOARD_AUTH_TOKEN）。"
-                ),
-            )
-        bundle = _build_settings_backup_bundle(include_secrets=include_secrets)
-        if include_secrets:
-            logger.warning(
-                "⚠️  已导出包含 .env 明文密钥的完整备份，请勿分享、提交或通过第三方渠道传输该文件。"
-            )
-        return bundle
-    except HTTPException:
-        raise
+        return _build_settings_backup_bundle()
     except Exception as e:
         logger.error(f"导出配置备份失败: {e}")
         raise HTTPException(status_code=500, detail=f"导出失败: {str(e)}")
@@ -1032,7 +990,7 @@ async def export_settings_backup(
 @router.post("/api/settings/backup")
 async def import_settings_backup(
     request: Request,
-    authenticated: bool = Depends(verify_admin_auth)
+    authenticated: bool = Depends(verify_sensitive_admin_auth)
 ):
     """导入完整配置备份。"""
     try:

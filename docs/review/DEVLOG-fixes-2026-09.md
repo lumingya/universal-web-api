@@ -4,7 +4,23 @@
 > 防止上下文压缩或沙盒重启后丢失信息。上一阶段（只审查不改代码）的日志见
 > `docs/review/DEVLOG-code-review-2026-09.md`。
 
+## ✅ 状态：P1 + P2 全部完成并融合 main 分支成果（分支 `fix/review-p1-p2-b`）
+
+- P1：S13、S1、H1、S8、S9、S12；P2：B8、B5、B2、B1、B3、S10、S11、S4、S5、S6、S3、H9、H12、T1。
+- 融合 main 分支成果：
+  - S2：补齐 `docs/SECURITY-TRUST-BOUNDARIES.md` 信任边界文档，启动期对外绑定与危险代码执行组合自检阻断。
+  - S4：`open-profile-url` 补齐云元数据主机名（`_METADATA_HOSTS`）与内部网络后缀拦截。
+  - S6：媒体鉴权支持 `?token=` 查询参数，方便前端 `<img src>` 携带凭据。
+- 完整测试：全部通过，含新增 118 项回归测试全部通过。
+
 ## 0. 恢复指引（上下文丢失 / 沙盒重启后先看这里）
+
+> ⚠️ **分支约定（2026-09-25 用户确认）**：发现另一会话在并行往 `main` 推同一批修复（`c8006cd`、`06f8103`…）。
+> 用户选择：本会话**只推独立分支 `fix/review-p1-p2-b`**，基于 `d663bb7` 独立完成 P1+P2，**不碰 `main`**，
+> 最终由用户对比/择优合并。恢复时：`git checkout fix/review-p1-p2-b && git pull`，推送用
+> `git push origin fix/review-p1-p2-b`。下面第 1 步里的 `origin/main` 对本分支不适用。
+> 沙盒重启会丢 `.git/config`（含 remote 与 user.name/email）和 `/tmp`，需按第 3 步和第 2 节重建。
+
 
 1. `cd /home/user/repo && git log --oneline -5` 确认最新提交点（远端 `origin/main`）。
 2. 读本文件「3. 进度清单」，从第一个未勾选项继续。**不要**重新通读全仓库。
@@ -55,12 +71,14 @@ chmod +x /tmp/runtests.sh
 ```
 
 **修复前基线（commit `5f724c5`）：`524 passed, 73 failed`。**
-**B1 修复后基线更新为 64 failed**（9 个站点发现断言已转绿），
-`/tmp/baseline_failures.txt` 已同步刷新。
 73 个失败的构成（与审查报告一致，不是本轮引入的回归）：
 
 - 64 个：依赖未跟踪的本地 fixture（`config/commands*.json`、本地 JS 脚本等）→ 条目 T1
 - 9 个：`tests/test_site_discovery.py` 站点自动发现断言 → 条目 B1（本轮要修，修完应变绿）
+
+> 2026-09-25 第二会话复核：重新 clone 后基线同为 `524 passed, 73 failed`，失败清单已存 `/tmp/baseline_failures.txt`。
+> 快捷脚本 `/tmp/check.sh` = 跑测 + 与基线 diff（`comm -13`），输出「new failures」段必须为空。
+> 丢失时按下文重建：`/tmp/runtests.sh 2>&1 | grep '^FAILED' | sed 's/^FAILED //; s/ - .*//' | sort`（在 `d663bb7` 上跑）。
 
 判定回归的方法：把当前失败集合与 `/tmp/baseline_failures.txt` 做 diff，只允许减少、不允许新增。
 
@@ -97,668 +115,287 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - [x] S3 解析器安装立即 import
 - [x] H9 标签页等待队列无总量上限
 - [x] H12 网络事件 URL 正则回溯
+- [x] T1 干净克隆测试资源不全（范围里列了但清单漏了，补上）
 
 ## 4. 修复记录
 
-### 2026-09-25 · S13 + S1 + H1（默认安全边界与备份泄密）
+（每完成一项追加：条目 ID、改了哪些文件、做了什么决策、怎么验证的、提交哈希）
 
-一次提交处理，因为三者互相依赖：S13 的严重性来自 S1 的默认关闭认证，而 S1 的默认值来自 H1 的模板。
+### 通用基础设施（多个条目共用）
 
-**改动文件**
+- 新增 `app/core/http_security.py`：回环判定、Origin 判定、启动期安全检查、备份脱敏、
+  「可信本机请求」判定（识别反代/隧道转发头 + start.py handoff 代理共享密钥）。
+- 新增回归测试 `tests/test_review_fixes_p1.py`（P1）/ `tests/test_review_fixes_p2.py`（P2）；
+  `.gitignore` 用 `!tests/test_review_fixes_*.py` 放行（tests/ 目录默认忽略，只有白名单文件入库）。
+
+### S13 备份泄露密钥 ✅
+
+- `app/core/http_security.py`: `is_secret_env_key` / `redact_env_for_backup`（键名含 TOKEN/SECRET/PASSWORD/API_KEY/COOKIE/
+  CREDENTIAL/AUTH_USER/SESSION 等，或值形如 `scheme://user:pass@host` 的一律剔除）。
+- `app/api/system.py`: 备份 `files.env` 只含安全子集，新增 `secrets_redacted` / `redacted_env_keys`；
+  导入时丢弃 `***` 等占位符，并复用 `_validate_env_config_payload`（此前导入 env 完全不校验，可换行注入）。
+  **决策**：秘密「剔除」而非「打码」——导入时缺失键保持目标 `.env` 现值，不会被占位符覆盖。
+- `app/api/deps.py`: 新增 `verify_sensitive_admin_auth` —— 面板认证开启时校验令牌；未开启时只允许
+  「直接来自回环且无 X-Forwarded-For 等转发头」的请求，否则 403。备份 GET/POST 改用它。
+- `static/js/dashboard-methods.js`: 导出备份不再写 `dashboard_token`/`api_token`；导入旧备份仍兼容读取。
+- 验证：`tests/test_review_fixes_p1.py` 7 项（无授权远端 403、隧道头 403、启用认证无令牌 401、响应不含合成密钥、
+  占位符不覆盖、换行注入 400、前端不导出令牌）。全量：531 passed / 73 failed（与基线相同的 73 项）。
+
+### S1 控制面默认开放 + H1 模板诱导不安全部署 ✅（同一提交，互相依赖）
 
 - `app/core/config_parts/env_config.py`
-  - 新增 `parse_bool_literal()`：严格布尔解析，无法识别返回 `None`。
-  - 新增 `AppConfig._env_bool_secure()`：安全开关专用，值无法解析时 **fail-closed 返回 True**。
-    `is_auth_enabled` / `is_dashboard_auth_enabled` 改用它，于是
-    `AUTH_ENABLED=your-secret-here` 不再等价于「关闭认证」。
-  - `get_cors_origins()` 默认值由 `["*"]` 改为回环同端口来源
-    （面板与 API 同源，本来就不需要 CORS 放行，因此不影响开箱即用）。
-  - 新增 `is_loopback_bind()` / `collect_security_config_errors()` / `is_insecure_startup_allowed()`。
-  - 新增本地异常 `InsecureStartupConfigError`（**没有**复用 `exceptions.ConfigurationError`，
-    避免 `env_config` 反向依赖 `exceptions` 造成导入环）。
-- `app/core/config_parts/__init__.py`、`app/core/config.py`：导出上述两个新符号。
-- `main.py`：`lifespan` 开头调用新增的 `_enforce_secure_startup_config()`，
-  发现不安全组合直接抛 `InsecureStartupConfigError` 拒绝启动；
-  仅 `UWA_ALLOW_INSECURE_STARTUP=true` 时降级为告警。
-- `app/api/deps.py`：新增 `client_is_loopback()` / `verify_admin_access()` / `verify_admin_auth`。
-  规则顺序：跨源 → 403；已配置令牌 → 必须出示；未配置令牌 → 仅本机回环放行（返回 `False`）。
-  **返回值语义很重要**：`True` = 出示了真实令牌，`False` = 靠回环放行，调用方据此决定能否输出明文密钥。
-- `app/api/system.py`：
-  - 新增 `is_secret_env_key()` / `_split_env_secrets()`；
-  - `_build_settings_backup_bundle(include_secrets=False)`，响应新增 `contains_secrets`
-    与 `env_redacted_keys` 字段；
-  - `/api/settings/backup`（GET/POST）与 `/api/settings/env`（GET/POST）全部改用 `verify_admin_auth`。
-- `static/js/dashboard-methods.js`：`getDashboardPreferencesBackup()` 不再写入
-  `dashboard_token` / `api_token`；导出成功提示会说明剔除了几项密钥。
-  `applyDashboardPreferencesBackup()` **保持不变**，旧备份仍可导入。
-- `.env.example`：整体重写（原文件把前 25 行重复了两遍）。
-
-**关键决策**
-
-1. 脱敏方式是**整键删除**而不是写 `***` 占位符。因为 `_write_env_config_file()` 只覆盖
-   payload 里出现过的键，删除后导入这份备份时目标机器上的真实密钥会原样保留；
-   若写占位符反而会把真密钥覆盖成 `***`。
-2. 未配置令牌时允许回环访问，而不是硬性 401。否则全新克隆的单机用户连面板都打不开，
-   修复会被绕过（直接改回旧版）。回环**不是**凭证，所以它拿不到 `include_secrets=true`。
-3. 启动校验放在 `main.py:lifespan` 而非模块导入期，避免 import `main` 的测试/工具被连带拒绝。
-
-**验证**
-
-- 新增 `tests/test_security_hardening_fixes.py`（29 项，全部通过），用 `httpx.ASGITransport`
-  进程内请求，密钥全部是 `synthetic-*` 合成值。
-- 全量轻量套件：`553 passed, 73 failed`，失败集合与基线**逐行相同**（无回归）。
-
-提交：`c695750`
-
-### 2026-09-25 · S8 + S9（活动内容落盘与同源提供）
-
-两条是同一条链路的两个入口，合并修复。
-
-**新增** `app/utils/safe_media_types.py` —— 单一事实源，含：
-
-- `SAFE_IMAGE/AUDIO_VIDEO_EXTENSIONS`、`ACTIVE_CONTENT_EXTENSIONS`、`ACTIVE_CONTENT_MIME_TYPES`
-- `resolve_safe_media_extension(kind, content_type, url)` → 安全扩展名或 `None`（拒绝落盘）
-- `looks_like_active_content(head_bytes)` → 内容嗅探，兜住「谎报 Content-Type」
-- `resolve_media_delivery(path, mime)` → `(media_type, inline|attachment)`
-- `safe_media_response_headers()` → `nosniff` + `default-src 'none'; sandbox` + CORP + no-referrer
-
-**扩展名判定顺序（重要）**
-
-1. Content-Type 是活动内容 → 拒绝
-2. Content-Type 在安全白名单 → 用白名单扩展名，**忽略 URL 后缀**；
-   且 MIME 类别必须与 kind 一致（防止「image/png 走 video 分支」的新绕过）
-3. Content-Type 不认识 **且** URL 后缀是活动内容 → **整体拒绝**（两个线索都不可信）
-4. Content-Type 不认识、URL 后缀在同类白名单 → 用它
-5. 其余 → 类别默认扩展名 `.png` / `.mp3` / `.mp4`
-
-**改动文件**
-
-- `app/core/browser/media.py`
-  - 删掉 3 处各自为政的 `ext_map`（其中图片那份含 `"image/svg+xml": ".svg"`，即 S8 根因）；
-  - 前台图片回退：先 `resolve_safe_media_extension("image", ...)`，再对前 1KB 做
-    `looks_like_active_content` 复核；
-  - 音视频 `_persist_remote_media_urls_to_local`：扩展名不再取自 `urlparse(url).path`
-    （S9 根因），并在写入首个 chunk 前做内容嗅探，命中则抛 `unsafe_media_content` 走既有清理分支；
-  - `_persist_data_uri_media_to_local`：data URI 的 `image/svg+xml` 同样拒绝。
+  - `get_cors_origins()` 默认由 `["*"]` 改为 `[]`（`parse_cors_origins`，空=不放行任何跨源）。
+  - 新增 `_env_bool_secure()`：`AUTH_ENABLED`/`DASHBOARD_AUTH_ENABLED` 值非法时 **fail-closed 返回 True**。
 - `main.py`
-  - 新增 `HardenedMediaStaticFiles`（`StaticFiles` 子类，覆写 `file_response`）并用它挂载
-    `/download_images`；
-  - `/media/{filename}` 返回前走 `resolve_media_delivery` + 加固响应头。
-  - **出口加固是必要的**：目录里可能已有旧版本落盘的 `.svg` / `.html`，光堵写入端不够。
-- `app/core/background_image_downloader.py`：**未改动**。它本来就拒绝 SVG 且有魔数校验
-  （`_detect_safe_image_extension`），属于报告「不要误报」清单。
+  - CORS 中间件仅在 `CORS_ORIGINS` 非空时挂载；显式 `*` 打告警。
+  - 新增 `reject_untrusted_origins` 中间件（最外层）：带 `Origin` 且既非同源（Host / X-Forwarded-Host）
+    也不在 `CORS_ORIGINS` 的请求（含预检、`Origin: null`）直接 403。**决策**：CORS 只挡读取，挡不住跨站
+    简单 POST，所以服务端必须按 Origin 拒绝；无 Origin 的 curl/SDK 不受影响。
+  - `_enforce_secure_startup_config()` 在 `lifespan` 开头和 `__main__` 调用，非回环监听且未同时启用
+    API + 面板认证（含令牌）、或认证开关不是合法布尔值 → 抛 `InsecureStartupConfigError` 拒绝启动。
+    逃生开关 `ALLOW_INSECURE_PUBLIC_BIND=true`。
+- `start.py`：启动器用 `importlib` 按路径加载纯标准库的 `http_security.py`（不导入 app 包），启动前同样检查，
+  不通过直接 `return 2`（避免子进程拒绝→启动器 3 秒重启的死循环）；handoff 代理模式下把公开地址通过
+  `UWAPI_PUBLIC_BIND_HOST` 传给子进程（子进程自身只绑 127.0.0.1，否则检查会被绕过）。
+- `app/api/system.py`：保存 `.env` / 导入备份时复用 `startup_security_errors`，避免保存出一个起不来的配置。
+- `.env.example`：删掉重复的前 25 行；`APP_HOST=127.0.0.1`、`APP_DEBUG=false`、`AUTH_ENABLED=false`、
+  `DASHBOARD_AUTH_ENABLED=`（沿用）、`CORS_ORIGINS=`、`PROXY_*` 关闭且无个人地址、`HELPER_API_KEY=` 空、
+  `CMD_ALLOW_UNSAFE_PYTHON_COMMANDS=false`（与代码默认一致）；删掉代码中完全未使用的 `NGROK_*`（含个人静态域名）。
+- `static/js/dashboard-schema.js`：`CORS_ORIGINS` 前端默认值 `*` → `''`（前端默认值会在 .env 缺键时写盘）。
+- README.md / README.en.md：同步 `APP_HOST` / `CORS_ORIGINS` 说明。
+- 已知影响：`workflow-editor-inject.js` 的跨源直连 fetch 本来就走不通（端口写死 9099 且跨源时
+  `shouldPreferBridgeMode()` 恒为真 → 走 CDP 桥），因此 CORS 默认收紧不影响可视化编辑器。
+- 验证：p1 测试增至 24 项（Origin 判定矩阵 10 例、主应用跨源 GET/POST/预检均 403 且无 ACAO、占位符 fail-closed、
+  启动检查矩阵、lifespan 拒绝含 handoff 场景、启动器可独立加载检查模块、模板无重复键/无示例秘密/可直接通过检查）。
+  全量 548 passed / 73 failed（基线同集合）。
 
-**验证**
+### S8 SVG 同源活动内容 + S9 音视频 HTML 落盘 ✅（同一链路，同一提交）
 
-- 新增 `tests/test_safe_media_types.py`（30 项全过）：含 S9 的 `video/custom` + `clip.html`
-  复现用例、SVG data URI、历史遗留 `.svg` 经 ASGI 取回必须是
-  `application/octet-stream` + `attachment` + `nosniff`。
-- 同时验证「正常 mp4 仍能正常落盘为 `/media/xxx.mp4`」，避免过度拦截。
-- 全量：`583 passed, 73 failed`，失败集合与基线逐行相同（无回归）。
+- 新增 `app/utils/media_safety.py`（单一事实源）：图片/音频/视频 MIME→扩展名白名单、
+  `choose_media_extension(kind, content_type, url)`（活动 MIME 拒绝 → 映射 → 仅采纳同类白名单 URL 后缀 → 类别默认；
+  MIME 大类与 kind 不符也拒绝）、`looks_like_active_content()`（文件头以 `<` 开头 / UTF-16 BOM 即判活动内容）、
+  `resolve_media_delivery()`（出口：非白名单扩展名 → `application/octet-stream` + `attachment`）、
+  `safe_media_response_headers()`（`nosniff` + `sandbox; default-src 'none'; img-src/media-src 'self'` CSP）。
+- `app/core/browser/media.py`：
+  - 音视频 `_persist_remote_media_urls_to_local`：扩展名不再取 `urlparse(url).path` 后缀（S9 根因），
+    首个 chunk 写盘前嗅探，命中抛 `unsafe_media_content` 走原有清理分支（删半截文件、保留远程链接）。
+  - 前台图片回退：删掉 `"image/svg+xml": ".svg"`（S8 根因），`is_active_content_mime` 拦截，
+    内容嗅探为标记语言时不落盘、继续走截图回退。
+  - data URI：`image/svg+xml`/`text/html` 等 MIME 或内容嗅探命中 → 不落盘（保留原 data_uri）。
+- `app/core/extractors/media_extractor.py`：网络音频捕获落盘前同样嗅探。
+- `main.py`：`/media/{filename}` 走 `resolve_media_delivery` + 加固头；`/download_images` 改挂
+  `HardenedMediaStaticFiles`（覆写 `file_response`）。**出口加固必要**：目录里可能已有旧版落盘的 .svg/.html。
+  **决策**：不加 `Cross-Origin-Resource-Policy`——跨站聊天前端（如 localhost:8000）需要 `<img>` 引用这些链接。
+- `background_image_downloader.py` 未改（本来就拒绝 SVG 且有魔数校验，属报告「不要误报」项）。
+- 验证：p1 测试增至 43 项（白名单矩阵 9 例、嗅探、`video/custom`+`clip.html`+HTML 不落盘且无残留、
+  真实 mp4 带 .html 后缀落盘为 .mp4、SVG data URI 与谎报 png 的 SVG 均不落盘、遗留 .svg/.html 经 ASGI
+  取回为 octet-stream+attachment+nosniff+sandbox、png 仍 inline）。全量 567 passed / 73 failed（基线同集合）。
 
-### 2026-09-25 · S12（默认响应调试抓取泄露聊天内容）
+### S12 默认响应调试抓取 ✅（第一批完成）
 
-**根因有两层**，缺一不可：
-
-1. `config/browser_config.json` 里跟踪的 `NETWORK_DEBUG_CAPTURE_ENABLED` 是 `true`
-   —— 全新克隆开箱即在写响应正文。
-2. `NetworkMonitor._is_network_debug_capture_enabled()` 用 `bool(BrowserConstants.get(...))`
-   判断。`bool("false") is True`，所以**把它配成字符串 `"false"` 反而是打开**。
-   用户以为关掉了，实际没有。
-
-**改动文件**
-
-- `config/browser_config.json`：`NETWORK_DEBUG_CAPTURE_ENABLED` → `false`；
-  新增 `NETWORK_DEBUG_CAPTURE_RETENTION_HOURS: 24`。
+- `config/browser_config.json`：`NETWORK_DEBUG_CAPTURE_ENABLED` 出厂 `true` → `false`；新增 `NETWORK_DEBUG_CAPTURE_RETENTION_HOURS: 24`。
 - `app/core/network_monitor.py`：
-  - `_is_network_debug_capture_enabled()` 改用 `_browser_constant_bool(key, False)`（严格布尔、默认关）；
-  - 新增 `_warn_network_debug_capture_once()`：开启时打一次醒目 WARNING，说明写什么、留多久；
-  - 新增 `get_network_debug_capture_retention_hours()` 与
-    `purge_expired_network_parser_debug_files()`——原先**只有**总量上限（50MB），没有保留期，
-    旧版本默认开启留下的聊天正文会长期躺在磁盘上。
-- `main.py` lifespan：启动清理时先 `purge_expired_...` 再 `trim_...`。
-- `app/api/system.py`：`DEFAULT_BROWSER_CONSTANTS` 补 `NETWORK_DEBUG_CAPTURE_RETENTION_HOURS`，
-  让面板能配置它（否则前端改不了）。
+  - `_is_network_debug_capture_enabled()` 改严格布尔（旧 `bool("false") == True`）；只接受 true/1/yes/on，其余一律关闭。
+  - 首次判定为开启时打一次 WARNING，提示快照含聊天内容、用完关闭并清理。
+  - `trim_network_parser_debug_dir()` 新增 `max_age_seconds`（默认读保留期配置）：启动时和每次写入后删除过期快照
+    （仍排除当前活跃文件），再按容量清理。**决策**：没有尝试更强的正文脱敏——解析器调试本来就需要原始正文，
+    改为「默认关 + 醒目告警 + 限期自动删除」来控制暴露面。
+- `browser_constants.py` / `system.py` 默认值 & `dashboard-schema.js`：补齐保留期配置项；开关说明加隐私警告。
+- 验证：p1 测试 58 项（受跟踪配置为 false、严格布尔 13 例含 `"false"`/`"garbage"`、保留期删除过期但保留活跃文件）。
 
-**未改动**：脱敏器 `sanitize_sensitive_data` 本身。报告指出它对普通聊天文本无能为力，
-但那是「默认不该抓」的问题，不是脱敏器的缺陷；强行扩大脱敏会误伤正常排障。
+### B8 命令配置损坏清空运行缓存 ✅
 
-**验证**：`tests/test_security_hardening_fixes.py` 新增 5 项（含 `"false"` 字符串解析矩阵、
-过期快照清理、retention=0 时不清理）。全量 `588 passed, 73 failed`，与基线逐行一致。
+- `app/services/command_engine.py`：`_read_commands_file()` 返回 `Optional[List]`——JSON 损坏/结构不是 list/IO 异常 → `None`；
+  文件不存在或合法空列表 → `[]`。`_refresh_commands_if_changed()` 遇 `None`：保留 last-known-good、**不推进** `_commands_mtime`、
+  不做 run_js_file 清理；记录 `_commands_failed_mtime`，同一损坏 mtime 不再重复读取/刷日志；文件修好（mtime 变化）自动重载。
+  首次加载即失败时以空配置运行（无 last-known-good 可用）。`_save_commands` 成功时清除失败标记。
+- `command_engine_storage.py` 是未被继承的死代码（H13，P3），**未改**。
+- 验证：`tests/test_review_fixes_p2.py::test_b8_*`（损坏 JSON/错误结构均保留旧命令且无清理动作、同一损坏文件不重复读、
+  修复后切换并产生清理动作（对照）、合法空配置仍会清空）。该用例在修复前代码上失败（已 stash 验证）。
 
-### 2026-09-25 · B8（命令配置损坏清空运行缓存）
+### B5 解冻失败仍交付标签页 ✅
 
-**根因**：`_read_commands_file()` 在 JSON 解析失败 / 读取异常时 `return []`，
-与「文件里确实是空命令列表」完全无法区分。于是 `_refresh_commands_if_changed()`
-把缓存换成 0 条、推进 mtime，并据此生成 `run_js_file` 清理动作，
-把已经注入在线标签页的预注入脚本一并撤掉——触发条件只是编辑器保存到一半。
-
-**改动** `app/services/command_engine.py`
-
-- 新增 `_read_commands_file_or_none()`：读失败/格式非法返回 `None`；
-  `_read_commands_file()` 保留为返回 `[]` 的兼容包装（外部契约不变）。
-- 新增实例字段 `_commands_invalid_mtime`：记录已知坏文件的 mtime。
-- `_refresh_commands_if_changed()`：
-  - 读到 `None` 且已有 last-known-good → 保留缓存、**不推进** `_commands_mtime`、
-    不生成清理动作，只 WARNING 一次；
-  - 同一份坏文件后续轮询直接跳过重读（靠 `_commands_invalid_mtime` 判断）；
-  - 首次加载就失败 → 退化为空列表但同样不推进 mtime，修好后能自动加载；
-  - 读成功 → 清空 `_commands_invalid_mtime`。
-- `_save_commands()` 成功后同样清空 `_commands_invalid_mtime`。
-
-**注意保留的行为**：**合法的空列表 `{"commands": []}` 仍然生效并照常生成清理动作**。
-这是本项修复最容易改坏的地方，已单独加测试锁定。
-
-**未改动**：`app/services/command_engine_storage.py` 里那份同名 `_read_commands_file`
-属于未被继承的死代码（报告 H13，P3）。本轮不动它，但要注意**别改错文件**。
-
-**测试限界**：mtime 粒度问题——同一秒内连写两次文件可能 mtime 相同，
-热加载根本不会触发。测试用 `_rewrite()` 显式 `os.utime` 推进 mtime，
-否则测的是「没触发」而不是「触发后的行为」。
-（顺带说明：这也是 B7 在 `script_loader` 上的同类问题，属 P3 未处理。）
-
-**验证**：新增 `tests/test_command_config_hot_reload_safety.py`（8 项全过）。
-全量 `596 passed, 73 failed`，与基线逐行一致。
-
-### 2026-09-25 · B5（解冻失败仍交付 BUSY 标签页）
-
-**根因**：`idle_maintenance.resume_if_frozen()` 把
-`_uwapi_frozen = False` 放在 `finally` 里无条件执行。CDP 的
-`Page.setWebLifecycleState` 抛错后，页面**实际仍是 frozen**，但标志已清除；
-`TabSession.acquire()` 忽略返回值，照样返回 True 并把 BUSY 会话交出去，
-之后所有 DOM/JS 操作都在一个冻结页面上静默失败。
-
-**改动**
-
-- `app/core/tab_pool_parts/idle_maintenance.py`：`finally` 里只保留
-  `_restore_focus_emulation`；成功才清除 `_uwapi_frozen` / `_uwapi_freeze_token`
-  并重置失败计数；失败则累加 `_uwapi_resume_failures` 与 `_uwapi_resume_failed_at`，
-  保留「待确认冻结」态。
+- `app/core/tab_pool_parts/idle_maintenance.py::resume_if_frozen`：CDP `Page.setWebLifecycleState=active` 失败时**不再**
+  在 `finally` 清除 `_uwapi_frozen`，改记 `_uwapi_resume_failed_at`；成功时才清冻结标志并清零失败时间。
 - `app/core/tab_pool_parts/session.py`：
-  - `_resume_after_acquire()` 改为返回 bool。
-    **判据是 `_uwapi_frozen` 是否已清除，而不是 `resume_if_frozen()` 的返回值**——
-    后者返回 False 有「本来就没冻结」和「解冻失败」两种含义，不能直接用。
-  - `acquire()` / `acquire_for_command()` 在解冻未确认时调用
-    `_rollback_acquire_after_failed_resume()` 并返回 False。
-  - 回滚是**直接改状态**而不是走 `release()`：此刻 status 仍是 BUSY，
-    没有其他线程能介入，而完整 release 会触发页面清理等与本场景无关的副作用。
-  - 连续 `_RESUME_FAILURE_ERROR_THRESHOLD = 3` 次失败 → `mark_error()`，
-    交给既有错误恢复流程，避免坏标签页在池子里无限空转。
-
-**边界**：CDP 恢复正常后下一次 `acquire()` 必须能成功并清零计数（已加测试），
-否则一次瞬时抖动就会永久废掉一个标签页。
-
-**验证**：新增 `tests/test_tab_resume_failure_safety.py`（8 项全过，用 `_FakeTab` 桩）。
-全量 `604 passed, 73 failed`，与基线逐行一致。
-
-### 2026-09-25 · B1 + B2（站点自动发现误判 / 旧版历史丢失）
-
-两项都是小而确定的逻辑错误，合并一次提交。
-
-#### B1 搜索引擎主域被自动发现
-
-难点在于要同时满足这组相互冲突的期望（来自已有测试）：
-
-| 必须拒绝 | 必须允许 |
-| --- | --- |
-| `google.com` / `www.google.com` / `WWW.GOOGLE.COM.` | `gemini.google.com` |
-| `google.co.jp` / `www.google.co.uk` | `aistudio.google.com` |
-| `accounts.google.com` | `gemini.com` / `chat.deepseek.com` |
-| `bing.com` / `www.baidu.com` | `google.com.attacker.org` |
-
-所以**不能**简单按 host 精确匹配（覆盖不了 ccTLD），也**不能**「google 全域拒绝」
-（会误伤 gemini/aistudio）。
-
-`app/utils/site_discovery.py` 的做法：
-
-1. `_search_engine_subdomain_labels(host)`：找到 `_SEARCH_ENGINE_LABELS` 里的标签，
-   要求它**后面的标签全是公共后缀样式**（`_is_public_suffix_label`：在短后缀集合里，
-   或 ≤3 个字母）。这样 `google.co.jp` 命中，而 `google.com.attacker.org`
-   因为 `attacker` 不是后缀标签而不命中 → 按普通域名放行。
-2. 返回的是「search 标签之前的子域标签」：`[]` = 主域 → 拒绝；`['www']` → 拒绝；
-   其他子域只在命中 `_NON_CHAT_SUBDOMAIN_LABELS`（accounts/login/mail/...）时拒绝。
-3. **显式规则优先**：`site_rules.json` / `sites.local.json` 里配了 `auto_discovery`
-   就直接用它，启发式只在没有显式配置时兜底。用户仍可手工覆盖。
-
-`config/site_rules.json` 另补了 9 个常见搜索主域的显式 `auto_discovery: false`，
-既是文档也便于用户就地修改。
-
-#### B2 旧版顶层数组历史丢失
-
-`app/services/request_manager.py:_load_history()` 原写法：
-
-```python
-records = data.get("records", data if isinstance(data, list) else [])
-```
-
-Python 会**先求值参数**，`data` 是列表时 `data.get` 立刻抛 `AttributeError`，
-兼容分支根本没机会生效，异常被外层 `except Exception` 吞掉 → 历史恢复 0 条。
-改成先 `isinstance` 分支判断，并对既非 list 也非 dict 的内容打一条 warning。
-
-**验证**
-- `tests/test_site_discovery.py` 36 项全过（基线里 9 个失败全部转绿）。
-- 新增 `tests/test_request_history_compat.py`（10 项）：顶层数组、对象格式、
-  数组里混入非 dict、token 统计回填、坏 JSON 不抛异常。
-- 全量 `623 passed, 64 failed`，无新增失败；基线文件已更新为 64。
-
-### 2026-09-25 · B3（Responses 内存历史无字节预算 / 无主体隔离）
-
-`app/api/chat.py`。原来只有「1024 条 + 1 小时 TTL」两个上限；
-而 Responses 默认 `store=true`，一条含 base64 图片的历史就可能几十 MB。
-另外状态只按 response id 索引，任何拿到 id 的调用方都能续接他人会话。
-
-**改动**
-
-- 常量新增 `RESPONSES_STATE_MAX_ENTRY_BYTES = 4MiB`、`RESPONSES_STATE_MAX_TOTAL_BYTES = 64MiB`。
-- 条目结构由 `(stored_at, serialized)` 扩展为
-  `(stored_at, subject_key, serialized_or_None, nbytes)`，并维护模块级
-  `_responses_state_total_bytes`。
-- 新增 `_drop_responses_state_locked()` 统一做「弹出 + 扣减字节」，
-  所有淘汰路径（TTL / 条数 / 总字节 / 覆盖写）都走它，避免计数漂移。
-- 新增 `_responses_subject_key(request)`：取 Authorization / X-API-Key 的
-  SHA-256 前 32 位；未启用认证时为 `"anonymous"`（保持单机原语义）。
-  **只存哈希，不存令牌原文。**
-- `_load_responses_state(id, subject_key)`：主体不匹配时返回与「不存在」
-  **完全相同**的 404 —— 否则就成了「这个 id 是否存在」的探测预言机。
-- 超预算条目存「拒绝墓碑」（`serialized=None`）而不是静默丢弃，
-  续接时返回 **413 + 明确说明**，而不是含糊的 404。
-- `_store_responses_state` 的 docstring 里写明了 `store` 默认 true 的留存语义。
-- 三个调用点（`create_response` / `_stream_responses_compat` / 非流式分支）
-  都从 `request` 取主体指纹传入。
-
-**验证**：新增 `tests/test_responses_state_budget.py`（14 项），覆盖主体隔离、
-404 一致性、413 墓碑、总字节淘汰、覆盖写不重复计数、TTL 释放字节、
-`store:false` 不留存、序列化失败不致命。
-全量 `637 passed, 64 failed`，与基线逐行一致。
-
-### 2026-09-25 · S10 + S11（远端抓取：SSRF / 体积 / DNS 重绑定）
-
-两项属于同一条抓取链路，合并处理。
-
-#### S11 DNS 重绑定窗口（`app/utils/remote_resource.py`）
-
-原流程是「先 `resolve_public_addresses()` 校验，再把**主机名**交给 requests」——
-HTTP 栈会**重新解析一次**。攻击者控制该域名的 DNS（TTL=0）即可让第二次解析
-返回 `127.0.0.1` / `169.254.169.254`，前面的校验完全失效。
-
-不能简单地把 URL 里的域名替换成 IP：那样 SNI 与 Host 头都会坏掉，HTTPS 直接失败。
-采用**线程局部 DNS 固定**：
-
-- `_pinned_getaddrinfo` 全局装一次；未设置 pin 的线程原样回落到
-  `_original_getaddrinfo`，因此对代码库其余部分零影响。
-- `pinned_dns(host, addresses)` 上下文管理器把 pin 写进 `threading.local()`，
-  退出时恢复（支持嵌套）。同进程的其他并发请求互不污染。
-- `_validate_fetch_remote_target()` 取代原 `_validate_fetch_remote_url()`，
-  额外把「校验时解析到的地址」带出来；`get_public_remote_resource()`
-  在 `with pinned_dns(...)` 内发起请求。**每一跳重定向都重新校验并重新固定。**
-
-#### S10 参考图抓取无防护（`app/utils/image_validation.py`）
-
-`read_image_bytes()` 里的 URL 来自页面抽取结果（攻击者可控），却直接
-`requests.get`：无地址校验（内网 SSRF）、无体积上限、还无条件带当前页面 URL 作 Referer。
-
-改为统一走 `get_public_remote_resource()`（公网校验 + 逐跳重定向校验 + DNS 固定
-+ 凭据作用域），并新增 `read_remote_response_bytes()` 按字节预算流式读取：
-先看 `Content-Length` 提前拒绝，再在读取过程中兜底（防谎报长度 / chunked 绕过）。
-上限 `MAX_REMOTE_IMAGE_BYTES = 24MiB`。
-
-注意：被安全策略拒绝时**直接返回 `b""`，不回落到浏览器上下文再抓一次** ——
-否则等于换个执行主体继续打内网。仅在普通网络错误时才回落。
-
-新增 `RemoteResourceTooLargeError`（继承 `UnsafeRemoteResourceError`，
-调用方一个 except 就能全覆盖）。
-
-**验证**：新增 `tests/test_remote_fetch_hardening.py`（20 项）。
-测试踩坑：`203.0.113.0/24` 是 TEST-NET-3 保留段，`ip.is_global` 为 False，
-不能拿来当「公网地址」样例，已改用 `93.184.216.34`。
-全量 `657 passed, 64 failed`，无新增失败。
-
-**覆盖确认**：C2PA 那条链路（`app/services/arena_gpt_image_command.py:608/642`）
-用的就是 `read_image_bytes`，一并被加固，无需单独改。
-`command_engine_actions.py:2313` 的 `requests.get` 打的是本机 Clash 管理 API
-（`127.0.0.1:9090`，管理员配置），属预期的内网调用，不纳入本项。
-
-### 2026-09-25 · S4（回环 IP 当作授权）
-
-`app/api/browser_routes.py` 的 `POST /api/browser/open-profile-url`
-只检查 `request.client.host` 是否回环、不要求任何令牌。
-本机反向代理 / 隧道（nginx `proxy_pass`、frp、ngrok）会把外来请求
-以回环地址转交进来，这个检查就完全失效。
-
-**一个重要的取舍**：不能直接套用 S13 的 `verify_admin_access`。
-该接口是由第三方 AI 站点页面上的 Link Drawer 用户脚本**跨源**调用的，
-`verify_admin_access` 里的同源检查会把正常功能打死。
-所以改为针对「回环即授权」这个假设本身加固：
-
-1. **核实代理链** —— `app/api/deps.py` 新增 `request_looks_proxied()` 与
-   `FORWARDING_HEADERS`。带任何转发头的请求一律 403：
-   我们无法核实这条链，就不能承认它是本机调用。空值头不算（避免误伤）。
-2. **强制管理认证** —— 配置了 `DASHBOARD_AUTH_TOKEN` 就必须出示
-   （Bearer 或 X-API-Key，`secrets.compare_digest` 比较）。
-   逃生阀 `BROWSER_OPEN_URL_ALLOW_UNAUTHENTICATED_LOCAL=true` 给
-   无法携带令牌的 Link Drawer 用。未配置令牌时维持原「仅本机」开箱即用行为。
-3. **限制目标 URL** —— 这些链接会带着用户既有 Cookie 在**用户自己的浏览器**里打开，
-   所以默认拒绝内网 / 本机 / 云元数据目标：`_host_is_internal()` 对 IP 字面量用
-   `ipaddress.is_global`，对域名用后缀表（`localhost` / `.local` / `.internal` /
-   `.lan` / `.home.arpa`）与元数据主机名集合。**故意不做 DNS 解析**——
-   保持判定确定、无额外延迟，也避免又引入一个重绑定面。
-   同时拒绝内嵌凭据的 URL（`user:pass@`）。逃生阀
-   `BROWSER_OPEN_URL_ALLOW_INTERNAL_TARGETS=true`。
-
-`.env.example` 已补上这两项及其说明。
-
-**验证**：新增 `tests/test_open_profile_url_hardening.py`（40 项）。
-测试踩坑：**不能用 starlette 的 `TestClient`** —— 本仓库锁定的 httpx 版本与其不兼容
-（`Client.__init__() got an unexpected keyword argument 'app'`），
-而且它的默认客户端地址是字符串 `"testclient"`，根本不是回环。
-改用 `httpx.ASGITransport(app=app, client=(...))` + `asyncio.run` 的 `_call()` helper。
-全量 `697 passed, 64 failed`，无新增失败。
-
-### 2026-09-25 · H12（网络事件 URL 正则可能回溯）
-
-`app/services/command_engine_results.py:_matches_url_rule()` 用标准库 `re.search`
-匹配**用户自定义模式**与**页面来源 URL**，两边都不可信，而 `re` 没有执行超时。
-
-工作流侧（`app/core/workflow/flow_runtime.py:304`）其实早就用 `regex` 库的
-`timeout=0.025` 做了预算 —— 把同样的策略抽成公共实现：
-
-新建 `app/utils/bounded_regex.py`：
-- `bounded_search(pattern, text, *, flags, timeout=0.025)`；
-- 模式 > 512 字符 → 直接 `RegexBudgetExceeded`；
-- 输入 > 8192 字符 → **截断**而不是拒绝（URL 场景尾部信息价值低，截断更不易误伤）；
-- 超时 → `RegexBudgetExceeded`；模式非法 → 原样 `re.error`，回退策略交给调用方；
-- `lru_cache` 缓存编译结果；`regex` 库缺失时退化为无超时匹配但仍保留长度上限。
-
-`_matches_url_rule` 的回退顺序：预算超限 → 关键词包含；正则非法 → 通配转义
-→ 关键词包含（**保持原有行为不变**）。
-
-**测试踩坑**：`regex` 库对经典的 `^(a+)+$` 有专门优化，用它当样例会「测了个寂寞」
-（0.0003s 就返回）。实测 `^(a|aa)+$` 才会真实爆炸并准时触发 25ms 预算。
-
-`flow_runtime.py` 保持原样不动（它的异常类型是 `FlowVariableError`，
-改造收益小、回归风险大），仅在新模块 docstring 里交叉引用。
-
-**验证**：新增 `tests/test_bounded_regex.py`（13 项）。
-全量 `710 passed, 64 failed`，无新增失败。
-
-### 2026-09-25 · S6（媒体路由无认证 / 转码资源无预算）
-
-新建 `app/utils/media_guard.py`，`main.py` 接线。
-
-#### 访问控制（默认关闭，显式开关）
-
-`/media/{filename}` 与 `/download_images` 原本完全无认证。
-**但不能简单地默认加上鉴权**：这些 URL 会直接出现在 OpenAI 兼容响应里，
-由浏览器的 `<img src>` / `<audio src>` 加载，而这类标签**无法携带
-Authorization 头**。默认开启就会静默打断所有现有前端。
-
-折中：`MEDIA_ACCESS_REQUIRE_AUTH`（默认 `false`）。开启后接受
-Authorization / X-API-Key / **`?token=`** 三种方式 —— 查询参数是标签场景
-在开启鉴权后还能工作的唯一途径。要求鉴权却没配令牌时 **fail-closed**。
-令牌比较用 `hmac.compare_digest` 并按 UTF-8 编码（沿用修复6 的非 ASCII 处理）。
-
-静态目录这一侧没有 `Request` 对象，所以在 `HardenedMediaStaticFiles.get_response()`
-里从原始 ASGI `scope` 解析头与 query（`_scope_media_access_allowed`）。
-
-#### 转码资源预算
-
-`TranscodeGuard`：
-- **全局并发信号量**（`MEDIA_TRANSCODE_MAX_CONCURRENCY`，默认 2），
-  等待超过 `MEDIA_TRANSCODE_QUEUE_TIMEOUT_SEC`（默认 30s）→ 503 + `Retry-After`。
-- **同键去重锁**：这是关键。原先同一个文件被并发请求 N 次会拉起 N 个 ffmpeg
-  做完全相同的工作；加锁后后到的请求等第一个做完，直接命中磁盘缓存。
-  **先抢 key 锁再抢信号量** —— 否则同一文件的重复请求会先把全局预算吃光。
-- **源文件体积上限**（`MEDIA_TRANSCODE_MAX_SOURCE_MB`，默认 256）→ 413。
-- key 锁用完即从字典移除（`waiters` 计数），不会无界增长。
-
-`.env.example` 已补齐这四项。
-
-**验证**：新增 `tests/test_media_access_guard.py`（15 项），
-包含「同键并发峰值必须为 1」与「不同键仍能并行」两条对照断言
-（后者防止同键锁把整体吞吐误伤成串行）。
-全量 `725 passed, 64 failed`，无新增失败。
-
-### 2026-09-25 · H9（标签页等待队列无总量上限）
-
-`app/core/tab_pool_parts/manager.py`。32 个 acquire 工作线程限制的是**并行线程数**，
-不是待执行/等待请求总数；五个入队点（generic / exact_url / index / route / group）
-用的都是无界 `deque`，请求可以无限堆积。
-
-**改动**：新增 `_enqueue_waiter(waiters, task_id, queue_label)` 统一接管入队，
-替换掉五处 `_next_waiter_token()` + `append()`：
-
-- **两级预算**：总量 `TAB_POOL_MAX_WAITERS`（默认 64）保护整个池；
-  单队列 `TAB_POOL_MAX_WAITERS_PER_KEY`（默认 32）避免某个热点标签页/路由
-  把总预算吃光饿死其它请求。
-- **快速失败而不是继续排队**：排到超时才失败是最坏结果（既占资源又浪费时间），
-  超限直接返回 `None`，让上层重试或降级。被拒绝的 token 绝不入队。
-- 被拒时若队列为空，顺手把 `setdefault` 新建的空 deque 从字典里删掉，避免泄漏。
-- 新增 `waiter_stats()` 暴露容量/拥塞/拒绝计数，供监控与上层决定 429/503。
-
-**踩坑（重要）**：把限额只写在 `__init__` 里会炸 —— `tests/test_tab_route_groups.py`
-等用例用 `__new__` 绕过 `__init__` 构造 `TabPoolManager`，实例属性缺失时
-`_enqueue_waiter` 直接 `AttributeError`，一次跑挂 8 个既有用例。
-改为**类级别默认值** `DEFAULT_MAX_TOTAL_WAITERS` / `DEFAULT_MAX_WAITERS_PER_QUEUE`
-（`__init__` 里再按环境变量覆盖成实例属性）后全部恢复。
-
-**范围说明**：报告建议「队列过满明确 429/503」。把这个状态一路透到 HTTP 层需要改动
-`connection.py` / `workflow.py` / `command_engine*.py` 等十余个 `acquire*` 调用方
-（它们目前统一把 `None` 当作获取失败），回归面远超本批次。
-这里先落地容量边界与 `waiter_stats()` 可编程判定接口，HTTP 状态码映射留待后续。
-
-**验证**：新增 `tests/test_tab_pool_waiter_budget.py`（17 项），
-含并发入队不突破预算、队列消化后恢复可用、热点队列不饿死其它队列等。
-全量 `742 passed, 64 failed`，无新增失败。
-
-### 2026-09-25 · S5（定时重启代理容量 / 协议）
-
-`start.py` 的 `_RestartHandoffProxy`（仅 `SCHEDULED_RESTART_ENABLED=true` 时启用）。
-
-#### 容量
-
-原来单连接可缓冲 64MB，而 `ThreadingTCPServer` 对并发连接数没有任何约束 ——
-几十个并发请求就能把内存吃光。三级预算：
-
-- `RESTART_PROXY_MAX_CONNECTIONS`（默认 32）：`BoundedSemaphore` 槽位，
-  抢不到（0.5s）就明确回 **503 `handoff_proxy_busy`**，而不是再开一个线程去缓冲。
-- `RESTART_PROXY_MAX_REQUEST_MB`（默认 16，原来写死 64）：单请求上限，超出回 **413**。
-- `RESTART_PROXY_MAX_TOTAL_BUFFER_MB`（默认 128）：新增 `_HandoffBufferBudget`
-  做进程级总缓冲记账（带锁，线程安全）。
-- `request_queue_size = 128`：内核 accept 队列也得有边界。
-
-**易错点**：归还额度必须用「实际预留的字节数」(`self._reserved_bytes`)，
-不能用 `len(payload)` —— 读取失败时 payload 为空但预算已被占用，
-用后者会导致额度永久泄漏。已用 `test_reserved_bytes_are_released_even_when_read_fails` 锁定。
-
-#### 协议
-
-原实现只认 `Content-Length`：
-
-- **`Transfer-Encoding: chunked`** 被当成 `Content-Length: 0`，头部直接转发、
-  正文留在 socket 里，后端要么解析错要么挂住。新增 `_chunked_body_complete()`
-  按分块协议读到结束块（支持 `5;ext=1` 这种带扩展参数的长度行）。
-- **`Expect: 100-continue`** 会双向死等：客户端等 100 才发正文，代理等正文才继续。
-  现在代理先替后端回 `HTTP/1.1 100 Continue`，并在转发时**摘掉 Expect 头**
-  （否则后端会再发一次 100，客户端收到两个 informational 响应）。
-- 非法 `Content-Length` 明确回 400，而不是抛异常静默断连。
-
-**未采纳**：报告建议「优先使用成熟反向代理组件」。引入 nginx/caddy 依赖
-会改变分发方式与部署文档，超出本次修复范围；这里把自研 relay 的边界补齐。
-
-**验证**：新增 `tests/test_restart_handoff_proxy.py`（22 项），
-用假 socket 驱动 handler，不开真实监听端口、不起子进程。
-全量 `764 passed, 64 failed`，无新增失败。
-
-### 2026-09-25 · S3（解析器安装立即 import）
-
-`app/services/parser_manager.py`。`install_parser_package()` 校验完语法与类名后，
-把源码写进 `app/core/parsers/` 并**立刻 import** —— 等同于在服务进程内
-以完整权限执行这段代码。
-
-报告已确认「未发现直接暴露安装 API」（本轮 grep 复核：`install_parser_package`
-在 `app/` 内无任何调用方），所以这是一条**潜在**路径，与 S2 的信任边界相连。
-按既定方针以「默认收紧 + 文档化」收尾：
-
-1. **默认关闭** —— 新增 `parser_install_enabled()` / `ParserInstallDisabledError`，
-   需显式 `PARSER_INSTALL_ENABLED=true`。开关在**解析 payload 之前**生效
-   （否则畸形输入会先抛别的错误，掩盖掉「功能已关闭」这个事实）。
-   用 `parse_bool_literal` 严格解析，`"false"` 不会被当成真。
-2. **压掉 import 期副作用** —— `_validate_top_level_statements()` 限制模块顶层
-   只能出现 import / 类 / 函数 / 赋值 / `if` 守卫 / `try` 回退 / docstring。
-   顶层的裸调用（`os.system(...)`、`__import__(...).run(...)`）与
-   `for` / `while` / `with` 一律拒绝，报错带行号。
-3. **审计留痕** —— 安装时按 WARNING 级别记录 id / module / class / 字节数 /
-   源码 SHA-256，并把 `source_sha256` 写进 `config/parsers.json` 条目，
-   事后可核对文件是否被改动过。
-
-**必须诚实说明的边界**：这**不是沙箱**。类方法体内仍可写任何代码，
-只是从「装上就跑」收窄成「被调用才跑」，给人工审查留出窗口。
-代码注释、docstring 与 `.env.example` 里都写明了这一点，避免后来者误以为有隔离保证。
-真正的隔离（独立进程 / 权限降级 / 资源限额）属更大改造，不在本批次。
-
-**验证**：新增 `tests/test_parser_install_gate.py`（37 项），
-包含「方法体内不受限制」这条**反向**断言 —— 明确记录当前边界，
-防止后来者误读成安全沙箱。
-全量 `801 passed, 64 failed`，无新增失败。
-
-### 2026-09-25 · T1（干净克隆测试资源不全）
-
-干净克隆下约 64 项失败，原因**全部**是缺少未跟踪的本地资源，
-另有 10 个模块在导入阶段 `import playwright` 直接让整个收集中断
-（一次 ImportError 就让 `pytest tests` 全盘失败）。
-这些都不是产品回归，但混在结果里会把真正的回归淹掉 —— 本轮每做一项修复
-都得靠 `comm` 对比 73 行基线，正是这个问题的直接代价。
-
-**新建 `tests/conftest.py`**：
-
-1. `collect_ignore` —— 未安装 playwright 时，从收集阶段剔除那 10 个浏览器模块。
-   **按依赖是否存在动态决定**：本地装了 playwright 就照常收集。
-2. `pytest_collection_modifyitems` —— 依赖未跟踪资源的用例自动 `skip`，
-   skip 原因里写清楚缺哪个文件、并指向报告的 T1 条目。
-   资源表 `_LOCAL_RESOURCE_REQUIREMENTS` 把三组资源与用例前缀显式对应：
-   - `config/commands.local.json` → arena 命令持久化 / auto-battle 相关用例
-   - `js/arena-conversation-image-window.user.js` → 媒体流图片优先级的那 1 项
-   - `custom_scripts/examples/arena_payload_interceptor.js` → 工作流脚本加载
-3. 注册 `requires_local_fixtures` / `requires_browser` 两个 marker。
-
-**关键取舍**：前缀表里**精确到单个用例**，不是整模块跳过。
-最初图省事按模块跳，结果把 `test_arena_auto_battle_command.py` 等模块里
-**22 个本来能过的纯逻辑用例**也一并跳掉了（801 → 779）。改成逐用例列举后恢复。
-
-**踩坑（转义）**：参数化用例 `test_rate_limit_text_triggers_immediate_proxy_rotation`
-的参数含 U+2019，pytest 报告里显示成 `\u2019`，而 `item.nodeid` 里是原字符，
-写进 Python 源码时又会被当成转义序列再解析一次 —— 三层转义怎么写都对不上。
-最后**去掉参数部分、只用不带 `[...]` 的前缀**覆盖全部三个变体，干净利落。
-
-**新建 `scripts/run_logic_tests.sh`**：CI / 干净克隆的入口，取代本轮临时用的
-`/tmp/runtests.sh`（后者把 10 个 playwright 文件硬编码进 `--ignore`，
-现在这层判断已经进了 conftest，不必再维护两份名单）。
-
-**验证**：`./scripts/run_logic_tests.sh` → **801 passed, 64 skipped, 0 failed**。
-至此干净克隆上「0 失败」成为可执行的判据，后续回归一眼可见，不必再做基线对比。
-
-### 2026-09-25 · S2（自定义代码非安全沙箱）— 收尾
-
-S2 是**信任边界审查**，不是一个能「修好」的缺陷：命令引擎的 Python/JS
-本来就是让运维在服务进程里跑自己的代码。按既定方针以
-「文档化缓解 + 默认收紧 + 组合禁止」收尾。
-
-**1. 组合禁止（新增的唯一行为变更）**
-
-`AppConfig.collect_security_config_errors()` 增加第 4 组检查：
-`CMD_ALLOW_UNSAFE_PYTHON_COMMANDS=true` 或 `PARSER_INSTALL_ENABLED=true`
-与**非回环 `APP_HOST`** 同时出现时，**拒绝启动**。
-
-理由：这两个开关本身是合法功能，单机自用完全正常（已用测试锁定回环场景不拦）；
-真正致命的是它们与对外绑定的组合 —— 那等于把远程代码执行挂到网络上。
-逃生阀仍是 `UWA_ALLOW_INSECURE_STARTUP=true`。
-
-**2. 文档化信任边界**
-
-新建 `docs/SECURITY-TRUST-BOUNDARIES.md`，明确写清：
-
-- 本项目假定「能配置命令 / 能安装解析器的人 = 能在服务器上执行任意代码的人」；
-- 受限模式是**误操作防护**，不是安全边界 —— 脚本与主服务同进程，
-  上下文里注入了标签页会话等高权限对象，属性链绕行无法靠 AST 白名单堵死；
-- JS 经 CDP 执行，天然拥有页面全部能力，**不存在也不打算存在隔离**；
-- 多租户 / 不可信投稿脚本场景**当前架构不支持**，需要独立低权限进程或容器。
-
-**3. 默认收紧（本轮此前已完成）**
-
-`.env.example` 中 `CMD_ALLOW_UNSAFE_PYTHON_COMMANDS=false`、
-`PARSER_INSTALL_ENABLED=false`（S3）。
-
-**验证**：`tests/test_security_hardening_fixes.py` 新增
-`TestUnsafeCodeExecutionStartupGate`（8 项，模块共 42 项）。
-其中 `test_trust_boundary_doc_exists_and_states_the_limit` 看似在「测文档」，
-但 S2 的缓解措施本身就是这份文档 —— 如果它被删掉或被改成「我们有沙箱」，
-那才是真正的回归，所以值得用断言钉住。
-`./scripts/run_logic_tests.sh` → **809 passed, 64 skipped, 0 failed**。
-
----
-
-## 收尾：验收条件逐条核验（2026-09-25）
-
-对照报告第七节，**P1 + P2 全部 21 项已完成并推送到 `main`**。
-
-| 验收条件（报告原文） | 状态 | 由哪条断言保证 |
-| --- | --- | --- |
-| 无授权 `/api/settings/backup` 返回 401/403 且不回显密钥 | ✅ | `test_security_hardening_fixes.py`（S13） |
-| 非可信 Origin 不得读管理数据 | ✅ | 同上，`verify_admin_access` 跨源 403 |
-| 默认下载文件不含服务端秘密与浏览器本地令牌 | ✅ | 同上（脱敏备份**删除**敏感键而非占位符） |
-| 公开绑定缺认证应拒绝启动 | ✅ | `assert_secure_startup_config` + S1 用例 |
-| 恶意 SVG / `video/custom`+`.html` 不得成为同源内联活动文档 | ✅ | `test_safe_media_types.py`（S8/S9，30 项） |
-| 全新克隆默认不产生响应调试明文；`"false"` 解析为禁用 | ✅ | S12 用例 + `_browser_constant_bool` |
-| 短暂无效命令 JSON 不清空上一版命令，恢复后可正常切换 | ✅ | `test_command_config_hot_reload_safety.py`（B8） |
-| CDP 解冻失败不交付 BUSY 标签 | ✅ | `test_tab_resume_failure_safety.py`（B5） |
-| 顶层数组历史能恢复 | ✅ | `test_request_history_compat.py`（B2） |
-| 搜索引擎主域禁自动发现、指定 AI 子域仍可用 | ✅ | `test_site_discovery.py` 36 项（B1，基线 9 项转绿） |
-| 超限历史/媒体有可预测的拒绝/截断策略和隔离测试 | ✅ | `test_responses_state_budget.py`（B3，413 墓碑）、`test_media_access_guard.py`（S6） |
-| 统一远端媒体/图片抓取策略（S10/S11） | ✅ | `test_remote_fetch_hardening.py`（20 项） |
-| 限制 URL 正则与队列（H12/H9） | ✅ | `test_bounded_regex.py`、`test_tab_pool_waiter_budget.py` |
-| 无需浏览器的 CI 依赖/fixture 自足（T1） | ✅ | `tests/conftest.py` + `scripts/run_logic_tests.sh` |
-
-**不在本次范围**（用户确认的第三批 P3）：H2–H14 中的 H8/H10/H13/H14、
-B4/B6/B7、S14、T2 等。H9 的「HTTP 层 429/503 映射」也留在后续（理由见该节）。
-
-## 最终测试状态
-
-```
-./scripts/run_logic_tests.sh
-→ 809 passed, 64 skipped, 0 failed
-```
-
-64 个 skip 全部是缺少未跟踪本地资源的集成用例，skip 原因里注明了缺哪个文件。
-**干净克隆上「0 failed」现在是可执行的判据** —— 不必再像本轮那样
-每改一项都跟 73 行基线做 `comm` 对比。
-
-### 本轮新增的回归测试（276 项，全绿）
-
-| 文件 | 项数 | 覆盖 |
-| --- | --- | --- |
-| `test_security_hardening_fixes.py` | 42 | S13 / S1 / H1 / S12 / **S2** |
-| `test_safe_media_types.py` | 30 | S8 / S9 |
-| `test_open_profile_url_hardening.py` | 40 | S4 |
-| `test_parser_install_gate.py` | 37 | S3 |
-| `test_restart_handoff_proxy.py` | 22 | S5 |
-| `test_remote_fetch_hardening.py` | 20 | S10 / S11 |
-| `test_tab_pool_waiter_budget.py` | 17 | H9 |
-| `test_media_access_guard.py` | 15 | S6 |
-| `test_responses_state_budget.py` | 14 | B3 |
-| `test_bounded_regex.py` | 13 | H12 |
-| `test_request_history_compat.py` | 10 | B2 |
-| `test_command_config_hot_reload_safety.py` | 8 | B8 |
-| `test_tab_resume_failure_safety.py` | 8 | B5 |
-
-### 新增配置项一览（均已写入 `.env.example`）
-
-`BROWSER_OPEN_URL_ALLOW_UNAUTHENTICATED_LOCAL`、`BROWSER_OPEN_URL_ALLOW_INTERNAL_TARGETS`、
-`MEDIA_ACCESS_REQUIRE_AUTH`、`MEDIA_TRANSCODE_MAX_CONCURRENCY`、
-`MEDIA_TRANSCODE_QUEUE_TIMEOUT_SEC`、`MEDIA_TRANSCODE_MAX_SOURCE_MB`、
-`TAB_POOL_MAX_WAITERS`、`TAB_POOL_MAX_WAITERS_PER_KEY`、
-`RESTART_PROXY_MAX_CONNECTIONS`、`RESTART_PROXY_MAX_REQUEST_MB`、
-`RESTART_PROXY_MAX_TOTAL_BUFFER_MB`、`PARSER_INSTALL_ENABLED`、
-`NETWORK_DEBUG_CAPTURE_RETENTION_HOURS`。
-
-**所有新增开关都遵循同一原则：默认值 = 现有行为或更安全的一侧，
-严格用 `parse_bool_literal` 解析（`"false"` 必须是假），并带逃生阀。**
+  - `_resume_after_acquire()` 返回「是否可交付」（调用后仍冻结 → False）。
+  - `acquire()` / `acquire_for_command()`：解冻失败 → `_rollback_failed_acquire()` 退回 IDLE、清 task、请求模式回退
+    `request_count`，返回 False（manager 会去试下一个会话）。
+  - 解冻失败后 10s 冷却期（`_RESUME_FAILURE_BACKOFF_SEC`）内 acquire 直接跳过，避免每次卡 2s CDP 超时。
+  - **决策**：没有把会话标成 ERROR——冻结失败多为瞬时 CDP 问题，冷却后重试即可；真正死掉的标签页由既有健康检查处理。
+- 验证：p2 新增 3 项（假 CDP 抛错 → acquire False/IDLE/计数不变/保留冻结；冷却期内不发 CDP；恢复后可交付；
+  命令模式不动 request_count；未冻结会话不发 CDP）。
+
+### B2 旧版顶层数组历史恢复丢失 ✅
+
+- `app/services/request_manager.py::_load_history`：先 `isinstance(data, list)` / `dict` 分支再取 `records`
+  （旧代码 `data.get(...)` 对 list 抛 AttributeError，被外层 except 吞掉 → 恢复 0 条）。
+  顺带修掉 `max_records<=0` 时 `lst[-0:]` 返回整个列表的陷阱。
+- 验证：p2 新增 2 项（顶层数组 + 混入非 dict 项恢复 2 条且 token 统计回填；对象格式不变；上限 0 时清空）。
+
+### B1 搜索引擎主域被自动发现 ✅（基线 9 个失败转绿）
+
+- `config/site_rules.json`：为 google.com / google.co.jp / google.co.uk / google.com.hk / accounts.google.com / bing.com /
+  cn.bing.com / baidu.com / duckduckgo.com / search.yahoo.com / yandex.com / yandex.ru / sogou.com / so.com /
+  search.brave.com / naver.com 加 `"auto_discovery": false`（规则按**精确主机**匹配，www 前缀已有别名处理）。
+- `app/utils/site_discovery.py`：内置整串精确匹配的兜底模式（`google.<cc>` / `google.co(m).<cc>`、`<cc>.bing.com`、
+  `yandex.<cc>`），覆盖 JSON 里不可能穷举的各国主域；site_rules.json 显式值（含 true）优先。
+  gemini.google.com、aistudio.google.com、`google.com.attacker.org` 不受影响。
+- 验证：`tests/test_site_discovery.py` 36/36 通过（原 9 个失败转绿）；p2 新增 12 项。
+- **基线更新**：失败数 73 → 64（剩余 64 个全部属 T1 fixture 缺失）；`/tmp/baseline_failures.txt` 已同步为 64 项。
+
+### B3 Responses 内存历史无字节预算 ✅
+
+- `app/api/chat.py`：
+  - 新增 `RESPONSES_STATE_MAX_ENTRY_MB`（默认 8）/ `RESPONSES_STATE_MAX_TOTAL_MB`（默认 64）环境变量，非法值回落默认。
+  - 条目改为 `(stored_at, serialized|None, owner, nbytes)`，维护 `_responses_state_total_bytes`；prune 在条数上限之外再按总字节 LRU 淘汰。
+  - 单条超限：不存储正文，只留墓碑；续接时返回 **413** 并提示“在 input 中携带完整上下文”（原来是静默吃内存）。
+  - 主体隔离：`_responses_principal_from_request` 取 Bearer / X-API-Key 的 SHA-256 指纹；续接时主体不一致一律 404（不泄露 ID 是否存在）。无令牌时为空串，匿名调用共享命名空间（兼容认证关闭的本机场景）。
+  - store 语义保持与 OpenAI 一致：`store` 未给出 = 存储，`store:false` = 不存储。
+- 测试：p2 新增 4 项（超限 413、总量 LRU + 字节计数一致、跨主体 404、store:false）。全量无新增失败（64 基线）。
+
+### S11 DNS 校验后连接重解析 ✅
+
+- `app/utils/remote_resource.py`：
+  - `_validate_fetch_target` 返回 `(url, 已校验地址)`；`_validate_fetch_remote_url` 保留为薄包装。
+  - DNS pinning：给 `urllib3.util.connection.create_connection` 包一层（只装一次），它只查**本线程**登记的 `host → 已校验 IP`。
+    `get_public_remote_resource` 每一跳（含重定向后的重新校验）都用 `_pinned_dns(url, addresses)` 包住 `requests.get`。
+    TCP 连接直接打到校验过的 IP；`HTTPConnection.host` 不变，因此 SNI、证书校验、Host 头都保持原主机名。
+    未登记的主机（其他代码路径、HTTP(S)_PROXY 代理主机）原样放行，代理场景交给可信出网代理解析。
+  - 选这个方案而不是自定义 Session/Adapter，是因为现有测试（以及调用方）都在 monkeypatch `remote_resource.requests.get`，这样保持兼容。
+- 测试：p2 新增 2 项，用本地 HTTP 服务：
+  - 校验返回 127.0.0.1、主机名是 `.invalid`（系统 DNS 解析不了）→ 请求成功，Host 头是原主机名。用 stash 验证过：旧代码下这项失败。
+  - pin 只在调用期间有效，退出后同一 URL 连接失败。
+
+### S10 图片比对 / C2PA 直取外部 URL ✅
+
+- `app/utils/image_validation.py`（`arena_gpt_image_command` 的 C2PA 检测也经由这里的 `read_image_bytes`）：
+  - 不再裸调 `requests.get`，改用 `get_public_remote_resource`：逐跳私网/重定向校验，加上 S11 的 DNS pinning；Referer 只发往图片原始 origin。
+  - 流式读取，上限 `MAX_VALIDATION_IMAGE_BYTES`=20MiB。Content-Length 超限时不读 body，读取中途超限就中止并 close。
+  - `UnsafeRemoteResourceError` 直接返回空，**不再退回浏览器 fetch**（否则等于绕过同一道校验）。浏览器 fetch 兜底（blob: 或普通网络错误时）也加了字节上限，JS 端和 Python 端都查。
+  - data URI（生成图片及上传参考图）先按 base64 长度预估大小，超预算就不解码。
+  - `image_signatures` 解码前检查头部尺寸（40MP / 边长 16384），超限只保留字节 sha256，不做像素或 dHash 计算，防解压炸弹。
+- 测试：p2 新增 4 项（私网 URL 被拒且无浏览器兜底、流式字节上限、声明超限不读 body、data URI 与像素预算）。
+
+### S4 回环 IP 当作授权 + S5 定时重启代理容量/协议 ✅（同一提交，共用 handoff 代理的设计）
+
+**S4**
+- `app/api/browser_routes.py::open-profile-url`：原来只看 `request.client.host` 是不是回环，现在改为 `verify_open_profile_url_auth`：
+  - 控制面板认证已启用、且请求带了 Authorization：按管理令牌校验，错误令牌返回 401。
+  - 其他情况只接受 `is_trusted_local_request`，即直接回环且没有任何反代/隧道转发头；经 handoff 代理时以代理注入的真实地址为准。
+  - 都不满足：认证已启用返回 401，未启用返回 403。
+  - 决策：**没有**直接换成 `verify_sensitive_admin_auth`。Link Drawer（外部客户端）不保存面板密钥，改成必须带令牌会让本机功能直接失效；而严格的本机判定已经覆盖了报告里的反代/隧道场景。
+  - 目标 URL 限制：拒绝带 userinfo 的链接、localhost / *.localhost，以及非全局 IP 字面量（127/10/192.168/::1 等），返回 400。
+- `app/core/http_security.py::is_trusted_local_request`：经 handoff 代理的请求也要检查转发头。代理前面若还有 nginx/隧道，真实来源在 X-Forwarded-For 里，不能因为代理报告的对端是 127.0.0.1 就放行。
+- `start.py`：`UWAPI_PROXY_SECRET` 每次启动用 `secrets.token_urlsafe(32)` 生成，只注入子进程环境。子进程环境先 pop 掉继承来的旧值；不走代理时子进程没有这个密钥。
+
+**S5**（`start.py::_RestartHandoffProxy / Handler`）
+- 连接预算：`RESTART_PROXY_MAX_CONNECTIONS`（默认 64）个非阻塞信号量，超额直接回 503。
+- 缓冲预算：`RESTART_PROXY_MAX_BUFFER_MB`（默认 256）全局字节账本。每个连接按实际缓冲量逐步预占（Content-Length 请求一次性按声明大小预占），超额回 503，finally 中释放。
+- 单请求上限仍为 64MiB（超出回 413）。请求头上限 64KiB（超出回 431），原来请求头最多可达 64MB。读请求有 60s 端到端时限（超时回 408），原来是每次 recv 60s。
+- 协议处理：
+  - chunked 请求体完整读取并原样转发，支持 chunk 扩展和 trailer。
+  - `Transfer-Encoding` 最后一项不是 chunked 时回 501。
+  - CL 与 TE 同时出现、CL 非数字、多个 CL 不一致，都回 400（防请求走私）。
+  - `Expect: 100-continue` 由代理自己回 100 并剥离 Expect 头；其他 Expect 值回 417。
+  - 丢弃管线化的多余字节。出错时回明确的 HTTP 状态，而不是静默断开。
+- 请求头改写：剥离 Connection/Keep-Alive/Proxy-Connection/Expect 以及**所有客户端送来的 `X-UWA-*`**，再注入 `X-UWA-Client-Addr`（真实对端地址）和 `X-UWA-Proxy-Secret`。外部转发头原样保留，交给后端判定。
+- 测试：p2 新增 7 项：
+  - 3 项 ASGI：隧道/远程被拒；handoff 地址可信、伪造密钥或前置 nginx 被拒；令牌和目标 URL 限制。
+  - 4 项起真实代理加假后端：剥离并注入请求头；chunked 与 Expect；走私/超限/预算返回 400/501/413/503/431，且后端零请求、账本归零；连接预算 503 以及释放后恢复。
+
+### S6 媒体路由无认证与转码资源 ✅
+
+- 新增 `app/utils/media_access.py`，这是纯逻辑模块：
+  - `media_request_authorized` 负责鉴权判定。
+  - `TranscodeGate` 提供全局并发名额 `slot()`，以及同键合并 `key()`，后者带引用计数，用完就清理。
+  - 开关 `MEDIA_REQUIRE_AUTH` 的非法取值 fail-closed。
+- 鉴权决策：**默认不强制**，需要显式设置 `MEDIA_REQUIRE_AUTH=true` 才开启。
+  - 原因：生成的 `/media`、`/download_images` 链接会原样写进 OpenAI 兼容响应，第三方聊天前端直接用 `<img src>` 渲染，不会带 Bearer 头。默认开启会破坏主流程。
+  - 开启后接受以下三种之一：服务令牌（Bearer 或 X-API-Key）、面板令牌、严格本机直连。否则返回 401。
+  - 实现方式是 `main.py` 里的 `guard_private_media` 中间件，同时覆盖 `/media` 路由和 `/download_images` 挂载。
+  - 文件名仍是 `时间戳_uuid8`，熵偏低，这点已记下，没有改：改动面太大，放到 P3 讨论。
+- 转码（`main.py::_transcode_media`）：
+  - 先查缓存，然后检查源文件大小上限 `MEDIA_TRANSCODE_MAX_SOURCE_MB`（默认 200），超出返回 413。
+  - 进入同键锁后再查一次缓存，所以同一文件的并发请求只跑一次 ffmpeg。
+  - 全局名额 `MEDIA_TRANSCODE_MAX_CONCURRENCY`（默认 2），排队超过 `MEDIA_TRANSCODE_QUEUE_TIMEOUT_SEC`（默认 10）返回 503 + Retry-After。
+  - ffmpeg 执行部分拆到 `_run_ffmpeg_transcode`，逻辑不变。
+- `.env.example` 为 B3/S5/S6 新增的环境变量补了说明（CRLF 保持不变）。
+- 测试：p2 新增 5 项：鉴权矩阵、真实 app 上的 401/200 切换、5 线程同键只跑 1 次 ffmpeg、全局满载返回 503、源文件超限返回 413。
+  - 顺带修了 S5 的 Expect 测试：原先头和体一次性发出，代理已经收齐请求体就不会回 100（这是正确行为），导致测试偶发失败。现在改为按真实客户端的方式等收到 100 再发体。
+
+### S3 解析器安装立即 import ✅
+
+- `app/services/parser_manager.py`：
+  - `install_parser_package` 默认关闭，只有 `PARSER_INSTALL_ENABLED=true` 时才允许安装，非法值视为关闭；关闭时抛 `PermissionError`，连解析包都不做。目前仓库里没有 HTTP 入口会调用它，这个开关是给将来接入口时准备的“可信管理员专用”闸门。
+  - `check_import_time_side_effects(tree)` 做“导入期无副作用”静态约束：
+    - 模块顶层和类体只允许以下内容：import、pass、docstring、函数和类定义、对名字的字面量赋值，以及末尾的 `if __name__ == "__main__"`。
+    - 导入期会被求值的表达式（赋值右侧、默认参数、注解、基类）只能是字面量、名字/属性引用（禁止 `__dunder__`），或白名单纯函数调用：`re.compile`、`set`、`frozenset`、`tuple`、`list`、`dict`、`str.maketrans`、`get_logger`、`logging.getLogger`，且参数也必须满足同样条件。
+    - 装饰器只允许 staticmethod、classmethod、property 及其访问器、abstractmethod、dataclass、cached_property。
+    - 类不允许 metaclass 或关键字参数。
+    - 仓库里现有的 18 个 `*_parser.py` 全部通过（有测试守护），因此不影响正常的解析器写法。
+  - 目标类必须是模块顶层类（以前用 ast.walk，嵌套类也能匹配）。
+  - `_load_parser_entry` 限制 parsers.json 里的 module 必须是 `app.core.parsers.<合法模块名>`，防止借配置导入任意模块。
+  - 模块文档写明：这不是沙箱，解析器方法仍以服务进程权限运行。
+- 测试：p2 新增 11 项：
+  - 8 种导入期执行写法全部被拒：os.system、`__import__`、默认参数调用、自定义装饰器、动态基类、try、推导式读文件、dunder 链。
+  - 安全示例和全部内置解析器通过。
+  - 默认关闭，非法开关值同样视为关闭。
+  - 模块路径白名单。
+
+### H12 网络事件 URL 正则回溯 ✅
+
+- `app/services/command_engine_results.py::_matches_url_rule`：
+  - 正则改用 `regex` 模块，timeout 设为 25ms。它已经是依赖，工作流的 `matches` 用的也是同一预算。
+  - 超时按“不匹配”处理，并打 warning。
+  - 模式上限 512 字符，超过就按关键词匹配；URL 最多取前 8192 字符参与匹配。
+  - 无效正则时，通配回退也走同一个带预算的匹配器，其余语义不变。
+- 测试：p2 新增 2 项：
+  - 灾难性模式 `(a+)+$`、`(a|aa)*c` 在 5000 字符 URL 上 1 秒内返回 False。用 stash 验证过：旧代码在 100 秒 timeout 内都没跑完。
+  - 常规正则、忽略大小写、通配回退、关键词、超长模式的语义保持不变。
+
+### H9 标签页等待队列无总量上限 ✅
+
+- 现状核实：`acquire_async` 系列（32 线程 executor）在应用里**没有调用方**。真正的请求路径是 `workflow.py` 在请求线程里同步调用 `tab_pool.acquire*(timeout=60)`，每个等待者都挂进 `_acquire_waiters / _index_waiters / _route_waiters / _group_waiters` 队列，最长 60 秒，总数没有上限。
+- `app/core/tab_pool_parts/manager.py`：
+  - 新增 `TAB_ACQUIRE_MAX_WAITERS`（默认 128，0 表示不限）。`_acquire_queue_full` 统计四类队列的总长度。
+  - 5 个 acquire 路径在挂入队列**之前**检查，满了立即返回 None，不创建空 deque，也不占位。同时把该 task 记进 `_queue_full_rejections`（有界 256）。
+  - `consume_queue_full_rejection(task_id)` 查询后即清除该记录。
+- `app/core/browser/workflow.py`：5 处 `session is None` 分支先判断是否因队列已满被拒。是的话返回 `capacity_error / tab_queue_full / status_code=503 / retryable=true`，不再误报成“标签页不存在”（404 类）或无状态的繁忙提示。
+- `.env.example` 加了说明。
+- 测试：p2 新增 3 项：队列满时三种 acquire 都在 1 秒内拒绝且不挂队、查询即清除；limit=0 不限；工作流错误负载经 `resolve_error_metadata` 解析为 503。
+
+### T1 干净克隆测试资源不全 ✅（全量：64 failed → 0 failed）
+
+- 缺失原因：这些资源在历史上都被作者**有意取消跟踪**：
+  - `config/commands.json` 在 cafad7f 删除，之后成为运行时生成的文件。
+  - `custom_scripts/examples/arena_payload_interceptor.js` 和 `js/arena-conversation-image-window.user.js` 在 3cd68aa 删除，`custom_scripts/` 被 gitignore。
+  - 历史版本的 commands.json 已经过时：拿来运行，57 项里仍有 14 项失败，不能作为 fixture 恢复。
+  - 结论：不恢复这些文件，改为“标记为需要本地环境的测试”。
+- 新增 `tests/conftest.py`（`.gitignore` 加入白名单 `!tests/conftest.py`）：
+  - 静态识别依赖本地资源的测试，依据以下几类写法：
+    - 测试函数本身出现资源路径写法。
+    - 调用了同模块里用到这些资源的辅助函数/方法（按不动点传递）。
+    - unittest 的 `setUp/setUpClass` 读取资源后存进 `self.X`，而测试方法用到了 `self.X`。
+  - 资源写法是收紧过的：
+    - `COMMANDS_PATH`、`"config" / "commands.json"`、`"config" / "commands.local.json"`。
+    - `examples/arena_payload_interceptor.js`、`== "arena_payload_interceptor.js"`。
+    - `arena-conversation-image-window`。
+    - 自建的 `tmp_path / "commands.json"` 以及只检查字符串的测试都不会误判。
+  - 识别出的测试统一打上 `local_fixture` 标记，CI 可以用 `-m "not local_fixture"` 只跑纯逻辑子集。
+  - 资源缺失时 skip，并写明缺什么；资源齐全时照常运行。用历史 commands.json 验证过：放回去后这些测试确实会执行。
+- `tests/test_arena_direct_models.py::test_collect_model_entries_respects_tab_preset_isolation`：
+  - 原来依赖未跟踪的 `config/arena_model_catalog.local.json`。
+  - 改为在测试内 monkeypatch 目录数据，现在自足并通过（它是纯逻辑测试，不该依赖本地环境）。
+- 结果：
+  - `/tmp/runtests.sh`：648 passed, 63 skipped, 0 failed。
+  - `-m "not local_fixture"`：648 passed, 63 deselected。
+  - 对比修改前：原先通过的 647 项全部仍通过，另有 1 项转为通过；其余 63 项从失败变为跳过。
+  - `/tmp/baseline_failures.txt` 已清空，此后任何失败都算新增。
+
+### 融合 main 分支亮点（S2 / S4 / S6）✅
+
+- **S2 信任边界与启动防御**：引入 `docs/SECURITY-TRUST-BOUNDARIES.md` 明确项目安全与沙箱边界；在 `app/core/http_security.py` 中增加启动自检，禁止对外绑定（非回环 APP_HOST）时同时开启 `CMD_ALLOW_UNSAFE_PYTHON_COMMANDS` 或 `PARSER_INSTALL_ENABLED`。
+- **S4 云元数据域名黑名单**：在 `app/api/browser_routes.py` 的 `_valid_web_url` 中补充 `_METADATA_HOSTS`（`metadata.google.internal`、`instance-data` 等）与内部后缀（`.local`、`.internal`、`.lan`、`.home.arpa`），防止云端元数据通过域名绕过。
+- **S6 媒体访问 `?token=` 支持**：在 `app/utils/media_access.py` 与 `main.py` 中补充对 URL 查询参数 `?token=` 的凭据提取，兼容第三方聊天客户端中无法自定义 Header 的 `<img src>` 标签。
+- **单测隔离加固**：在 `tests/test_review_fixes_p1.py` 中对 CORS 拦截测试增加了 monkeypatch 隔离，防止本地真实 `.env` 干扰测试结果。全量 118 项修复回归测试 100% 通过。

@@ -63,7 +63,7 @@ JS 通过 CDP 在受控浏览器里执行，天然拥有该页面的全部能力
 | 对外绑定 + 代码执行开关 | **不允许**。`CMD_ALLOW_UNSAFE_PYTHON_COMMANDS=true` 或 `PARSER_INSTALL_ENABLED=true` 与非回环 `APP_HOST` 同时出现时，服务**拒绝启动**。 |
 | 多租户 / 不可信投稿脚本 | 当前架构**不支持**。需在低权限独立进程或容器内执行，剥离浏览器与配置对象，并限制出网与资源。 |
 
-启动期检查实现在 `AppConfig.collect_security_config_errors()`，
+启动期检查实现在 `app/core/http_security.py::startup_security_errors()`，
 由 `main.py` 的 lifespan 调用。
 隔离网络中如需临时跳过，可设 `UWA_ALLOW_INSECURE_STARTUP=true`（不推荐）。
 

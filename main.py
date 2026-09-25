@@ -15,28 +15,19 @@ import threading
 import time
 import webbrowser
 from typing import Any, Dict, Optional
-from urllib.parse import parse_qs
 from urllib.request import urlopen
 from pathlib import Path
 from contextlib import asynccontextmanager
 from app import __version__ as APP_VERSION
 from app.core import get_browser
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse, FileResponse, PlainTextResponse, Response
+from fastapi.responses import JSONResponse, FileResponse, Response
 # ================= 导入配置 =================
 
-from app.core.config import AppConfig, InsecureStartupConfigError, get_logger, get_shared_file_log_handler
-from app.utils.safe_media_types import resolve_media_delivery, safe_media_response_headers
-from app.utils.media_guard import (
-    TranscodeBusyError,
-    TranscodeTooLargeError,
-    media_access_allowed,
-    media_access_requires_auth,
-    transcode_guard,
-)
+from app.core.config import AppConfig, get_logger, get_shared_file_log_handler
 from app.services.restart_guard import RestartGuard
 
 # ================= 日志配置 =================
@@ -448,44 +439,32 @@ def _dashboard_info_response():
         "docs": "/docs"
     })
 
-def _enforce_secure_startup_config() -> None:
-    """启动期安全配置校验（修复 S1 / H1）。
 
-    - 默认 fail-closed：发现不安全组合直接终止启动；
-    - 仅当显式设置 `UWA_ALLOW_INSECURE_STARTUP=true` 时降级为醒目告警，
-      供隔离网络里的临时调试使用。
-    """
-    errors = AppConfig.collect_security_config_errors()
+class InsecureStartupConfigError(RuntimeError):
+    """公开监听但未启用认证 / 认证开关不是合法布尔值等不安全配置（S1 / H1）。"""
+
+
+def _enforce_secure_startup_config() -> None:
+    """启动期安全检查：发现不安全组合直接拒绝启动，而不是静默以「无认证」对外服务。"""
+    from app.core.http_security import startup_security_errors
+
+    host = os.getenv("UWAPI_PUBLIC_BIND_HOST") or AppConfig.get_host()
+    errors = startup_security_errors(host=host)
     if not errors:
         return
-
-    for item in errors:
-        logger.error(f"❌ 不安全的启动配置: {item}")
-
-    if AppConfig.is_insecure_startup_allowed():
-        logger.warning(
-            "⚠️  UWA_ALLOW_INSECURE_STARTUP=true，已跳过安全配置检查。"
-            "服务可能对不可信网络开放，请勿在生产或公网环境使用。"
-        )
-        return
-
-    raise InsecureStartupConfigError(
-        "检测到不安全的启动配置，已拒绝启动：\n"
-        + "\n".join(f"  - {item}" for item in errors)
-        + "\n修正 .env 后重试；确需临时跳过可设置 UWA_ALLOW_INSECURE_STARTUP=true（不推荐）。"
-    )
+    for message in errors:
+        logger.error(f"❌ 安全配置错误: {message}")
+    raise InsecureStartupConfigError("；".join(errors))
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     global restart_guard
+    _enforce_secure_startup_config()
     _install_asyncio_exception_filter()
     logger.info("=" * 60)
-    logger.info("Universal Web-to-API 服务启动中...")
-    # 修复 S1/H1：不安全的默认配置（对外绑定 + 无认证 / CORS 通配 / 占位符布尔值）
-    # 过去只会静默生效。这里改为 fail-closed，让部署者在启动时就看到问题。
-    _enforce_secure_startup_config()
+    logger.info("Universal Web-to-API 服务启动中...")       
     # 启动时清理临时文件目录与调试日志目录
     try:
         from app.utils.file_paste import cleanup_temp_dir
@@ -494,13 +473,7 @@ async def lifespan(app: FastAPI):
         logger.debug(f"临时目录清理跳过: {e}")
 
     try:
-        # 修复 S12：除总量上限外，按保留期清理历史响应调试快照，
-        # 避免旧版本默认开启时留下的聊天正文长期留存在磁盘上。
-        from app.core.network_monitor import (
-            purge_expired_network_parser_debug_files,
-            trim_network_parser_debug_dir,
-        )
-        purge_expired_network_parser_debug_files()
+        from app.core.network_monitor import trim_network_parser_debug_dir
         trim_network_parser_debug_dir()
     except Exception as e:
         logger.debug(f"网络解析调试目录清理跳过: {e}")
@@ -647,8 +620,8 @@ app = FastAPI(
 )
 
 # CORS 配置
-if AppConfig.is_cors_enabled():
-    _cors_origins = AppConfig.get_cors_origins()
+_cors_origins = AppConfig.get_cors_origins() if AppConfig.is_cors_enabled() else []
+if _cors_origins:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=_cors_origins,
@@ -659,6 +632,8 @@ if AppConfig.is_cors_enabled():
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    if "*" in _cors_origins:
+        logger.warning("⚠️ CORS_ORIGINS=* ：任何网页都能跨源调用本服务，请确认已启用认证或改为具体来源")
 
 
 @app.middleware("http")
@@ -692,6 +667,49 @@ async def _call_next_without_dashboard_cache(request, call_next):
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
     return response
+
+
+@app.middleware("http")
+async def reject_untrusted_origins(request, call_next):
+    """S1：拒绝来自非同源、未在 CORS_ORIGINS 显式放行的浏览器请求（含 CORS 预检）。
+
+    CORS 只能阻止「读取响应」，挡不住跨站的简单 POST（表单/no-cors fetch）写操作；
+    这里在服务端按 Origin 直接拒绝，作为控制面的 CSRF 防护。无 Origin 头的请求
+    （curl/SDK/同源导航）不受影响，仍交由各路由的认证依赖处理。
+    """
+    from app.core.http_security import origin_is_allowed
+
+    origin = request.headers.get("origin")
+    if origin is not None and not origin_is_allowed(
+        origin,
+        request.headers.get("host"),
+        _cors_origins,
+        # 反代改写 Host 时以 X-Forwarded-Host 为准；浏览器跨源设置该头必触发预检，
+        # 预检本身带 Origin 且无此头，会先在这里被拒，因此攻击页无法借此伪造同源。
+        forwarded_host=request.headers.get("x-forwarded-host"),
+    ):
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "跨源请求被拒绝：来源未在 CORS_ORIGINS 中放行"},
+        )
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def guard_private_media(request, call_next):
+    """S6：MEDIA_REQUIRE_AUTH=true 时，/media 与 /download_images 需要服务/面板令牌或严格本机访问。"""
+    from app.utils.media_access import is_media_path, media_request_authorized
+
+    if is_media_path(request.url.path):
+        client_host = request.client.host if request.client else None
+        query_token = request.query_params.get("token")
+        if not media_request_authorized(client_host, request.headers, query_token=query_token):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "媒体访问需要认证（MEDIA_REQUIRE_AUTH 已开启）"},
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+    return await call_next(request)
 
 
 # ================= Dashboard 路由（优先级最高）=================
@@ -757,58 +775,6 @@ _MEDIA_MIME_OVERRIDES = {
     ".ogv": "video/ogg",
 }
 
-
-def _scope_media_access_allowed(scope) -> bool:
-    """从原始 ASGI scope 里取出凭据做校验（StaticFiles 拿不到 Request 对象）。"""
-    headers = {}
-    try:
-        for raw_key, raw_value in (scope or {}).get("headers") or []:
-            headers[bytes(raw_key).decode("latin-1").lower()] = bytes(raw_value).decode("latin-1")
-    except Exception:
-        headers = {}
-    query_token = ""
-    try:
-        query_token = parse_qs((scope or {}).get("query_string", b"").decode("latin-1")).get(
-            "token", [""]
-        )[0]
-    except Exception:
-        query_token = ""
-    return media_access_allowed(
-        authorization=headers.get("authorization"),
-        x_api_key=headers.get("x-api-key"),
-        query_token=query_token,
-    )
-
-
-class HardenedMediaStaticFiles(StaticFiles):
-    """给 `/download_images` 静态目录统一加固（修复 S8 / S9）。
-
-    目录里可能残留历史版本落盘的 `.svg` / `.html`。即便新代码已经拒绝写入，
-    出口这一层也必须保证它们不会再以同源活动文档的形式被打开：
-    白名单之外的扩展名一律降级为 `application/octet-stream` + `attachment`。
-    """
-
-    async def get_response(self, path, scope):
-        # 修复 S6：静态媒体目录原本完全无认证。默认仍然放行（兼容 <img src>），
-        # 但开启 MEDIA_ACCESS_REQUIRE_AUTH 后必须出示服务令牌。
-        if media_access_requires_auth() and not _scope_media_access_allowed(scope):
-            return PlainTextResponse("media_unauthorized", status_code=401)
-        return await super().get_response(path, scope)
-
-    def file_response(self, full_path, stat_result, scope, status_code=200):
-        response = super().file_response(full_path, stat_result, scope, status_code=status_code)
-        media_type, disposition = resolve_media_delivery(
-            full_path, getattr(response, "media_type", None)
-        )
-        if disposition == "attachment":
-            response.media_type = media_type
-            response.headers["content-type"] = media_type
-            filename = Path(str(full_path)).name
-            response.headers["content-disposition"] = f'attachment; filename="{filename}"'
-        for key, value in safe_media_response_headers().items():
-            response.headers[key] = value
-        return response
-
 _MEDIA_TRANSCODE_FORMATS = {
     "mp3": {
         "ext": ".mp3",
@@ -840,6 +806,15 @@ def _guess_media_mime(path: Path) -> str:
     return _MEDIA_MIME_OVERRIDES.get(suffix) or mimetypes.guess_type(str(path))[0] or "application/octet-stream"
 
 
+def _new_transcode_gate():
+    from app.utils.media_access import TranscodeGate
+
+    return TranscodeGate.from_env()
+
+
+_TRANSCODE_GATE = _new_transcode_gate()
+
+
 def _transcode_media(path: Path, fmt: str) -> Path:
     spec = _MEDIA_TRANSCODE_FORMATS.get(fmt)
     if not spec:
@@ -849,21 +824,38 @@ def _transcode_media(path: Path, fmt: str) -> Path:
     if not ffmpeg_path:
         raise HTTPException(status_code=503, detail="ffmpeg_not_available")
 
-    # 修复 S6：源文件体积上限，避免一个超大文件把 ffmpeg 与磁盘拖死
-    try:
-        transcode_guard.check_source_size(path.stat().st_size)
-    except TranscodeTooLargeError as exc:
-        logger.warning(f"媒体转码被拒绝（源文件过大）: {exc}")
-        raise HTTPException(status_code=413, detail="media_source_too_large")
+    from app.utils.media_access import TranscodeBusyError, transcode_max_source_bytes
 
     cache_dir = path.parent / "_transcoded"
     cache_dir.mkdir(exist_ok=True)
     # Include the complete source filename in the cache key.  Different input
     # formats can share a stem (for example voice.wav and voice.ogg).
     out_path = cache_dir / f"{path.name}{spec['ext']}"
-    if out_path.exists() and out_path.stat().st_mtime >= path.stat().st_mtime and out_path.stat().st_size > 0:
-        return out_path
 
+    def _cached() -> bool:
+        return out_path.exists() and out_path.stat().st_mtime >= path.stat().st_mtime and out_path.stat().st_size > 0
+
+    if _cached():
+        return out_path
+    # S6：源文件大小上限、同键合并、全局并发上限（排队超时 503）
+    if path.stat().st_size > transcode_max_source_bytes():
+        raise HTTPException(status_code=413, detail="media_transcode_source_too_large")
+    try:
+        with _TRANSCODE_GATE.key(str(out_path)):
+            if _cached():
+                return out_path
+            with _TRANSCODE_GATE.slot():
+                return _run_ffmpeg_transcode(path, fmt, spec, ffmpeg_path, cache_dir, out_path)
+    except TranscodeBusyError:
+        raise HTTPException(
+            status_code=503,
+            detail="media_transcode_busy",
+            headers={"Retry-After": "5"},
+        )
+
+
+def _run_ffmpeg_transcode(path: Path, fmt: str, spec: Dict[str, Any], ffmpeg_path: str,
+                          cache_dir: Path, out_path: Path) -> Path:
     temp_path = cache_dir / (
         f".{path.name}.{os.getpid()}.{threading.get_ident()}.{time.time_ns()}{spec['ext']}"
     )
@@ -906,53 +898,27 @@ def _transcode_media(path: Path, fmt: str) -> Path:
     return out_path
 
 
-def _transcode_media_guarded(path: Path, fmt: str) -> Path:
-    """在全局并发预算与同键去重锁内执行转码（修复 S6）。"""
-    try:
-        with transcode_guard.slot(f"{path.name}:{fmt}"):
-            return _transcode_media(path, fmt)
-    except TranscodeBusyError:
-        logger.warning(
-            f"媒体转码队列已满（并发上限 {transcode_guard.max_concurrency}）: {path.name} -> {fmt}"
-        )
-        raise HTTPException(
-            status_code=503,
-            detail="media_transcode_busy",
-            headers={"Retry-After": "5"},
-        )
-
-
 @app.get("/media/{filename}", include_in_schema=False)
 async def media_file(
-    request: Request,
     filename: str,
     format: Optional[str] = Query(default=None, pattern="^(mp3|m4a)$"),
-    token: Optional[str] = Query(default=None),
 ):
-    # 修复 S6：可选的媒体鉴权（默认关闭，保持 <img src> 兼容）
-    if not media_access_allowed(
-        authorization=request.headers.get("authorization"),
-        x_api_key=request.headers.get("x-api-key"),
-        query_token=token,
-    ):
-        raise HTTPException(status_code=401, detail="media_unauthorized")
-
     source_path = _resolve_download_media_path(filename)
     requested_format = str(format or "").strip().lower() if isinstance(format, str) else ""
 
     if requested_format:
         # ffmpeg 转码最长可达 60 秒，必须放到线程池执行，
         # 否则会同步阻塞事件循环，冻结所有并发 SSE 流。
-        media_path = await asyncio.to_thread(
-            _transcode_media_guarded, source_path, requested_format
-        )
+        media_path = await asyncio.to_thread(_transcode_media, source_path, requested_format)
         media_type = _MEDIA_TRANSCODE_FORMATS[requested_format]["mime"]
     else:
         media_path = source_path
         media_type = _guess_media_mime(media_path)
 
-    # 修复 S9：内联返回前按扩展名/MIME 复核一次。
-    # 历史遗留的 .html / .svg 文件会被降级为强制下载，而不是同源活动文档。
+    # S8/S9：出口加固。白名单媒体才可 inline；历史遗留的 .svg/.html 等一律强制下载，
+    # 并附带 nosniff + sandbox CSP，防止在应用同源执行脚本。
+    from app.utils.media_safety import resolve_media_delivery, safe_media_response_headers
+
     media_type, disposition = resolve_media_delivery(media_path, media_type)
     return FileResponse(
         media_path,
@@ -975,6 +941,25 @@ if Path("static").exists():
 # 🆕 挂载图片下载目录
 download_images_dir = Path("download_images")
 download_images_dir.mkdir(exist_ok=True)  # 自动创建目录
+class HardenedMediaStaticFiles(StaticFiles):
+    """S8/S9：/download_images 出口加固——非白名单扩展名强制下载，统一 nosniff + sandbox CSP。"""
+
+    def file_response(self, full_path, stat_result, scope, status_code=200):
+        from app.utils.media_safety import resolve_media_delivery, safe_media_response_headers
+
+        response = super().file_response(full_path, stat_result, scope, status_code)
+        media_type, disposition = resolve_media_delivery(Path(str(full_path)))
+        if disposition == "attachment":
+            response.media_type = media_type
+            response.headers["content-type"] = media_type
+            response.headers["content-disposition"] = (
+                'attachment; filename="' + Path(str(full_path)).name.replace('"', '').replace('\\', '') + '"'
+            )
+        for key, value in safe_media_response_headers().items():
+            response.headers[key] = value
+        return response
+
+
 app.mount("/download_images", HardenedMediaStaticFiles(directory="download_images"), name="download_images")
 logger.info(f"📁 图片下载目录: {download_images_dir.absolute()}")
 
@@ -1051,6 +1036,8 @@ if __name__ == "__main__":
     print("  APP_DEBUG=true            # 调试模式")
     print("  BROWSER_PORT=9222         # 浏览器端口")
     print("=" * 60 + "\n")
+
+    _enforce_secure_startup_config()
 
     uvicorn.run(
         app,

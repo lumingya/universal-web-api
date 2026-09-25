@@ -10,8 +10,6 @@ from .env_config import (
     load_dotenv,
     AppConfig,
     app_config,
-    InsecureStartupConfigError,
-    parse_bool_literal,
 )
 from .browser_constants import (
     BrowserConstants,
@@ -151,8 +149,6 @@ __all__ = [
     # 应用配置
     'AppConfig',
     'app_config',
-    'InsecureStartupConfigError',
-    'parse_bool_literal',
     'load_dotenv',
     'PROJECT_ROOT',
     'DEFAULT_LOG_DIR',

@@ -484,7 +484,7 @@ const BROWSER_CONSTANTS_SCHEMA = {
             },
             NETWORK_DEBUG_CAPTURE_ENABLED: {
                 label: '启用响应调试捕获',
-                desc: '命中网络解析器时，只保存少量关键快照到 logs/network_parser_debug，方便开发新解析器，同时避免刷爆磁盘。',
+                desc: '命中网络解析器时，保存少量关键快照到 logs/network_parser_debug，方便开发新解析器。⚠️ 快照含响应正文片段（可能包含聊天内容），仅在调试时开启，用完关闭并清理目录。',
                 type: 'switch',
                 default: false
             },
@@ -520,6 +520,15 @@ const BROWSER_CONSTANTS_SCHEMA = {
                 min: 5,
                 step: 5,
                 default: 50
+            },
+            NETWORK_DEBUG_CAPTURE_RETENTION_HOURS: {
+                label: '调试快照保留时长',
+                unit: '小时',
+                desc: '超过该时长的调试快照在启动和每次写入时自动删除（快照可能含聊天内容）；0 表示只按容量清理。',
+                type: 'number',
+                min: 0,
+                step: 1,
+                default: 24
             }
         }
     },
@@ -663,7 +672,7 @@ const ENV_CONFIG_SCHEMA = {
         items: {
             APP_HOST: {
                 label: '监听地址',
-                desc: '0.0.0.0 允许外部访问，127.0.0.1 仅本地',
+                desc: '127.0.0.1 仅本机（推荐）；0.0.0.0 允许外部访问，此时必须同时启用控制面板认证和服务 API 认证，否则服务拒绝启动',
                 type: 'text',
                 default: '127.0.0.1'
             },
@@ -739,9 +748,10 @@ const ENV_CONFIG_SCHEMA = {
             },
             CORS_ORIGINS: {
                 label: '允许的跨域源',
-                desc: '多个用逗号分隔，* 表示全部允许',
+                // S1：后端默认不放行任何跨源来源；前端默认值会在 .env 缺键时被写盘，必须保持一致。
+                desc: '多个用逗号分隔（如 https://app.example.com）；留空 = 不允许跨源网页调用（控制面板同源无需配置）。不推荐 *',
                 type: 'text',
-                default: '*'
+                default: ''
             }
         }
     },

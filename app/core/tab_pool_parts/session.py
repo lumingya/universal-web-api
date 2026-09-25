@@ -255,33 +255,40 @@ class TabSession:
         with self._lock:
             return self._debug_summary_unlocked()
 
-    #: 连续解冻失败多少次后把标签页标记为 ERROR 交给恢复流程（修复 B5）
-    _RESUME_FAILURE_ERROR_THRESHOLD = 3
+    # B5：解冻失败后的冷却期，期间 acquire 直接跳过该会话，避免每次都卡 2 秒 CDP 超时
+    _RESUME_FAILURE_BACKOFF_SEC = 10.0
 
     def acquire(self, task_id: str) -> bool:
+        if self._resume_recently_failed():
+            return False
         if not self._acquire_request_unlocked_entry(task_id):
             return False
         if not self._resume_after_acquire("acquire"):
-            self._rollback_acquire_after_failed_resume(rollback_request_count=True)
+            self._rollback_failed_acquire(task_id, request_mode=True)
             return False
         return True
 
     def acquire_for_command(self, task_id: str) -> bool:
         """Acquire tab for command execution without incrementing request counter."""
+        if self._resume_recently_failed():
+            return False
         if not self._acquire_command_unlocked_entry(task_id):
             return False
         if not self._resume_after_acquire("acquire_for_command"):
-            self._rollback_acquire_after_failed_resume(rollback_request_count=False)
+            self._rollback_failed_acquire(task_id, request_mode=False)
             return False
         return True
+
+    def _resume_recently_failed(self) -> bool:
+        if not getattr(self, "_uwapi_frozen", False):
+            return False
+        failed_at = float(getattr(self, "_uwapi_resume_failed_at", 0.0) or 0.0)
+        return bool(failed_at) and (time.time() - failed_at) < self._RESUME_FAILURE_BACKOFF_SEC
 
     def _resume_after_acquire(self, reason: str) -> bool:
         """P0-6：被空闲冻结的标签页在交给调用方之前恢复为 active。
 
-        修复 B5：返回「这个会话现在可以交付吗」。
-        `resume_if_frozen()` 返回 False 有两种含义——「本来就没冻结」和
-        「尝试解冻但 CDP 失败」，不能直接当作判据；这里统一以
-        `_uwapi_frozen` 是否已清除为准。
+        B5：返回该会话是否可交付——解冻失败（仍处于冻结态）返回 False。
         """
         try:
             from .idle_maintenance import resume_if_frozen
@@ -289,38 +296,22 @@ class TabSession:
             resume_if_frozen(self, reason=reason)
         except Exception as e:
             logger.debug(f"[{self.id}] resume frozen tab failed: {e}")
+        return not bool(getattr(self, "_uwapi_frozen", False))
 
-        if getattr(self, "_uwapi_frozen", False):
-            logger.warning(
-                f"[{self.id}] 标签页解冻未确认，拒绝交付本次占用 (reason={reason})"
-            )
-            return False
-        return True
-
-    def _rollback_acquire_after_failed_resume(self, *, rollback_request_count: bool) -> None:
-        """解冻失败后原子回滚刚才的占用，并在连续失败时标记为异常。
-
-        直接回滚而不是走 `release()`：此刻 status 仍是 BUSY，没有其他线程能介入，
-        而完整的 release 流程会触发页面清理等一系列与本场景无关的副作用。
-        """
-        should_mark_error = False
+    def _rollback_failed_acquire(self, task_id: str, *, request_mode: bool) -> None:
+        """B5：解冻失败时撤销本次占用，把会话退回 IDLE（保留冻结标记），不交付给调用方。"""
         with self._lock:
-            if self.status == TabStatus.BUSY:
-                self.status = TabStatus.IDLE
+            if self.status != TabStatus.BUSY or str(self.current_task_id or "") != str(task_id or ""):
+                return
+            self.status = TabStatus.IDLE
             self.current_task_id = None
-            self._clear_health_cache_unlocked()
-            if rollback_request_count and self.request_count > 0:
+            if request_mode and self.request_count > 0:
                 self.request_count -= 1
-            self.last_used_at = time.time()
-            failures = int(getattr(self, "_uwapi_resume_failures", 0) or 0)
-            should_mark_error = failures >= self._RESUME_FAILURE_ERROR_THRESHOLD
-
-        if should_mark_error:
-            # 连续多次解冻失败说明这个标签页的 CDP 通道已经不可用，
-            # 交给既有的错误恢复流程处理，而不是让它一直占着池子空转。
-            self.mark_error(
-                f"连续 {self._RESUME_FAILURE_ERROR_THRESHOLD} 次解除冻结失败，标签页 CDP 通道可能已失效"
-            )
+            self._clear_health_cache_unlocked()
+        logger.warning(
+            f"[{self.id}] 标签页解冻失败，本次不交付该会话（task={task_id}），"
+            f"{self._RESUME_FAILURE_BACKOFF_SEC:.0f}s 内跳过"
+        )
 
     def _acquire_request_unlocked_entry(self, task_id: str) -> bool:
         with self._lock:

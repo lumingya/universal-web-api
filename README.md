@@ -160,12 +160,12 @@ Invoke-RestMethod 'http://127.0.0.1:8199/v1/chat/completions' -Method Post -Cont
 
 | 变量 | 默认/示例 | 说明 |
 | --- | --- | --- |
-| `APP_HOST` | `127.0.0.1` | 监听地址。局域网共享才使用 `0.0.0.0`，并同时启用认证和防火墙。 |
+| `APP_HOST` | `127.0.0.1` | 监听地址。局域网共享才使用 `0.0.0.0`，并同时启用认证和防火墙；非回环监听但未启用两套认证时服务会拒绝启动（可信隔离网络可设 `ALLOW_INSECURE_PUBLIC_BIND=true`）。 |
 | `APP_PORT` | `8199` | API、控制面板和教程端口。 |
 | `APP_DEBUG` | `false` | `true` 开启 `/docs`、`/redoc` 和更详细错误；共享环境应关闭。 |
 | `AUTH_ENABLED` / `AUTH_TOKEN` | `false` / 空 | API Bearer 或 `X-API-Key` 认证；启用时必须设置强令牌。 |
 | `DASHBOARD_AUTH_ENABLED` / `DASHBOARD_AUTH_TOKEN` | 跟随 API / 空 | 控制面板与管理接口认证，可使用独立令牌。 |
-| `CORS_ENABLED` / `CORS_ORIGINS` | `false` / `http://127.0.0.1:8199` | 默认关闭跨域；确需跨域时再打开，并改为明确来源列表。 |
+| `CORS_ENABLED` / `CORS_ORIGINS` | `true` / 空 | `CORS_ORIGINS` 留空即不放行任何跨源网页（控制面板同源，无需配置）；未放行来源的浏览器请求会被直接 403。确需跨域时填写明确来源列表。 |
 | `BROWSER_PORT` | `9222` | 受控浏览器 DevTools 端口，只允许本机访问。 |
 | `BROWSER_PATH` / `BROWSER_PROFILE_DIR` / `BROWSER_PROFILE_NAME` | 自动 / 项目目录 / `Default` | 自定义浏览器和独立用户目录。Chrome 136+ 不要直接复用系统默认 User Data。 |
 | `SITES_CONFIG_FILE` | `config/sites.json` | 站点、工作流、标签页路由和预设配置。 |

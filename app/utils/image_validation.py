@@ -21,14 +21,61 @@ from urllib.parse import urlsplit
 from PIL import Image, ImageOps
 
 from app.core.config import logger
-from app.utils.remote_resource import (
-    UnsafeRemoteResourceError,
-    get_public_remote_resource,
-    read_remote_response_bytes,
-)
+from app.utils.remote_resource import UnsafeRemoteResourceError, get_public_remote_resource
 
-#: 参考图比对最多读取的远端字节数（修复 S10：原先无上限，且不校验目标地址）
-MAX_REMOTE_IMAGE_BYTES = 24 * 1024 * 1024
+# S10：比对/C2PA 路径读取第三方页面图片时的预算（与 image_handler 的上传图片上限保持同一量级）。
+MAX_VALIDATION_IMAGE_BYTES = 20 * 1024 * 1024
+MAX_VALIDATION_IMAGE_PIXELS = 40_000_000
+MAX_VALIDATION_IMAGE_DIMENSION = 16_384
+
+
+def _decode_data_uri_bytes(source: str) -> bytes:
+    """解码 data URI；先按 base64 长度预估解码大小，超预算直接放弃（不做完整解码）。"""
+    try:
+        encoded = source.split(",", 1)[1]
+    except IndexError:
+        return b""
+    if (len(encoded) * 3) // 4 > MAX_VALIDATION_IMAGE_BYTES + 3:
+        logger.warning("[IMAGE_VALIDATION] data URI 超过字节预算，跳过比对")
+        return b""
+    try:
+        payload = base64.b64decode(encoded)
+    except Exception:
+        return b""
+    return payload if len(payload) <= MAX_VALIDATION_IMAGE_BYTES else b""
+
+
+def _read_remote_image_limited(source: str, headers: Dict[str, str], timeout: Any) -> bytes:
+    """经受限抓取器读取远程图片：逐跳私网/重定向校验 + DNS pinning + 流式字节上限。"""
+    response = get_public_remote_resource(
+        source,
+        headers=headers,
+        credential_origin_url=source,
+        timeout=timeout,
+        stream=True,
+    )
+    try:
+        if int(getattr(response, "status_code", 0) or 0) >= 400:
+            return b""
+        declared = str((getattr(response, "headers", None) or {}).get("Content-Length") or "").strip()
+        if declared.isdigit() and int(declared) > MAX_VALIDATION_IMAGE_BYTES:
+            logger.warning("[IMAGE_VALIDATION] 远程图片 Content-Length 超过预算，跳过比对")
+            return b""
+        chunks: List[bytes] = []
+        total = 0
+        for chunk in response.iter_content(chunk_size=65536):
+            if not chunk:
+                continue
+            total += len(chunk)
+            if total > MAX_VALIDATION_IMAGE_BYTES:
+                logger.warning("[IMAGE_VALIDATION] 远程图片超过字节预算，已中止读取")
+                return b""
+            chunks.append(chunk)
+        return b"".join(chunks)
+    finally:
+        close = getattr(response, "close", None)
+        if callable(close):
+            close()
 
 
 def get_current_page_url(tab: Any) -> str:
@@ -52,10 +99,7 @@ def read_image_bytes(
         return b""
 
     if source.startswith("data:"):
-        try:
-            return base64.b64decode(source.split(",", 1)[1])
-        except Exception:
-            return b""
+        return _decode_data_uri_bytes(source)
 
     # 规范化超时时间为 (connect_timeout, read_timeout)
     if isinstance(timeout, (int, float)):
@@ -75,39 +119,20 @@ def read_image_bytes(
         eff_timeout = (2.0, 5.0)
 
     if source.startswith(("http://", "https://")):
-        # 修复 S10：URL 来自页面抽取结果（攻击者可控）。
-        # 原先直接 requests.get，既不校验目标是否为内网地址（SSRF），
-        # 也不限制响应体积，还会把当前页面 URL 当 Referer 无条件发出去。
-        # 改为统一走 get_public_remote_resource：公网地址校验 + 逐跳重定向校验
-        # + DNS 固定 + 凭据作用域，并按字节预算流式读取。
-        response = None
         try:
             referer = get_current_page_url(tab)
             headers = {"User-Agent": "Mozilla/5.0"}
             if referer:
                 headers["Referer"] = referer
-            response = get_public_remote_resource(
-                source,
-                headers=headers,
-                credential_origin_url=referer or source,
-                timeout=eff_timeout,
-                stream=True,
-            )
-            response.raise_for_status()
-            payload = read_remote_response_bytes(response, MAX_REMOTE_IMAGE_BYTES)
+            payload = _read_remote_image_limited(source, headers, eff_timeout)
             if payload:
                 return payload
-        except UnsafeRemoteResourceError as e:
-            logger.warning(f"参考图读取被安全策略拒绝: {str(e)[:120]} url={source[:120]}")
+        except UnsafeRemoteResourceError as exc:
+            # S10：私网/非法目标不再退回浏览器 fetch（那会绕过同一道校验）
+            logger.warning(f"[IMAGE_VALIDATION] 拒绝读取非公网图片地址: {exc}")
             return b""
         except Exception:
             pass
-        finally:
-            if response is not None:
-                try:
-                    response.close()
-                except Exception:
-                    pass
 
     if tab is None:
         return b""
@@ -115,7 +140,7 @@ def read_image_bytes(
     try:
         result = tab.run_js(
             r"""
-            return (async function(url) {
+            return (async function(url, maxBytes) {
                 let timer = null;
                 try {
                     const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
@@ -124,7 +149,10 @@ def read_image_bytes(
                         signal: controller ? controller.signal : undefined
                     });
                     if (!response.ok) return '';
+                    const declared = Number(response.headers.get('content-length') || 0);
+                    if (declared && declared > maxBytes) return '';
                     const buffer = await response.arrayBuffer();
+                    if (buffer.byteLength > maxBytes) return '';
                     const bytes = new Uint8Array(buffer);
                     let binary = '';
                     const step = 0x8000;
@@ -137,11 +165,15 @@ def read_image_bytes(
                 } finally {
                     if (timer) clearTimeout(timer);
                 }
-            })(arguments[0]);
+            })(arguments[0], arguments[1]);
             """,
             source,
+            MAX_VALIDATION_IMAGE_BYTES,
         )
-        return base64.b64decode(str(result or ""))
+        encoded = str(result or "")
+        if (len(encoded) * 3) // 4 > MAX_VALIDATION_IMAGE_BYTES + 3:
+            return b""
+        return base64.b64decode(encoded)
     except Exception:
         return b""
 
@@ -165,10 +197,7 @@ def read_uploaded_image_bytes(
         return bytes(value)
     source = str(value or "").strip()
     if source.startswith("data:"):
-        try:
-            return base64.b64decode(source.split(",", 1)[1])
-        except Exception:
-            return b""
+        return _decode_data_uri_bytes(source)
     reader = local_reader or read_local_image_bytes
     return reader(source)
 
@@ -216,6 +245,17 @@ def image_signatures(payload: bytes) -> Dict[str, Any]:
 
     try:
         with Image.open(BytesIO(data)) as source:
+            # S10：解码前按头部尺寸做像素预算，防解压炸弹（只算 sha256，不做像素级比对）
+            width, height = source.size
+            if (
+                width <= 0
+                or height <= 0
+                or width > MAX_VALIDATION_IMAGE_DIMENSION
+                or height > MAX_VALIDATION_IMAGE_DIMENSION
+                or width * height > MAX_VALIDATION_IMAGE_PIXELS
+            ):
+                logger.warning(f"[IMAGE_VALIDATION] 图片尺寸 {width}x{height} 超过像素预算，跳过像素签名")
+                return signatures
             image = ImageOps.exif_transpose(source).convert("RGBA")
             signatures["size"] = image.size
             signatures["pixel_sha256"] = hashlib.sha256(image.tobytes()).hexdigest()

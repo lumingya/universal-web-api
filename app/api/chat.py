@@ -9,7 +9,6 @@ app/api/chat.py - 核心聊天 API
 
 import json
 import codecs
-import hashlib
 import contextlib  # 修复(7)：用于 aclosing 确保内部异步生成器及时清理
 import copy
 import os
@@ -70,7 +69,6 @@ from app.api.openai_stop import (
     sse_frame_data_text,
 )
 from app.api.deps import (
-    extract_authorization_token,
     verify_dashboard_auth,
     verify_service_auth,
     verify_service_token,
@@ -94,39 +92,50 @@ STREAM_QUEUE_POLL_TIMEOUT = 0.5
 SSE_HEARTBEAT_INTERVAL = 5.0
 RESPONSES_STATE_MAX_ENTRIES = 1024
 RESPONSES_STATE_TTL_SEC = 3600.0
-# 修复 B3：原来只有「条数 + TTL」两个上限，没有任何字节预算。
-# Responses 默认 store=true 且会把多模态内容（base64 图片）整段存进内存历史，
-# 1024 条足以撑爆进程内存。这里补上单项与总量的字节预算。
-RESPONSES_STATE_MAX_ENTRY_BYTES = 4 * 1024 * 1024
-RESPONSES_STATE_MAX_TOTAL_BYTES = 64 * 1024 * 1024
+
+
+def _responses_state_env_bytes(name: str, default_mib: float) -> int:
+    raw = os.getenv(name)
+    try:
+        value = float(str(raw).strip()) if raw not in (None, "") else float(default_mib)
+    except (TypeError, ValueError):
+        value = float(default_mib)
+    if value != value or value <= 0:  # NaN / 非正数回落默认
+        value = float(default_mib)
+    return int(value * 1024 * 1024)
+
+
+# B3：Responses 续接历史的字节预算（单位 MiB，可用环境变量覆盖）。
+# 单条超限 → 不存储并留下「过大」墓碑，续接时返回 413 明确提示；总量超限 → 按 LRU 淘汰。
+RESPONSES_STATE_MAX_ENTRY_BYTES = _responses_state_env_bytes("RESPONSES_STATE_MAX_ENTRY_MB", 8)
+RESPONSES_STATE_MAX_TOTAL_BYTES = _responses_state_env_bytes("RESPONSES_STATE_MAX_TOTAL_MB", 64)
 
 _responses_state_lock = threading.RLock()
 # 修复(4)：会话历史改存 json.dumps 序列化字符串（不可变），
 # 读写两侧不再对含 base64 图片的完整消息历史做 deepcopy，序列化/反序列化均在锁外执行
-# 修复 B3：条目结构扩展为 (stored_at, subject_key, serialized_or_None, nbytes)。
-#   - subject_key：认证主体指纹，避免任何人拿到 response id 就能续接他人会话
-#   - serialized 为 None：超出字节预算的「拒绝墓碑」，让续接得到明确错误而不是静默 404
-_responses_state_by_id: "OrderedDict[str, tuple[float, str, Optional[str], int]]" = OrderedDict()
+# B3：条目 = (stored_at, serialized 或 None(过大墓碑), owner 主体指纹, 字节数)
+_responses_state_by_id: "OrderedDict[str, tuple[float, Optional[str], str, int]]" = OrderedDict()
 _responses_state_total_bytes = 0
 
 
-def _responses_subject_key(request: Any) -> str:
-    """返回用于隔离 Responses 会话状态的认证主体指纹（修复 B3）。
+def _responses_principal_from_request(request: Any) -> str:
+    """B3：续接状态按调用主体隔离——取请求携带的 API 令牌（Bearer / X-API-Key）的 SHA-256 指纹。
 
-    未启用认证时所有请求同属一个主体（单机本地部署的既有语义）；
-    启用认证后不同令牌之间互相看不到对方的 previous_response_id。
-    只存令牌的哈希前缀，不存令牌本身。
+    未携带令牌（认证关闭的本机场景）时为空串，所有匿名调用共享一个命名空间，与旧行为一致。
     """
-    headers = getattr(request, "headers", None) or {}
-    try:
-        authorization = headers.get("authorization")
-        api_key = headers.get("x-api-key")
-    except Exception:
-        authorization = api_key = None
-    token = extract_authorization_token(authorization) or str(api_key or "").strip()
-    if not token:
-        return "anonymous"
-    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:32]
+    import hashlib
+
+    headers = getattr(request, "headers", None)
+    if headers is None:
+        return ""
+    raw = str(headers.get("authorization") or "").strip()
+    if raw.lower().startswith("bearer "):
+        raw = raw[7:].strip()
+    if not raw:
+        raw = str(headers.get("x-api-key") or "").strip()
+    if not raw:
+        return ""
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 class _ToolCallingExecutionCancelled(Exception):
@@ -566,11 +575,11 @@ def _new_response_item_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
 
 
-def _drop_responses_state_locked(response_id: str) -> None:
+def _pop_responses_state_locked(response_id: str) -> None:
     global _responses_state_total_bytes
     entry = _responses_state_by_id.pop(response_id, None)
     if entry is not None:
-        _responses_state_total_bytes = max(0, _responses_state_total_bytes - int(entry[3]))
+        _responses_state_total_bytes = max(0, _responses_state_total_bytes - int(entry[3] or 0))
 
 
 def _prune_responses_state_locked(now: Optional[float] = None) -> None:
@@ -581,19 +590,17 @@ def _prune_responses_state_locked(now: Optional[float] = None) -> None:
         if entry[0] < cutoff
     ]
     for response_id in expired_ids:
-        _drop_responses_state_locked(response_id)
+        _pop_responses_state_locked(response_id)
     while len(_responses_state_by_id) > RESPONSES_STATE_MAX_ENTRIES:
-        oldest_id = next(iter(_responses_state_by_id))
-        _drop_responses_state_locked(oldest_id)
-    # 修复 B3：条数达标不代表内存达标——一条含 base64 图片的历史就可能有几十 MB
-    while _responses_state_total_bytes > RESPONSES_STATE_MAX_TOTAL_BYTES and _responses_state_by_id:
-        oldest_id = next(iter(_responses_state_by_id))
-        _drop_responses_state_locked(oldest_id)
+        _pop_responses_state_locked(next(iter(_responses_state_by_id)))
+    # B3：总字节预算，按 LRU（OrderedDict 头部最久未用）淘汰
+    while _responses_state_by_id and _responses_state_total_bytes > RESPONSES_STATE_MAX_TOTAL_BYTES:
+        _pop_responses_state_locked(next(iter(_responses_state_by_id)))
 
 
 def _load_responses_state(
     previous_response_id: Optional[str],
-    subject_key: str = "anonymous",
+    principal: str = "",
 ) -> List[Dict[str, Any]]:
     response_id = str(previous_response_id or "").strip()
     if not response_id:
@@ -601,25 +608,23 @@ def _load_responses_state(
     with _responses_state_lock:
         _prune_responses_state_locked()
         entry = _responses_state_by_id.get(response_id)
-        # 修复 B3：状态按 response id 索引但不绑定主体，任何拿到 id 的调用方
-        # 都能续接他人会话。主体不匹配时返回与「不存在」完全相同的 404，
-        # 避免把「这个 id 确实存在」当成探测预言机。
-        if entry is None or entry[1] != subject_key:
+        # B3：不同主体一律当作不存在（不泄露 ID 是否有效）
+        if entry is None or str(entry[2] or "") != str(principal or ""):
             raise HTTPException(
                 status_code=404,
                 detail=f"previous_response_id not found or expired: {response_id}",
             )
-        if entry[2] is None:
+        if entry[1] is None:
             raise HTTPException(
                 status_code=413,
                 detail=(
-                    f"previous_response_id {response_id} 的会话历史超出服务端存储预算"
-                    f"（单条上限 {RESPONSES_STATE_MAX_ENTRY_BYTES // (1024 * 1024)}MB），未被保存；"
-                    "请在请求中自行携带完整历史。"
+                    f"previous_response_id 的会话历史超过存储上限 "
+                    f"({RESPONSES_STATE_MAX_ENTRY_BYTES // (1024 * 1024)} MiB)，未被保存；"
+                    "请在 input 中携带完整上下文重新发送"
                 ),
             )
         _responses_state_by_id.move_to_end(response_id)
-        serialized = entry[2]
+        serialized = entry[1]
     # 修复(4)：锁内只做 dict 读写与 LRU 维护；大 payload 的反序列化放到锁外，
     # 避免含 base64 图片的历史在全局锁持有期间做重拷贝阻塞其他请求。
     # json round-trip 对该数据（本就来自 JSON 请求体）与 deepcopy 语义等价
@@ -632,14 +637,9 @@ def _store_responses_state(
     chat_payload: Dict[str, Any],
     *,
     enabled: bool,
-    subject_key: str = "anonymous",
+    principal: str = "",
 ) -> None:
-    """保存 Responses 会话历史，供 previous_response_id 续接。
-
-    `enabled` 对应请求里的 `store` 字段，**默认为 true**（与 OpenAI 语义一致）：
-    不显式传 `store: false` 就会在服务端内存里保留整段对话（含多模态内容）
-    最多 `RESPONSES_STATE_TTL_SEC` 秒。不希望留存的调用方请显式传 `store: false`。
-    """
+    global _responses_state_total_bytes
     if not enabled:
         return
 
@@ -665,23 +665,20 @@ def _store_responses_state(
         # 数据理论上均来自 JSON 请求体/响应体，不可序列化属异常场景：跳过存储而非让请求 500
         logger.warning(f"responses 会话历史序列化失败（跳过存储）: {e}")
         return
-    global _responses_state_total_bytes
-    nbytes = len(serialized.encode("utf-8", errors="ignore"))
-    over_budget = nbytes > RESPONSES_STATE_MAX_ENTRY_BYTES
-    if over_budget:
-        # 修复 B3：超预算时存一个「拒绝墓碑」而不是静默丢弃，
-        # 这样后续 previous_response_id 会得到明确的 413，而不是含糊的 404。
+    nbytes = len(serialized.encode("utf-8"))
+    stored: Optional[str] = serialized
+    if nbytes > RESPONSES_STATE_MAX_ENTRY_BYTES:
+        # B3：单条超限不入内存，只留极小的墓碑，续接时给出可预测的 413
         logger.warning(
-            f"responses 会话历史超出单条字节预算，未保存: id={key}, "
-            f"size={nbytes}B, limit={RESPONSES_STATE_MAX_ENTRY_BYTES}B"
+            f"responses 会话历史 {nbytes / (1024 * 1024):.1f} MiB 超过单条上限 "
+            f"{RESPONSES_STATE_MAX_ENTRY_BYTES / (1024 * 1024):.0f} MiB，未存储: {key}"
         )
-        serialized = None
+        stored = None
         nbytes = 0
-
     with _responses_state_lock:
         _prune_responses_state_locked()
-        _drop_responses_state_locked(key)
-        _responses_state_by_id[key] = (time.time(), subject_key, serialized, nbytes)
+        _pop_responses_state_locked(key)
+        _responses_state_by_id[key] = (time.time(), stored, str(principal or ""), nbytes)
         _responses_state_total_bytes += nbytes
         _responses_state_by_id.move_to_end(key)
         _prune_responses_state_locked()
@@ -1104,15 +1101,12 @@ def _append_response_input_item(messages: List[Dict[str, Any]], item: Any) -> No
         messages.append({"role": "user", "content": normalized_content})
 
 
-def _responses_input_to_messages(
-    body: ResponsesRequest,
-    subject_key: str = "anonymous",
-) -> List[Dict[str, Any]]:
+def _responses_input_to_messages(body: ResponsesRequest, principal: str = "") -> List[Dict[str, Any]]:
     messages: List[Dict[str, Any]] = []
     instructions = str(body.instructions or "").strip()
     if instructions:
         messages.append({"role": "system", "content": instructions})
-    messages.extend(_load_responses_state(body.previous_response_id, subject_key))
+    messages.extend(_load_responses_state(body.previous_response_id, principal))
 
     source = body.input
     if source in (None, "") and body.prompt not in (None, ""):
@@ -1154,12 +1148,12 @@ def _responses_request_to_chat_request(
     body: ResponsesRequest,
     *,
     stream: bool,
-    subject_key: str = "anonymous",
+    principal: str = "",
 ) -> ChatRequest:
     return ChatRequest(
         workflow_variables=body.workflow_variables,
         model=body.model,
-        messages=_responses_input_to_messages(body, subject_key),
+        messages=_responses_input_to_messages(body, principal),
         stream=stream,
         temperature=body.temperature,
         max_tokens=body.max_output_tokens,
@@ -2039,7 +2033,7 @@ async def _stream_responses_compat(
             chat_body.messages,
             chat_payload,
             enabled=body.store is not False,
-            subject_key=_responses_subject_key(request),
+            principal=_responses_principal_from_request(request),
         )
         yield _pack_response_event(terminal_event, completed)
     except Exception as e:
@@ -2451,10 +2445,8 @@ async def create_response(
     authenticated: bool = Depends(verify_auth)
 ):
     """OpenAI Responses API 兼容入口。"""
-    responses_subject_key = _responses_subject_key(request)
-    chat_body = _responses_request_to_chat_request(
-        body, stream=bool(body.stream), subject_key=responses_subject_key
-    )
+    principal = _responses_principal_from_request(request)
+    chat_body = _responses_request_to_chat_request(body, stream=bool(body.stream), principal=principal)
 
     if body.stream:
         return StreamingResponse(
@@ -2513,7 +2505,7 @@ async def create_response(
         chat_body.messages,
         payload,
         enabled=body.store is not False,
-        subject_key=_responses_subject_key(request),
+        principal=principal,
     )
     return JSONResponse(content=response_obj)
 
