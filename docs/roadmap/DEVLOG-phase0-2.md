@@ -168,6 +168,47 @@ Portal 把用户本机的**一个文件夹**发布成公网 MCP 端点：`https:
 - [ ] **R2-7** 可观测性：`/metrics`、结构化日志、贯穿全程的请求 ID、收窄 `except Exception`。
 - [ ] **R2-8** 前端工程化：预编译 Tailwind、改用 ES Modules、拆分 `dashboard-methods.js`、Node 端单测。
 
+## 3.5 设计记录：R1-1 Schema 与 R1-2 站点配置彻底拆分（实施前定稿，改动时同步更新）
+
+**现状调研（2026-09-26）**
+
+- `app/services/config/engine.py` 的 `ConfigEngine` 读写 `config/sites.json`（常量 `CONFIG_FILE`，可用环境变量 `SITES_CONFIG_FILE` 覆盖）和 `config/sites.local.json`（本地覆盖），按 mtime 热重载。
+- 其他引用点：
+  - `app/api/system.py`：完整备份的导出和导入；
+  - `app/api/config_compare_support.py`：用 `ConfigConstants.CONFIG_FILE` 的相对路径拉取 GitHub main 上的 `config/sites.json`，失败时回退缓存；
+  - `app/services/arena_model_catalog.py`；
+  - `app/utils/site_rules.py`（只读 sites.local.json）；
+  - `scripts/upgrade_gemini_deepseek.py`；
+  - `updater.py`：遇到 `SITES_CONFIG_PATH` 时调用 `merge_sites_file` 合并（同一站点优先保留本地并补入新字段，本地独有的保留，发布独有的新增）；
+  - `update_preserve.py` 里的选项 `sites_config`；
+  - 另有 5 个测试直接读 `config/sites.json`。
+- 旧版更新器**只拷贝、不删除**：新发布包里没有 `config/sites.json` 时，用户原有文件原样保留；`config/sites/*.json` 会被当作普通文件写入。
+- 旧版客户端的「与官方对比」拉不到 main 上的 `config/sites.json` 时，会回退到最近一次缓存并提示 stale，属于可接受的降级。
+
+**定稿方案**
+
+- 新的事实来源是 `config/sites/` 目录，环境变量 `SITES_CONFIG_DIR` 可覆盖。每个站点一个文件，全局配置是 `_global.json`。文件外层包一个信封：
+
+  ```json
+  {"schema_version": 1, "site": "<域名或 _global>", "adapter_version": "…", "min_app_version": "…",
+   "last_verified": "YYYY-MM-DD", "config": { …与原 sites.json 中该节点完全相同… }}
+  ```
+
+  加载时解包 `config`，拼回与原来**完全相同**的 `sites` 字典，所以应用其他部分无需改动。
+- **自动迁移**：启动时如果发现旧的 `config/sites.json`：
+  - 目录为空：把旧文件拆成单站点文件；
+  - 目录已有文件（通过更新器升级的场景）：按 `merge_site_records` 的语义合并，即优先保留本地并补入新字段，与现有更新语义一致；
+  - 两种情况最后都把旧文件改名为 `sites.json.migrated-<时间戳>.bak`，不删除。
+- **保存**：只重写内容有变化的站点文件（临时文件 + `os.replace`），保留信封里的元数据；已删除的站点移到 `config/sites/.trash/`。热重载改为基于目录签名（文件名、mtime、大小）。
+- **分发与更新通道（R1-3 共用）**：
+  - 仓库内的 `config/sites/index.json` 由 `scripts/build_sites_index.py` 生成，记录每个文件的 sha256、adapter_version 和 min_app_version。由测试保证它与目录内容一致。
+  - 「与官方对比」和适配器更新都改为：先拉 index，再按 sha256 校验拉取单站点文件，并逐文件缓存。
+- **更新器**：`config/sites/<站点>.json` 逐文件合并，语义与 `merge_sites_file` 相同。`update_preserve.py` 新增 `config/sites/` 选项；旧选项 `config/sites.json` 保留兼容。
+- **备份**：导出格式不变，仍是合并后的 `sites` 字典，所以旧备份照样能导入；导入时写回单站点文件。
+- **Schema（R1-1）**：`app/services/config/site_schema.json`（JSON Schema 2020-12，`jsonschema` 已在依赖中）校验信封与站点配置的关键结构，包括 selectors、workflow、stream_config、file_paste、image_extraction、request_transport。
+  - 加载时校验失败只告警、不阻止启动；保存和导入时校验失败则拒绝，并给出路径级错误。
+  - 未知字段放行，因为现有配置里字段很多，先保证不误伤。
+
 ## 4. 进度记录
 
 ### 2026-09-26
