@@ -16,6 +16,54 @@
     },
     "you.com": {
       "stealth_default": true
+    },
+    "google.com": {
+      "auto_discovery": false
+    },
+    "google.co.jp": {
+      "auto_discovery": false
+    },
+    "google.co.uk": {
+      "auto_discovery": false
+    },
+    "google.com.hk": {
+      "auto_discovery": false
+    },
+    "accounts.google.com": {
+      "auto_discovery": false
+    },
+    "bing.com": {
+      "auto_discovery": false
+    },
+    "cn.bing.com": {
+      "auto_discovery": false
+    },
+    "baidu.com": {
+      "auto_discovery": false
+    },
+    "duckduckgo.com": {
+      "auto_discovery": false
+    },
+    "search.yahoo.com": {
+      "auto_discovery": false
+    },
+    "yandex.com": {
+      "auto_discovery": false
+    },
+    "yandex.ru": {
+      "auto_discovery": false
+    },
+    "sogou.com": {
+      "auto_discovery": false
+    },
+    "so.com": {
+      "auto_discovery": false
+    },
+    "search.brave.com": {
+      "auto_discovery": false
+    },
+    "naver.com": {
+      "auto_discovery": false
     }
   }
 }

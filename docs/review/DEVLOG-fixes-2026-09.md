@@ -96,7 +96,7 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - [x] B8 命令配置损坏时清空运行缓存
 - [x] B5 解冻失败仍交付标签页
 - [x] B2 旧版顶层数组历史恢复丢失
-- [ ] B1 搜索引擎主域被自动发现
+- [x] B1 搜索引擎主域被自动发现
 - [ ] B3 Responses 内存历史无字节预算
 - [ ] S10 图片比对 / C2PA 直取外部 URL
 - [ ] S11 DNS 校验后连接重解析
@@ -222,3 +222,14 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
   （旧代码 `data.get(...)` 对 list 抛 AttributeError，被外层 except 吞掉 → 恢复 0 条）。
   顺带修掉 `max_records<=0` 时 `lst[-0:]` 返回整个列表的陷阱。
 - 验证：p2 新增 2 项（顶层数组 + 混入非 dict 项恢复 2 条且 token 统计回填；对象格式不变；上限 0 时清空）。
+
+### B1 搜索引擎主域被自动发现 ✅（基线 9 个失败转绿）
+
+- `config/site_rules.json`：为 google.com / google.co.jp / google.co.uk / google.com.hk / accounts.google.com / bing.com /
+  cn.bing.com / baidu.com / duckduckgo.com / search.yahoo.com / yandex.com / yandex.ru / sogou.com / so.com /
+  search.brave.com / naver.com 加 `"auto_discovery": false`（规则按**精确主机**匹配，www 前缀已有别名处理）。
+- `app/utils/site_discovery.py`：内置整串精确匹配的兜底模式（`google.<cc>` / `google.co(m).<cc>`、`<cc>.bing.com`、
+  `yandex.<cc>`），覆盖 JSON 里不可能穷举的各国主域；site_rules.json 显式值（含 true）优先。
+  gemini.google.com、aistudio.google.com、`google.com.attacker.org` 不受影响。
+- 验证：`tests/test_site_discovery.py` 36/36 通过（原 9 个失败转绿）；p2 新增 12 项。
+- **基线更新**：失败数 73 → 64（剩余 64 个全部属 T1 fixture 缺失）；`/tmp/baseline_failures.txt` 已同步为 64 项。

@@ -194,3 +194,27 @@ def test_b2_object_format_still_works_and_zero_limit_clears(tmp_path, monkeypatc
     rm0 = _bare_request_manager(tmp_path, monkeypatch, max_records=0)
     rm0._load_history()
     assert rm0._monitor_history == []   # lst[-0:] 陷阱
+
+
+# ---------------------------------------------------------------------------
+# B1 · 搜索引擎主域禁自动发现，AI 子域保留
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("domain,allowed", [
+    ("google.de", False), ("www.google.com.br", False), ("cn.bing.com", False), ("yandex.ru", False),
+    ("duckduckgo.com", False), ("www.baidu.com", False),
+    ("gemini.google.com", True), ("aistudio.google.com", True), ("google.com.attacker.org", True),
+    ("notgoogle.com", True), ("copilot.microsoft.com", True),
+])
+def test_b1_builtin_search_hosts(domain, allowed):
+    from app.utils.site_discovery import automatic_discovery_allowed
+
+    assert automatic_discovery_allowed(domain) is allowed
+
+
+def test_b1_explicit_rule_overrides_builtin(monkeypatch):
+    from app.utils import site_discovery
+
+    monkeypatch.setattr(site_discovery, "get_site_rule",
+                        lambda host: {"auto_discovery": True} if host == "google.de" else {})
+    assert site_discovery.automatic_discovery_allowed("google.de") is True
