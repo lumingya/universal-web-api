@@ -18,10 +18,17 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional
 from urllib.parse import urlsplit
 
-import requests
 from PIL import Image, ImageOps
 
 from app.core.config import logger
+from app.utils.remote_resource import (
+    UnsafeRemoteResourceError,
+    get_public_remote_resource,
+    read_remote_response_bytes,
+)
+
+#: 参考图比对最多读取的远端字节数（修复 S10：原先无上限，且不校验目标地址）
+MAX_REMOTE_IMAGE_BYTES = 24 * 1024 * 1024
 
 
 def get_current_page_url(tab: Any) -> str:
@@ -68,21 +75,39 @@ def read_image_bytes(
         eff_timeout = (2.0, 5.0)
 
     if source.startswith(("http://", "https://")):
+        # 修复 S10：URL 来自页面抽取结果（攻击者可控）。
+        # 原先直接 requests.get，既不校验目标是否为内网地址（SSRF），
+        # 也不限制响应体积，还会把当前页面 URL 当 Referer 无条件发出去。
+        # 改为统一走 get_public_remote_resource：公网地址校验 + 逐跳重定向校验
+        # + DNS 固定 + 凭据作用域，并按字节预算流式读取。
+        response = None
         try:
             referer = get_current_page_url(tab)
             headers = {"User-Agent": "Mozilla/5.0"}
             if referer:
                 headers["Referer"] = referer
-            response = requests.get(
+            response = get_public_remote_resource(
                 source,
                 headers=headers,
+                credential_origin_url=referer or source,
                 timeout=eff_timeout,
+                stream=True,
             )
             response.raise_for_status()
-            if response.content:
-                return response.content
+            payload = read_remote_response_bytes(response, MAX_REMOTE_IMAGE_BYTES)
+            if payload:
+                return payload
+        except UnsafeRemoteResourceError as e:
+            logger.warning(f"参考图读取被安全策略拒绝: {str(e)[:120]} url={source[:120]}")
+            return b""
         except Exception:
             pass
+        finally:
+            if response is not None:
+                try:
+                    response.close()
+                except Exception:
+                    pass
 
     if tab is None:
         return b""

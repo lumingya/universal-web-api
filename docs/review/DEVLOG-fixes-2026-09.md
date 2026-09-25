@@ -90,7 +90,7 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - [x] B1 搜索引擎主域被自动发现
 - [x] B3 Responses 内存历史无字节预算
 - [ ] S10 图片比对 / C2PA 直取外部 URL
-- [ ] S11 DNS 校验后连接重解析
+- [x] S11 DNS 校验后连接重解析
 - [ ] S4 回环 IP 当作授权
 - [ ] S5 定时重启代理容量 / 协议
 - [ ] S6 媒体路由无认证与转码资源
@@ -370,3 +370,45 @@ Python 会**先求值参数**，`data` 是列表时 `data.get` 立刻抛 `Attrib
 404 一致性、413 墓碑、总字节淘汰、覆盖写不重复计数、TTL 释放字节、
 `store:false` 不留存、序列化失败不致命。
 全量 `637 passed, 64 failed`，与基线逐行一致。
+
+### 2026-09-25 · S10 + S11（远端抓取：SSRF / 体积 / DNS 重绑定）
+
+两项属于同一条抓取链路，合并处理。
+
+#### S11 DNS 重绑定窗口（`app/utils/remote_resource.py`）
+
+原流程是「先 `resolve_public_addresses()` 校验，再把**主机名**交给 requests」——
+HTTP 栈会**重新解析一次**。攻击者控制该域名的 DNS（TTL=0）即可让第二次解析
+返回 `127.0.0.1` / `169.254.169.254`，前面的校验完全失效。
+
+不能简单地把 URL 里的域名替换成 IP：那样 SNI 与 Host 头都会坏掉，HTTPS 直接失败。
+采用**线程局部 DNS 固定**：
+
+- `_pinned_getaddrinfo` 全局装一次；未设置 pin 的线程原样回落到
+  `_original_getaddrinfo`，因此对代码库其余部分零影响。
+- `pinned_dns(host, addresses)` 上下文管理器把 pin 写进 `threading.local()`，
+  退出时恢复（支持嵌套）。同进程的其他并发请求互不污染。
+- `_validate_fetch_remote_target()` 取代原 `_validate_fetch_remote_url()`，
+  额外把「校验时解析到的地址」带出来；`get_public_remote_resource()`
+  在 `with pinned_dns(...)` 内发起请求。**每一跳重定向都重新校验并重新固定。**
+
+#### S10 参考图抓取无防护（`app/utils/image_validation.py`）
+
+`read_image_bytes()` 里的 URL 来自页面抽取结果（攻击者可控），却直接
+`requests.get`：无地址校验（内网 SSRF）、无体积上限、还无条件带当前页面 URL 作 Referer。
+
+改为统一走 `get_public_remote_resource()`（公网校验 + 逐跳重定向校验 + DNS 固定
++ 凭据作用域），并新增 `read_remote_response_bytes()` 按字节预算流式读取：
+先看 `Content-Length` 提前拒绝，再在读取过程中兜底（防谎报长度 / chunked 绕过）。
+上限 `MAX_REMOTE_IMAGE_BYTES = 24MiB`。
+
+注意：被安全策略拒绝时**直接返回 `b""`，不回落到浏览器上下文再抓一次** ——
+否则等于换个执行主体继续打内网。仅在普通网络错误时才回落。
+
+新增 `RemoteResourceTooLargeError`（继承 `UnsafeRemoteResourceError`，
+调用方一个 except 就能全覆盖）。
+
+**验证**：新增 `tests/test_remote_fetch_hardening.py`（20 项）。
+测试踩坑：`203.0.113.0/24` 是 TEST-NET-3 保留段，`ip.is_global` 为 False，
+不能拿来当「公网地址」样例，已改用 `93.184.216.34`。
+全量 `657 passed, 64 failed`，无新增失败。
