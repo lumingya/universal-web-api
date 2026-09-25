@@ -13,6 +13,7 @@ app/core/workflow/script_loader.py - 通用工作流 JavaScript 脚本加载与�
 import json
 import os
 import re
+import time
 import hashlib
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -62,8 +63,8 @@ class ScriptLoader:
             (self.base_dir / "scripts").resolve(),
         ]
 
-        # 内存缓存：{ absolute_path_str: (mtime, content) }
-        self._cache: Dict[str, Tuple[float, str]] = {}
+        # 内存缓存：{ absolute_path_str: ((mtime_ns, ctime_ns, size, ino), content) }
+        self._cache: Dict[str, Tuple[Tuple[int, int, int, int], str]] = {}
 
     def clear_cache(self) -> None:
         """清空脚本内存缓存"""
@@ -176,19 +177,24 @@ class ScriptLoader:
         """
         path_key = str(file_path.resolve())
         try:
-            mtime = file_path.stat().st_mtime
+            st = file_path.stat()
         except Exception as e:
             raise WorkflowError(f"js_script_stat_failed: {e}")
+        # B7：只比 st_mtime（浮点秒，部分文件系统精度 1~2s）会在「同一时间戳内被替换」时
+        # 返回旧脚本。签名改为 纳秒 mtime + ctime + 大小 + inode（原子替换会换 inode）；
+        # 且文件在最近 2 秒内变动过时不信任缓存（racy-git 同款处理），直接重读。
+        signature = (st.st_mtime_ns, st.st_ctime_ns, st.st_size, getattr(st, "st_ino", 0))
+        racy = (time.time_ns() - st.st_mtime_ns) < 2_000_000_000
 
-        if path_key in self._cache:
-            cached_mtime, cached_content = self._cache[path_key]
-            if cached_mtime == mtime:
+        if path_key in self._cache and not racy:
+            cached_signature, cached_content = self._cache[path_key]
+            if cached_signature == signature:
                 return cached_content
 
         try:
             content = file_path.read_text(encoding="utf-8-sig")
-            self._cache[path_key] = (mtime, content)
-            logger.debug(f"[ScriptLoader] 已加载脚本文件 (mtime={mtime}): {file_path.name}")
+            self._cache[path_key] = (signature, content)
+            logger.debug(f"[ScriptLoader] 已加载脚本文件 (mtime_ns={st.st_mtime_ns}): {file_path.name}")
             return content
         except Exception as e:
             raise WorkflowError(f"js_script_read_failed: {e}")

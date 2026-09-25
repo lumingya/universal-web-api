@@ -29,7 +29,7 @@ T1 以 skip + `local_fixture` 标记代替恢复本地文件。原则：**不要
 P3 清单（顺序即执行顺序，完成一项勾一项，每项独立提交）：
 
 - [x] B6 `BROWSER_CDP_RECYCLE_AFTER_REQUESTS=inf` OverflowError
-- [ ] B7 脚本热加载 mtime 相同内容替换仍返回旧脚本
+- [x] B7 脚本热加载 mtime 相同内容替换仍返回旧脚本
 - [ ] B4 `n>1` 只返回 1 个 choice
 - [ ] H7 未导入的类型注解（F821）
 - [ ] H8 chat.py 重复定义的 Arena 辅助函数
@@ -431,3 +431,10 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - `app/core/tab_pool_parts/idle_maintenance.py::_env_float`：`math.isfinite` 校验，inf/-inf/nan/1e400 → 警告并用默认值（禁用仍用 0）；
   新增 `_env_int` 包装，`BROWSER_CDP_RECYCLE_AFTER_REQUESTS` / `_DOM_NODES` 改用它。
 - 测试：新建 `tests/test_review_fixes_p3.py`，B6 共 6 项。
+
+### B7 脚本热加载同 mtime 替换返回旧脚本 ✅（P3）
+
+- `app/core/workflow/script_loader.py::load_script_content`：缓存签名由浮点 `st_mtime` 改为
+  `(st_mtime_ns, st_ctime_ns, st_size, st_ino)`（原子替换会换 inode、原地改写会动 ctime/size）；
+  另外 mtime 距今 < 2s 的文件不信任缓存直接重读（racy-git 做法，应对粗粒度时间戳文件系统）。
+- 测试：p3 新增 3 项（同 mtime 不同长度、同 mtime 同长度原子替换、未变化命中缓存）；旧代码下前两项失败（stash 验证）。

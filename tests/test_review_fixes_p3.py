@@ -35,3 +35,53 @@ def test_b6_zero_still_disables_and_valid_values_kept(monkeypatch):
     cfg = IdleMaintenanceConfig.from_env()
     assert cfg.recycle_after_requests == 0
     assert cfg.recycle_dom_nodes == 5000
+
+
+# ---------------------------------------------------------------------------
+# B7 · 脚本热加载：mtime 相同但内容被替换时必须重读
+# ---------------------------------------------------------------------------
+
+def _loader():
+    from app.core.workflow import script_loader as sl
+
+    cls = next(v for v in vars(sl).values()
+               if isinstance(v, type) and hasattr(v, "load_script_content") and v.__module__ == sl.__name__)
+    return cls()
+
+
+def test_b7_same_mtime_replaced_content_is_reloaded(tmp_path):
+    loader = _loader()
+    script = tmp_path / "a.js"
+    script.write_text("first", encoding="utf-8")
+    old = time.time_ns() - 10_000_000_000  # 10s 前，避开 racy 窗口
+    os.utime(script, ns=(old, old))
+    assert loader.load_script_content(script) == "first"
+    # 同一 mtime、不同内容且长度不同
+    script.write_text("later-content", encoding="utf-8")
+    os.utime(script, ns=(old, old))
+    assert loader.load_script_content(script) == "later-content"
+
+
+def test_b7_same_mtime_same_size_atomic_replace_is_reloaded(tmp_path):
+    loader = _loader()
+    script = tmp_path / "a.js"
+    script.write_text("AAAA", encoding="utf-8")
+    old = time.time_ns() - 10_000_000_000
+    os.utime(script, ns=(old, old))
+    assert loader.load_script_content(script) == "AAAA"
+    replacement = tmp_path / "a.js.tmp"
+    replacement.write_text("BBBB", encoding="utf-8")
+    os.utime(replacement, ns=(old, old))
+    os.replace(replacement, script)  # 新 inode，mtime/size 均相同
+    assert loader.load_script_content(script) == "BBBB"
+
+
+def test_b7_unchanged_file_served_from_cache(tmp_path, monkeypatch):
+    loader = _loader()
+    script = tmp_path / "a.js"
+    script.write_text("cached", encoding="utf-8")
+    old = time.time_ns() - 10_000_000_000
+    os.utime(script, ns=(old, old))
+    assert loader.load_script_content(script) == "cached"
+    monkeypatch.setattr(Path, "read_text", lambda *a, **k: pytest.fail("should hit cache"))
+    assert loader.load_script_content(script) == "cached"
