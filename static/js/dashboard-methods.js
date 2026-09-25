@@ -1600,12 +1600,12 @@
         },
 
         getDashboardPreferencesBackup() {
-            const dashboardToken = getStoredDashboardToken();
-
+            // 修复 S13：备份包过去会把浏览器本地保存的面板令牌以 dashboard_token /
+            // api_token 两个字段明文写进下载文件。备份文件常被随手分享或提交，
+            // 等于直接泄露管理凭据。导出只保留非敏感的界面偏好；
+            // 令牌请在新机器上手动填写（导入逻辑仍兼容旧备份里的字段）。
             return {
-                dark_mode: !!this.darkMode,
-                dashboard_token: dashboardToken,
-                api_token: dashboardToken
+                dark_mode: !!this.darkMode
             };
         },
 
@@ -1642,7 +1642,17 @@
                 a.click();
                 URL.revokeObjectURL(url);
 
-                this.notify('完整配置备份已导出', 'success');
+                const redacted = Array.isArray(payload && payload.env_redacted_keys)
+                    ? payload.env_redacted_keys
+                    : [];
+                if (redacted.length) {
+                    this.notify(
+                        '完整配置备份已导出（已剔除 ' + redacted.length + ' 项 .env 密钥，需在目标机器手动填写）',
+                        'success'
+                    );
+                } else {
+                    this.notify('完整配置备份已导出', 'success');
+                }
             } catch (error) {
                 this.notify('完整备份导出失败: ' + error.message, 'error');
             }

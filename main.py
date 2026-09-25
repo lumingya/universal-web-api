@@ -27,7 +27,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, FileResponse, Response
 # ================= 导入配置 =================
 
-from app.core.config import AppConfig, get_logger, get_shared_file_log_handler
+from app.core.config import AppConfig, InsecureStartupConfigError, get_logger, get_shared_file_log_handler
 from app.services.restart_guard import RestartGuard
 
 # ================= 日志配置 =================
@@ -439,13 +439,44 @@ def _dashboard_info_response():
         "docs": "/docs"
     })
 
+def _enforce_secure_startup_config() -> None:
+    """启动期安全配置校验（修复 S1 / H1）。
+
+    - 默认 fail-closed：发现不安全组合直接终止启动；
+    - 仅当显式设置 `UWA_ALLOW_INSECURE_STARTUP=true` 时降级为醒目告警，
+      供隔离网络里的临时调试使用。
+    """
+    errors = AppConfig.collect_security_config_errors()
+    if not errors:
+        return
+
+    for item in errors:
+        logger.error(f"❌ 不安全的启动配置: {item}")
+
+    if AppConfig.is_insecure_startup_allowed():
+        logger.warning(
+            "⚠️  UWA_ALLOW_INSECURE_STARTUP=true，已跳过安全配置检查。"
+            "服务可能对不可信网络开放，请勿在生产或公网环境使用。"
+        )
+        return
+
+    raise InsecureStartupConfigError(
+        "检测到不安全的启动配置，已拒绝启动：\n"
+        + "\n".join(f"  - {item}" for item in errors)
+        + "\n修正 .env 后重试；确需临时跳过可设置 UWA_ALLOW_INSECURE_STARTUP=true（不推荐）。"
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     global restart_guard
     _install_asyncio_exception_filter()
     logger.info("=" * 60)
-    logger.info("Universal Web-to-API 服务启动中...")       
+    logger.info("Universal Web-to-API 服务启动中...")
+    # 修复 S1/H1：不安全的默认配置（对外绑定 + 无认证 / CORS 通配 / 占位符布尔值）
+    # 过去只会静默生效。这里改为 fail-closed，让部署者在启动时就看到问题。
+    _enforce_secure_startup_config()
     # 启动时清理临时文件目录与调试日志目录
     try:
         from app.utils.file_paste import cleanup_temp_dir

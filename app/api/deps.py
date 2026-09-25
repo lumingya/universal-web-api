@@ -3,9 +3,11 @@ app/api/deps.py - API 共享依赖
 """
 
 import hmac
+import ipaddress
 from typing import Iterable, Optional
+from urllib.parse import urlsplit
 
-from fastapi import Header, HTTPException
+from fastapi import Header, HTTPException, Request
 
 from app.core.config import AppConfig
 
@@ -105,3 +107,97 @@ async def verify_dashboard_auth(authorization: Optional[str] = Header(None)) -> 
 async def verify_auth(authorization: Optional[str] = Header(None)) -> bool:
     """向后兼容：默认用于控制面板管理接口。"""
     return await verify_dashboard_auth(authorization)
+
+
+# ==================== 敏感管理接口的强制鉴权（修复 S13 / S1 / S4）====================
+
+def client_is_loopback(request: Optional[Request]) -> bool:
+    """请求是否来自本机回环地址。
+
+    注意：这**不是**身份凭证。本机上的任意进程、以及配置不当的反向代理/隧道
+    都可能让外来请求看起来来自回环（见 S4）。它只用于在「未配置任何管理令牌」
+    的单机默认部署下，保留开箱即用体验，同时挡住所有远程访问。
+    """
+    if request is None:
+        return False
+    client = getattr(request, "client", None)
+    host = getattr(client, "host", None) if client is not None else None
+    if not host:
+        return False
+    candidate = str(host).strip().strip("[]")
+    if candidate == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(candidate).is_loopback
+    except ValueError:
+        return False
+
+
+def _request_origin_is_same(request: Optional[Request]) -> bool:
+    """跨源判定：没有 Origin 视为同源（非浏览器客户端），有则必须与 Host 完全一致。"""
+    if request is None:
+        return True
+    origin = (request.headers.get("origin") or "").strip()
+    if not origin or origin.lower() == "null":
+        return not origin
+    allowed = AppConfig.get_cors_origins() if AppConfig.is_cors_enabled() else []
+    if origin in allowed:
+        return True
+    parsed = urlsplit(origin)
+    origin_host = (parsed.netloc or "").lower()
+    request_host = (request.headers.get("host") or "").lower()
+    return bool(origin_host) and origin_host == request_host
+
+
+def verify_admin_access(
+    request: Optional[Request] = None,
+    authorization: Optional[str] = None,
+) -> bool:
+    """敏感管理接口的访问校验，**不受 DASHBOARD_AUTH_ENABLED 默认关闭的影响**。
+
+    修复 S13：`GET /api/settings/backup` 这类会原样吐出 `.env` 的接口，
+    过去完全依赖默认关闭的全局开关，等于对任何能连上端口的人开放。
+
+    规则（按顺序）：
+    1. 浏览器跨源请求一律拒绝（403），避免恶意页面借用户身份读取管理数据；
+    2. 已配置管理令牌 → 必须提供正确令牌（沿用 `verify_dashboard_token` 的比较逻辑）；
+    3. 未配置任何令牌 → 只允许本机回环访问，远程访问返回 401 并提示配置令牌。
+
+    返回 True 表示「请求者出示了真实令牌」，False 表示「靠本机回环放行」。
+    调用方可据此决定是否输出最敏感的内容（例如备份里的明文密钥）。
+    """
+    if not _request_origin_is_same(request):
+        raise HTTPException(status_code=403, detail="跨源访问管理接口已被拒绝")
+
+    expected = AppConfig.get_dashboard_auth_token()
+    if expected:
+        _verify_token_candidates(
+            enabled=True,
+            token_value=expected,
+            candidates=_auth_candidates(authorization),
+        )
+        return True
+
+    if AppConfig.is_dashboard_auth_enabled():
+        # 开了认证却没有令牌：这是配置错误，绝不能当成「放行」
+        raise HTTPException(status_code=500, detail="服务配置错误")
+
+    if client_is_loopback(request):
+        return False
+
+    raise HTTPException(
+        status_code=401,
+        detail=(
+            "该接口仅允许本机访问。如需远程管理，请设置 DASHBOARD_AUTH_ENABLED=true "
+            "与 DASHBOARD_AUTH_TOKEN 后使用 Bearer 令牌访问。"
+        ),
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+async def verify_admin_auth(
+    request: Request,
+    authorization: Optional[str] = Header(None),
+) -> bool:
+    """FastAPI 依赖版本，用于敏感管理接口。"""
+    return verify_admin_access(request=request, authorization=authorization)

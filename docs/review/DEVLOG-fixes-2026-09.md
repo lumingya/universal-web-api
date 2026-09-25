@@ -73,9 +73,9 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 
 ### 第一批
 
-- [ ] S13 备份接口泄露 `.env` 密钥 + 前端导出本地令牌
-- [ ] S1 控制面默认开放（认证默认关 + CORS `*`）
-- [ ] H1 `.env.example` 诱导不安全部署
+- [x] S13 备份接口泄露 `.env` 密钥 + 前端导出本地令牌
+- [x] S1 控制面默认开放（认证默认关 + CORS `*`）
+- [x] H1 `.env.example` 诱导不安全部署
 - [ ] S8 SVG 以同源活动内容落盘/提供
 - [ ] S9 音视频响应头 + `.html` 后缀落盘
 - [ ] S12 默认开启的响应调试抓取
@@ -98,4 +98,52 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 
 ## 4. 修复记录
 
-（每完成一项追加：条目 ID、改了哪些文件、做了什么决策、怎么验证的、提交哈希）
+### 2026-09-25 · S13 + S1 + H1（默认安全边界与备份泄密）
+
+一次提交处理，因为三者互相依赖：S13 的严重性来自 S1 的默认关闭认证，而 S1 的默认值来自 H1 的模板。
+
+**改动文件**
+
+- `app/core/config_parts/env_config.py`
+  - 新增 `parse_bool_literal()`：严格布尔解析，无法识别返回 `None`。
+  - 新增 `AppConfig._env_bool_secure()`：安全开关专用，值无法解析时 **fail-closed 返回 True**。
+    `is_auth_enabled` / `is_dashboard_auth_enabled` 改用它，于是
+    `AUTH_ENABLED=your-secret-here` 不再等价于「关闭认证」。
+  - `get_cors_origins()` 默认值由 `["*"]` 改为回环同端口来源
+    （面板与 API 同源，本来就不需要 CORS 放行，因此不影响开箱即用）。
+  - 新增 `is_loopback_bind()` / `collect_security_config_errors()` / `is_insecure_startup_allowed()`。
+  - 新增本地异常 `InsecureStartupConfigError`（**没有**复用 `exceptions.ConfigurationError`，
+    避免 `env_config` 反向依赖 `exceptions` 造成导入环）。
+- `app/core/config_parts/__init__.py`、`app/core/config.py`：导出上述两个新符号。
+- `main.py`：`lifespan` 开头调用新增的 `_enforce_secure_startup_config()`，
+  发现不安全组合直接抛 `InsecureStartupConfigError` 拒绝启动；
+  仅 `UWA_ALLOW_INSECURE_STARTUP=true` 时降级为告警。
+- `app/api/deps.py`：新增 `client_is_loopback()` / `verify_admin_access()` / `verify_admin_auth`。
+  规则顺序：跨源 → 403；已配置令牌 → 必须出示；未配置令牌 → 仅本机回环放行（返回 `False`）。
+  **返回值语义很重要**：`True` = 出示了真实令牌，`False` = 靠回环放行，调用方据此决定能否输出明文密钥。
+- `app/api/system.py`：
+  - 新增 `is_secret_env_key()` / `_split_env_secrets()`；
+  - `_build_settings_backup_bundle(include_secrets=False)`，响应新增 `contains_secrets`
+    与 `env_redacted_keys` 字段；
+  - `/api/settings/backup`（GET/POST）与 `/api/settings/env`（GET/POST）全部改用 `verify_admin_auth`。
+- `static/js/dashboard-methods.js`：`getDashboardPreferencesBackup()` 不再写入
+  `dashboard_token` / `api_token`；导出成功提示会说明剔除了几项密钥。
+  `applyDashboardPreferencesBackup()` **保持不变**，旧备份仍可导入。
+- `.env.example`：整体重写（原文件把前 25 行重复了两遍）。
+
+**关键决策**
+
+1. 脱敏方式是**整键删除**而不是写 `***` 占位符。因为 `_write_env_config_file()` 只覆盖
+   payload 里出现过的键，删除后导入这份备份时目标机器上的真实密钥会原样保留；
+   若写占位符反而会把真密钥覆盖成 `***`。
+2. 未配置令牌时允许回环访问，而不是硬性 401。否则全新克隆的单机用户连面板都打不开，
+   修复会被绕过（直接改回旧版）。回环**不是**凭证，所以它拿不到 `include_secrets=true`。
+3. 启动校验放在 `main.py:lifespan` 而非模块导入期，避免 import `main` 的测试/工具被连带拒绝。
+
+**验证**
+
+- 新增 `tests/test_security_hardening_fixes.py`（29 项，全部通过），用 `httpx.ASGITransport`
+  进程内请求，密钥全部是 `synthetic-*` 合成值。
+- 全量轻量套件：`553 passed, 73 failed`，失败集合与基线**逐行相同**（无回归）。
+
+提交：`c695750`

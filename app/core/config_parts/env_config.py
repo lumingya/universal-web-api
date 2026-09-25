@@ -11,6 +11,31 @@ from typing import Any, Dict, List, Optional
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_LOG_DIR = PROJECT_ROOT / "logs"
 
+# 修复 S1/H1：布尔环境变量必须显式解析。
+# 旧实现用「值是否落在真值白名单」判断，于是 `.env.example` 里的
+# `AUTH_ENABLED=your-secret-here` 会被静默判成 false，把认证整个关掉。
+_TRUE_LITERALS = frozenset({"true", "1", "yes", "on", "y", "t"})
+_FALSE_LITERALS = frozenset({"false", "0", "no", "off", "n", "f"})
+
+class InsecureStartupConfigError(ValueError):
+    """启动期安全配置错误：不允许静默回退，必须让部署者看到并修正。"""
+
+
+def parse_bool_literal(value: Any) -> Optional[bool]:
+    """严格解析布尔字面量；无法识别时返回 None（由调用方决定 fail-closed 策略）。"""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if text == "":
+        return None
+    if text in _TRUE_LITERALS:
+        return True
+    if text in _FALSE_LITERALS:
+        return False
+    return None
+
 
 def atomic_write_json(path: str | Path, payload: Any) -> None:
     """Atomically write JSON to disk using a same-directory temporary file."""
@@ -111,9 +136,26 @@ class AppConfig:
     @staticmethod
     def _env_bool(name: str, default: bool = False) -> bool:
         value = os.getenv(name)
-        if value is None or str(value).strip() == "":
+        parsed = parse_bool_literal(value)
+        if parsed is None:
             return bool(default)
-        return str(value).strip().lower() in ("true", "1", "yes", "on")
+        return parsed
+
+    @staticmethod
+    def _env_bool_secure(name: str, default: bool = False) -> bool:
+        """安全开关专用：值无法解析为布尔时 fail-closed（视为启用保护），而不是静默关闭。
+
+        修复 S1/H1：`AUTH_ENABLED=your-secret-here` 过去等价于 `false`，
+        复制 `.env.example` 的部署会在自以为开了认证的情况下完全裸奔。
+        现在这种值会被当成「开启」，并在启动校验里报错要求修正。
+        """
+        raw = os.getenv(name)
+        if raw is None or str(raw).strip() == "":
+            return bool(default)
+        parsed = parse_bool_literal(raw)
+        if parsed is None:
+            return True
+        return parsed
 
     @staticmethod
     def _env_int(name: str, default: int) -> int:
@@ -157,7 +199,7 @@ class AppConfig:
     # ===== 认证配置 =====
     @staticmethod
     def is_auth_enabled() -> bool:
-        return AppConfig._env_bool("AUTH_ENABLED", False)
+        return AppConfig._env_bool_secure("AUTH_ENABLED", False)
 
     @staticmethod
     def get_auth_token() -> str:
@@ -168,7 +210,7 @@ class AppConfig:
         value = os.getenv("DASHBOARD_AUTH_ENABLED")
         if value is None or str(value).strip() == "":
             return AppConfig.is_auth_enabled()
-        return AppConfig._env_bool("DASHBOARD_AUTH_ENABLED", False)
+        return AppConfig._env_bool_secure("DASHBOARD_AUTH_ENABLED", False)
 
     @staticmethod
     def get_dashboard_auth_token() -> str:
@@ -178,15 +220,113 @@ class AppConfig:
     # ===== CORS 配置 =====
     @staticmethod
     def is_cors_enabled() -> bool:
-        return os.getenv("CORS_ENABLED", "true").lower() in ("true", "1", "yes")
-    
+        return AppConfig._env_bool("CORS_ENABLED", True)
+
+    @staticmethod
+    def get_default_cors_origins() -> List[str]:
+        """默认只放行本机同端口来源。
+
+        修复 S1：默认 `*` 意味着任意第三方网页都能跨源读取管理接口。
+        控制面板与 API 由同一个服务提供，属于同源请求，根本不需要 CORS 放行，
+        因此把默认值收敛到回环来源，既安全又不影响开箱即用。
+        """
+        port = AppConfig.get_port()
+        return [
+            f"http://127.0.0.1:{port}",
+            f"http://localhost:{port}",
+            f"http://[::1]:{port}",
+        ]
+
     @staticmethod
     def get_cors_origins() -> List[str]:
-        origins = os.getenv("CORS_ORIGINS", "*")
+        raw = os.getenv("CORS_ORIGINS")
+        if raw is None or str(raw).strip() == "":
+            return AppConfig.get_default_cors_origins()
+        origins = str(raw).strip()
         if origins == "*":
             return ["*"]
-        return [o.strip() for o in origins.split(",") if o.strip()]
-    
+        parsed = [o.strip() for o in origins.split(",") if o.strip()]
+        return parsed or AppConfig.get_default_cors_origins()
+
+    # ===== 启动期安全校验（修复 S1 / H1）=====
+    @staticmethod
+    def is_loopback_bind(host: Optional[str] = None) -> bool:
+        """服务是否只绑定在本机回环地址上。"""
+        value = str(host if host is not None else AppConfig.get_host()).strip().lower()
+        value = value.strip("[]")
+        if not value:
+            return False
+        if value in ("127.0.0.1", "::1", "localhost"):
+            return True
+        return value.startswith("127.")
+
+    @staticmethod
+    def collect_security_config_errors() -> List[str]:
+        """收集会导致服务在不安全状态下启动的配置错误。
+
+        返回空列表表示通过。调用方（start.py / main.py 启动流程）应在非空时
+        直接拒绝启动，而不是静默回退到「认证关闭 + CORS 全开」。
+        """
+        errors: List[str] = []
+
+        # 1) 安全开关必须是合法布尔值，不能是 `your-secret-here` 之类的占位符
+        for flag in ("AUTH_ENABLED", "DASHBOARD_AUTH_ENABLED", "CORS_ENABLED"):
+            raw = os.getenv(flag)
+            if raw is None or str(raw).strip() == "":
+                continue
+            if parse_bool_literal(raw) is None:
+                errors.append(
+                    f"{flag} 的值不是合法布尔量（当前为 {raw!r}）。"
+                    f"请填写 true 或 false；令牌应写在对应的 *_TOKEN 变量里。"
+                )
+
+        public_bind = not AppConfig.is_loopback_bind()
+
+        # 2) 对外绑定时必须配置管理令牌，否则控制面板等于对整个网络开放
+        if public_bind:
+            if AppConfig.is_dashboard_auth_enabled():
+                if not AppConfig.get_dashboard_auth_token():
+                    errors.append(
+                        "DASHBOARD_AUTH_ENABLED=true 但 DASHBOARD_AUTH_TOKEN/AUTH_TOKEN 为空，"
+                        "无法校验任何请求。请设置一个强令牌。"
+                    )
+            else:
+                errors.append(
+                    f"APP_HOST={AppConfig.get_host()} 会把服务暴露到本机以外，"
+                    "但控制面板认证是关闭的。请设置 DASHBOARD_AUTH_ENABLED=true 与 "
+                    "DASHBOARD_AUTH_TOKEN，或把 APP_HOST 改回 127.0.0.1。"
+                )
+            if AppConfig.is_auth_enabled() and not AppConfig.get_auth_token():
+                errors.append(
+                    "AUTH_ENABLED=true 但 AUTH_TOKEN 为空，对外服务接口无法校验请求。"
+                )
+
+        # 3) 通配 CORS 与对外绑定的组合，等于任何网页都能代用户操作本服务
+        if public_bind and AppConfig.is_cors_enabled() and "*" in AppConfig.get_cors_origins():
+            errors.append(
+                "CORS_ORIGINS=* 与对外绑定同时开启：任意第三方网页都可跨源调用本服务。"
+                "请把 CORS_ORIGINS 限定为确切来源，或设置 CORS_ENABLED=false。"
+            )
+
+        return errors
+
+    @staticmethod
+    def assert_secure_startup_config() -> None:
+        """启动期强校验，不通过直接抛 ConfigurationError（fail-closed）。"""
+        errors = AppConfig.collect_security_config_errors()
+        if errors:
+            details = "\n".join(f"  - {item}" for item in errors)
+            raise InsecureStartupConfigError(
+                "检测到不安全的启动配置，已拒绝启动：\n"
+                f"{details}\n"
+                "如确需在隔离网络中临时跳过此检查，可设置 UWA_ALLOW_INSECURE_STARTUP=true（不推荐）。"
+            )
+
+    @staticmethod
+    def is_insecure_startup_allowed() -> bool:
+        return AppConfig._env_bool("UWA_ALLOW_INSECURE_STARTUP", False)
+
+
     # ===== 浏览器配置 =====
     @staticmethod
     def get_browser_port() -> int:
