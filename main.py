@@ -28,6 +28,7 @@ from fastapi.responses import JSONResponse, FileResponse, Response
 # ================= 导入配置 =================
 
 from app.core.config import AppConfig, InsecureStartupConfigError, get_logger, get_shared_file_log_handler
+from app.utils.safe_media_types import resolve_media_delivery, safe_media_response_headers
 from app.services.restart_guard import RestartGuard
 
 # ================= 日志配置 =================
@@ -742,6 +743,29 @@ _MEDIA_MIME_OVERRIDES = {
     ".ogv": "video/ogg",
 }
 
+
+class HardenedMediaStaticFiles(StaticFiles):
+    """给 `/download_images` 静态目录统一加固（修复 S8 / S9）。
+
+    目录里可能残留历史版本落盘的 `.svg` / `.html`。即便新代码已经拒绝写入，
+    出口这一层也必须保证它们不会再以同源活动文档的形式被打开：
+    白名单之外的扩展名一律降级为 `application/octet-stream` + `attachment`。
+    """
+
+    def file_response(self, full_path, stat_result, scope, status_code=200):
+        response = super().file_response(full_path, stat_result, scope, status_code=status_code)
+        media_type, disposition = resolve_media_delivery(
+            full_path, getattr(response, "media_type", None)
+        )
+        if disposition == "attachment":
+            response.media_type = media_type
+            response.headers["content-type"] = media_type
+            filename = Path(str(full_path)).name
+            response.headers["content-disposition"] = f'attachment; filename="{filename}"'
+        for key, value in safe_media_response_headers().items():
+            response.headers[key] = value
+        return response
+
 _MEDIA_TRANSCODE_FORMATS = {
     "mp3": {
         "ext": ".mp3",
@@ -849,11 +873,15 @@ async def media_file(
         media_path = source_path
         media_type = _guess_media_mime(media_path)
 
+    # 修复 S9：内联返回前按扩展名/MIME 复核一次。
+    # 历史遗留的 .html / .svg 文件会被降级为强制下载，而不是同源活动文档。
+    media_type, disposition = resolve_media_delivery(media_path, media_type)
     return FileResponse(
         media_path,
         media_type=media_type,
         filename=media_path.name,
-        content_disposition_type="inline",
+        content_disposition_type=disposition,
+        headers=safe_media_response_headers(),
     )
 # ================= 注册 API 路由（在 Dashboard 之后）=================
 
@@ -869,7 +897,7 @@ if Path("static").exists():
 # 🆕 挂载图片下载目录
 download_images_dir = Path("download_images")
 download_images_dir.mkdir(exist_ok=True)  # 自动创建目录
-app.mount("/download_images", StaticFiles(directory="download_images"), name="download_images")
+app.mount("/download_images", HardenedMediaStaticFiles(directory="download_images"), name="download_images")
 logger.info(f"📁 图片下载目录: {download_images_dir.absolute()}")
 
 

@@ -76,8 +76,8 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - [x] S13 备份接口泄露 `.env` 密钥 + 前端导出本地令牌
 - [x] S1 控制面默认开放（认证默认关 + CORS `*`）
 - [x] H1 `.env.example` 诱导不安全部署
-- [ ] S8 SVG 以同源活动内容落盘/提供
-- [ ] S9 音视频响应头 + `.html` 后缀落盘
+- [x] S8 SVG 以同源活动内容落盘/提供
+- [x] S9 音视频响应头 + `.html` 后缀落盘
 - [ ] S12 默认开启的响应调试抓取
 
 ### 第二批
@@ -147,3 +147,49 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - 全量轻量套件：`553 passed, 73 failed`，失败集合与基线**逐行相同**（无回归）。
 
 提交：`c695750`
+
+### 2026-09-25 · S8 + S9（活动内容落盘与同源提供）
+
+两条是同一条链路的两个入口，合并修复。
+
+**新增** `app/utils/safe_media_types.py` —— 单一事实源，含：
+
+- `SAFE_IMAGE/AUDIO_VIDEO_EXTENSIONS`、`ACTIVE_CONTENT_EXTENSIONS`、`ACTIVE_CONTENT_MIME_TYPES`
+- `resolve_safe_media_extension(kind, content_type, url)` → 安全扩展名或 `None`（拒绝落盘）
+- `looks_like_active_content(head_bytes)` → 内容嗅探，兜住「谎报 Content-Type」
+- `resolve_media_delivery(path, mime)` → `(media_type, inline|attachment)`
+- `safe_media_response_headers()` → `nosniff` + `default-src 'none'; sandbox` + CORP + no-referrer
+
+**扩展名判定顺序（重要）**
+
+1. Content-Type 是活动内容 → 拒绝
+2. Content-Type 在安全白名单 → 用白名单扩展名，**忽略 URL 后缀**；
+   且 MIME 类别必须与 kind 一致（防止「image/png 走 video 分支」的新绕过）
+3. Content-Type 不认识 **且** URL 后缀是活动内容 → **整体拒绝**（两个线索都不可信）
+4. Content-Type 不认识、URL 后缀在同类白名单 → 用它
+5. 其余 → 类别默认扩展名 `.png` / `.mp3` / `.mp4`
+
+**改动文件**
+
+- `app/core/browser/media.py`
+  - 删掉 3 处各自为政的 `ext_map`（其中图片那份含 `"image/svg+xml": ".svg"`，即 S8 根因）；
+  - 前台图片回退：先 `resolve_safe_media_extension("image", ...)`，再对前 1KB 做
+    `looks_like_active_content` 复核；
+  - 音视频 `_persist_remote_media_urls_to_local`：扩展名不再取自 `urlparse(url).path`
+    （S9 根因），并在写入首个 chunk 前做内容嗅探，命中则抛 `unsafe_media_content` 走既有清理分支；
+  - `_persist_data_uri_media_to_local`：data URI 的 `image/svg+xml` 同样拒绝。
+- `main.py`
+  - 新增 `HardenedMediaStaticFiles`（`StaticFiles` 子类，覆写 `file_response`）并用它挂载
+    `/download_images`；
+  - `/media/{filename}` 返回前走 `resolve_media_delivery` + 加固响应头。
+  - **出口加固是必要的**：目录里可能已有旧版本落盘的 `.svg` / `.html`，光堵写入端不够。
+- `app/core/background_image_downloader.py`：**未改动**。它本来就拒绝 SVG 且有魔数校验
+  （`_detect_safe_image_extension`），属于报告「不要误报」清单。
+
+**验证**
+
+- 新增 `tests/test_safe_media_types.py`（30 项全过）：含 S9 的 `video/custom` + `clip.html`
+  复现用例、SVG data URI、历史遗留 `.svg` 经 ASGI 取回必须是
+  `application/octet-stream` + `attachment` + `nosniff`。
+- 同时验证「正常 mp4 仍能正常落盘为 `/media/xxx.mp4`」，避免过度拦截。
+- 全量：`583 passed, 73 failed`，失败集合与基线逐行相同（无回归）。
