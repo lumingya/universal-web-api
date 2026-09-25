@@ -6,11 +6,14 @@ import ipaddress
 from typing import Any, Dict
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, HTTPException, Request
+from typing import Optional
+
+from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.core import get_browser
-from app.core.config import get_logger
+from app.core.config import AppConfig, get_logger
+from app.core.http_security import is_trusted_local_request
 from app.utils.browser_profile_identity import resolve_tab_browser_profile
 
 
@@ -35,7 +38,49 @@ def _valid_web_url(url: str) -> str:
     parsed = urlparse(value)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise HTTPException(status_code=400, detail="只允许打开 http/https 链接")
+    # S4：受控浏览器带着用户登录态，不替调用方打开本机/内网地址或带凭据的 URL
+    if parsed.username is not None or parsed.password is not None:
+        raise HTTPException(status_code=400, detail="链接不能包含用户名/密码")
+    host = str(parsed.hostname or "").strip().rstrip(".").casefold()
+    if not host or host == "localhost" or host.endswith(".localhost"):
+        raise HTTPException(status_code=400, detail="不允许打开本机地址")
+    try:
+        literal = ipaddress.ip_address(host.split("%", 1)[0])
+    except ValueError:
+        literal = None
+    if literal is not None and not literal.is_global:
+        raise HTTPException(status_code=400, detail="不允许打开本机/内网 IP 地址")
     return value
+
+
+def verify_open_profile_url_auth(
+    request: Request,
+    authorization: Optional[str] = Header(None),
+) -> bool:
+    """S4：打开受控浏览器链接的鉴权。
+
+    - 带了 Authorization 且控制面板认证已启用：按管理令牌校验（错误令牌 401）；
+    - 否则仅接受「直接来自本机回环、没有任何反代/隧道转发头」的请求
+      （经 start.py handoff 代理时以其注入的真实客户端地址为准）——
+      Link Drawer 不保存面板密钥，仍可在本机使用；
+    - 其余：认证已启用 → 401，未启用 → 403。
+    """
+    from app.api.deps import verify_dashboard_token
+
+    dashboard_auth = AppConfig.is_dashboard_auth_enabled()
+    if dashboard_auth and str(authorization or "").strip():
+        verify_dashboard_token(authorization=authorization)
+        return True
+    client_host = request.client.host if request.client else None
+    if is_trusted_local_request(client_host, request.headers):
+        return True
+    if dashboard_auth:
+        raise HTTPException(
+            status_code=401,
+            detail="需要控制面板认证令牌",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    raise HTTPException(status_code=403, detail="此接口仅允许本机直接调用")
 
 
 def _target_info(tab: Any) -> Dict[str, Any]:
@@ -116,14 +161,13 @@ def open_url_in_profile(url: str, profile: Dict[str, Any]) -> Dict[str, Any]:
             raise HTTPException(status_code=502, detail="无法在对应用户目录中打开链接") from fallback_error
 
 
-# Link Drawer stores only routing metadata, not the dashboard secret. This
-# endpoint is safe to call without it because remote clients are rejected.
+# Link Drawer stores only routing metadata, not the dashboard secret. Without a
+# token only direct (non-proxied, non-tunneled) loopback callers are accepted.
 @router.post("/open-profile-url")
 def open_profile_url(
     payload: OpenProfileUrlRequest,
     request: Request,
+    authorization: Optional[str] = Header(None),
 ):
-    client_host = request.client.host if request.client else ""
-    if not _is_loopback(client_host):
-        raise HTTPException(status_code=403, detail="此接口仅允许本机调用")
+    verify_open_profile_url_auth(request, authorization)
     return open_url_in_profile(_valid_web_url(payload.url), payload.profile)

@@ -834,62 +834,272 @@ def _inspect_headless_or_windowless_browser(port: int, timeout: float = 0.5) -> 
 
 
 class _RestartHandoffProxy(socketserver.ThreadingTCPServer):
-    """Small TCP relay which buffers a request while the child service restarts."""
+    """Small TCP relay which buffers a request while the child service restarts.
+
+    S4/S5：
+    - 每个连接先占用并发名额（``RESTART_PROXY_MAX_CONNECTIONS``，默认 64），超额直接 503；
+    - 缓冲的请求体计入全局字节预算（``RESTART_PROXY_MAX_BUFFER_MB``，默认 256），超额 503；
+    - 客户端传来的 ``X-UWA-*`` 一律剥离，再注入真实对端地址与每次启动随机生成的共享密钥，
+      子进程据此（且只据此）判断真实客户端；外部转发头原样保留，供后端判定反代/隧道。
+    """
 
     allow_reuse_address = True
     daemon_threads = True
 
-    def __init__(self, host: str, port: int, backend_port: int):
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        backend_port: int,
+        *,
+        proxy_secret: str = "",
+        max_connections: int | None = None,
+        max_buffer_bytes: int | None = None,
+    ):
         self.backend_port = int(backend_port)
+        self.proxy_secret = str(proxy_secret or "")
+        self.max_connections = max(1, int(max_connections or _env_int("RESTART_PROXY_MAX_CONNECTIONS", 64)))
+        self.max_buffer_bytes = max(
+            1024 * 1024,
+            int(max_buffer_bytes or _env_int("RESTART_PROXY_MAX_BUFFER_MB", 256) * 1024 * 1024),
+        )
+        self._connection_slots = threading.BoundedSemaphore(self.max_connections)
+        self._budget_lock = threading.Lock()
+        self._buffered_bytes = 0
         super().__init__((host, int(port)), _RestartHandoffProxyHandler)
+
+    def reserve_buffer(self, size: int) -> bool:
+        with self._budget_lock:
+            if self._buffered_bytes + size > self.max_buffer_bytes:
+                return False
+            self._buffered_bytes += size
+            return True
+
+    def release_buffer(self, size: int) -> None:
+        with self._budget_lock:
+            self._buffered_bytes = max(0, self._buffered_bytes - size)
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        value = int(str(os.getenv(name, "") or "").strip())
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+class _ProxyRequestError(Exception):
+    def __init__(self, status: int, reason: str):
+        super().__init__(reason)
+        self.status = int(status)
+        self.reason = reason
 
 
 class _RestartHandoffProxyHandler(socketserver.BaseRequestHandler):
     _BUFFER_SIZE = 64 * 1024
+    _MAX_HEADER_BYTES = 64 * 1024
     _MAX_REQUEST_BYTES = 64 * 1024 * 1024
+    _REQUEST_READ_TIMEOUT = 60.0  # 读完整个请求（头+体）的端到端时限
+    _STRIPPED_REQUEST_HEADERS = ("connection", "keep-alive", "proxy-connection", "expect")
 
     def handle(self) -> None:
+        server = self.server
+        if not server._connection_slots.acquire(blocking=False):
+            self._send_simple_response(503, "Too many pending connections")
+            return
+        self._reserved = 0
         try:
-            payload = self._read_request()
+            try:
+                payload = self._read_request()
+            except _ProxyRequestError as exc:
+                self._send_simple_response(exc.status, exc.reason)
+                return
             if payload:
                 self._forward_when_backend_ready(payload)
         except Exception:
             return
+        finally:
+            if self._reserved:
+                server.release_buffer(self._reserved)
+                self._reserved = 0
+            server._connection_slots.release()
+
+    def _send_simple_response(self, status: int, reason: str) -> None:
+        body = (reason + "\n").encode("utf-8", errors="replace")
+        head = (
+            f"HTTP/1.1 {int(status)} {reason}\r\n"
+            "Content-Type: text/plain; charset=utf-8\r\n"
+            f"Content-Length: {len(body)}\r\n"
+            "Connection: close\r\n\r\n"
+        ).encode("iso-8859-1", errors="replace")
+        try:
+            self.request.settimeout(5.0)
+            self.request.sendall(head + body)
+        except OSError:
+            pass
+
+    def _reserve(self, total: int) -> None:
+        """Grow this connection's share of the global buffer budget to ``total`` bytes."""
+        extra = int(total) - self._reserved
+        if extra <= 0:
+            return
+        if not self.server.reserve_buffer(extra):
+            raise _ProxyRequestError(503, "Proxy buffer budget exhausted")
+        self._reserved += extra
+
+    def _recv_into(self, payload: bytearray, deadline: float, limit: int) -> None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise _ProxyRequestError(408, "Request Timeout")
+        self.request.settimeout(min(remaining, 60.0))
+        try:
+            chunk = self.request.recv(max(1, min(self._BUFFER_SIZE, limit)))
+        except socket.timeout as exc:
+            raise _ProxyRequestError(408, "Request Timeout") from exc
+        if not chunk:
+            raise ConnectionError("client closed")
+        self._reserve(len(payload) + len(chunk))
+        payload.extend(chunk)
 
     def _read_request(self) -> bytes:
-        self.request.settimeout(60.0)
+        deadline = time.monotonic() + self._REQUEST_READ_TIMEOUT
         payload = bytearray()
-        while b"\r\n\r\n" not in payload:
-            chunk = self.request.recv(self._BUFFER_SIZE)
-            if not chunk:
-                return b""
-            payload.extend(chunk)
-            if len(payload) > self._MAX_REQUEST_BYTES:
-                return b""
+        try:
+            while b"\r\n\r\n" not in payload:
+                if len(payload) > self._MAX_HEADER_BYTES:
+                    raise _ProxyRequestError(431, "Request Header Fields Too Large")
+                self._recv_into(payload, deadline, self._BUFFER_SIZE)
+        except ConnectionError:
+            return b""
 
         header_end = payload.find(b"\r\n\r\n") + 4
+        if header_end > self._MAX_HEADER_BYTES:
+            raise _ProxyRequestError(431, "Request Header Fields Too Large")
         headers = bytes(payload[:header_end]).decode("iso-8859-1", errors="replace")
-        content_length = 0
-        for line in headers.split("\r\n")[1:]:
-            if line.lower().startswith("content-length:"):
-                content_length = max(0, int(line.split(":", 1)[1].strip()))
-                break
-        target_size = header_end + content_length
-        if target_size > self._MAX_REQUEST_BYTES:
-            return b""
-        while len(payload) < target_size:
-            chunk = self.request.recv(min(self._BUFFER_SIZE, target_size - len(payload)))
-            if not chunk:
+        lines = headers.split("\r\n")
+        request_line, header_lines = lines[0], [line for line in lines[1:] if line]
+
+        content_length: int | None = None
+        chunked = False
+        expect_continue = False
+        for line in header_lines:
+            name, _, value = line.partition(":")
+            key = name.strip().lower()
+            value = value.strip()
+            if key == "content-length":
+                if not value.isdigit() or (content_length is not None and int(value) != content_length):
+                    raise _ProxyRequestError(400, "Bad Request")
+                content_length = int(value)
+            elif key == "transfer-encoding":
+                codings = [item.strip().lower() for item in value.split(",") if item.strip()]
+                if not codings or codings[-1] != "chunked":
+                    raise _ProxyRequestError(501, "Not Implemented")
+                chunked = True
+            elif key == "expect":
+                if value.lower() != "100-continue":
+                    raise _ProxyRequestError(417, "Expectation Failed")
+                expect_continue = True
+        if chunked and content_length is not None:
+            # CL + TE 同时出现是经典的请求走私形态，直接拒绝
+            raise _ProxyRequestError(400, "Bad Request")
+
+        body = bytearray(payload[header_end:])
+        del payload
+        if expect_continue and (chunked or (content_length or 0) > len(body)):
+            # 代理自己回 100，后端收到的是完整请求（Expect 头已剥离）
+            try:
+                self.request.sendall(b"HTTP/1.1 100 Continue\r\n\r\n")
+            except OSError:
                 return b""
-            payload.extend(chunk)
+        try:
+            if chunked:
+                body = self._read_chunked_body(body, deadline, header_end)
+            else:
+                target = int(content_length or 0)
+                if header_end + target > self._MAX_REQUEST_BYTES:
+                    raise _ProxyRequestError(413, "Payload Too Large")
+                self._reserve(header_end + target)
+                if len(body) > target:
+                    body = body[:target]  # 单连接单请求：丢弃管线化的后续字节
+                while len(body) < target:
+                    self._recv_into(body, deadline, target - len(body))
+        except ConnectionError:
+            return b""
+
+        kept = [
+            line for line in header_lines
+            if line.partition(":")[0].strip().lower() not in self._STRIPPED_REQUEST_HEADERS
+            and not line.partition(":")[0].strip().lower().startswith("x-uwa-")
+        ]
+        secret = str(getattr(self.server, "proxy_secret", "") or "")
+        if secret:
+            try:
+                peer = str(self.client_address[0])
+            except Exception:
+                peer = ""
+            kept.append(f"X-UWA-Client-Addr: {peer}")
+            kept.append(f"X-UWA-Proxy-Secret: {secret}")
         # One request per client connection makes the restart boundary explicit
         # and lets us safely replay a request that arrived while draining.
-        header_lines = [
-            line for line in headers.split("\r\n")
-            if not line.lower().startswith("connection:")
-        ]
-        rewritten_headers = "\r\n".join(header_lines).rstrip("\r\n") + "\r\nConnection: close\r\n\r\n"
-        return rewritten_headers.encode("iso-8859-1") + bytes(payload[header_end:])
+        rewritten = "\r\n".join([request_line, *kept, "Connection: close", "", ""])
+        return rewritten.encode("iso-8859-1", errors="replace") + bytes(body)
+
+    def _read_chunked_body(self, body: bytearray, deadline: float, header_len: int) -> bytearray:
+        """读取完整的 chunked 请求体（原样转发，不解码），受单请求与全局预算约束。"""
+        pos = 0
+        while True:
+            # chunk-size 行
+            while True:
+                eol = body.find(b"\r\n", pos)
+                if eol >= 0:
+                    break
+                if len(body) - pos > 1024:
+                    raise _ProxyRequestError(400, "Bad Request")
+                self._recv_chunk(body, deadline, header_len)
+            size_token = bytes(body[pos:eol]).split(b";", 1)[0].strip()
+            try:
+                size = int(size_token, 16)
+            except ValueError as exc:
+                raise _ProxyRequestError(400, "Bad Request") from exc
+            if size < 0:
+                raise _ProxyRequestError(400, "Bad Request")
+            pos = eol + 2
+            if size == 0:
+                # trailers，直到空行
+                while True:
+                    eol = body.find(b"\r\n", pos)
+                    if eol < 0:
+                        if len(body) - pos > self._MAX_HEADER_BYTES:
+                            raise _ProxyRequestError(431, "Request Header Fields Too Large")
+                        self._recv_chunk(body, deadline, header_len)
+                        continue
+                    if eol == pos:
+                        return body[: eol + 2]
+                    pos = eol + 2
+            need = pos + size + 2
+            if header_len + need > self._MAX_REQUEST_BYTES:
+                raise _ProxyRequestError(413, "Payload Too Large")
+            while len(body) < need:
+                self._recv_chunk(body, deadline, header_len, need - len(body))
+            if bytes(body[pos + size:need]) != b"\r\n":
+                raise _ProxyRequestError(400, "Bad Request")
+            pos = need
+
+    def _recv_chunk(self, body: bytearray, deadline: float, header_len: int, want: int | None = None) -> None:
+        if header_len + len(body) > self._MAX_REQUEST_BYTES:
+            raise _ProxyRequestError(413, "Payload Too Large")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise _ProxyRequestError(408, "Request Timeout")
+        self.request.settimeout(min(remaining, 60.0))
+        try:
+            chunk = self.request.recv(max(1, min(self._BUFFER_SIZE, want or self._BUFFER_SIZE)))
+        except socket.timeout as exc:
+            raise _ProxyRequestError(408, "Request Timeout") from exc
+        if not chunk:
+            raise ConnectionError("client closed")
+        self._reserve(header_len + len(body) + len(chunk))
+        body.extend(chunk)
 
     def _client_disconnected(self) -> bool:
         # One HTTP request per connection. Never leave an old backend running
@@ -961,9 +1171,9 @@ class _RestartHandoffProxyHandler(socketserver.BaseRequestHandler):
         return True
 
 
-def _start_restart_handoff_proxy(host: str, public_port: int, backend_port: int):
+def _start_restart_handoff_proxy(host: str, public_port: int, backend_port: int, proxy_secret: str = ""):
     try:
-        proxy = _RestartHandoffProxy(host, public_port, backend_port)
+        proxy = _RestartHandoffProxy(host, public_port, backend_port, proxy_secret=proxy_secret)
     except OSError as exc:
         raise RuntimeError(f"无法启动重启守护代理（端口 {public_port}）：{exc}") from exc
     threading.Thread(target=proxy.serve_forever, daemon=True, name="restart-handoff-proxy").start()
@@ -1366,11 +1576,20 @@ def _check_startup_security() -> bool:
     return False
 
 
-def _run_service_loop(*, public_port: int | None = None, backend_port: int | None = None) -> int:
+def _run_service_loop(
+    *,
+    public_port: int | None = None,
+    backend_port: int | None = None,
+    proxy_secret: str = "",
+) -> int:
     is_restart = False
     while True:
         _load_env_file(PROJECT_DIR / ".env")
         child_env = _build_service_env()
+        # S4：代理共享密钥只来自本次启动；不继承 shell / .env 里可能残留或被预置的值
+        child_env.pop("UWAPI_PROXY_SECRET", None)
+        if proxy_secret and backend_port is not None:
+            child_env["UWAPI_PROXY_SECRET"] = proxy_secret
         if is_restart:
             child_env["UWAPI_IS_RESTART"] = "1"
         if backend_port is not None:
@@ -1436,8 +1655,15 @@ def main() -> int:
     public_port = int(os.getenv("APP_PORT", "8199") or "8199")
     if _env_flag("SCHEDULED_RESTART_ENABLED", False):
         backend_port = _find_backend_port(public_port)
-        _start_restart_handoff_proxy(os.getenv("APP_HOST", "127.0.0.1"), public_port, backend_port)
-        return _run_service_loop(public_port=public_port, backend_port=backend_port)
+        import secrets
+
+        proxy_secret = secrets.token_urlsafe(32)  # S4：每次启动随机生成，只经子进程环境传递
+        _start_restart_handoff_proxy(
+            os.getenv("APP_HOST", "127.0.0.1"), public_port, backend_port, proxy_secret
+        )
+        return _run_service_loop(
+            public_port=public_port, backend_port=backend_port, proxy_secret=proxy_secret
+        )
     return _run_service_loop()
 
 

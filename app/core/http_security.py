@@ -306,11 +306,11 @@ def is_trusted_local_request(
     real = effective_client_host(client_host, headers, env)
     if not is_loopback_host(real):
         return False
-    # 受信 handoff 代理已给出真实地址时，它自己会剥离外部转发头；
-    # 其余情况下，出现任何转发头都视为经反代/隧道进入。
-    trusted_proxy = real != client_host
-    if not trusted_proxy:
-        for name in FORWARDING_HEADERS:
-            if _header(headers, name):
-                return False
+    # handoff 代理（S4/S5）会原样保留外部转发头、只剥离并重写 X-UWA-*：
+    # 若 handoff 代理前面还有 nginx / 隧道，真实地址在转发头里，不能因为
+    # 「代理报告的对端是 127.0.0.1」就当作本机。所以无论是否经 handoff 代理，
+    # 出现任何转发头都视为经反代/隧道进入。
+    for name in FORWARDING_HEADERS:
+        if _header(headers, name):
+            return False
     return True

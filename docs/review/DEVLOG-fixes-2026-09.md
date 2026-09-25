@@ -100,8 +100,8 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - [x] B3 Responses 内存历史无字节预算
 - [x] S10 图片比对 / C2PA 直取外部 URL
 - [x] S11 DNS 校验后连接重解析
-- [ ] S4 回环 IP 当作授权
-- [ ] S5 定时重启代理容量 / 协议
+- [x] S4 回环 IP 当作授权
+- [x] S5 定时重启代理容量 / 协议
 - [ ] S6 媒体路由无认证与转码资源
 - [ ] S3 解析器安装立即 import
 - [ ] H9 标签页等待队列无总量上限
@@ -266,3 +266,30 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
   - data URI（生成图片及上传参考图）先按 base64 长度预估大小，超预算就不解码。
   - `image_signatures` 解码前检查头部尺寸（40MP / 边长 16384），超限只保留字节 sha256，不做像素或 dHash 计算，防解压炸弹。
 - 测试：p2 新增 4 项（私网 URL 被拒且无浏览器兜底、流式字节上限、声明超限不读 body、data URI 与像素预算）。
+
+### S4 回环 IP 当作授权 + S5 定时重启代理容量/协议 ✅（同一提交，共用 handoff 代理的设计）
+
+**S4**
+- `app/api/browser_routes.py::open-profile-url`：原来只看 `request.client.host` 是不是回环，现在改为 `verify_open_profile_url_auth`：
+  - 控制面板认证已启用、且请求带了 Authorization：按管理令牌校验，错误令牌返回 401。
+  - 其他情况只接受 `is_trusted_local_request`，即直接回环且没有任何反代/隧道转发头；经 handoff 代理时以代理注入的真实地址为准。
+  - 都不满足：认证已启用返回 401，未启用返回 403。
+  - 决策：**没有**直接换成 `verify_sensitive_admin_auth`。Link Drawer（外部客户端）不保存面板密钥，改成必须带令牌会让本机功能直接失效；而严格的本机判定已经覆盖了报告里的反代/隧道场景。
+  - 目标 URL 限制：拒绝带 userinfo 的链接、localhost / *.localhost，以及非全局 IP 字面量（127/10/192.168/::1 等），返回 400。
+- `app/core/http_security.py::is_trusted_local_request`：经 handoff 代理的请求也要检查转发头。代理前面若还有 nginx/隧道，真实来源在 X-Forwarded-For 里，不能因为代理报告的对端是 127.0.0.1 就放行。
+- `start.py`：`UWAPI_PROXY_SECRET` 每次启动用 `secrets.token_urlsafe(32)` 生成，只注入子进程环境。子进程环境先 pop 掉继承来的旧值；不走代理时子进程没有这个密钥。
+
+**S5**（`start.py::_RestartHandoffProxy / Handler`）
+- 连接预算：`RESTART_PROXY_MAX_CONNECTIONS`（默认 64）个非阻塞信号量，超额直接回 503。
+- 缓冲预算：`RESTART_PROXY_MAX_BUFFER_MB`（默认 256）全局字节账本。每个连接按实际缓冲量逐步预占（Content-Length 请求一次性按声明大小预占），超额回 503，finally 中释放。
+- 单请求上限仍为 64MiB（超出回 413）。请求头上限 64KiB（超出回 431），原来请求头最多可达 64MB。读请求有 60s 端到端时限（超时回 408），原来是每次 recv 60s。
+- 协议处理：
+  - chunked 请求体完整读取并原样转发，支持 chunk 扩展和 trailer。
+  - `Transfer-Encoding` 最后一项不是 chunked 时回 501。
+  - CL 与 TE 同时出现、CL 非数字、多个 CL 不一致，都回 400（防请求走私）。
+  - `Expect: 100-continue` 由代理自己回 100 并剥离 Expect 头；其他 Expect 值回 417。
+  - 丢弃管线化的多余字节。出错时回明确的 HTTP 状态，而不是静默断开。
+- 请求头改写：剥离 Connection/Keep-Alive/Proxy-Connection/Expect 以及**所有客户端送来的 `X-UWA-*`**，再注入 `X-UWA-Client-Addr`（真实对端地址）和 `X-UWA-Proxy-Secret`。外部转发头原样保留，交给后端判定。
+- 测试：p2 新增 7 项：
+  - 3 项 ASGI：隧道/远程被拒；handoff 地址可信、伪造密钥或前置 nginx 被拒；令牌和目标 URL 限制。
+  - 4 项起真实代理加假后端：剥离并注入请求头；chunked 与 Expect；走私/超限/预算返回 400/501/413/503/431，且后端零请求、账本归零；连接预算 503 以及释放后恢复。
