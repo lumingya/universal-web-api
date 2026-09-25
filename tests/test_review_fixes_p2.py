@@ -218,3 +218,74 @@ def test_b1_explicit_rule_overrides_builtin(monkeypatch):
     monkeypatch.setattr(site_discovery, "get_site_rule",
                         lambda host: {"auto_discovery": True} if host == "google.de" else {})
     assert site_discovery.automatic_discovery_allowed("google.de") is True
+
+
+# ---------------------------------------------------------------------------
+# B3 · Responses 续接历史字节预算 + 主体隔离
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def responses_state(monkeypatch):
+    from app.api import chat
+
+    monkeypatch.setattr(chat, "_responses_state_by_id", chat.OrderedDict())
+    monkeypatch.setattr(chat, "_responses_state_total_bytes", 0)
+    return chat
+
+
+def _payload(text):
+    return {"choices": [{"message": {"role": "assistant", "content": text}}]}
+
+
+def test_b3_entry_over_budget_is_not_stored_and_resume_returns_413(responses_state, monkeypatch):
+    chat = responses_state
+    monkeypatch.setattr(chat, "RESPONSES_STATE_MAX_ENTRY_BYTES", 1024)
+    chat._store_responses_state("resp_big", [{"role": "user", "content": "x" * 5000}],
+                                _payload("ok"), enabled=True)
+    assert chat._responses_state_total_bytes == 0
+    with pytest.raises(chat.HTTPException) as exc:
+        chat._load_responses_state("resp_big")
+    assert exc.value.status_code == 413
+
+
+def test_b3_total_budget_evicts_lru(responses_state, monkeypatch):
+    chat = responses_state
+    monkeypatch.setattr(chat, "RESPONSES_STATE_MAX_ENTRY_BYTES", 10_000)
+    monkeypatch.setattr(chat, "RESPONSES_STATE_MAX_TOTAL_BYTES", 5_000)
+    for i in range(5):
+        chat._store_responses_state(f"resp_{i}", [{"role": "user", "content": "y" * 1500}],
+                                    _payload("ok"), enabled=True)
+    assert chat._responses_state_total_bytes <= 5_000
+    assert "resp_0" not in chat._responses_state_by_id
+    assert "resp_4" in chat._responses_state_by_id
+    assert sum(e[3] for e in chat._responses_state_by_id.values()) == chat._responses_state_total_bytes
+    history = chat._load_responses_state("resp_4")
+    assert history[-1]["role"] == "assistant"
+
+
+def test_b3_state_is_bound_to_principal(responses_state):
+    chat = responses_state
+
+    class Req:
+        def __init__(self, headers):
+            self.headers = headers
+
+    alice = chat._responses_principal_from_request(Req({"authorization": "Bearer alice-token"}))
+    bob = chat._responses_principal_from_request(Req({"x-api-key": "bob-token"}))
+    anon = chat._responses_principal_from_request(Req({}))
+    assert alice and bob and alice != bob and anon == ""
+    assert "alice-token" not in alice
+
+    chat._store_responses_state("resp_a", [{"role": "user", "content": "secret"}],
+                                _payload("ok"), enabled=True, principal=alice)
+    assert chat._load_responses_state("resp_a", alice)[0]["content"] == "secret"
+    for other in (bob, anon):
+        with pytest.raises(chat.HTTPException) as exc:
+            chat._load_responses_state("resp_a", other)
+        assert exc.value.status_code == 404
+
+
+def test_b3_store_false_keeps_nothing(responses_state):
+    chat = responses_state
+    chat._store_responses_state("resp_x", [{"role": "user", "content": "hi"}], _payload("ok"), enabled=False)
+    assert "resp_x" not in chat._responses_state_by_id

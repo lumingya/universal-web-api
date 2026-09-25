@@ -97,7 +97,7 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - [x] B5 解冻失败仍交付标签页
 - [x] B2 旧版顶层数组历史恢复丢失
 - [x] B1 搜索引擎主域被自动发现
-- [ ] B3 Responses 内存历史无字节预算
+- [x] B3 Responses 内存历史无字节预算
 - [ ] S10 图片比对 / C2PA 直取外部 URL
 - [ ] S11 DNS 校验后连接重解析
 - [ ] S4 回环 IP 当作授权
@@ -233,3 +233,13 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
   gemini.google.com、aistudio.google.com、`google.com.attacker.org` 不受影响。
 - 验证：`tests/test_site_discovery.py` 36/36 通过（原 9 个失败转绿）；p2 新增 12 项。
 - **基线更新**：失败数 73 → 64（剩余 64 个全部属 T1 fixture 缺失）；`/tmp/baseline_failures.txt` 已同步为 64 项。
+
+### B3 Responses 内存历史无字节预算 ✅
+
+- `app/api/chat.py`：
+  - 新增 `RESPONSES_STATE_MAX_ENTRY_MB`（默认 8）/ `RESPONSES_STATE_MAX_TOTAL_MB`（默认 64）环境变量，非法值回落默认。
+  - 条目改为 `(stored_at, serialized|None, owner, nbytes)`，维护 `_responses_state_total_bytes`；prune 在条数上限之外再按总字节 LRU 淘汰。
+  - 单条超限：不存储正文，只留墓碑；续接时返回 **413** 并提示“在 input 中携带完整上下文”（原来是静默吃内存）。
+  - 主体隔离：`_responses_principal_from_request` 取 Bearer / X-API-Key 的 SHA-256 指纹；续接时主体不一致一律 404（不泄露 ID 是否存在）。无令牌时为空串，匿名调用共享命名空间（兼容认证关闭的本机场景）。
+  - store 语义保持与 OpenAI 一致：`store` 未给出 = 存储，`store:false` = 不存储。
+- 测试：p2 新增 4 项（超限 413、总量 LRU + 字节计数一致、跨主体 404、store:false）。全量无新增失败（64 基线）。
