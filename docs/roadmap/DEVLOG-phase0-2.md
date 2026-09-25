@@ -8,9 +8,12 @@
 
 - main 冻结，只推本分支。本地环境（Portal）与推送链路见 §2.8。
 - ✅ 阶段 0 已完成：R0-1、R0-2、R0-5、R0-6、R0-8。R0-3/R0-4 暂缓，R0-7 由用户发布。
-  - 实机 Windows 3.13 全量（含 Playwright 与真实浏览器）：1141 passed / 67 skipped / 1 failed。唯一失败是早已存在的 page_guide 滚动用例，见 §4。
-- ✅ R1-1 Schema；✅ R1-2 站点配置彻底拆分，同时让更新器具备「未改动的站点文件直接更新」能力，这是 R1-3 的核心。
-- ▶ 下一步：R1-3 的剩余部分（运行时在线检查和更新适配器，面板入口），然后是 R1-4 解析器金标测试。
+- ✅ R1-1 Schema。
+- ✅ R1-2 站点配置彻底拆分，更新器同时具备「未改动的站点文件直接更新」能力。
+- ✅ R1-4 解析器金标测试。
+- ✅ R1-5 官方 SDK 协议一致性测试。
+- ▶ 下一步：R1-3 运行时部分（设计见 §3.6），然后 R1-6、R1-7，再进入阶段 2。
+- 实机验证进度：`a7c22f0` 的实机全量测试正在运行（先补装 requirements-dev，再依次跑 3.13 与 3.10），结果待补记。上一次实机失败的原因是 `scripts/build_sites_index.py` 被 .gitignore 白名单漏掉，已在 `beab65c` 修复。
 
 ## 1. 用户决策（2026-09-26，必须遵守）
 
@@ -153,8 +156,8 @@ Portal 把用户本机的**一个文件夹**发布成公网 MCP 端点：`https:
 - [x] **R1-1** Schema v1 已完成（`app/services/config/site_schema.py`）。加载时只告警；保存或导入时拒绝的逻辑放到 R1-6/后续再接入。
 - [x] **R1-2** 彻底拆分已完成（见 §4）：`config/sites/` 目录、自动迁移、`index.json`、更新器逐站点合并、备份导入导出、官方对比读取 index。
 - [ ] **R1-3** 适配器独立更新通道：索引加摘要校验，只更新用户没改过的预设，保留本地覆盖。
-- [ ] **R1-4** 17 个解析器的金标测试，使用合成样本并标注 `synthetic`。
-- [ ] **R1-5** 协议一致性测试：用官方 openai 和 anthropic SDK 对接假浏览器后端。
+- [x] **R1-4** 金标测试框架完成（`0d75621`）：8 个此前零测试的解析器都有了合成样本，每个样本按三种方式喂入，共 28 项测试。其余已有测试的解析器可以按需补样本。
+- [x] **R1-5** 协议一致性测试完成（`a7c22f0`）：用官方 openai 3.x 和 anthropic 1.x SDK 覆盖 chat.completions、Responses 与 Messages 三种接口的流式和非流式调用、422 错误映射和 models 列表，共 8 项测试。
 - [ ] **R1-6** 适配器健康巡检：可达性、登录态、关键选择器，全程不发消息。
 - [ ] **R1-7** 选择器韧性：语义锚点、候选列表和打分、Site Studio 给出修复建议。只加机制，不在没有验证的情况下改现有选择器。
 
@@ -209,6 +212,26 @@ Portal 把用户本机的**一个文件夹**发布成公网 MCP 端点：`https:
 - **Schema（R1-1）**：`app/services/config/site_schema.json`（JSON Schema 2020-12，`jsonschema` 已在依赖中）校验信封与站点配置的关键结构，包括 selectors、workflow、stream_config、file_paste、image_extraction、request_transport。
   - 加载时校验失败只告警、不阻止启动；保存和导入时校验失败则拒绝，并给出路径级错误。
   - 未知字段放行，因为现有配置里字段很多，先保证不误伤。
+
+## 3.6 设计记录：R1-3 运行时适配器更新（在线检查与应用）
+
+更新器已经能在发布整包时逐站点处理（见 R1-2）。R1-3 的剩余部分是**不发整包**也能热更新站点配置：
+
+- 服务 `app/services/adapter_updates.py`：
+  - `check()`：拉取官方 main 上的 `config/sites/index.json`，与本地安装时附带的 `config/sites/index.json`（记录已安装版本的规范化摘要）以及本地文件的当前内容逐站点比较，得到以下状态：
+    - `up_to_date`；
+    - `update_available`：官方有变化，且用户没改过本地文件，可以安全自动应用；
+    - `conflict`：官方有变化，但用户也改过本地文件，需要手动对比或合并；
+    - `new_site`：官方新增的站点；
+    - `local_only`：只在本地存在的站点；
+    - `requires_newer_app`：站点要求的 min_app_version 高于当前应用版本。
+  - `apply(sites)`：按 `file_sha256` 校验后下载官方文件，写入方式如下：
+    - `update_available` 和 `new_site`：直接替换或新增；
+    - `conflict`：必须显式要求，然后按 `merge_site_records` 合并（本地优先）。
+    - 写入后更新本地 index.json 中对应站点的条目，再调用 `config_engine.reload_config()`。
+  - 网络部分复用 `config_compare_support` 的安全抓取（`get_public_remote_resource`、大小限制与缓存）。
+- API：`GET /api/adapters/updates`（检查）、`POST /api/adapters/updates/apply`（请求体 `{"sites": [...], "include_conflicts": false}`），鉴权与其他配置接口一致。
+- 面板：在配置页加一个「检查站点适配器更新」入口，展示列表并支持一键应用安全更新。UI 放到后面，能在本机用 Playwright 截图核对时再做。
 
 ## 4. 进度记录
 
@@ -272,4 +295,13 @@ Portal 把用户本机的**一个文件夹**发布成公网 MCP 端点：`https:
     - test_config_compare_remote 新增 index 布局与 sha 不一致两项；
     - 5 个直接读 sites.json 的测试改用 `tests/_sites.py`。
   - 沙盒全量：1105 passed / 141 skipped。
+- **修复**：`scripts/build_sites_index.py` 被 `.gitignore` 的 `/scripts/*` 白名单漏掉了（`git add -A scripts/` 会静默跳过被忽略的文件），导致 Windows 干净克隆中测试失败。已加入白名单并补测试（`beab65c`）。
+- **R1-4**（`0d75621`）：
+  - 新增 `tests/fixtures/parsers/build_synthetic.py`，按各解析器源码注释中记录的线上格式，合成 aistudio、chatgpt、claude（含 CRLF 变体）、deepseek、gemini、glm、kimi、qwen 的样本。
+  - 新增 `tests/test_parser_golden.py`，每个样本按三种方式喂入：一次性、事件边界快照、每 7 字符快照。28 项首次运行全部通过。
+- **R1-5**（`a7c22f0`）：
+  - 新增 `tests/test_protocol_conformance.py`：假浏览器（与真实流监听一样用 SSEFormatter 打包）加 ASGITransport，官方 SDK 走完整 HTTP 路径。
+  - 首次运行时流式用例失败，原因是假浏览器输出的 chunk 缺少 object/model 字段，与真实格式不符，已修正假实现。
+  - anthropic 1.x 改用 `httpx2`，测试会自动适配。
+  - requirements-dev.txt 增加 openai 和 anthropic。
 
