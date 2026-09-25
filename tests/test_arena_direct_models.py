@@ -1115,6 +1115,17 @@ def test_arena_catalog_tab_does_not_cross_route_code_model_to_text_preset(monkey
 def test_collect_model_entries_respects_tab_preset_isolation(monkeypatch):
     from app.api.chat import _collect_model_entries
 
+    # T1：不依赖未跟踪的 config/arena_model_catalog.local.json——生图预设的目录配置
+    # 在测试内显式给出（「主预设-直连模式」走内置默认文本目录）。
+    monkeypatch.setattr(
+        "app.services.arena_model_catalog.load_arena_model_catalog_data",
+        lambda: {
+            "arena.ai": {
+                "万能直连-通用生图": {"enabled": True, "source": "arena_direct", "modality": "image"},
+            }
+        },
+    )
+
     class _MockPool:
         def __init__(self, tabs):
             self._tabs = tabs

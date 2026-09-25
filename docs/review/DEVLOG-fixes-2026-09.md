@@ -106,6 +106,7 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - [x] S3 解析器安装立即 import
 - [x] H9 标签页等待队列无总量上限
 - [x] H12 网络事件 URL 正则回溯
+- [x] T1 干净克隆测试资源不全（范围里列了但清单漏了，补上）
 
 ## 4. 修复记录
 
@@ -354,3 +355,31 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - `app/core/browser/workflow.py`：5 处 `session is None` 分支先判断是否因队列已满被拒。是的话返回 `capacity_error / tab_queue_full / status_code=503 / retryable=true`，不再误报成“标签页不存在”（404 类）或无状态的繁忙提示。
 - `.env.example` 加了说明。
 - 测试：p2 新增 3 项：队列满时三种 acquire 都在 1 秒内拒绝且不挂队、查询即清除；limit=0 不限；工作流错误负载经 `resolve_error_metadata` 解析为 503。
+
+### T1 干净克隆测试资源不全 ✅（全量：64 failed → 0 failed）
+
+- 缺失原因：这些资源在历史上都被作者**有意取消跟踪**：
+  - `config/commands.json` 在 cafad7f 删除，之后成为运行时生成的文件。
+  - `custom_scripts/examples/arena_payload_interceptor.js` 和 `js/arena-conversation-image-window.user.js` 在 3cd68aa 删除，`custom_scripts/` 被 gitignore。
+  - 历史版本的 commands.json 已经过时：拿来运行，57 项里仍有 14 项失败，不能作为 fixture 恢复。
+  - 结论：不恢复这些文件，改为“标记为需要本地环境的测试”。
+- 新增 `tests/conftest.py`（`.gitignore` 加入白名单 `!tests/conftest.py`）：
+  - 静态识别依赖本地资源的测试，依据以下几类写法：
+    - 测试函数本身出现资源路径写法。
+    - 调用了同模块里用到这些资源的辅助函数/方法（按不动点传递）。
+    - unittest 的 `setUp/setUpClass` 读取资源后存进 `self.X`，而测试方法用到了 `self.X`。
+  - 资源写法是收紧过的：
+    - `COMMANDS_PATH`、`"config" / "commands.json"`、`"config" / "commands.local.json"`。
+    - `examples/arena_payload_interceptor.js`、`== "arena_payload_interceptor.js"`。
+    - `arena-conversation-image-window`。
+    - 自建的 `tmp_path / "commands.json"` 以及只检查字符串的测试都不会误判。
+  - 识别出的测试统一打上 `local_fixture` 标记，CI 可以用 `-m "not local_fixture"` 只跑纯逻辑子集。
+  - 资源缺失时 skip，并写明缺什么；资源齐全时照常运行。用历史 commands.json 验证过：放回去后这些测试确实会执行。
+- `tests/test_arena_direct_models.py::test_collect_model_entries_respects_tab_preset_isolation`：
+  - 原来依赖未跟踪的 `config/arena_model_catalog.local.json`。
+  - 改为在测试内 monkeypatch 目录数据，现在自足并通过（它是纯逻辑测试，不该依赖本地环境）。
+- 结果：
+  - `/tmp/runtests.sh`：648 passed, 63 skipped, 0 failed。
+  - `-m "not local_fixture"`：648 passed, 63 deselected。
+  - 对比修改前：原先通过的 647 项全部仍通过，另有 1 项转为通过；其余 63 项从失败变为跳过。
+  - `/tmp/baseline_failures.txt` 已清空，此后任何失败都算新增。

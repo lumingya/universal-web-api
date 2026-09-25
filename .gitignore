@@ -188,3 +188,4 @@ scripts/custom/
 !tests/test_attachment_evidence_regressions.py
 # 审查问题修复回归测试（docs/review/DEVLOG-fixes-2026-09.md）
 !tests/test_review_fixes_*.py
+!tests/conftest.py
