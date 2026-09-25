@@ -139,3 +139,20 @@ def test_h7_annotations_resolvable():
         for obj in vars(mod).values():
             if callable(obj) and getattr(obj, "__module__", None) == mod.__name__ and not isinstance(obj, type):
                 typing.get_type_hints(obj)  # 旧代码对缺失导入会抛 NameError
+
+
+# ---------------------------------------------------------------------------
+# H8 · chat.py 的 Arena 错误辅助函数只定义一次
+# ---------------------------------------------------------------------------
+
+def test_h8_arena_helpers_defined_once():
+    import ast
+
+    src = (Path(__file__).resolve().parents[1] / "app" / "api" / "chat.py").read_text(encoding="utf-8")
+    names = [n.name for n in ast.parse(src).body if isinstance(n, ast.FunctionDef)]
+    for helper in (
+        "_is_arena_prompt_rejection", "_is_arena_non_retryable",
+        "_is_arena_prompt_rejection_payload", "_is_arena_non_retryable_payload",
+        "_arena_prompt_rejection_response", "_arena_non_retryable_response",
+    ):
+        assert names.count(helper) == 1, helper

@@ -32,7 +32,7 @@ P3 清单（顺序即执行顺序，完成一项勾一项，每项独立提交�
 - [x] B7 脚本热加载 mtime 相同内容替换仍返回旧脚本
 - [x] B4 `n>1` 只返回 1 个 choice
 - [x] H7 未导入的类型注解（F821）
-- [ ] H8 chat.py 重复定义的 Arena 辅助函数
+- [x] H8 chat.py 重复定义的 Arena 辅助函数
 - [ ] H10 stream_monitor 重复方法
 - [ ] H13 未使用的 command_engine_storage mixin
 - [ ] T2 requirements-dev 缺 httpx
@@ -451,3 +451,9 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - `start.py` 补 `from typing import Any, Optional`；`app/utils/model_routing.py` 补 `Optional`。
   （两文件均有 `from __future__ import annotations`，运行时不崩，但 `typing.get_type_hints` / 工具链会 NameError。）
 - `pyflakes app main.py start.py` 的 undefined name 清零。测试：p3 新增 1 项（get_type_hints 遍历两模块函数；旧代码失败）。
+
+### H8 chat.py 重复 Arena 辅助函数 ✅（P3）
+
+- 删除 `app/api/chat.py` 前一组 6 个被后文覆盖、从未生效的定义（`_is_arena_prompt_rejection` 等），保留实际生效的后一组 → **运行时行为零变化**。
+  顺带去掉后一组里与模块级导入重复的 `ARENA_PROMPT_REJECTED_CODE` 局部导入（同一对象，已验证）。模块级兼容别名导入保留。
+- pyflakes 的 redefinition 告警从 6+1 降为仅剩与本项无关的局部 `import copy`。测试：p3 新增 1 项（AST 确认各只定义一次）。
