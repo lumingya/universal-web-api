@@ -150,3 +150,47 @@ def test_b5_unfrozen_session_acquire_is_unchanged():
     assert session.acquire("task") is True
     assert session.status == TabStatus.BUSY
     assert session.tab.calls == []   # 未冻结时不发任何 CDP
+
+
+# ---------------------------------------------------------------------------
+# B2 · 旧版顶层数组历史恢复
+# ---------------------------------------------------------------------------
+
+def _bare_request_manager(tmp_path, monkeypatch, max_records=200):
+    from app.services.request_manager import RequestManager
+
+    rm = object.__new__(RequestManager)
+    rm._history_file = str(tmp_path / "request_history.json")
+    rm._monitor_history = []
+    rm._history_revision_cache = None
+    rm.total_input_tokens = 0
+    rm.total_output_tokens = 0
+    monkeypatch.setattr(rm, "_request_monitor_enabled", lambda: True, raising=False)
+    monkeypatch.setattr(rm, "_request_monitor_max_records", lambda: max_records, raising=False)
+    return rm
+
+
+def _history_record(i):
+    return {"request_id": f"req-{i}", "created_at": 1000.0 + i, "prompt": f"p{i}",
+            "response": f"r{i}", "status": "completed",
+            "token_estimate": {"prompt": 3, "response": 5}}
+
+
+def test_b2_legacy_top_level_array_history_is_restored(tmp_path, monkeypatch):
+    rm = _bare_request_manager(tmp_path, monkeypatch)
+    Path(rm._history_file).write_text(json.dumps([_history_record(1), _history_record(2), "junk"]),
+                                      encoding="utf-8")
+    rm._load_history()
+    assert [r["request_id"] for r in rm._monitor_history] == ["req-1", "req-2"]
+    assert rm.total_input_tokens == 6 and rm.total_output_tokens == 10
+
+
+def test_b2_object_format_still_works_and_zero_limit_clears(tmp_path, monkeypatch):
+    rm = _bare_request_manager(tmp_path, monkeypatch)
+    Path(rm._history_file).write_text(json.dumps({"records": [_history_record(1)]}), encoding="utf-8")
+    rm._load_history()
+    assert [r["request_id"] for r in rm._monitor_history] == ["req-1"]
+
+    rm0 = _bare_request_manager(tmp_path, monkeypatch, max_records=0)
+    rm0._load_history()
+    assert rm0._monitor_history == []   # lst[-0:] 陷阱

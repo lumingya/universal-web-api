@@ -95,7 +95,7 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 
 - [x] B8 命令配置损坏时清空运行缓存
 - [x] B5 解冻失败仍交付标签页
-- [ ] B2 旧版顶层数组历史恢复丢失
+- [x] B2 旧版顶层数组历史恢复丢失
 - [ ] B1 搜索引擎主域被自动发现
 - [ ] B3 Responses 内存历史无字节预算
 - [ ] S10 图片比对 / C2PA 直取外部 URL
@@ -215,3 +215,10 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
   - **决策**：没有把会话标成 ERROR——冻结失败多为瞬时 CDP 问题，冷却后重试即可；真正死掉的标签页由既有健康检查处理。
 - 验证：p2 新增 3 项（假 CDP 抛错 → acquire False/IDLE/计数不变/保留冻结；冷却期内不发 CDP；恢复后可交付；
   命令模式不动 request_count；未冻结会话不发 CDP）。
+
+### B2 旧版顶层数组历史恢复丢失 ✅
+
+- `app/services/request_manager.py::_load_history`：先 `isinstance(data, list)` / `dict` 分支再取 `records`
+  （旧代码 `data.get(...)` 对 list 抛 AttributeError，被外层 except 吞掉 → 恢复 0 条）。
+  顺带修掉 `max_records<=0` 时 `lst[-0:]` 返回整个列表的陷阱。
+- 验证：p2 新增 2 项（顶层数组 + 混入非 dict 项恢复 2 条且 token 统计回填；对象格式不变；上限 0 时清空）。

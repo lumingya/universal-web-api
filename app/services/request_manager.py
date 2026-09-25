@@ -551,16 +551,29 @@ class RequestManager:
                 return
             with open(self._history_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            records = data.get("records", data if isinstance(data, list) else [])
+            # B2：旧版历史文件是顶层数组，必须先按类型分支再取值——
+            # 旧实现先调用 data.get(...)，list 没有 .get 直接抛错，兼容分支永远走不到，恢复 0 条。
+            if isinstance(data, list):
+                records = data
+            elif isinstance(data, dict):
+                records = data.get("records", [])
+            else:
+                records = []
             if isinstance(records, list):
                 raw_records = [item for item in records if isinstance(item, dict)]
                 max_records = self._request_monitor_max_records()
-                if self._history_records_are_ordered(raw_records):
+                if max_records <= 0:
+                    # 注意 lst[-0:] 等于整个列表，max_records=0 时必须显式清空
+                    raw_records = []
+                elif self._history_records_are_ordered(raw_records):
                     raw_records = raw_records[-max_records:]
                 normalized_records = [
                     self._normalize_history_record(item) for item in raw_records
                 ]
-                self._monitor_history = self._sort_history_records(normalized_records)[-max_records:]
+                self._monitor_history = (
+                    self._sort_history_records(normalized_records)[-max_records:]
+                    if max_records > 0 else []
+                )
                 
                 # 如果没有持久化的 token 统计，从已有的 200 条历史请求中求和做初次填充
                 if self.total_input_tokens == 0 and self.total_output_tokens == 0:
