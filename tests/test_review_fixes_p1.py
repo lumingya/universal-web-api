@@ -168,9 +168,11 @@ def test_cors_origins_default_is_empty(monkeypatch):
     assert AppConfig.get_cors_origins() == ["*"]
 
 
-def test_main_app_rejects_cross_origin_management_requests():
+def test_main_app_rejects_cross_origin_management_requests(monkeypatch):
     import main
     from httpx import ASGITransport, AsyncClient
+
+    monkeypatch.setattr(main, "_cors_origins", [])
 
     async def run():
         async with AsyncClient(transport=ASGITransport(app=main.app),

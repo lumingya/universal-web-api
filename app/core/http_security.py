@@ -195,6 +195,26 @@ def startup_security_errors(
             "请设置 AUTH_ENABLED=true 与 AUTH_TOKEN，"
             f"或改回 APP_HOST=127.0.0.1（可信隔离网络可设 {INSECURE_OVERRIDE_ENV}=true）。"
         )
+
+    # S2：把「在服务进程内执行任意代码」的能力与对外绑定组合起来，
+    # 等于把远程代码执行直接暴露到网络上。
+    for flag, description in (
+        (
+            "CMD_ALLOW_UNSAFE_PYTHON_COMMANDS",
+            "命令引擎的 Python 脚本会以非沙箱模式执行（可访问完整 builtins 与浏览器对象）",
+        ),
+        (
+            "PARSER_INSTALL_ENABLED",
+            "运行时解析器安装会把任意源码写入 app/core/parsers/ 并立即 import",
+        ),
+    ):
+        if _env_true(env, flag):
+            errors.append(
+                f"{flag}=true 与对外绑定（APP_HOST={bind_host}）同时开启："
+                f"{description}，等于把远程代码执行暴露到网络上。"
+                f"请把 APP_HOST 改回 127.0.0.1，或关闭 {flag}。"
+            )
+
     return errors
 
 

@@ -61,18 +61,20 @@ def is_media_path(path: str) -> bool:
     return any(value.startswith(prefix) for prefix in MEDIA_PATH_PREFIXES)
 
 
-def _candidates(headers: Any) -> list:
+def _candidates(headers: Any, query_token: Optional[str] = None) -> list:
     out = []
-    if headers is None:
-        return out
-    auth = str(headers.get("authorization") or "").strip()
-    if auth.lower().startswith("bearer "):
-        auth = auth[7:].strip()
-    if auth:
-        out.append(auth)
-    api_key = str(headers.get("x-api-key") or "").strip()
-    if api_key:
-        out.append(api_key)
+    if headers is not None:
+        auth = str(headers.get("authorization") or "").strip()
+        if auth.lower().startswith("bearer "):
+            auth = auth[7:].strip()
+        if auth:
+            out.append(auth)
+        api_key = str(headers.get("x-api-key") or "").strip()
+        if api_key:
+            out.append(api_key)
+    token_param = str(query_token or "").strip()
+    if token_param:
+        out.append(token_param)
     return out
 
 
@@ -88,12 +90,13 @@ def media_request_authorized(
     client_host: Optional[str],
     headers: Any,
     env: Optional[Mapping[str, str]] = None,
+    query_token: Optional[str] = None,
 ) -> bool:
     """MEDIA_REQUIRE_AUTH 开启时的判定；未开启时恒为 True。"""
     env = os.environ if env is None else env
     if not media_auth_required(env):
         return True
-    candidates = _candidates(headers)
+    candidates = _candidates(headers, query_token=query_token)
     if candidates:
         if _token_matches(env.get("AUTH_TOKEN", ""), candidates):
             return True

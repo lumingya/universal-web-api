@@ -33,6 +33,17 @@ def _is_loopback(host: str) -> bool:
         return str(host or "").casefold() == "localhost"
 
 
+_INTERNAL_HOST_SUFFIXES = (
+    "localhost",
+    ".localhost",
+    ".local",
+    ".internal",
+    ".lan",
+    ".home.arpa",
+)
+_METADATA_HOSTS = frozenset({"metadata.google.internal", "metadata", "instance-data"})
+
+
 def _valid_web_url(url: str) -> str:
     value = str(url or "").strip()
     parsed = urlparse(value)
@@ -42,8 +53,11 @@ def _valid_web_url(url: str) -> str:
     if parsed.username is not None or parsed.password is not None:
         raise HTTPException(status_code=400, detail="链接不能包含用户名/密码")
     host = str(parsed.hostname or "").strip().rstrip(".").casefold()
-    if not host or host == "localhost" or host.endswith(".localhost"):
-        raise HTTPException(status_code=400, detail="不允许打开本机地址")
+    if not host or host in _METADATA_HOSTS or any(
+        host == suffix.lstrip(".") or host.endswith(suffix)
+        for suffix in _INTERNAL_HOST_SUFFIXES
+    ):
+        raise HTTPException(status_code=400, detail="不允许打开本机/内部地址")
     try:
         literal = ipaddress.ip_address(host.split("%", 1)[0])
     except ValueError:

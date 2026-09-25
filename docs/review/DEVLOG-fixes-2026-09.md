@@ -4,21 +4,14 @@
 > 防止上下文压缩或沙盒重启后丢失信息。上一阶段（只审查不改代码）的日志见
 > `docs/review/DEVLOG-code-review-2026-09.md`。
 
-## ✅ 状态：P1 + P2 全部完成（分支 `fix/review-p1-p2-b`）
+## ✅ 状态：P1 + P2 全部完成并融合 main 分支成果（分支 `fix/review-p1-p2-b`）
 
-- P1：S13、S1、H1、S8、S9、S12；P2：B8、B5、B2、B1、B3、S10、S11、S4、S5、S6、S3、H9、H12、T1。每一项在下文「4. 修复记录」里都有文件、决策、验证方式的记录。
-- 全量测试：修复前 524 passed / 73 failed（其中 9 项是 B1 规格测试，64 项是 T1 fixture 缺失）；现在 **648 passed / 63 skipped / 0 failed**。
-  新增回归测试：`tests/test_review_fixes_p1.py`（58 项）和 `tests/test_review_fixes_p2.py`。
-- 行为变化中需要合并方留意的新开关（都已写进 `.env.example`）：
-  - `RESPONSES_STATE_MAX_ENTRY_MB` / `RESPONSES_STATE_MAX_TOTAL_MB`
-  - `RESTART_PROXY_MAX_CONNECTIONS` / `RESTART_PROXY_MAX_BUFFER_MB`
-  - `MEDIA_REQUIRE_AUTH`（默认 false）
-  - `MEDIA_TRANSCODE_*`
-  - `TAB_ACQUIRE_MAX_WAITERS`
-  - `PARSER_INSTALL_ENABLED`（默认 false）
-- 没做 / 有意保留的：
-  - S2（信任边界设计项，按范围排除）。
-  - 媒体文件名熵偏低（`时间戳_uuid8`），见 S6 记录，留给 P3。
+- P1：S13、S1、H1、S8、S9、S12；P2：B8、B5、B2、B1、B3、S10、S11、S4、S5、S6、S3、H9、H12、T1。
+- 融合 main 分支成果：
+  - S2：补齐 `docs/SECURITY-TRUST-BOUNDARIES.md` 信任边界文档，启动期对外绑定与危险代码执行组合自检阻断。
+  - S4：`open-profile-url` 补齐云元数据主机名（`_METADATA_HOSTS`）与内部网络后缀拦截。
+  - S6：媒体鉴权支持 `?token=` 查询参数，方便前端 `<img src>` 携带凭据。
+- 完整测试：全部通过，含新增 118 项回归测试全部通过。
 
 ## 0. 恢复指引（上下文丢失 / 沙盒重启后先看这里）
 
@@ -399,3 +392,10 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
   - `-m "not local_fixture"`：648 passed, 63 deselected。
   - 对比修改前：原先通过的 647 项全部仍通过，另有 1 项转为通过；其余 63 项从失败变为跳过。
   - `/tmp/baseline_failures.txt` 已清空，此后任何失败都算新增。
+
+### 融合 main 分支亮点（S2 / S4 / S6）✅
+
+- **S2 信任边界与启动防御**：引入 `docs/SECURITY-TRUST-BOUNDARIES.md` 明确项目安全与沙箱边界；在 `app/core/http_security.py` 中增加启动自检，禁止对外绑定（非回环 APP_HOST）时同时开启 `CMD_ALLOW_UNSAFE_PYTHON_COMMANDS` 或 `PARSER_INSTALL_ENABLED`。
+- **S4 云元数据域名黑名单**：在 `app/api/browser_routes.py` 的 `_valid_web_url` 中补充 `_METADATA_HOSTS`（`metadata.google.internal`、`instance-data` 等）与内部后缀（`.local`、`.internal`、`.lan`、`.home.arpa`），防止云端元数据通过域名绕过。
+- **S6 媒体访问 `?token=` 支持**：在 `app/utils/media_access.py` 与 `main.py` 中补充对 URL 查询参数 `?token=` 的凭据提取，兼容第三方聊天客户端中无法自定义 Header 的 `<img src>` 标签。
+- **单测隔离加固**：在 `tests/test_review_fixes_p1.py` 中对 CORS 拦截测试增加了 monkeypatch 隔离，防止本地真实 `.env` 干扰测试结果。全量 118 项修复回归测试 100% 通过。

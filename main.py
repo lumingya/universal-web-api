@@ -702,7 +702,8 @@ async def guard_private_media(request, call_next):
 
     if is_media_path(request.url.path):
         client_host = request.client.host if request.client else None
-        if not media_request_authorized(client_host, request.headers):
+        query_token = request.query_params.get("token")
+        if not media_request_authorized(client_host, request.headers, query_token=query_token):
             return JSONResponse(
                 status_code=401,
                 content={"detail": "媒体访问需要认证（MEDIA_REQUIRE_AUTH 已开启）"},

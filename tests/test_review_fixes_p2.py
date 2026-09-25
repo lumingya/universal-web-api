@@ -995,3 +995,76 @@ def test_h9_workflow_reports_503_for_queue_full():
     assert err["code"] == "tab_queue_full" and err["status_code"] == 503 and err["retryable"] is True
     meta = resolve_error_metadata(payload)
     assert meta.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# S2 / S4 / S6 融合增量测试
+# ---------------------------------------------------------------------------
+
+def test_s2_startup_gate_rejects_unsafe_code_with_public_bind():
+    import app.core.http_security as hs
+
+    env = {
+        "AUTH_ENABLED": "true",
+        "AUTH_TOKEN": "token",
+        "DASHBOARD_AUTH_ENABLED": "true",
+        "DASHBOARD_AUTH_TOKEN": "token",
+    }
+    # 回环绑定时，即使开启 unsafe python 也不报错
+    assert hs.startup_security_errors(host="127.0.0.1", env=dict(env, CMD_ALLOW_UNSAFE_PYTHON_COMMANDS="true")) == []
+    assert hs.startup_security_errors(host="127.0.0.1", env=dict(env, PARSER_INSTALL_ENABLED="true")) == []
+
+    # 对外绑定时，开启 unsafe python 或 parser install 报错
+    errs_python = hs.startup_security_errors(host="0.0.0.0", env=dict(env, CMD_ALLOW_UNSAFE_PYTHON_COMMANDS="true"))
+    assert any("CMD_ALLOW_UNSAFE_PYTHON_COMMANDS=true" in e for e in errs_python)
+
+    errs_parser = hs.startup_security_errors(host="0.0.0.0", env=dict(env, PARSER_INSTALL_ENABLED="true"))
+    assert any("PARSER_INSTALL_ENABLED=true" in e for e in errs_parser)
+
+
+def test_s2_trust_boundaries_doc_exists():
+    from pathlib import Path
+    doc = Path(__file__).resolve().parents[1] / "docs" / "SECURITY-TRUST-BOUNDARIES.md"
+    assert doc.is_file()
+    content = doc.read_text(encoding="utf-8")
+    assert "不是安全沙箱" in content
+
+
+def test_s4_rejects_metadata_and_internal_suffix_hosts():
+    from fastapi import HTTPException
+    from app.api.browser_routes import _valid_web_url
+
+    for bad in (
+        "http://metadata.google.internal/computeMetadata/v1/",
+        "http://metadata/v1",
+        "http://instance-data/latest/meta-data/",
+        "http://service.internal/api",
+        "http://router.lan/",
+        "http://server.local/",
+        "http://nas.home.arpa/",
+    ):
+        with pytest.raises(HTTPException) as exc:
+            _valid_web_url(bad)
+        assert exc.value.status_code == 400
+        assert "不允许打开本机/内部地址" in exc.value.detail
+
+    # 正常公网地址放行
+    assert _valid_web_url("https://example.com/foo") == "https://example.com/foo"
+
+
+def test_s6_media_auth_accepts_query_token():
+    from app.utils.media_access import media_request_authorized
+
+    env = {
+        "MEDIA_REQUIRE_AUTH": "true",
+        "AUTH_TOKEN": "svc-token",
+        "DASHBOARD_AUTH_TOKEN": "dash-token",
+    }
+    # 无凭据非本机拒绝
+    assert media_request_authorized("8.8.8.8", headers={}, env=env, query_token=None) is False
+    # query_token 匹配服务令牌放行
+    assert media_request_authorized("8.8.8.8", headers={}, env=env, query_token="svc-token") is True
+    # query_token 匹配面板令牌放行
+    assert media_request_authorized("8.8.8.8", headers={}, env=env, query_token="dash-token") is True
+    # query_token 错误拒绝
+    assert media_request_authorized("8.8.8.8", headers={}, env=env, query_token="wrong-token") is False
