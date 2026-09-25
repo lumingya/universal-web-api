@@ -124,4 +124,6 @@ def test_history_saves_are_debounced_and_flushed(tmp_path, monkeypatch):
     data = json.loads((tmp_path / "config" / "request_history.json").read_text(encoding="utf-8"))
     assert data["records"][-1]["request_id"] == "last"
     assert fsyncs == []
-    assert not any(t.name == "request-history-save" and t.is_alive() for t in threading.enumerate())
+    # 只检查本管理器自己的保存线程：全局 request_manager（其他测试发起的请求）也可能有同名线程在去抖窗口内
+    worker = mgr._history_save_worker
+    assert worker is None or not worker.is_alive()
