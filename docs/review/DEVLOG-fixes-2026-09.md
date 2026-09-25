@@ -37,7 +37,7 @@ P3 清单（顺序即执行顺序，完成一项勾一项，每项独立提交�
 - [x] H13 未使用的 command_engine_storage mixin
 - [x] T2 requirements-dev 缺 httpx
 - [x] S14 遗留教程搜索框 innerHTML
-- [ ] S7 公开引导/健康接口信息最小化
+- [x] S7 公开引导/健康接口信息最小化
 - [ ] H14 站点/完整备份导入无大小上限
 - [ ] H2 README 版本与 CHANGELOG 链接
 - [ ] H3 .gitignore 规则清理
@@ -481,3 +481,13 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - `static/tutorial/index.html`：新增 `escHtml`；搜索结果（含**用户输入的查询词**回显、章节标题/分组/小节摘要、href）
   与 TOC（h3 文本/id）拼 innerHTML 前全部转义。NAV/SITES 为页内常量，未改。
 - 校验：抽取内联脚本 `node --check` 通过；escHtml 对 `<img onerror>` 等输出正确。测试：p3 新增 1 项（源码断言）。
+
+### S7 公开健康/引导接口信息暴露 ✅（P3）
+
+- 新增 `app/utils/diagnostics_access.py`：特权调用者 = 严格本机直连（复用 S4 `is_trusted_local_request`，有转发头即不算本机）
+  或携带有效 `AUTH_TOKEN` / `DASHBOARD_AUTH_TOKEN`（Bearer / X-API-Key）。**不强制令牌**（遵照用户要求）。
+- `GET /health`：非特权 → 最小响应 `{service, browser:{connected}, config:{auth_enabled, dashboard_auth_enabled}, detail:"restricted", timestamp}`，
+  只读连接标志、**不调用 `browser.health_check()`**（避免匿名请求触发浏览器连接）；200/503 语义保留，探活脚本不受影响；
+  控制面板登录前需要的 `dashboard_auth_enabled` 保留。错误令牌也只是降级为最小响应，不返回 401。特权 → 原详细响应。
+- `GET /api/startup/controlled-browser-guide-data`：非特权 → 403；引导页/教程页前端本身在失败时回落内置默认站点列表。
+- README 接口表注明行为。测试：p3 新增 9 项（远程匿名最小且不连浏览器、503 保留、本机详情、本机+转发头视为远程、三种令牌、错误令牌不 401、引导数据）。

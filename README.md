@@ -131,7 +131,7 @@ Invoke-RestMethod 'http://127.0.0.1:8199/v1/chat/completions' -Method Post -Cont
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
-| GET | `/health` | 服务与浏览器基础健康检查 |
+| GET | `/health` | 服务与浏览器基础健康检查（匿名远程只返回最小信息；本机直连或带令牌返回详细诊断） |
 | GET | `/v1/models` | 当前标签页/预设暴露的模型目录 |
 | GET | `/v1/provider/capabilities` | 协议、功能和模型能力清单 |
 | GET | `/v1/provider/status` | 浏览器连接、标签页池和请求状态（不含密钥） |

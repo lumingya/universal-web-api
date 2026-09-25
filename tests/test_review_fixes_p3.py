@@ -224,3 +224,98 @@ def test_s14_tutorial_search_escapes_user_input():
     assert "${escHtml(h.textContent)}" in html
     for raw in ("${s.title}", "${s.subs.slice(0,60)}", "${h.textContent}</a>"):
         assert raw not in html, raw
+
+
+# ---------------------------------------------------------------------------
+# S7 · 公开 /health 与引导数据最小化；本机直连 / 有效令牌才给详情（不强制令牌）
+# ---------------------------------------------------------------------------
+
+class _FakeBrowser:
+    def __init__(self, connected=True):
+        self._connected = connected
+        self.browser_handle = object() if connected else None
+        self.health_calls = 0
+
+    def health_check(self):
+        self.health_calls += 1
+        return {"status": "healthy", "connected": self._connected, "port": 9222,
+                "tab_pool": {"total": 3}, "error": None}
+
+
+def _s7_get(monkeypatch, path, client_host, headers=None, env=None, browser=None):
+    import asyncio
+
+    import main
+    from app.api import system
+    from httpx import ASGITransport, AsyncClient
+
+    for name in ("AUTH_TOKEN", "DASHBOARD_AUTH_TOKEN", "AUTH_ENABLED", "TRUST_PROXY_HEADERS"):
+        monkeypatch.delenv(name, raising=False)
+    for key, value in (env or {}).items():
+        monkeypatch.setenv(key, value)
+    fake = browser or _FakeBrowser()
+    monkeypatch.setattr(system, "get_browser", lambda *a, **k: fake)
+
+    async def run():
+        transport = ASGITransport(app=main.app, client=(client_host, 40000))
+        async with AsyncClient(transport=transport, base_url="http://testserver") as c:
+            return await c.get(path, headers=headers or {})
+
+    return asyncio.run(run()), fake
+
+
+def test_s7_remote_anonymous_health_is_minimal_and_passive(monkeypatch):
+    resp, fake = _s7_get(monkeypatch, "/health", "203.0.113.9")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["service"] == "healthy" and body["browser"] == {"connected": True}
+    assert "dashboard_auth_enabled" in body["config"]
+    for leaked in ("version", "request_manager"):
+        assert leaked not in body
+    assert "sites_loaded" not in body["config"]
+    assert fake.health_calls == 0  # 不触发浏览器连接
+
+
+def test_s7_remote_anonymous_health_keeps_503_when_disconnected(monkeypatch):
+    resp, _ = _s7_get(monkeypatch, "/health", "203.0.113.9", browser=_FakeBrowser(connected=False))
+    assert resp.status_code == 503 and resp.json()["browser"] == {"connected": False}
+
+
+def test_s7_local_direct_health_gets_details(monkeypatch):
+    resp, fake = _s7_get(monkeypatch, "/health", "127.0.0.1")
+    body = resp.json()
+    assert "version" in body and "request_manager" in body
+    assert body["browser"]["tab_pool"] == {"total": 3}
+    assert fake.health_calls == 1
+
+
+def test_s7_local_but_forwarded_is_treated_as_remote(monkeypatch):
+    resp, _ = _s7_get(monkeypatch, "/health", "127.0.0.1", headers={"X-Forwarded-For": "198.51.100.7"})
+    assert "version" not in resp.json()
+
+
+@pytest.mark.parametrize("header", [
+    {"Authorization": "Bearer svc-token"},
+    {"X-API-Key": "svc-token"},
+    {"Authorization": "Bearer dash-token"},
+])
+def test_s7_remote_with_valid_token_gets_details(monkeypatch, header):
+    env = {"AUTH_TOKEN": "svc-token", "DASHBOARD_AUTH_TOKEN": "dash-token"}
+    resp, _ = _s7_get(monkeypatch, "/health", "203.0.113.9", headers=header, env=env)
+    assert "version" in resp.json()
+
+
+def test_s7_remote_with_wrong_token_still_minimal_not_401(monkeypatch):
+    env = {"AUTH_TOKEN": "svc-token"}
+    resp, _ = _s7_get(monkeypatch, "/health", "203.0.113.9", headers={"Authorization": "Bearer nope"}, env=env)
+    assert resp.status_code == 200 and "version" not in resp.json()
+
+
+def test_s7_guide_data_local_ok_remote_forbidden(monkeypatch):
+    resp, _ = _s7_get(monkeypatch, "/api/startup/controlled-browser-guide-data", "127.0.0.1")
+    assert resp.status_code == 200 and "sites" in resp.json()
+    resp, _ = _s7_get(monkeypatch, "/api/startup/controlled-browser-guide-data", "203.0.113.9")
+    assert resp.status_code == 403 and "sites" not in resp.json()
+    resp, _ = _s7_get(monkeypatch, "/api/startup/controlled-browser-guide-data", "203.0.113.9",
+                      headers={"Authorization": "Bearer t"}, env={"AUTH_TOKEN": "t"})
+    assert resp.status_code == 200
