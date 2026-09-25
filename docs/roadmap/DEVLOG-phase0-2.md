@@ -7,9 +7,9 @@
 ## 当前状态（随时更新）
 
 - 2026-09-26：P3 已合并进 main（`29d9685`），此后 main 冻结，只推本分支。
-- **本地环境已接入（Portal）**，约定见 §2.8。沙盒负责改代码并推送本分支；用户机器上的 worktree 执行 `git pull` 后跑重型验证。
-- ✅ R0-2 完成，已在实机 3.10 与 3.13 上验证（见 §4）。
-- ▶ 进行中：R0-5（测试入库）。已从用户本地找回 12 个被白名单挡住的测试文件（N3），放在沙盒 `/tmp/recovered`，这个位置不持久，丢失可从用户主工作区 `tests/` 重新下载。
+- 本地环境已接入（Portal），用户已把工作区范围调整为 `工作区\`。我的专用目录和推送链路见 §2.8。
+- ✅ R0-2（实机 3.10/3.13）；✅ R0-5（沙盒 1068 passed / 96 skipped，实机全量带浏览器测试的结果待补记）。
+- ▶ 下一步：R0-6 行尾统一（`.gitattributes` 加 renormalize），然后是 R0-8 指南，再进入阶段 1。
 
 ## 1. 用户决策（2026-09-26，必须遵守）
 
@@ -105,23 +105,34 @@ Portal 把用户本机的**一个文件夹**发布成公网 MCP 端点：`https:
    - 「复制 URL」，把 URL 发给我。
 5. `.portal/` 目录由我在那份克隆的 `.git/info/exclude` 里忽略，不改仓库里的 `.gitignore`。
 
-### 2.8 实际接入情况（2026-09-26，重启或压缩后先看这里）
+### 2.8 实际接入情况（2026-09-26 更新，重启或压缩后先看这里）
 
-- Portal 工作区 = 用户的**日常工作副本**：`C:\Users\QIU\Desktop\useful\projects\普遍反代\新测试版`，停在 main，服务正在运行（APP 8199，Chrome 9222，使用 `chrome_profile/`）。**不要改动它的工作区文件，不要切分支，不要占用或重启 8199/9222。**
-  - 已做的唯一改动：在 `.git/info/exclude` 里加了 `/.portal/`。
-  - 另外一次 `git fetch --prune` 清掉了过期的远程跟踪引用 `origin/pr/18`（无害）。以后 fetch 不加 `--prune`。
-- 我的工作目录（都在已被忽略的 `scratch/` 下，可整体删除）：
-  - `scratch/arena-wt`：`git worktree`，分支 `dev/roadmap-phase0-2`，只执行 `git pull --ff-only`，不在本机提交。
-  - `scratch/arena-venv313` 与 `scratch/arena-venv310`：独立 venv，已装 requirements、requirements-dev、ruff。
-  - `scratch/arena-tools/run-tests.ps1 -Py 310|313 [-Target tests/x.py]`：跑非浏览器测试子集。
-  - 清理方法：`git worktree remove scratch/arena-wt`，然后删除上面这些目录。
-- 本机环境：Win11 26200，PowerShell 5.1，非管理员账户 QIU；Python 3.13.6（默认）、3.10.2（`py -3.10`）、3.12.12（uv）；Node 22.18；Chrome 153；C 盘剩余 18.7GB，D 盘剩余 73GB。
+**Portal 工作区根目录**：`C:\Users\QIU\Desktop\useful\projects\工作区`（用户调整后的范围）。
+
+- `普遍反代\新测试版`：用户的**日常工作副本**（main 分支，平时在 8199/9222 运行服务）。**只读，不改文件、不切分支、不占用或重启 8199/9222。**
+  - 我之前在里面建的 worktree、venv、`.portal`、`.git/info/exclude` 条目和本地 dev 分支引用都已清理，恢复原状。
+- `普遍反代\universal-web-api`：旧的发布解压版，不是 git 仓库，里面有 `.env`。不碰。
+- `comfy-comic-studio\`、`普遍反代\AstrBot*`：其他项目。不碰。
+- **我的专用目录 `普遍反代\arena-dev\`**（完全独立，可整体删除）：
+  - `universal-web-api\`：独立克隆（origin = GitHub），停在 `dev/roadmap-phase0-2`，提交身份为 AI Review Agent (Arena)。**不在这里直接改代码**，只接收沙盒送来的 bundle 并 push。
+  - `venv313\`（requirements、requirements-dev、ruff、playwright；不下载 Playwright 自带的浏览器，测试回退到本机 Chrome）和 `venv310\`。
+  - `tools\run-tests.ps1 -Py 313|310 [-PytestArgs @(...)]`：在克隆里跑 pytest。
+  - `inbox\`：接收 bundle 的中转目录。
+- **推送链路（沙盒没有 GitHub 凭据）**：沙盒执行 `~/tools/ship.sh`，它会：
+  1. 把 `origin/dev..dev` 打成 git bundle；
+  2. 通过 Portal 文件 API 上传到 `arena-dev\inbox`；
+  3. 在本机克隆里 `git pull --ff-only <bundle>`，再用用户自己的 Git Credential Manager（lumingya）执行 `git push origin dev/roadmap-phase0-2`；
+  4. 沙盒 fetch 后核对远端 HEAD。
+
+  **只推 dev 分支，绝不推 main。** 沙盒的 `.git/config` 不会进快照，ship.sh 每次都会补回 remote、身份和 upstream。
+- 本机环境：Win11 26200，PowerShell 5.1，非管理员账户 QIU；Python 3.13.6、3.10.2（`py -3.10`）、3.12.12（uv）；Node 22.18；Chrome 153；C 盘剩余约 18GB。本机有 `gh` CLI 登录凭据，但发布相关操作暂缓，不要用。
 - 注意事项：
-  - PATH 里的 `bash` 是 WSL 的，但没有安装发行版，不可用。只用 PowerShell 或 cmd。
+  - PATH 里的 `bash` 是 WSL 的，但没有安装发行版，不可用。
   - PowerShell 下 `git ... 2>&1` 会产生 NativeCommandError 噪音，改用 `cmd /c "git ... 2>&1"`。
   - 用 `.bat` 做 python 桩时，不加 `call` 调用不会返回调用方；要编译 exe 桩（`Add-Type -OutputType ConsoleApplication`）。
-- 协作规则文件 `agent_collaboration_rules.md` 是 Codex（后端）与 Antigravity（前端）之间的 `agent-bridge` 协议。项目内的 `.agent_bridge.json` 显示两者自 2026-08 起空闲，没有未读消息。**不要运行 `agent-bridge --read-msgs --mark-read`**，以免把发给它们的消息标成已读。
-- Portal 客户端：沙盒里的 `~/tools/portal.py`。URL 只存放在 `~/.cache/portal/url`，这个目录不进快照；重启后需要用户重新提供 URL。
+  - Portal 重启（比如用户调整工作区）会杀掉所有后台任务。
+- 协作规则文件 `agent_collaboration_rules.md` 是 Codex 与 Antigravity 之间的 `agent-bridge` 协议，两者自 2026-08 起空闲。**不要运行 `--read-msgs --mark-read`。**
+- Portal 客户端：沙盒里的 `~/tools/portal.py`。URL 只存放在 `~/.cache/portal/url`，这个目录不进快照；沙盒重启后要从对话里重新 `seturl`，或请用户重新提供。
 
 ## 3. 任务清单（R 编号见路线图 §6）
 
@@ -131,7 +142,7 @@ Portal 把用户本机的**一个文件夹**发布成公网 MCP 端点：`https:
 - [x] **R0-2** N1 修复，最低 Python 统一为 3.10（`ef423b6`、`85abd38`）。实机 3.10.2 结果：693 passed / 72 skipped；3.13.6 结果：702 passed / 63 skipped。
 - [ ] **R0-3** CI（GitHub Actions）——**暂缓**，等用户确认。
 - [ ] **R0-4** 自动发包，以及删除 `3.7.5` 标签——**暂缓**，等用户确认。
-- [ ] **R0-5** 测试入库：`.gitignore` 的 tests 规则从白名单改为黑名单，补交遗漏的测试；新增 `pyproject.toml`，写入 pytest 配置和 markers。
+- [x] **R0-5** 测试入库（`de48ce3`）：找回 12 个文件；tests/ 改为黑名单；新增 `pyproject.toml`（pytest markers、ruff 基线）；新增 `_playwright.py` 回退到本机浏览器；`_real_browser` 支持 Windows 和 macOS。
 - [ ] **R0-6** H4 行尾统一：用 `.gitattributes` 加 `git add --renormalize .`，单独提交，并登记到 `.git-blame-ignore-revs`。main 已冻结，所以在本分支上做。
 - [—] **R0-7** 发布 3.0.0——不做，由用户发。
 - [ ] **R0-8** 仓库安全：细粒度令牌、规则集、2FA 都需要用户在 GitHub 设置里操作，我只写操作指南。
@@ -178,4 +189,16 @@ Portal 把用户本机的**一个文件夹**发布成公网 MCP 端点：`https:
   - ruff 的 py38 目标下 E9 检查通过：旧版 Python 执行 start.py 时能看到友好提示，而不是 SyntaxError。
   - 遗留问题：ruff 报 8 个 F811（重复定义），与版本无关，留给 CI/lint 基线处理。
 - 本地环境接入：握手成功，Portal 1.0.0 提供 14 个工具。建立了 worktree 和两个 venv，详见 §2.8。
+- **R0-5 完成**（`de48ce3`）：
+  - 从用户本地找回白名单挡住的 12 个文件，敏感信息扫描无命中；其中 9 个测试文件在沙盒里 282 passed。
+  - tests/ 规则从白名单改为黑名单。
+  - 新增 pyproject.toml：pytest 的 testpaths、pythonpath、3 个 marker，以及 ruff 最小基线。
+  - Playwright 模块统一先 importorskip，并通过 `tests/_playwright.py` 在没有自带 Chromium 时回退到本机 Chrome/Edge。
+  - conftest 给使用 real_page/headed_page 的测试自动打 `real_browser` 标记。
+  - 新增 `tests/test_repo_hygiene.py`。
+  - 沙盒直接跑 `python -m pytest`，不需要 ignore 列表：1068 passed / 96 skipped。
+- **环境调整**：
+  - 用户把 Portal 工作区改为上一级的 `工作区\`，并把 `普遍反代` 整体移了进去。移动后旧 worktree 失效，Portal 重启时后台测试也被中断。
+  - 沙盒同时发生了重启：`.git/config` 丢失，因此 PAT 也不在了。
+  - 处理方式：在 `arena-dev\` 新建独立克隆和两个 venv，清理 `新测试版` 里我的全部痕迹，改用 bundle 加用户本机凭据推送（`~/tools/ship.sh`，详见 §2.8）。
 
