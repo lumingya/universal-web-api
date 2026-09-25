@@ -44,7 +44,7 @@
 - [x] M3 安全：认证与中间件（main.py / app/api/deps.py / CORS / 管理接口）——路由依赖逐项核对，ASGITransport 进程内验证默认跨源读取及启用认证时的 401/200；不代表真实浏览器联调
 - [x] M4 安全：命令引擎、updater、媒体落盘/文件路径、SSRF——以 mock 响应+临时目录验证同源 SVG/HTML 落盘与响应头；直接图片请求及 DNS 校验窗口单独记风险，未访问外网/内网目标
 - [x] M5 核心请求链路：chat.py / anthropic_routes.py / streaming_response.py / request_manager.py——核查认证委派、流关闭/取消、Responses 状态与请求历史，轻量复现 B2–B4
-- [ ] M6 标签页池：tab_pool_parts/*（manager / session / recovery / idle_maintenance）
+- [x] M6 标签页池：tab_pool_parts/*（manager / session / recovery / idle_maintenance）——检查锁与取消/恢复路径；用无浏览器桩验证冻结恢复失败和非有限配置值
 - [ ] M7 浏览器与工作流：core/browser/*、core/workflow/*、stream_monitor、network_monitor
 - [ ] M8 服务层：tool_calling*、config engine、command_engine*
 - [ ] M9 前端：static/js（XSS / v-html / 大文件）
@@ -79,6 +79,9 @@
 | B3 | P2 | `app/api/chat.py:93-99,539-608,1030-1076,1950-1955,2420-2425` | Responses API 默认 `store=None` 时存储完整请求历史和助手消息；只有 1h/1024 条**数量**上限，无单条/总字节配额，base64 多模态和连续会话会使内存放大。状态全局只按不可预测 response_id 索引、未按客户端隔离；ID 一旦泄露可跨调用续接历史。建议每项/总量预算、媒体内容剥离/摘要，按认证主体隔离，并在文档说明驻留期。 | 小数据两轮存储字符串长度 137→274；未运行压力测试或尝试跨用户访问 |
 | B4 | P3 | `app/api/chat.py:469-475,524-528,2514-2517,2804-2813`, `app/core/config_parts/sse_formatter.py:229` | OpenAI `n` 允许 `>=1`，但请求链未据此生成多条选择；非流式统一构造单条 choices，流式将其只当 stop 处理条件。请求 `n=3` 会静默只得一条，建议验证 `n==1` 时明确拒绝其他值或实现多路执行。README 已笼统说明某些网页不支持的字段会忽略，仍应显式声明此行为。 | 构造 `n=3` 请求模型成功，打包器生成 choices 数=1；未接真实浏览器 |
 | H8 | P3 | `app/api/chat.py:157-193,217-249` | 六个 Arena 错误辅助函数同名定义两次，前者随后被后者覆盖；两套提示词拒绝判断/响应构造实现不完全相同，增加维护漂移和死代码。清理重复定义并保留行为单测。 | 静态确认；无执行回归结论 |
+| B5 | P2 | `app/core/tab_pool_parts/idle_maintenance.py:346-384`, `app/core/tab_pool_parts/session.py:258-278` | 冻结标签页恢复 CDP 指令报错后，`resume_if_frozen` 返回 false，却在 `finally` 清除 `_uwapi_frozen` 标志；`TabSession.acquire()` 忽略返回值并仍标记 BUSY、返回 true，可能将仍冻结的页面交给请求，后续也不再重试解冻。恢复失败应阻止交付/标为异常并保留待核实状态。 | 假 CDP 抛错的轻量桩复现：acquire=true、status=busy、frozen flag=false；未连接浏览器 |
+| B6 | P3 | `app/core/tab_pool_parts/idle_maintenance.py:69-103`, `app/core/tab_pool_parts/manager.py:219` | 环境变量 `BROWSER_CDP_RECYCLE_AFTER_REQUESTS=inf` 或 DOM_NODES=inf 可通过 `float()` 后执行 `int(inf)` 抛 OverflowError，使创建标签页池失败。配置解析须检查 `math.isfinite()` 并回退默认。 | patch 进程环境复现 OverflowError；默认配置无此问题 |
+| H9 | P2（优化） | `app/core/tab_pool_parts/manager.py:151-155,2882-2905,3436-3483`, `app/services/request_manager.py:2282-2335` | 获取标签页的独立线程池限制 32 个**工作线程**，但待执行任务的 `ThreadPoolExecutor` 内部队列和池的等待队列未设置总量上限；大量并发请求可占住线程/排队 Future，活跃请求也不按历史记录条数被驱逐。建议在 API 入口统一设置最大并发与等待数、早返回 429/503，并监控队列深度。 | 静态容量分析；未进行大量并发压力测试，不作为已复现的耗尽故障 |
 
 ## 5. 工作流水
 
@@ -89,3 +92,4 @@
 - 2026-09-25 / M3：复核 `app/api/deps.py` 的服务与后台双令牌和路由依赖：149 个 APIRoute 中 12 个无 FastAPI 依赖；其中 6 个模型别名路由在函数内手动验服务令牌，另 6 个是 `/`、`/dashboard`、浏览器引导页、`/media/{filename}`、`/health`、`POST /api/browser/open-profile-url`。`httpx.ASGITransport` 进程内测试：默认关闭后台认证时，外来 Origin 的 CORS 预检和 `GET /api/commands` 均返回 200，后者响应允许 `Access-Control-Allow-Origin: *`；临时仅在进程环境中启用后台认证并提供合成令牌后，同一路由无令牌返回 401、带令牌返回 200。无真实浏览器或外部网络访问，未测试浏览器本地网络策略和反向代理拓扑；检查产生的忽略配置已删除。S1、S4、S6、S7 见上。
 - 2026-09-25 / M4：复核命令引擎受限 Python 执行上下文（含浏览器、配置对象和默认可导入 requests）、解析器动态导入及 updater；`updater.py:828-874` 已限制 ZIP 路径/符号链接/条目数/展开大小/压缩比，下载验 SHA-256 digest，失败会从备份恢复，**不将这些保护误报为缺失**。用无网络 mock 响应和自动清理的微型临时目录分别驱动 SVG 图片前台回退与音视频远程下载：获得 `.svg` 和 `.html`，经 `httpx.ASGITransport` 同源路由实际返回 `200 image/svg+xml`（无 attachment/CSP）与 `200 text/html; charset=utf-8`、`Content-Disposition: inline`（无 CSP）。`read_image_bytes` 的回环 URL 以 mock `requests.get` 证明可达调用点，**未实际连接回环/内网**；公共抓取器 mock DNS 后仍把原主机名交给 requests，重绑定仅按条件性风险报告。所有临时产物与导入生成的忽略配置已删除；未安装/运行浏览器或大文件压力测试。S2、S3、S8–S11 见上。
 - 2026-09-25 / M5：阅读 OpenAI / Anthropic 接口的认证委派、SSE 响应关闭与请求生命周期：已实现断连时主动关闭异步生成器、线程工作队列限背压及绝对执行超时，未把这些保护误报为缺陷。隔离小文件测试（不运行浏览器）证实历史旧数组读入丢失（B2）；Responses 默认启用内存存储且连续两轮重复保留完整会话（B3）；构造 `n=3` 可接受但单选择输出（B4）。`chat.py` 六个 Arena 错误辅助函数重复定义（H8）。临时目录及导入生成的忽略配置已清理。
+- 2026-09-25 / M6：核对 `TabPoolManager` 的获取/释放条件队列、独立 acquire executor 与取消后回收、Session 状态门禁、隔离恢复服务的超时槽、空闲冻结/CDP 回收逻辑；已存在 0.25s 取消轮询及冻结前检查页面隐藏，不把无真实浏览器实验的状态竞态当成已发生事故。仅用抛错 CDP 桩证明解冻失败仍交付会话（B5），仅用临时 env 值证明配置 inf 可使构造失败（B6）。等待队列未总量限流作为优化风险 H9 记录，不做压力测试；无截图或浏览器下载。
