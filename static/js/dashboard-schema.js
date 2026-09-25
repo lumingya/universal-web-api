@@ -663,7 +663,7 @@ const ENV_CONFIG_SCHEMA = {
         items: {
             APP_HOST: {
                 label: '监听地址',
-                desc: '0.0.0.0 允许外部访问，127.0.0.1 仅本地',
+                desc: '127.0.0.1 仅本机（推荐）；0.0.0.0 允许外部访问，此时必须同时启用控制面板认证和服务 API 认证，否则服务拒绝启动',
                 type: 'text',
                 default: '127.0.0.1'
             },
@@ -739,9 +739,10 @@ const ENV_CONFIG_SCHEMA = {
             },
             CORS_ORIGINS: {
                 label: '允许的跨域源',
-                desc: '多个用逗号分隔，* 表示全部允许',
+                // S1：后端默认不放行任何跨源来源；前端默认值会在 .env 缺键时被写盘，必须保持一致。
+                desc: '多个用逗号分隔（如 https://app.example.com）；留空 = 不允许跨源网页调用（控制面板同源无需配置）。不推荐 *',
                 type: 'text',
-                default: '*'
+                default: ''
             }
         }
     },

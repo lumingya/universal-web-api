@@ -85,8 +85,8 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 ### 第一批
 
 - [x] S13 备份接口泄露 `.env` 密钥 + 前端导出本地令牌
-- [ ] S1 控制面默认开放（认证默认关 + CORS `*`）
-- [ ] H1 `.env.example` 诱导不安全部署
+- [x] S1 控制面默认开放（认证默认关 + CORS `*`）
+- [x] H1 `.env.example` 诱导不安全部署
 - [ ] S8 SVG 以同源活动内容落盘/提供
 - [ ] S9 音视频响应头 + `.html` 后缀落盘
 - [ ] S12 默认开启的响应调试抓取
@@ -130,3 +130,31 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - `static/js/dashboard-methods.js`: 导出备份不再写 `dashboard_token`/`api_token`；导入旧备份仍兼容读取。
 - 验证：`tests/test_review_fixes_p1.py` 7 项（无授权远端 403、隧道头 403、启用认证无令牌 401、响应不含合成密钥、
   占位符不覆盖、换行注入 400、前端不导出令牌）。全量：531 passed / 73 failed（与基线相同的 73 项）。
+
+### S1 控制面默认开放 + H1 模板诱导不安全部署 ✅（同一提交，互相依赖）
+
+- `app/core/config_parts/env_config.py`
+  - `get_cors_origins()` 默认由 `["*"]` 改为 `[]`（`parse_cors_origins`，空=不放行任何跨源）。
+  - 新增 `_env_bool_secure()`：`AUTH_ENABLED`/`DASHBOARD_AUTH_ENABLED` 值非法时 **fail-closed 返回 True**。
+- `main.py`
+  - CORS 中间件仅在 `CORS_ORIGINS` 非空时挂载；显式 `*` 打告警。
+  - 新增 `reject_untrusted_origins` 中间件（最外层）：带 `Origin` 且既非同源（Host / X-Forwarded-Host）
+    也不在 `CORS_ORIGINS` 的请求（含预检、`Origin: null`）直接 403。**决策**：CORS 只挡读取，挡不住跨站
+    简单 POST，所以服务端必须按 Origin 拒绝；无 Origin 的 curl/SDK 不受影响。
+  - `_enforce_secure_startup_config()` 在 `lifespan` 开头和 `__main__` 调用，非回环监听且未同时启用
+    API + 面板认证（含令牌）、或认证开关不是合法布尔值 → 抛 `InsecureStartupConfigError` 拒绝启动。
+    逃生开关 `ALLOW_INSECURE_PUBLIC_BIND=true`。
+- `start.py`：启动器用 `importlib` 按路径加载纯标准库的 `http_security.py`（不导入 app 包），启动前同样检查，
+  不通过直接 `return 2`（避免子进程拒绝→启动器 3 秒重启的死循环）；handoff 代理模式下把公开地址通过
+  `UWAPI_PUBLIC_BIND_HOST` 传给子进程（子进程自身只绑 127.0.0.1，否则检查会被绕过）。
+- `app/api/system.py`：保存 `.env` / 导入备份时复用 `startup_security_errors`，避免保存出一个起不来的配置。
+- `.env.example`：删掉重复的前 25 行；`APP_HOST=127.0.0.1`、`APP_DEBUG=false`、`AUTH_ENABLED=false`、
+  `DASHBOARD_AUTH_ENABLED=`（沿用）、`CORS_ORIGINS=`、`PROXY_*` 关闭且无个人地址、`HELPER_API_KEY=` 空、
+  `CMD_ALLOW_UNSAFE_PYTHON_COMMANDS=false`（与代码默认一致）；删掉代码中完全未使用的 `NGROK_*`（含个人静态域名）。
+- `static/js/dashboard-schema.js`：`CORS_ORIGINS` 前端默认值 `*` → `''`（前端默认值会在 .env 缺键时写盘）。
+- README.md / README.en.md：同步 `APP_HOST` / `CORS_ORIGINS` 说明。
+- 已知影响：`workflow-editor-inject.js` 的跨源直连 fetch 本来就走不通（端口写死 9099 且跨源时
+  `shouldPreferBridgeMode()` 恒为真 → 走 CDP 桥），因此 CORS 默认收紧不影响可视化编辑器。
+- 验证：p1 测试增至 24 项（Origin 判定矩阵 10 例、主应用跨源 GET/POST/预检均 403 且无 ACAO、占位符 fail-closed、
+  启动检查矩阵、lifespan 拒绝含 handoff 场景、启动器可独立加载检查模块、模板无重复键/无示例秘密/可直接通过检查）。
+  全量 548 passed / 73 failed（基线同集合）。

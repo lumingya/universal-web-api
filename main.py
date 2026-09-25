@@ -439,10 +439,29 @@ def _dashboard_info_response():
         "docs": "/docs"
     })
 
+
+class InsecureStartupConfigError(RuntimeError):
+    """公开监听但未启用认证 / 认证开关不是合法布尔值等不安全配置（S1 / H1）。"""
+
+
+def _enforce_secure_startup_config() -> None:
+    """启动期安全检查：发现不安全组合直接拒绝启动，而不是静默以「无认证」对外服务。"""
+    from app.core.http_security import startup_security_errors
+
+    host = os.getenv("UWAPI_PUBLIC_BIND_HOST") or AppConfig.get_host()
+    errors = startup_security_errors(host=host)
+    if not errors:
+        return
+    for message in errors:
+        logger.error(f"❌ 安全配置错误: {message}")
+    raise InsecureStartupConfigError("；".join(errors))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     global restart_guard
+    _enforce_secure_startup_config()
     _install_asyncio_exception_filter()
     logger.info("=" * 60)
     logger.info("Universal Web-to-API 服务启动中...")       
@@ -601,8 +620,8 @@ app = FastAPI(
 )
 
 # CORS 配置
-if AppConfig.is_cors_enabled():
-    _cors_origins = AppConfig.get_cors_origins()
+_cors_origins = AppConfig.get_cors_origins() if AppConfig.is_cors_enabled() else []
+if _cors_origins:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=_cors_origins,
@@ -613,6 +632,8 @@ if AppConfig.is_cors_enabled():
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    if "*" in _cors_origins:
+        logger.warning("⚠️ CORS_ORIGINS=* ：任何网页都能跨源调用本服务，请确认已启用认证或改为具体来源")
 
 
 @app.middleware("http")
@@ -646,6 +667,32 @@ async def _call_next_without_dashboard_cache(request, call_next):
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
     return response
+
+
+@app.middleware("http")
+async def reject_untrusted_origins(request, call_next):
+    """S1：拒绝来自非同源、未在 CORS_ORIGINS 显式放行的浏览器请求（含 CORS 预检）。
+
+    CORS 只能阻止「读取响应」，挡不住跨站的简单 POST（表单/no-cors fetch）写操作；
+    这里在服务端按 Origin 直接拒绝，作为控制面的 CSRF 防护。无 Origin 头的请求
+    （curl/SDK/同源导航）不受影响，仍交由各路由的认证依赖处理。
+    """
+    from app.core.http_security import origin_is_allowed
+
+    origin = request.headers.get("origin")
+    if origin is not None and not origin_is_allowed(
+        origin,
+        request.headers.get("host"),
+        _cors_origins,
+        # 反代改写 Host 时以 X-Forwarded-Host 为准；浏览器跨源设置该头必触发预检，
+        # 预检本身带 Origin 且无此头，会先在这里被拒，因此攻击页无法借此伪造同源。
+        forwarded_host=request.headers.get("x-forwarded-host"),
+    ):
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "跨源请求被拒绝：来源未在 CORS_ORIGINS 中放行"},
+        )
+    return await call_next(request)
 
 
 # ================= Dashboard 路由（优先级最高）=================
@@ -914,6 +961,8 @@ if __name__ == "__main__":
     print("  APP_DEBUG=true            # 调试模式")
     print("  BROWSER_PORT=9222         # 浏览器端口")
     print("=" * 60 + "\n")
+
+    _enforce_secure_startup_config()
 
     uvicorn.run(
         app,

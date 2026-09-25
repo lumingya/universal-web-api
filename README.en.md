@@ -156,7 +156,7 @@ Copy [`.env.example`](./.env.example) to `.env` only when you need to override d
 
 | Variable | Recommended local value | Purpose |
 | :--- | :--- | :--- |
-| `APP_HOST` | `127.0.0.1` | Bind to localhost. Use `0.0.0.0` only behind a trusted firewall/reverse proxy. |
+| `APP_HOST` | `127.0.0.1` | Bind to localhost. Use `0.0.0.0` only behind a trusted firewall/reverse proxy. A non-loopback bind without both API and dashboard auth refuses to start (override: `ALLOW_INSECURE_PUBLIC_BIND=true`). |
 | `APP_PORT` | `8199` | Dashboard and API port. |
 | `APP_DEBUG` | `false` | Enable `/docs`, `/redoc`, and detailed errors only for local debugging. |
 | `AUTH_ENABLED` | `false` | Require a Bearer token or `X-API-Key` for API calls. |
@@ -164,7 +164,7 @@ Copy [`.env.example`](./.env.example) to `.env` only when you need to override d
 | `DASHBOARD_AUTH_ENABLED` | `false` | Protect the dashboard independently from the API. |
 | `DASHBOARD_AUTH_TOKEN` | a separate token | Dashboard credential; never reuse it for client integrations. |
 | `CORS_ENABLED` | `false` | Keep disabled for same-origin local clients; enable only when a browser client needs cross-origin access. |
-| `CORS_ORIGINS` | `http://127.0.0.1:8199` | When CORS is enabled, list explicit trusted origins instead of `*`. |
+| `CORS_ORIGINS` | empty | Empty = no cross-origin web page may call the service (the dashboard is same-origin). Browser requests from origins not listed here are rejected with 403. List explicit trusted origins instead of `*`. |
 | `BROWSER_PORT` | `9222` | Chromium remote-debugging port used by the controlled browser. |
 | `PROXY_ENABLED` | `false` | Send controlled-browser traffic through `PROXY_ADDRESS`. |
 | `PROXY_ADDRESS` | `http://127.0.0.1:7890` | HTTP or SOCKS5 proxy URL. |

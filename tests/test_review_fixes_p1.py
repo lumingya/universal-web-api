@@ -135,3 +135,142 @@ def test_frontend_backup_does_not_export_local_tokens():
     block = source[start:end]
     assert "getStoredDashboardToken" not in block
     assert "dashboard_token:" not in block and "api_token:" not in block
+
+
+# ---------------------------------------------------------------------------
+# S1 · 控制面默认开放 → Origin 守卫 + CORS 默认不放行
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("origin,host,allowed,forwarded,expected", [
+    (None, "127.0.0.1:8199", [], None, True),                       # 非浏览器客户端
+    ("http://127.0.0.1:8199", "127.0.0.1:8199", [], None, True),     # 同源面板
+    ("http://LOCALHOST:8199", "localhost:8199", [], None, True),
+    ("https://evil.example", "127.0.0.1:8199", [], None, False),
+    ("null", "127.0.0.1:8199", [], None, False),                     # 沙箱 iframe / file://
+    ("http://127.0.0.1:9999", "127.0.0.1:8199", [], None, False),    # 同主机不同端口
+    ("https://app.example.com", "127.0.0.1:8199", ["https://app.example.com"], None, True),
+    ("https://evil.example", "127.0.0.1:8199", ["*"], None, True),   # 用户显式 *
+    ("https://api.example.com", "127.0.0.1:8199", [], "api.example.com", True),  # 反代
+    ("https://api.example.com:443", "api.example.com", [], None, True),          # 默认端口
+])
+def test_origin_is_allowed(origin, host, allowed, forwarded, expected):
+    assert hs.origin_is_allowed(origin, host, allowed, forwarded_host=forwarded) is expected
+
+
+def test_cors_origins_default_is_empty(monkeypatch):
+    from app.core.config import AppConfig
+
+    monkeypatch.delenv("CORS_ORIGINS", raising=False)
+    assert AppConfig.get_cors_origins() == []
+    monkeypatch.setenv("CORS_ORIGINS", "https://a.example/, https://b.example")
+    assert AppConfig.get_cors_origins() == ["https://a.example", "https://b.example"]
+    monkeypatch.setenv("CORS_ORIGINS", "*")
+    assert AppConfig.get_cors_origins() == ["*"]
+
+
+def test_main_app_rejects_cross_origin_management_requests():
+    import main
+    from httpx import ASGITransport, AsyncClient
+
+    async def run():
+        async with AsyncClient(transport=ASGITransport(app=main.app),
+                               base_url="http://127.0.0.1:8199") as c:
+            read = await c.get("/api/commands", headers={"Origin": "https://evil.example"})
+            write = await c.post("/api/settings/env", content="x",
+                                 headers={"Origin": "https://evil.example",
+                                          "Content-Type": "text/plain"})
+            preflight = await c.options("/api/commands", headers={
+                "Origin": "https://evil.example", "Access-Control-Request-Method": "POST"})
+            return read, write, preflight
+
+    read, write, preflight = asyncio.run(run())
+    for resp in (read, write, preflight):
+        assert resp.status_code == 403
+        assert resp.headers.get("access-control-allow-origin") is None
+
+
+# ---------------------------------------------------------------------------
+# H1 · 模板 / 布尔解析 / 启动期拒绝不安全组合
+# ---------------------------------------------------------------------------
+
+def test_auth_switch_placeholder_fails_closed(monkeypatch):
+    from app.core.config import AppConfig
+
+    monkeypatch.setenv("AUTH_ENABLED", "your-secret-here")
+    monkeypatch.delenv("DASHBOARD_AUTH_ENABLED", raising=False)
+    assert AppConfig.is_auth_enabled() is True
+    assert AppConfig.is_dashboard_auth_enabled() is True
+    monkeypatch.setenv("AUTH_ENABLED", "off")
+    assert AppConfig.is_auth_enabled() is False
+
+
+def test_startup_security_errors_matrix():
+    ok_local = hs.startup_security_errors(host="127.0.0.1", env={})
+    assert ok_local == []
+
+    bad_bool = hs.startup_security_errors(host="127.0.0.1", env={"DASHBOARD_AUTH_ENABLED": "your-secret-here"})
+    assert len(bad_bool) == 1 and "DASHBOARD_AUTH_ENABLED" in bad_bool[0]
+
+    public_no_auth = hs.startup_security_errors(host="0.0.0.0", env={})
+    assert len(public_no_auth) == 2
+
+    public_enabled_no_token = hs.startup_security_errors(
+        host="0.0.0.0", env={"AUTH_ENABLED": "true"})
+    assert len(public_enabled_no_token) == 2
+
+    public_ok = hs.startup_security_errors(
+        host="0.0.0.0", env={"AUTH_ENABLED": "true", "AUTH_TOKEN": "a", "DASHBOARD_AUTH_TOKEN": "b"})
+    assert public_ok == []
+
+    override = hs.startup_security_errors(host="192.168.1.5", env={hs.INSECURE_OVERRIDE_ENV: "true"})
+    assert override == []
+
+    assert hs.startup_security_errors(host="::1", env={}) == []
+    assert hs.startup_security_errors(host="localhost", env={}) == []
+
+
+def test_main_lifespan_refuses_public_bind_without_auth(monkeypatch):
+    import main
+
+    monkeypatch.setenv("APP_HOST", "0.0.0.0")
+    monkeypatch.delenv("UWAPI_PUBLIC_BIND_HOST", raising=False)
+    for name in ("AUTH_ENABLED", "AUTH_TOKEN", "DASHBOARD_AUTH_ENABLED", "DASHBOARD_AUTH_TOKEN",
+                 hs.INSECURE_OVERRIDE_ENV):
+        monkeypatch.delenv(name, raising=False)
+    with pytest.raises(main.InsecureStartupConfigError):
+        main._enforce_secure_startup_config()
+
+    # handoff 代理场景：子进程绑回环，但公开地址由启动器传入
+    monkeypatch.setenv("APP_HOST", "127.0.0.1")
+    monkeypatch.setenv("UWAPI_PUBLIC_BIND_HOST", "0.0.0.0")
+    with pytest.raises(main.InsecureStartupConfigError):
+        main._enforce_secure_startup_config()
+
+
+def test_start_launcher_loads_security_module_without_app_package():
+    import importlib.util
+    root = Path(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location("_start_under_test", root / "start.py")
+    start = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(start)
+    module = start._load_http_security_module()
+    assert module.startup_security_errors(host="0.0.0.0", env={})
+
+
+def test_env_example_is_safe_to_copy():
+    root = Path(__file__).resolve().parents[1]
+    env = {}
+    for line in (root / ".env.example").read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, value = line.split("=", 1)
+            assert key.strip() not in env, f"重复键 {key}"
+            env[key.strip()] = value.strip()
+    assert "your-secret-here" not in env.values()
+    assert env["APP_HOST"] == "127.0.0.1"
+    assert env["CORS_ORIGINS"] == ""
+    assert env["APP_DEBUG"] == "false"
+    assert hs.startup_security_errors(env=env) == []
+    for key, value in env.items():
+        if hs.is_secret_env_key(key):
+            assert value == "", f"模板不应包含示例秘密值: {key}"

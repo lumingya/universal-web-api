@@ -1335,6 +1335,37 @@ def _find_backend_port(public_port: int) -> int:
         return int(probe.getsockname()[1])
 
 
+def _load_http_security_module():
+    """按文件路径加载纯标准库的 app/core/http_security.py，避免在启动器里导入整个 app 包。"""
+    import importlib.util
+
+    module_path = PROJECT_DIR / "app" / "core" / "http_security.py"
+    spec = importlib.util.spec_from_file_location("_uwa_http_security", module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"无法加载 {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _check_startup_security() -> bool:
+    """S1 / H1：公开监听却未启用认证、认证开关写成非布尔值时拒绝启动。"""
+    try:
+        errors = _load_http_security_module().startup_security_errors(
+            host=os.getenv("APP_HOST", "127.0.0.1")
+        )
+    except Exception as exc:  # 检查模块本身异常不应阻断启动，交给子进程 lifespan 再查一次
+        _log(f"[WARN] 启动安全检查未执行: {exc}")
+        return True
+    if not errors:
+        return True
+    _section("安全配置检查未通过")
+    for message in errors:
+        _log(f"[ERROR] {message}")
+    _log()
+    return False
+
+
 def _run_service_loop(*, public_port: int | None = None, backend_port: int | None = None) -> int:
     is_restart = False
     while True:
@@ -1343,6 +1374,9 @@ def _run_service_loop(*, public_port: int | None = None, backend_port: int | Non
         if is_restart:
             child_env["UWAPI_IS_RESTART"] = "1"
         if backend_port is not None:
+            # 子进程只监听回环，真正对外的是 handoff 代理；把公开监听地址告诉子进程，
+            # 让它的启动期安全检查（公开监听必须启用认证）按真实暴露面判断。
+            child_env["UWAPI_PUBLIC_BIND_HOST"] = os.getenv("APP_HOST", "127.0.0.1")
             child_env["APP_HOST"] = "127.0.0.1"
             child_env["APP_PORT"] = str(backend_port)
             # main.py loads .env during import.  Keep the launcher-selected
@@ -1385,6 +1419,8 @@ def main() -> int:
     _load_env_file(PROJECT_DIR / ".env")
     _apply_env_defaults()
     _display_current_config()
+    if not _check_startup_security():
+        return 2
 
     _check_python_version()
     _run_auto_update()

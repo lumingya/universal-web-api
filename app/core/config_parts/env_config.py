@@ -116,6 +116,23 @@ class AppConfig:
         return str(value).strip().lower() in ("true", "1", "yes", "on")
 
     @staticmethod
+    def _env_bool_secure(name: str, default: bool = False) -> bool:
+        """安全开关专用布尔解析（H1）：值存在但不是合法布尔字面量时 fail-closed 返回 True。
+
+        旧逻辑下 ``AUTH_ENABLED=your-secret-here`` 会被当作 false，静默关闭认证。
+        启动期 ``startup_security_errors`` 还会直接拒绝这类配置，这里是第二道保险。
+        """
+        value = os.getenv(name)
+        if value is None or str(value).strip() == "":
+            return bool(default)
+        lowered = str(value).strip().lower()
+        if lowered in ("true", "1", "yes", "on"):
+            return True
+        if lowered in ("false", "0", "no", "off"):
+            return False
+        return True
+
+    @staticmethod
     def _env_int(name: str, default: int) -> int:
         """安全读取整数环境变量：空值/非法值一律回落默认值，避免服务启动期崩溃。"""
         raw = os.getenv(name)
@@ -157,7 +174,7 @@ class AppConfig:
     # ===== 认证配置 =====
     @staticmethod
     def is_auth_enabled() -> bool:
-        return AppConfig._env_bool("AUTH_ENABLED", False)
+        return AppConfig._env_bool_secure("AUTH_ENABLED", False)
 
     @staticmethod
     def get_auth_token() -> str:
@@ -168,7 +185,7 @@ class AppConfig:
         value = os.getenv("DASHBOARD_AUTH_ENABLED")
         if value is None or str(value).strip() == "":
             return AppConfig.is_auth_enabled()
-        return AppConfig._env_bool("DASHBOARD_AUTH_ENABLED", False)
+        return AppConfig._env_bool_secure("DASHBOARD_AUTH_ENABLED", False)
 
     @staticmethod
     def get_dashboard_auth_token() -> str:
@@ -182,10 +199,14 @@ class AppConfig:
     
     @staticmethod
     def get_cors_origins() -> List[str]:
-        origins = os.getenv("CORS_ORIGINS", "*")
-        if origins == "*":
-            return ["*"]
-        return [o.strip() for o in origins.split(",") if o.strip()]
+        """S1：默认不放行任何跨源来源。
+
+        控制面板与 API 同源，本来就不需要 CORS；非浏览器客户端（SDK、curl、酒馆后端）
+        不受 CORS 影响。需要浏览器跨源调用时请显式列出来源，``*`` 仍可显式配置但不推荐。
+        """
+        from app.core.http_security import parse_cors_origins
+
+        return parse_cors_origins(os.getenv("CORS_ORIGINS", ""))
     
     # ===== 浏览器配置 =====
     @staticmethod
