@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from urllib.parse import urlsplit
 
 from app.core.config import get_logger
+from app.utils.bounded_regex import RegexBudgetExceeded, bounded_search
 
 if TYPE_CHECKING:
     from app.core.tab_pool import TabSession
@@ -638,14 +639,23 @@ class CommandEngineResultsMixin:
         if not pattern:
             return True
         if mode == "regex":
+            # 修复 H12：模式由用户自定义、URL 来自被访问页面，两边都不可信。
+            # 标准库 re.search 没有超时，嵌套量词遇到构造串会指数级回溯并卡死线程。
+            # 改走 bounded_search（25ms 预算 + 模式/输入长度上限）。
             try:
-                return bool(re.search(pattern, url, flags=re.IGNORECASE))
+                return bounded_search(pattern, url, flags=re.IGNORECASE)
+            except RegexBudgetExceeded as exc:
+                logger.warning(
+                    f"[CMD] 正则超出求值预算，回退关键词匹配: {str(exc)[:80]} pattern={pattern[:120]}"
+                )
+                simplified = str(pattern).replace("*", "").strip()
+                return bool(simplified) and simplified.lower() in url.lower()
             except re.error:
                 logger.warning(f"[CMD] 无效正则，回退通配/关键词匹配: {pattern}")
                 wildcard = str(pattern).replace(".", r"\.").replace("*", ".*")
                 try:
-                    return bool(re.search(wildcard, url, flags=re.IGNORECASE))
-                except re.error:
+                    return bounded_search(wildcard, url, flags=re.IGNORECASE)
+                except (re.error, RegexBudgetExceeded):
                     pass
                 simplified = str(pattern).replace("*", "").strip()
                 if simplified:

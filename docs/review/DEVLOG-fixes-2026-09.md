@@ -96,7 +96,7 @@ diff /tmp/baseline_failures.txt /tmp/now.txt   # '>' 行 = 新增回归，必须
 - [ ] S6 媒体路由无认证与转码资源
 - [ ] S3 解析器安装立即 import
 - [ ] H9 标签页等待队列无总量上限
-- [ ] H12 网络事件 URL 正则回溯
+- [x] H12 网络事件 URL 正则回溯
 
 ## 4. 修复记录
 
@@ -453,3 +453,30 @@ HTTP 栈会**重新解析一次**。攻击者控制该域名的 DNS（TTL=0）�
 而且它的默认客户端地址是字符串 `"testclient"`，根本不是回环。
 改用 `httpx.ASGITransport(app=app, client=(...))` + `asyncio.run` 的 `_call()` helper。
 全量 `697 passed, 64 failed`，无新增失败。
+
+### 2026-09-25 · H12（网络事件 URL 正则可能回溯）
+
+`app/services/command_engine_results.py:_matches_url_rule()` 用标准库 `re.search`
+匹配**用户自定义模式**与**页面来源 URL**，两边都不可信，而 `re` 没有执行超时。
+
+工作流侧（`app/core/workflow/flow_runtime.py:304`）其实早就用 `regex` 库的
+`timeout=0.025` 做了预算 —— 把同样的策略抽成公共实现：
+
+新建 `app/utils/bounded_regex.py`：
+- `bounded_search(pattern, text, *, flags, timeout=0.025)`；
+- 模式 > 512 字符 → 直接 `RegexBudgetExceeded`；
+- 输入 > 8192 字符 → **截断**而不是拒绝（URL 场景尾部信息价值低，截断更不易误伤）；
+- 超时 → `RegexBudgetExceeded`；模式非法 → 原样 `re.error`，回退策略交给调用方；
+- `lru_cache` 缓存编译结果；`regex` 库缺失时退化为无超时匹配但仍保留长度上限。
+
+`_matches_url_rule` 的回退顺序：预算超限 → 关键词包含；正则非法 → 通配转义
+→ 关键词包含（**保持原有行为不变**）。
+
+**测试踩坑**：`regex` 库对经典的 `^(a+)+$` 有专门优化，用它当样例会「测了个寂寞」
+（0.0003s 就返回）。实测 `^(a|aa)+$` 才会真实爆炸并准时触发 25ms 预算。
+
+`flow_runtime.py` 保持原样不动（它的异常类型是 `FlowVariableError`，
+改造收益小、回归风险大），仅在新模块 docstring 里交叉引用。
+
+**验证**：新增 `tests/test_bounded_regex.py`（13 项）。
+全量 `710 passed, 64 failed`，无新增失败。
