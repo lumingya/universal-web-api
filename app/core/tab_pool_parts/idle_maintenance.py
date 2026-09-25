@@ -505,6 +505,9 @@ def recycle_tab_connection(tab: Any) -> None:
     # 每次尝试都从 disconnect 开始：_driver_init 第一步就取新驱动，中途失败会留下一个
     # 半初始化的驱动（_is_loading 卡住、load 回调未注册、文档根未获取）。实测半初始化 / 取驱动失败 /
     # _get_document 失败三种情况下，标签页都会在后续请求里报错或空等 10s+，必须完整重建。
+    # 另外 DrissionPage 的 _get_document() 失败时不抛异常：读不到返回 False；
+    # 另一线程（页面加载事件）正在读时直接返回 None；读的过程中抛异常则会让 _is_reading 标志一直卡住，
+    # 之后每次都“直接返回 None”。只看异常会把这些情况当成功、留下失效的文档根（run_js 报 ElementLostError）。
     last_exc: Optional[BaseException] = None
     for attempt in range(RECYCLE_REBUILD_ATTEMPTS):
         try:
@@ -512,8 +515,19 @@ def recycle_tab_connection(tab: Any) -> None:
         except Exception:
             pass
         try:
+            if getattr(tab, "_is_reading", False):
+                tab._is_reading = False  # 旧会话上中断的读取留下的标志，新驱动上重新读取
             tab._driver_init(target_id)
-            tab._get_document()
+            doc = tab._get_document()
+            if doc is None:
+                # 新驱动的页面加载事件正在读取文档：等它读完
+                deadline = time.monotonic() + 5.0
+                while getattr(tab, "_is_reading", False) and time.monotonic() < deadline:
+                    time.sleep(0.05)
+            elif doc is False:
+                raise RuntimeError("document root unavailable after reconnect")
+            if not _tab_connection_healthy(tab):
+                raise RuntimeError("tab does not respond after reconnect")
             last_exc = None
             break
         except Exception as exc:
@@ -544,6 +558,46 @@ def recycle_tab_connection(tab: Any) -> None:
                 delattr(tab, attr)
         except Exception:
             pass
+
+
+def _reinstall_command_init_scripts(session: Any, tab: Any) -> int:
+    """Re-register command ``run_js_file`` new-document scripts on the fresh CDP session.
+
+    ``Page.addScriptToEvaluateOnNewDocument`` registrations belong to the CDP session and die
+    with it, while the command engine's per-session registry (and the bootstrap mtime cache)
+    still say "installed" -- so page-resilience / monitoring scripts would silently stop being
+    injected after the next reload. Re-register the same source and update the identifier.
+    The page itself was not reloaded, so the script is NOT executed again in the current document.
+    """
+    registry = getattr(session, "_command_init_js_registry", None)
+    if not isinstance(registry, dict) or not registry:
+        return 0
+    restored = 0
+    lost = False
+    for key, entry in list(registry.items()):
+        source = str(entry.get("source", "") or "") if isinstance(entry, dict) else ""
+        if not source:
+            continue
+        try:
+            result = _run_cdp(tab, "Page.addScriptToEvaluateOnNewDocument", timeout=5.0, source=source)
+            identifier = ""
+            if isinstance(result, dict):
+                identifier = str(result.get("identifier") or result.get("scriptId") or "").strip()
+            entry["identifier"] = identifier
+            restored += 1
+        except Exception as exc:
+            # 让命令引擎下一轮重新同步（启动脚本会重新注册）
+            registry.pop(key, None)
+            lost = True
+            logger.warning(
+                f"[{getattr(session, 'id', '?')}] CDP 回收后重新注册命令预注入脚本失败: "
+                f"{entry.get('path', key) if isinstance(entry, dict) else key}: {exc}"
+            )
+    if lost:
+        state = getattr(session, "_command_bootstrap_js_files", None)
+        if isinstance(state, dict):
+            state.clear()
+    return restored
 
 
 RECYCLE_REBUILD_ATTEMPTS = 3
@@ -668,6 +722,7 @@ def recycle_session(manager: Any, session: Any, reason: str) -> bool:
             return False
 
         recycle_tab_connection(tab)
+        _reinstall_command_init_scripts(session, tab)
         # 旧会话注册的可见性模拟脚本已随会话失效；标签页释放时本来就会恢复页面状态
         try:
             from app.core.page_lifecycle import _clear_visibility_emulation_attrs

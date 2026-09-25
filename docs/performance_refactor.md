@@ -76,10 +76,22 @@ maint 租约 acquire_for_command → 停止该标签页全局网络监听（等�
 
 重建失败时的处理：`_driver_init` 第一步就换新驱动，中途失败会留下半初始化的驱动（取不到驱动 → 所有操作
 `PageDisconnectedError`；`Page.getFrameTree` / `_get_document` 失败 → `run_js` 报 `ElementLostError`、找元素空等 10s+）。
-因此每次重试都从 `disconnect()` 开始完整重建，最多 `RECYCLE_REBUILD_ATTEMPTS=3` 次（间隔 0.5s/1s）。仍失败时用
+因此每次重试都从 `disconnect()` 开始完整重建，最多 `RECYCLE_REBUILD_ATTEMPTS=3` 次（间隔 0.5s/1s）。
+**成功判定**不只看有没有异常：DrissionPage 的 `_get_document()` 失败时返回 False；另一线程（页面加载事件）正在读时返回 None；
+读的过程中抛异常还会让 `_is_reading` 标志一直卡住，之后每次都直接返回 None——只看异常会把这些当成功，留下失效的文档根
+（之后每次 `run_js` 都报 `ElementLostError`；这是真实浏览器压测中抓到的）。现在每次尝试先清掉卡住的标志，返回 False 视为失败，
+返回 None 时等待并发读取完成，最后用 `run_js("return 1")` 验证标签页确实可用才算成功。仍失败时用
 `run_js("return 1")` 验证连接：可用则照常释放；不可用则停掉残留驱动、从 DrissionPage 的 `ChromiumTab._TABS` 单例缓存
 中移除该对象、`mark_error("cdp_recycle_failed")`。`release` 保留 ERROR 状态，该会话不会再被分配，随后由
 `_cleanup_unhealthy_tabs` 按原有逻辑移出/隔离；重新扫描时同一目标会得到一个全新的标签页对象。
+
+会话级状态的恢复：`Page.addScriptToEvaluateOnNewDocument` 注册属于 CDP 会话，回收后全部失效。
+- 可见性模拟、音频捕获、Kimi 抓流：清掉“已注册”标记，释放 / 下次使用时自动重新注册；
+- 命令 `run_js_file` 的新文档注入（含 `bootstrap_on_session_ready` 启动脚本）：回收成功后立即按注册表里的原文重新注册、
+  更新 identifier（**不在当前页面重复执行**）；重新注册失败则清空启动脚本缓存，由命令引擎下一轮重新同步。
+  否则注册表仍显示“已安装”，页面下一次刷新后这些韧性 / 监控脚本就不再注入。
+- 全局网络监听：回收前停止，回收后的 release 会异步重启；监听空窗只有回收本身的约 1–1.5s，且只发生在空闲标签页上。
+- 回收期间标签页处于维护占用（非工作流 BUSY），周期 page_check 会跳过这 1–1.5s，之后照常检查。
 
 因条件不满足而跳过（监听停不下来、仍在监听、占用失败）时 60s 内不再尝试，避免挤掉冻结。
 调度挂在 `TabPoolManager.run_watchdog_tick()`，在维护线程池中执行。
@@ -182,6 +194,17 @@ DrissionPage `ele.click` + `ele.input`、CDP 按键、`execCommand('insertText')
 
 注意：
 
+- **与命令 page_check 的关系**：page_check 每次检查前都先 `resume_if_frozen`（与唤醒开关无关，必定执行），检查永远在运行中的页面上进行；
+  默认 `CMD_WAKE_TAB_BEFORE_PAGE_CHECK=true` 时每次唤醒都算“活动”，而冻结要求连续 60s 无活动，
+  所以**被启用的周期 page_check 覆盖的标签页实际上不会被冻结**，检查行为与 2.10.0 相同；
+  冻结只发生在没有 page_check 覆盖（scope / domain 不匹配、或关闭了周期检查）的空闲隐藏标签页上。
+  工作流进行中的标签页（`check_while_busy_workflow`）是 BUSY，从不冻结。
+  若设置 `CMD_WAKE_TAB_BEFORE_PAGE_CHECK=false`：标签页会在 60s 无活动后冻结、下一次 page_check 前被解冻，
+  解冻后的第一次读取可能还是冻结前的页面内容，最多晚一个检查周期发现异常。
+  另外，原有的 `_try_wake_tab` 唤醒结束时会关闭焦点仿真，后台标签页被唤醒后会被 Chrome 按后台页节流（计时器约 1 次/秒），
+  这是 2.10.0 就有的行为，与冻结无关（真实浏览器对照：冻结 / 不冻结两条路径唤醒后的计时器速率一致）。
+- 冻结期间页面自己的 JS 不运行，依赖页面脚本才会出现的异常（如站点轮询发现登录失效后弹出的提示）要等标签页恢复运行后才会出现：
+  被 page_check 覆盖的标签页不受影响（不会被冻结）；未被覆盖的标签页会在下次被占用 / 唤醒时出现，由请求流程照常处理。
 - 可见（用户正在看）的标签页永远不会被冻结；每个标签页一个独立窗口且都没最小化时，冻结基本不会触发。
 - 冻结启用时，周期保活 `CMD_PERIODIC_KEEPALIVE_ENABLED` 默认改为 false；**显式设为 true 会周期性唤醒标签页，冻结基本失效**。
 - 同一个 target 若被多个 DrissionPage 对象同时持有（每个都开了焦点仿真），真实可见性会一直是 visible，
@@ -240,7 +263,8 @@ DrissionPage `ele.click` + `ele.input`、CDP 按键、`execCommand('insertText')
 - `test_stream_snapshot.py`、`test_cdp_hygiene.py`：快照与旧路径逐项对照、RemoteObject 释放、`Network.enable` 上限、懒拼接补丁；
 - `test_idle_maintenance.py`：冻结/恢复/回收/调度的单元测试 + 真实浏览器回收；前台标签页不切换焦点仿真（页面不收到 blur/focus）、
   可见退避、用户切回后状态同步、冻结核验（未生效回滚 / 被外部解除后重新冻结，含真实浏览器回收场景）、冻结给占用让路、
-  回收失败重试与隔离（真实 TabPoolManager：暂时失败重建成功；持续失败不再分配、重新扫描得到可用的新对象）；
+  回收失败重试与隔离（真实 TabPoolManager：暂时失败重建成功；持续失败不再分配、重新扫描得到可用的新对象）、
+  回收后命令启动 JS 文件仍在刷新时注入且不重复执行、冻结的后台标签页经 page_check 读取路径先解冻并检测到页面渲染的异常；
   有头冻结用例需要 X 显示（`xvfb-run`），否则跳过；
 - `e2e_concurrency_headed.py`：手动并发压测（见 P0-6），多浏览器并发就同时起多个进程；
 - `test_network_res_types.py`：资源类型解析与真实浏览器过滤（图片/脚本不再进入监听）；
