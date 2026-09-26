@@ -975,7 +975,7 @@ class RequestManager:
     def _coerce_token_count(value: Any) -> int:
         try:
             count = int(value)
-        except Exception:
+        except (TypeError, ValueError, OverflowError):
             return 0
         return max(0, count)
 
@@ -995,7 +995,7 @@ class RequestManager:
     def _coerce_timestamp(value: Any) -> float:
         try:
             timestamp = float(value)
-        except Exception:
+        except (TypeError, ValueError, OverflowError):
             return 0.0
         if not math.isfinite(timestamp) or timestamp <= 0:
             return 0.0

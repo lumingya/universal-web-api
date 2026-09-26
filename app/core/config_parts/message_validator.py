@@ -27,7 +27,7 @@ class MessageValidator:
         parsed = None
         try:
             parsed = json.loads(stripped)
-        except Exception:
+        except (TypeError, ValueError, RecursionError):
             parsed = None
 
         if parsed is None:

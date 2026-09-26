@@ -101,7 +101,7 @@ def _try_parse_json_text(value: object):
         return None
     try:
         return json.loads(stripped)
-    except Exception:
+    except (TypeError, ValueError, RecursionError):
         return None
 
 

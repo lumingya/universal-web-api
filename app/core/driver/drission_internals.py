@@ -40,7 +40,7 @@ def is_real_page(obj: Any) -> bool:
         from DrissionPage._pages.chromium_base import ChromiumBase
 
         return isinstance(obj, ChromiumBase)
-    except Exception:
+    except Exception:  # broad-except: 判断失败一律视为非真实页面
         return False
 
 
@@ -52,7 +52,7 @@ def forget_tab_object(tab: Any) -> None:
         tab_id = getattr(tab, "tab_id", None) or getattr(tab, "_target_id", None)
         if tab_id and ChromiumTab._TABS.get(tab_id) is tab:
             ChromiumTab._TABS.pop(tab_id, None)
-    except Exception:
+    except Exception:  # broad-except: 清理缓存是尽力而为，失败不影响回收流程
         pass
 
 

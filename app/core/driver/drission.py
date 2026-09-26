@@ -212,7 +212,7 @@ class DrissionListener:
             driver = getattr(self._listen, "_driver", None)
             return bool(getattr(self._listen, "listening", False) and driver is not None
                         and getattr(driver, "is_running", False))
-        except Exception:
+        except Exception:  # broad-except: DrissionPage 内部状态的尽力而为操作（原样迁自 network_monitor）
             return False
 
     def force_reset(self) -> None:
@@ -220,23 +220,23 @@ class DrissionListener:
         listen = self._listen
         try:
             setattr(listen, "listening", False)
-        except Exception:
+        except Exception:  # broad-except: DrissionPage 内部状态的尽力而为操作（原样迁自 network_monitor）
             pass
         try:
             if hasattr(listen, "_network_enabled"):
                 setattr(listen, "_network_enabled", False)
-        except Exception:
+        except Exception:  # broad-except: DrissionPage 内部状态的尽力而为操作（原样迁自 network_monitor）
             pass
         try:
             if hasattr(listen, "_driver"):
                 setattr(listen, "_driver", None)
-        except Exception:
+        except Exception:  # broad-except: DrissionPage 内部状态的尽力而为操作（原样迁自 network_monitor）
             pass
         try:
             clear = getattr(listen, "clear", None)
             if callable(clear):
                 clear()
-        except Exception:
+        except Exception:  # broad-except: DrissionPage 内部状态的尽力而为操作（原样迁自 network_monitor）
             pass
 
     def safe_stop(self) -> None:
@@ -245,14 +245,14 @@ class DrissionListener:
         try:
             if getattr(listen, "listening", False):
                 listen.stop()
-        except Exception:
+        except Exception:  # broad-except: DrissionPage 内部状态的尽力而为操作（原样迁自 network_monitor）
             self.force_reset()
             return
         try:
             clear = getattr(listen, "clear", None)
             if callable(clear):
                 clear()
-        except Exception:
+        except Exception:  # broad-except: DrissionPage 内部状态的尽力而为操作（原样迁自 network_monitor）
             pass
 
     def counters(self) -> dict:
@@ -260,18 +260,18 @@ class DrissionListener:
         listen = self._listen
         try:
             running_targets = int(getattr(listen, "_running_targets", 0) or 0)
-        except Exception:
+        except Exception:  # broad-except: DrissionPage 内部状态的尽力而为操作（原样迁自 network_monitor）
             running_targets = 0
         try:
             running_requests = int(getattr(listen, "_running_requests", 0) or 0)
-        except Exception:
+        except Exception:  # broad-except: DrissionPage 内部状态的尽力而为操作（原样迁自 network_monitor）
             running_requests = 0
         queued_packets = 0
         try:
             caught = getattr(listen, "_caught", None)
             if caught is not None and hasattr(caught, "qsize"):
                 queued_packets = int(caught.qsize() or 0)
-        except Exception:
+        except Exception:  # broad-except: DrissionPage 内部状态的尽力而为操作（原样迁自 network_monitor）
             queued_packets = 0
         return {
             "running_targets": max(0, running_targets),

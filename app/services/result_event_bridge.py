@@ -172,7 +172,7 @@ def _extract_prompt_from_request_payload(raw_payload: Any) -> str:
 
     try:
         data = json.loads(text)
-    except Exception:
+    except (TypeError, ValueError, RecursionError):
         return ""
 
     if isinstance(data, dict):

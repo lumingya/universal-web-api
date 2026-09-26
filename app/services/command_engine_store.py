@@ -483,7 +483,7 @@ class CommandEngineStoreMixin:
             rows = field.get("rows")
             try:
                 rows = int(rows)
-            except Exception:
+            except (TypeError, ValueError, OverflowError):
                 rows = rows
             normalized_fields.append({
                 "key": str(field.get("key") or "").strip(),

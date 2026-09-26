@@ -245,7 +245,7 @@ def _decode_history_arguments(raw_args: Any) -> Any:
         return raw_args if raw_args is not None else {}
     try:
         decoded = json.loads(raw_args)
-    except Exception:
+    except (TypeError, ValueError, RecursionError):
         return raw_args
     return decoded if isinstance(decoded, dict) else raw_args
 

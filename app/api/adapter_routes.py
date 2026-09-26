@@ -56,7 +56,7 @@ async def adapter_health(site: str, preset: Optional[str] = None, authenticated:
         return await asyncio.to_thread(check_site_health, site, preset)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except Exception as exc:  # 浏览器未连接等
+    except Exception as exc:  # broad-except: 浏览器未连接、驱动异常等一律转换为 503
         logger.warning(f"适配器巡检失败: {exc}")
         raise HTTPException(status_code=503, detail=f"巡检失败：{exc}") from exc
 

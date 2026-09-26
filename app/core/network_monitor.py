@@ -362,7 +362,7 @@ class NetworkMonitor:
         )
         try:
             first_content_timeout = float(first_content_timeout)
-        except Exception:
+        except (TypeError, ValueError, OverflowError):
             first_content_timeout = max(
                 (
                     self.DEFAULT_IMAGE_FIRST_CONTENT_TIMEOUT
@@ -387,7 +387,7 @@ class NetworkMonitor:
         )
         try:
             post_content_silence_threshold = float(post_content_silence_threshold)
-        except Exception:
+        except (TypeError, ValueError, OverflowError):
             post_content_silence_threshold = max(
                 self.DEFAULT_POST_CONTENT_SILENCE_THRESHOLD,
                 float(self._silence_threshold or self.DEFAULT_SILENCE_THRESHOLD) * 2.0,
@@ -409,7 +409,7 @@ class NetworkMonitor:
         )
         try:
             initial_target_body_wait = float(initial_target_body_wait)
-        except Exception:
+        except (TypeError, ValueError, OverflowError):
             initial_target_body_wait = max(
                 self.DEFAULT_INITIAL_TARGET_BODY_WAIT,
                 float(self._silence_threshold or self.DEFAULT_SILENCE_THRESHOLD)
@@ -620,7 +620,7 @@ class NetworkMonitor:
 
         try:
             data = json.loads(text)
-        except Exception:
+        except (TypeError, ValueError, RecursionError):
             data = None
 
         if isinstance(data, dict):
@@ -1116,7 +1116,7 @@ class NetworkMonitor:
 
         try:
             status = int(status)
-        except Exception:
+        except (TypeError, ValueError, OverflowError):
             status = 0
 
         return {
@@ -1403,7 +1403,7 @@ class NetworkMonitor:
             if stripped.startswith("{") and stripped.endswith("}"):
                 try:
                     parsed = json.loads(stripped)
-                except Exception:
+                except (TypeError, ValueError, RecursionError):
                     return None
                 return parsed if isinstance(parsed, dict) else None
         return None
@@ -2200,7 +2200,7 @@ class NetworkMonitor:
                 )
             try:
                 timeout = float(timeout)
-            except Exception:
+            except (TypeError, ValueError, OverflowError):
                 timeout = self.DEFAULT_RESPONSE_INTERVAL
             timeout = min(max(0.01, timeout), max(0.01, remaining_hard_timeout))
 

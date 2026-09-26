@@ -752,7 +752,7 @@ class AttachmentMonitor:
         raw_value = self._config.get(key, default) if isinstance(self._config, dict) else default
         try:
             return float(raw_value)
-        except Exception:
+        except (TypeError, ValueError, OverflowError):
             return float(default)
 
     def _config_dict(self, key: str) -> Dict[str, Any]:

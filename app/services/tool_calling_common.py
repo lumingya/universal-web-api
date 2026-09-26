@@ -59,7 +59,7 @@ def _get_max_tool_result_chars() -> int:
     raw_value = str(os.getenv("TOOL_CALLING_MAX_TOOL_RESULT_CHARS", "300000") or "300000").strip()
     try:
         value = int(raw_value)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         value = 300000
     return max(1, value)
 
@@ -75,7 +75,7 @@ def _read_tool_calling_int(name: str, default: int, minimum: int, maximum: int) 
     raw_value = str(os.getenv(name, str(default)) or str(default)).strip()
     try:
         value = int(raw_value)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         value = default
     return max(minimum, min(maximum, value))
 

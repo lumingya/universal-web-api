@@ -1195,7 +1195,7 @@ class WorkflowExecutorActionMixin:
             index = result.get("currentIndex")
             try:
                 index = int(index)
-            except Exception:
+            except (TypeError, ValueError, OverflowError):
                 index = len(entries) - 1
             if isinstance(entries, list) and entries and 0 <= index < len(entries):
                 entry = entries[index] or {}

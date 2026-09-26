@@ -157,7 +157,7 @@ class SiteStore:
         for path in files:
             try:
                 payload = self.read_envelope(path)
-            except Exception as exc:  # JSON 损坏、编码错误、信封不完整
+            except (OSError, ValueError) as exc:  # JSON 损坏、编码错误（均为 ValueError）、信封不完整、读文件失败
                 broken[path] = str(exc)
                 logger.error(f"站点配置文件无法读取，已跳过且不会被覆盖: {path.name}: {exc}")
                 old_site = previous_sites_by_path.get(path)
@@ -210,7 +210,7 @@ class SiteStore:
                     handle.flush()
                     os.fsync(handle.fileno())
                 pending.append((site, path, tmp, payload, text))
-        except Exception:
+        except Exception:  # broad-except: 清理已写出的临时文件后原样重新抛出
             for _, _, tmp, _, _ in pending:
                 try:
                     tmp.unlink()
@@ -258,7 +258,7 @@ class SiteStore:
             legacy = json.loads(raw) if raw else {}
             if not isinstance(legacy, dict):
                 raise ValueError("顶层不是对象")
-        except Exception as exc:
+        except (OSError, ValueError) as exc:
             logger.error(f"旧版站点配置 {self.legacy_file} 无法解析，暂不迁移（原文件保持不变）: {exc}")
             return None
 
@@ -269,7 +269,7 @@ class SiteStore:
         for path in self.site_files():
             try:
                 payload = self.read_envelope(path)
-            except Exception:
+            except (OSError, ValueError):
                 continue
             existing[payload["site"]] = (path, payload)
 

@@ -28,7 +28,7 @@ def _get_positive_int_env(name: str, default: int) -> int:
         return default
     try:
         value = int(raw)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return default
     return value if value > 0 else default
 

@@ -1361,7 +1361,7 @@ return (() => {
                 return []
             try:
                 data = json.loads(payload)
-            except Exception:
+            except (TypeError, ValueError, RecursionError):
                 return []
             return [data] if isinstance(data, dict) else []
 
@@ -2096,7 +2096,7 @@ return (() => {
         if text.startswith("{") or text.startswith("["):
             try:
                 return json.loads(text)
-            except Exception:
+            except (TypeError, ValueError, RecursionError):
                 return text
         return text
 

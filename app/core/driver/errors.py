@@ -65,7 +65,7 @@ _DISCONNECTED_MARKERS = (
 def _drission_error_types():
     try:
         from DrissionPage import errors
-    except Exception:  # pragma: no cover - DrissionPage 为必装依赖
+    except ImportError:  # pragma: no cover - DrissionPage 为必装依赖
         return {}
     return {
         "context": tuple(getattr(errors, n) for n in ("ContextLostError",) if hasattr(errors, n)),
@@ -106,7 +106,7 @@ def translate_error(error: BaseException) -> DriverError:
 def _is_drission_error(error: BaseException) -> bool:
     try:
         from DrissionPage.errors import BaseError
-    except Exception:  # pragma: no cover
+    except ImportError:  # pragma: no cover
         return False
     return isinstance(error, BaseError)
 
@@ -123,7 +123,7 @@ def translated_errors() -> Iterator[None]:
         yield
     except DriverError:
         raise
-    except Exception as exc:
+    except Exception as exc:  # broad-except: 先判断类型，非 DrissionPage 异常原样重新抛出
         if not _is_drission_error(exc):
             raise
         raise translate_error(exc) from exc

@@ -61,7 +61,7 @@ class TrackedWorkerExecutionCancelled(Exception):
 def _coerce_max_request_execute_time_sec(raw: Any, default: float, source: str) -> float:
     try:
         value = float(raw)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         logger.debug(f"Invalid {source} MAX_REQUEST_EXECUTE_TIME_SEC={raw!r}, using default {default}s")
         return max(MIN_MAX_REQUEST_EXECUTE_TIME_SEC, float(default))
 
@@ -157,7 +157,7 @@ def put_worker_queue_item(
 def _coerce_worker_queue_put_timeout(raw_timeout: Any, *, cancelled: bool = False) -> float:
     try:
         value = float(raw_timeout)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         value = 0.5
     if cancelled:
         return WORKER_QUEUE_CANCEL_PUT_BLOCK_SEC
@@ -177,19 +177,19 @@ async def wait_worker_queue_item(
     """Wait for a worker queue item without occupying the default executor."""
     try:
         timeout_value = float(timeout)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         timeout_value = 0.5
     timeout_value = max(0.0, timeout_value)
 
     try:
         interval = float(poll_interval)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         interval = 0.01
     interval = max(0.001, min(interval, 0.05))
 
     try:
         max_interval = float(max_poll_interval)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         max_interval = 0.05
     max_interval = max(interval, min(max_interval, 0.05))
 
@@ -214,15 +214,15 @@ async def wait_worker_queue_item(
 def _next_worker_queue_wait_interval(current: float, max_interval: float, remaining: float) -> float:
     try:
         current_value = float(current)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         current_value = 0.001
     try:
         max_value = float(max_interval)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         max_value = 0.05
     try:
         remaining_value = float(remaining)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         remaining_value = max_value
 
     max_value = max(0.001, min(max_value, 0.05))

@@ -38,7 +38,7 @@ def _get_tool_validation_retry_limit() -> int:
     raw_value = str(os.getenv("TOOL_CALLING_INTERNAL_RETRY_MAX", "2") or "2").strip()
     try:
         value = int(raw_value)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         value = 2
     return max(0, min(5, value))
 
@@ -449,7 +449,7 @@ def _detect_malformed_tool_payload(raw_text: str, allowed_tool_names: Optional[s
         if any(marker in lowered for marker in ('"tool_calls"', '"tool_name"')):
             try:
                 payload = json.loads(stripped)
-            except Exception:
+            except (TypeError, ValueError, RecursionError):
                 return (
                     "The reply looked like a structured tool payload, but it could not be parsed "
                     "into valid tool_calls."
@@ -499,7 +499,7 @@ def _decode_tool_arguments(tool_call: Dict[str, Any]) -> Optional[Dict[str, Any]
             return {}
         try:
             parsed = json.loads(stripped)
-        except Exception:
+        except (TypeError, ValueError, RecursionError):
             return None
         if isinstance(parsed, dict) and not _contains_unicode_surrogate(parsed):
             return parsed
@@ -997,7 +997,7 @@ def _get_rejected_tool_argument_preview_limit() -> int:
     raw_value = str(os.getenv("TOOL_CALLING_REJECTED_ARGUMENT_PREVIEW_CHARS", "500") or "500").strip()
     try:
         value = int(raw_value)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         value = 500
     return max(0, min(5000, value))
 

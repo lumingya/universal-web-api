@@ -171,7 +171,7 @@ class ArenaImageStreamObserver(StreamObserver):
         val = cfg.get("arena_active_stop_recovery_grace_seconds", 60.0)
         try:
             return float(val)
-        except Exception:
+        except (TypeError, ValueError, OverflowError):
             return 60.0
 
     def get_stream_recovery_max_refreshes(self, default: int) -> Optional[int]:

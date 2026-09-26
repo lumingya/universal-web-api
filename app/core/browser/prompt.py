@@ -203,7 +203,7 @@ class BrowserPromptMixin:
             if isinstance(raw_args, str):
                 try:
                     args_obj = json.loads(raw_args)
-                except Exception:
+                except (TypeError, ValueError, RecursionError):
                     args_obj = raw_args
             else:
                 args_obj = raw_args if raw_args is not None else {}

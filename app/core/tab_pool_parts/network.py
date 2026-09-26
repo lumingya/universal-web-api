@@ -119,7 +119,7 @@ class _GlobalNetworkInterceptionManager:
 
         try:
             status = int(status)
-        except Exception:
+        except (TypeError, ValueError, OverflowError):
             status = 0
 
         return {

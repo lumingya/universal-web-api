@@ -349,7 +349,7 @@ def decode_browser_non_stream_payload(payload: Any) -> Dict[str, Any]:
     for candidate in candidates:
         try:
             data = json.loads(candidate)
-        except Exception as exc:
+        except (TypeError, ValueError, RecursionError) as exc:
             last_error = exc
             continue
         if isinstance(data, dict):
@@ -380,7 +380,7 @@ def _try_parse_json_payload(text: str, allowed_tools: Dict[str, Dict[str, Any]])
         return None
     try:
         payload = json.loads(candidate)
-    except Exception:
+    except (TypeError, ValueError, RecursionError):
         return None
     return _normalize_parsed_payload(payload, allowed_tools)
 
@@ -557,7 +557,7 @@ def _normalize_tool_calls(
         if isinstance(args, str):
             try:
                 decoded_args = json.loads(args)
-            except Exception:
+            except (TypeError, ValueError, RecursionError):
                 decoded_args = None
             if _contains_unicode_surrogate(decoded_args):
                 continue
@@ -608,7 +608,7 @@ def _decode_tool_arguments(tool_call: Dict[str, Any]) -> Optional[Dict[str, Any]
             return {}
         try:
             parsed = json.loads(stripped)
-        except Exception:
+        except (TypeError, ValueError, RecursionError):
             return None
         if isinstance(parsed, dict) and not _contains_unicode_surrogate(parsed):
             return parsed

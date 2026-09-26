@@ -909,7 +909,7 @@ class BrowserWorkflowMixin:
             if resolved_tab_index is not None:
                 try:
                     resolved_index = int(resolved_tab_index)
-                except Exception:
+                except (TypeError, ValueError, OverflowError):
                     resolved_index = 0
                 if resolved_index <= 0:
                     yield self.formatter.pack_error(

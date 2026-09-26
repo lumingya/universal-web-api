@@ -27,7 +27,7 @@ class TabPoolConfigMixin:
     def _to_float(value: Any, default: float) -> float:
         try:
             return float(value)
-        except Exception:
+        except (TypeError, ValueError, OverflowError):
             return default
     @staticmethod
     def _normalize_allocation_mode(value: Any) -> str:

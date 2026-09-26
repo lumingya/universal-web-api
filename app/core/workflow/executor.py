@@ -507,7 +507,7 @@ class WorkflowExecutor(
     def _coerce_float(value: Any, default: float, minimum: Optional[float] = None) -> float:
         try:
             result = float(value)
-        except Exception:
+        except (TypeError, ValueError, OverflowError):
             result = float(default)
         if minimum is not None:
             result = max(float(minimum), result)
@@ -517,7 +517,7 @@ class WorkflowExecutor(
     def _coerce_int(value: Any, default: int, minimum: Optional[int] = None) -> int:
         try:
             result = int(value)
-        except Exception:
+        except (TypeError, ValueError, OverflowError):
             result = int(default)
         if minimum is not None:
             result = max(int(minimum), result)

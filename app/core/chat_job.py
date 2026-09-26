@@ -66,7 +66,7 @@ def job_for(protocol: str, *, model: Any = "", stream: Any = False, **routing: A
         from app.services.metrics import REQUEST_ID
 
         request_id = REQUEST_ID.get()
-    except Exception:
+    except ImportError:
         request_id = ""
     return ChatJob(
         protocol=protocol,
@@ -163,7 +163,7 @@ def _sse_data_text(segment: str) -> str:
         from app.api.openai_stop import sse_frame_data_text
 
         return sse_frame_data_text(segment)
-    except Exception:
+    except Exception:  # broad-except: 共享解析器不可用或解析失败时回退到简单实现
         lines = [line[5:].lstrip() for line in segment.split("\n") if line.startswith("data:")]
         return "\n".join(lines)
 
@@ -179,7 +179,7 @@ async def iter_openai_sse_payloads(body_iterator: AsyncIterator[Any]) -> AsyncIt
             return None
         try:
             payload = json.loads(payload_text)
-        except Exception:
+        except (TypeError, ValueError, RecursionError):
             logger.debug(f"无法解析 OpenAI SSE chunk: {payload_text[:200]}")
             return None
         return payload if isinstance(payload, dict) else None
@@ -214,7 +214,7 @@ async def iter_openai_sse_payloads(body_iterator: AsyncIterator[Any]) -> AsyncIt
         if close is not None:
             try:
                 await close()
-            except Exception:
+            except Exception:  # broad-except: 关闭上游流是收尾操作，失败不影响结果
                 pass
 
 

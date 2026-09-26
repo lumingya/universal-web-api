@@ -79,7 +79,7 @@ class AdapterUpdater:
         try:
             payload = json.loads((self.sites_dir / INDEX_NAME).read_text(encoding="utf-8-sig"))
             return payload if isinstance(payload, dict) else {}
-        except Exception:
+        except (OSError, ValueError):
             return {}
 
     def _local_envelopes(self) -> Dict[str, Dict[str, Any]]:
@@ -88,7 +88,7 @@ class AdapterUpdater:
         for path in store.site_files():
             try:
                 payload = store.read_envelope(path)
-            except Exception:
+            except (OSError, ValueError):
                 continue
             result[payload["site"]] = {"path": path, "payload": payload}
         return result

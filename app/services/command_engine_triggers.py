@@ -248,12 +248,12 @@ class CommandEngineTriggersMixin:
     def _coerce_int(self, value: Any, default: int) -> int:
         try:
             return int(value)
-        except Exception:
+        except (TypeError, ValueError, OverflowError):
             return default
     def _coerce_float(self, value: Any, default: float) -> float:
         try:
             return float(value)
-        except Exception:
+        except (TypeError, ValueError, OverflowError):
             return default
     @staticmethod
     def _counter_inc(counter: Dict[str, int], key: str):
@@ -272,7 +272,7 @@ class CommandEngineTriggersMixin:
     def _normalize_priority(self, value: Any, default: int = 2) -> int:
         try:
             p = int(value)
-        except Exception:
+        except (TypeError, ValueError, OverflowError):
             p = int(default)
         return p
     def _get_request_priority_baseline(self) -> int:

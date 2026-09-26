@@ -287,7 +287,7 @@ class ScriptLoader:
             if (trimmed.startswith("{") and trimmed.endswith("}")) or (trimmed.startswith("[") and trimmed.endswith("]")):
                 try:
                     safe_args = json.loads(trimmed)
-                except Exception:
+                except (TypeError, ValueError, RecursionError):
                     pass
 
         context_json = json.dumps(safe_context, ensure_ascii=False, default=str)
@@ -398,7 +398,7 @@ class ScriptLoader:
                 if (trimmed.startswith("{") and trimmed.endswith("}")) or (trimmed.startswith("[") and trimmed.endswith("]")):
                     try:
                         parsed_args = json.loads(trimmed)
-                    except Exception:
+                    except (TypeError, ValueError, RecursionError):
                         pass
 
             # 对入参 args 进行宏变量插值

@@ -202,7 +202,7 @@ def _collect_runtime_gauges() -> None:
             counts[state] = counts.get(state, 0) + 1
         for state, count in counts.items():
             TAB_POOL_TABS.set(count, status=state)
-    except Exception:
+    except Exception:  # broad-except: 指标抓取不能因为浏览器状态异常而失败
         return
 
 

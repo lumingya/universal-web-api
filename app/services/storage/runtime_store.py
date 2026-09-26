@@ -104,7 +104,7 @@ class RuntimeStore:
                     [(str(k), int(v)) for k, v in values.items()],
                 )
                 conn.execute("COMMIT")
-            except Exception:
+            except Exception:  # broad-except: 回滚事务后原样重新抛出
                 conn.execute("ROLLBACK")
                 raise
 
@@ -169,7 +169,7 @@ class RuntimeStore:
                         f"DELETE FROM request_history WHERE request_id IN ({','.join('?' * len(chunk))})", chunk
                     )
                 conn.execute("COMMIT")
-            except Exception:
+            except Exception:  # broad-except: 回滚事务后原样重新抛出
                 conn.execute("ROLLBACK")
                 raise
             for key, _, _, _, text in changed:
