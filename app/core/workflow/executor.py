@@ -1330,11 +1330,11 @@ class WorkflowExecutor(
             if self._combo_contains_submit_key(key):
                 self._capture_arena_page_error_baseline("keypress")
             if self.stealth_mode:
-                self.tab.actions.key_down(key)
+                driver_for_tab(self.tab).actions.key_down(key)
                 time.sleep(random.uniform(0.05, 0.13))
-                self.tab.actions.key_up(key)
+                driver_for_tab(self.tab).actions.key_up(key)
             else:
-                self.tab.actions.key_down(key).key_up(key)
+                driver_for_tab(self.tab).actions.key_down(key).key_up(key)
             if self._combo_contains_submit_key(key):
                 self._capture_dom_send_baseline("keypress")
 
@@ -1358,17 +1358,17 @@ class WorkflowExecutor(
 
             if self.stealth_mode:
                 for item in keys:
-                    self.tab.actions.key_down(item)
+                    driver_for_tab(self.tab).actions.key_down(item)
                     time.sleep(random.uniform(0.03, 0.09))
                 time.sleep(random.uniform(0.05, 0.13))
                 for item in reversed(keys):
-                    self.tab.actions.key_up(item)
+                    driver_for_tab(self.tab).actions.key_up(item)
                     time.sleep(random.uniform(0.02, 0.08))
             else:
                 for item in keys:
-                    self.tab.actions.key_down(item)
+                    driver_for_tab(self.tab).actions.key_down(item)
                 for item in reversed(keys):
-                    self.tab.actions.key_up(item)
+                    driver_for_tab(self.tab).actions.key_up(item)
             if self._combo_contains_submit_key(key):
                 self._capture_dom_send_baseline("keypress_combo")
 

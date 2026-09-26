@@ -27,6 +27,7 @@ from app.utils.image_validation import (
     same_image,
     validate_generated_images as _common_validate_generated_images,
 )
+from app.core.driver import driver_for_tab
 
 
 ARENA_NATIVE_STOP_SELECTOR = 'css:button[aria-label="Stop generation"]'
@@ -231,7 +232,7 @@ def auto_skip_arena_direct_comparison(tab: Any) -> bool:
         return false;
     """
     try:
-        return bool(tab.run_js(script))
+        return bool(driver_for_tab(tab).run_js(script))
     except Exception:
         return False
 
@@ -250,7 +251,7 @@ def detect_arena_render_crash(tab: Any) -> bool:
         return false;
     """
     try:
-        return bool(tab.run_js(script))
+        return bool(driver_for_tab(tab).run_js(script))
     except Exception:
         return False
 
@@ -447,7 +448,7 @@ def evaluate_arena_direct_generation_state(
     """
     try:
         data = _decode_js_result(
-            tab.run_js(_json_js(script), baseline_depth, current_prompt, stop_selector)
+            driver_for_tab(tab).run_js(_json_js(script), baseline_depth, current_prompt, stop_selector)
         )
         if isinstance(data, dict) and data.get("status"):
             return data
@@ -596,7 +597,7 @@ def get_arena_generation_status(
         });
     """
     try:
-        result = tab.run_js(script, selector)
+        result = driver_for_tab(tab).run_js(script, selector)
         if isinstance(result, str):
             # P0-2：页面内 JSON.stringify，避免 RemoteObject 泄漏
             try:
@@ -695,7 +696,7 @@ def capture_arena_result_baseline(
         })(arguments[0], arguments[1], arguments[2]);
     """
     try:
-        result = _decode_js_result(tab.run_js(
+        result = _decode_js_result(driver_for_tab(tab).run_js(
             _json_js(script),
             result_selector,
             token,
@@ -808,7 +809,7 @@ class ArenaImageGenerationGuard:
         """
         try:
             if self.result_selector or self.baseline_token or self.baseline_property:
-                result = self.tab.run_js(
+                result = driver_for_tab(self.tab).run_js(
                     _json_js(script),
                     self.result_selector,
                     self.baseline_token,
@@ -817,7 +818,7 @@ class ArenaImageGenerationGuard:
             else:
                 # Preserve compatibility with lightweight tab doubles and
                 # older wrappers whose run_js accepts only the script.
-                result = self.tab.run_js(_json_js(script))
+                result = driver_for_tab(self.tab).run_js(_json_js(script))
         except Exception:
             return None
         result = _decode_js_result(result)

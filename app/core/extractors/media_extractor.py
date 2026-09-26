@@ -18,7 +18,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from app.core.driver import driver_for_tab
+from app.core.driver import as_element, driver_for_tab
 from app.core.config import get_logger
 from app.core.extractors.image_extractor import (
     get_default_image_extraction_config,
@@ -2331,7 +2331,7 @@ class MediaExtractor:
         if not element:
             return {}
         try:
-            result = element.run_js(self.ACTIVATE_AUDIO_TRIGGER_SURFACE_JS) or {}
+            result = as_element(element).run_js(self.ACTIVATE_AUDIO_TRIGGER_SURFACE_JS) or {}
             return result if isinstance(result, dict) else {}
         except Exception as exc:
             logger.debug(f"激活页面音频操作区失败（已忽略）: {exc}")
@@ -2358,7 +2358,7 @@ class MediaExtractor:
         }
 
         try:
-            result = element.run_js(self.TRIGGER_AUDIO_PLAYBACK_JS, js_opts) or {}
+            result = as_element(element).run_js(self.TRIGGER_AUDIO_PLAYBACK_JS, js_opts) or {}
             return result if isinstance(result, dict) else {}
         except Exception as exc:
             logger.debug(f"触发页面音频播放失败（已忽略）: {exc}")
@@ -3183,7 +3183,7 @@ class MediaExtractor:
         }
 
         try:
-            result = element.run_js(self.EXTRACT_MEDIA_JS, js_opts)
+            result = as_element(element).run_js(self.EXTRACT_MEDIA_JS, js_opts)
         except Exception as exc:
             logger.warning(f"{media_type} 提取失败（已忽略）: {exc}")
             return []

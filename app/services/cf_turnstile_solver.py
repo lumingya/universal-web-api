@@ -18,6 +18,7 @@ from urllib.parse import urlsplit
 
 from app.core.config import logger as default_logger
 from app.utils.human_mouse import cdp_precise_click as default_cdp_precise_click, smooth_move_mouse as default_smooth_move_mouse
+from app.core.driver import driver_for_tab
 
 _DEFAULT_MAX_ATTEMPTS = 3
 
@@ -263,7 +264,7 @@ def _wait_for_clickable_point(
         if raise_if_cancelled:
             raise_if_cancelled()
         try:
-            probe = tab.run_js(js_code)
+            probe = driver_for_tab(tab).run_js(js_code)
             if isinstance(probe, dict):
                 if probe.get("ok"):
                     x = max(0, int(probe["x"]) + random.randint(-2, 2))
@@ -290,8 +291,8 @@ def _wait_for_clickable_point(
         fy = max(0, int(last_fallback.get("y", 310)))
     else:
         try:
-            vw = int(tab.run_js("return window.innerWidth || document.documentElement.clientWidth || 800") or 800)
-            vh = int(tab.run_js("return window.innerHeight || document.documentElement.clientHeight || 600") or 600)
+            vw = int(driver_for_tab(tab).run_js("return window.innerWidth || document.documentElement.clientWidth || 800") or 800)
+            vh = int(driver_for_tab(tab).run_js("return window.innerHeight || document.documentElement.clientHeight || 600") or 600)
             fx = max(0, int(vw / 2 - 90))
             fy = max(0, int(vh / 2 + 10))
         except Exception:
@@ -317,7 +318,7 @@ def _wait_for_challenge_resolved(
         if raise_if_cancelled:
             raise_if_cancelled()
         try:
-            probe = tab.run_js(js_code)
+            probe = driver_for_tab(tab).run_js(js_code)
             if isinstance(probe, dict) and probe.get("resolved"):
                 return True
         except Exception as e:

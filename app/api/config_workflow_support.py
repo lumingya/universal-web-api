@@ -13,6 +13,7 @@ from app.models.schemas import ActionType
 from app.core.workflow.flow_runtime import (FlowProgram, FlowValidationError, validate_workflow, has_control_flow, capture_page_state, validate_inputs)
 from app.services.config_engine import config_engine
 from app.utils.site_url import extract_remote_site_domain
+from app.core.driver import driver_for_tab
 
 logger = get_logger('API.CONFIG.WORKFLOW')
 
@@ -23,7 +24,7 @@ VALID_WORKFLOW_ACTIONS = frozenset(get_args(ActionType))
 def _notify_workflow_editor_action_result(tab, action_id: str, success: bool, message: str, trace=None) -> None:
     """将测试结果回推给已注入的可视化编辑器页面。"""
     try:
-        tab.run_js(
+        driver_for_tab(tab).run_js(
             """
             return (function(actionId, ok, text, trace) {
               if (window.WorkflowEditor && typeof window.WorkflowEditor.handleBackendResult === 'function') {
@@ -45,7 +46,7 @@ def _notify_workflow_editor_action_result(tab, action_id: str, success: bool, me
 def _notify_workflow_editor_action_status(tab, action_id: str, phase: str, message: str) -> None:
     """将测试中间状态回推给已注入的可视化编辑器页面。"""
     try:
-        tab.run_js(
+        driver_for_tab(tab).run_js(
             """
             return (function(actionId, phaseName, text) {
               if (window.WorkflowEditor && typeof window.WorkflowEditor.handleBackendStatus === 'function') {
@@ -76,7 +77,7 @@ def _wake_workflow_editor_test_tab(session) -> None:
 
     focus_emulation_set = False
     try:
-        session.tab.run_cdp(
+        driver_for_tab(session.tab).run_cdp(
             "Emulation.setFocusEmulationEnabled",
             enabled=True,
             _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
@@ -86,7 +87,7 @@ def _wake_workflow_editor_test_tab(session) -> None:
         pass
 
     try:
-        session.tab.run_cdp(
+        driver_for_tab(session.tab).run_cdp(
             "Page.setWebLifecycleState",
             state="active",
             _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
@@ -95,13 +96,13 @@ def _wake_workflow_editor_test_tab(session) -> None:
         pass
 
     try:
-        session.tab.run_js("return document.readyState || '';", timeout=BACKGROUND_WAKE_JS_TIMEOUT)
+        driver_for_tab(session.tab).run_js("return document.readyState || '';", timeout=BACKGROUND_WAKE_JS_TIMEOUT)
     except Exception:
         pass
     finally:
         if focus_emulation_set:
             try:
-                session.tab.run_cdp(
+                driver_for_tab(session.tab).run_cdp(
                     "Emulation.setFocusEmulationEnabled",
                     enabled=False,
                     _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
@@ -249,7 +250,7 @@ def _execute_workflow_editor_test_payload(
             if data.get("visual_feedback") is True and time.monotonic() - cancellation["checked_at"] >= 0.2:
                 cancellation["checked_at"] = time.monotonic()
                 try:
-                    cancellation["cancelled"] = cancellation["cancelled"] or tab.run_js(
+                    cancellation["cancelled"] = cancellation["cancelled"] or driver_for_tab(tab).run_js(
                         "return window.__WORKFLOW_EDITOR_TEST_CANCELLED__ === true || (arguments[0] && window.__WORKFLOW_EDITOR_TEST_RUN_ID__ !== arguments[0]);",
                         str(data.get("visual_run_id") or "")[:128], timeout=0.5,
                     ) is True

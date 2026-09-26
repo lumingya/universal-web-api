@@ -103,12 +103,27 @@ def translate_error(error: BaseException) -> DriverError:
     return classify_driver_error(error)(str(error), original=error)
 
 
+def _is_drission_error(error: BaseException) -> bool:
+    try:
+        from DrissionPage.errors import BaseError
+    except Exception:  # pragma: no cover
+        return False
+    return isinstance(error, BaseError)
+
+
 @contextlib.contextmanager
 def translated_errors() -> Iterator[None]:
-    """把代码块里抛出的底层异常翻译成驱动异常（KeyboardInterrupt 等 BaseException 原样放行）。"""
+    """只把 DrissionPage 自己的异常翻译成驱动异常；其他异常原样抛出。
+
+    Python 内置异常（TypeError、OSError、KeyError……）保持原样，调用方已有的 ``except TypeError`` 之类
+    的兼容逻辑因此不受影响——例如 network_monitor 先试 ``start(pattern, res_type=True)``，
+    旧版 DrissionPage 不认识该参数时抛 TypeError，再退回 ``start(pattern)``。
+    """
     try:
         yield
     except DriverError:
         raise
     except Exception as exc:
+        if not _is_drission_error(exc):
+            raise
         raise translate_error(exc) from exc

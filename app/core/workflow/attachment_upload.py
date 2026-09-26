@@ -17,7 +17,7 @@ from app.core.config import WorkflowError
 from app.core.tab_pool import get_clipboard_lock
 from app.utils.attachments import attachment_config, type_allowed, MIB
 from app.utils.platform import get_primary_modifier_key
-from app.core.driver import driver_for_tab
+from app.core.driver import as_element, driver_for_tab
 
 
 class DispatchState(str, Enum):
@@ -57,7 +57,7 @@ class AttachmentUploadCoordinator:
         if not selector:
             return None
         try:
-            return self.tab.ele(selector, timeout=0.6)
+            return driver_for_tab(self.tab).find(selector, timeout=0.6)
         except Exception:
             return None
 
@@ -65,11 +65,11 @@ class AttachmentUploadCoordinator:
         configured = self.selectors.get("file_input")
         try:
             if configured:
-                return list(self.tab.eles(configured, timeout=0.6) or [])
+                return list(driver_for_tab(self.tab).find_all(configured, timeout=0.6) or [])
             # Prefer composer-scoped lookup; retain legacy page lookup if no root was configured.
             root_selector = self.selectors.get("composer_root")
             root = self._element(root_selector) if root_selector else self.tab
-            return list(root.eles('css:input[type="file"]', timeout=0.6) or []) if root else []
+            return list(as_element(root).find_all('css:input[type="file"]', timeout=0.6) or []) if root else []
         except Exception:
             return []
 
@@ -99,7 +99,7 @@ class AttachmentUploadCoordinator:
             return DispatchResult(DispatchState.NOT_DISPATCHED, "cdp_drop")
         dropped = False
         try:
-            point = zone.run_js("this.scrollIntoView({block:'center'}); const r=this.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2};")
+            point = as_element(zone).run_js("this.scrollIntoView({block:'center'}); const r=this.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2};")
             if not isinstance(point, dict) or not all(isinstance(point.get(k), (int, float)) and point[k] > 0 for k in ("x", "y")):
                 return DispatchResult(DispatchState.NOT_DISPATCHED, "cdp_drop", "invalid_target")
             data = {"items": [], "files": [str(path)], "dragOperationsMask": 1}
@@ -127,7 +127,7 @@ for(const type of ['dragenter','dragover','drop']) this.dispatchEvent(new DragEv
 return true;
 """.replace("PAYLOAD", payload)
         try:
-            zone.run_js(script)
+            as_element(zone).run_js(script)
             return DispatchResult(DispatchState.DISPATCHED, "js_drop")
         except Exception:
             return DispatchResult(DispatchState.UNKNOWN, "js_drop", "drop_acknowledgement_missing")
@@ -148,7 +148,7 @@ return true;
                 copier(str(path))
                 modifier = get_primary_modifier_key()
                 pasted = True
-                self.tab.actions.key_down(modifier).key_down("V").key_up("V").key_up(modifier)
+                driver_for_tab(self.tab).actions.key_down(modifier).key_down("V").key_up("V").key_up(modifier)
             return DispatchResult(DispatchState.DISPATCHED, name)
         except (ClipboardUnsupportedError, ClipboardDependencyError):
             return DispatchResult(DispatchState.NOT_DISPATCHED, name, "clipboard_unavailable")

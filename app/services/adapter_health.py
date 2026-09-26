@@ -55,7 +55,8 @@ class DrissionProbe:
         from app.core.driver import DriverError
 
         try:
-            return len(self.driver.find_all(selector, timeout=self.timeout))
+            # 配置里的选择器默认是 CSS：先规范化，再交给驱动（驱动按 DrissionPage 原生语法原样传递）
+            return len(self.driver.find_all(to_locator(selector), timeout=self.timeout))
         except DriverError as exc:
             logger.debug(f"选择器无效或查询失败: {selector!r}: {exc}")
             return -1

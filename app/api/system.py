@@ -40,6 +40,7 @@ from app.services.extractor_manager import extractor_manager
 from app.services.request_manager import request_manager
 from app.utils.site_url import extract_remote_site_domain, route_domain_matches
 from update_preserve import load_update_preserve_settings, save_update_preserve_settings
+from app.core.driver import as_element, driver_for_tab
 
 logger = get_logger("API.SYSTEM")
 
@@ -564,7 +565,7 @@ def _build_selector_test_diagnosis(
 
 def _collect_selector_test_element_snapshot(ele: Any) -> Dict[str, Any]:
     try:
-        snapshot = ele.run_js(
+        snapshot = as_element(ele).run_js(
             """
             return (function () {
                 const target = this;
@@ -1359,7 +1360,7 @@ def _run_selector_test(
                 return
 
             try:
-                elements = tab.eles(query_selector, timeout=timeout)
+                elements = driver_for_tab(tab).find_all(query_selector, timeout=timeout)
             except Exception as error:
                 tab_summary.update({"success": False, "count": 0, "message": str(error)})
                 result["tabs"].append(tab_summary)
@@ -1387,7 +1388,7 @@ def _run_selector_test(
             if highlight:
                 for ele in valid_elements:
                     try:
-                        ele.run_js("""
+                        as_element(ele).run_js("""
                             const token = `selector-test-${Date.now()}-${Math.random().toString(36).slice(2)}`;
                             const previous = {
                                 outline: this.style.outline,

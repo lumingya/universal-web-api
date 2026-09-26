@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 
 from app.core.config import get_logger
 from app.models.schemas import normalize_modalities_config
+from app.core.driver import as_element
 
 logger = get_logger("IMG_EXT")
 
@@ -629,7 +630,7 @@ class ImageExtractor:
         
         try:
             # 执行 JS
-            result = element.run_js(self.EXTRACT_IMAGES_JS, js_opts)
+            result = as_element(element).run_js(self.EXTRACT_IMAGES_JS, js_opts)
             
             if not result:
                 logger.debug(f" JS 返回空结果")

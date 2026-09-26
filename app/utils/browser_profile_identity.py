@@ -7,7 +7,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Any, Dict
-from app.core.driver import driver_for_tab
+from app.core.driver import browser_driver, driver_for_tab
 
 
 _CACHE: Dict[str, Dict[str, str]] = {}
@@ -57,7 +57,7 @@ def _profile_display_name(profile_path: Path) -> Dict[str, str]:
 
 
 def _target_infos(browser: Any) -> list[Dict[str, Any]]:
-    result = browser._run_cdp("Target.getTargets") or {}
+    result = browser_driver(browser).run_cdp("Target.getTargets") or {}
     items = result.get("targetInfos") if isinstance(result, dict) else []
     return [item for item in (items or []) if isinstance(item, dict)]
 
@@ -90,7 +90,7 @@ def _resolve_via_profile_page(tab: Any, timeout: float = 3.0) -> Dict[str, str]:
         if context_id:
             create_args["browserContextId"] = context_id
         try:
-            created = browser._run_cdp("Target.createTarget", **create_args) or {}
+            created = browser_driver(browser).run_cdp("Target.createTarget", **create_args) or {}
             if isinstance(created, dict):
                 temp_target_id = str(created.get("targetId") or "").strip()
         except Exception:
@@ -166,7 +166,7 @@ def _resolve_via_profile_page(tab: Any, timeout: float = 3.0) -> Dict[str, str]:
     finally:
         if temp_target_id:
             try:
-                browser._run_cdp("Target.closeTarget", targetId=temp_target_id)
+                browser_driver(browser).run_cdp("Target.closeTarget", targetId=temp_target_id)
             except Exception:
                 pass
         if popup_token:

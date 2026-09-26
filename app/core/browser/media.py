@@ -40,6 +40,7 @@ from app.utils.media_safety import (
 from app.utils.site_url import extract_remote_site_domain
 from app.utils.image_validation import filter_reference_images
 from app.core.tab_pool import TabSession
+from app.core.driver import as_element, driver_for_tab
 
 if TYPE_CHECKING:
     from .main import BrowserCore
@@ -63,7 +64,7 @@ class BrowserMediaMixin:
         selector = str(image_config.get("selector") or "img").strip() or "img"
         token = uuid.uuid4().hex
         try:
-            result = tab.run_js(
+            result = driver_for_tab(tab).run_js(
                 """
                 const selector = String(arguments[0] || "img");
                 const token = String(arguments[1] || "");
@@ -232,7 +233,7 @@ class BrowserMediaMixin:
 
         try:
             return bool(
-                candidate.run_js(
+                as_element(candidate).run_js(
                     """
                     const selector = String(arguments[0] || "img");
                     const baselineToken = String(arguments[1] || "");
@@ -1109,7 +1110,7 @@ class BrowserMediaMixin:
                 def _has_media(candidate) -> bool:
                     try:
                         return bool(
-                            candidate.run_js(
+                            as_element(candidate).run_js(
                                 """
                                 const selector = String(arguments[0] || "img");
                                 try {
@@ -1146,7 +1147,7 @@ class BrowserMediaMixin:
                     for index, candidate in enumerate(candidates):
                         has_media = _has_media(candidate)
                         try:
-                            rect = candidate.run_js(
+                            rect = as_element(candidate).run_js(
                                 """
                                 const rect = this.getBoundingClientRect();
                                 return {
@@ -1410,7 +1411,7 @@ class BrowserMediaMixin:
                         placeholder_text = str(extractor.extract_text(last_element) or "")
                     else:
                         placeholder_text = str(
-                            last_element.run_js("return this.innerText || this.textContent || ''") or ""
+                            as_element(last_element).run_js("return this.innerText || this.textContent || ''") or ""
                         )
                 except Exception:
                     placeholder_text = ""
@@ -1449,7 +1450,7 @@ class BrowserMediaMixin:
             if not has_generated_image_hint:
                 try:
                     has_generated_image_hint = bool(
-                        last_element.run_js(
+                        as_element(last_element).run_js(
                             """
                             return !!this.querySelector(
                                 '.attachment-container.generated-images, '
@@ -1827,7 +1828,7 @@ class BrowserMediaMixin:
         if target_element is not None and len(effective_response_text_hint) <= 8:
             try:
                 dom_response_text = str(
-                    target_element.run_js(
+                    as_element(target_element).run_js(
                         """
                         const text = (this.innerText || this.textContent || "").trim();
                         return text;
@@ -2256,7 +2257,7 @@ class BrowserMediaMixin:
         last_state: Dict[str, Any] = {}
         while True:
             try:
-                raw_state = img_ele.run_js(
+                raw_state = as_element(img_ele).run_js(
                     """
                     return (() => {
                         const src = String(
@@ -2310,7 +2311,7 @@ class BrowserMediaMixin:
     def _expand_image_element_for_screenshot(img_ele) -> bool:
         """Temporarily render an image at its decoded dimensions for screenshot fallback."""
         try:
-            return bool(img_ele.run_js(
+            return bool(as_element(img_ele).run_js(
                 """
                 return (() => {
                     const image = this;
@@ -2357,7 +2358,7 @@ class BrowserMediaMixin:
     @staticmethod
     def _restore_image_element_after_screenshot(img_ele) -> None:
         try:
-            img_ele.run_js(
+            as_element(img_ele).run_js(
                 """
                 (() => {
                     const image = this;
@@ -2455,7 +2456,7 @@ class BrowserMediaMixin:
             seen_ids = {id(e["element"]) for e in target_list}
             for candidate_selector in candidate_selectors:
                 try:
-                    candidates = root.eles(f"css:{candidate_selector}", timeout=0.5) or []
+                    candidates = as_element(root).find_all(f"css:{candidate_selector}", timeout=0.5) or []
                 except Exception as exc:
                     logger.debug(
                         f"读取{scope_name}图片候选失败（忽略）: "
@@ -2494,7 +2495,7 @@ class BrowserMediaMixin:
                             };
                         """
                         try:
-                            entry_state = ele.run_js(
+                            entry_state = as_element(ele).run_js(
                                 baseline_probe,
                                 baseline_property,
                                 baseline_token,
@@ -2505,7 +2506,7 @@ class BrowserMediaMixin:
                             # baseline marker, so retain the strict URL match and treat
                             # the candidate as unmarked rather than failing extraction.
                             entry_state = {
-                                "src": ele.run_js(
+                                "src": as_element(ele).run_js(
                                     """
                                     return String(
                                         this.currentSrc
@@ -3157,10 +3158,10 @@ class BrowserMediaMixin:
                 })(arguments[0]);
                 """
 
-                probe_result = tab.run_js(probe_js, url)
+                probe_result = driver_for_tab(tab).run_js(probe_js, url)
                 logger.info(f"[PROBE_JS] probe_result_type={type(probe_result).__name__}, value={str(probe_result)[:500]}")
 
-                download_result = tab.run_js(js_code, url, canvas_image_max_size)
+                download_result = driver_for_tab(tab).run_js(js_code, url, canvas_image_max_size)
 
                 logger.info(f"[PROBE_JS] canvas_result_type={type(download_result).__name__}, value={str(download_result)[:300]}")                
                 if download_result and download_result.get('success'):

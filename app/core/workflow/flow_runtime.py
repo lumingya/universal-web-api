@@ -16,6 +16,7 @@ from urllib.parse import quote
 from typing import Any
 
 from app.core.config import WorkflowError, WorkflowCancelledError
+from app.core.driver import as_element
 
 CONTROL_ACTIONS = frozenset({"SET", "CAPTURE", "IF", "SWITCH", "GROUP", "GUARD", "TRY", "LABEL"})
 LEAF_ACTIONS = frozenset({"FILL_INPUT", "SELECT_MODEL", "CLICK", "COORD_CLICK", "COORD_SCROLL", "STREAM_WAIT", "STREAM_OUTPUT", "KEY_PRESS", "WAIT", "JS_EXEC", "READONLY_HINT", "PAGE_FETCH"})
@@ -564,7 +565,7 @@ def capture_page_state(executor, spec, target, variables=None):
     if source == "text": result = element.text
     elif source == "class": result = element.attr("class")
     elif source == "attribute": result = element.attr(spec["attribute"])
-    elif source == "value": result = element.run_js("return this.value;")
+    elif source == "value": result = as_element(element).run_js("return this.value;")
     else: raise FlowValidationError("不支持的捕获类型")
     if result is None and "default" in spec: return spec["default"]
     if isinstance(result, str) and len(result) > 65536: raise FlowLimitError("捕获结果超过 65536 字符")

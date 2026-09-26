@@ -21,7 +21,7 @@ from app.services.arena_direct_models import (
     resolve_arena_direct_model,
 )
 from app.utils.human_mouse import cdp_precise_click, human_scroll_path, idle_drift, smooth_move_mouse
-from app.core.driver import driver_for_tab
+from app.core.driver import as_element, driver_for_tab
 
 
 _URL_SNAPSHOT_TIMING_LOG_THRESHOLD = 0.25
@@ -189,7 +189,7 @@ class WorkflowExecutorActionMixin:
 
         try:
             self._smart_delay(0.02, 0.06)
-            result = ele.run_js(
+            result = as_element(ele).run_js(
                 """
                 try {
                     const el = this;
@@ -1281,7 +1281,7 @@ class WorkflowExecutorActionMixin:
             return []
         locator = raw_selector if raw_selector.startswith(("css:", "xpath:")) else f"css:{raw_selector}"
         try:
-            return [ele for ele in self.tab.eles(locator) if self._element_is_displayed(ele)]
+            return [ele for ele in driver_for_tab(self.tab).find_all(locator) if self._element_is_displayed(ele)]
         except Exception:
             return []
 
@@ -1340,7 +1340,7 @@ class WorkflowExecutorActionMixin:
         if ele is None:
             return ""
         try:
-            span = ele.ele('css:span.flex-1.truncate.text-left', timeout=0.02)
+            span = as_element(ele).find('css:span.flex-1.truncate.text-left', timeout=0.02)
             if span:
                 val = str(getattr(span, "raw_text", "") or getattr(span, "text", "") or "").strip()
                 if val:

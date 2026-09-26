@@ -51,6 +51,7 @@ from app.services.config_engine import config_engine
 from app.services.extractor_manager import extractor_manager
 from app.utils.site_url import extract_remote_site_domain
 from app.utils.similarity import verify_extraction
+from app.core.driver import driver_for_tab
 
 logger = get_logger('API.CONFIG')
 
@@ -892,7 +893,7 @@ async def consume_workflow_editor_actions(
 
     for tab in tabs:
         try:
-            queued_actions = tab.run_js(
+            queued_actions = driver_for_tab(tab).run_js(
                 """
                 return (function() {
                   const queue = Array.isArray(window.__WORKFLOW_EDITOR_PENDING_ACTIONS__)

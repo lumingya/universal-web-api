@@ -11,6 +11,7 @@ import time
 from datetime import date, timedelta
 from typing import Any, Callable, Dict, Iterable, List, Optional, Set, TYPE_CHECKING
 from urllib.parse import urlsplit
+from app.core.driver import as_element, driver_for_tab
 
 try:
     import requests
@@ -249,7 +250,7 @@ class CommandEngineActionsMixin:
         script_identifier = str((registry_entry or {}).get("identifier", "") or "").strip()
         if script_identifier:
             try:
-                tab.run_cdp(
+                driver_for_tab(tab).run_cdp(
                     "Page.removeScriptToEvaluateOnNewDocument",
                     identifier=script_identifier,
                     _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
@@ -293,7 +294,7 @@ class CommandEngineActionsMixin:
 
     def _run_command_js(self, tab: Any, code: Any) -> Any:
         wrapped_code = self._wrap_run_js_for_return(code)
-        return tab.run_js(wrapped_code if wrapped_code is not None else code)
+        return driver_for_tab(tab).run_js(wrapped_code if wrapped_code is not None else code)
 
     def _execute_command_async(
         self,
@@ -754,7 +755,7 @@ return (() => {
         while time.time() < deadline:
             attempt_count += 1
             try:
-                probe = session.tab.run_js(self._captcha_click_point_script())
+                probe = driver_for_tab(session.tab).run_js(self._captcha_click_point_script())
             except Exception as e:
                 last_error = f"captcha_probe_failed:{e}"
                 logger.warning(f"[CMD] 人机验证目标探测失败，继续重试: {e}")
@@ -875,7 +876,7 @@ return (() => {
 
                 if origin:
                     try:
-                        tab.run_cdp("Storage.clearDataForOrigin", origin=origin, storageTypes="all")
+                        driver_for_tab(tab).run_cdp("Storage.clearDataForOrigin", origin=origin, storageTypes="all")
                         origin_cleared = True
                     except Exception as e:
                         logger.debug(f"[CMD] 按源清空存储失败（忽略）: {e}")
@@ -888,7 +889,7 @@ return (() => {
                     if kwargs is None:
                         continue
                     try:
-                        result = tab.run_cdp("Network.getCookies", **kwargs) or {}
+                        result = driver_for_tab(tab).run_cdp("Network.getCookies", **kwargs) or {}
                         cookies = result.get("cookies") or []
                         if cookies:
                             cookie_items = cookies
@@ -917,13 +918,13 @@ return (() => {
                     elif current_url:
                         delete_kwargs["url"] = current_url
                     try:
-                        tab.run_cdp("Network.deleteCookies", **delete_kwargs)
+                        driver_for_tab(tab).run_cdp("Network.deleteCookies", **delete_kwargs)
                         deleted_cookies += 1
                     except Exception as e:
                         logger.debug(f"[CMD] 删除 Cookie 失败（忽略）: {e}")
 
                 try:
-                    tab.run_js(
+                    driver_for_tab(tab).run_js(
                         "try { localStorage.clear(); } catch (e) {}"
                         "try { sessionStorage.clear(); } catch (e) {}"
                         "try { document.cookie.split(';').forEach(function(c) {"
@@ -966,7 +967,7 @@ return (() => {
                 if site_data:
                     selector = site_data.get("selectors", {}).get("new_chat_btn", "")
                     if selector:
-                        ele = tab.ele(selector, timeout=3)
+                        ele = driver_for_tab(tab).find(selector, timeout=3)
                         if ele:
                             ele.click()
                             time.sleep(1)
@@ -1072,7 +1073,7 @@ return (() => {
                     previous_source = str((registry_entry or {}).get("source", "") or "")
                     if previous_identifier and previous_source and previous_source != code:
                         try:
-                            tab.run_cdp(
+                            driver_for_tab(tab).run_cdp(
                                 "Page.removeScriptToEvaluateOnNewDocument",
                                 identifier=previous_identifier,
                                 _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
@@ -1082,7 +1083,7 @@ return (() => {
                         previous_identifier = ""
 
                     if not previous_identifier or previous_source != code:
-                        result = tab.run_cdp(
+                        result = driver_for_tab(tab).run_cdp(
                             "Page.addScriptToEvaluateOnNewDocument",
                             source=code,
                             _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
@@ -1153,7 +1154,7 @@ return (() => {
             selector = action.get("selector", "")
             if selector:
                 try:
-                    ele = tab.ele(selector, timeout=3)
+                    ele = driver_for_tab(tab).find(selector, timeout=3)
                     if ele:
                         # 获取当前站点的 stealth 配置
                         config_engine = self._get_config_engine()
@@ -1166,7 +1167,7 @@ return (() => {
                         if is_stealth:
                             logger.debug(f"[CMD] 准备低熵模式点击元素: {selector}")
                             # 尝试通过 JS 获取元素中心坐标
-                            rect = ele.run_js(
+                            rect = as_element(ele).run_js(
                                 "const r = this.getBoundingClientRect();"
                                 "return {x: Math.round(r.x + r.width/2), y: Math.round(r.y + r.height/2)}"
                             )
@@ -1697,7 +1698,7 @@ return (() => {
             "  }\n"
             "}).call(this);"
         )
-        value = ele.run_js(js)
+        value = as_element(ele).run_js(js)
         return str(value or "")
 
     def _execute_read_element_action(self, action: Dict, session: 'TabSession') -> Any:
@@ -1711,7 +1712,7 @@ return (() => {
         trim_enabled = bool(action.get("trim", True))
 
         try:
-            ele = session.tab.ele(selector, timeout=timeout_sec)
+            ele = driver_for_tab(session.tab).find(selector, timeout=timeout_sec)
             if not ele:
                 return {"ok": False, "error": f"element_not_found:{selector}"}
             value = self._read_element_value(ele, read_mode, attr_name)
@@ -1740,7 +1741,7 @@ return (() => {
         extras = resolved.get("extras") or {}
 
         try:
-            ele = session.tab.ele(selector, timeout=timeout_sec)
+            ele = driver_for_tab(session.tab).find(selector, timeout=timeout_sec)
             if not ele:
                 return {"ok": False, "error": f"element_not_found:{selector}"}
 
@@ -2251,7 +2252,7 @@ return (() => {
         try:
             if hasattr(session.tab, "stop_loading"):
                 session.tab.stop_loading()
-            session.tab.run_js("if (window.stop) { window.stop(); }")
+            driver_for_tab(session.tab).run_js("if (window.stop) { window.stop(); }")
         except Exception:
             pass
 
@@ -2668,7 +2669,7 @@ return (() => {
                         "const ui = command_ui.values || command_ui;\n"
                         + script
                     )
-                result = session.tab.run_js(wrapped_script, ui_payload)
+                result = driver_for_tab(session.tab).run_js(wrapped_script, ui_payload)
                 logger.info(f"[CMD] JS 脚本执行完成: {str(result)[:200]}")
                 return {"mode": "advanced", "result": result, "steps": []}
             except Exception as e:

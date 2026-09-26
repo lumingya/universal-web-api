@@ -20,7 +20,7 @@ from app.core.page_lifecycle import (
     install_visibility_emulation,
     restore_visibility_emulation,
 )
-from app.core.driver import driver_for_tab
+from app.core.driver import as_element, driver_for_tab
 
 
 class _PageInteractionGate:
@@ -831,7 +831,7 @@ class WorkflowExecutorInteractionMixin:
 
     def _sample_element_interactable_state(self, ele) -> Dict[str, Any]:
         try:
-            state = ele.run_js(
+            state = as_element(ele).run_js(
                 """
                 try {
                     const el = this;

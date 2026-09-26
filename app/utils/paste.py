@@ -12,6 +12,7 @@ import random
 import json
 from typing import Optional
 from app.core.config import get_logger
+from app.core.driver import driver_for_tab
 
 logger = get_logger("PASTE")
 
@@ -106,13 +107,13 @@ def safe_universal_paste(page, selector: str, text_content: str,
     
     # 注入通用 JS 函数
     try:
-        page.run_js(UNIVERSAL_INSERT_JS)
+        driver_for_tab(page).run_js(UNIVERSAL_INSERT_JS)
     except Exception as e:
         logger.error(f"注入 JS 失败: {e}")
         return False
     
     # 获取元素对象
-    ele = page.ele(selector)
+    ele = driver_for_tab(page).find(selector)
     if not ele:
         logger.warning(f"找不到元素: {selector}")
         return False
@@ -131,20 +132,20 @@ def safe_universal_paste(page, selector: str, text_content: str,
         for retry in range(max_retries + 1):
             try:
                 # 获取写入前的长度
-                before_len = page.run_js("return window.getElementTextLength(arguments[0])", ele)
+                before_len = driver_for_tab(page).run_js("return window.getElementTextLength(arguments[0])", ele)
                 before_len = before_len or 0
                 
                 # 安全转义文本，防止 JS 报错
                 safe_chunk = json.dumps(chunk)
                 
                 # 调用 JS 写入
-                result = page.run_js(f"return window.universalAppend(arguments[0], {safe_chunk})", ele)
+                result = driver_for_tab(page).run_js(f"return window.universalAppend(arguments[0], {safe_chunk})", ele)
                 
                 # 短暂等待让页面更新
                 time.sleep(0.05)
                 
                 # 获取写入后的长度
-                after_len = page.run_js("return window.getElementTextLength(arguments[0])", ele)
+                after_len = driver_for_tab(page).run_js("return window.getElementTextLength(arguments[0])", ele)
                 after_len = after_len or 0
                 
                 # 验证是否成功写入
@@ -179,14 +180,14 @@ def clear_and_paste(page, selector: str, text_content: str, **kwargs) -> bool:
     """
     清空输入框后粘贴（用于替换内容而非追加）
     """
-    ele = page.ele(selector)
+    ele = driver_for_tab(page).find(selector)
     if not ele:
         logger.warning(f"找不到元素: {selector}")
         return False
     
     # 清空内容
     try:
-        page.run_js("""
+        driver_for_tab(page).run_js("""
             const ele = arguments[0];
             if (ele.tagName === 'TEXTAREA' || ele.tagName === 'INPUT') {
                 ele.value = '';

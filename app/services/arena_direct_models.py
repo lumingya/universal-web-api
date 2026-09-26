@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 
 from app.core.config import logger
 from app.utils.site_url import extract_remote_site_domain, route_domain_matches
+from app.core.driver import driver_for_tab
 
 
 ARENA_DIRECT_MODEL_PREFIX = "arena.ai/direct/"
@@ -542,9 +543,9 @@ def read_arena_direct_models_from_tab(tab: Any) -> List[Dict[str, Any]]:
         return []
     try:
         try:
-            return _normalize_models(tab.run_js(_ARENA_DIRECT_MODEL_EXTRACT_JS, timeout=3.0))
+            return _normalize_models(driver_for_tab(tab).run_js(_ARENA_DIRECT_MODEL_EXTRACT_JS, timeout=3.0))
         except TypeError:
-            return _normalize_models(tab.run_js(_ARENA_DIRECT_MODEL_EXTRACT_JS))
+            return _normalize_models(driver_for_tab(tab).run_js(_ARENA_DIRECT_MODEL_EXTRACT_JS))
     except Exception as e:
         logger.debug(f"从标签页读取 Arena 直连模型失败（已优雅降级）: {e}")
         return []

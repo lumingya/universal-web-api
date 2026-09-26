@@ -8,6 +8,7 @@ from app.core.config import logger
 from ._arena_snapshot import _ARENA_STORE_SNAPSHOT_JS
 from .idle_maintenance import note_network_activity
 from .session import TabSession
+from app.core.driver import driver_for_tab
 
 
 ResponseListenerCallback = Callable[[TabSession, Any, Dict[str, Any], threading.Event], None]
@@ -437,10 +438,10 @@ class _GlobalNetworkInterceptionManager:
 
     def _start_listen(self, tab: Any) -> None:
         try:
-            tab.listen.start(self._listen_pattern, res_type=self._res_types)
+            driver_for_tab(tab).listener.start(self._listen_pattern, res_type=self._res_types)
         except TypeError:
             # 简化的测试替身 / 旧版 Listener 不支持 res_type
-            tab.listen.start(self._listen_pattern)
+            driver_for_tab(tab).listener.start(self._listen_pattern)
 
     def start_for_session(self, session: TabSession) -> bool:
         if not session:
@@ -557,7 +558,7 @@ class _GlobalNetworkInterceptionManager:
                 if not listening:
                     try:
                         # 复用连接，降低对 CDP session 的额外占用
-                        tab.listen._reuse_driver = True
+                        driver_for_tab(tab).listener._reuse_driver = True
                         self._start_listen(tab)
                         listening = True
                         last_listener_clear_at = time.monotonic()
@@ -574,7 +575,7 @@ class _GlobalNetworkInterceptionManager:
                         events_since_listener_clear = 0
 
                 try:
-                    response = tab.listen.wait(timeout=self._wait_timeout)
+                    response = driver_for_tab(tab).listener.wait(timeout=self._wait_timeout)
                 except Exception as e:
                     if stop_event.is_set() or self._is_shutdown():
                         break

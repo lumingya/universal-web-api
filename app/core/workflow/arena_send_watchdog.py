@@ -16,6 +16,7 @@ from typing import Any, Callable, Dict, Mapping, Optional
 from urllib.parse import urlparse
 
 from app.core.config import logger
+from app.core.driver import driver_for_tab
 
 
 ARENA_SEND_NO_TARGET_AFTER_RETRY = "arena_send_no_target_after_retry"
@@ -279,7 +280,7 @@ class ArenaSendWatchdog:
         stop_selector = str(self.selectors.get("stop_btn") or "")
         script = self._snapshot_script(input_selector, stop_selector)
         try:
-            raw = self.tab.run_js(script, timeout=2)
+            raw = driver_for_tab(self.tab).run_js(script, timeout=2)
         except Exception as exc:
             logger.debug(f"[ArenaWatchdog] DOM snapshot failed: {exc}")
             return ArenaSendSnapshot()
@@ -331,7 +332,7 @@ class ArenaSendWatchdog:
             str(selectors.get("stop_btn") or ""),
         )
         try:
-            raw = tab.run_js(script, timeout=2)
+            raw = driver_for_tab(tab).run_js(script, timeout=2)
         except Exception as exc:
             logger.debug(f"[ArenaWatchdog] error baseline capture failed: {exc}")
             return {"available": False, "items": []}
@@ -548,7 +549,7 @@ def refresh_arena_page_for_retry(
         try:
             if should_stop is not None and should_stop():
                 raise ArenaSendWatchdogCancelled("Arena retry refresh cancelled")
-            raw = tab.run_js(
+            raw = driver_for_tab(tab).run_js(
                 ArenaSendWatchdog._snapshot_script(selector, ""),
                 timeout=2,
             )

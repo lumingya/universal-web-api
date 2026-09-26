@@ -126,11 +126,11 @@ class FakeTabDriver:
         self.cdp_calls.append((method, params))
         return self._cdp(method, params) if self._cdp else {}
 
-    def find(self, locator: str, timeout: float = 0) -> Optional[FakeElement]:
+    def find(self, locator: str, timeout: Optional[float] = None) -> Optional[FakeElement]:
         matches = self.find_all(locator, timeout)
         return matches[0] if matches else None
 
-    def find_all(self, locator: str, timeout: float = 0) -> List[FakeElement]:
+    def find_all(self, locator: str, timeout: Optional[float] = None) -> List[FakeElement]:
         self._maybe_fail()
         return [element for element in self.elements if element.matches(locator)]
 

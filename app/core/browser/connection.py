@@ -8,9 +8,10 @@ import time
 import contextlib
 from typing import Optional, List, Dict, Any, TYPE_CHECKING
 
-from DrissionPage import Chromium, ChromiumPage, ChromiumOptions
+from app.core.driver.drission_internals import connect_existing_browser
 from app.core.config import logger, BrowserConstants, BrowserConnectionError, SSEFormatter
 from app.core import cdp_hygiene
+from app.core.driver import browser_driver
 
 # P0-2 / P0-4：运行期 CDP 卫生补丁（释放 run_js 对象结果、Network.enable 缓冲上限）
 cdp_hygiene.install()
@@ -324,10 +325,7 @@ class BrowserConnectionMixin:
 
         try:
             logger.debug(f"连接浏览器 127.0.0.1:{self.port}")
-            opts = ChromiumOptions()
-            opts.set_address(f"127.0.0.1:{self.port}")
-            opts.existing_only()
-            self.browser_handle = Chromium(addr_or_opts=opts)
+            self.browser_handle = connect_existing_browser(f"127.0.0.1:{self.port}")
             if previous_handle is not None and previous_handle is not self.browser_handle:
                 self._dispose_previous_browser_handle(previous_handle, "connect")
             try:
@@ -380,7 +378,7 @@ class BrowserConnectionMixin:
             return False
 
         try:
-            result = browser._run_cdp("Target.getTargets") or {}
+            result = browser_driver(browser).run_cdp("Target.getTargets") or {}
             target_infos = result.get("targetInfos")
             return isinstance(target_infos, list)
         except Exception:
@@ -392,7 +390,7 @@ class BrowserConnectionMixin:
             return []
 
         try:
-            result = browser._run_cdp("Target.getTargets") or {}
+            result = browser_driver(browser).run_cdp("Target.getTargets") or {}
             target_infos = result.get("targetInfos") or []
         except Exception:
             return []

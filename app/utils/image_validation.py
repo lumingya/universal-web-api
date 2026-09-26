@@ -22,6 +22,7 @@ from PIL import Image, ImageOps
 
 from app.core.config import logger
 from app.utils.remote_resource import UnsafeRemoteResourceError, get_public_remote_resource
+from app.core.driver import driver_for_tab
 
 # S10：比对/C2PA 路径读取第三方页面图片时的预算（与 image_handler 的上传图片上限保持同一量级）。
 MAX_VALIDATION_IMAGE_BYTES = 20 * 1024 * 1024
@@ -83,7 +84,7 @@ def get_current_page_url(tab: Any) -> str:
     if tab is None:
         return ""
     try:
-        return str(tab.run_js("return location.href") or "").strip()
+        return str(driver_for_tab(tab).run_js("return location.href") or "").strip()
     except Exception:
         return str(getattr(tab, "url", "") or "").strip()
 
@@ -138,7 +139,7 @@ def read_image_bytes(
         return b""
 
     try:
-        result = tab.run_js(
+        result = driver_for_tab(tab).run_js(
             r"""
             return (async function(url, maxBytes) {
                 let timer = null;

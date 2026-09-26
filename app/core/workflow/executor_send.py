@@ -12,6 +12,7 @@ from app.core.config import BrowserConstants, WorkflowError, logger
 from app.core.elements import ElementFinder
 from app.services.arena_image_generation import is_arena_page_url
 from .attachment_monitor import AttachmentMonitor
+from app.core.driver import driver_for_tab
 
 
 class WorkflowExecutorSendMixin:
@@ -141,7 +142,7 @@ class WorkflowExecutorSendMixin:
         """
 
         try:
-            return self.tab.run_js(js) or {}
+            return driver_for_tab(self.tab).run_js(js) or {}
         except Exception as e:
             logger.debug(f"[SEND] 附件状态探测失败: {e}")
             return {
@@ -489,7 +490,7 @@ class WorkflowExecutorSendMixin:
         try:
             url = str(getattr(tab, "url", "") or "")
             if not url and hasattr(tab, "run_js"):
-                url = str(tab.run_js("return location.href") or "")
+                url = str(driver_for_tab(tab).run_js("return location.href") or "")
         except Exception:
             url = ""
         return is_arena_page_url(url)
@@ -543,7 +544,7 @@ class WorkflowExecutorSendMixin:
         }})();
         """
         try:
-            return bool(tab.run_js(script))
+            return bool(driver_for_tab(tab).run_js(script))
         except Exception as exc:
             logger.debug(f"[SEND] Arena 主动打断执行异常: {exc}")
             return False
@@ -985,7 +986,7 @@ class WorkflowExecutorSendMixin:
         """
 
         try:
-            res = self.tab.run_js(js) or {}
+            res = driver_for_tab(self.tab).run_js(js) or {}
             logger.debug(
                 f"[SEND] 探测页面状态: generating={res.get('generating')}, "
                 f"stopBtnFound={res.get('stopBtnFound')}, "

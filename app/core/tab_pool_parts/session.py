@@ -13,6 +13,7 @@ from app.utils.site_url import (
 )
 
 from ._utils import _TAB_HEALTH_CACHE_TTL_SEC, _should_skip_pool_url
+from app.core.driver import driver_for_tab
 
 
 class TabStatus(Enum):
@@ -73,8 +74,6 @@ class TabSession:
     @property
     def driver(self):
         """R2-1：该标签页的统一驱动（按标签页对象复用同一个包装）。迁移中的代码通过它访问浏览器。"""
-        from app.core.driver import driver_for_tab
-
         return driver_for_tab(self.tab)
 
     def is_available(self) -> bool:
@@ -531,7 +530,7 @@ class TabSession:
         try:
             if hasattr(self.tab, "stop_loading"):
                 self.tab.stop_loading()
-            self.tab.run_js("if (window.stop) { window.stop(); }")
+            driver_for_tab(self.tab).run_js("if (window.stop) { window.stop(); }")
         except Exception:
             pass
 
@@ -643,7 +642,7 @@ class TabSession:
         try:
             if hasattr(self.tab, "stop_loading"):
                 self.tab.stop_loading()
-            self.tab.run_js("if (window.stop) { window.stop(); }")
+            driver_for_tab(self.tab).run_js("if (window.stop) { window.stop(); }")
         except Exception:
             pass
 

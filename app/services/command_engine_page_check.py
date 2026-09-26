@@ -8,6 +8,7 @@ import re
 import time
 from typing import Dict, List, Optional, Any, TYPE_CHECKING
 from app.services.command_engine_common import _NON_ASCII_RE, _WHITESPACE_RE, _WORD_LIKE_KEYWORD_RE, logger
+from app.core.driver import driver_for_tab
 
 if TYPE_CHECKING:
     from app.core.tab_pool import TabSession  # noqa: F401
@@ -235,7 +236,7 @@ class CommandEnginePageCheckMixin:
         }
         try:
             try:
-                session.tab.run_js(
+                driver_for_tab(session.tab).run_js(
                     "return (() => { window.__codexWorkflowContext = arguments[0] || {}; return true; })()",
                     context,
                 )

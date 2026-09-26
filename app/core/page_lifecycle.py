@@ -11,6 +11,7 @@ import time
 from typing import Any
 
 from app.core.config import logger
+from app.core.driver import driver_for_tab
 
 BACKGROUND_WAKE_CDP_TIMEOUT = 0.5
 BACKGROUND_WAKE_JS_TIMEOUT = 0.5
@@ -120,7 +121,7 @@ def install_visibility_emulation(tab: Any, owner: Any = None, *, reason: str = "
         try:
             phase_started = time.perf_counter()
             try:
-                result = tab.run_cdp(
+                result = driver_for_tab(tab).run_cdp(
                     "Page.addScriptToEvaluateOnNewDocument",
                     source=source,
                     _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
@@ -155,7 +156,7 @@ def install_visibility_emulation(tab: Any, owner: Any = None, *, reason: str = "
     try:
         phase_started = time.perf_counter()
         try:
-            tab.run_js(source, timeout=BACKGROUND_WAKE_JS_TIMEOUT)
+            driver_for_tab(tab).run_js(source, timeout=BACKGROUND_WAKE_JS_TIMEOUT)
         finally:
             _log_wake_timing(
                 reason,
@@ -174,7 +175,7 @@ def install_visibility_emulation(tab: Any, owner: Any = None, *, reason: str = "
     try:
         phase_started = time.perf_counter()
         try:
-            state = tab.run_js(
+            state = driver_for_tab(tab).run_js(
                 "return JSON.stringify({hidden: !!document.hidden, visibilityState: document.visibilityState || '', hasFocus: !!(document.hasFocus && document.hasFocus()), wasDiscarded: !!document.wasDiscarded});",
                 timeout=BACKGROUND_WAKE_JS_TIMEOUT,
             )
@@ -241,7 +242,7 @@ def restore_visibility_emulation(tab: Any, owner: Any = None, *, reason: str = "
             try:
                 phase_started = time.perf_counter()
                 try:
-                    tab.run_cdp(
+                    driver_for_tab(tab).run_cdp(
                         "Page.removeScriptToEvaluateOnNewDocument",
                         identifier=script_id,
                         _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
@@ -262,7 +263,7 @@ def restore_visibility_emulation(tab: Any, owner: Any = None, *, reason: str = "
     try:
         phase_started = time.perf_counter()
         try:
-            tab.run_js(_VISIBILITY_EMULATION_RESTORE_SOURCE, timeout=BACKGROUND_WAKE_JS_TIMEOUT)
+            driver_for_tab(tab).run_js(_VISIBILITY_EMULATION_RESTORE_SOURCE, timeout=BACKGROUND_WAKE_JS_TIMEOUT)
         finally:
             _log_wake_timing(
                 reason,

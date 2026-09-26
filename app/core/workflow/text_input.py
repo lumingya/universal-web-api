@@ -29,7 +29,7 @@ from app.utils.file_paste import (
 )
 from app.utils.human_mouse import smooth_move_mouse
 from app.utils.platform import get_primary_modifier_key
-from app.core.driver import driver_for_tab
+from app.core.driver import as_element, browser_driver, driver_for_tab
 
 # ================= 常量配置 =================
 
@@ -174,7 +174,7 @@ class TextInputHandler:
     def is_contenteditable(self, ele) -> bool:
         """检测元素是否为 contenteditable"""
         try:
-            return bool(ele.run_js("""
+            return bool(as_element(ele).run_js("""
                 return !!(this.isContentEditable || this.getAttribute('contenteditable') === 'true')
             """))
         except Exception:
@@ -190,7 +190,7 @@ class TextInputHandler:
     def debug_read_input_sample(self, ele, head: int = 80, tail: int = 80) -> dict:
         """读取输入框内容的头尾采样（用于调试）"""
         try:
-            return ele.run_js(f"""
+            return as_element(ele).run_js(f"""
                 return (function(){{
                     try {{
                         const el = this;
@@ -229,7 +229,7 @@ class TextInputHandler:
     def get_input_len(self, ele) -> int:
         """读取当前输入框内容长度"""
         try:
-            n = ele.run_js("""
+            n = as_element(ele).run_js("""
                 try {
                     const el = this;
                     if (!el) return 0;
@@ -255,7 +255,7 @@ class TextInputHandler:
     def read_input_full_text(self, ele) -> str:
         """读取输入框完整内容"""
         try:
-            s = ele.run_js("""
+            s = as_element(ele).run_js("""
                 try {
                     const el = this;
                     const target = (() => {
@@ -286,7 +286,7 @@ class TextInputHandler:
     def get_input_stats(self, ele) -> tuple:
         """获取输入框统计信息：(长度, 换行数)"""
         try:
-            res = ele.run_js("""
+            res = as_element(ele).run_js("""
                 return (function(){
                     try {
                         const el = this;
@@ -332,7 +332,7 @@ class TextInputHandler:
             pass
 
         try:
-            ele.run_js("""
+            as_element(ele).run_js("""
                 (function(){
                     try {
                         const tag = (this.tagName || '').toLowerCase();
@@ -371,7 +371,7 @@ class TextInputHandler:
     def focus_to_end(self, ele):
         """把焦点放回输入框，并把光标移到末尾"""
         try:
-            ele.run_js("""
+            as_element(ele).run_js("""
                 (function(){
                     try { this.focus && this.focus(); } catch(e){}
                     const tag = (this.tagName || '').toLowerCase();
@@ -406,7 +406,7 @@ class TextInputHandler:
     def _probe_focus_state(self, ele) -> dict:
         """检查当前焦点/选区是否仍落在目标输入元素内。"""
         try:
-            state = ele.run_js("""
+            state = as_element(ele).run_js("""
                 return (function(){
                     try {
                         const el = this;
@@ -499,7 +499,7 @@ class TextInputHandler:
                 owner = getattr(ele, "owner", None)
                 backend_id = getattr(ele, "_backend_id", None)
                 if owner is not None and backend_id is not None:
-                    owner._run_cdp("DOM.focus", backendNodeId=backend_id)
+                    browser_driver(owner).run_cdp("DOM.focus", backendNodeId=backend_id)
                     time.sleep(0.04)
                     state = self._probe_focus_state(ele)
                     if bool(state.get("activeWithin")) or bool(state.get("selectionWithin")):
@@ -844,7 +844,7 @@ class TextInputHandler:
         }}).call(this);
         """    
         try:
-            return bool(ele.run_js(js_code))
+            return bool(as_element(ele).run_js(js_code))
         except Exception as e:
             logger.error(f"原子输入执行错误: {e}")
             return False
@@ -853,7 +853,7 @@ class TextInputHandler:
         """(备用) 简单追加模式"""
         try:
             escaped = json.dumps(chunk)
-            ok = ele.run_js(f"""
+            ok = as_element(ele).run_js(f"""
             return (function() {{
                 try {{
                     const chunk = {escaped};
@@ -955,18 +955,18 @@ class TextInputHandler:
     def physical_activate(self, ele):
         """物理激活输入框（绕过 isTrusted 检测）"""
         try:
-            ele.run_js("this.focus && this.focus()")
+            as_element(ele).run_js("this.focus && this.focus()")
             
             is_ce = self.is_contenteditable(ele)
             
             if is_ce:
-                self.tab.actions.key_down(' ').key_up(' ')
+                driver_for_tab(self.tab).actions.key_down(' ').key_up(' ')
                 time.sleep(0.03)
-                self.tab.actions.key_down('Backspace').key_up('Backspace')
+                driver_for_tab(self.tab).actions.key_down('Backspace').key_up('Backspace')
             else:
                 ele.input(' ')
                 time.sleep(0.03)
-                self.tab.actions.key_down('Backspace').key_up('Backspace')
+                driver_for_tab(self.tab).actions.key_down('Backspace').key_up('Backspace')
             
             time.sleep(0.1)
         except Exception as e:
@@ -1066,7 +1066,7 @@ class TextInputHandler:
         try:
             escaped_text = json.dumps(text)
 
-            ok = ele.run_js(f"""
+            ok = as_element(ele).run_js(f"""
                 (function() {{
                     try {{
                         const v = {escaped_text};
@@ -1194,42 +1194,42 @@ class TextInputHandler:
         between_max = float(BrowserConstants.get('STEALTH_KEY_BETWEEN_MAX') or 0.06)
 
         if len(keys) == 1:
-            self.tab.actions.key_down(keys[0])
+            driver_for_tab(self.tab).actions.key_down(keys[0])
             self._sleep_human_key_delay(down_up_min, down_up_max)
-            self.tab.actions.key_up(keys[0])
+            driver_for_tab(self.tab).actions.key_up(keys[0])
             return
         
         modifier = keys[0]
         targets = keys[1:]
         
-        self.tab.actions.key_down(modifier)
+        driver_for_tab(self.tab).actions.key_down(modifier)
         self._sleep_human_key_delay(between_min, between_max)
 
         if len(targets) == 1:
             target = targets[0]
-            self.tab.actions.key_down(target)
+            driver_for_tab(self.tab).actions.key_down(target)
             self._sleep_human_key_delay(down_up_min, down_up_max)
 
             # 少量“交叉释放”模拟：先松修饰键再松目标键
             if random.random() < random.uniform(0.14, 0.26):
-                self.tab.actions.key_up(modifier)
+                driver_for_tab(self.tab).actions.key_up(modifier)
                 self._sleep_human_key_delay(0.01, 0.04)
-                self.tab.actions.key_up(target)
+                driver_for_tab(self.tab).actions.key_up(target)
             else:
-                self.tab.actions.key_up(target)
+                driver_for_tab(self.tab).actions.key_up(target)
                 self._sleep_human_key_delay(0.01, 0.04)
-                self.tab.actions.key_up(modifier)
+                driver_for_tab(self.tab).actions.key_up(modifier)
             return
         
         for i, target in enumerate(targets):
-            self.tab.actions.key_down(target)
+            driver_for_tab(self.tab).actions.key_down(target)
             self._sleep_human_key_delay(down_up_min, down_up_max)
-            self.tab.actions.key_up(target)
+            driver_for_tab(self.tab).actions.key_up(target)
             if i < len(targets) - 1:
                 self._sleep_human_key_delay(between_min, between_max)
         
         self._sleep_human_key_delay(down_up_min, down_up_max)
-        self.tab.actions.key_up(modifier)
+        driver_for_tab(self.tab).actions.key_up(modifier)
 
     def _press_primary_combo(self, key: str, *, humanized: bool = False):
         """发送平台主修饰键组合，例如 Ctrl/Cmd + A/V。"""
@@ -1237,7 +1237,7 @@ class TextInputHandler:
             self._human_key_combo(self._primary_modifier, key)
             return
 
-        self.tab.actions.key_down(self._primary_modifier).key_down(key).key_up(key).key_up(self._primary_modifier)
+        driver_for_tab(self.tab).actions.key_down(self._primary_modifier).key_down(key).key_up(key).key_up(self._primary_modifier)
 
     def _paste_text_via_clipboard(
         self,
@@ -1352,7 +1352,7 @@ class TextInputHandler:
             return []
 
         try:
-            return list(self.tab.eles(normalized, timeout=timeout) or [])
+            return list(driver_for_tab(self.tab).find_all(normalized, timeout=timeout) or [])
         except Exception as e:
             logger.debug(f"[FILE_PASTE] 查找元素失败 {selector!r}: {e}")
             return []
@@ -1390,7 +1390,7 @@ class TextInputHandler:
                 continue
             seen.add(normalized)
             try:
-                ele = self.tab.ele(normalized, timeout=1.5)
+                ele = driver_for_tab(self.tab).find(normalized, timeout=1.5)
             except Exception as e:
                 logger.debug(f"[FILE_PASTE] 上传后重定位输入框失败 ({source}={selector!r}): {e}")
                 continue
@@ -1409,7 +1409,7 @@ class TextInputHandler:
     def _get_element_file_count(self, ele) -> int:
         """Read the selected file count from a file input element."""
         try:
-            count = ele.run_js("return (this.files && this.files.length) || 0;")
+            count = as_element(ele).run_js("return (this.files && this.files.length) || 0;")
             return int(count or 0)
         except Exception:
             return 0
@@ -2086,7 +2086,7 @@ class TextInputHandler:
             time.sleep(0.05)
             self._press_primary_combo('A')
             time.sleep(0.05)
-            self.tab.actions.key_down('Delete').key_up('Delete')
+            driver_for_tab(self.tab).actions.key_down('Delete').key_up('Delete')
             time.sleep(0.1)
         
             self._paste_text_via_clipboard(

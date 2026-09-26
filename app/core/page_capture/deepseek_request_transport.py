@@ -10,6 +10,7 @@ from typing import Any, Dict
 from app.core.config import logger
 
 from .request_transport import register_page_request_transport
+from app.core.driver import driver_for_tab
 
 
 DEEPSEEK_COMPLETION_PROFILE: Dict[str, Any] = {
@@ -401,7 +402,7 @@ def execute_deepseek_completion_transport(
     )
 
     try:
-        result = tab.run_js(script) or {}
+        result = driver_for_tab(tab).run_js(script) or {}
     except Exception as e:
         logger.warning(f"[REQUEST_TRANSPORT] 页面直发执行异常: {e}")
         return {"ok": False, "error": str(e)}

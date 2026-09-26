@@ -360,7 +360,7 @@ def human_scroll(
             logger.debug(f"[SCROLL_CDP] mouseWheel 派发失败: {e}")
             # 降级到 actions（滚动触发 CF 的风险低于点击）
             try:
-                tab.actions.scroll(0, step * direction)
+                driver_for_tab(tab).actions.scroll(0, step * direction)
             except Exception:
                 break
         

@@ -13,6 +13,7 @@ from app.core.config import logger
 
 from ._utils import _looks_like_transient_local_debug_error
 from .session import TabSession, TabStatus
+from app.core.driver import browser_driver
 
 
 class TabPoolContextMixin:
@@ -27,7 +28,7 @@ class TabPoolContextMixin:
             if browser is None or not hasattr(browser, "_run_cdp"):
                 return {}
 
-            result = browser._run_cdp("Target.getTargetInfo", targetId=raw_tab_id) or {}
+            result = browser_driver(browser).run_cdp("Target.getTargetInfo", targetId=raw_tab_id) or {}
             info = result.get("targetInfo") or {}
             return info if isinstance(info, dict) else {}
         except Exception as e:
@@ -171,7 +172,7 @@ class TabPoolContextMixin:
             browser = self._get_browser_handle()
             if browser is None or not hasattr(browser, "_run_cdp"):
                 return
-            browser._run_cdp("Target.disposeBrowserContext", browserContextId=context_id)
+            browser_driver(browser).run_cdp("Target.disposeBrowserContext", browserContextId=context_id)
         except Exception as e:
             logger.debug(f"[TabPool] dispose browser context failed ({context_id}): {e}")
     def _dispose_browser_context_async(self, browser_context_id: Optional[str]) -> None:
@@ -504,7 +505,7 @@ class TabPoolContextMixin:
             return None
 
         try:
-            result = browser._run_cdp("Target.getTargets")
+            result = browser_driver(browser).run_cdp("Target.getTargets")
             if not isinstance(result, dict) or not isinstance(result.get("targetInfos"), list):
                 logger.debug("[TabPool] Target.getTargets returned an incomplete snapshot")
                 return None

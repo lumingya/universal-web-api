@@ -30,6 +30,7 @@ from app.core.background_image_downloader import (
     normalize_remote_image_url,
 )
 from app.core.parsers import ParserRegistry, ResponseParser
+from app.core.driver import driver_for_tab
 
 
 def _network_debug_capture_retention_seconds() -> float:
@@ -693,66 +694,28 @@ class NetworkMonitor:
         status_code = NetworkMonitor._extract_status_code_from_error_detail(error)
         return status_code in (403, 429, 503)
 
-    def _listen_is_active(self) -> bool:
+    def _listener(self):
+        """R2-1：经驱动取得本标签页的监听器包装；没有标签页或标签页不支持监听时返回 None。"""
+        if self.tab is None:
+            return None
         try:
-            listen = getattr(self.tab, "listen", None)
-            driver = getattr(listen, "_driver", None) if listen is not None else None
-            return bool(
-                listen is not None
-                and getattr(listen, "listening", False)
-                and driver is not None
-                and getattr(driver, "is_running", False)
-            )
+            return driver_for_tab(self.tab).listener_or_none
         except Exception:
-            return False
+            return None
+
+    def _listen_is_active(self) -> bool:
+        listener = self._listener()
+        return bool(listener is not None and listener.is_active())
 
     def _force_reset_listen_state(self):
-        listen = getattr(self.tab, "listen", None)
-        if listen is None:
-            return
-
-        try:
-            setattr(listen, "listening", False)
-        except Exception:
-            pass
-
-        try:
-            if hasattr(listen, "_network_enabled"):
-                setattr(listen, "_network_enabled", False)
-        except Exception:
-            pass
-
-        try:
-            if hasattr(listen, "_driver"):
-                setattr(listen, "_driver", None)
-        except Exception:
-            pass
-
-        try:
-            clear = getattr(listen, "clear", None)
-            if callable(clear):
-                clear()
-        except Exception:
-            pass
+        listener = self._listener()
+        if listener is not None:
+            listener.force_reset()
 
     def _safe_stop_listen(self):
-        listen = getattr(self.tab, "listen", None)
-        if listen is None:
-            return
-
-        try:
-            if getattr(listen, "listening", False):
-                listen.stop()
-        except Exception:
-            self._force_reset_listen_state()
-            return
-
-        try:
-            clear = getattr(listen, "clear", None)
-            if callable(clear):
-                clear()
-        except Exception:
-            pass
+        listener = self._listener()
+        if listener is not None:
+            listener.safe_stop()
 
     @staticmethod
     def _is_restartable_listen_error(err_text: str) -> bool:
@@ -923,49 +886,26 @@ class NetworkMonitor:
 
         self._reset_prefetched_responses()
         self._reset_stream_chunk_merge_cache()
-        self.tab.listen._reuse_driver = True
+        driver_for_tab(self.tab).listener.reuse_driver = True
         try:
             # tab.listen 与全局监听共享：显式 res_type=True，避免继承全局监听的资源类型过滤
-            self.tab.listen.start(self._listen_pattern, res_type=True)
+            driver_for_tab(self.tab).listener.start(self._listen_pattern, res_type=True)
         except TypeError:
-            self.tab.listen.start(self._listen_pattern)
+            driver_for_tab(self.tab).listener.start(self._listen_pattern)
         if not self._listen_is_active():
             raise NetworkMonitorError("监听启动后未进入活动状态")
         self._pre_started = True
         self._is_listening = True
 
     def _read_listen_counters(self) -> Dict[str, int]:
-        listen = getattr(self.tab, "listen", None)
-        if listen is None:
+        listener = self._listener()
+        if listener is None:
             return {
                 "running_targets": 0,
                 "running_requests": 0,
                 "queued_packets": 0,
             }
-
-        try:
-            running_targets = int(getattr(listen, "_running_targets", 0) or 0)
-        except Exception:
-            running_targets = 0
-
-        try:
-            running_requests = int(getattr(listen, "_running_requests", 0) or 0)
-        except Exception:
-            running_requests = 0
-
-        queued_packets = 0
-        try:
-            caught = getattr(listen, "_caught", None)
-            if caught is not None and hasattr(caught, "qsize"):
-                queued_packets = int(caught.qsize() or 0)
-        except Exception:
-            queued_packets = 0
-
-        return {
-            "running_targets": max(0, running_targets),
-            "running_requests": max(0, running_requests),
-            "queued_packets": max(0, queued_packets),
-        }
+        return listener.counters()
 
     def mark_send_attempt(self):
         """Record the listener baseline immediately before a submit action."""
@@ -1066,7 +1006,7 @@ class NetworkMonitor:
 
             wait_timeout = min(0.05, max(0.01, remaining))
             try:
-                response = self.tab.listen.wait(timeout=wait_timeout)
+                response = driver_for_tab(self.tab).listener.wait(timeout=wait_timeout)
             except Exception as e:
                 err_text = str(e)
                 if self._is_restartable_listen_error(err_text):
@@ -1144,7 +1084,7 @@ class NetworkMonitor:
             if not self._listen_is_active():
                 self._ensure_listening("wait_inactive")
 
-            response = self.tab.listen.wait(timeout=step_timeout)
+            response = driver_for_tab(self.tab).listener.wait(timeout=step_timeout)
             if response not in (None, False):
                 return response
 

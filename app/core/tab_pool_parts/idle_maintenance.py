@@ -46,6 +46,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from app.core.config import logger
+from app.core.driver import browser_driver, driver_for_tab
 
 
 # 真实可见性：可见性模拟在 document 实例上定义了 own property，
@@ -203,7 +204,7 @@ def _set_focus_emulation(tab: Any, enabled: bool) -> bool:
 
 def _read_real_visibility(tab: Any) -> str:
     try:
-        return str(tab.run_js(REAL_VISIBILITY_JS, timeout=1.0) or "").strip().lower()
+        return str(driver_for_tab(tab).run_js(REAL_VISIBILITY_JS, timeout=1.0) or "").strip().lower()
     except Exception:
         return "unknown"
 
@@ -239,7 +240,7 @@ _FREEZE_MARK_READ_JS = (
 def _read_freeze_mark(tab: Any) -> Optional[dict]:
     """``None`` = could not read; ``{}`` = marker missing (document replaced)."""
     try:
-        raw = tab.run_js(_FREEZE_MARK_READ_JS, timeout=1.0)
+        raw = driver_for_tab(tab).run_js(_FREEZE_MARK_READ_JS, timeout=1.0)
     except Exception:
         return None
     if not raw:
@@ -313,7 +314,7 @@ def _front_tab_hint(tab: Any) -> str:
         if str(target_id) == my_id:
             return "front"
         try:
-            other = browser._run_cdp("Browser.getWindowForTarget", targetId=target_id) or {}
+            other = browser_driver(browser).run_cdp("Browser.getWindowForTarget", targetId=target_id) or {}
         except Exception:
             continue
         if other.get("windowId") == window_id:
@@ -454,7 +455,7 @@ def freeze_session(manager: Any, session: Any, config: IdleMaintenanceConfig) ->
         token = f"{getattr(session, 'id', '?')}:{time.time_ns()}"
         mark_installed = False
         try:
-            mark_installed = bool(tab.run_js(_FREEZE_MARK_INSTALL_JS, token, timeout=1.0))
+            mark_installed = bool(driver_for_tab(tab).run_js(_FREEZE_MARK_INSTALL_JS, token, timeout=1.0))
         except Exception:
             mark_installed = False
 
@@ -621,7 +622,7 @@ RECYCLE_REBUILD_ATTEMPTS = 3
 
 def _tab_connection_healthy(tab: Any) -> bool:
     try:
-        return tab.run_js("return 1", timeout=2.0) == 1
+        return driver_for_tab(tab).run_js("return 1", timeout=2.0) == 1
     except Exception:
         return False
 
@@ -637,14 +638,9 @@ def _quarantine_broken_tab(session: Any, tab: Any, reason: str) -> None:
         tab.disconnect()
     except Exception:
         pass
-    try:
-        from DrissionPage._pages.chromium_tab import ChromiumTab
+    from app.core.driver.drission_internals import forget_tab_object
 
-        tab_id = getattr(tab, "tab_id", None) or getattr(tab, "_target_id", None)
-        if tab_id and ChromiumTab._TABS.get(tab_id) is tab:
-            ChromiumTab._TABS.pop(tab_id, None)
-    except Exception:
-        pass
+    forget_tab_object(tab)
     try:
         session.mark_error(reason)
     except Exception:

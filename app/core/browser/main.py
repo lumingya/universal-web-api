@@ -3,7 +3,6 @@
 import threading
 from typing import Optional, Dict, Any, List, Callable
 
-from DrissionPage import Chromium, ChromiumPage
 from app.core.config import logger, BrowserConstants, BrowserConnectionError, SSEFormatter
 from app.core.tab_pool import TabPoolManager
 
@@ -39,8 +38,8 @@ class BrowserCore(
             return
         
         self.port = port or BrowserConstants.DEFAULT_PORT
-        self.browser_handle: Optional[Chromium] = None
-        self.page: Optional[ChromiumPage] = None
+        self.browser_handle: Optional[Any] = None  # DrissionPage Chromium（经 app.core.driver 创建）
+        self.page: Optional[Any] = None  # DrissionPage 标签页对象
         
         self._connected = False
         self._should_stop_checker: Callable[[], bool] = lambda: False

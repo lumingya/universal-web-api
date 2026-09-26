@@ -10,6 +10,7 @@ from typing import Any, Optional, Dict, List
 
 from app.core.extractors.base import BaseExtractor
 from app.core.extractors.image_extractor import image_extractor
+from app.core.driver import as_element
 
 
 class DeepBrowserExtractor(BaseExtractor):
@@ -403,7 +404,7 @@ class DeepBrowserExtractor(BaseExtractor):
         
         # ===== 向下查找（只在必要时执行）=====
         try:
-            children = element.eles(self.CONTENT_CHILD_SELECTOR_COMBINED, timeout=0.08)
+            children = as_element(element).find_all(self.CONTENT_CHILD_SELECTOR_COMBINED, timeout=0.08)
             if children and not isinstance(children, list):
                 children = [children]
         except Exception:
@@ -416,7 +417,7 @@ class DeepBrowserExtractor(BaseExtractor):
                 child_class = child.attr('class') or ""
                 if 'paragraph' in child_class:
                     continue
-                child_text = child.run_js("return this.textContent || this.innerText || ''")
+                child_text = as_element(child).run_js("return this.textContent || this.innerText || ''")
                 if child_text and len(str(child_text).strip()) > 0:
                     return child
             except Exception:
@@ -432,7 +433,7 @@ class DeepBrowserExtractor(BaseExtractor):
         target_ele = self.find_content_node(element)
         
         try:
-            text = target_ele.run_js(self.DEEP_EXTRACT_JS)
+            text = as_element(target_ele).run_js(self.DEEP_EXTRACT_JS)
             if text and str(text).strip():
                 return str(text).replace('\r\n', '\n').replace('\r', '\n')
         except Exception:
@@ -471,7 +472,7 @@ class DeepBrowserExtractor(BaseExtractor):
 
             index_part = ""
             try:
-                index = element.run_js("""
+                index = as_element(element).run_js("""
                     const parent = this.parentElement;
                     if (!parent) return -1;
                     const siblings = Array.from(parent.children);

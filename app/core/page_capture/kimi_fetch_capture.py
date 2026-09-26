@@ -15,6 +15,7 @@ from app.core.parsers import ParserRegistry
 
 from .base import PageFetchCapture
 from .registry import register_page_fetch_capture
+from app.core.driver import driver_for_tab
 
 
 class KimiPageFetchCapture(PageFetchCapture):
@@ -139,10 +140,10 @@ class KimiPageFetchCapture(PageFetchCapture):
         with self._page_interaction_slot("JS_EXEC", "kimi_capture_prepare") as acquired:
             if not acquired or self._check_cancelled():
                 return
-            install_result = self.tab.run_js(
+            install_result = driver_for_tab(self.tab).run_js(
                 f"return {self._BOOTSTRAP_JS.strip()}"
             )
-            self.tab.run_js(
+            driver_for_tab(self.tab).run_js(
                 """
                 return (function(token) {
                   const cap = window.__KIMI_CAPTURE__ = window.__KIMI_CAPTURE__ || {};
@@ -194,7 +195,7 @@ class KimiPageFetchCapture(PageFetchCapture):
         except Exception:
             since = 0
         # P0-2：结果在页面内 JSON.stringify，只回传字符串，不留 RemoteObject
-        state = self.tab.run_js(
+        state = driver_for_tab(self.tab).run_js(
             """
             return JSON.stringify((function(token, sinceLength) {
               const cap = window.__KIMI_CAPTURE__;
@@ -241,7 +242,7 @@ class KimiPageFetchCapture(PageFetchCapture):
     def _clear_page_capture_buffer(self) -> None:
         # 修复(7d)：monitor 结束时尽力清空当前 token 对应请求的页面侧缓冲，失败忽略
         try:
-            self.tab.run_js(
+            driver_for_tab(self.tab).run_js(
                 """
                 return (function(token) {
                   const cap = window.__KIMI_CAPTURE__;

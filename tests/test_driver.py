@@ -160,14 +160,16 @@ def test_drission_driver_forwards_calls():
     assert tab.calls[-1] == ("run_js", "return 1", (5,), True, 3)
     assert driver.run_cdp("Page.reload", ignoreCache=True) == {"ok": True}
 
-    element = driver.find("textarea", timeout=0.5)  # 裸选择器按 CSS 处理
+    element = driver.find("css:textarea", timeout=0.5)  # 定位器按 DrissionPage 原生语法原样传递
     assert tab.calls[-1] == ("ele", "css:textarea", 0.5)
     assert element.tag == "textarea" and element.text == "hello" and element.attr("id") == "prompt"
     element.click(by_js=True)
     element.input("hi", clear=True)
     assert tab.element.clicked == [True] and tab.element.typed == [("hi", True)]
     assert driver.find("#missing") is None  # NoneElement（假值）-> None
-    assert len(driver.find_all("textarea")) == 1  # 假值元素被过滤
+    assert len(driver.find_all("css:textarea")) == 1  # 假值元素被过滤
+    driver.find("发送")
+    assert tab.calls[-1] == ("ele", "发送", None)  # 不带前缀＝DrissionPage 文本匹配，驱动不改写
 
     assert driver.navigate("https://chat.example.com/new", timeout=10) is True
     driver.reload(ignore_cache=True)
@@ -263,10 +265,149 @@ def test_real_browser_driver_roundtrip(real_page):
     driver.run_js("document.getElementById('prompt').focus()")
     driver.insert_text("你好，驱动")
     assert driver.run_js("return document.getElementById('prompt').value") == "你好，驱动"
-    assert driver.find_all("button.send")[0].text == "发送"
+    assert driver.find_all("css:button.send")[0].text == "发送"
+    assert driver.find("发送") is not None  # DrissionPage 原生：不带前缀按文本匹配
     assert driver.find(".does-not-exist") is None
     evaluated = driver.run_cdp("Runtime.evaluate", expression="1 + 2", returnByValue=True)
     assert evaluated["result"]["value"] == 3
     assert driver.screenshot().startswith(b"\x89PNG")
     with pytest.raises(ScriptError):
         driver.run_js("throw new Error('boom')")
+
+
+# --------------------------------------------------------------------------- 收口阶段新增：元素包装、动作链、监听器、浏览器级 CDP
+
+
+def test_only_drissionpage_errors_are_translated_builtin_errors_pass_through():
+    """回归：network_monitor 依赖 `except TypeError` 退回旧签名；内置异常必须原样抛出。"""
+    class _OldListenTab(_StubTab):
+        def run_js(self, script, *args, **kwargs):
+            raise TypeError("start() got an unexpected keyword argument 'res_type'")
+
+    with pytest.raises(TypeError):
+        DrissionTabDriver(_OldListenTab()).run_js("x")
+    with pytest.raises(OSError):
+        with translated_errors():
+            raise OSError("socket closed")
+
+
+def test_as_element_wrapping_rules_and_click_proxy():
+    from app.core.driver import DrissionElement, as_element, unwrap
+
+    raw = _StubElement()
+    wrapped = as_element(raw)
+    assert isinstance(wrapped, DrissionElement) and wrapped.raw is raw
+    assert as_element(wrapped) is wrapped  # 不重复包装
+    assert as_element(None) is None
+    falsy = _NoneElement()
+    assert as_element(falsy) is falsy  # 假值（NoneElement）原样返回，保持原有报错行为
+    fake = FakeElement("div")
+    assert as_element(fake) is fake
+    assert wrapped == raw and hash(wrapped) == hash(raw) and unwrap(wrapped) is raw
+    wrapped.click(by_js=True)  # 点击器代理可直接调用
+    assert raw.clicked == [True]
+    assert wrapped.run_js("return 1") == "ran"
+    assert wrapped.tag == "textarea" and wrapped.text == "hello"
+
+
+def test_run_js_unwraps_element_arguments():
+    from app.core.driver import as_element
+
+    tab = _StubTab()
+    element = as_element(_StubElement())
+    DrissionTabDriver(tab).run_js("arguments[0].focus()", element)
+    assert tab.calls[-1][2][0] is element.raw  # DrissionPage 只认原始元素
+
+
+def test_actions_wrapper_chains_and_unwraps():
+    from app.core.driver import as_element
+
+    class _Actions:
+        def __init__(self):
+            self.log = []
+
+        def move_to(self, target, **kwargs):
+            self.log.append(("move_to", target))
+            return self
+
+        def click(self):
+            self.log.append(("click",))
+            return self
+
+        def position(self):
+            return (1, 2)
+
+    class _TabWithActions(_StubTab):
+        def __init__(self):
+            super().__init__()
+            self.actions = _Actions()
+
+    tab = _TabWithActions()
+    element = as_element(_StubElement())
+    driver = DrissionTabDriver(tab)
+    chained = driver.actions.move_to(element).click()
+    assert tab.actions.log == [("move_to", element.raw), ("click",)]
+    assert chained.raw is tab.actions  # 链式调用返回包装对象
+    assert driver.actions.position() == (1, 2)  # 非链式返回值原样透传
+
+
+def test_listener_wrapper_preserves_network_monitor_helpers():
+    import queue
+
+    class _Driver:
+        is_running = True
+
+    class _Listen:
+        def __init__(self):
+            self.listening = True
+            self._driver = _Driver()
+            self._network_enabled = True
+            self._running_targets = 2
+            self._running_requests = 3
+            self._caught = queue.Queue()
+            self._caught.put("packet")
+            self._reuse_driver = False
+            self.stopped = 0
+            self.cleared = 0
+
+        def stop(self):
+            self.stopped += 1
+            self.listening = False
+
+        def clear(self):
+            self.cleared += 1
+
+    class _TabWithListen(_StubTab):
+        def __init__(self):
+            super().__init__()
+            self.listen = _Listen()
+
+    tab = _TabWithListen()
+    listener = DrissionTabDriver(tab).listener
+    assert listener.is_active() and listener.listening
+    assert listener.counters() == {"running_targets": 2, "running_requests": 3, "queued_packets": 1}
+    listener.reuse_driver = True
+    assert tab.listen._reuse_driver is True
+    listener.safe_stop()
+    assert tab.listen.stopped == 1 and tab.listen.cleared == 1 and not listener.is_active()
+    listener.force_reset()
+    assert tab.listen._driver is None and tab.listen._network_enabled is False
+    assert DrissionTabDriver(_StubTab()).listener_or_none is None  # 没有 listen 属性
+
+
+def test_browser_driver_runs_browser_level_cdp():
+    from app.core.driver import browser_driver
+
+    class _Browser:
+        def __init__(self):
+            self.calls = []
+
+        def _run_cdp(self, method, **params):
+            self.calls.append((method, params))
+            return {"targetInfos": []}
+
+    browser = _Browser()
+    driver = browser_driver(browser)
+    assert driver.run_cdp("Target.getTargets") == {"targetInfos": []}
+    assert browser.calls == [("Target.getTargets", {})]
+    assert browser_driver(browser) is driver and browser_driver(driver) is driver

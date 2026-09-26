@@ -17,6 +17,7 @@ from app.core.page_lifecycle import (
     restore_visibility_emulation,
 )
 from app.services.command_engine_common import logger
+from app.core.driver import driver_for_tab
 
 if TYPE_CHECKING:
     from app.core.tab_pool import TabSession  # noqa: F401
@@ -76,7 +77,7 @@ class CommandEnginePagesMixin:
     def _set_focus_emulation(self, session: 'TabSession', enabled: bool):
         """Best-effort focus emulation without stealing OS/browser foreground focus."""
         try:
-            session.tab.run_cdp(
+            driver_for_tab(session.tab).run_cdp(
                 "Emulation.setFocusEmulationEnabled",
                 enabled=bool(enabled),
                 _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
@@ -146,7 +147,7 @@ class CommandEnginePagesMixin:
             return
         focus_emulation_set = False
         try:
-            session.tab.run_cdp(
+            driver_for_tab(session.tab).run_cdp(
                 "Emulation.setFocusEmulationEnabled",
                 enabled=True,
                 _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
@@ -161,7 +162,7 @@ class CommandEnginePagesMixin:
             if self._mark_session_closed_if_disconnected(session, e, "wake_visibility"):
                 return
         try:
-            session.tab.run_cdp(
+            driver_for_tab(session.tab).run_cdp(
                 "Page.setWebLifecycleState",
                 state="active",
                 _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
@@ -170,14 +171,14 @@ class CommandEnginePagesMixin:
             if self._mark_session_closed_if_disconnected(session, e, "wake_lifecycle"):
                 return
         try:
-            session.tab.run_js("return document.readyState || '';", timeout=BACKGROUND_WAKE_JS_TIMEOUT)
+            driver_for_tab(session.tab).run_js("return document.readyState || '';", timeout=BACKGROUND_WAKE_JS_TIMEOUT)
         except Exception as e:
             if self._mark_session_closed_if_disconnected(session, e, "wake_ready_state"):
                 return
         finally:
             if focus_emulation_set:
                 try:
-                    session.tab.run_cdp(
+                    driver_for_tab(session.tab).run_cdp(
                         "Emulation.setFocusEmulationEnabled",
                         enabled=False,
                         _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
@@ -187,7 +188,7 @@ class CommandEnginePagesMixin:
     def _run_page_check_js(self, session: 'TabSession', script: str) -> Any:
         if self._is_session_closed(session):
             raise RuntimeError("page_check session is closed")
-        return session.tab.run_js(script, timeout=self._page_check_js_timeout_sec)
+        return driver_for_tab(session.tab).run_js(script, timeout=self._page_check_js_timeout_sec)
     def _is_page_check_backing_off(self, session: 'TabSession') -> bool:
         until = float(getattr(session, "_pc_js_backoff_until", 0.0) or 0.0)
         return until > time.time()

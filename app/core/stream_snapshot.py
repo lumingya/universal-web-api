@@ -385,7 +385,7 @@ def resolve_locator(selector: str) -> Optional[Tuple[str, str]]:
     else:
         loc_text = f"css:{raw}"
     try:
-        from DrissionPage._functions.locator import get_loc
+        from app.core.driver.drission_internals import get_loc
 
         by, query = get_loc(loc_text)
     except Exception:

@@ -8,6 +8,7 @@ app/core/extractors/dom_mode.py - DOM 直接提取器
 from typing import Any
 
 from app.core.extractors.base import BaseExtractor
+from app.core.driver import as_element
 
 
 class DOMDirectExtractor(BaseExtractor):
@@ -60,7 +61,7 @@ class DOMDirectExtractor(BaseExtractor):
                     return self._normalize_text(text)
             
             # 回退：使用 textContent
-            text = element.run_js("return this.textContent || this.innerText || ''")
+            text = as_element(element).run_js("return this.textContent || this.innerText || ''")
             return self._normalize_text(str(text)) if text else ""
         
         except Exception:
@@ -105,7 +106,7 @@ class DOMDirectExtractor(BaseExtractor):
             # 3. 加入 DOM 位置
             index_part = ""
             try:
-                index = element.run_js("""
+                index = as_element(element).run_js("""
                     const parent = this.parentElement;
                     if (!parent) return -1;
                     const siblings = Array.from(parent.children);
@@ -137,7 +138,7 @@ class DOMDirectExtractor(BaseExtractor):
             return element
         
         try:
-            children = element.eles(self.CONTENT_CHILD_SELECTOR_COMBINED, timeout=0.08)
+            children = as_element(element).find_all(self.CONTENT_CHILD_SELECTOR_COMBINED, timeout=0.08)
             if children and not isinstance(children, list):
                 children = [children]
         except Exception:
@@ -147,7 +148,7 @@ class DOMDirectExtractor(BaseExtractor):
             try:
                 if not child:
                     continue
-                text = child.run_js("return this.textContent || ''")
+                text = as_element(child).run_js("return this.textContent || ''")
                 if text and len(str(text).strip()) > 0:
                     return child
             except Exception:

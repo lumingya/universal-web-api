@@ -32,6 +32,7 @@ import threading
 from typing import Any, Dict, Optional
 
 from app.core.config import logger
+from app.core.driver import as_element
 
 _INSTALL_LOCK = threading.Lock()
 _INSTALLED = False
@@ -119,7 +120,9 @@ def _release_object(page: Any, object_id: str) -> None:
 
 def _patch_parse_js_result() -> bool:
     try:
-        from DrissionPage._elements import chromium_element as ce
+        from app.core.driver.drission_internals import chromium_element_module
+
+        ce = chromium_element_module()
     except Exception as exc:  # pragma: no cover - DrissionPage missing
         logger.debug(f"[CDP_HYGIENE] DrissionPage 不可用，跳过 run_js 补丁: {exc}")
         return False
@@ -146,7 +149,9 @@ def _patch_parse_js_result() -> bool:
 
 def _patch_network_enable() -> bool:
     try:
-        from DrissionPage._base.driver import Driver
+        from app.core.driver.drission_internals import driver_class
+
+        Driver = driver_class()
     except Exception as exc:  # pragma: no cover - DrissionPage missing
         logger.debug(f"[CDP_HYGIENE] DrissionPage Driver 不可用，跳过 Network.enable 补丁: {exc}")
         return False
@@ -244,9 +249,9 @@ def run_js_json(target: Any, script_body: str, *args: Any, timeout: Optional[flo
     """Run ``script_body`` on a tab/element and return the decoded JSON value."""
     wrapped = wrap_js_json(script_body)
     if timeout is None:
-        raw = target.run_js(wrapped, *args)
+        raw = as_element(target).run_js(wrapped, *args)
     else:
-        raw = target.run_js(wrapped, *args, timeout=timeout)
+        raw = as_element(target).run_js(wrapped, *args, timeout=timeout)
     return decode_js_json(raw, default)
 
 

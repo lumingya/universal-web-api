@@ -14,6 +14,7 @@ from app.services.arena_image_generation import (
     read_image_bytes as _read_image_bytes,
     same_image as _same_image,
 )
+from app.core.driver import as_element, driver_for_tab
 
 
 GPT_IMAGE_MARKERS = (
@@ -86,7 +87,7 @@ def _sleep(ctx: dict[str, Any], seconds: float, step: float = 0.2) -> None:
 
 def _current_url(tab: Any) -> str:
     try:
-        return str(tab.run_js("return location.href") or "").strip()
+        return str(driver_for_tab(tab).run_js("return location.href") or "").strip()
     except Exception:
         return str(getattr(tab, "url", "") or "").strip()
 
@@ -123,7 +124,7 @@ def _redirect_if_agent_page(ctx: dict[str, Any], redirect_url: str) -> bool:
             "[GPT-IMAGE-2] agent-page redirect tab.get() failed, "
             f"falling back to location.replace(): {navigate_error}"
         )
-        tab.run_js("location.replace(arguments[0])", redirect_url)
+        driver_for_tab(tab).run_js("location.replace(arguments[0])", redirect_url)
     return True
 
 
@@ -147,7 +148,7 @@ def _new_image_chat_ready(tab: Any, redirect_url: str) -> bool:
     if not input_box:
         return False
     try:
-        return int(input_box.run_js("return String(this.value || '').length")) == 0
+        return int(as_element(input_box).run_js("return String(this.value || '').length")) == 0
     except Exception:
         return False
 
@@ -172,7 +173,7 @@ def _visible_image_sources(tab: Any) -> list[str]:
             .filter(Boolean);
     """
     try:
-        return list(dict.fromkeys(str(item) for item in (tab.run_js(script) or []) if item))
+        return list(dict.fromkeys(str(item) for item in (driver_for_tab(tab).run_js(script) or []) if item))
     except Exception:
         return []
 
@@ -187,7 +188,7 @@ def _log_image_url(url: str) -> str:
 
 def _find(tab: Any, selector: str, timeout: float = 1.0) -> Any:
     try:
-        return tab.ele(selector, timeout=timeout)
+        return driver_for_tab(tab).find(selector, timeout=timeout)
     except Exception:
         return None
 
@@ -201,7 +202,7 @@ def _upload_reference_image(ctx: dict[str, Any], path: str) -> bool:
 
     inputs = []
     try:
-        inputs = list(tab.eles('css:input[type="file"]', timeout=1.5) or [])
+        inputs = list(driver_for_tab(tab).find_all('css:input[type="file"]', timeout=1.5) or [])
     except Exception:
         pass
     if not inputs:
@@ -218,7 +219,7 @@ def _upload_reference_image(ctx: dict[str, Any], path: str) -> bool:
                 except Exception:
                     pass
                 try:
-                    inputs = list(tab.eles('css:input[type="file"]', timeout=1.0) or [])
+                    inputs = list(driver_for_tab(tab).find_all('css:input[type="file"]', timeout=1.0) or [])
                 except Exception:
                     inputs = []
                 if inputs:
@@ -240,13 +241,13 @@ def _refresh_page(ctx: dict[str, Any]) -> None:
     try:
         tab.refresh()
     except Exception:
-        tab.run_js("location.reload()")
+        driver_for_tab(tab).run_js("location.reload()")
     _sleep(ctx, 2.0)
 
 
 def _is_generating(tab: Any) -> bool:
     try:
-        result = tab.run_js(
+        result = driver_for_tab(tab).run_js(
             """
             return (() => {
                 const visible = (element) => {
@@ -275,7 +276,7 @@ def _is_generating(tab: Any) -> bool:
 
 def _is_generation_stopped(tab: Any) -> bool:
     try:
-        result = tab.run_js(
+        result = driver_for_tab(tab).run_js(
                 """
                 return (() => {
                     const visible = (element) => {
@@ -366,7 +367,7 @@ def _vote_a_better(ctx: dict[str, Any]) -> bool:
         })();
     """
     try:
-        clicked = bool(tab.run_js(script))
+        clicked = bool(driver_for_tab(tab).run_js(script))
     except Exception as error:
         logger.warning(f"[GPT-IMAGE-2] failed to click A better: {error}")
         return False
@@ -421,7 +422,7 @@ def _send_prompt(
         return False
     if require_clear_confirmation:
         try:
-            replaced = input_box.run_js(
+            replaced = as_element(input_box).run_js(
                 """
                 const value = String(arguments[0] || '');
                 const setter = Object.getOwnPropertyDescriptor(
@@ -453,7 +454,7 @@ def _send_prompt(
             current_input = _find(tab, "css:textarea[name='message']", 0.3)
             try:
                 current_value = str(
-                    current_input.run_js("return String(this.value || '')") if current_input else ""
+                    as_element(current_input).run_js("return String(this.value || '')") if current_input else ""
                 )
             except Exception:
                 current_value = ""
@@ -473,7 +474,7 @@ def _send_prompt(
             if not current_input:
                 return False
             try:
-                return int(current_input.run_js("return String(this.value || '').length")) == 0
+                return int(as_element(current_input).run_js("return String(this.value || '').length")) == 0
             except Exception:
                 return False
 
@@ -540,7 +541,7 @@ def _send_prompt(
             if current_url and current_url != before_url:
                 return True
             try:
-                if int(input_box.run_js("return String(this.value || '').length")) == 0:
+                if int(as_element(input_box).run_js("return String(this.value || '').length")) == 0:
                     return True
             except Exception:
                 pass

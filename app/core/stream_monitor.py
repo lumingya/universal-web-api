@@ -15,7 +15,7 @@ import time
 from typing import Generator, Optional, Callable, Tuple, Dict, List, Any
 from urllib.parse import urlparse
 
-from app.core.driver import driver_for_tab
+from app.core.driver import as_element, driver_for_tab
 from app.core.config import logger, BrowserConstants, SSEFormatter
 from app.core.background_image_downloader import (
     background_image_downloader,
@@ -365,7 +365,7 @@ class GeneratingStatusCache:
 
         if self._found_selector:
             try:
-                ele = self.tab.ele(self._found_selector, timeout=0.1)
+                ele = driver_for_tab(self.tab).find(self._found_selector, timeout=0.1)
                 if ele and ele.states.is_displayed:
                     self._last_result = True
                     return True
@@ -382,7 +382,7 @@ class GeneratingStatusCache:
 
         for selector in indicator_selectors:
             try:
-                ele = self.tab.ele(selector, timeout=0.05)
+                ele = driver_for_tab(self.tab).find(selector, timeout=0.05)
                 if ele and ele.states.is_displayed:
                     self._found_selector = selector
                     self._last_result = True
@@ -801,7 +801,7 @@ class StreamMonitor:
         scored = []
         for index, ele in enumerate(elements):
             try:
-                score = ele.run_js(
+                score = as_element(ele).run_js(
                     """
                     const rect = this.getBoundingClientRect();
                     const ol = this.closest('main ol, ol, [role="feed"], [data-testid*="conversation"]');
@@ -1224,9 +1224,9 @@ class StreamMonitor:
         if getattr(tab, "_uwapi_page_snapshot_ok", False):
             return True
         try:
-            from DrissionPage._pages.chromium_base import ChromiumBase
+            from app.core.driver.drission_internals import is_real_page
 
-            return isinstance(tab, ChromiumBase)
+            return is_real_page(tab)
         except Exception:
             return False
 
@@ -1563,7 +1563,7 @@ class StreamMonitor:
         return JSON.stringify({ count: sources.size, urls, references });
         """
         image_config = getattr(self, "_image_config", {}) or {}
-        info = decode_js_json(element.run_js(
+        info = decode_js_json(as_element(element).run_js(
             script,
             str(image_config.get("request_baseline_token") or ""),
             str(image_config.get("request_baseline_property") or ""),

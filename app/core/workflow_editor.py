@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Optional
 from app.core.config import BrowserConstants
 from app.core.config import logger
+from app.core.driver import driver_for_tab
 
 
 class WorkflowEditorInjector:
@@ -79,7 +80,7 @@ class WorkflowEditorInjector:
             script = cls._load_script()
             
             # 🆕 在 Python 端进行域名校验（更可靠）
-            current_domain = tab.run_js("return window.location.hostname")
+            current_domain = driver_for_tab(tab).run_js("return window.location.hostname")
             
             if target_domain and target_domain != current_domain:
                 logger.warning(f"域名不匹配: 期望 {target_domain}, 实际 {current_domain}")
@@ -92,13 +93,13 @@ class WorkflowEditorInjector:
                 }
             
             # 检查是否已注入
-            already_injected = tab.run_js("return !!window.__WORKFLOW_EDITOR_INJECTED__")
+            already_injected = driver_for_tab(tab).run_js("return !!window.__WORKFLOW_EDITOR_INJECTED__")
             
             if already_injected:
                 # 已存在：销毁旧实例后强制重注入，避免继续运行旧脚本
                 logger.info(f"编辑器已存在，执行强制重注入: domain={target_domain}")
                 try:
-                    tab.run_js("window.WorkflowEditor?.destroy?.();")
+                    driver_for_tab(tab).run_js("window.WorkflowEditor?.destroy?.();")
                 except Exception as destroy_error:
                     logger.debug(f"销毁旧编辑器失败（忽略）: {destroy_error}")
 
@@ -125,7 +126,7 @@ class WorkflowEditorInjector:
                     )
 
                 full_script = "\n".join(reinject_parts) + "\n\n" + script
-                tab.run_js(full_script)
+                driver_for_tab(tab).run_js(full_script)
 
                 return {
                     "success": True,
@@ -169,7 +170,7 @@ class WorkflowEditorInjector:
             full_script = "\n".join(injection_parts) + "\n\n" + script
             
             # 5. 一次性注入
-            tab.run_js(full_script)
+            driver_for_tab(tab).run_js(full_script)
             
             logger.info(f"编辑器已注入到: {tab.url[:50]}... (domain: {target_domain or 'unknown'})")
             

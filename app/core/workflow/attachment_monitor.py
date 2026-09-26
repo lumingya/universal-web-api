@@ -13,6 +13,7 @@ from typing import Any, Callable, Dict, Iterable, Optional
 
 from app.core.config import BrowserConstants, logger
 from app.core.elements import ElementFinder
+from app.core.driver import driver_for_tab
 
 
 _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
@@ -760,7 +761,7 @@ class AttachmentMonitor:
 
     def _run_js(self, script: str):
         try:
-            return self.tab.run_js(script)
+            return driver_for_tab(self.tab).run_js(script)
         except Exception as exc:
             logger.debug(f"[ATTACHMENT] JS execution failed: {exc}")
             return None
@@ -868,7 +869,7 @@ class AttachmentMonitor:
             "monitorState": state if isinstance(state, dict) else {},
         }
         try:
-            result = self.tab.run_js(code, payload)
+            result = driver_for_tab(self.tab).run_js(code, payload)
         except Exception as exc:
             message = str(exc)
             logger.debug(f"[ATTACHMENT] state probe failed ({stage or 'unknown'}): {message}")

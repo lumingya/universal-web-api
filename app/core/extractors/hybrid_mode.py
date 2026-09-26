@@ -10,6 +10,7 @@ app/core/extractors/hybrid_mode.py - 混合智能提取器
 from typing import Any
 
 from app.core.extractors.base import BaseExtractor
+from app.core.driver import as_element
 
 
 class HybridExtractor(BaseExtractor):
@@ -287,7 +288,7 @@ class HybridExtractor(BaseExtractor):
             # 3. DOM 位置
             index_part = ""
             try:
-                index = element.run_js("""
+                index = as_element(element).run_js("""
                     const parent = this.parentElement;
                     if (!parent) return -1;
                     return Array.from(parent.children).indexOf(this);
@@ -313,10 +314,10 @@ class HybridExtractor(BaseExtractor):
         
         for selector in self.CONTENT_SELECTORS:
             try:
-                child = element.ele(selector, timeout=0.05)
+                child = as_element(element).find(selector, timeout=0.05)
                 if child:
                     # 验证有实际内容
-                    text = child.run_js("return (this.textContent || '').trim()")
+                    text = as_element(child).run_js("return (this.textContent || '').trim()")
                     if text and len(str(text)) > 10:
                         return child
             except Exception:
@@ -341,7 +342,7 @@ class HybridExtractor(BaseExtractor):
             }
         """
         try:
-            result = element.run_js(self.DETECT_COMPLEXITY_JS)
+            result = as_element(element).run_js(self.DETECT_COMPLEXITY_JS)
             if isinstance(result, dict):
                 return result
         except Exception:
@@ -362,7 +363,7 @@ class HybridExtractor(BaseExtractor):
                 return self._normalize(element.text)
             
             # 回退：JS 读取
-            text = element.run_js("return this.textContent || this.innerText || ''")
+            text = as_element(element).run_js("return this.textContent || this.innerText || ''")
             return self._normalize(str(text)) if text else ""
         
         except Exception:
@@ -375,7 +376,7 @@ class HybridExtractor(BaseExtractor):
         使用 JS 注入遍历 DOM 树
         """
         try:
-            text = element.run_js(self.DEEP_EXTRACT_JS)
+            text = as_element(element).run_js(self.DEEP_EXTRACT_JS)
             if text and str(text).strip():
                 return self._normalize(str(text))
         except Exception:

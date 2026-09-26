@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from app.core.config import BrowserConstants, logger
+from app.core.driver import driver_for_tab
 
 _ELEMENT_TIMING_LOG_THRESHOLD = 0.5
 
@@ -151,9 +152,9 @@ class ElementFinder:
         """内部方法：使用 DrissionPage 语法查找元素"""
         try:
             if selector.startswith(('tag:', '@', 'xpath:', 'css:')) or '@@' in selector:
-                ele = self.tab.ele(selector, timeout=timeout)
+                ele = driver_for_tab(self.tab).find(selector, timeout=timeout)
             else:
-                ele = self.tab.ele(f'css:{selector}', timeout=timeout)
+                ele = driver_for_tab(self.tab).find(f'css:{selector}', timeout=timeout)
             
             # 更可靠的检查
             if ele and hasattr(ele, 'tag') and ele.tag:
@@ -442,9 +443,9 @@ class ElementFinder:
         """支持 DrissionPage 语法或默认 CSS 语法的批量查找"""
         try:
             if selector.startswith(('tag:', '@', 'xpath:', 'css:')) or '@@' in selector:
-                eles = self.tab.eles(selector, timeout=timeout)
+                eles = driver_for_tab(self.tab).find_all(selector, timeout=timeout)
             else:
-                eles = self.tab.eles(f'css:{selector}', timeout=timeout)
+                eles = driver_for_tab(self.tab).find_all(f'css:{selector}', timeout=timeout)
             return list(eles) if eles else []
         except Exception:
             return []

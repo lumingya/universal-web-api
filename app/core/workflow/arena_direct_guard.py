@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 
 from app.core.config import logger
 from app.utils.site_url import extract_remote_site_domain, route_domain_matches
+from app.core.driver import driver_for_tab
 
 
 ARENA_DIRECT_DEFAULT_ENTRY_URL = "https://arena.ai/text/direct"
@@ -285,7 +286,7 @@ def recover_arena_direct_page(
         if should_stop is not None and should_stop():
             raise ArenaDirectRecoveryError("Arena direct recovery cancelled")
         try:
-            raw = tab.run_js(probe_script, timeout=2)
+            raw = driver_for_tab(tab).run_js(probe_script, timeout=2)
             if isinstance(raw, dict) and raw.get("documentReady"):
                 current_url = str(raw.get("url") or "")
                 if is_arena_direct_url(current_url) and raw.get("inputVisible"):

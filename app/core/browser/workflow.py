@@ -55,6 +55,7 @@ from app.services.arena_image_generation import (
     validate_generated_images,
 )
 from app.utils.image_validation import filter_reference_images
+from app.core.driver import driver_for_tab
 
 if TYPE_CHECKING:
     from .main import BrowserCore
@@ -1889,7 +1890,7 @@ class BrowserWorkflowMixin:
                     tracked_audio_nodes = int(capture_status.get("tracked_media_elements") or 0) + int(capture_status.get("tracked_web_audio") or 0)
                 try:
                     if getattr(session, "_audio_capture_init_script_source", None) != init_script:
-                        tab.run_cdp(
+                        driver_for_tab(tab).run_cdp(
                             "Page.addScriptToEvaluateOnNewDocument",
                             source=init_script,
                             _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
@@ -1934,7 +1935,7 @@ class BrowserWorkflowMixin:
                                 deadline = time.time() + 20.0
                                 while time.time() < deadline and not effective_stop_checker():
                                     try:
-                                        if tab.ele(input_selector, timeout=0.5):
+                                        if driver_for_tab(tab).find(input_selector, timeout=0.5):
                                             break
                                     except Exception:
                                         pass

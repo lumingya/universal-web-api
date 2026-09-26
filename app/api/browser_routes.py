@@ -15,6 +15,7 @@ from app.core import get_browser
 from app.core.config import AppConfig, get_logger
 from app.core.http_security import is_trusted_local_request
 from app.utils.browser_profile_identity import resolve_tab_browser_profile
+from app.core.driver import browser_driver, driver_for_tab
 
 
 logger = get_logger("API.BROWSER")
@@ -99,7 +100,7 @@ def verify_open_profile_url_auth(
 
 def _target_info(tab: Any) -> Dict[str, Any]:
     try:
-        result = tab.run_cdp("Target.getTargetInfo") or {}
+        result = driver_for_tab(tab).run_cdp("Target.getTargetInfo") or {}
         info = result.get("targetInfo") if isinstance(result, dict) else {}
         return info if isinstance(info, dict) else {}
     except Exception:
@@ -155,11 +156,11 @@ def open_url_in_profile(url: str, profile: Dict[str, Any]) -> Dict[str, Any]:
         kwargs: Dict[str, Any] = {"url": url}
         if context_id:
             kwargs["browserContextId"] = context_id
-        created = handle._run_cdp("Target.createTarget", **kwargs) or {}
+        created = browser_driver(handle).run_cdp("Target.createTarget", **kwargs) or {}
         target_id = str(created.get("targetId") or "").strip() if isinstance(created, dict) else ""
         if target_id:
             try:
-                handle._run_cdp("Target.activateTarget", targetId=target_id)
+                browser_driver(handle).run_cdp("Target.activateTarget", targetId=target_id)
             except Exception:
                 pass
         return {"success": True, "targetId": target_id, "browserContextId": context_id}
@@ -168,7 +169,7 @@ def open_url_in_profile(url: str, profile: Dict[str, Any]) -> Dict[str, Any]:
         # of its own pages keeps the new tab in that exact profile.
         try:
             script = "window.open(arguments[0], '_blank'); return true;"
-            source_tab.run_js(script, url)
+            driver_for_tab(source_tab).run_js(script, url)
             return {"success": True, "targetId": "", "browserContextId": context_id}
         except Exception as fallback_error:
             logger.warning(f"打开用户目录链接失败: {error}; fallback={fallback_error}")
