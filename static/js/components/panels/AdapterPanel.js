@@ -76,8 +76,10 @@ window.AdapterPanel = {
                 this.lintLoading = false;
             }
         },
-        async checkUpdates() {
-            this.updatesLoading = true; this.updatesError = ''; this.applyResult = null;
+        async checkUpdates(keepApplyResult = false) {
+            // 应用更新后会自动刷新列表：这时要保留“已更新 N 个站点”的结果提示，不能被清掉
+            this.updatesLoading = true; this.updatesError = '';
+            if (!keepApplyResult) this.applyResult = null;
             try {
                 this.updates = await this.request('/api/adapters/updates');
             } catch (error) {
@@ -98,7 +100,7 @@ window.AdapterPanel = {
                     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
                 });
                 this.$emit('updated', this.applyResult);
-                await this.checkUpdates();
+                await this.checkUpdates(true);
             } catch (error) {
                 this.updatesError = error.message || String(error);
             } finally {
@@ -114,7 +116,7 @@ window.AdapterPanel = {
                     <h4>健康巡检</h4>
                     <p>在浏览器里已打开的 {{ domain || '当前站点' }} 页面上检查各选择器能否命中。只读取页面，不会输入、点击或发送消息。</p>
                 </div>
-                <button type="button" class="adapter-btn" :disabled="!domain || healthLoading" @click="runHealth">
+                <button type="button" class="adapter-btn" :disabled="!domain || healthLoading" @click="runHealth()">
                     {{ healthLoading ? '巡检中…' : '开始巡检' }}
                 </button>
             </div>
@@ -149,7 +151,7 @@ window.AdapterPanel = {
                     <h4>选择器稳健度</h4>
                     <p>静态检查当前预设的选择器：生成的哈希类名、依赖元素顺序或界面文字的写法，在站点改版时容易失效。</p>
                 </div>
-                <button type="button" class="adapter-btn" :disabled="!domain || lintLoading" @click="runLint">
+                <button type="button" class="adapter-btn" :disabled="!domain || lintLoading" @click="runLint()">
                     {{ lintLoading ? '检查中…' : '检查' }}
                 </button>
             </div>
@@ -175,7 +177,7 @@ window.AdapterPanel = {
                     <h4>适配器更新（全部站点）</h4>
                     <p>与官方仓库的站点配置比较。没改过的站点可以一键更新；改过的站点会单独标出，需要你确认后按「本地优先」合并。</p>
                 </div>
-                <button type="button" class="adapter-btn" :disabled="updatesLoading || applying" @click="checkUpdates">
+                <button type="button" class="adapter-btn" :disabled="updatesLoading || applying" @click="checkUpdates()">
                     {{ updatesLoading ? '检查中…' : '检查更新' }}
                 </button>
             </div>
