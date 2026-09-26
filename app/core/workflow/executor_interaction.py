@@ -20,6 +20,7 @@ from app.core.page_lifecycle import (
     install_visibility_emulation,
     restore_visibility_emulation,
 )
+from app.core.driver import driver_for_tab
 
 
 class _PageInteractionGate:
@@ -327,7 +328,7 @@ class WorkflowExecutorInteractionMixin:
             return False
 
         try:
-            result = self.tab.run_js(
+            result = driver_for_tab(self.tab).run_js(
                 """
                 try {
                     const el = arguments[0];
@@ -349,12 +350,12 @@ class WorkflowExecutorInteractionMixin:
 
     def _resolve_active_text_input(self):
         try:
-            active_ele = self.tab.run_js("return document.activeElement")
+            active_ele = driver_for_tab(self.tab).run_js("return document.activeElement")
         except Exception:
             active_ele = None
         if self._element_accepts_text_input(active_ele):
             try:
-                info = self.tab.run_js("""
+                info = driver_for_tab(self.tab).run_js("""
                     const el = arguments[0];
                     return {
                         tag: (el.tagName || '').toLowerCase(),
@@ -456,7 +457,7 @@ class WorkflowExecutorInteractionMixin:
             try:
                 phase_started = time.perf_counter()
                 try:
-                    self.tab.run_cdp(
+                    driver_for_tab(self.tab).run_cdp(
                         "Emulation.setFocusEmulationEnabled",
                         enabled=True,
                         _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
@@ -508,7 +509,7 @@ class WorkflowExecutorInteractionMixin:
         try:
             phase_started = time.perf_counter()
             try:
-                self.tab.run_cdp(
+                driver_for_tab(self.tab).run_cdp(
                     "Page.setWebLifecycleState",
                     state="active",
                     _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
@@ -530,7 +531,7 @@ class WorkflowExecutorInteractionMixin:
         try:
             phase_started = time.perf_counter()
             try:
-                self.tab.run_js("return document.readyState || '';", timeout=BACKGROUND_WAKE_JS_TIMEOUT)
+                driver_for_tab(self.tab).run_js("return document.readyState || '';", timeout=BACKGROUND_WAKE_JS_TIMEOUT)
             finally:
                 self._log_interaction_timing(
                     "workflow_start",
@@ -548,7 +549,7 @@ class WorkflowExecutorInteractionMixin:
             if self._workflow_focus_emulation_active:
                 phase_started = time.perf_counter()
                 try:
-                    self.tab.run_cdp(
+                    driver_for_tab(self.tab).run_cdp(
                         "Emulation.setFocusEmulationEnabled",
                         enabled=False,
                         _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
@@ -602,7 +603,7 @@ class WorkflowExecutorInteractionMixin:
                 try:
                     phase_started = time.perf_counter()
                     try:
-                        self.tab.run_cdp(
+                        driver_for_tab(self.tab).run_cdp(
                             "Emulation.setFocusEmulationEnabled",
                             enabled=True,
                             _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
@@ -640,7 +641,7 @@ class WorkflowExecutorInteractionMixin:
             try:
                 phase_started = time.perf_counter()
                 try:
-                    self.tab.run_cdp(
+                    driver_for_tab(self.tab).run_cdp(
                         "Page.setWebLifecycleState",
                         state="active",
                         _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
@@ -660,7 +661,7 @@ class WorkflowExecutorInteractionMixin:
             try:
                 phase_started = time.perf_counter()
                 try:
-                    self.tab.run_js(
+                    driver_for_tab(self.tab).run_js(
                         "return {readyState: document.readyState || '', hidden: !!document.hidden, visibilityState: document.visibilityState || ''};",
                         timeout=BACKGROUND_WAKE_JS_TIMEOUT,
                     )
@@ -691,7 +692,7 @@ class WorkflowExecutorInteractionMixin:
                 try:
                     phase_started = time.perf_counter()
                     try:
-                        self.tab.run_cdp(
+                        driver_for_tab(self.tab).run_cdp(
                             "Emulation.setFocusEmulationEnabled",
                             enabled=False,
                             _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
@@ -721,7 +722,7 @@ class WorkflowExecutorInteractionMixin:
                 try:
                     phase_started = time.perf_counter()
                     try:
-                        self.tab.run_cdp(
+                        driver_for_tab(self.tab).run_cdp(
                             "Emulation.setFocusEmulationEnabled",
                             enabled=True,
                             _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
@@ -763,7 +764,7 @@ class WorkflowExecutorInteractionMixin:
             try:
                 phase_started = time.perf_counter()
                 try:
-                    self.tab.run_cdp(
+                    driver_for_tab(self.tab).run_cdp(
                         "Page.setWebLifecycleState",
                         state="active",
                         _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
@@ -802,7 +803,7 @@ class WorkflowExecutorInteractionMixin:
                 try:
                     phase_started = time.perf_counter()
                     try:
-                        self.tab.run_cdp(
+                        driver_for_tab(self.tab).run_cdp(
                             "Emulation.setFocusEmulationEnabled",
                             enabled=False,
                             _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,

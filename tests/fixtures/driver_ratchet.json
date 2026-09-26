@@ -94,20 +94,14 @@
  },
  "app/core/workflow/attachment_upload.py": {
   "ele": 3,
-  "run_cdp": 1,
   "run_js": 2
- },
- "app/core/workflow/executor.py": {
-  "run_js": 6
  },
  "app/core/workflow/executor_actions.py": {
   "ele": 2,
-  "run_cdp": 7,
-  "run_js": 6
+  "run_js": 1
  },
  "app/core/workflow/executor_interaction.py": {
-  "run_cdp": 9,
-  "run_js": 6
+  "run_js": 1
  },
  "app/core/workflow/executor_send.py": {
   "run_js": 4
@@ -118,7 +112,7 @@
  "app/core/workflow/text_input.py": {
   "ele": 2,
   "run_cdp": 1,
-  "run_js": 14
+  "run_js": 13
  },
  "app/core/workflow_editor.py": {
   "run_js": 5

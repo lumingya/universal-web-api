@@ -17,6 +17,7 @@ from app.core.config import WorkflowError
 from app.core.tab_pool import get_clipboard_lock
 from app.utils.attachments import attachment_config, type_allowed, MIB
 from app.utils.platform import get_primary_modifier_key
+from app.core.driver import driver_for_tab
 
 
 class DispatchState(str, Enum):
@@ -105,7 +106,7 @@ class AttachmentUploadCoordinator:
             for event in ("dragEnter", "dragOver", "drop"):
                 self._check()
                 dropped = event == "drop"
-                self.tab.run_cdp("Input.dispatchDragEvent", type=event, x=point["x"], y=point["y"], data=data, modifiers=0)
+                driver_for_tab(self.tab).run_cdp("Input.dispatchDragEvent", type=event, x=point["x"], y=point["y"], data=data, modifiers=0)
             return DispatchResult(DispatchState.DISPATCHED, "cdp_drop")
         except WorkflowError:
             raise

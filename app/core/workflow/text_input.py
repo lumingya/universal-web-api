@@ -29,6 +29,7 @@ from app.utils.file_paste import (
 )
 from app.utils.human_mouse import smooth_move_mouse
 from app.utils.platform import get_primary_modifier_key
+from app.core.driver import driver_for_tab
 
 # ================= 常量配置 =================
 
@@ -1589,7 +1590,7 @@ class TextInputHandler:
             .replace("__SEND_SELECTOR__", send_selector_js)
 
         try:
-            result = self.tab.run_js(js) or {}
+            result = driver_for_tab(self.tab).run_js(js) or {}
         except Exception as e:
             logger.debug(f"[FILE_PASTE] 检查文件上传信号失败: {e}")
             result = {}

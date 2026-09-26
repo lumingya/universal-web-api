@@ -21,6 +21,7 @@ from app.services.arena_direct_models import (
     resolve_arena_direct_model,
 )
 from app.utils.human_mouse import cdp_precise_click, human_scroll_path, idle_drift, smooth_move_mouse
+from app.core.driver import driver_for_tab
 
 
 _URL_SNAPSHOT_TIMING_LOG_THRESHOLD = 0.25
@@ -515,7 +516,7 @@ class WorkflowExecutorActionMixin:
             })
 
         try:
-            result = self.tab.run_js(
+            result = driver_for_tab(self.tab).run_js(
                 """
                 const payload = arguments[0] || {};
                 const probes = Array.isArray(payload.probes) ? payload.probes : [];
@@ -812,7 +813,7 @@ class WorkflowExecutorActionMixin:
         backend_id = getattr(ele, '_backend_id', None)
         if backend_id is not None:
             try:
-                result = self.tab.run_cdp(
+                result = driver_for_tab(self.tab).run_cdp(
                     "DOM.getBoxModel",
                     backendNodeId=int(backend_id),
                     _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
@@ -881,7 +882,7 @@ class WorkflowExecutorActionMixin:
 
     def _sample_coord_click_target(self, x: int, y: int) -> Optional[dict]:
         try:
-            state = self.tab.run_js(
+            state = driver_for_tab(self.tab).run_js(
                 """
                 try {
                     const x = Math.round(Number(arguments[0]) || 0);
@@ -1044,7 +1045,7 @@ class WorkflowExecutorActionMixin:
     def _coord_dom_click_at(self, x: int, y: int, sample: Optional[dict] = None) -> bool:
         """Background-friendly coord click using page-side events before CDP fallback."""
         try:
-            result = self.tab.run_js(
+            result = driver_for_tab(self.tab).run_js(
                 """
                 return (function() {
                     try {
@@ -1186,7 +1187,7 @@ class WorkflowExecutorActionMixin:
         last_error = ""
 
         try:
-            result = self.tab.run_cdp(
+            result = driver_for_tab(self.tab).run_cdp(
                 "Page.getNavigationHistory",
                 _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
             ) or {}
@@ -1209,7 +1210,7 @@ class WorkflowExecutorActionMixin:
             target_id = str(getattr(self.tab, "tab_id", "") or "").strip()
             if target_id:
                 try:
-                    result = self.tab.run_cdp(
+                    result = driver_for_tab(self.tab).run_cdp(
                         "Target.getTargetInfo",
                         targetId=target_id,
                         _timeout=BACKGROUND_WAKE_CDP_TIMEOUT,
@@ -1357,14 +1358,14 @@ class WorkflowExecutorActionMixin:
 
     def _close_arena_model_dialog(self) -> None:
         try:
-            self.tab.run_cdp(
+            driver_for_tab(self.tab).run_cdp(
                 "Input.dispatchKeyEvent",
                 type="keyDown",
                 key="Escape",
                 code="Escape",
                 windowsVirtualKeyCode=27,
             )
-            self.tab.run_cdp(
+            driver_for_tab(self.tab).run_cdp(
                 "Input.dispatchKeyEvent",
                 type="keyUp",
                 key="Escape",
@@ -1902,7 +1903,7 @@ class WorkflowExecutorActionMixin:
     def _flash_click_marker(self, x: int, y: int):
         """在页面上短暂标记实际点击坐标，便于排查坐标系问题。"""
         try:
-            self.tab.run_js(
+            driver_for_tab(self.tab).run_js(
                 """
                 const x = arguments[0];
                 const y = arguments[1];
@@ -2042,7 +2043,7 @@ class WorkflowExecutorActionMixin:
             scroll_dx = int(round(total_dx * t)) - prev_dx
             scroll_dy = int(round(total_dy * t)) - prev_dy
 
-            self.tab.run_cdp(
+            driver_for_tab(self.tab).run_cdp(
                 'Input.dispatchMouseEvent',
                 type='mouseMoved',
                 x=anchor_x,
@@ -2052,7 +2053,7 @@ class WorkflowExecutorActionMixin:
                 modifiers=0,
                 pointerType='mouse'
             )
-            self.tab.run_cdp(
+            driver_for_tab(self.tab).run_cdp(
                 'Input.dispatchMouseEvent',
                 type='mouseWheel',
                 x=anchor_x,
@@ -2258,7 +2259,7 @@ class WorkflowExecutorActionMixin:
             if not selector:
                 return 0
 
-            n = self.tab.run_js("""
+            n = driver_for_tab(self.tab).run_js("""
                 try {
                     const sel = String(arguments[0] || '').trim();
                     let root = sel ? document.querySelector(sel) : null;

@@ -51,6 +51,7 @@ from .executor_interaction import WorkflowExecutorInteractionMixin
 from .executor_request_transport import WorkflowExecutorRequestTransportMixin
 from .executor_send import WorkflowExecutorSendMixin
 from .script_loader import script_loader
+from app.core.driver import driver_for_tab
 
 
 class WorkflowExecutor(
@@ -358,7 +359,7 @@ class WorkflowExecutor(
             probe_timeout = 0.5
         probe_timeout = min(2.0, max(0.1, probe_timeout))
         try:
-            return bool(self.tab.run_js(script, timeout=probe_timeout))
+            return bool(driver_for_tab(self.tab).run_js(script, timeout=probe_timeout))
         except Exception as e:
             logger.debug(f"[Executor] 验证页面探测失败（忽略）: {e}")
             return False
@@ -451,7 +452,7 @@ class WorkflowExecutor(
             "return true;}catch(e){return false;}})();"
         )
         try:
-            self.tab.run_js(source)
+            driver_for_tab(self.tab).run_js(source)
         except Exception as e:
             logger.debug(f"[JS_LIFECYCLE] 旧工作流脚本清理失败（忽略）: {e}")
 
@@ -467,7 +468,7 @@ class WorkflowExecutor(
             "); return true;}catch(e){return false;}})();"
         )
         try:
-            self.tab.run_js(source)
+            driver_for_tab(self.tab).run_js(source)
         except Exception as e:
             logger.debug(f"[JS_LIFECYCLE] 工作流脚本清理失败（忽略）: {e}")
 
@@ -482,7 +483,7 @@ class WorkflowExecutor(
             "); return true;}catch(e){return false;}})();"
         )
         try:
-            self.tab.run_js(source)
+            driver_for_tab(self.tab).run_js(source)
         except Exception as e:
             logger.debug(f"[JS_LIFECYCLE] 单步脚本清理失败（忽略）: {e}")
 
@@ -668,7 +669,7 @@ class WorkflowExecutor(
                 try:
                     if hasattr(self.tab, "stop_loading"):
                         self.tab.stop_loading()
-                    self.tab.run_js("if (window.stop) { window.stop(); }")
+                    driver_for_tab(self.tab).run_js("if (window.stop) { window.stop(); }")
                 except Exception:
                     pass
             return matched
@@ -1445,7 +1446,7 @@ class WorkflowExecutor(
             if not acquired or self._check_cancelled():
                 return None
             try:
-                result = self.tab.run_js(executable_script)
+                result = driver_for_tab(self.tab).run_js(executable_script)
                 elapsed_ms = (time.perf_counter() - start_time) * 1000
                 logger.info(
                     f"[JS_EXEC:DONE] 脚本执行成功: target={target!r}, 耗时={elapsed_ms:.2f}ms, "
