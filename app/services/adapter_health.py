@@ -17,6 +17,7 @@ import time
 from typing import Any, Dict, Iterable, List, Optional, Protocol
 
 from app.core.config import get_logger
+from app.core.driver.locators import to_locator as _driver_to_locator
 from app.services.selector_quality import fallback_suggestions, lint_selector
 
 logger = get_logger("ADAPTER_HEALTH")
@@ -35,32 +36,29 @@ class Probe(Protocol):
         """返回命中数量；选择器语法无效时返回 -1。"""
 
 
-def to_locator(selector: str) -> str:
-    """与 ElementFinder 相同：带 DrissionPage 前缀的原样使用，其余按 CSS 处理；
-    另外以 ``/`` 或 ``(`` 开头的按 XPath 处理（工作流执行器对这类选择器走 document.evaluate）。"""
-    selector = selector.strip()
-    if selector.startswith(("tag:", "@", "xpath:", "css:")) or "@@" in selector:
-        return selector
-    if selector.startswith(("/", "(")):
-        return f"xpath:{selector}"
-    return f"css:{selector}"
+# R2-1：定位规则统一到驱动层，这里保留旧名以兼容已有调用与测试
+to_locator = _driver_to_locator
 
 
 class DrissionProbe:
+    """把标签页适配成探针。R2-1 起经由统一驱动查询元素（参数既可以是 DrissionPage 标签页，也可以是驱动对象）。"""
+
     def __init__(self, tab: Any, url: str = "", timeout: float = 0.3):
-        self.tab = tab
-        self.url = url or str(getattr(tab, "url", "") or "")
+        from app.core.driver import driver_for_tab
+
+        self.driver = driver_for_tab(tab)
+        self.tab = self.driver.raw
+        self.url = url or self.driver.url
         self.timeout = timeout
 
     def count(self, selector: str) -> int:
+        from app.core.driver import DriverError
+
         try:
-            elements = self.tab.eles(to_locator(selector), timeout=self.timeout)
-        except Exception as exc:
+            return len(self.driver.find_all(selector, timeout=self.timeout))
+        except DriverError as exc:
             logger.debug(f"选择器无效或查询失败: {selector!r}: {exc}")
             return -1
-        if not isinstance(elements, list):
-            elements = [elements] if elements else []
-        return sum(1 for element in elements if element)
 
 
 def evaluate_preset(probe: Probe, preset: Dict[str, Any], definitions: Iterable[Dict[str, Any]]) -> Dict[str, Any]:

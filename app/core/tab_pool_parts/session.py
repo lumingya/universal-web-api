@@ -69,6 +69,14 @@ class TabSession:
 
     _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
 
+
+    @property
+    def driver(self):
+        """R2-1：该标签页的统一驱动（按标签页对象复用同一个包装）。迁移中的代码通过它访问浏览器。"""
+        from app.core.driver import driver_for_tab
+
+        return driver_for_tab(self.tab)
+
     def is_available(self) -> bool:
         with self._lock:
             return self.status == TabStatus.IDLE and not self._termination_in_progress
