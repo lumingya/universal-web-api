@@ -19,7 +19,8 @@ window.ConfigTab = {
         'workflow-panel': window.WorkflowPanel,
         'file-paste-panel': window.FilePastePanel,
         'prompt-padding-panel': window.PromptPaddingPanel,
-        'preset-transfer': window.PresetTransfer
+        'preset-transfer': window.PresetTransfer,
+        'adapter-panel': window.AdapterPanel
     },
     data() {
         return {
@@ -158,7 +159,8 @@ window.ConfigTab = {
                 { id: 'response', title: '响应解析', subtitle: '提取与流式输出', heading: '把网页回复转换为 API 响应', description: '配置响应提取与流式输出策略，匹配当前站点的生成方式。' },
                 { id: 'media', title: '媒体提取', subtitle: '图片、音频与视频', heading: '你想收到什么内容？', description: '接收 AI 回复里的媒体内容。上传文件请到「输入处理」。' },
                 { id: 'workflow', title: '请求工作流', subtitle: '编排自动化步骤', heading: '串起一次完整的请求', description: '编排输入、发送、等待与提取动作，为当前预设定义执行顺序。' },
-                { id: 'advanced', title: '高级功能', subtitle: '会话隔离与自愈', heading: '遇到问题，再按需开启', description: '登录互相影响、输入不稳定、消息没发出？只处理你正在遇到的那一项。' }
+                { id: 'advanced', title: '高级功能', subtitle: '会话隔离与自愈', heading: '遇到问题，再按需开启', description: '登录互相影响、输入不稳定、消息没发出？只处理你正在遇到的那一项。' },
+                { id: 'maintenance', title: '维护与巡检', subtitle: '健康检查与更新', heading: '站点适配器维护', description: '检查选择器是否还能命中、写法是否稳健，并同步官方最新的站点配置。' },
             ];
         },
         activeWorkspaceMeta() { return this.workspaceSections.find(s => s.id === this.activeWorkspaceSection) || this.workspaceSections[0]; },
@@ -374,6 +376,15 @@ window.ConfigTab = {
             if (payload.select) this.selectedPreset = payload.select;
             this.ensurePresetMutableSections();
         },
+        // R2-8：维护面板使用的请求函数（带鉴权；检查全部站点更新可能较慢，超时放宽到 30 秒）
+        adapterRequest(url, options = {}) {
+            return this.fetchJson(url, { ...options, headers: this.buildAuthHeaders(options.headers || {}) }, { timeoutMs: 30000 });
+        },
+
+        onAdapterUpdated() {
+            this.$emit('reload-config');
+        },
+
         buildAuthHeaders(extraHeaders = {}) {
             const token = String(window.getDashboardAuthToken ? window.getDashboardAuthToken() : '').trim();
             const headers = { ...extraHeaders };
@@ -2157,6 +2168,9 @@ window.ConfigTab = {
                             </label>
                         </div></details></section></div></div>
                 <!-- 工作流面板 -->
+                <adapter-panel v-if="currentDomain" v-show="activeWorkspaceSection === 'maintenance'" class="config-fixed-panel"
+                    :domain="currentDomain || ''" :preset-name="selectedPreset || ''" :request="adapterRequest"
+                    @updated="onAdapterUpdated"></adapter-panel>
                 <workflow-panel v-if="presetConfig" v-show="activeWorkspaceSection === 'workflow'" class="config-fixed-panel"
                     :workflow="presetConfig.workflow || []"
                     :selectors="presetConfig.selectors || {}"

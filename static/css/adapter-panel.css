@@ -1,0 +1,26 @@
+/* R2-8：站点适配器维护面板（健康巡检 / 选择器稳健度 / 适配器更新） */
+.adapter-panel { display: flex; flex-direction: column; gap: 16px; }
+.adapter-card { padding: 16px 18px; }
+.adapter-card-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.adapter-card-header h4 { margin: 0 0 4px; font-size: 15px; font-weight: 600; }
+.adapter-card-header p { margin: 0; font-size: 13px; opacity: .75; line-height: 1.5; }
+.adapter-btn { flex-shrink: 0; padding: 6px 14px; border-radius: 8px; border: 1px solid rgba(99, 102, 241, .45);
+  background: rgba(99, 102, 241, .08); color: inherit; font-size: 13px; cursor: pointer; margin-top: 8px; }
+.adapter-btn:hover:not(:disabled) { background: rgba(99, 102, 241, .16); }
+.adapter-btn:disabled { opacity: .5; cursor: not-allowed; }
+.adapter-btn.is-small { padding: 2px 10px; margin-top: 0; font-size: 12px; }
+.adapter-result { margin-top: 12px; font-size: 13px; }
+.adapter-table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 12.5px; }
+.adapter-table th, .adapter-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid rgba(127, 127, 127, .18); vertical-align: top; }
+.adapter-table code { font-size: 12px; word-break: break-all; }
+.adapter-badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; background: rgba(127, 127, 127, .15); }
+.adapter-badge.is-good { background: rgba(34, 197, 94, .15); color: #15803d; }
+.adapter-badge.is-warn { background: rgba(234, 179, 8, .18); color: #a16207; }
+.adapter-badge.is-bad { background: rgba(239, 68, 68, .15); color: #b91c1c; }
+.adapter-error { color: #dc2626; font-size: 13px; margin-top: 8px; }
+.adapter-good { color: #15803d; margin: 6px 0; }
+.adapter-muted { opacity: .65; margin-left: 8px; }
+.adapter-problems { margin: 6px 0 6px 18px; list-style: disc; }
+html.dark .adapter-badge.is-good, .dark .adapter-badge.is-good { color: #4ade80; }
+html.dark .adapter-badge.is-warn, .dark .adapter-badge.is-warn { color: #facc15; }
+html.dark .adapter-badge.is-bad, .dark .adapter-badge.is-bad { color: #f87171; }

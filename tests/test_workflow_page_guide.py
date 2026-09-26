@@ -162,7 +162,13 @@ def test_coordinate_and_scroll_endpoint_drag_are_not_just_visual(page):
 
 def test_scroll_relayout_and_missing_dynamic_target_explanations(page):
     guide=page.locator('#wfe-page-guide');pin=guide.locator('.pin[data-pin="root.0"]');old=pin.bounding_box()['y']
-    page.evaluate('window.scrollBy(0,100)');page.wait_for_timeout(150)
+    page.evaluate('window.scrollBy(0,100)')
+    # 引导层在 scroll 事件里用 requestAnimationFrame 重绘；无头 Chrome 的 rAF 会被节流，
+    # 固定等 150ms 时快时慢（实机约半数失败）。改为轮询直到图钉跟随移动（最多 3 秒）。
+    for _ in range(60):
+        if abs(pin.bounding_box()['y']-(old-100))<2:
+            break
+        page.wait_for_timeout(50)
     assert abs(pin.bounding_box()['y']-(old-100))<2
     page.evaluate('document.getElementById("old").remove()');page.wait_for_timeout(700)
     expect(pin).to_have_count(0)
