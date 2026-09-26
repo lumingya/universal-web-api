@@ -122,3 +122,7 @@ custom_scripts/
 /config/*.migrated-*.bak
 /config/sites/.trash/
 /config/sites/*.tmp
+
+# R2-5：运行时数据库（请求历史、统计）及 SQLite WAL/SHM 文件、已导入的旧 JSON 备份
+/config/runtime.sqlite3*
+/config/*.json.migrated-*.bak

@@ -111,8 +111,9 @@ def test_history_saves_are_debounced_and_flushed(tmp_path, monkeypatch):
         time.sleep(0.05)
     time.sleep(0.2)
     assert len(writes) == 1
-    data = json.loads((tmp_path / "config" / "request_history.json").read_text(encoding="utf-8"))
-    assert len(data["records"]) == 25
+    # R2-5：历史改存 SQLite（config/runtime.sqlite3），不再整文件重写 request_history.json
+    assert mgr._runtime_store().history_count() == 25
+    assert not (tmp_path / "config" / "request_history.json").exists()
 
     # a save requested right before shutdown is written by flush_pending_saves
     with mgr._history_lock:
@@ -121,8 +122,7 @@ def test_history_saves_are_debounced_and_flushed(tmp_path, monkeypatch):
     t0 = time.time()
     mgr.flush_pending_saves()
     assert time.time() - t0 < 0.4
-    data = json.loads((tmp_path / "config" / "request_history.json").read_text(encoding="utf-8"))
-    assert data["records"][-1]["request_id"] == "last"
+    assert mgr._runtime_store().load_history(100)[-1]["request_id"] == "last"
     assert fsyncs == []
     # 只检查本管理器自己的保存线程：全局 request_manager（其他测试发起的请求）也可能有同名线程在去抖窗口内
     worker = mgr._history_save_worker

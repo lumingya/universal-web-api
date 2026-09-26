@@ -429,6 +429,11 @@ class RequestManager:
 
         self._stats_file = "config/app_stats.json"
         self._history_file = "config/request_history.json"
+        # R2-5：单例被重新初始化（测试会这样做）时，丢弃上一次缓存的存储连接，按当前路径/环境重新打开
+        previous_store = getattr(self, "_store", None)
+        if previous_store is not None:
+            previous_store.close()
+        self._store = None
         self._monitor_history: List[Dict[str, Any]] = []
         self._history_lock = threading.Lock()
         self._history_save_lock = threading.Lock()
@@ -465,37 +470,51 @@ class RequestManager:
 
         logger.debug("RequestManager 初始化完成")
         
+    def _runtime_store(self):
+        """R2-5：请求历史与统计的 SQLite 存储；默认与旧 JSON 文件同目录（config/runtime.sqlite3）。"""
+        store = getattr(self, "_store", None)
+        if store is None:
+            from app.services.storage.runtime_store import RuntimeStore
+
+            history_file = getattr(self, "_history_file", "config/request_history.json")
+            path = os.getenv("RUNTIME_DB_PATH") or os.path.join(os.path.dirname(history_file) or ".", "runtime.sqlite3")
+            store = RuntimeStore(path)
+            self._store = store
+        return store
+
     def _load_stats(self):
         try:
-            if os.path.exists(self._stats_file):
-                with open(self._stats_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    self.total_requests = self._coerce_token_count(data.get("total_requests", 0))
-                    self.total_input_tokens = self._coerce_token_count(data.get("total_input_tokens", 0))
-                    self.total_output_tokens = self._coerce_token_count(data.get("total_output_tokens", 0))
+            from app.services.storage.runtime_store import migrate_legacy_file
+
+            store = self._runtime_store()
+            data: Dict[str, Any] = store.load_stats()
+            stats_file = getattr(self, "_stats_file", "")
+            if not data and stats_file and os.path.exists(stats_file):
+                # 首次启用 SQLite：导入旧的 config/app_stats.json，原文件改名备份
+                with open(stats_file, "r", encoding="utf-8") as f:
+                    legacy = json.load(f)
+                data = {
+                    key: self._coerce_token_count(legacy.get(key, 0))
+                    for key in ("total_requests", "total_input_tokens", "total_output_tokens")
+                } if isinstance(legacy, dict) else {}
+                if data:
+                    store.save_stats(data)
+                    migrate_legacy_file(stats_file)
+            self.total_requests = self._coerce_token_count(data.get("total_requests", 0))
+            self.total_input_tokens = self._coerce_token_count(data.get("total_input_tokens", 0))
+            self.total_output_tokens = self._coerce_token_count(data.get("total_output_tokens", 0))
         except Exception as e:
             logger.debug(f"加载状态失败: {e}")
 
     def _save_stats(self):
-        tmp_path = self._stats_file + ".tmp"
         try:
             with self._stats_save_lock:
-                os.makedirs(os.path.dirname(self._stats_file), exist_ok=True)
-                payload = {
+                self._runtime_store().save_stats({
                     "total_requests": self.total_requests,
                     "total_input_tokens": self.total_input_tokens,
                     "total_output_tokens": self.total_output_tokens,
-                }
-                # 原子替换即可保证文件完整；不再每次 fsync（Windows 上单次可达数十 ms）
-                with open(tmp_path, "w", encoding="utf-8") as f:
-                    json.dump(payload, f)
-                os.replace(tmp_path, self._stats_file)
+                })
         except Exception as e:
-            try:
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
-            except Exception:
-                pass
             logger.debug(f"保存状态失败: {e}")
 
     def _cleanup_stale_temp_files(self):
@@ -547,18 +566,29 @@ class RequestManager:
             if not self._request_monitor_enabled():
                 self._monitor_history = []
                 return
-            if not os.path.exists(self._history_file):
-                return
-            with open(self._history_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            # B2：旧版历史文件是顶层数组，必须先按类型分支再取值——
-            # 旧实现先调用 data.get(...)，list 没有 .get 直接抛错，兼容分支永远走不到，恢复 0 条。
-            if isinstance(data, list):
-                records = data
-            elif isinstance(data, dict):
-                records = data.get("records", [])
+            from app.services.storage.runtime_store import migrate_legacy_file
+
+            store = self._runtime_store()
+            max_to_load = self._request_monitor_max_records()
+            if store.history_count() > 0:
+                records = store.load_history(max_to_load)
+            elif os.path.exists(self._history_file):
+                # R2-5 首次启用 SQLite：导入旧的 JSON 历史（兼容两种旧格式），原文件改名备份
+                with open(self._history_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                # B2：旧版历史文件是顶层数组，必须先按类型分支再取值——
+                # 旧实现先调用 data.get(...)，list 没有 .get 直接抛错，兼容分支永远走不到，恢复 0 条。
+                if isinstance(data, list):
+                    records = data
+                elif isinstance(data, dict):
+                    records = data.get("records", [])
+                else:
+                    records = []
+                if isinstance(records, list):
+                    store.sync_history([item for item in records if isinstance(item, dict)])
+                    migrate_legacy_file(self._history_file)
             else:
-                records = []
+                return
             if isinstance(records, list):
                 raw_records = [item for item in records if isinstance(item, dict)]
                 max_records = self._request_monitor_max_records()
@@ -588,32 +618,15 @@ class RequestManager:
     def _save_history(self):
         if not self._request_monitor_enabled() or not self._request_monitor_save_to_file():
             return
-        tmp_path = self._history_file + ".tmp"
         try:
             with self._history_save_lock:
-                os.makedirs(os.path.dirname(self._history_file), exist_ok=True)
                 with self._history_lock:
                     max_records = self._request_monitor_max_records()
                     self._trim_monitor_history_unlocked()
                     records = list(self._monitor_history[-max_records:]) if max_records > 0 else []
-                with open(tmp_path, "w", encoding="utf-8") as f:
-                    json.dump(
-                        {
-                            "max_records": max_records,
-                            "saved_at": time.time(),
-                            "records": records,
-                        },
-                        f,
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                    )
-                os.replace(tmp_path, self._history_file)
+                # R2-5：增量同步到 SQLite——只写新增/变化的记录，删除已淘汰的记录（不再整文件重写）
+                self._runtime_store().sync_history(records)
         except Exception as e:
-            try:
-                if os.path.exists(tmp_path):
-                    os.remove(tmp_path)
-            except Exception:
-                pass
             logger.debug(f"保存请求历史失败: {e}")
 
     def _schedule_stats_save(self) -> None:

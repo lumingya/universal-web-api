@@ -225,6 +225,7 @@ SETTINGS: Tuple[Setting, ...] = (
     Setting('FILE_PASTE_PDF_FONT_PATH', 'str', '', 'files', '文件粘贴转 PDF 时使用的中文字体；留空自动查找'),
     Setting('PARSERS_CONFIG_FILE', 'str', '', 'files', '解析器配置文件；留空为 config/parsers.json'),
     Setting('PASTE_TEMP_CLEANUP_MIN_AGE_SECONDS', 'float', 900.0, 'files', '粘贴产生的临时文件至少保留多久（秒）才清理', minimum=0),
+    Setting('RUNTIME_DB_PATH', 'str', '', 'files', '运行时数据库（请求历史、累计统计，SQLite）；留空为 config/runtime.sqlite3'),
     Setting('SITES_CONFIG_DIR', 'str', 'config/sites', 'files', '站点配置目录（每站点一个文件）', active=True),
     Setting('SITES_CONFIG_FILE', 'str', '', 'files', '旧版单文件站点配置，仅作为自动迁移来源；留空为 config/sites.json'),
     Setting('SITES_LOCAL_FILE', 'str', '', 'files', '站点本地覆盖文件；留空为 config/sites.local.json'),
