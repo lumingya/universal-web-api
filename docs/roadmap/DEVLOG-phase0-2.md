@@ -9,20 +9,14 @@
 - main 冻结，只推本分支。本地环境（Portal）与推送链路见 §2.8。
 - ✅ 阶段 0、阶段 1 完成。
 - 阶段 2：
-  - ✅ R2-2、R2-3（三个巨型类）、R2-4、R2-5；
-  - R2-7 核心已完成；
-  - R2-8 已完成面板部分；
-  - R2-1 与 R2-6 设计已定稿、尚未实施，见 `docs/architecture/browser-driver-and-process-model.md`。
-- 两个实机偶发失败的判定：
-  - page_guide 滚动用例：旧版在实机 5 次中失败 3 次，原因是无头模式下 rAF 被节流，已改为轮询（`f922557`）；
-  - CDP 回收用例：5 次全部通过，属于罕见竞态。
-- 最近一次实机验证：
-  - `a212f5a` 全量：3.13 为 1306 passed / 1 failed，3.10 为 1297 passed / 1 failed。唯一失败是维护面板的界面测试，它发现的缺陷已在 `bc09cec` 修复；
-  - 修复后在 `902b095` 重跑面板测试与 page_guide 用例，两个 Python 版本都是 4/4 通过。
+  - ✅ R2-2、R2-3、R2-4、R2-5；
+  - R2-7 核心已完成；R2-8 已完成面板部分；
+  - **R2-1 进行中**：已完成第 1～4 步（标签页级），直接调用从 253 降到 195 处；
+  - R2-6 设计已定稿、未实施。
 - ▶ 下一步：
-  - R2-1 第 1 步（接口加 DrissionPage 实现加假驱动，调用点零改动）；
-  - R2-8 预编译 Tailwind；
-  - R2-7 补齐日志中的 request_id。
+  - 等 3dfcce8 的实机全量回归（交互路径必须过真实浏览器与 Playwright 用例）；
+  - 然后盘点元素 API 的用法并迁移元素级调用；
+  - 再做第 5 步网络监听。
 
 ## 1. 用户决策（2026-09-26，必须遵守）
 
@@ -172,8 +166,13 @@ Portal 把用户本机的**一个文件夹**发布成公网 MCP 端点：`https:
 
 ### 阶段 2：架构演进（全面落地）
 
-- [ ] **R2-1** 设计与分阶段计划已定稿，见 `docs/architecture/browser-driver-and-process-model.md`，尚未实施。
-  - 涉及 50 个文件、约 300 处直接调用；每一步都需要在本机做真实浏览器回归。
+- [~] **R2-1** 进行中（计划见 `docs/architecture/browser-driver-and-process-model.md`）：
+  - ✅ 第 1 步（`94c5dc5`）：驱动层 `app/core/driver/`、TabSession.driver，调用点零改动。本机 3.13 全绿。
+  - ✅ 第 2 步（`5ec2202`）：只读路径，即 media_extractor 与 stream_monitor 的标签页级 run_js，加上健康巡检。
+  - ✅ 第 3 步（`a012838`）：CDP 集中点，即 human_mouse 与 browser_profile_identity 的标签页级调用。
+  - ✅ 第 4 步·标签页级（`3dfcce8`）：交互路径 34 处。
+  - 待办：元素级调用（需要先盘点元素 API 的用法并扩展 DrissionElement）；第 5 步网络监听；第 6 步收口。
+  - 进度由棘轮测试锁定：直接调用从 253 降到 195 处，文件从 46 个降到 44 个。
 - [x] **R2-2**（`5568ce2`）：新增 ChatJob（协议、路由、请求 ID）与类型化 ChatEvent，执行层输出统一由共享解码器处理，并按协议计量。
   - 两个成熟的渲染状态机没有重写，详见 `docs/architecture/chat-pipeline.md`。OpenAI、Anthropic、Responses 都先翻译成它，协议层保持轻薄。
 - [x] **R2-3** 三个巨型类全部完成拆分：
@@ -383,4 +382,13 @@ Portal 把用户本机的**一个文件夹**发布成公网 MCP 端点：`https:
   - 修复后的 page_guide 用例单独重跑 5 次全部通过。
   - 维护面板界面测试 3 项中失败 1 项，暴露了组件的真实缺陷：应用更新后自动调用 checkUpdates 刷新，而它会清空 applyResult，导致「已更新 N 个站点」的提示一闪而过。
   - 已修复（`bc09cec`）：改为 `checkUpdates(keepApplyResult)`；按钮改为显式调用，避免点击事件对象被当成第一个参数传入。
+- **R2-1 第 1 步**（`94c5dc5`）：
+  - 统一异常：分类器合并了原来三处字符串规则，测试逐条核对一致，翻译后消息不变。
+  - DrissionTabDriver 只做转发；FakeTabDriver 用于测试；新增棘轮测试。
+  - 本机 3.13：1331 passed / 0 failed。
+- **R2-1 第 2～4 步**（`5ec2202`、`a012838`、`3dfcce8`）：迁移前全仓核对，app/ 里没有按 DrissionPage 异常类型的 except、isinstance 或类名字符串判断，因此切换到驱动（保留原消息）不改变行为。
+  - 踩坑一：驱动的 run_js 原本总是显式传 `as_expr` / `timeout`，与签名为 `run_js(script, *args)` 的测试替身不兼容；已改为只在参数与默认值不同时才传。
+  - 踩坑二：棘轮原先用正则统计，会把 `driver_for_tab(tab).run_js(` 也算作直接调用，无法反映进度；已改为 AST 统计，并排除驱动接收者。
+  - 踩坑三：自动插入导入时，曾把导入放到 `from __future__` 之前（运行时 SyntaxError），而 ruff 基线没有覆盖这条规则；已修正，并把 F404 加入 ruff 基线。
+- **测试修复**（`1b16387`）：测试反复重新初始化 RequestManager 单例，而前序测试遗留的保存线程醒来后，会调用新测试打桩的 `_save_history`，导致防抖用例在全量中稳定失败；已改为重新初始化前先排空遗留线程。
 
