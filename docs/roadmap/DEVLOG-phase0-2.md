@@ -8,15 +8,18 @@
 
 - main 冻结，只推本分支。本地环境（Portal）与推送链路见 §2.8。
 - ✅ 阶段 0、阶段 1 完成。
-- 阶段 2 已完成：R2-7 核心、R2-4、R2-5、R2-2、R2-3。
-- 顺带修复一个 bug：页面内工作流编辑器的回调端口错误（`3ad3837`）。
-- ▶ 剩余：
-  - R2-8 前端工程化：面板入口（适配器更新、巡检、lint）、预编译 Tailwind，并排查 page_guide 用例；
-  - R2-1 BrowserDriver 接口；
-  - R2-6 进程模型拆分。
-- 实机状态：`5568ce2` 在 3.13 上结果为 1297 passed / 2 failed：
-  - page_guide 滚动用例是早已存在的问题；
-  - `test_real_browser_recycle_releases_pinned_detached_dom` 首次失败，报 DrissionPage 的 “Cannot find context with specified id”，是页面执行上下文被销毁的竞态，与本批改动无关，待单独重跑确认。
+- 阶段 2：
+  - ✅ R2-2、R2-3（三个巨型类）、R2-4、R2-5；
+  - R2-7 核心已完成；
+  - R2-8 已完成面板部分；
+  - R2-1 与 R2-6 设计已定稿、尚未实施，见 `docs/architecture/browser-driver-and-process-model.md`。
+- 两个实机偶发失败的判定：
+  - page_guide 滚动用例：旧版在实机 5 次中失败 3 次，原因是无头模式下 rAF 被节流，已改为轮询（`f922557`）；
+  - CDP 回收用例：5 次全部通过，属于罕见竞态。
+- ▶ 下一步：
+  - R2-1 第 1 步（接口加 DrissionPage 实现加假驱动，调用点零改动）；
+  - R2-8 预编译 Tailwind；
+  - R2-7 补齐日志中的 request_id。
 
 ## 1. 用户决策（2026-09-26，必须遵守）
 
@@ -166,20 +169,24 @@ Portal 把用户本机的**一个文件夹**发布成公网 MCP 端点：`https:
 
 ### 阶段 2：架构演进（全面落地）
 
-- [ ] **R2-1** `BrowserDriver` 接口全量接管 run_js、run_cdp、find、click、type、listen、screenshot，先用 DrissionPage 实现。
+- [ ] **R2-1** 设计与分阶段计划已定稿，见 `docs/architecture/browser-driver-and-process-model.md`，尚未实施。
+  - 涉及 50 个文件、约 300 处直接调用；每一步都需要在本机做真实浏览器回归。
 - [x] **R2-2**（`5568ce2`）：新增 ChatJob（协议、路由、请求 ID）与类型化 ChatEvent，执行层输出统一由共享解码器处理，并按协议计量。
   - 两个成熟的渲染状态机没有重写，详见 `docs/architecture/chat-pipeline.md`。OpenAI、Anthropic、Responses 都先翻译成它，协议层保持轻薄。
-- [~] **R2-3** 部分完成：TabPoolManager 拆成 9 个 mixin（`e4c0c2d`，4567→273 行）；CommandEngine 类体拆成 6 个 mixin（`35df9c8`，3870→643 行）。
-  - 用 AST 核对：全部方法的语法树与拆分前一致。
-  - ConfigEngine（3321 行）尚未拆分，可以用同一套脚本。
+- [x] **R2-3** 三个巨型类全部完成拆分：
+  - TabPoolManager：9 个 mixin（`e4c0c2d`，4567→273 行）；
+  - CommandEngine：6 个 mixin（`35df9c8`，3870→643 行）；
+  - ConfigEngine：6 个 mixin（`f4164da`，3321→298 行）。
+  - 用 AST 核对：全部方法语法树与拆分前一致，逻辑零改动。
 - [x] **R2-4**（`1f6b7d8`）：单一事实源改为自研的登记表 `app/core/settings_registry.py`，不引入 pydantic-settings 依赖，因为运行时读取仍分散在 136 处 `os.getenv`，逐步迁移到 `get_setting()` 即可。
   - 共 155 项；`.env.example` 由它生成；面板保存时按它校验；代码、登记表、面板三方一致由测试守护。
 - [x] **R2-5**（`6749545`）：请求历史与累计统计改存 SQLite（WAL），增量写入，旧 JSON 自动导入。
   - 命令结果目前只存在内存里（原本就没有持久化），因此没有需要迁移的内容；如需持久化，可以直接写入同一个 RuntimeStore。
-- [ ] **R2-6** 进程模型：浏览器 worker 与 API 分离。
+- [ ] **R2-6** 设计已定稿（同上文档 §5：回环 HTTP 或 WebSocket IPC，传输 ChatEvent，由 `UWAPI_WORKER_MODE` 开关控制），尚未实施；建议在 R2-1 的第 1、2 步之后进行。
 - [~] **R2-7** 部分完成（`ea8d3cb`）：`/metrics`（Prometheus，无第三方依赖）与 `X-Request-ID`（中间件 + `REQUEST_ID` 上下文变量）已完成。
   - 待办：日志格式里带上 request_id；收窄 `except Exception`（1454 处）需要按模块逐步进行。
-- [ ] **R2-8** 前端工程化：预编译 Tailwind、改用 ES Modules、拆分 `dashboard-methods.js`、Node 端单测。
+- [~] **R2-8** 部分完成：站点配置页新增「维护与巡检」面板（`f922557`，含界面测试）；page_guide 偶发失败已修复。
+  - 待办：预编译 Tailwind（目前是本地托管的运行时 JIT，407KB）、ES Modules、拆分 `dashboard-methods.js`、Node 端单测。
 
 ## 3.5 设计记录：R1-1 Schema 与 R1-2 站点配置彻底拆分（实施前定稿，改动时同步更新）
 
@@ -357,4 +364,16 @@ Portal 把用户本机的**一个文件夹**发布成公网 MCP 端点：`https:
   - CommandEngine 的模块级常量迁到 `command_engine_common`，原文件重新导出以保持兼容；用 AST 全仓核对过，外部只导入 CommandEngine 和 command_engine 两个名字。
   - 新增 `test_class_structure`，保证 mixin 之间没有同名方法，避免 MRO 静默遮蔽。
   - `_env_scan` 改为同时扫描未提交的新文件：否则刚拆出、尚未提交的模块里读取的变量会被误判为「登记了却没人读」。
+- **偶发失败排查**：在用户本机把两个可疑用例各单独重跑 5 次：
+  - CDP 回收用例 5 次全部通过，是罕见竞态；
+  - page_guide 滚动用例（旧版）5 次中失败 3 次。原因是引导层在 scroll 事件里用 rAF 重绘，无头 Chrome 的 rAF 会被节流，固定等待 150ms 不可靠，已改为最多轮询 3 秒（`f922557`）。
+  - 3.10 在 `5568ce2` 的全量结果为 1290 passed / 0 failed，首次全绿。
+- **R2-8 面板**（`f922557`）：新增 AdapterPanel，放在站点配置页的「维护与巡检」分区，含三个区块：
+  - 巡检：展示状态、提示和回退建议；
+  - 稳健度：只列出有问题的选择器；
+  - 更新：一键应用安全更新；冲突站点需确认后按本地优先合并。
+
+  界面测试在空白页加载本地 Vue 与组件，并使用假请求函数。
+- **R2-3 ConfigEngine**（`f4164da`）：拆成 6 个 mixin；11 个模块级定义原样迁到 `engine_common`，`engine.py` 重新导出。ConfigConstants 仍是同一个类对象，测试对它的 monkeypatch 照常生效。
+- **R2-1 / R2-6**：只做了现状清单和设计，未实施。原因是两者都要改动浏览器层的每条路径，必须逐步在本机做真实浏览器回归；在本轮长会话的末尾仓促重写风险过高。分阶段计划见 `docs/architecture/browser-driver-and-process-model.md`。
 
