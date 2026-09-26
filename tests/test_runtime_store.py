@@ -61,6 +61,8 @@ def manager_factory(tmp_path, monkeypatch):
 
     def make():
         manager = RequestManager.__new__(RequestManager)
+        if getattr(manager, "_initialized", False):
+            manager.flush_pending_saves(timeout=5)  # 排空上一次初始化遗留的保存线程
         manager._initialized = False
         monkeypatch.setattr(RequestManager, "_request_monitor_enabled", lambda self: True)
         monkeypatch.setattr(RequestManager, "_request_monitor_save_to_file", lambda self: True)

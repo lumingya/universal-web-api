@@ -82,6 +82,10 @@ def _fresh_manager(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "config").mkdir()
     mgr = RequestManager.__new__(RequestManager)
+    if getattr(mgr, "_initialized", False):
+        # 单例会被反复重新初始化：先排空上一次初始化遗留的保存线程，否则它醒来后会读到本测试的
+        # _history_save_requested 并调用本测试打桩的 _save_history（全量测试中稳定复现为防抖窗口内多一次写入）
+        mgr.flush_pending_saves(timeout=5)
     mgr._initialized = False
     monkeypatch.setattr(RequestManager, "_run_zombie_sweep_loop", lambda self: None)
     RequestManager.__init__(mgr)
