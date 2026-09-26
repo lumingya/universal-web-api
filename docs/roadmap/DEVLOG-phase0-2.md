@@ -7,15 +7,16 @@
 ## 当前状态（随时更新）
 
 - main 冻结，只推本分支。本地环境（Portal）与推送链路见 §2.8。
-- ✅ **阶段 0 完成**：R0-1、R0-2、R0-5、R0-6、R0-8。R0-3/R0-4 暂缓，R0-7 由用户发布。
-- ✅ **阶段 1 完成**：R1-1 至 R1-7。实机验证（`43325ec`）：
-  - Windows 3.13：1251 passed / 67 skipped / 1 failed；
-  - Windows 3.10：1241 passed / 76 skipped / 2 failed。
-  - 两次失败都已知：page_guide 滚动用例是早已存在的问题；request_history 防抖测试受全局线程干扰，已在 `92f6850` 修复。
-- ▶ **阶段 2 进行中**：
-  - R2-7 已完成核心部分（`ea8d3cb`：`/metrics`、X-Request-ID）；
-  - 接下来依次是 R2-4 类型化配置、R2-5 SQLite、R2-2 ChatJob、R2-3 拆类、R2-8 前端、R2-1 驱动接口、R2-6 进程模型。
-- 最近一次实机全量测试（`ea8d3cb`）：Windows 3.13 结果 1257 passed / 67 skipped / 1 failed；3.10 结果 1248 passed / 76 skipped / 1 failed。唯一失败是早已存在的 page_guide 滚动用例。
+- ✅ 阶段 0、阶段 1 完成。
+- 阶段 2 已完成：R2-7 核心、R2-4、R2-5、R2-2、R2-3。
+- 顺带修复一个 bug：页面内工作流编辑器的回调端口错误（`3ad3837`）。
+- ▶ 剩余：
+  - R2-8 前端工程化：面板入口（适配器更新、巡检、lint）、预编译 Tailwind，并排查 page_guide 用例；
+  - R2-1 BrowserDriver 接口；
+  - R2-6 进程模型拆分。
+- 实机状态：`5568ce2` 在 3.13 上结果为 1297 passed / 2 failed：
+  - page_guide 滚动用例是早已存在的问题；
+  - `test_real_browser_recycle_releases_pinned_detached_dom` 首次失败，报 DrissionPage 的 “Cannot find context with specified id”，是页面执行上下文被销毁的竞态，与本批改动无关，待单独重跑确认。
 
 ## 1. 用户决策（2026-09-26，必须遵守）
 
@@ -166,7 +167,8 @@ Portal 把用户本机的**一个文件夹**发布成公网 MCP 端点：`https:
 ### 阶段 2：架构演进（全面落地）
 
 - [ ] **R2-1** `BrowserDriver` 接口全量接管 run_js、run_cdp、find、click、type、listen、screenshot，先用 DrissionPage 实现。
-- [ ] **R2-2** 统一内部请求模型 ChatJob。OpenAI、Anthropic、Responses 都先翻译成它，协议层保持轻薄。
+- [x] **R2-2**（`5568ce2`）：新增 ChatJob（协议、路由、请求 ID）与类型化 ChatEvent，执行层输出统一由共享解码器处理，并按协议计量。
+  - 两个成熟的渲染状态机没有重写，详见 `docs/architecture/chat-pipeline.md`。OpenAI、Anthropic、Responses 都先翻译成它，协议层保持轻薄。
 - [ ] **R2-3** 拆解巨型类：TabPoolManager、CommandEngine、ConfigEngine。
 - [ ] **R2-4** 类型化配置：以 pydantic-settings 为单一事实源，自动生成 `.env.example`（解决 N9）。
 - [ ] **R2-5** 请求历史、命令结果、统计改用 SQLite（WAL），并自动迁移现有 JSON。
@@ -329,3 +331,26 @@ Portal 把用户本机的**一个文件夹**发布成公网 MCP 端点：`https:
   - 标签页池指标只读取已连接的 `_browser_instance`，不调用 get_browser，因为那样会创建实例；
   - 测试时注意：没有浏览器的环境下 `/health` 按设计返回 503。
 - **实机验证 `ea8d3cb`**：3.13 结果 1257 passed / 1 failed；3.10 结果 1248 passed / 1 failed。两个版本的唯一失败都是早已存在的 page_guide 滚动用例，防抖测试的修复已生效。
+- **修复**（`3ad3837`）：页面内工作流编辑器的「保存工作流 / 测试运行」请求原本发往 `127.0.0.1:${PORT:-9099}`，而服务默认监听 APP_PORT=8199，且全仓没有任何地方设置 PORT，因此默认配置下保存会失败。这是 R2-4 梳理环境变量时发现的，现已改用 `AppConfig.get_port()`。
+- **R2-4**（`1f6b7d8`）：
+  - 用 AST 两遍扫描代码中读取的环境变量：
+    - 第一遍自动识别转发参数的辅助函数，并记录变量名在第几个参数；
+    - 第二遍解析模块常量、`os` 别名和 env 映射。
+    - 共找到 166 个名字；其中 8 个是外部变量（终端检测、系统路径、内部标志），另有 4 个旧名别名。
+  - 登记表共 154 项，另加 R2-5 新增的 RUNTIME_DB_PATH，现为 155 项。说明来源依次是面板的 label/desc、原 `.env.example` 的注释，以及人工补写（82 个此前完全没有文档）。
+  - 核对结果：代码字面默认值与登记表 0 处不符；面板 51 项的类型、选项、默认值全部一致。
+  - 重新生成的 `.env.example` 中启用的 75 个键与取值和原模板完全一致，另有 79 个可选项以注释形式写出。
+- **R2-5**（`6749545`）：
+  - RuntimeStore 使用 WAL 与 synchronous=NORMAL，按记录摘要做增量同步，支持 query_history。
+  - RequestManager 只替换了 I/O 部分；首次启动导入两种旧格式的 JSON，原文件改名为 `.migrated-*.bak`。
+  - 踩坑：RequestManager 是单例，测试会重新初始化它，旧的 `_store` 连接因此泄漏到别的测试（表现为记录数多出 2 条）；已在 `__init__` 里关闭并丢弃旧连接。
+- **R2-2**（`5568ce2`）：
+  - 流式 Responses 的响应体在端点函数返回之后才执行，因此需要用 `with_chat_job` 包住生成器。
+  - 端到端测试确认三种协议各计数一次。
+- **R2-3**（`e4c0c2d`、`35df9c8`）：
+  - 拆分前排查了四类陷阱：`super()`、双下划线名称改写、类名自引用、测试对模块全局变量的 monkeypatch。
+  - 用脚本自动拆分并裁剪导入，逐个比对 AST。
+  - CommandEngine 的模块级常量迁到 `command_engine_common`，原文件重新导出以保持兼容；用 AST 全仓核对过，外部只导入 CommandEngine 和 command_engine 两个名字。
+  - 新增 `test_class_structure`，保证 mixin 之间没有同名方法，避免 MRO 静默遮蔽。
+  - `_env_scan` 改为同时扫描未提交的新文件：否则刚拆出、尚未提交的模块里读取的变量会被误判为「登记了却没人读」。
+
