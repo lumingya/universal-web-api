@@ -109,6 +109,7 @@ custom_scripts/
 !/scripts/bundle_workflow_studio_css.py
 !/scripts/upgrade_gemini_deepseek.py
 !/scripts/build_sites_index.py
+!/scripts/build_env_example.py
 
 # Tests：tests/ 下默认全部跟踪（R0-5）。原先的白名单让 v3.0.0 的 12 个测试从未入库（路线图 N3）。
 # 个人临时脚本或输出请使用下列命名，避免误提交：

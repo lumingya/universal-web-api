@@ -940,6 +940,7 @@ def _validate_env_config_payload(new_config: Dict[str, Any]) -> None:
     except Exception:
         existing_env = {}
 
+    changed_keys: list = []
     for key, value in new_config.items():
         serialized = _serialize_env_value(value)
         if "\r" in serialized or "\n" in serialized:
@@ -952,6 +953,16 @@ def _validate_env_config_payload(new_config: Dict[str, Any]) -> None:
             continue
         if not isinstance(key, str) or not re.match(r"^[A-Z][A-Z0-9_]*$", key):
             raise HTTPException(status_code=400, detail=f"非法的配置键名: {key}")
+        changed_keys.append(key)
+
+    # R2-4：按环境变量登记表校验类型、范围与枚举取值（只校验新增/修改的键，存量值原样放行）
+    from app.core.settings_registry import validate_env_values
+
+    value_errors = validate_env_values(
+        {key: _serialize_env_value(new_config[key]) for key in changed_keys}
+    )
+    if value_errors:
+        raise HTTPException(status_code=400, detail="配置值不合法：" + "；".join(value_errors.values()))
 
     # 修复：认证自锁保护。开启认证却留空令牌时，deps.py 会对每个 /api/* 抛 500，
     # 控制面板此后打不开，只能手改 .env 恢复。按合并后的最终生效值判断。
