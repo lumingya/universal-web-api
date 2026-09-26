@@ -7,7 +7,6 @@ app/core/workflow_editor.py - 可视化工作流编辑器注入管理
 """
 
 import json
-import os
 from pathlib import Path
 from typing import Optional
 from app.core.config import BrowserConstants
@@ -19,6 +18,17 @@ class WorkflowEditorInjector:
     
     _script_cache: Optional[str] = None
     _script_mtime: Optional[tuple[int, ...]] = None
+
+    @staticmethod
+    def _api_base() -> str:
+        """注入脚本回调后端（保存工作流、测试运行）用的地址，必须与服务实际监听的端口一致。
+
+        修复：此前读取未文档化的 PORT 环境变量（默认 9099），而服务默认监听 APP_PORT=8199，
+        默认配置下页面内编辑器的“保存/测试”请求会打到错误端口而失败。
+        """
+        from app.core.config import AppConfig
+
+        return f"http://127.0.0.1:{AppConfig.get_port()}"
 
     @staticmethod
     def _build_js_assignment(var_name: str, value) -> str:
@@ -92,8 +102,7 @@ class WorkflowEditorInjector:
                 except Exception as destroy_error:
                     logger.debug(f"销毁旧编辑器失败（忽略）: {destroy_error}")
 
-                api_port = os.getenv("PORT", "9099")
-                api_base = f"http://127.0.0.1:{api_port}"
+                api_base = cls._api_base()
 
                 reinject_parts = [
                     cls._build_js_assignment("__WORKFLOW_EDITOR_API_BASE__", api_base),
@@ -127,8 +136,7 @@ class WorkflowEditorInjector:
                 }
             
             # 🆕 构建完整注入脚本（变量 + 编辑器代码）
-            api_port = os.getenv("PORT", "9099")
-            api_base = f"http://127.0.0.1:{api_port}"
+            api_base = cls._api_base()
             
             injection_parts = []
             

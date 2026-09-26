@@ -49,7 +49,7 @@
     const BALL_RADIUS = BALL_SIZE / 2;
     const TEST_DIRECT_FETCH_TIMEOUT_MS = 60000;
     const TEST_ACTIVITY_TIMEOUT_MS = 60000;
-    const getApiBase = () => window.__WORKFLOW_EDITOR_API_BASE__ || 'http://127.0.0.1:9099';
+    const getApiBase = () => window.__WORKFLOW_EDITOR_API_BASE__ || 'http://127.0.0.1:8199';
     const getCurrentTabId = () => window.__WORKFLOW_EDITOR_TAB_ID__ || '';
 
     const state = {
