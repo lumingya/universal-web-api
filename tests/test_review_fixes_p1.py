@@ -129,7 +129,9 @@ def test_backup_import_rejects_newline_injection(synthetic_env_dir):
 
 
 def test_frontend_backup_does_not_export_local_tokens():
-    source = (Path(__file__).resolve().parents[1] / "static/js/dashboard-methods.js").read_text(encoding="utf-8")
+    from tests._dashboard_js import dashboard_methods_source
+
+    source = dashboard_methods_source()  # R2-8：dashboard-methods 已按主题拆分
     start = source.index("getDashboardPreferencesBackup()")
     end = source.index("applyDashboardPreferencesBackup(", start)
     block = source[start:end]

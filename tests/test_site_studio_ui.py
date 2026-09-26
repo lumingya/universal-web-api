@@ -1,5 +1,6 @@
 """Site Studio regressions. Pure component tests; never writes user configuration."""
 from pathlib import Path
+import json
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -43,7 +44,7 @@ def test_studio_search_and_save_feedback_are_truthful():
     script = r"""
 const fs = require('fs'), vm = require('vm'), assert = require('assert');
 const ctx = {window: {}};
-vm.runInNewContext(fs.readFileSync('static/js/dashboard-methods.js', 'utf8'), ctx);
+vm.runInNewContext(fs.readFileSync(__DASHBOARD_METHODS_BUNDLE__, 'utf8'), ctx);
 vm.runInNewContext(fs.readFileSync('static/js/dashboard-state.js', 'utf8'), ctx);
 const methods = ctx.window.DashboardMethods;
 const state = {sites: {'www.doubao.com': {}, 'chat.deepseek.com': {}}, searchQuery: ' 豆包 ', siteDisplayName: methods.siteDisplayName};
@@ -75,6 +76,8 @@ assert.equal(legacy.presets, 1); assert.equal(legacy.coreFilled, 1);
   assert(notice.includes('保存失败')); assert.equal(target.isSaving, false);
 })().catch(e => {console.error(e); process.exit(1)});
 """
+    from tests._dashboard_js import dashboard_methods_bundle  # R2-8：拆分后的完整源码
+    script = script.replace("__DASHBOARD_METHODS_BUNDLE__", json.dumps(str(dashboard_methods_bundle())))
     subprocess.run(["node", "-e", script], cwd=ROOT, check=True, capture_output=True, text=True)
 
 

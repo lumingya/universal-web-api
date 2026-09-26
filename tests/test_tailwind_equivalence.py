@@ -177,3 +177,26 @@ def test_precompiled_css_matches_runtime_jit_on_every_tab(server):
             assert not report, "预编译样式与原运行时不一致：\n" + "\n".join(report[:40])
         finally:
             browser.close()
+
+
+def test_dashboard_loads_and_every_tab_renders_without_page_errors(server):
+    """R2-8：脚本改为 ES 模块（严格模式、延迟执行）后，控制面板加载与切换每个标签页都不能出现未捕获异常。"""
+    with sync_playwright() as p:
+        browser = launch_chromium(p.chromium)
+        try:
+            page = browser.new_page(viewport={"width": 1440, "height": 900})
+            errors = []
+            page.on("pageerror", lambda exc: errors.append(str(exc)))
+            page.goto(server + "/")
+            page.wait_for_selector("button.app-nav-item", timeout=20000)
+            assert page.evaluate("typeof window.DashboardMethods === 'object' && Object.keys(window.DashboardMethods).length > 150")
+            tabs = page.locator("button.app-nav-item")
+            for dark in (False, True):
+                page.evaluate("(d) => document.documentElement.classList.toggle('dark', d)", dark)
+                for index in range(tabs.count()):
+                    tabs.nth(index).click()
+                    page.wait_for_timeout(500)
+            assert not errors, "控制面板出现未捕获异常：\n" + "\n".join(errors[:10])
+        finally:
+            browser.close()
+

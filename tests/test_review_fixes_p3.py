@@ -326,7 +326,9 @@ def test_s7_guide_data_local_ok_remote_forbidden(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_h14_import_handlers_check_file_size():
-    js = (Path(__file__).resolve().parents[1] / "static" / "js" / "dashboard-methods.js").read_text(encoding="utf-8")
+    from tests._dashboard_js import dashboard_methods_source
+
+    js = dashboard_methods_source()  # R2-8：dashboard-methods 已按主题拆分
     assert "SITE_CONFIG_IMPORT_MAX_BYTES" in js and "SETTINGS_BACKUP_IMPORT_MAX_BYTES" in js
     for handler, const in (("handleImportFile(event)", "SITE_CONFIG_IMPORT_MAX_BYTES"),
                            ("handleSettingsBackupImportFile(event)", "SETTINGS_BACKUP_IMPORT_MAX_BYTES")):
@@ -341,10 +343,11 @@ def test_h14_size_error_helper_behaviour():
     node = shutil.which("node")
     if not node:
         pytest.skip("node not installed")
-    root = Path(__file__).resolve().parents[1]
+    from tests._dashboard_js import dashboard_methods_bundle
+
     script = (
         "global.window={};global.localStorage={getItem(){return null}};"
-        f"require({json.dumps(str(root / 'static/js/dashboard-methods.js'))});"
+        f"require({json.dumps(str(dashboard_methods_bundle()))});"
         "const f=window.importFileSizeError;"
         "console.log(JSON.stringify([f({size:1024},8*1024*1024,'配置文件'),f({size:9*1024*1024},8*1024*1024,'配置文件')]));"
     )

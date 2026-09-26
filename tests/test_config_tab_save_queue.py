@@ -4,7 +4,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_TAB_FILE = ROOT / "static/js/components/ConfigTab.js"
-DASHBOARD_METHODS_FILE = ROOT / "static/js/dashboard-methods.js"
+from tests._dashboard_js import dashboard_methods_bundle  # noqa: E402
+
+DASHBOARD_METHODS_FILE = dashboard_methods_bundle()  # R2-8：拆分后的完整源码
 
 
 def test_advanced_config_saves_reach_backend_in_user_action_order() -> None:

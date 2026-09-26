@@ -708,39 +708,51 @@
 
     </div>
 
-    <!-- 加载组件 JS -->
+    <!-- 加载组件 JS（R2-8：除 Vue 全局构建外均以 ES 模块加载——严格模式、模块作用域、按文档顺序延迟执行） -->
     <script src="/static/vendor/vue.global.prod.js?v=2.6.7"></script>
-    <script src="/static/js/icons.js?v=operations-2"></script>
-    <script src="/static/js/components/Sidebar.js?v=studio-2.0.0"></script>
-    <script src="/static/js/components/OnboardingGuide.js?v=1.0.0"></script>
-    <script src="/static/js/components/HomeTab.js?v=3.1.1"></script>
+    <script type="module" src="/static/js/icons.js?v=operations-2"></script>
+    <script type="module" src="/static/js/components/Sidebar.js?v=studio-2.0.0"></script>
+    <script type="module" src="/static/js/components/OnboardingGuide.js?v=1.0.0"></script>
+    <script type="module" src="/static/js/components/HomeTab.js?v=3.1.1"></script>
     <!-- 子组件（在 ConfigTab 之前） -->
-    <script src="static/js/components/panels/SelectorPanel.js?v=studio-2"></script>
-    <script src="static/js/components/panels/ImageConfigPanel.js?v=gentle-2"></script>
-    <script src="static/js/components/panels/StreamConfigPanel.js?v=gentle-2"></script>
-    <script src="/static/js/workflow-studio.js?v=3.4.0"></script>
-    <script src="/static/js/components/panels/WorkflowPanel.js?v=3.1.0"></script>
-    <script src="static/js/components/panels/FilePastePanel.js?v=gentle-2"></script>
-    <script src="static/js/components/panels/PromptPaddingPanel.js?v=gentle-2"></script>
+    <script type="module" src="static/js/components/panels/SelectorPanel.js?v=studio-2"></script>
+    <script type="module" src="static/js/components/panels/ImageConfigPanel.js?v=gentle-2"></script>
+    <script type="module" src="static/js/components/panels/StreamConfigPanel.js?v=gentle-2"></script>
+    <script type="module" src="/static/js/workflow-studio.js?v=3.4.0"></script>
+    <script type="module" src="/static/js/components/panels/WorkflowPanel.js?v=3.1.0"></script>
+    <script type="module" src="static/js/components/panels/FilePastePanel.js?v=gentle-2"></script>
+    <script type="module" src="static/js/components/panels/PromptPaddingPanel.js?v=gentle-2"></script>
 
     <!-- 主组件 -->
-    <script src="/static/js/components/panels/PresetTransfer.js?v=1.1.0"></script>
-    <script src="static/js/components/panels/AdapterPanel.js?v=1.0.1"></script>
-    <script src="static/js/components/ConfigTab.js?v=adapter-panel-1"></script>
-    <script src="/static/js/components/LogsTab.js?v=3.0.1"></script>
-    <script src="/static/js/components/RequestMonitorTab.js?v=operations-2"></script>
-    <script src="/static/js/components/SettingsTab.js?v=3.0.1"></script>
-    <script src="/static/js/components/Dialogs.js?v=2.6.9"></script>
-    <script src="/static/js/components/TabPoolTab.js?v=operations-2"></script>
-    <script src="/static/js/components/commands/CommandsTabComputed.js?v=2.6.9"></script>
-    <script src="/static/js/components/commands/CommandsTabMethods.js?v=2.6.16"></script>
-    <script src="/static/js/components/commands/CommandsTabTemplate.js?v=3.0.1"></script>
-    <script src="/static/js/components/CommandsTab.js?v=2.6.14"></script>
+    <script type="module" src="/static/js/components/panels/PresetTransfer.js?v=1.1.0"></script>
+    <script type="module" src="static/js/components/panels/AdapterPanel.js?v=1.0.1"></script>
+    <script type="module" src="static/js/components/ConfigTab.js?v=adapter-panel-1"></script>
+    <script type="module" src="/static/js/components/LogsTab.js?v=3.0.1"></script>
+    <script type="module" src="/static/js/components/RequestMonitorTab.js?v=operations-2"></script>
+    <script type="module" src="/static/js/components/SettingsTab.js?v=3.0.1"></script>
+    <script type="module" src="/static/js/components/Dialogs.js?v=2.6.9"></script>
+    <script type="module" src="/static/js/components/TabPoolTab.js?v=operations-2"></script>
+    <script type="module" src="/static/js/components/commands/CommandsTabComputed.js?v=2.6.9"></script>
+    <script type="module" src="/static/js/components/commands/CommandsTabMethods.js?v=2.6.16"></script>
+    <script type="module" src="/static/js/components/commands/CommandsTabTemplate.js?v=3.0.1"></script>
+    <script type="module" src="/static/js/components/CommandsTab.js?v=2.6.14"></script>
 
     <!-- 主应用逻辑 -->
-<script src="/static/js/dashboard-schema.js?v=attachments-1"></script>
-    <script src="/static/js/dashboard-state.js?v=studio-2"></script>
-    <script src="/static/js/dashboard-methods.js?v=scoped-transfer-1"></script>
-    <script src="/static/js/dashboard.js?v=3.1.0"></script>
+<script type="module" src="/static/js/dashboard-schema.js?v=attachments-1"></script>
+    <script type="module" src="/static/js/dashboard-state.js?v=studio-2"></script>
+    <!-- R2-8：dashboard-methods 按主题拆分；shared.js 与各分组须在组装器之前加载 -->
+    <script type="module" src="/static/js/dashboard/shared.js?v=1.0.0"></script>
+    <script type="module" src="/static/js/dashboard/methods-core.js?v=1.0.0"></script>
+    <script type="module" src="/static/js/dashboard/methods-api.js?v=1.0.0"></script>
+    <script type="module" src="/static/js/dashboard/methods-media.js?v=1.0.0"></script>
+    <script type="module" src="/static/js/dashboard/methods-logs.js?v=1.0.0"></script>
+    <script type="module" src="/static/js/dashboard/methods-transfer.js?v=1.0.0"></script>
+    <script type="module" src="/static/js/dashboard/methods-settings.js?v=1.0.0"></script>
+    <script type="module" src="/static/js/dashboard/methods-versions.js?v=1.0.0"></script>
+    <script type="module" src="/static/js/dashboard/methods-selectors.js?v=1.0.0"></script>
+    <script type="module" src="/static/js/dashboard/methods-editing.js?v=1.0.0"></script>
+    <script type="module" src="/static/js/dashboard/methods-tools.js?v=1.0.0"></script>
+    <script type="module" src="/static/js/dashboard-methods.js?v=assembler-1.0.0"></script>
+    <script type="module" src="/static/js/dashboard.js?v=3.1.0"></script>
 </body>
 </html>
