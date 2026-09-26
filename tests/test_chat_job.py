@@ -173,3 +173,35 @@ def test_each_protocol_is_tagged_and_counted(monkeypatch):
     assert "response.completed" in r3.text
     for protocol in before:
         assert count(protocol) == before[protocol] + 1, protocol
+
+
+def test_x_request_id_is_linked_to_request_history(monkeypatch):
+    """R2-7：客户端拿到的 X-Request-ID 能在请求历史里查到，与内部 req-xxx 关联。"""
+    httpx = pytest.importorskip("httpx")
+    import main
+    from app.api import chat, tab_routes
+    from app.services.request_manager import request_manager
+
+    for name in ("AUTH_ENABLED", "AUTH_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+    browser = _FakeBrowser()
+    monkeypatch.setattr(chat, "get_browser", lambda **kwargs: browser)
+    monkeypatch.setattr(tab_routes, "get_browser", lambda **kwargs: browser)
+    monkeypatch.setattr(request_manager, "_request_monitor_enabled", lambda: True)
+
+    async def run():
+        transport = httpx.ASGITransport(app=main.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1:8199", timeout=30) as client:
+            return await client.post(
+                "/v1/messages",
+                headers={"X-Request-ID": "trace-link-42"},
+                json={"model": "deepseek-v4", "max_tokens": 64, "messages": [{"role": "user", "content": "hi"}]},
+            )
+
+    response = asyncio.run(run())
+    assert response.status_code == 200 and response.headers["x-request-id"] == "trace-link-42"
+    with request_manager._history_lock:
+        records = [r for r in request_manager._monitor_history if r.get("http_request_id") == "trace-link-42"]
+    assert records, "请求历史里没有找到对应 X-Request-ID 的记录"
+    assert records[-1]["protocol"] == PROTOCOL_ANTHROPIC_MESSAGES
+    assert str(records[-1]["id"]).startswith("req-")  # 历史记录里内部编号的键名是 id

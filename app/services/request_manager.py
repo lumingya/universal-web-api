@@ -227,6 +227,7 @@ class RequestContext:
     tab_id: Optional[str] = None
     client_fp: str = ""
     protocol: str = "openai.chat"  # R2-2：openai.chat / anthropic.messages / openai.responses
+    http_request_id: str = ""  # R2-7：客户端可见的 X-Request-ID，把 HTTP 请求与 req-xxx 日志关联起来
     monitor: Dict[str, Any] = field(default_factory=dict)
     started_at_monotonic: Optional[float] = field(default=None, repr=False)
     last_activity_at: Optional[float] = field(default=None, repr=False)
@@ -1966,6 +1967,8 @@ class RequestManager:
             "tab_id": snapshot["tab_id"] or monitor.get("tab_id") or "",
             "model": str(monitor.get("model") or ""),
             "endpoint": str(monitor.get("endpoint") or ""),
+            "protocol": str(getattr(ctx, "protocol", "") or "openai.chat"),
+            "http_request_id": str(getattr(ctx, "http_request_id", "") or ""),
             "request_type": str(monitor.get("request_type") or ""),
             "is_stream": bool(monitor.get("is_stream")),
             "is_multimodal": bool(monitor.get("is_multimodal") or monitor.get("has_response_media")),
@@ -2316,6 +2319,12 @@ class RequestManager:
             ctx.protocol = current_protocol()
         except Exception:
             pass
+        try:  # R2-7：记录本次 HTTP 请求的 X-Request-ID（由 RequestMetricsMiddleware 设置）
+            from app.services.metrics import REQUEST_ID
+
+            ctx.http_request_id = REQUEST_ID.get()
+        except Exception:
+            pass
         cleanup_history_contexts: List[RequestContext] = []
 
         with self._requests_lock:
@@ -2331,7 +2340,7 @@ class RequestManager:
         # 设置上下文后记录日志
         token = _request_context.set(request_id)
         try:
-            logger.info("创建")
+            logger.info(f"创建 (X-Request-ID={ctx.http_request_id})" if ctx.http_request_id else "创建")
         finally:
             _request_context.reset(token)
         
