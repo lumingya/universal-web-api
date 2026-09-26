@@ -122,10 +122,18 @@ HTTP_DURATION = Histogram(
     buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600),
 )
 HTTP_IN_FLIGHT = Gauge("uwapi_http_requests_in_flight", "进行中的 HTTP 请求数")
+CHAT_REQUESTS = Counter("uwapi_chat_requests_total", "聊天请求数（按协议 openai.chat / anthropic.messages / openai.responses 与最终状态）")
+CHAT_REQUEST_DURATION = Histogram(
+    "uwapi_chat_request_duration_seconds",
+    "聊天请求从创建到结束的耗时（秒，按协议）",
+    buckets=(0.5, 1, 2.5, 5, 10, 20, 30, 60, 120, 300, 600),
+)
 TAB_POOL_TABS = Gauge("uwapi_tab_pool_tabs", "标签页池中的标签页数（按状态；浏览器未连接时不输出）")
 BUILD_INFO = Gauge("uwapi_build_info", "构建信息（值恒为 1）")
 UPTIME = Gauge("uwapi_uptime_seconds", "进程已运行秒数")
-REGISTRY: List[_Metric] = [HTTP_REQUESTS, HTTP_DURATION, HTTP_IN_FLIGHT, TAB_POOL_TABS, BUILD_INFO, UPTIME]
+REGISTRY: List[_Metric] = [
+    HTTP_REQUESTS, HTTP_DURATION, HTTP_IN_FLIGHT, CHAT_REQUESTS, CHAT_REQUEST_DURATION, TAB_POOL_TABS, BUILD_INFO, UPTIME,
+]
 
 
 def new_request_id() -> str:

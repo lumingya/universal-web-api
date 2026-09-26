@@ -21,6 +21,7 @@ from app.api.streaming_response import RequestStreamingResponse as StreamingResp
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.api import chat as chat_api
+from app.core.chat_job import PROTOCOL_ANTHROPIC_MESSAGES, iter_openai_sse_payloads, job_for, use_chat_job
 from app.api.openai_stop import (
     find_first_stop_sequence,
     normalize_openai_stop_sequences,
@@ -796,50 +797,9 @@ def _serialize_tool_arguments_fragment(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-async def _iter_openai_stream_chunks(body_iterator: AsyncIterator[Any]) -> AsyncIterator[Dict[str, Any]]:
-    buffer = ""
-    utf8_decoder = codecs.getincrementaldecoder("utf-8")("ignore")
-
-    def _decode_sse_segment(segment: str) -> Optional[Dict[str, Any]]:
-        payload_text = sse_frame_data_text(segment)
-        if not payload_text or payload_text.strip() == "[DONE]":
-            return None
-        try:
-            return json.loads(payload_text)
-        except Exception:
-            logger.debug(f"无法解析 OpenAI SSE chunk: {payload_text[:200]}")
-            return None
-
-    try:
-        async for raw_chunk in body_iterator:
-            text = utf8_decoder.decode(raw_chunk) if isinstance(raw_chunk, bytes) else str(raw_chunk or "")
-            if not text:
-                continue
-            buffer += text
-            buffer = buffer.replace("\r\n", "\n").replace("\r", "\n")
-            while "\n\n" in buffer:
-                segment, buffer = buffer.split("\n\n", 1)
-                data = _decode_sse_segment(segment.strip())
-                if data is not None:
-                    yield data
-
-        decoder_tail = utf8_decoder.decode(b"", final=True)
-        if decoder_tail:
-            buffer += decoder_tail
-            buffer = buffer.replace("\r\n", "\n").replace("\r", "\n")
-            while "\n\n" in buffer:
-                segment, buffer = buffer.split("\n\n", 1)
-                data = _decode_sse_segment(segment.strip())
-                if data is not None:
-                    yield data
-
-        tail = buffer.strip()
-        if tail:
-            data = _decode_sse_segment(tail)
-            if data is not None:
-                yield data
-    finally:
-        await _close_async_iterator(body_iterator)
+# R2-2：执行层输出的解码逻辑统一到 app/core/chat_job.iter_openai_sse_payloads（唯一实现）；
+# 保留旧名作为别名，关闭语义不变（消费方关闭时同样会关闭上游 body_iterator）。
+_iter_openai_stream_chunks = iter_openai_sse_payloads
 
 
 async def _anthropic_stream_from_openai_inner(
@@ -1665,11 +1625,12 @@ async def create_message(
     chat_body = chat_api.ChatRequest(**openai_payload)
     # 修复2: 捕获内部工作流的 HTTPException，转换为 Anthropic 错误格式
     try:
-        response = await chat_api.chat_completions(
-            request=request,
-            body=chat_body,
-            authenticated=authenticated,
-        )
+        with use_chat_job(job_for(PROTOCOL_ANTHROPIC_MESSAGES, model=body.model, stream=body.stream)):
+            response = await chat_api.chat_completions(
+                request=request,
+                body=chat_body,
+                authenticated=authenticated,
+            )
     except HTTPException as exc:
         return _http_exception_to_anthropic_response(exc, request_id)
     return _wrap_openai_response_as_anthropic(response, body, request_id)
@@ -1708,15 +1669,17 @@ async def create_message_with_route_domain(
     chat_body = tab_routes_api.ChatRequest(**openai_payload)
     # 修复2: 捕获内部工作流的 HTTPException，转换为 Anthropic 错误格式
     try:
-        response = await tab_routes_api.chat_with_route_domain(
-            route_domain=route_domain,
-            request=request,
-            body=chat_body,
-            tab_index=tab_index,
-            selector=selector,
-            preset_name=None,
-            authenticated=authenticated,
-        )
+        with use_chat_job(job_for(PROTOCOL_ANTHROPIC_MESSAGES, model=body.model, stream=body.stream,
+                                  route_domain=route_domain, tab_index=tab_index)):
+            response = await tab_routes_api.chat_with_route_domain(
+                route_domain=route_domain,
+                request=request,
+                body=chat_body,
+                tab_index=tab_index,
+                selector=selector,
+                preset_name=None,
+                authenticated=authenticated,
+            )
     except HTTPException as exc:
         return _http_exception_to_anthropic_response(exc, request_id)
     return _wrap_openai_response_as_anthropic(response, body, request_id)
@@ -1749,15 +1712,17 @@ async def create_message_with_route_domain_and_preset(
             route_domain,
             preset_name,
         )["preset_name"]
-        response = await tab_routes_api.chat_with_route_domain(
-            route_domain=route_domain,
-            request=request,
-            body=chat_body,
-            tab_index=tab_index,
-            selector=selector,
-            preset_name=forced_preset_name,
-            authenticated=authenticated,
-        )
+        with use_chat_job(job_for(PROTOCOL_ANTHROPIC_MESSAGES, model=body.model, stream=body.stream,
+                                  route_domain=route_domain, preset=forced_preset_name, tab_index=tab_index)):
+            response = await tab_routes_api.chat_with_route_domain(
+                route_domain=route_domain,
+                request=request,
+                body=chat_body,
+                tab_index=tab_index,
+                selector=selector,
+                preset_name=forced_preset_name,
+                authenticated=authenticated,
+            )
     except HTTPException as exc:
         return _http_exception_to_anthropic_response(exc, request_id)
     return _wrap_openai_response_as_anthropic(response, body, request_id)

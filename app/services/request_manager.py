@@ -226,6 +226,7 @@ class RequestContext:
     # v2.0 新增：关联的标签页 ID
     tab_id: Optional[str] = None
     client_fp: str = ""
+    protocol: str = "openai.chat"  # R2-2：openai.chat / anthropic.messages / openai.responses
     monitor: Dict[str, Any] = field(default_factory=dict)
     started_at_monotonic: Optional[float] = field(default=None, repr=False)
     last_activity_at: Optional[float] = field(default=None, repr=False)
@@ -2309,6 +2310,12 @@ class RequestManager:
         """创建新请求"""
         request_id = self._generate_id()
         ctx = RequestContext(request_id=request_id, client_fp=str(client_fp or ""))
+        try:  # R2-2：按协议入口设置的 ChatJob 标注协议（未设置时为 openai.chat）
+            from app.core.chat_job import current_protocol
+
+            ctx.protocol = current_protocol()
+        except Exception:
+            pass
         cleanup_history_contexts: List[RequestContext] = []
 
         with self._requests_lock:
@@ -2469,6 +2476,19 @@ class RequestManager:
             self._append_monitor_history(ctx)
         except Exception as e:
             logger.debug(f"写入请求监控历史失败: {e}")
+
+        try:  # R2-2 / R2-7：按协议与最终状态计数（每个请求只记一次）
+            with ctx._lock:
+                already_reported = getattr(ctx, "_metrics_reported", False)
+                ctx._metrics_reported = True
+            if not already_reported:
+                from app.services.metrics import CHAT_REQUEST_DURATION, CHAT_REQUESTS
+
+                protocol = str(getattr(ctx, "protocol", "") or "openai.chat")
+                CHAT_REQUESTS.inc(protocol=protocol, status=snapshot["status"].value)
+                CHAT_REQUEST_DURATION.observe(float(snapshot.get("duration") or 0.0), protocol=protocol)
+        except Exception as e:
+            logger.debug(f"记录请求指标失败: {e}")
 
         # Count a terminal request once, not every cleanup/wrapper invocation.
         # Partial text, tool text and media are real output; empty SSE keepalives are not.

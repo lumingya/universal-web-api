@@ -25,6 +25,7 @@ from typing import Optional, Any, Dict, List, Callable, AsyncIterator
 from fastapi import APIRouter, Request, HTTPException, Header, Depends
 from fastapi.responses import JSONResponse, StreamingResponse as StarletteStreamingResponse
 from app.api.streaming_response import RequestStreamingResponse as StreamingResponse
+from app.core.chat_job import PROTOCOL_OPENAI_RESPONSES, job_for, use_chat_job, with_chat_job
 from pydantic import BaseModel, Field, field_validator
 
 from app.core.config import _request_context, get_logger, SSEFormatter
@@ -2416,15 +2417,17 @@ async def create_response(
     """OpenAI Responses API 兼容入口。"""
     principal = _responses_principal_from_request(request)
     chat_body = _responses_request_to_chat_request(body, stream=bool(body.stream), principal=principal)
+    # R2-2：标注协议，执行入口据此给 RequestContext 打标签并按协议记录指标
+    job = job_for(PROTOCOL_OPENAI_RESPONSES, model=body.model, stream=bool(body.stream))
 
     if body.stream:
         return StreamingResponse(
-            _stream_responses_compat(
+            with_chat_job(job, _stream_responses_compat(
                 request=request,
                 body=body,
                 chat_body=chat_body,
                 authenticated=authenticated,
-            ),
+            )),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache, no-transform",
@@ -2434,11 +2437,12 @@ async def create_response(
         )
 
     try:
-        status_code, payload = await _run_chat_completion_final(
-            request=request,
-            body=chat_body,
-            authenticated=authenticated,
-        )
+        with use_chat_job(job):
+            status_code, payload = await _run_chat_completion_final(
+                request=request,
+                body=chat_body,
+                authenticated=authenticated,
+            )
     except Exception as e:
         failed = _build_responses_object(
             body,
