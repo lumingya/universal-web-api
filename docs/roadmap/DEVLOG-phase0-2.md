@@ -165,23 +165,11 @@ Portal 把用户本机的**一个文件夹**发布成公网 MCP 端点：`https:
 
 ### 阶段 2：架构演进（全面落地）
 
-- [~] **R2-1** 进行中（计划见 `docs/architecture/browser-driver-and-process-model.md`）：
-  - ✅ 第 1 步（`94c5dc5`）：驱动层 `app/core/driver/`、TabSession.driver，调用点零改动。本机 3.13 全绿。
-  - ✅ 第 2 步（`5ec2202`）：只读路径，即 media_extractor 与 stream_monitor 的标签页级 run_js，加上健康巡检。
-  - ✅ 第 3 步（`a012838`）：CDP 集中点，即 human_mouse 与 browser_profile_identity 的标签页级调用。
-  - ✅ 第 4 步·标签页级（`3dfcce8`）：交互路径 34 处。
-  - 实机验证：`82e266f`（第 1～4 步）3.13 为 1332 passed / 0 failed，3.10 为 1323 passed / 0 failed，交互路径通过真实浏览器与 Playwright 用例。
-  - 待办①，元素级调用。按常见变量名统计，约有 run_js 39、click 24、attr 19、states 5 处（is_displayed 3、is_alive 2）。方案：
-    - DrissionElement 补上 is_displayed / is_alive；过渡期用 `__getattr__` 把其余属性转发给原元素；
-    - ElementFinder 改为返回包装对象。
-    - **风险点**：元素会被当作参数传给 `tab.run_js(script, ele)` 或 `tab.actions.move_to(ele)`，DrissionPage 只认原始元素，因此驱动的 run_js 需要自动拆包，未迁移的调用点改用 `.raw`；另外要排查对元素做 isinstance 判断的代码。
-  - 待办②，第 5 步网络监听（风险最高）：
-    - network_monitor 用到了私有属性 `tab.listen._reuse_driver`；
-    - 有一段依赖 DrissionPage 内部实现的自定义停止逻辑；
-    - 下游广泛读取 DataPacket（response.body、url、资源类型等）。
-    - 需要先设计 NetworkListener 与数据包包装，再逐项实机验证流式捕获。
-  - 待办③，第 6 步收口：除驱动包外禁止直接调用，棘轮降到 0。
-  - 进度由棘轮测试锁定：直接调用从 253 降到 195 处，文件从 46 个降到 44 个。
+- [x] **R2-1** 完成：业务代码不再直接调用 DrissionPage，统一经由 `app/core/driver/`。
+  - 第 1～4 步：`94c5dc5` 到 `3dfcce8`；收口：`73c0c84`。
+  - 收口一次改写了 222 处，覆盖元素级（`as_element`）、浏览器级（`browser_driver`）、键鼠动作链、网络监听；DrissionPage 内部类统一经 `drission_internals.py` 访问。
+  - 棘轮基线归零，并有断言：除驱动包外不允许任何直接调用。
+  - 实机验证：`73c0c84` 在 3.13 上 1340 passed / 0 failed；3.10 上唯一失败是代理时序问题，已修复，见下方 `fa20a37`。
 - [x] **R2-2**（`5568ce2`）：新增 ChatJob（协议、路由、请求 ID）与类型化 ChatEvent，执行层输出统一由共享解码器处理，并按协议计量。
   - 两个成熟的渲染状态机没有重写，详见 `docs/architecture/chat-pipeline.md`。OpenAI、Anthropic、Responses 都先翻译成它，协议层保持轻薄。
 - [x] **R2-3** 三个巨型类全部完成拆分：
@@ -196,8 +184,12 @@ Portal 把用户本机的**一个文件夹**发布成公网 MCP 端点：`https:
 - [ ] **R2-6** 设计已定稿（同上文档 §5：回环 HTTP 或 WebSocket IPC，传输 ChatEvent，由 `UWAPI_WORKER_MODE` 开关控制），尚未实施；建议在 R2-1 的第 1、2 步之后进行。
 - [~] **R2-7** 部分完成（`ea8d3cb`）：`/metrics`（Prometheus，无第三方依赖）与 `X-Request-ID`（中间件 + `REQUEST_ID` 上下文变量）已完成。
   - 待办：日志格式里带上 request_id；收窄 `except Exception`（1454 处）需要按模块逐步进行。
-- [~] **R2-8** 部分完成：站点配置页新增「维护与巡检」面板（`f922557`，含界面测试）；page_guide 偶发失败已修复。
-  - 待办：预编译 Tailwind（目前是本地托管的运行时 JIT，407KB）、ES Modules、拆分 `dashboard-methods.js`、Node 端单测。
+- [x] **R2-8** 完成：
+  - 维护面板（`f922557`）；
+  - Tailwind 预编译（`2e37530`）：407KB 运行时脚本换成 90KB CSS，有逐元素等价性测试；
+  - 拆分 dashboard-methods.js 为 11 个文件，无损校验（`9cccde3`）；
+  - 除 Vue 外 38 个脚本改为 ES 模块；
+  - 新增 Node 端单测（`node --test`，已纳入 pytest）。
 
 ## 3.5 设计记录：R1-1 Schema 与 R1-2 站点配置彻底拆分（实施前定稿，改动时同步更新）
 
@@ -402,4 +394,18 @@ Portal 把用户本机的**一个文件夹**发布成公网 MCP 端点：`https:
 - **测试修复**（`1b16387`）：测试反复重新初始化 RequestManager 单例，而前序测试遗留的保存线程醒来后，会调用新测试打桩的 `_save_history`，导致防抖用例在全量中稳定失败；已改为重新初始化前先排空遗留线程。
 - **R2-7 请求 ID 贯穿**（`2da24c1`）：RequestContext 新增 http_request_id，「创建」日志带上 X-Request-ID，请求历史记录新增 protocol 与 http_request_id 字段。端到端测试验证：带 X-Request-ID 调用 /v1/messages 后，能在历史中找到对应记录。
 - **实机验证**：`82e266f`（驱动第 1～4 步）两个 Python 版本全绿；`2da24c1` 在 3.13 上为 1333 passed / 0 failed，3.10 上为 1324 passed / 0 failed。
+- **R2-1 收口**（`73c0c84`）：
+  - 用 AST 按 UTF-8 字节偏移精确改写 222 处。
+  - network_monitor 里依赖 Listener 内部状态的四段逻辑，原样迁入 DrissionListener。
+  - 由既有测试发现并修正了两处语义问题：
+    - translated_errors 原本会翻译所有异常，导致 network_monitor 依赖的 `except TypeError`（旧版 DrissionPage 不认识 res_type 参数时的退回逻辑）失效；已改为只翻译 DrissionPage 自身的异常；
+    - 驱动的 find 原本用 to_locator 把不带前缀的定位器当作 CSS，而 DrissionPage 原生语义是文本匹配；已改为原样传递，配置里的选择器由调用方自行规范化。
+- **R2-8**：
+  - Tailwind：确认了运行时版本（3.4.17）和注入方式（`document.head.append`），预编译 CSS 因此放在 head 末尾，保持原有层叠顺序。
+  - 覆盖检查顺带发现 8 个从未生效的类名（透明度刻度之外的写法，以及 `py-0.2`），保持原样只登记。
+  - 拆分：Node vm 校验 155 个方法、键顺序一致、源码逐字相同。
+  - ES 模块：38 个文件都能按模块语法解析；跨文件的裸引用都能经 window 解析到。
+  - 失误与改进：一次串联命令没有在测试失败时停下，带着 5 项失败提交了。这 5 项是读取原文件源码的测试，修复后并入同一个提交（修订后为 `9cccde3`）。此后改用 `~/tools/check.sh && git commit`，检查失败就不会提交。
+- **修复**（`fa20a37`）：重启守护代理在连接数超限时，原本不读请求就回 503 并关闭；Windows 上会因接收缓冲区有未读数据而发 RST，503 被丢弃（本机 3.10 偶发失败的原因）。已改为先 shutdown 再读掉客户端数据，然后关闭。
+- **工具**：新增 `~/tools/restore.sh`（沙盒重启后一条命令恢复环境）和 `~/tools/check.sh`（提交前检查）；`ship.sh` 在 Portal 响应超时后会反复确认远端，不再误报失败。
 
