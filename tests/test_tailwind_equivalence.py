@@ -131,8 +131,13 @@ def server():
     httpd.shutdown()
 
 
+# 首次访问会弹出新手引导遮罩（预期行为），测试里预先写入“已完成”的标记，免得遮罩挡住点击
+SKIP_ONBOARDING = "localStorage.setItem('uwa_onboarding_v1', JSON.stringify({completed: true}))"
+
+
 def _open(browser, url):
     page = browser.new_page(viewport={"width": 1440, "height": 900})
+    page.add_init_script(SKIP_ONBOARDING)
     page.goto(url)
     page.wait_for_selector("button.app-nav-item", timeout=20000)
     page.wait_for_timeout(1500)
@@ -185,6 +190,7 @@ def test_dashboard_loads_and_every_tab_renders_without_page_errors(server):
         browser = launch_chromium(p.chromium)
         try:
             page = browser.new_page(viewport={"width": 1440, "height": 900})
+            page.add_init_script(SKIP_ONBOARDING)
             errors = []
             page.on("pageerror", lambda exc: errors.append(str(exc)))
             page.goto(server + "/")
