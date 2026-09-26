@@ -942,6 +942,18 @@ class _RestartHandoffProxyHandler(socketserver.BaseRequestHandler):
             self.request.settimeout(5.0)
             self.request.sendall(head + body)
         except OSError:
+            return
+        # 优雅关闭：先发 FIN 让响应送达，再在短时间内读掉客户端已发来的请求数据。
+        # 否则在 Windows 上，接收缓冲区里有未读数据时关闭套接字会以 RST 中止连接，
+        # 已写出的 503 可能在送达前被丢弃（客户端只看到连接被重置）。
+        try:
+            self.request.shutdown(socket.SHUT_WR)
+            self.request.settimeout(0.5)
+            deadline = time.monotonic() + 1.0
+            while time.monotonic() < deadline:
+                if not self.request.recv(65536):
+                    break
+        except OSError:
             pass
 
     def _reserve(self, total: int) -> None:
