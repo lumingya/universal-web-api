@@ -44,7 +44,8 @@ def _browser():
 
 
 @router.get("/internal/worker/health")
-async def worker_health() -> Dict[str, Any]:
+async def worker_health(request: Request) -> Dict[str, Any]:
+    _authorize(request)
     return {"ok": True, "role": "worker", "pid": os.getpid()}
 
 

@@ -6,7 +6,7 @@
   只监听 127.0.0.1，另外提供带令牌鉴权的 ``/internal/worker/*`` 接口；
 - **API 进程**对外服务：协议接口（/v1、/url、/tab 等）在本进程完成协议转换、鉴权与计量，
   执行时经 ``RemoteBrowserProxy`` 交给 worker；所有 ``/api/*`` 面板请求整体转发给 worker；
-  worker 由 API 进程启动并在退出时关闭，崩溃时 API 进程对执行请求返回错误而自身不受影响。
+  worker 由 API 进程启动、监控并在退出时关闭；意外退出后自动以指数退避重启。重启窗口内的在途请求仍可能失败，但 API 进程保持可用。
 """
 
 from __future__ import annotations

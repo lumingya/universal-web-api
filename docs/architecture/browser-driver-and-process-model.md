@@ -121,8 +121,10 @@ class BrowserDriver(Protocol):       # 浏览器进程（对应现在的 Chromiu
   - 标签页池的白名单方法（get_tabs_with_index、set_tab_model_name、apply_runtime_config、terminate_by_index、set_tab_preset、get_route_groups_snapshot 等）与配置属性；
   - get_pool_status 与 health_check。
   - 其他能力在 API 进程中访问会抛 `WorkerModeUnsupported`，并说明原因。
-- **尚未覆盖**：
-  - worker 意外退出时，API 进程只会让执行请求报错，不会自动重启 worker；需要手动重启服务，或借助现有的定时重启守护。
+- **恢复与限制**：
+  - `WorkerSupervisor` 监控 worker 子进程；意外退出后立即尝试重启，启动失败时按指数退避（默认 1–30 秒）持续重试；API 关闭时先停止监控，再关闭 worker。
+  - 内部健康检查同样要求回环来源与随机令牌，避免把端口上的其他服务误认成当前 worker。
+  - worker 重启窗口内，在途请求仍可能报错；process 模式仍为实验性，默认保持 `inproc`，切默认前需在专用副本做长时间 soak test。
   - 面板的流式接口经转发层透传，已测试普通请求与流式透传，但尚未做长时间实机验证。
-- **测试**：`tests/test_worker_mode.py` 覆盖远程执行、停止传播、白名单与鉴权、转发与真实客户端地址、process 模式下经官方 SDK 的端到端请求，以及真实拉起和关闭 worker 子进程。
+- **测试**：`tests/test_worker_mode.py` 覆盖远程执行、停止传播、白名单与鉴权、转发与真实客户端地址、process 模式下经官方 SDK 的端到端请求、真实拉起/关闭 worker，以及意外退出后的自动重启。
 

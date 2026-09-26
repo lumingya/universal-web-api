@@ -469,6 +469,7 @@ async def lifespan(app: FastAPI):
     if api_process:
         from app.worker.supervisor import supervisor as worker_supervisor
         await asyncio.to_thread(worker_supervisor.start)
+        worker_supervisor.start_monitoring()
     elif is_worker_role():
         logger.info("[startup] 以浏览器 worker 角色运行（仅供本机 API 进程调用）")
     _install_asyncio_exception_filter()

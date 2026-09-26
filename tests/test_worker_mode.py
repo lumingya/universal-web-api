@@ -6,6 +6,7 @@ worker 端用真实的 uvicorn 线程承载内部接口，浏览器换成假实�
 from __future__ import annotations
 
 import asyncio
+import os
 import socket
 import threading
 import time
@@ -167,6 +168,8 @@ def test_worker_rejects_bad_token_and_unknown_methods(worker):
     bad = requests.post(base + "/internal/worker/execute", json={"method": "execute_workflow", "kwargs": {}},
                         headers={TOKEN_HEADER: "wrong"}, timeout=5)
     assert bad.status_code == 403
+    health_without_token = requests.get(base + "/internal/worker/health", timeout=5)
+    assert health_without_token.status_code == 403
     unknown = requests.post(base + "/internal/worker/execute", json={"method": "shutdown", "kwargs": {}},
                             headers={TOKEN_HEADER: TOKEN}, timeout=5)
     assert unknown.status_code == 400
@@ -228,6 +231,59 @@ def test_get_browser_returns_proxy_only_in_api_process_mode(monkeypatch):
     assert not isinstance(browser_main.get_browser(auto_connect=False), RemoteBrowserProxy)
 
 
+def test_supervisor_restarts_worker_after_unexpected_exit(monkeypatch):
+    """API 进程监控到 worker 崩溃后会自动拉起新子进程。"""
+    from app.worker.forwarding import PROXY_SECRET_ENV
+    from app.worker.supervisor import WorkerSupervisor
+
+    monkeypatch.setenv("AUTO_OPEN_BROWSER", "false")
+    monkeypatch.setenv("BROWSER_PORT", str(_free_port()))
+    for key in (URL_ENV, TOKEN_ENV, "UWAPI_WORKER_PORT", PROXY_SECRET_ENV):
+        monkeypatch.delenv(key, raising=False)
+
+    supervisor = WorkerSupervisor()
+    try:
+        first_url = supervisor.start(ready_timeout=90)
+        first_process = supervisor.process
+        assert first_process is not None
+        first_token = os.environ[TOKEN_ENV]
+        first_health = requests.get(
+            first_url + "/internal/worker/health", headers={TOKEN_HEADER: first_token}, timeout=5
+        ).json()
+        first_worker_pid = first_health["pid"]
+        supervisor.start_monitoring(
+            check_interval=0.05,
+            ready_timeout=15,
+            initial_retry_delay=0.05,
+            max_retry_delay=0.2,
+        )
+        first_process.kill()
+        first_process.wait(timeout=5)
+
+        deadline = time.monotonic() + 30
+        restarted = False
+        while time.monotonic() < deadline:
+            current = supervisor.process
+            token = os.environ.get(TOKEN_ENV, "")
+            if current is not None and current is not first_process and supervisor.alive() and token != first_token:
+                try:
+                    response = requests.get(
+                        str(supervisor.url) + "/internal/worker/health",
+                        headers={TOKEN_HEADER: token}, timeout=1,
+                    )
+                except requests.RequestException:
+                    time.sleep(0.05)
+                    continue
+                if response.status_code == 200 and response.json().get("pid") != first_worker_pid:
+                    restarted = True
+                    break
+            time.sleep(0.05)
+        assert restarted, "worker 崩溃后监控器没有在时限内拉起新进程"
+    finally:
+        supervisor.stop()
+    assert not supervisor.alive()
+
+
 def test_supervisor_starts_and_stops_a_real_worker_process(monkeypatch):
     """真实启动一个 worker 子进程（python -m uvicorn main:app，worker 角色），确认就绪与关闭。"""
     from app.worker.supervisor import WorkerSupervisor
@@ -240,7 +296,8 @@ def test_supervisor_starts_and_stops_a_real_worker_process(monkeypatch):
     try:
         url = supervisor.start(ready_timeout=90)
         assert supervisor.alive()
-        assert requests.get(url + "/internal/worker/health", timeout=5).json()["role"] == "worker"
+        health = requests.get(url + "/internal/worker/health", headers={TOKEN_HEADER: os.environ[TOKEN_ENV]}, timeout=5)
+        assert health.json()["role"] == "worker"
         denied = requests.post(url + "/internal/worker/browser", json={"method": "health_check"}, timeout=5)
         assert denied.status_code == 403  # 没有令牌
     finally:
