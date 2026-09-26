@@ -152,11 +152,7 @@
   "run_js": 2
  },
  "app/utils/browser_profile_identity.py": {
-  "run_cdp": 5,
-  "run_js": 3
- },
- "app/utils/human_mouse.py": {
-  "run_cdp": 7
+  "run_cdp": 3
  },
  "app/utils/image_validation.py": {
   "run_js": 2

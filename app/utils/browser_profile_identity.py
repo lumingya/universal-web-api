@@ -7,6 +7,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Any, Dict
+from app.core.driver import driver_for_tab
 
 
 _CACHE: Dict[str, Dict[str, str]] = {}
@@ -67,7 +68,7 @@ def _resolve_via_profile_page(tab: Any, timeout: float = 3.0) -> Dict[str, str]:
     if browser is None or not source_id or not hasattr(browser, "_run_cdp"):
         return {}
 
-    source_info = tab.run_cdp("Target.getTargetInfo") or {}
+    source_info = driver_for_tab(tab).run_cdp("Target.getTargetInfo") or {}
     target_info = source_info.get("targetInfo") if isinstance(source_info, dict) else {}
     context_id = str((target_info or {}).get("browserContextId") or "").strip()
     cache_key = context_id or source_id
@@ -101,7 +102,7 @@ def _resolve_via_profile_page(tab: Any, timeout: float = 3.0) -> Dict[str, str]:
         if not temp_target_id:
             existing_ids = {str(item.get("targetId") or "") for item in _target_infos(browser)}
             popup_token = f"profile-probe-{threading.get_ident()}-{time.time_ns()}"
-            opened = tab.run_js(
+            opened = driver_for_tab(tab).run_js(
                 """
                 const token = arguments[0];
                 const child = window.open('about:blank', token);
@@ -137,12 +138,12 @@ def _resolve_via_profile_page(tab: Any, timeout: float = 3.0) -> Dict[str, str]:
                 time.sleep(0.05)
         if temp_tab is None:
             return {}
-        temp_tab.run_cdp("Page.navigate", url="chrome://version")
+        driver_for_tab(temp_tab).run_cdp("Page.navigate", url="chrome://version")
         profile_path_text = ""
         while time.time() < deadline and not profile_path_text:
             try:
                 profile_path_text = str(
-                    temp_tab.run_js(
+                    driver_for_tab(temp_tab).run_js(
                         "return document.querySelector('#profile_path')?.textContent || ''"
                     )
                     or ""
@@ -170,7 +171,7 @@ def _resolve_via_profile_page(tab: Any, timeout: float = 3.0) -> Dict[str, str]:
                 pass
         if popup_token:
             try:
-                tab.run_js(
+                driver_for_tab(tab).run_js(
                     """
                     const token = arguments[0];
                     const store = window.__profileProbeWindows || {};

@@ -18,4 +18,4 @@ extend-exclude = ["venv", "scratch", "tmp", "temp", "chrome_profile", "custom_sc
 
 [tool.ruff.lint]
 # 最小基线：只启用“出现即是 bug”的规则（语法错误、未定义名称、比较/断言误用等），风格类规则暂不启用。
-select = ["E9", "F63", "F7", "F82"]
+select = ["E9", "F63", "F7", "F82", "F404"]

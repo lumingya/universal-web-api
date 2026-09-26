@@ -23,6 +23,7 @@ import random
 from typing import Tuple, Optional, Callable
 
 from app.core.config import logger
+from app.core.driver import driver_for_tab
 
 
 # ================= CDP 鼠标事件派发 =================
@@ -43,7 +44,7 @@ def _dispatch_mouse_move(tab, x: int, y: int, buttons: int = 0) -> bool:
         是否成功
     """
     try:
-        tab.run_cdp(
+        driver_for_tab(tab).run_cdp(
             'Input.dispatchMouseEvent',
             _timeout=0,
             type='mouseMoved',
@@ -343,7 +344,7 @@ def human_scroll(
         step = min(remaining, random.randint(80, 120))
         
         try:
-            tab.run_cdp(
+            driver_for_tab(tab).run_cdp(
                 'Input.dispatchMouseEvent',
                 _timeout=0,
                 type='mouseWheel',
@@ -419,7 +420,7 @@ def human_scroll_path(
 
         if delta_x or delta_y:
             try:
-                tab.run_cdp(
+                driver_for_tab(tab).run_cdp(
                     'Input.dispatchMouseEvent',
                     _timeout=0,
                     type='mouseWheel',
@@ -447,7 +448,7 @@ def human_scroll_path(
     rest_dy = total_dy - prev_scroll_y
     if rest_dx or rest_dy:
         try:
-            tab.run_cdp(
+            driver_for_tab(tab).run_cdp(
                 'Input.dispatchMouseEvent',
                 _timeout=0,
                 type='mouseWheel',
@@ -516,7 +517,7 @@ def cdp_precise_click(
             return False
         
         # 2. mousePressed（force=0.5 → pressure=0.5）
-        tab.run_cdp(
+        driver_for_tab(tab).run_cdp(
             'Input.dispatchMouseEvent',
             _timeout=0,
             type='mousePressed',
@@ -562,7 +563,7 @@ def cdp_precise_click(
         release_x = x + random.randint(-1, 1)
         release_y = y + random.randint(-1, 1)
         
-        tab.run_cdp(
+        driver_for_tab(tab).run_cdp(
             'Input.dispatchMouseEvent',
             _timeout=0,
             type='mouseReleased',
@@ -585,7 +586,7 @@ def cdp_precise_click(
 def _release_mouse(tab, x: int, y: int):
     """安全释放鼠标按钮（防止状态泄漏）"""
     try:
-        tab.run_cdp(
+        driver_for_tab(tab).run_cdp(
             'Input.dispatchMouseEvent',
             _timeout=0,
             type='mouseReleased',
