@@ -376,4 +376,8 @@ Portal 把用户本机的**一个文件夹**发布成公网 MCP 端点：`https:
   界面测试在空白页加载本地 Vue 与组件，并使用假请求函数。
 - **R2-3 ConfigEngine**（`f4164da`）：拆成 6 个 mixin；11 个模块级定义原样迁到 `engine_common`，`engine.py` 重新导出。ConfigConstants 仍是同一个类对象，测试对它的 monkeypatch 照常生效。
 - **R2-1 / R2-6**：只做了现状清单和设计，未实施。原因是两者都要改动浏览器层的每条路径，必须逐步在本机做真实浏览器回归；在本轮长会话的末尾仓促重写风险过高。分阶段计划见 `docs/architecture/browser-driver-and-process-model.md`。
+- **实机验证与修复**（`a212f5a` 之后）：
+  - 修复后的 page_guide 用例单独重跑 5 次全部通过。
+  - 维护面板界面测试 3 项中失败 1 项，暴露了组件的真实缺陷：应用更新后自动调用 checkUpdates 刷新，而它会清空 applyResult，导致「已更新 N 个站点」的提示一闪而过。
+  - 已修复（`bc09cec`）：改为 `checkUpdates(keepApplyResult)`；按钮改为显式调用，避免点击事件对象被当成第一个参数传入。
 
