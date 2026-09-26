@@ -23,7 +23,10 @@ _ENV_MAPPING_NAMES = {"env", "environ", "environment", "_env"}
 
 
 def _python_files() -> List[Path]:
-    output = subprocess.check_output(["git", "ls-files", "*.py"], cwd=ROOT, text=True)
+    # 包含尚未提交但未被忽略的新文件（例如刚拆分出来的模块），扫描结果不依赖 git 暂存状态
+    output = subprocess.check_output(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "*.py"], cwd=ROOT, text=True
+    )
     return [ROOT / f for f in output.split() if not f.startswith("tests/")]
 
 
