@@ -10,13 +10,12 @@
 - ✅ 阶段 0、阶段 1 完成。
 - 阶段 2：
   - ✅ R2-2、R2-3、R2-4、R2-5；
-  - R2-7 核心已完成；R2-8 已完成面板部分；
-  - **R2-1 进行中**：已完成第 1～4 步（标签页级），直接调用从 253 降到 195 处；
-  - R2-6 设计已定稿、未实施。
-- ▶ 下一步：
-  - 等 3dfcce8 的实机全量回归（交互路径必须过真实浏览器与 Playwright 用例）；
-  - 然后盘点元素 API 的用法并迁移元素级调用；
-  - 再做第 5 步网络监听。
+  - R2-7：/metrics、X-Request-ID 已贯穿到请求历史；待办为收窄 except；
+  - R2-8：面板部分已完成；
+  - **R2-1**：第 1～4 步（标签页级）已完成并通过实机验证，直接调用从 253 降到 195 处；
+  - R2-6：设计已定稿、未实施。
+- 最近实机：`2da24c1` 在 3.13 上为 1333 passed / 0 failed，3.10 上为 1324 passed / 0 failed，两个版本全绿。
+- ▶ 下一步：R2-1 元素级迁移（方案与风险见上方清单），然后第 5 步网络监听。
 
 ## 1. 用户决策（2026-09-26，必须遵守）
 
@@ -171,7 +170,17 @@ Portal 把用户本机的**一个文件夹**发布成公网 MCP 端点：`https:
   - ✅ 第 2 步（`5ec2202`）：只读路径，即 media_extractor 与 stream_monitor 的标签页级 run_js，加上健康巡检。
   - ✅ 第 3 步（`a012838`）：CDP 集中点，即 human_mouse 与 browser_profile_identity 的标签页级调用。
   - ✅ 第 4 步·标签页级（`3dfcce8`）：交互路径 34 处。
-  - 待办：元素级调用（需要先盘点元素 API 的用法并扩展 DrissionElement）；第 5 步网络监听；第 6 步收口。
+  - 实机验证：`82e266f`（第 1～4 步）3.13 为 1332 passed / 0 failed，3.10 为 1323 passed / 0 failed，交互路径通过真实浏览器与 Playwright 用例。
+  - 待办①，元素级调用。按常见变量名统计，约有 run_js 39、click 24、attr 19、states 5 处（is_displayed 3、is_alive 2）。方案：
+    - DrissionElement 补上 is_displayed / is_alive；过渡期用 `__getattr__` 把其余属性转发给原元素；
+    - ElementFinder 改为返回包装对象。
+    - **风险点**：元素会被当作参数传给 `tab.run_js(script, ele)` 或 `tab.actions.move_to(ele)`，DrissionPage 只认原始元素，因此驱动的 run_js 需要自动拆包，未迁移的调用点改用 `.raw`；另外要排查对元素做 isinstance 判断的代码。
+  - 待办②，第 5 步网络监听（风险最高）：
+    - network_monitor 用到了私有属性 `tab.listen._reuse_driver`；
+    - 有一段依赖 DrissionPage 内部实现的自定义停止逻辑；
+    - 下游广泛读取 DataPacket（response.body、url、资源类型等）。
+    - 需要先设计 NetworkListener 与数据包包装，再逐项实机验证流式捕获。
+  - 待办③，第 6 步收口：除驱动包外禁止直接调用，棘轮降到 0。
   - 进度由棘轮测试锁定：直接调用从 253 降到 195 处，文件从 46 个降到 44 个。
 - [x] **R2-2**（`5568ce2`）：新增 ChatJob（协议、路由、请求 ID）与类型化 ChatEvent，执行层输出统一由共享解码器处理，并按协议计量。
   - 两个成熟的渲染状态机没有重写，详见 `docs/architecture/chat-pipeline.md`。OpenAI、Anthropic、Responses 都先翻译成它，协议层保持轻薄。
@@ -391,4 +400,6 @@ Portal 把用户本机的**一个文件夹**发布成公网 MCP 端点：`https:
   - 踩坑二：棘轮原先用正则统计，会把 `driver_for_tab(tab).run_js(` 也算作直接调用，无法反映进度；已改为 AST 统计，并排除驱动接收者。
   - 踩坑三：自动插入导入时，曾把导入放到 `from __future__` 之前（运行时 SyntaxError），而 ruff 基线没有覆盖这条规则；已修正，并把 F404 加入 ruff 基线。
 - **测试修复**（`1b16387`）：测试反复重新初始化 RequestManager 单例，而前序测试遗留的保存线程醒来后，会调用新测试打桩的 `_save_history`，导致防抖用例在全量中稳定失败；已改为重新初始化前先排空遗留线程。
+- **R2-7 请求 ID 贯穿**（`2da24c1`）：RequestContext 新增 http_request_id，「创建」日志带上 X-Request-ID，请求历史记录新增 protocol 与 http_request_id 字段。端到端测试验证：带 X-Request-ID 调用 /v1/messages 后，能在历史中找到对应记录。
+- **实机验证**：`82e266f`（驱动第 1～4 步）两个 Python 版本全绿；`2da24c1` 在 3.13 上为 1333 passed / 0 failed，3.10 上为 1324 passed / 0 failed。
 
