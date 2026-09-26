@@ -9,7 +9,11 @@ import pytest
 
 @pytest.mark.parametrize(
     ("module", "class_name", "min_mixins"),
-    [("app.core.tab_pool_parts.manager", "TabPoolManager", 9), ("app.services.command_engine", "CommandEngine", 3)],
+    [
+        ("app.core.tab_pool_parts.manager", "TabPoolManager", 9),
+        ("app.services.command_engine", "CommandEngine", 9),
+        ("app.services.config.engine", "ConfigEngine", 6),
+    ],
 )
 def test_no_method_is_defined_twice_across_mixins(module, class_name, min_mixins):
     klass = getattr(importlib.import_module(module), class_name)
