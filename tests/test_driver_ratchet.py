@@ -1,6 +1,7 @@
 """R2-1：驱动迁移的“棘轮”——业务代码里直接调用 DrissionPage 的次数只能减少，不能增加。
 
-基线在 tests/fixtures/driver_ratchet.json：每个文件、每种调用的当前次数。
+基线在 tests/fixtures/driver_ratchet.json：每个文件、每种调用的当前次数（按 AST 统计；
+接收者是驱动对象的调用——driver_for_tab(...).run_js(...)、session.driver.find(...)——不计入）。
 - 次数超过基线或出现新文件：测试失败（新代码请通过 app.core.driver 访问浏览器）；
 - 迁移后次数下降：测试仍然通过，但会提示运行
   ``python tests/test_driver_ratchet.py --update`` 把基线降下来，锁定进度。
@@ -8,6 +9,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 import subprocess
@@ -16,12 +18,35 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BASELINE = ROOT / "tests" / "fixtures" / "driver_ratchet.json"
-PATTERNS = {
-    "run_js": re.compile(r"\.run_js(?:_loaded)?\("),
-    "run_cdp": re.compile(r"\.(?:_)?run_cdp\("),
-    "ele": re.compile(r"\.eles?\("),
-    "import": re.compile(r"^\s*(?:from DrissionPage|import DrissionPage)", re.M),
-}
+IMPORT_PATTERN = re.compile(r"^\s*(?:from DrissionPage|import DrissionPage)", re.M)
+_CALL_KINDS = {"run_js": "run_js", "run_js_loaded": "run_js", "run_cdp": "run_cdp", "_run_cdp": "run_cdp",
+               "ele": "ele", "eles": "ele"}
+
+
+def _is_driver_receiver(node: ast.AST) -> bool:
+    """接收者是驱动对象：driver_for_tab(...) 的返回值，或名字里带 driver 的变量/属性（session.driver、self.driver）。"""
+    if isinstance(node, ast.Call):
+        func = node.func
+        name = func.id if isinstance(func, ast.Name) else (func.attr if isinstance(func, ast.Attribute) else "")
+        return name == "driver_for_tab"
+    if isinstance(node, ast.Name):
+        return "driver" in node.id.lower()
+    if isinstance(node, ast.Attribute):
+        return "driver" in node.attr.lower()
+    return False
+
+
+def _count_file(text: str) -> dict:
+    counts: dict = {}
+    for node in ast.walk(ast.parse(text)):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in _CALL_KINDS:
+            if not _is_driver_receiver(node.func.value):
+                kind = _CALL_KINDS[node.func.attr]
+                counts[kind] = counts.get(kind, 0) + 1
+    imports = len(IMPORT_PATTERN.findall(text))
+    if imports:
+        counts["import"] = imports
+    return counts
 
 
 def current_counts() -> dict:
@@ -32,9 +57,7 @@ def current_counts() -> dict:
     for rel in sorted(files):
         if rel.startswith("app/core/driver/"):
             continue
-        text = (ROOT / rel).read_text(encoding="utf-8-sig")
-        per_file = {kind: len(pattern.findall(text)) for kind, pattern in PATTERNS.items()}
-        per_file = {kind: n for kind, n in per_file.items() if n}
+        per_file = _count_file((ROOT / rel).read_text(encoding="utf-8-sig"))
         if per_file:
             counts[rel] = per_file
     return counts
@@ -67,3 +90,16 @@ if __name__ == "__main__":
         BASELINE.write_text(json.dumps(counts, ensure_ascii=False, indent=1, sort_keys=True) + "\n", encoding="utf-8")
         total = sum(sum(v.values()) for v in counts.values())
         print(f"基线已更新：{len(counts)} 个文件，共 {total} 处直接调用")
+
+
+def test_ratchet_ignores_calls_through_the_driver():
+    sample = (
+        "tab.run_js('a')\n"
+        "driver_for_tab(tab).run_js('b')\n"
+        "session.driver.find_all('x')\n"
+        "self.driver.run_cdp('Page.reload')\n"
+        "self.tab.ele('css:x')\n"
+        "from DrissionPage import ChromiumPage\n"
+    )
+    assert _count_file(sample) == {"run_js": 1, "ele": 1, "import": 1}
+

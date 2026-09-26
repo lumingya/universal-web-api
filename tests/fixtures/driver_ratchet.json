@@ -15,7 +15,6 @@
   "run_js": 2
  },
  "app/core/browser/connection.py": {
-  "ele": 1,
   "import": 1,
   "run_cdp": 2
  },
@@ -53,7 +52,7 @@
   "run_js": 1
  },
  "app/core/extractors/media_extractor.py": {
-  "run_js": 13
+  "run_js": 3
  },
  "app/core/page_capture/deepseek_request_transport.py": {
   "run_js": 1
@@ -68,7 +67,7 @@
  "app/core/stream_monitor.py": {
   "ele": 2,
   "import": 1,
-  "run_js": 4
+  "run_js": 2
  },
  "app/core/stream_snapshot.py": {
   "import": 1

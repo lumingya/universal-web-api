@@ -15,6 +15,7 @@ import time
 from typing import Generator, Optional, Callable, Tuple, Dict, List, Any
 from urllib.parse import urlparse
 
+from app.core.driver import driver_for_tab
 from app.core.config import logger, BrowserConstants, SSEFormatter
 from app.core.background_image_downloader import (
     background_image_downloader,
@@ -1276,7 +1277,7 @@ class StreamMonitor:
             self._note_page_snapshot_failure(f"unsupported selector: {selector!r}")
             return None
         try:
-            raw = self.tab.run_js(
+            raw = driver_for_tab(self.tab).run_js(
                 SNAPSHOT_JS,
                 json.dumps(config, ensure_ascii=False),
                 timeout=self.PAGE_SNAPSHOT_JS_TIMEOUT,
@@ -1575,7 +1576,7 @@ class StreamMonitor:
     def _extract_page_image_info(self) -> Dict[str, Any]:
         selector = str(self._image_config.get("selector") or "img").strip() or "img"
         try:
-            info = self.tab.run_js(
+            info = driver_for_tab(self.tab).run_js(
                 """
                 const selector = String(arguments[0] || "img");
                 const baselineToken = String(arguments[1] || "");

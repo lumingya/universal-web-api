@@ -74,8 +74,14 @@ class DrissionTabDriver:
             return str(getattr(self._tab, "title", "") or "")
 
     def run_js(self, script: str, *args: Any, timeout: Optional[float] = None, as_expr: bool = False) -> Any:
+        # 只传与默认值不同的关键字参数：对 DrissionPage 完全等价，也兼容签名为 run_js(script, *args) 的测试替身
+        kwargs: dict = {}
+        if as_expr:
+            kwargs["as_expr"] = True
+        if timeout is not None:
+            kwargs["timeout"] = timeout
         with translated_errors():
-            return self._tab.run_js(script, *args, as_expr=as_expr, timeout=timeout)
+            return self._tab.run_js(script, *args, **kwargs)
 
     def run_cdp(self, method: str, **params: Any) -> Any:
         with translated_errors():

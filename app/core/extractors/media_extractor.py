@@ -18,6 +18,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from app.core.driver import driver_for_tab
 from app.core.config import get_logger
 from app.core.extractors.image_extractor import (
     get_default_image_extraction_config,
@@ -2301,7 +2302,7 @@ class MediaExtractor:
             final_config = get_default_image_extraction_config()
             if config:
                 final_config.update(config)
-            tab.run_js(
+            driver_for_tab(tab).run_js(
                 self.INSTALL_PAGE_AUDIO_CAPTURE_JS,
                 {
                     "reset": True,
@@ -2320,7 +2321,7 @@ class MediaExtractor:
         if not tab:
             return {}
         try:
-            result = tab.run_js(self.PAGE_AUDIO_CAPTURE_STATUS_JS) or {}
+            result = driver_for_tab(tab).run_js(self.PAGE_AUDIO_CAPTURE_STATUS_JS) or {}
             return result if isinstance(result, dict) else {}
         except Exception as exc:
             logger.debug(f"读取页面音频捕获状态失败（已忽略）: {exc}")
@@ -2387,7 +2388,7 @@ class MediaExtractor:
             final_config.update(config)
         network_config = self._get_audio_network_capture_config(final_config)
         try:
-            tab.run_js(
+            driver_for_tab(tab).run_js(
                 PAGE_TTS_WS_PROBE_INSTALL_JS,
                 {
                     "clear": bool(clear),
@@ -2405,7 +2406,7 @@ class MediaExtractor:
         if not tab:
             return False
         try:
-            tab.run_js(
+            driver_for_tab(tab).run_js(
                 PAGE_TTS_WS_PROBE_INSTALL_JS,
                 {
                     "clear": True,
@@ -2469,7 +2470,7 @@ class MediaExtractor:
         }
 
         try:
-            start_result = tab.run_js(PAGE_BROWSER_TTS_FALLBACK_START_JS, start_opts) or {}
+            start_result = driver_for_tab(tab).run_js(PAGE_BROWSER_TTS_FALLBACK_START_JS, start_opts) or {}
         except Exception as exc:
             logger.debug(f"浏览器 TTS 兜底启动失败（已忽略）: {exc}")
             return []
@@ -2495,7 +2496,7 @@ class MediaExtractor:
         while time.time() < deadline and not effective_stop_checker():
             time.sleep(0.2)
             try:
-                status = tab.run_js(PAGE_BROWSER_TTS_FALLBACK_STATUS_JS) or {}
+                status = driver_for_tab(tab).run_js(PAGE_BROWSER_TTS_FALLBACK_STATUS_JS) or {}
             except Exception as exc:
                 logger.debug(f"读取浏览器 TTS 兜底状态失败（已忽略）: {exc}")
                 status = {}
@@ -2521,7 +2522,7 @@ class MediaExtractor:
 
         if not status:
             try:
-                status = tab.run_js(PAGE_BROWSER_TTS_FALLBACK_STATUS_JS) or {}
+                status = driver_for_tab(tab).run_js(PAGE_BROWSER_TTS_FALLBACK_STATUS_JS) or {}
             except Exception:
                 status = {}
 
@@ -2630,7 +2631,7 @@ class MediaExtractor:
 
             while time.time() < deadline and not effective_stop_checker():
                 time.sleep(0.15)
-                logs = tab.run_js(PAGE_TTS_WS_PROBE_DUMP_JS) or []
+                logs = driver_for_tab(tab).run_js(PAGE_TTS_WS_PROBE_DUMP_JS) or []
                 if not isinstance(logs, list) or not logs:
                     continue
 
@@ -2669,7 +2670,7 @@ class MediaExtractor:
 
         if not best_event:
             try:
-                logs = tab.run_js(PAGE_TTS_WS_PROBE_DUMP_JS) or []
+                logs = driver_for_tab(tab).run_js(PAGE_TTS_WS_PROBE_DUMP_JS) or []
                 related_count = 0
                 summaries: List[str] = []
                 for item in logs[-32:]:
@@ -2746,7 +2747,7 @@ class MediaExtractor:
             "maxBytes": int(final_config.get("max_size_mb", 10) * 1024 * 1024),
         }
         try:
-            result = tab.run_js(self.EXPORT_PAGE_AUDIO_CAPTURE_JS, js_opts) or {}
+            result = driver_for_tab(tab).run_js(self.EXPORT_PAGE_AUDIO_CAPTURE_JS, js_opts) or {}
         except Exception as exc:
             logger.debug(f"导出页面音频捕获失败（已忽略）: {exc}")
             return []
