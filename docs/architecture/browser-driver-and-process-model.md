@@ -1,6 +1,10 @@
 # R2-1 BrowserDriver 接口与 R2-6 进程模型：设计与分阶段计划
 
-> 状态：设计定稿，尚未实施。两项改动都会触及浏览器层的每一条路径，必须在用户本机用真实浏览器逐阶段回归。
+> 状态（2026-09-27 更新）：
+> - **R2-1 已完成**：业务代码经由 `app/core/driver/` 访问浏览器，由棘轮测试保证除驱动包外零直接调用；
+> - **R2-6 已实现为实验性的 process 模式**（`UWAPI_WORKER_MODE=process`），默认仍是 inproc，见 §5「实现情况」。
+>
+> 原设计说明如下：两项改动都会触及浏览器层的每一条路径，必须在用户本机用真实浏览器逐阶段回归。
 > 为此本文把工作拆成可以独立合并、独立回滚的小步。现状数据来自 2026-09-27 对 `dev/roadmap-phase0-2` 的统计。
 
 ## 1. 为什么要做
@@ -101,3 +105,24 @@ class BrowserDriver(Protocol):       # 浏览器进程（对应现在的 Chromiu
 
 - 每个迁移步骤合并前，在本机跑一遍真实浏览器用例；工作流相关步骤还需要对常用站点手工冒烟。改动不涉及账号，只需要已登录的受控浏览器。
 - R2-6 切换默认之前，建议先以 process 模式日常使用一周。
+
+## 7. 实现情况（R2-6）
+
+- **启用**：在 `.env` 中设置 `UWAPI_WORKER_MODE=process`。API 进程启动时会自动拉起 worker：
+  - 命令是 `python -m uvicorn main:app`，只监听 127.0.0.1，端口自动选择，也可用 `UWAPI_WORKER_PORT` 指定；
+  - 令牌与代理密钥在启动时随机生成，API 进程退出时 worker 随之关闭。
+- **职责划分**：
+  - worker 运行完整应用（`UWAPI_WORKER_ROLE=worker`），持有浏览器、标签页池与命令调度，另外提供 `/internal/worker/*` 接口，要求令牌正确且来源为本机。
+  - API 进程：协议接口（/v1、/url、/tab）在本进程完成协议转换、鉴权与计量，执行时经 `RemoteBrowserProxy` 交给 worker；所有 `/api/*` 面板请求整体转发给 worker，所以面板功能完整。
+  - 转发时带上 `UWAPI_PROXY_SECRET` 对应的密钥和 `X-Forwarded-For`，worker 因此看到真实的客户端地址，按来源判断的限制照常生效。
+- **传输**：执行结果以 NDJSON 逐块传回，worker 约每秒发一次心跳。API 侧检测到停止请求就关闭连接，worker 随即置位 stop_checker。
+- **API 进程可用的远程能力**：
+  - 五个 `execute_workflow*` 方法；
+  - 标签页池的白名单方法（get_tabs_with_index、set_tab_model_name、apply_runtime_config、terminate_by_index、set_tab_preset、get_route_groups_snapshot 等）与配置属性；
+  - get_pool_status 与 health_check。
+  - 其他能力在 API 进程中访问会抛 `WorkerModeUnsupported`，并说明原因。
+- **尚未覆盖**：
+  - worker 意外退出时，API 进程只会让执行请求报错，不会自动重启 worker；需要手动重启服务，或借助现有的定时重启守护。
+  - 面板的流式接口经转发层透传，已测试普通请求与流式透传，但尚未做长时间实机验证。
+- **测试**：`tests/test_worker_mode.py` 覆盖远程执行、停止传播、白名单与鉴权、转发与真实客户端地址、process 模式下经官方 SDK 的端到端请求，以及真实拉起和关闭 worker 子进程。
+

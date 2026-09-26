@@ -462,6 +462,15 @@ async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     global restart_guard
     _enforce_secure_startup_config()
+    # R2-6：process 模式下本进程只做对外 API，浏览器由 worker 进程持有（先启动 worker，再做后续检查）
+    from app.worker import is_api_process, is_worker_role
+    api_process = is_api_process()
+    worker_supervisor = None
+    if api_process:
+        from app.worker.supervisor import supervisor as worker_supervisor
+        await asyncio.to_thread(worker_supervisor.start)
+    elif is_worker_role():
+        logger.info("[startup] 以浏览器 worker 角色运行（仅供本机 API 进程调用）")
     _install_asyncio_exception_filter()
     logger.info("=" * 60)
     logger.info("Universal Web-to-API 服务启动中...")       
@@ -496,61 +505,63 @@ async def lifespan(app: FastAPI):
     except Exception:
         is_restart = False
 
-    try:
-        browser = get_browser(auto_connect=False)
-        health = await asyncio.to_thread(browser.health_check)
+    if not api_process:  # R2-6：API 进程不持有浏览器，启动检查与引导页由 worker 负责
+        try:
+            browser = get_browser(auto_connect=False)
+            health = await asyncio.to_thread(browser.health_check)
     
-        if health["connected"]:
-            startup_blank_tab_id = _capture_startup_blank_tab_id(browser)
-            if is_restart:
-                logger.info("✅ 浏览器已连接 (检测到服务重启，跳过自动打开教程与引导页)")
-            elif not AppConfig.is_auto_open_browser_enabled():
-                logger.info("✅ 浏览器已连接 (AUTO_OPEN_BROWSER=false，跳过自动打开教程与引导页)")
-            elif _should_open_startup_pages(browser, is_restart=is_restart):
-                try:
-                    base_url = _get_local_startup_base_url()
-                    tutorial_url = f"{base_url}/static/tutorial/index.html"
-                    guide_url = f"{base_url}/static/controlled-browser-guide.html"
-                    logger.info(f"[startup] 首次启动，使用系统浏览器打开教程页: {tutorial_url}")
-                    _open_startup_page_non_blocking(
-                        tutorial_url,
-                        page_name="教程页",
-                        initial_delay_sec=1.2,
-                    )
-                    logger.info(f"[startup] 首次启动，准备在受控浏览器打开引导页: {guide_url}")
-                    _open_controlled_browser_page_non_blocking(
-                        browser,
-                        guide_url,
-                        page_name="受控浏览器引导页",
-                        initial_delay_sec=0.8,
-                        startup_blank_tab_id=startup_blank_tab_id,
-                        is_restart=is_restart,
-                    )
-                except Exception as e:
-                    logger.warning(f"⚠️ 无法打开教程页: {e}")
+            if health["connected"]:
+                startup_blank_tab_id = _capture_startup_blank_tab_id(browser)
+                if is_restart:
+                    logger.info("✅ 浏览器已连接 (检测到服务重启，跳过自动打开教程与引导页)")
+                elif not AppConfig.is_auto_open_browser_enabled():
+                    logger.info("✅ 浏览器已连接 (AUTO_OPEN_BROWSER=false，跳过自动打开教程与引导页)")
+                elif _should_open_startup_pages(browser, is_restart=is_restart):
+                    try:
+                        base_url = _get_local_startup_base_url()
+                        tutorial_url = f"{base_url}/static/tutorial/index.html"
+                        guide_url = f"{base_url}/static/controlled-browser-guide.html"
+                        logger.info(f"[startup] 首次启动，使用系统浏览器打开教程页: {tutorial_url}")
+                        _open_startup_page_non_blocking(
+                            tutorial_url,
+                            page_name="教程页",
+                            initial_delay_sec=1.2,
+                        )
+                        logger.info(f"[startup] 首次启动，准备在受控浏览器打开引导页: {guide_url}")
+                        _open_controlled_browser_page_non_blocking(
+                            browser,
+                            guide_url,
+                            page_name="受控浏览器引导页",
+                            initial_delay_sec=0.8,
+                            startup_blank_tab_id=startup_blank_tab_id,
+                            is_restart=is_restart,
+                        )
+                    except Exception as e:
+                        logger.warning(f"⚠️ 无法打开教程页: {e}")
+                else:
+                    # 显示已连接状态
+                    try:
+                        existing_tab_count = _count_existing_remote_pages(browser)
+                    except Exception:
+                        existing_tab_count = "?"
+                    logger.info(f"✅ 浏览器已连接 (检测到 {existing_tab_count} 个现有网页，跳过教程)")
             else:
-                # 显示已连接状态
-                try:
-                    existing_tab_count = _count_existing_remote_pages(browser)
-                except Exception:
-                    existing_tab_count = "?"
-                logger.info(f"✅ 浏览器已连接 (检测到 {existing_tab_count} 个现有网页，跳过教程)")
-        else:
-            logger.warning(f"⚠️ 浏览器未连接: {health.get('error', '未知')}")
+                logger.warning(f"⚠️ 浏览器未连接: {health.get('error', '未知')}")
         
-    except Exception as e:
-        logger.warning(f"⚠️ 浏览器检查跳过: {e}")
+        except Exception as e:
+            logger.warning(f"⚠️ 浏览器检查跳过: {e}")
 
-    # 显式预热命令调度器，避免依赖控制面板接口后才初始化。
-    try:
-        from app.services.command_engine import command_engine
-        command_engine.ensure_scheduler_running()
-        logger.info(
-            f"[startup] 命令调度器: "
-            f"{'running' if command_engine.is_scheduler_running() else 'stopped'}"
-        )
-    except Exception as e:
-        logger.warning(f"[startup] 命令调度器初始化失败: {e}")
+    if not api_process:  # R2-6：命令调度操作标签页，process 模式下在 worker 中运行
+        # 显式预热命令调度器，避免依赖控制面板接口后才初始化。
+        try:
+            from app.services.command_engine import command_engine
+            command_engine.ensure_scheduler_running()
+            logger.info(
+                f"[startup] 命令调度器: "
+                f"{'running' if command_engine.is_scheduler_running() else 'stopped'}"
+            )
+        except Exception as e:
+            logger.warning(f"[startup] 命令调度器初始化失败: {e}")
 
     restart_guard = RestartGuard(
         enabled=AppConfig.is_scheduled_restart_enabled(),
@@ -578,6 +589,8 @@ async def lifespan(app: FastAPI):
     yield
 
     logger.info("服务正在关闭...")
+    if worker_supervisor is not None:
+        await asyncio.to_thread(worker_supervisor.stop)
     if restart_guard is not None:
         await restart_guard.stop()
         restart_guard = None
@@ -940,6 +953,14 @@ async def media_file(
 
 from app.api import router as api_router
 app.include_router(api_router)
+
+# R2-6：worker 角色额外提供内部接口；API 进程模式下 /api/* 整体转发给 worker（中间件内按模式判断）
+from app.worker import is_worker_role as _is_worker_role
+if _is_worker_role():
+    from app.worker.rpc_routes import router as worker_rpc_router
+    app.include_router(worker_rpc_router)
+from app.worker.forwarding import WorkerForwardingMiddleware
+app.add_middleware(WorkerForwardingMiddleware)
 
 # R2-7：请求 ID 与 Prometheus 指标。最后注册 = 最外层，覆盖全部请求（纯 ASGI，不缓冲流式响应）
 from app.services.metrics import RequestMetricsMiddleware

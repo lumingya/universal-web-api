@@ -67,6 +67,22 @@ def scan_env_reads() -> Dict[str, List[dict]]:
                         table[target.id] = node.value.value
         constants[path] = table
 
+    # 跨模块常量：from app.worker import URL_ENV 之类，按模块路径解析到定义处的常量
+    by_module = {}
+    for path in trees:
+        rel = path.relative_to(ROOT).with_suffix("")
+        parts = list(rel.parts)
+        if parts[-1] == "__init__":
+            parts = parts[:-1]
+        by_module[".".join(parts)] = constants[path]
+    for path, tree in trees.items():
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module and node.module in by_module and node.level == 0:
+                for alias in node.names:
+                    value = by_module[node.module].get(alias.name)
+                    if value:
+                        constants[path].setdefault(alias.asname or alias.name, value)
+
     # 第一遍：识别把某个参数转发给环境变量读取的辅助函数，记录参数位置
     helpers: Dict[str, int] = {}
     for tree in trees.values():

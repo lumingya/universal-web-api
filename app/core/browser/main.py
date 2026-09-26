@@ -126,8 +126,14 @@ _browser_lock = threading.Lock()
 
 
 def get_browser(port: int = None, auto_connect: bool = True) -> BrowserCore:
-    """获取浏览器实例"""
+    """获取浏览器实例（R2-6：process 模式的 API 进程返回指向 worker 的远程代理）"""
     global _browser_instance
+    from app.worker import is_api_process
+
+    if is_api_process():
+        from app.worker.client import get_remote_browser
+
+        return get_remote_browser()
     
     if _browser_instance is not None:
         return _browser_instance
