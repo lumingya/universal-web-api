@@ -1,0 +1,4 @@
+/* R2-8：预编译 Tailwind 的入口（生成 static/css/tailwind.css），与原运行时一样包含基础样式（preflight） */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;

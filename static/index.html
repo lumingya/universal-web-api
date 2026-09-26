@@ -35,6 +35,8 @@
     <link rel="stylesheet" href="/static/css/site-studio.css?v=3.1.1">
     <link rel="stylesheet" href="/static/css/operations-studio.css?v=1.0.1">
     <link rel="stylesheet" href="/static/css/adapter-panel.css?v=1.0.0">
+    <!-- R2-8：预编译的 Tailwind（原运行时 JIT 脚本 407KB）；放在所有样式表之后，与原先运行时把 <style> 追加到 head 末尾的层叠顺序一致 -->
+    <link rel="stylesheet" href="/static/css/tailwind.css?v=3.4.17-1">
 
     <!-- 图标定义 -->
 </head>
@@ -707,35 +709,6 @@
     </div>
 
     <!-- 加载组件 JS -->
-    <script src="/static/vendor/tailwindcss.js?v=2.6.7"></script>
-    <script>
-        window.tailwind = window.tailwind || {};
-        (function () {
-            // 中性色（gray/slate/stone）改为读取 CSS 变量：
-            // 亮色下与 Tailwind 默认值一致；夜间由 dashboard-dark.css 统一收敛到暖绿色板，
-            // 使旧组件的 dark: 工具类与橄榄主题保持一致，不再出现冷蓝灰。
-            var shades = [50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950];
-            function scale(name) {
-                var out = {};
-                shades.forEach(function (s) {
-                    out[s] = 'rgb(var(--twc-' + name + '-' + s + ') / <alpha-value>)';
-                });
-                return out;
-            }
-            window.tailwind.config = {
-                darkMode: 'class',
-                theme: {
-                    extend: {
-                        colors: {
-                            gray: scale('gray'),
-                            slate: scale('slate'),
-                            stone: scale('stone')
-                        }
-                    }
-                }
-            };
-        })();
-    </script>
     <script src="/static/vendor/vue.global.prod.js?v=2.6.7"></script>
     <script src="/static/js/icons.js?v=operations-2"></script>
     <script src="/static/js/components/Sidebar.js?v=studio-2.0.0"></script>
