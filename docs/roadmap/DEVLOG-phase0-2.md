@@ -169,9 +169,13 @@ Portal 把用户本机的**一个文件夹**发布成公网 MCP 端点：`https:
 - [ ] **R2-1** `BrowserDriver` 接口全量接管 run_js、run_cdp、find、click、type、listen、screenshot，先用 DrissionPage 实现。
 - [x] **R2-2**（`5568ce2`）：新增 ChatJob（协议、路由、请求 ID）与类型化 ChatEvent，执行层输出统一由共享解码器处理，并按协议计量。
   - 两个成熟的渲染状态机没有重写，详见 `docs/architecture/chat-pipeline.md`。OpenAI、Anthropic、Responses 都先翻译成它，协议层保持轻薄。
-- [ ] **R2-3** 拆解巨型类：TabPoolManager、CommandEngine、ConfigEngine。
-- [ ] **R2-4** 类型化配置：以 pydantic-settings 为单一事实源，自动生成 `.env.example`（解决 N9）。
-- [ ] **R2-5** 请求历史、命令结果、统计改用 SQLite（WAL），并自动迁移现有 JSON。
+- [~] **R2-3** 部分完成：TabPoolManager 拆成 9 个 mixin（`e4c0c2d`，4567→273 行）；CommandEngine 类体拆成 6 个 mixin（`35df9c8`，3870→643 行）。
+  - 用 AST 核对：全部方法的语法树与拆分前一致。
+  - ConfigEngine（3321 行）尚未拆分，可以用同一套脚本。
+- [x] **R2-4**（`1f6b7d8`）：单一事实源改为自研的登记表 `app/core/settings_registry.py`，不引入 pydantic-settings 依赖，因为运行时读取仍分散在 136 处 `os.getenv`，逐步迁移到 `get_setting()` 即可。
+  - 共 155 项；`.env.example` 由它生成；面板保存时按它校验；代码、登记表、面板三方一致由测试守护。
+- [x] **R2-5**（`6749545`）：请求历史与累计统计改存 SQLite（WAL），增量写入，旧 JSON 自动导入。
+  - 命令结果目前只存在内存里（原本就没有持久化），因此没有需要迁移的内容；如需持久化，可以直接写入同一个 RuntimeStore。
 - [ ] **R2-6** 进程模型：浏览器 worker 与 API 分离。
 - [~] **R2-7** 部分完成（`ea8d3cb`）：`/metrics`（Prometheus，无第三方依赖）与 `X-Request-ID`（中间件 + `REQUEST_ID` 上下文变量）已完成。
   - 待办：日志格式里带上 request_id；收窄 `except Exception`（1454 处）需要按模块逐步进行。
