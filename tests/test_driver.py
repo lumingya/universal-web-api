@@ -388,6 +388,12 @@ def test_listener_wrapper_preserves_network_monitor_helpers():
     assert listener.counters() == {"running_targets": 2, "running_requests": 3, "queued_packets": 1}
     listener.reuse_driver = True
     assert tab.listen._reuse_driver is True
+    assert listener._reuse_driver is True
+    listener._reuse_driver = False
+    assert tab.listen._reuse_driver is False
+    assert listener.reuse_driver is False
+    listener.reuse_driver = True
+    assert tab.listen._reuse_driver is True
     listener.safe_stop()
     assert tab.listen.stopped == 1 and tab.listen.cleared == 1 and not listener.is_active()
     listener.force_reset()

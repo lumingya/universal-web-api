@@ -455,14 +455,20 @@ def _ensure_project_structure() -> None:
         if not (PROJECT_DIR / rel_path).exists():
             missing.append(str(rel_path))
 
+    sites_dir = PROJECT_DIR / "config" / "sites"
     sites_config = PROJECT_DIR / "config" / "sites.json"
-    if not sites_config.exists():
-        _log("[WARN] 缺失: config/sites.json，将自动创建")
-        sites_config.parent.mkdir(parents=True, exist_ok=True)
-        sites_config.write_text('{"_global": {"selector_definitions": []}}\n', encoding="utf-8")
-        _log("[INFO] 已创建空配置文件")
+    has_site_files = sites_dir.is_dir() and any(
+        path.is_file() and path.name != "index.json" and not path.name.startswith(".")
+        for path in sites_dir.glob("*.json")
+    )
+    if has_site_files:
+        _log("[OK] 找到: config/sites/")
+    elif sites_config.is_file():
+        _log("[OK] 找到旧版配置: config/sites.json（启动时将自动迁移到 config/sites/）")
     else:
-        _log("[OK] 找到: config/sites.json")
+        _log("[WARN] 缺失: config/sites/，将自动创建目录")
+        sites_dir.mkdir(parents=True, exist_ok=True)
+        _log("[INFO] 已创建站点配置目录: config/sites/")
 
     if missing:
         for item in missing:
@@ -1581,21 +1587,28 @@ def _load_http_security_module():
 
 
 def _check_startup_security() -> bool:
-    """S1 / H1：公开监听却未启用认证、认证开关写成非布尔值时拒绝启动。"""
+    """S1 / H1：公开监听却未启用认证、认证开关写成非布尔值时发出告警（只告警不拒绝启动，兼容旧版配置）。"""
     try:
-        errors = _load_http_security_module().startup_security_errors(
+        sec_module = _load_http_security_module()
+        errors = sec_module.startup_security_errors(
+            host=os.getenv("APP_HOST", "127.0.0.1")
+        )
+        warnings = getattr(sec_module, "startup_security_warnings", lambda **kw: [])(
             host=os.getenv("APP_HOST", "127.0.0.1")
         )
     except Exception as exc:  # 检查模块本身异常不应阻断启动，交给子进程 lifespan 再查一次
         _log(f"[WARN] 启动安全检查未执行: {exc}")
         return True
-    if not errors:
+    issues = [*errors, *warnings]
+    if not issues:
         return True
-    _section("安全配置检查未通过")
-    for message in errors:
-        _log(f"[ERROR] {message}")
+    _section("安全配置风险告警")
+    for message in issues:
+        _log(f"[WARN] {message}")
+    _log("[WARN] 为兼容从旧版本升级的用户并保证控制面板可访问，当前仅记录告警并未拒绝启动。")
+    _log("[WARN] 请尽快在控制面板或 .env 中完善认证配置，避免服务处于未授权暴露状态！")
     _log()
-    return False
+    return True
 
 
 def _run_service_loop(

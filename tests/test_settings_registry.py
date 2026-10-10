@@ -142,7 +142,7 @@ def test_parse_value_accepts(name, raw, expected):
 @pytest.mark.parametrize(
     ("name", "raw", "fragment"),
     [
-        ("AUTH_ENABLED", "your-secret-here", "true/false"), ("APP_PORT", "abc", "数字"),
+        ("AUTH_ENABLED", "invalid_val", "true/false"), ("APP_PORT", "abc", "数字"),
         ("APP_PORT", "80.5", "整数"), ("APP_PORT", "70000", "不能大于"), ("LOG_LEVEL", "verbose", "之一"),
         ("TOOL_CALLING_MAX_ARGUMENT_DEPTH", "1", "不能小于"),
     ],
@@ -150,6 +150,10 @@ def test_parse_value_accepts(name, raw, expected):
 def test_parse_value_rejects(name, raw, fragment):
     with pytest.raises(ValueError, match=fragment):
         reg.parse_value(reg.BY_NAME[name], raw)
+
+
+def test_parse_value_compat_placeholder():
+    assert reg.parse_value(reg.BY_NAME["AUTH_ENABLED"], "your-secret-here") is False
 
 
 def test_get_setting_supports_aliases_and_falls_back_on_invalid():

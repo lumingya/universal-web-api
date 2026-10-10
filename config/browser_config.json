@@ -72,7 +72,7 @@
     "excluded_urls": [
       "https://arena.ai/image/direct"
     ],
-    "preserve_error_tabs": true,
+    "preserve_error_tabs": false,
     "route_groups": [],
     "auto_remember_url_presets": true
   },

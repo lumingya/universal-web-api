@@ -392,11 +392,12 @@ _ATTACHMENT_MONITOR_BOOTSTRAP_JS = r"""
       child !== node && node.contains(child) && lower(child.tagName) !== "img"));
     const uploadNodes = cards.filter(node => !cards.some(parent => parent !== node && parent.contains(node)));
     const inCard = node => candidates.some(card => card === node || card.contains(node));
-    const pendingNodes = queryAll(pendingSelector).filter(eligible);
+    const pendingNodes = queryAll(pendingSelector).filter(node => eligible(node) &&
+      !/(?:^|[ _-])(?:loading-)?error(?:$|[ _-])/i.test(String(node.className || "")));
     if (root && root !== document.body && root !== document.documentElement && isVisibleNode(root) &&
         root.getAttribute("aria-busy") === "true") pendingNodes.push(root);
     const errorSelector = joinSelectors(mergeUnique(
-      ["[data-upload-state='error']", "[data-upload-state='failed']"], opts && opts.errorSelectors));
+      ["[data-upload-state='error']", "[data-upload-state='failed']", "[class*='loading-error']", "[class*='upload-error']"], opts && opts.errorSelectors));
     const errorNodes = queryAll(errorSelector).filter(eligible);
     const uploadErrorCount = errorNodes.length;
     const statusSelector = joinSelectors(mergeUnique([

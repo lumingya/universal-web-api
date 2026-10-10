@@ -154,6 +154,9 @@ UPDATE_PRESERVE_OPTIONS: List[Dict[str, Any]] = [
 INTERNAL_ALWAYS_PRESERVE: List[str] = [
     str(UPDATE_SETTINGS_FILE).replace("\\", "/"),
     "config/app_stats.json",
+    "config/runtime.sqlite3",
+    "config/runtime.sqlite3-wal",
+    "config/runtime.sqlite3-shm",
 ]
 LEGACY_PATTERN_ALIASES = {
     "sites.local.json": "config/sites.local.json",

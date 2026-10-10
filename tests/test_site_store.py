@@ -249,3 +249,34 @@ def test_config_engine_migrates_saves_and_hot_reloads(tmp_path, monkeypatch):
     os.utime(tmp_path / "sites" / "chatgpt.com.json", None)
     engine.refresh_if_changed()
     assert engine.sites["chatgpt.com"]["presets"][preset]["selectors"]["input_box"] == "textarea#edited-outside"
+
+
+def test_upgrade_migration_keeps_shipped_selector_definitions_when_legacy_global_is_empty(tmp_path):
+    """旧版占位 sites.json 里的空 selector_definitions 不应冲掉发布版 _global.json 的内置定义。"""
+    sites_dir = tmp_path / "sites"
+    shipped_defs = [{"key": "input_box", "description": "输入框", "enabled": True, "required": True}]
+    SiteStore(sites_dir, tmp_path / "none.json").save({"_global": {"selector_definitions": shipped_defs}})
+
+    legacy = tmp_path / "sites.json"
+    _write_legacy(legacy, {"_global": {"selector_definitions": []}})
+
+    merged = SiteStore(sites_dir, legacy).load()
+    assert merged["_global"]["selector_definitions"] == shipped_defs
+
+
+def test_launcher_structure_check_does_not_recreate_legacy_sites_json(tmp_path, monkeypatch):
+    """start.py 与 start.bat 启动结构检查不应再创建旧版 config/sites.json，避免每次启动重复触发迁移。"""
+    import start
+
+    for rel_path in start.REQUIRED_PROJECT_FILES:
+        target = tmp_path / rel_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("# stub\n", encoding="utf-8")
+    monkeypatch.setattr(start, "PROJECT_DIR", tmp_path)
+
+    start._ensure_project_structure()
+    assert (tmp_path / "config" / "sites").is_dir()
+    assert not (tmp_path / "config" / "sites.json").exists()
+
+    start_bat = (ROOT / "start.bat").read_text(encoding="utf-8")
+    assert "> \"config\\sites.json\"" not in start_bat

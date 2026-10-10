@@ -842,6 +842,18 @@ def _cuteify_warning_message(logger_name: str, message_text: str) -> str:
     if len(text) > 4000:
         return text
 
+    selector_warning_match = re.match(
+        r"^(?:⚠️\s*)?\[([^\]]+)\]\s*(.+?选择器找不到|选择器找不到)(?:（(.+?)）)?，可能是失效了[！!](.*)$",
+        text,
+        re.S,
+    )
+    if selector_warning_match:
+        tag, desc, selector_expr, extra = selector_warning_match.groups()
+        target = tag if tag not in {"SELECTOR", "selector"} else (desc.replace("选择器找不到", "").strip() or "目标")
+        sel_detail = f"（{selector_expr}）" if selector_expr else ""
+        suffix = f" {extra.strip()}" if extra.strip() else ""
+        return f"⚠️ 小鹿提醒：{target} 选择器找不到喵{sel_detail}，可能是网页改版失效了！{suffix}"
+
     send_retry_window_match = _SEND_RETRY_WINDOW_PATTERN.match(text)
     if send_retry_window_match:
         max_wait, action = send_retry_window_match.groups()

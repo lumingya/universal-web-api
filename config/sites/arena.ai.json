@@ -1,18 +1,23 @@
 {
   "schema_version": 1,
   "site": "arena.ai",
-  "adapter_version": "2026.09.26",
-  "min_app_version": "3.0.0",
+  "adapter_version": "2026.10.10",
+  "min_app_version": "3.0.1",
   "config": {
     "presets": {
       "万能直连-通用文本": {
         "selectors": {
           "input_box": "textarea[name=\"message\"]",
+          "model_select_btn": "button[aria-haspopup=\"dialog\"]:has(span.flex-1.truncate.text-start), button[aria-haspopup=\"dialog\"]:has(span.flex-1.truncate.text-left), button[aria-haspopup=\"dialog\"]:has(span.flex-1.truncate)",
           "send_btn": "button[aria-label=\"Send message\"][type=\"submit\"]:not(:disabled):not([aria-disabled=\"true\"]), button[type=\"submit\"]:not(:disabled):not([aria-disabled=\"true\"]), button[aria-label=\"Send message\"]:not(:disabled):not([aria-disabled=\"true\"])",
+          "stop_btn": "button[aria-label=\"Stop generation\"]",
           "result_container": "main ol > div.w-full:not(.flex) .flex.flex-col.gap-3",
-          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href*=\"direct\"], a[data-sidebar=\"menu-button\"][href=\"/\"], a[href=\"/text/direct\"], a[href=\"/\"]",
+          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href=\"/text\"], a[data-sidebar=\"menu-button\"][href*=\"direct\"], a[data-sidebar=\"menu-button\"][href=\"/\"], a[data-sidebar=\"menu-button\"][href=\"/code\"], a[data-sidebar=\"menu-button\"][href*=\"image\"], a[href=\"/text\"], a[href=\"/text/direct\"]",
           "message_wrapper": null,
-          "generating_indicator": null
+          "generating_indicator": null,
+          "upload_btn": "button[aria-label=\"Add files\"], button[aria-label*=\"files\" i]",
+          "file_input": "input[type=\"file\"]",
+          "drop_zone": "form, textarea[name=\"message\"]"
         },
         "workflow": [
           {
@@ -186,7 +191,7 @@
         "file_paste": {
           "enabled": false,
           "threshold": 50000,
-          "temp_file_type": "txt",
+          "temp_file_type": "pdf",
           "hint_text": "完全专注于文件内容",
           "txt_hint_text": "完全专注于文件内容",
           "pdf_hint_text": "完全专注于文件内容",
@@ -207,6 +212,22 @@
           "segments_per_side": 12,
           "random_insert_enabled": false,
           "random_insert_chars": ""
+        },
+        "attachments": {
+          "enabled": true,
+          "max_count": 8,
+          "max_file_mb": 20,
+          "max_total_mb": 50,
+          "allowed_types": [
+            "image",
+            "file",
+            "document"
+          ],
+          "transport_order": [
+            "file_input",
+            "cdp_drop",
+            "image_clipboard"
+          ]
         }
       },
       "万能直连-通用生图": {
@@ -218,7 +239,10 @@
           "message_wrapper": null,
           "generating_indicator": null,
           "retry button": "button[aria-label=\"Rerun stopped messages\"], button[data-slot=\"tooltip-trigger\"]:has(svg path[d*=\"21.8883\"])",
-          "stop_btn": "button[aria-label=\"Stop generation\"]"
+          "stop_btn": "button[aria-label=\"Stop generation\"]",
+          "upload_btn": "button[aria-label=\"Add files\"], button[aria-label*=\"files\" i]",
+          "file_input": "input[type=\"file\"]",
+          "drop_zone": "form, textarea[name=\"message\"]"
         },
         "workflow": [
           {
@@ -396,7 +420,7 @@
         "file_paste": {
           "enabled": true,
           "threshold": 120000,
-          "temp_file_type": "chunk",
+          "temp_file_type": "pdf",
           "hint_text": "超过输入上限，本次请求中断",
           "txt_hint_text": "完全专注于文件内容",
           "pdf_hint_text": "完全专注于文件内容",
@@ -417,17 +441,37 @@
           "segments_per_side": 12,
           "random_insert_enabled": true,
           "random_insert_chars": "。，、’"
+        },
+        "attachments": {
+          "enabled": true,
+          "max_count": 8,
+          "max_file_mb": 20,
+          "max_total_mb": 50,
+          "allowed_types": [
+            "image",
+            "file",
+            "document"
+          ],
+          "transport_order": [
+            "file_input",
+            "cdp_drop",
+            "image_clipboard"
+          ]
         }
       },
       "主预设-直连模式": {
         "selectors": {
           "input_box": "textarea[name=\"message\"]",
-          "model_select_btn": "button[aria-haspopup=\"dialog\"]:has(span.flex-1.truncate.text-left)",
-          "send_btn": "button[type=\"submit\"]",
+          "model_select_btn": "button[aria-haspopup=\"dialog\"]:has(span.flex-1.truncate.text-start), button[aria-haspopup=\"dialog\"]:has(span.flex-1.truncate.text-left), button[aria-haspopup=\"dialog\"]:has(span.flex-1.truncate)",
+          "send_btn": "button[aria-label=\"Send message\"][type=\"submit\"]:not(:disabled):not([aria-disabled=\"true\"]), button[type=\"submit\"]:not(:disabled):not([aria-disabled=\"true\"]), button[aria-label=\"Send message\"]:not(:disabled):not([aria-disabled=\"true\"])",
+          "stop_btn": "button[aria-label=\"Stop generation\"]",
           "result_container": "main ol > div.w-full:not(.flex) .flex.flex-col.gap-3",
-          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href*=\"direct\"], a[data-sidebar=\"menu-button\"][href=\"/code\"], a[data-sidebar=\"menu-button\"][href=\"/\"], a[data-sidebar=\"menu-button\"][href*=\"image\"]",
+          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href=\"/text\"], a[data-sidebar=\"menu-button\"][href*=\"direct\"], a[data-sidebar=\"menu-button\"][href=\"/\"], a[data-sidebar=\"menu-button\"][href=\"/code\"], a[data-sidebar=\"menu-button\"][href*=\"image\"], a[href=\"/text\"], a[href=\"/text/direct\"]",
           "message_wrapper": null,
-          "generating_indicator": null
+          "generating_indicator": null,
+          "upload_btn": "button[aria-label=\"Add files\"], button[aria-label*=\"files\" i]",
+          "file_input": "input[type=\"file\"]",
+          "drop_zone": "form, textarea[name=\"message\"]"
         },
         "workflow": [
           {
@@ -609,7 +653,7 @@
         "file_paste": {
           "enabled": true,
           "threshold": 120000,
-          "temp_file_type": "error",
+          "temp_file_type": "pdf",
           "hint_text": "超过输入上限，本次请求中断",
           "txt_hint_text": "完全专注于文件内容",
           "pdf_hint_text": "完全专注于文件内容",
@@ -651,6 +695,22 @@
           "segments_per_side": 12,
           "random_insert_enabled": false,
           "random_insert_chars": ""
+        },
+        "attachments": {
+          "enabled": true,
+          "max_count": 8,
+          "max_file_mb": 20,
+          "max_total_mb": 50,
+          "allowed_types": [
+            "image",
+            "file",
+            "document"
+          ],
+          "transport_order": [
+            "file_input",
+            "cdp_drop",
+            "image_clipboard"
+          ]
         }
       },
       "预设_过CF盾": {
@@ -658,9 +718,12 @@
           "input_box": "textarea[name=\"message\"]",
           "send_btn": "button[type=\"submit\"]",
           "result_container": "main ol > div.w-full:not(.flex) .flex.flex-col.gap-3",
-          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href*=\"direct\"], a[data-sidebar=\"menu-button\"][href=\"/\"]",
+          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href=\"/text\"], a[data-sidebar=\"menu-button\"][href*=\"direct\"], a[data-sidebar=\"menu-button\"][href=\"/\"], a[data-sidebar=\"menu-button\"][href=\"/code\"], a[data-sidebar=\"menu-button\"][href*=\"image\"], a[href=\"/text\"], a[href=\"/text/direct\"]",
           "message_wrapper": null,
-          "generating_indicator": null
+          "generating_indicator": null,
+          "upload_btn": "button[aria-label=\"Add files\"], button[aria-label*=\"files\" i]",
+          "file_input": "input[type=\"file\"]",
+          "drop_zone": "form, textarea[name=\"message\"]"
         },
         "workflow": [
           {
@@ -787,7 +850,7 @@
         "file_paste": {
           "enabled": false,
           "threshold": 50000,
-          "temp_file_type": "txt",
+          "temp_file_type": "pdf",
           "hint_text": "完全专注于文件内容",
           "txt_hint_text": "完全专注于文件内容",
           "pdf_hint_text": "完全专注于文件内容",
@@ -808,6 +871,22 @@
           "segments_per_side": 12,
           "random_insert_enabled": false,
           "random_insert_chars": ""
+        },
+        "attachments": {
+          "enabled": true,
+          "max_count": 8,
+          "max_file_mb": 20,
+          "max_total_mb": 50,
+          "allowed_types": [
+            "image",
+            "file",
+            "document"
+          ],
+          "transport_order": [
+            "file_input",
+            "cdp_drop",
+            "image_clipboard"
+          ]
         }
       },
       "direct-预注入-图片模式": {
@@ -815,11 +894,14 @@
           "input_box": "textarea[name=\"message\"]",
           "send_btn": "button[aria-label=\"Stop generation\"], button[aria-label=\"Send message\"][type=\"submit\"]:not(:disabled):not([aria-disabled=\"true\"])",
           "result_container": "main ol > div.w-full:not(.flex) .flex.flex-col.gap-3",
-          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href*=\"direct\"], a[data-sidebar=\"menu-button\"][href=\"/\"], a[data-sidebar=\"menu-button\"][href*=\"image\"]",
+          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href=\"/text\"], a[data-sidebar=\"menu-button\"][href*=\"direct\"], a[data-sidebar=\"menu-button\"][href=\"/\"], a[data-sidebar=\"menu-button\"][href=\"/code\"], a[data-sidebar=\"menu-button\"][href*=\"image\"], a[href=\"/text\"], a[href=\"/text/direct\"]",
           "message_wrapper": null,
           "generating_indicator": null,
           "retry button": "button[aria-label=\"Rerun stopped messages\"], button[data-slot=\"tooltip-trigger\"]:has(svg path[d*=\"21.8883\"])",
-          "stop_btn": "button[aria-label=\"Stop generation\"]"
+          "stop_btn": "button[aria-label=\"Stop generation\"]",
+          "upload_btn": "button[aria-label=\"Add files\"], button[aria-label*=\"files\" i]",
+          "file_input": "input[type=\"file\"]",
+          "drop_zone": "form, textarea[name=\"message\"]"
         },
         "workflow": [
           {
@@ -1020,7 +1102,7 @@
         "file_paste": {
           "enabled": true,
           "threshold": 120000,
-          "temp_file_type": "error",
+          "temp_file_type": "pdf",
           "hint_text": "超过输入上限，本次请求中断",
           "txt_hint_text": "完全专注于文件内容",
           "pdf_hint_text": "完全专注于文件内容",
@@ -1041,6 +1123,22 @@
           "segments_per_side": 0,
           "random_insert_enabled": true,
           "random_insert_chars": "`~-_=+'\"\\|[{]}"
+        },
+        "attachments": {
+          "enabled": true,
+          "max_count": 8,
+          "max_file_mb": 20,
+          "max_total_mb": 50,
+          "allowed_types": [
+            "image",
+            "file",
+            "document"
+          ],
+          "transport_order": [
+            "file_input",
+            "cdp_drop",
+            "image_clipboard"
+          ]
         }
       },
       "主预设-双栏模式": {
@@ -1048,9 +1146,12 @@
           "input_box": "textarea[name=\"message\"]",
           "send_btn": "button[type=\"submit\"]",
           "result_container": "main ol > div.w-full:not(.flex) .flex.flex-col.gap-3",
-          "new_chat_btn": "a[href*=\"/text/side-by-side\"], a[data-sidebar=\"menu-button\"][href*=\"side-by-side\"], button[aria-label*=\"side by side\" i]",
+          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href=\"/text\"], a[data-sidebar=\"menu-button\"][href*=\"direct\"], a[data-sidebar=\"menu-button\"][href=\"/\"], a[data-sidebar=\"menu-button\"][href=\"/code\"], a[data-sidebar=\"menu-button\"][href*=\"image\"], a[href=\"/text\"], a[href=\"/text/direct\"]",
           "message_wrapper": null,
-          "generating_indicator": null
+          "generating_indicator": null,
+          "upload_btn": "button[aria-label=\"Add files\"], button[aria-label*=\"files\" i]",
+          "file_input": "input[type=\"file\"]",
+          "drop_zone": "form, textarea[name=\"message\"]"
         },
         "workflow": [
           {
@@ -1206,7 +1307,7 @@
         "file_paste": {
           "enabled": false,
           "threshold": 50000,
-          "temp_file_type": "txt",
+          "temp_file_type": "pdf",
           "hint_text": "完全专注于文件内容",
           "txt_hint_text": "完全专注于文件内容",
           "pdf_hint_text": "完全专注于文件内容",
@@ -1227,6 +1328,22 @@
           "segments_per_side": 12,
           "random_insert_enabled": false,
           "random_insert_chars": ""
+        },
+        "attachments": {
+          "enabled": true,
+          "max_count": 8,
+          "max_file_mb": 20,
+          "max_total_mb": 50,
+          "allowed_types": [
+            "image",
+            "file",
+            "document"
+          ],
+          "transport_order": [
+            "file_input",
+            "cdp_drop",
+            "image_clipboard"
+          ]
         }
       },
       "主预设-图片模式": {
@@ -1234,11 +1351,14 @@
           "input_box": "textarea[name=\"message\"]",
           "send_btn": "button[aria-label=\"Stop generation\"], button[aria-label=\"Send message\"][type=\"submit\"]:not(:disabled):not([aria-disabled=\"true\"])",
           "result_container": "main ol > div.w-full:not(.flex) .flex.flex-col.gap-3",
-          "new_chat_btn": "a[href*=\"/image\"], a[data-sidebar=\"menu-button\"][href*=\"/image\"]",
+          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href=\"/text\"], a[data-sidebar=\"menu-button\"][href*=\"direct\"], a[data-sidebar=\"menu-button\"][href=\"/\"], a[data-sidebar=\"menu-button\"][href=\"/code\"], a[data-sidebar=\"menu-button\"][href*=\"image\"], a[href=\"/text\"], a[href=\"/text/direct\"]",
           "message_wrapper": null,
           "generating_indicator": null,
           "retry button": "button[aria-label=\"Rerun stopped messages\"], button[data-slot=\"tooltip-trigger\"]:has(svg path[d*=\"21.8883\"])",
-          "stop_btn": "button[aria-label=\"Stop generation\"]"
+          "stop_btn": "button[aria-label=\"Stop generation\"]",
+          "upload_btn": "button[aria-label=\"Add files\"], button[aria-label*=\"files\" i]",
+          "file_input": "input[type=\"file\"]",
+          "drop_zone": "form, textarea[name=\"message\"]"
         },
         "workflow": [
           {
@@ -1435,7 +1555,7 @@
         "file_paste": {
           "enabled": false,
           "threshold": 50000,
-          "temp_file_type": "txt",
+          "temp_file_type": "pdf",
           "hint_text": "完全专注于文件内容",
           "txt_hint_text": "完全专注于文件内容",
           "pdf_hint_text": "完全专注于文件内容",
@@ -1456,6 +1576,22 @@
           "segments_per_side": 0,
           "random_insert_enabled": true,
           "random_insert_chars": "`~-_=+'\"\\|[{]}"
+        },
+        "attachments": {
+          "enabled": true,
+          "max_count": 8,
+          "max_file_mb": 20,
+          "max_total_mb": 50,
+          "allowed_types": [
+            "image",
+            "file",
+            "document"
+          ],
+          "transport_order": [
+            "file_input",
+            "cdp_drop",
+            "image_clipboard"
+          ]
         }
       },
       "Battle-左侧": {
@@ -1464,10 +1600,13 @@
           "send_btn": "button[aria-label=\"Stop generation\"], button[aria-label=\"Send message\"][type=\"submit\"]:not(:disabled):not([aria-disabled=\"true\"])",
           "stop_btn": "button[aria-label=\"Stop generation\"]",
           "result_container": "main ol > div.w-full:not(.flex) .flex.flex-col.gap-3",
-          "new_chat_btn": "a[href*=\"/text/side-by-side\"], a[data-sidebar=\"menu-button\"][href*=\"side-by-side\"], button[aria-label*=\"side by side\" i]",
+          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href=\"/text\"], a[data-sidebar=\"menu-button\"][href*=\"direct\"], a[data-sidebar=\"menu-button\"][href=\"/\"], a[data-sidebar=\"menu-button\"][href=\"/code\"], a[data-sidebar=\"menu-button\"][href*=\"image\"], a[href=\"/text\"], a[href=\"/text/direct\"]",
           "message_wrapper": null,
           "generating_indicator": "button[aria-label=\"Stop generation\"]",
-          "retry_send_btn": "button[aria-label=\"Rerun stopped messages\"], button[data-slot=\"tooltip-trigger\"]:has(svg path[d*=\"21.8883\"])"
+          "retry_send_btn": "button[aria-label=\"Rerun stopped messages\"], button[data-slot=\"tooltip-trigger\"]:has(svg path[d*=\"21.8883\"])",
+          "upload_btn": "button[aria-label=\"Add files\"], button[aria-label*=\"files\" i]",
+          "file_input": "input[type=\"file\"]",
+          "drop_zone": "form, textarea[name=\"message\"]"
         },
         "workflow": [
           {
@@ -1669,7 +1808,7 @@
         "file_paste": {
           "enabled": true,
           "threshold": 120000,
-          "temp_file_type": "error",
+          "temp_file_type": "pdf",
           "hint_text": "超过输入上限，本次请求中断",
           "txt_hint_text": "完全专注于文件内容",
           "pdf_hint_text": "完全专注于文件内容",
@@ -1711,6 +1850,22 @@
           "segments_per_side": 12,
           "random_insert_enabled": true,
           "random_insert_chars": "，。、、’"
+        },
+        "attachments": {
+          "enabled": true,
+          "max_count": 8,
+          "max_file_mb": 20,
+          "max_total_mb": 50,
+          "allowed_types": [
+            "image",
+            "file",
+            "document"
+          ],
+          "transport_order": [
+            "file_input",
+            "cdp_drop",
+            "image_clipboard"
+          ]
         }
       },
       "Battle-右侧": {
@@ -1719,10 +1874,13 @@
           "send_btn": "button[aria-label=\"Stop generation\"], button[aria-label=\"Send message\"][type=\"submit\"]:not(:disabled):not([aria-disabled=\"true\"])",
           "stop_btn": "button[aria-label=\"Stop generation\"]",
           "result_container": "main ol > div.w-full:not(.flex) .flex.flex-col.gap-3",
-          "new_chat_btn": "a[href*=\"/text/side-by-side\"], a[data-sidebar=\"menu-button\"][href*=\"side-by-side\"], button[aria-label*=\"side by side\" i]",
+          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href=\"/text\"], a[data-sidebar=\"menu-button\"][href*=\"direct\"], a[data-sidebar=\"menu-button\"][href=\"/\"], a[data-sidebar=\"menu-button\"][href=\"/code\"], a[data-sidebar=\"menu-button\"][href*=\"image\"], a[href=\"/text\"], a[href=\"/text/direct\"]",
           "message_wrapper": null,
           "generating_indicator": "button[aria-label=\"Stop generation\"]",
-          "retry_send_btn": "button[aria-label=\"Rerun stopped messages\"], button[data-slot=\"tooltip-trigger\"]:has(svg path[d*=\"21.8883\"])"
+          "retry_send_btn": "button[aria-label=\"Rerun stopped messages\"], button[data-slot=\"tooltip-trigger\"]:has(svg path[d*=\"21.8883\"])",
+          "upload_btn": "button[aria-label=\"Add files\"], button[aria-label*=\"files\" i]",
+          "file_input": "input[type=\"file\"]",
+          "drop_zone": "form, textarea[name=\"message\"]"
         },
         "workflow": [
           {
@@ -1924,10 +2082,10 @@
         "file_paste": {
           "enabled": true,
           "threshold": 120000,
-          "temp_file_type": "error",
+          "temp_file_type": "pdf",
           "hint_text": "超过输入上限，本次请求中断",
           "txt_hint_text": "完全专注于文件内容",
-          "pdf_hint_text": "文件内容为上下文，据此回复",
+          "pdf_hint_text": "完全专注于文件内容",
           "error_hint_text": "超过输入上限，本次请求中断",
           "reacquire_input_after_upload": false,
           "post_upload_input_selector": "",
@@ -1966,6 +2124,22 @@
           "segments_per_side": 12,
           "random_insert_enabled": true,
           "random_insert_chars": "，。、；‘、’"
+        },
+        "attachments": {
+          "enabled": true,
+          "max_count": 8,
+          "max_file_mb": 20,
+          "max_total_mb": 50,
+          "allowed_types": [
+            "image",
+            "file",
+            "document"
+          ],
+          "transport_order": [
+            "file_input",
+            "cdp_drop",
+            "image_clipboard"
+          ]
         }
       },
       "Battle-赢家优先（非流式）": {
@@ -1974,10 +2148,13 @@
           "send_btn": "button[aria-label=\"Stop generation\"], button[aria-label=\"Send message\"][type=\"submit\"]:not(:disabled):not([aria-disabled=\"true\"])",
           "stop_btn": "button[aria-label=\"Stop generation\"]",
           "result_container": "main ol > div.w-full:not(.flex) .flex.flex-col.gap-3",
-          "new_chat_btn": "a[href*=\"/text/side-by-side\"], a[data-sidebar=\"menu-button\"][href*=\"side-by-side\"], button[aria-label*=\"side by side\" i]",
+          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href=\"/text\"], a[data-sidebar=\"menu-button\"][href*=\"direct\"], a[data-sidebar=\"menu-button\"][href=\"/\"], a[data-sidebar=\"menu-button\"][href=\"/code\"], a[data-sidebar=\"menu-button\"][href*=\"image\"], a[href=\"/text\"], a[href=\"/text/direct\"]",
           "message_wrapper": null,
           "generating_indicator": "button[aria-label=\"Stop generation\"]",
-          "retry_send_btn": "button[aria-label=\"Rerun stopped messages\"], button[data-slot=\"tooltip-trigger\"]:has(svg path[d*=\"21.8883\"])"
+          "retry_send_btn": "button[aria-label=\"Rerun stopped messages\"], button[data-slot=\"tooltip-trigger\"]:has(svg path[d*=\"21.8883\"])",
+          "upload_btn": "button[aria-label=\"Add files\"], button[aria-label*=\"files\" i]",
+          "file_input": "input[type=\"file\"]",
+          "drop_zone": "form, textarea[name=\"message\"]"
         },
         "workflow": [
           {
@@ -2184,7 +2361,7 @@
         "file_paste": {
           "enabled": false,
           "threshold": 50000,
-          "temp_file_type": "error",
+          "temp_file_type": "pdf",
           "hint_text": "超过输入上限，本次请求中断",
           "txt_hint_text": "完全专注于文件内容",
           "pdf_hint_text": "完全专注于文件内容",
@@ -2226,6 +2403,22 @@
           "segments_per_side": 12,
           "random_insert_enabled": false,
           "random_insert_chars": ""
+        },
+        "attachments": {
+          "enabled": true,
+          "max_count": 8,
+          "max_file_mb": 20,
+          "max_total_mb": 50,
+          "allowed_types": [
+            "image",
+            "file",
+            "document"
+          ],
+          "transport_order": [
+            "file_input",
+            "cdp_drop",
+            "image_clipboard"
+          ]
         }
       },
       "主预设-图片模式-右侧": {
@@ -2233,11 +2426,14 @@
           "input_box": "textarea[name=\"message\"]",
           "send_btn": "button[aria-label=\"Stop generation\"], button[aria-label=\"Send message\"][type=\"submit\"]:not(:disabled):not([aria-disabled=\"true\"])",
           "result_container": "main ol > div.w-full:not(.flex) .flex.flex-col.gap-3",
-          "new_chat_btn": "a[href*=\"/image\"], a[data-sidebar=\"menu-button\"][href*=\"/image\"]",
+          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href=\"/text\"], a[data-sidebar=\"menu-button\"][href*=\"direct\"], a[data-sidebar=\"menu-button\"][href=\"/\"], a[data-sidebar=\"menu-button\"][href=\"/code\"], a[data-sidebar=\"menu-button\"][href*=\"image\"], a[href=\"/text\"], a[href=\"/text/direct\"]",
           "message_wrapper": null,
           "generating_indicator": null,
           "retry button": "button[aria-label=\"Rerun stopped messages\"], button[data-slot=\"tooltip-trigger\"]:has(svg path[d*=\"21.8883\"])",
-          "stop_btn": "button[aria-label=\"Stop generation\"]"
+          "stop_btn": "button[aria-label=\"Stop generation\"]",
+          "upload_btn": "button[aria-label=\"Add files\"], button[aria-label*=\"files\" i]",
+          "file_input": "input[type=\"file\"]",
+          "drop_zone": "form, textarea[name=\"message\"]"
         },
         "workflow": [
           {
@@ -2441,7 +2637,7 @@
         "file_paste": {
           "enabled": false,
           "threshold": 50000,
-          "temp_file_type": "txt",
+          "temp_file_type": "pdf",
           "hint_text": "完全专注于文件内容",
           "txt_hint_text": "完全专注于文件内容",
           "pdf_hint_text": "完全专注于文件内容",
@@ -2483,6 +2679,22 @@
           "segments_per_side": 0,
           "random_insert_enabled": true,
           "random_insert_chars": "`~-_=+'\"\\|[{]}"
+        },
+        "attachments": {
+          "enabled": true,
+          "max_count": 8,
+          "max_file_mb": 20,
+          "max_total_mb": 50,
+          "allowed_types": [
+            "image",
+            "file",
+            "document"
+          ],
+          "transport_order": [
+            "file_input",
+            "cdp_drop",
+            "image_clipboard"
+          ]
         }
       },
       "direct-图片模式-文生图": {
@@ -2490,11 +2702,14 @@
           "input_box": "textarea[name=\"message\"]",
           "send_btn": "button[aria-label=\"Stop generation\"], button[aria-label=\"Send message\"][type=\"submit\"]:not(:disabled):not([aria-disabled=\"true\"])",
           "result_container": "main ol > div.w-full:not(.flex) .flex.flex-col.gap-3",
-          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href*=\"direct\"], a[data-sidebar=\"menu-button\"][href=\"/\"], a[data-sidebar=\"menu-button\"][href*=\"image\"]",
+          "new_chat_btn": "a[data-sidebar=\"menu-button\"][href=\"/text\"], a[data-sidebar=\"menu-button\"][href*=\"direct\"], a[data-sidebar=\"menu-button\"][href=\"/\"], a[data-sidebar=\"menu-button\"][href=\"/code\"], a[data-sidebar=\"menu-button\"][href*=\"image\"], a[href=\"/text\"], a[href=\"/text/direct\"]",
           "message_wrapper": null,
           "generating_indicator": null,
           "retry button": "button[aria-label=\"Rerun stopped messages\"], button[data-slot=\"tooltip-trigger\"]:has(svg path[d*=\"21.8883\"])",
-          "stop_btn": "button[aria-label=\"Stop generation\"]"
+          "stop_btn": "button[aria-label=\"Stop generation\"]",
+          "upload_btn": "button[aria-label=\"Add files\"], button[aria-label*=\"files\" i]",
+          "file_input": "input[type=\"file\"]",
+          "drop_zone": "form, textarea[name=\"message\"]"
         },
         "workflow": [
           {
@@ -2707,7 +2922,7 @@
         "file_paste": {
           "enabled": true,
           "threshold": 120000,
-          "temp_file_type": "error",
+          "temp_file_type": "pdf",
           "hint_text": "超过输入上限，本次请求中断",
           "txt_hint_text": "完全专注于文件内容",
           "pdf_hint_text": "完全专注于文件内容",
@@ -2728,6 +2943,22 @@
           "segments_per_side": 0,
           "random_insert_enabled": true,
           "random_insert_chars": "`~-_=+'\"\\|[{]}"
+        },
+        "attachments": {
+          "enabled": true,
+          "max_count": 8,
+          "max_file_mb": 20,
+          "max_total_mb": 50,
+          "allowed_types": [
+            "image",
+            "file",
+            "document"
+          ],
+          "transport_order": [
+            "file_input",
+            "cdp_drop",
+            "image_clipboard"
+          ]
         }
       }
     },

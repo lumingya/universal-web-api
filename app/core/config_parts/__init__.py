@@ -10,6 +10,7 @@ from .env_config import (
     load_dotenv,
     AppConfig,
     app_config,
+    get_tutorial_selectors_url,
 )
 from .browser_constants import (
     BrowserConstants,
@@ -149,6 +150,7 @@ __all__ = [
     # 应用配置
     'AppConfig',
     'app_config',
+    'get_tutorial_selectors_url',
     'load_dotenv',
     'PROJECT_ROOT',
     'DEFAULT_LOG_DIR',

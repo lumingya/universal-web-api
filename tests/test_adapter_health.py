@@ -84,7 +84,7 @@ def test_health_api_reports_unknown_site_as_404(monkeypatch):
     import main
     from httpx import ASGITransport, AsyncClient
 
-    for name in ("AUTH_ENABLED", "AUTH_TOKEN"):
+    for name in ("AUTH_ENABLED", "AUTH_TOKEN", "DASHBOARD_AUTH_ENABLED", "DASHBOARD_AUTH_TOKEN"):
         monkeypatch.delenv(name, raising=False)
 
     async def run():

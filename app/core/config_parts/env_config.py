@@ -119,13 +119,15 @@ class AppConfig:
     def _env_bool_secure(name: str, default: bool = False) -> bool:
         """安全开关专用布尔解析（H1）：值存在但不是合法布尔字面量时 fail-closed 返回 True。
 
-        旧逻辑下 ``AUTH_ENABLED=your-secret-here`` 会被当作 false，静默关闭认证。
-        启动期 ``startup_security_errors`` 还会直接拒绝这类配置，这里是第二道保险。
+        兼容逻辑：若值为 3.0.0 模板自带的占位符 ``your-secret-here``，视为未设置（回退 default），
+        避免因无令牌 fail-closed 开启认证导致接口与控制面板 500。
         """
         value = os.getenv(name)
         if value is None or str(value).strip() == "":
             return bool(default)
         lowered = str(value).strip().lower()
+        if lowered == "your-secret-here":
+            return bool(default)
         if lowered in ("true", "1", "yes", "on"):
             return True
         if lowered in ("false", "0", "no", "off"):
@@ -351,3 +353,12 @@ class AppConfig:
 
 # 创建全局配置实例
 app_config = AppConfig()
+
+
+def get_tutorial_selectors_url() -> str:
+    """返回本地控制台教程中选择器配置章节的跳转链接。"""
+    try:
+        port = AppConfig.get_port()
+    except Exception:
+        port = 8199
+    return f"http://127.0.0.1:{port}/static/tutorial/index.html#selectors"

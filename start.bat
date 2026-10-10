@@ -297,13 +297,14 @@ if not exist "app\services\config_engine.py" (
     echo [ERROR] 缺失: app\services\config_engine.py
     set "STRUCTURE_OK=0"
 )
-if not exist "config\sites.json" (
-    echo [WARN] 缺失: config\sites.json，将自动创建
-    if not exist "config" mkdir "config"
-    echo {"_global": {"selector_definitions": []}} > "config\sites.json"
-    echo [INFO] 已创建空配置文件
+if exist "config\sites\*.json" (
+    echo [OK] 找到: config\sites\
+) else if exist "config\sites.json" (
+    echo [OK] 找到旧版配置: config\sites.json（启动时将自动迁移到 config\sites\）
 ) else (
-    echo [OK] 找到: config\sites.json
+    echo [WARN] 缺失: config\sites\，将自动创建目录
+    if not exist "config\sites" mkdir "config\sites"
+    echo [INFO] 已创建站点配置目录: config\sites\
 )
 if not exist "main.py" (
     echo [ERROR] 缺失: main.py

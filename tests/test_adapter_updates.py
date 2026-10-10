@@ -148,7 +148,7 @@ def test_api_routes_are_wired(monkeypatch, env):
 
     updater, _, _, _ = env
     monkeypatch.setattr(adapter_updates, "default_updater", lambda branch="main": updater)
-    for name in ("AUTH_ENABLED", "AUTH_TOKEN"):
+    for name in ("AUTH_ENABLED", "AUTH_TOKEN", "DASHBOARD_AUTH_ENABLED", "DASHBOARD_AUTH_TOKEN"):
         monkeypatch.delenv(name, raising=False)
 
     async def run():

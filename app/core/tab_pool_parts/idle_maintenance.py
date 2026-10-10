@@ -753,7 +753,7 @@ def recycle_session(manager: Any, session: Any, reason: str) -> bool:
         setattr(session, "_uwapi_recycle_count", int(getattr(session, "_uwapi_recycle_count", 0) or 0) + 1)
         setattr(session, "_uwapi_recycle_retry_at", 0.0)
         ok = True
-        logger.info(
+        logger.debug(
             f"[{session.id}] 空闲标签页 CDP 会话已回收（{reason}，"
             f"耗时 {time.perf_counter() - started:.2f}s）"
         )

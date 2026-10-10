@@ -90,3 +90,26 @@ def test_health_report_includes_quality_and_suggestions():
     assert report["status"] == "broken"
     assert "generated_class" in {issue["code"] for issue in row["quality"]["issues"]}
     assert row["suggestions"][0]["selector"] == fallback
+
+
+def test_selector_failure_warning_and_tutorial_link():
+    from app.core.config import get_tutorial_selectors_url
+    from app.core.config_parts.cute_translator import _cuteify_warning_message
+
+    url = get_tutorial_selectors_url()
+    assert url.endswith("/static/tutorial/index.html#selectors")
+    assert "http://127.0.0.1:" in url
+
+    raw_warning = f"⚠️ [send_btn] 发送按钮选择器找不到，可能是失效了！请参考教程更新选择器: {url}"
+    translated = _cuteify_warning_message("TEST", raw_warning)
+    assert "小鹿提醒：send_btn" in translated
+    assert "网页改版失效了" in translated
+    assert url in translated
+
+    raw_input_warning = f"⚠️ [input_box] 输入框选择器找不到（#bad-id），可能是失效了！请参考教程更新选择器: {url}"
+    translated_input = _cuteify_warning_message("TEST", raw_input_warning)
+    assert "小鹿提醒：input_box" in translated_input
+    assert "（#bad-id）" in translated_input
+    assert url in translated_input
+
+

@@ -276,6 +276,8 @@ def parse_value(setting: Setting, raw: Any) -> Any:
     kind = setting.type
     if kind == "bool":
         lowered = text.lower()
+        if lowered == "your-secret-here":
+            return setting.default
         if lowered in TRUE_VALUES:
             return True
         if lowered in FALSE_VALUES:

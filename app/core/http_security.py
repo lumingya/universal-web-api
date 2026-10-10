@@ -143,12 +143,33 @@ def _bool_value_error(name: str, env: Mapping[str, str]) -> Optional[str]:
     if raw is None or str(raw).strip() == "":
         return None
     lowered = str(raw).strip().lower()
+    if lowered == "your-secret-here":
+        # 兼容 3.0.0 模板：视为未设置（由 startup_security_warnings 产生告警提示，不作致命错误）
+        return None
     if lowered in TRUE_VALUES or lowered in FALSE_VALUES:
         return None
     return (
         f"{name}={raw!r} 不是合法布尔值（应为 true/false）。"
         f"此前该值会被静默当作 false 从而关闭认证，现拒绝启动。"
     )
+
+
+def startup_security_warnings(
+    host: Optional[str] = None,
+    env: Optional[Mapping[str, str]] = None,
+) -> List[str]:
+    """返回非致命但建议修改的安全告警（例如旧模板兼容项）。"""
+    env = os.environ if env is None else env
+    warnings: List[str] = []
+
+    for name in ("AUTH_ENABLED", "DASHBOARD_AUTH_ENABLED"):
+        raw = env.get(name)
+        if raw is not None and str(raw).strip().lower() == "your-secret-here":
+            warnings.append(
+                f"{name}='your-secret-here' 为 3.0.0 模板旧占位符，已兼容视为未设置（未启用认证）。"
+                "请尽快在控制面板或 .env 中显式设置为 false，或设置有效令牌后设为 true。"
+            )
+    return warnings
 
 
 def _env_true(env: Mapping[str, str], name: str) -> bool:

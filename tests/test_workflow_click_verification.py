@@ -384,3 +384,91 @@ def test_click_verification_probe_handles_empty_prefixed_selectors():
         {"target": "empty_css", "selector": "CSS:", "state": "hidden"},
     ]
 
+
+def test_wait_for_element_interactable_fast_path():
+    from app.core.workflow.executor_interaction import WorkflowExecutorInteractionMixin
+
+    class _DummyExecutor(WorkflowExecutorInteractionMixin):
+        def __init__(self):
+            self._refreshed = False
+
+        def _get_page_interaction_settings(self):
+            return {
+                "ready_timeout": 5.0,
+                "stable_samples": 2,
+                "sample_interval": 0.05,
+                "rect_tolerance": 3,
+            }
+
+        def _get_recent_fill_send_wait_timeout(self, target_key, base_timeout):
+            return 5.0
+
+        def _check_cancelled(self):
+            return False
+
+        def _sample_element_interactable_state(self, ele):
+            return {
+                "interactable": True,
+                "connected": True,
+                "rect": {"x": 100, "y": 200, "width": 32, "height": 32},
+            }
+
+        def _refresh_target_element(self, selector, target_key, *, timeout=0.3):
+            self._refreshed = True
+            return None
+
+    executor = _DummyExecutor()
+    dummy_element = object()
+    import time
+    start = time.perf_counter()
+    result = executor._wait_for_element_interactable(dummy_element, "button.send", "send_btn")
+    elapsed = time.perf_counter() - start
+
+    assert result is dummy_element
+    assert not executor._refreshed, "可交互元素不应触发多余的 _refresh_target_element"
+    assert elapsed < 0.3, f"快速通行应在极短时间内完成，实际耗时 {elapsed:.2f}s"
+
+
+def test_wait_for_element_interactable_refreshes_when_disconnected():
+    from app.core.workflow.executor_interaction import WorkflowExecutorInteractionMixin
+
+    class _DummyExecutor(WorkflowExecutorInteractionMixin):
+        def __init__(self):
+            self.refresh_count = 0
+            self.calls = 0
+
+        def _get_page_interaction_settings(self):
+            return {
+                "ready_timeout": 1.0,
+                "stable_samples": 2,
+                "sample_interval": 0.02,
+                "rect_tolerance": 3,
+            }
+
+        def _get_recent_fill_send_wait_timeout(self, target_key, base_timeout):
+            return 1.0
+
+        def _check_cancelled(self):
+            return False
+
+        def _sample_element_interactable_state(self, ele):
+            self.calls += 1
+            if ele == "initial":
+                return {"interactable": False, "connected": False}
+            return {
+                "interactable": True,
+                "connected": True,
+                "rect": {"x": 100, "y": 200, "width": 32, "height": 32},
+            }
+
+        def _refresh_target_element(self, selector, target_key, *, timeout=0.3):
+            self.refresh_count += 1
+            return "new_element"
+
+    executor = _DummyExecutor()
+    result = executor._wait_for_element_interactable("initial", "button.send", "send_btn")
+
+    assert result == "new_element"
+    assert executor.refresh_count >= 1, "初始节点失效时应触发刷新"
+
+

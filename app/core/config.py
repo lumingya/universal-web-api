@@ -29,6 +29,7 @@ from app.core.config_parts import (
     load_dotenv,
     AppConfig,
     app_config,
+    get_tutorial_selectors_url,
 
     # 浏览器常量
     BrowserConstants,

@@ -14,7 +14,13 @@ import time
 from typing import Any, Optional
 from urllib.parse import unquote, urlparse
 
-from app.core.config import BrowserConstants, ElementNotFoundError, WorkflowError, logger
+from app.core.config import (
+    BrowserConstants,
+    ElementNotFoundError,
+    WorkflowError,
+    get_tutorial_selectors_url,
+    logger,
+)
 from app.core.page_lifecycle import BACKGROUND_WAKE_CDP_TIMEOUT
 from app.core.workflow.model_selection import execute_model_selection
 from app.services.arena_direct_models import (
@@ -1340,7 +1346,7 @@ class WorkflowExecutorActionMixin:
         if ele is None:
             return ""
         try:
-            span = as_element(ele).find('css:span.flex-1.truncate.text-left', timeout=0.02)
+            span = as_element(ele).find('css:span.flex-1.truncate.text-start, css:span.flex-1.truncate.text-left, css:span.flex-1.truncate', timeout=0.02)
             if span:
                 val = str(getattr(span, "raw_text", "") or getattr(span, "text", "") or "").strip()
                 if val:
@@ -1408,7 +1414,7 @@ class WorkflowExecutorActionMixin:
         timeout = self._coerce_float(settings.get("timeout"), 3.0, minimum=0.5)
         trigger_selector = str(
             selector
-            or 'button[aria-haspopup="dialog"]:has(span.flex-1.truncate.text-left)'
+            or 'button[aria-haspopup="dialog"]:has(span.flex-1.truncate.text-start), button[aria-haspopup="dialog"]:has(span.flex-1.truncate.text-left), button[aria-haspopup="dialog"]:has(span.flex-1.truncate)'
         ).strip()
         dialog_opened = False
 
@@ -1777,7 +1783,11 @@ class WorkflowExecutorActionMixin:
 
         if found_element:
             if target_key == "send_btn":
-                logger.warning(f"[CLICK] 发送按钮点击失败，降级到 Enter 键: {last_error}")
+                tutorial_url = get_tutorial_selectors_url()
+                logger.warning(
+                    f"⚠️ [send_btn] 发送按钮点击失败（{last_error}），本次已降级模拟按 Enter 键发送。"
+                    f"如需更新选择器请参考教程: {tutorial_url}"
+                )
                 self._execute_keypress("Enter")
                 return True
             elif last_error is not None and (
@@ -1789,11 +1799,21 @@ class WorkflowExecutorActionMixin:
             if bool(getattr(self.finder, "_last_send_btn_blocked_by_stop", False)):
                 logger.warning("[CLICK] send_btn 当前处于停止态，跳过 Enter 降级以避免重复提交/中断")
                 return False
+            tutorial_url = get_tutorial_selectors_url()
+            logger.warning(
+                f"⚠️ [send_btn] 发送按钮选择器找不到，可能是失效了（本次已自动降级按 Enter 键发送）。"
+                f"请参考教程更新选择器: {tutorial_url}"
+            )
             self._execute_keypress("Enter")
             return True
         
         elif not optional:
-            raise ElementNotFoundError(f"点击目标未找到: {selector}")
+            tutorial_url = get_tutorial_selectors_url()
+            logger.warning(
+                f"⚠️ [{target_key or selector}] 选择器找不到，可能是失效了！"
+                f"请参考教程更新选择器: {tutorial_url}"
+            )
+            raise ElementNotFoundError(f"点击目标未找到: {selector}，可能是选择器失效了。请参考教程更新: {tutorial_url}")
         return False
 
     def _execute_coord_click(self, value: Any, optional: bool):
@@ -2706,7 +2726,12 @@ class WorkflowExecutorActionMixin:
             ele = self.finder.find_with_fallback(selector, target_key, timeout=find_timeout)
             if not ele:
                 if not optional:
-                    raise ElementNotFoundError("找不到输入框")
+                    tutorial_url = get_tutorial_selectors_url()
+                    logger.warning(
+                        f"⚠️ [{target_key or 'input_box'}] 输入框选择器找不到（{selector}），可能是失效了！"
+                        f"请参考教程更新选择器: {tutorial_url}"
+                    )
+                    raise ElementNotFoundError(f"找不到输入框（{selector}），可能是选择器失效了。请参考教程更新: {tutorial_url}")
                 return
 
             ele = self._wait_for_element_interactable(ele, selector, target_key)

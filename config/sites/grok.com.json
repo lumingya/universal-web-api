@@ -7,12 +7,15 @@
     "presets": {
       "主预设": {
         "selectors": {
-          "input_box": "div[data-testid=\"chat-input\"] [contenteditable=\"true\"]",
-          "send_btn": "form button[type=\"submit\"][aria-label=\"提交\"], form button[type=\"submit\"][aria-label=\"Send\"], form button[type=\"submit\"]",
-          "result_container": "div[id^=\"response-\"] [data-testid=\"assistant-message\"] > .relative > .relative",
-          "new_chat_btn": "a.peer\\/menu-button[href=\"/\"]",
+          "input_box": "div[data-testid=\"chat-input\"] [contenteditable=\"true\"], div.tiptap.ProseMirror, textarea",
+          "send_btn": "form button[type=\"submit\"][aria-label=\"提交\"], form button[type=\"submit\"][aria-label=\"Send\"], form button[type=\"submit\"], button[aria-label=\"提交\"]",
+          "result_container": "div[id^=\"response-\"] [data-testid=\"assistant-message\"], [data-testid=\"assistant-message\"]",
+          "new_chat_btn": "a.peer\\/menu-button[href=\"/\"], a[href=\"/\"]",
           "message_wrapper": "div[id^=\"response-\"]",
-          "generating_indicator": "button[aria-label=\"停止\"], button[aria-label=\"Stop\"], button[aria-label*=\"停止\"], button[aria-label*=\"Stop\"]"
+          "generating_indicator": "button[aria-label*=\"停止模型响应\"], button[aria-label*=\"停止\"], button[aria-label*=\"Stop\"]",
+          "upload_btn": "button[data-testid=\"attach-button\"], button.group\\/attach-button, button[aria-label=\"附件\"]",
+          "drop_zone": "form, div[data-testid=\"chat-input\"], div.tiptap.ProseMirror",
+          "file_input": "input[type=\"file\"][name=\"files\"], input[type=\"file\"]"
         },
         "workflow": [
           {
@@ -159,24 +162,57 @@
           "error_hint_text": "输入文本长度超过限制，已中止发送",
           "reacquire_input_after_upload": false,
           "post_upload_input_selector": "",
-          "post_upload_settle": 0,
+          "post_upload_settle": 0.0,
           "upload_signal_timeout": 2.5,
-          "upload_signal_grace": 3,
+          "upload_signal_grace": 3.0,
           "state_probe": {
             "enabled": false,
             "code": ""
+          },
+          "attachment_monitor": {
+            "root_selectors": [
+              "form",
+              "div[data-testid=\"chat-input\"]"
+            ],
+            "attachment_selectors": [
+              "[class*=\"attachment\"]",
+              "[class*=\"preview\"]",
+              "img[src^=\"blob:\"]",
+              "button[aria-label*=\"附件\"]",
+              "div:has(> img)"
+            ],
+            "pending_selectors": [],
+            "busy_text_markers": [],
+            "send_button_disabled_markers": [],
+            "require_attachment_present": false,
+            "require_upload_signal_before_ready": false,
+            "continue_once_on_unconfirmed_send": true,
+            "idle_timeout": 8.0,
+            "hard_max_wait": 90.0
+          },
+          "attachments": {
+            "enabled": true,
+            "max_count": 8,
+            "max_file_mb": 20,
+            "max_total_mb": 50,
+            "allowed_types": [],
+            "error_selectors": [],
+            "transport_order": [
+              "file_input",
+              "cdp_drop",
+              "image_clipboard"
+            ],
+            "ready_timeout": 30
           }
         },
         "stream_config": {
-          "mode": "network",
-          "hard_timeout": 300,
+          "mode": "dom",
+          "hard_timeout": 90,
           "network": {
-            "listen_pattern": "/rest/app-chat/conversations/",
+            "listen_pattern": "",
             "parser": "grok",
             "response_interval": 0.5,
-            "silence_threshold": 2,
-            "stream_match_mode": "regex",
-            "stream_match_pattern": "/rest/app-chat/conversations/(?:new|[^/]+/(?:responses|load-responses))(?:$|[?#])"
+            "silence_threshold": 3
           }
         },
         "prompt_padding": {

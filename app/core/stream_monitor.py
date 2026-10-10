@@ -376,6 +376,8 @@ class GeneratingStatusCache:
         indicator_selectors = [
             'css:button[aria-label*="Stop"]',
             'css:button[aria-label*="stop"]',
+            'css:button[aria-label*="停止"]',
+            'css:button[aria-label*="暂停"]',
             'css:[data-state="streaming"]',
             'css:.stop-generating',
         ]
@@ -1786,8 +1788,9 @@ class StreamMonitor:
         if current['is_generating']:
             return True, "生成指示器激活"
         
-        if current['text_len'] > baseline['text_len'] + 10:
-            return True, f"文本增长 {current['text_len'] - baseline['text_len']} 字符"
+        growth = current['text_len'] - baseline['text_len']
+        if growth > 0 and (current.get('text', '').strip() != baseline.get('text', '').strip() or growth >= 3):
+            return True, f"文本增长 {growth} 字符"
         
         # 🆕 图片检测：即使没有文本增长，有图片出现也认为开始回复
         current_img = current.get('image_count', 0)

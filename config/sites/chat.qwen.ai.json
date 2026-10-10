@@ -14,7 +14,7 @@
           "message_wrapper": ".qwen-chat-message, .chat-response-message, .chat-user-message, .chat-item, [data-role]",
           "generating_indicator": "button[aria-label*=\"停止\"], button[aria-label*=\"Stop\"]",
           "file_input": "input[type=\"file\"]",
-          "drop_zone": "body",
+          "drop_zone": null,
           "下拉框": "#qwen-chat-header-left .ant-dropdown-trigger",
           "3.6max": "//div[contains(@class, 'model-item') and .//span[text()='Qwen3.6-Max-Preview']]"
         },
@@ -239,6 +239,20 @@
           "segments_per_side": 12,
           "random_insert_enabled": false,
           "random_insert_chars": ""
+        },
+        "attachments": {
+          "enabled": true,
+          "transport_order": [
+            "image_clipboard",
+            "file_clipboard",
+            "file_input"
+          ],
+          "attachment_selectors": [
+            ".message-input-column-file",
+            ".file-card-list",
+            ".vision-item-image",
+            ".fileitem-btn"
+          ]
         }
       },
       "3.6 max": {
@@ -250,7 +264,7 @@
           "message_wrapper": ".qwen-chat-message, .chat-response-message, .chat-user-message, .chat-item, [data-role]",
           "generating_indicator": "button[aria-label*=\"停止\"], button[aria-label*=\"Stop\"]",
           "file_input": "input[type=\"file\"]",
-          "drop_zone": "body",
+          "drop_zone": null,
           "下拉框": "#qwen-chat-header-left .ant-dropdown-trigger",
           "3.6max": "//div[contains(@class, 'model-item') and .//span[text()='Qwen3.6-Max-Preview']]"
         },
@@ -491,6 +505,20 @@
           "segments_per_side": 12,
           "random_insert_enabled": false,
           "random_insert_chars": ""
+        },
+        "attachments": {
+          "enabled": true,
+          "transport_order": [
+            "image_clipboard",
+            "file_clipboard",
+            "file_input"
+          ],
+          "attachment_selectors": [
+            ".message-input-column-file",
+            ".file-card-list",
+            ".vision-item-image",
+            ".fileitem-btn"
+          ]
         }
       },
       "3.8": {
@@ -502,7 +530,7 @@
           "message_wrapper": ".qwen-chat-message, .chat-response-message, .chat-user-message, .chat-item, [data-role]",
           "generating_indicator": "button[aria-label*=\"停止\"], button[aria-label*=\"Stop\"]",
           "file_input": "input[type=\"file\"]",
-          "drop_zone": "body",
+          "drop_zone": null,
           "下拉框": "#qwen-chat-header-left .ant-dropdown-trigger",
           "展开更多模型": "//div[contains(text(), '展开更多模型')]",
           "3.7max": "//div[@role='option'][.//span[text()='Qwen3.8-Max-Preview']]"
@@ -732,6 +760,20 @@
           "segments_per_side": 12,
           "random_insert_enabled": false,
           "random_insert_chars": ""
+        },
+        "attachments": {
+          "enabled": true,
+          "transport_order": [
+            "image_clipboard",
+            "file_clipboard",
+            "file_input"
+          ],
+          "attachment_selectors": [
+            ".message-input-column-file",
+            ".file-card-list",
+            ".vision-item-image",
+            ".fileitem-btn"
+          ]
         }
       }
     },

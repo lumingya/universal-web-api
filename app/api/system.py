@@ -1108,12 +1108,15 @@ async def import_settings_backup(
                 # R1-2：备份里的 sites 是旧 sites.json 结构；按“整体替换”语义写回 config/sites/ 目录。
                 # 先记住目录里现有的和即将写入的每个文件，失败时由 _restore_file_snapshots 整体回滚。
                 store = config_engine.site_store
+                sites_to_save = dict(files["sites"])
+                if "_global" not in sites_to_save:
+                    sites_to_save["_global"] = config_engine.global_config.to_dict()
                 for site_path in store.site_files():
                     remember_file(site_path)
-                for site_key in files["sites"]:
+                for site_key in sites_to_save:
                     remember_file(store.file_for(str(site_key)))
                 with config_engine._io_lock:
-                    store.save(files["sites"])
+                    store.save(sites_to_save)
                 imported_sections.append("sites")
 
             if "sites_local" in files:

@@ -9,7 +9,7 @@
         "selectors": {
           "input_box": "div[data-testid=\"chat-input\"], div[contenteditable=\"true\"][data-testid=\"chat-input\"], div.ProseMirror[contenteditable=\"true\"]",
           "send_btn": "button[type=\"submit\"], button[aria-label*=\"Send Message\"], button[aria-label*=\"发送\"]",
-          "result_container": "div.font-claude-response:last-of-type, div[data-testid=\"assistant-message\"] .font-claude-response:last-of-type",
+          "result_container": "div[data-testid=\"assistant-message\"] .standard-markdown, div[data-testid=\"assistant-message\"], div.font-claude-response:last-of-type",
           "new_chat_btn": "a[aria-label=\"New chat\"], a[href=\"/new\"], button[aria-label*=\"New chat\"], button[aria-label*=\"新聊天\"]",
           "message_wrapper": null,
           "generating_indicator": "button[aria-label*=\"Stop\"], button[aria-label*=\"停止\"]"
@@ -48,15 +48,8 @@
         ],
         "stealth": false,
         "stream_config": {
-          "mode": "network",
-          "hard_timeout": 300,
-          "network": {
-            "listen_pattern": "/completion",
-            "parser": "claude",
-            "silence_threshold": 15,
-            "first_content_timeout": 60,
-            "response_interval": 0.5
-          }
+          "mode": "dom",
+          "hard_timeout": 300
         },
         "image_extraction": {
           "enabled": false,

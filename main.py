@@ -445,16 +445,18 @@ class InsecureStartupConfigError(RuntimeError):
 
 
 def _enforce_secure_startup_config() -> None:
-    """启动期安全检查：发现不安全组合直接拒绝启动，而不是静默以「无认证」对外服务。"""
-    from app.core.http_security import startup_security_errors
+    """启动期安全检查：发现不安全组合发出告警提示（兼容旧版升级，不阻断启动）。"""
+    from app.core.http_security import startup_security_errors, startup_security_warnings
 
     host = os.getenv("UWAPI_PUBLIC_BIND_HOST") or AppConfig.get_host()
     errors = startup_security_errors(host=host)
-    if not errors:
+    warnings = startup_security_warnings(host=host)
+    issues = [*errors, *warnings]
+    if not issues:
         return
-    for message in errors:
-        logger.error(f"❌ 安全配置错误: {message}")
-    raise InsecureStartupConfigError("；".join(errors))
+    for message in issues:
+        logger.warning(f"⚠️ 安全配置告警: {message}")
+    logger.warning("⚠️ 为兼容旧版本升级并确保控制面板可访问，当前仅告警未阻断服务启动；请尽快进入控制面板修改并保存安全配置！")
 
 
 @asynccontextmanager

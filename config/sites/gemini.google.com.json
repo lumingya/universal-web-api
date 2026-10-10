@@ -10,12 +10,15 @@
           "input_box": "rich-textarea .ql-editor[contenteditable=\"true\"][role=\"textbox\"]",
           "send_btn": "button[aria-label=\"发送\"]",
           "result_container": ".markdown-main-panel, single-image.generated-image",
-          "new_chat_btn": "//span[text()='发起新对话']",
+          "new_chat_btn": "css:a[href=\"/app\"][aria-label*=\"发起新对话\"], gem-icon-button a[aria-label*=\"发起新对话\"], a.mdc-icon-button[aria-label*=\"发起新对话\"], [data-test-id=\"side-nav-sparkle-button\"]",
           "message_wrapper": null,
           "generating_indicator": ".blue-circle.stop-icon mat-icon[data-mat-icon-name=\"stop\"]",
           "点击模型选择": "//button[@data-test-id='bard-mode-menu-button']",
           "选择模型": "//gem-menu-item[contains(., '3.8 Flash') or contains(., '3.7 Flash')]",
-          "临时对话按钮": "//button[@aria-label='临时对话']"
+          "临时对话按钮": "//button[@aria-label='临时对话']",
+          "upload_btn": "button[aria-label*=\"上传和工具\"], button[aria-label*=\"Upload\"]",
+          "drop_zone": "rich-textarea, .input-area",
+          "file_input": "input[type=\"file\"], input.hidden-file-input"
         },
         "stream_config": {
           "mode": "network",
@@ -375,9 +378,9 @@
           "error_hint_text": "输入文本长度超过限制，已中止发送",
           "reacquire_input_after_upload": false,
           "post_upload_input_selector": "",
-          "post_upload_settle": 0,
+          "post_upload_settle": 0.0,
           "upload_signal_timeout": 2.5,
-          "upload_signal_grace": 3,
+          "upload_signal_grace": 3.0,
           "state_probe": {
             "enabled": false,
             "code": ""
@@ -387,7 +390,7 @@
             "post_click_observe_window": 1.8,
             "pre_retry_probe_window": 0.12,
             "retry_observe_window": 0.9,
-            "attachment_observe_window": 8,
+            "attachment_observe_window": 8.0,
             "max_retry_count": 2,
             "retry_interval": 0.6,
             "retry_cooldown_window": 1.5,
@@ -417,7 +420,18 @@
               ".image-preview",
               "button.cancel-button",
               "[data-test-id=\"image-loading-preview\"]",
-              "img[aria-label=\"图片预览\"]"
+              "img[aria-label=\"图片预览\"]",
+              "img[src^=\"blob:\"]",
+              "img[src^=\"data:image\"]",
+              "[class*=\"preview\"]",
+              "[class*=\"attachment\"]",
+              "mat-chip",
+              ".file-preview",
+              "[class*=\"file-preview\"]",
+              "[class*=\"uploader-file\"]",
+              "[data-test-id*=\"file\"]",
+              "img[src^='blob:']",
+              "img[src^='data:image']"
             ],
             "pending_selectors": [
               ".image-preview.loading",
@@ -440,8 +454,23 @@
             "require_attachment_present": true,
             "require_upload_signal_before_ready": false,
             "continue_once_on_unconfirmed_send": false,
-            "idle_timeout": 12,
-            "hard_max_wait": 120
+            "idle_timeout": 12.0,
+            "hard_max_wait": 120.0
+          },
+          "attachments": {
+            "enabled": true,
+            "max_count": 8,
+            "max_file_mb": 20,
+            "max_total_mb": 50,
+            "allowed_types": [],
+            "error_selectors": [],
+            "transport_order": [
+              "cdp_drop",
+              "file_input",
+              "image_clipboard",
+              "file_clipboard"
+            ],
+            "ready_timeout": 30
           }
         },
         "prompt_padding": {
@@ -457,12 +486,15 @@
           "input_box": "rich-textarea .ql-editor[contenteditable=\"true\"][role=\"textbox\"]",
           "send_btn": "button[aria-label=\"发送\"]",
           "result_container": ".markdown-main-panel, single-image.generated-image",
-          "new_chat_btn": "//span[text()='发起新对话']",
+          "new_chat_btn": "css:a[href=\"/app\"][aria-label*=\"发起新对话\"], gem-icon-button a[aria-label*=\"发起新对话\"], a.mdc-icon-button[aria-label*=\"发起新对话\"], [data-test-id=\"side-nav-sparkle-button\"]",
           "message_wrapper": null,
           "generating_indicator": ".blue-circle.stop-icon mat-icon[data-mat-icon-name=\"stop\"]",
           "点击模型选择": "//button[@data-test-id='bard-mode-menu-button']",
           "选择模型": "//gem-menu-item[contains(., '3.1 Pro')]",
-          "临时对话按钮": "//button[@aria-label='临时对话']"
+          "临时对话按钮": "//button[@aria-label='临时对话']",
+          "upload_btn": "button[aria-label*=\"上传和工具\"], button[aria-label*=\"Upload\"]",
+          "drop_zone": "rich-textarea, .input-area",
+          "file_input": "input[type=\"file\"], input.hidden-file-input"
         },
         "stream_config": {
           "mode": "network",
@@ -801,9 +833,9 @@
           "error_hint_text": "输入文本长度超过限制，已中止发送",
           "reacquire_input_after_upload": false,
           "post_upload_input_selector": "",
-          "post_upload_settle": 0,
+          "post_upload_settle": 0.0,
           "upload_signal_timeout": 2.5,
-          "upload_signal_grace": 3,
+          "upload_signal_grace": 3.0,
           "state_probe": {
             "enabled": false,
             "code": ""
@@ -813,7 +845,7 @@
             "post_click_observe_window": 1.8,
             "pre_retry_probe_window": 0.12,
             "retry_observe_window": 0.9,
-            "attachment_observe_window": 8,
+            "attachment_observe_window": 8.0,
             "max_retry_count": 2,
             "retry_interval": 0.6,
             "retry_cooldown_window": 1.5,
@@ -843,7 +875,18 @@
               ".image-preview",
               "button.cancel-button",
               "[data-test-id=\"image-loading-preview\"]",
-              "img[aria-label=\"图片预览\"]"
+              "img[aria-label=\"图片预览\"]",
+              "img[src^=\"blob:\"]",
+              "img[src^=\"data:image\"]",
+              "[class*=\"preview\"]",
+              "[class*=\"attachment\"]",
+              "mat-chip",
+              ".file-preview",
+              "[class*=\"file-preview\"]",
+              "[class*=\"uploader-file\"]",
+              "[data-test-id*=\"file\"]",
+              "img[src^='blob:']",
+              "img[src^='data:image']"
             ],
             "pending_selectors": [
               ".image-preview.loading",
@@ -866,8 +909,23 @@
             "require_attachment_present": true,
             "require_upload_signal_before_ready": false,
             "continue_once_on_unconfirmed_send": false,
-            "idle_timeout": 12,
-            "hard_max_wait": 120
+            "idle_timeout": 12.0,
+            "hard_max_wait": 120.0
+          },
+          "attachments": {
+            "enabled": true,
+            "max_count": 8,
+            "max_file_mb": 20,
+            "max_total_mb": 50,
+            "allowed_types": [],
+            "error_selectors": [],
+            "transport_order": [
+              "cdp_drop",
+              "file_input",
+              "image_clipboard",
+              "file_clipboard"
+            ],
+            "ready_timeout": 30
           }
         },
         "prompt_padding": {
@@ -883,12 +941,15 @@
           "input_box": "rich-textarea .ql-editor[contenteditable=\"true\"][role=\"textbox\"]",
           "send_btn": "button[aria-label=\"发送\"]",
           "result_container": ".markdown-main-panel, single-image.generated-image",
-          "new_chat_btn": "//span[text()='发起新对话']",
+          "new_chat_btn": "css:a[href=\"/app\"][aria-label*=\"发起新对话\"], gem-icon-button a[aria-label*=\"发起新对话\"], a.mdc-icon-button[aria-label*=\"发起新对话\"], [data-test-id=\"side-nav-sparkle-button\"]",
           "message_wrapper": null,
           "generating_indicator": ".blue-circle.stop-icon mat-icon[data-mat-icon-name=\"stop\"]",
           "点击模型选择": "//button[@data-test-id='bard-mode-menu-button']",
           "选择模型": "//gem-menu-item[contains(., '3.5 Flash-Lite') or contains(., '3.5 Flash Lite') or contains(., '3.1 Flash-Lite') or contains(., '3.1 Flash Lite')]",
-          "临时对话按钮": "//button[@aria-label='临时对话']"
+          "临时对话按钮": "//button[@aria-label='临时对话']",
+          "upload_btn": "button[aria-label*=\"上传和工具\"], button[aria-label*=\"Upload\"]",
+          "drop_zone": "rich-textarea, .input-area",
+          "file_input": "input[type=\"file\"], input.hidden-file-input"
         },
         "stream_config": {
           "mode": "network",
@@ -1227,9 +1288,9 @@
           "error_hint_text": "输入文本长度超过限制，已中止发送",
           "reacquire_input_after_upload": false,
           "post_upload_input_selector": "",
-          "post_upload_settle": 0,
+          "post_upload_settle": 0.0,
           "upload_signal_timeout": 2.5,
-          "upload_signal_grace": 3,
+          "upload_signal_grace": 3.0,
           "state_probe": {
             "enabled": false,
             "code": ""
@@ -1239,7 +1300,7 @@
             "post_click_observe_window": 1.8,
             "pre_retry_probe_window": 0.12,
             "retry_observe_window": 0.9,
-            "attachment_observe_window": 8,
+            "attachment_observe_window": 8.0,
             "max_retry_count": 2,
             "retry_interval": 0.6,
             "retry_cooldown_window": 1.5,
@@ -1269,7 +1330,18 @@
               ".image-preview",
               "button.cancel-button",
               "[data-test-id=\"image-loading-preview\"]",
-              "img[aria-label=\"图片预览\"]"
+              "img[aria-label=\"图片预览\"]",
+              "img[src^=\"blob:\"]",
+              "img[src^=\"data:image\"]",
+              "[class*=\"preview\"]",
+              "[class*=\"attachment\"]",
+              "mat-chip",
+              ".file-preview",
+              "[class*=\"file-preview\"]",
+              "[class*=\"uploader-file\"]",
+              "[data-test-id*=\"file\"]",
+              "img[src^='blob:']",
+              "img[src^='data:image']"
             ],
             "pending_selectors": [
               ".image-preview.loading",
@@ -1292,8 +1364,23 @@
             "require_attachment_present": true,
             "require_upload_signal_before_ready": false,
             "continue_once_on_unconfirmed_send": false,
-            "idle_timeout": 12,
-            "hard_max_wait": 120
+            "idle_timeout": 12.0,
+            "hard_max_wait": 120.0
+          },
+          "attachments": {
+            "enabled": true,
+            "max_count": 8,
+            "max_file_mb": 20,
+            "max_total_mb": 50,
+            "allowed_types": [],
+            "error_selectors": [],
+            "transport_order": [
+              "cdp_drop",
+              "file_input",
+              "image_clipboard",
+              "file_clipboard"
+            ],
+            "ready_timeout": 30
           }
         },
         "prompt_padding": {
@@ -1309,12 +1396,15 @@
           "input_box": "rich-textarea .ql-editor[contenteditable=\"true\"][role=\"textbox\"]",
           "send_btn": "button[aria-label=\"发送\"]",
           "result_container": ".markdown-main-panel, single-image.generated-image",
-          "new_chat_btn": "//span[text()='发起新对话']",
+          "new_chat_btn": "css:a[href=\"/app\"][aria-label*=\"发起新对话\"], gem-icon-button a[aria-label*=\"发起新对话\"], a.mdc-icon-button[aria-label*=\"发起新对话\"], [data-test-id=\"side-nav-sparkle-button\"]",
           "message_wrapper": null,
           "generating_indicator": ".blue-circle.stop-icon mat-icon[data-mat-icon-name=\"stop\"]",
           "点击模型选择": "//button[@data-test-id='bard-mode-menu-button']",
           "选择模型": "//gem-menu-item[contains(., '3.8 Flash') or contains(., '3.7 Flash')]",
-          "临时对话按钮": "//button[@aria-label='临时对话']"
+          "临时对话按钮": "//button[@aria-label='临时对话']",
+          "upload_btn": "button[aria-label*=\"上传和工具\"], button[aria-label*=\"Upload\"]",
+          "drop_zone": "rich-textarea, .input-area",
+          "file_input": "input[type=\"file\"], input.hidden-file-input"
         },
         "stream_config": {
           "mode": "network",
@@ -1673,9 +1763,9 @@
           "error_hint_text": "输入文本长度超过限制，已中止发送",
           "reacquire_input_after_upload": false,
           "post_upload_input_selector": "",
-          "post_upload_settle": 0,
+          "post_upload_settle": 0.0,
           "upload_signal_timeout": 2.5,
-          "upload_signal_grace": 3,
+          "upload_signal_grace": 3.0,
           "state_probe": {
             "enabled": false,
             "code": ""
@@ -1685,7 +1775,7 @@
             "post_click_observe_window": 1.8,
             "pre_retry_probe_window": 0.12,
             "retry_observe_window": 0.9,
-            "attachment_observe_window": 8,
+            "attachment_observe_window": 8.0,
             "max_retry_count": 2,
             "retry_interval": 0.6,
             "retry_cooldown_window": 1.5,
@@ -1715,7 +1805,18 @@
               ".image-preview",
               "button.cancel-button",
               "[data-test-id=\"image-loading-preview\"]",
-              "img[aria-label=\"图片预览\"]"
+              "img[aria-label=\"图片预览\"]",
+              "img[src^=\"blob:\"]",
+              "img[src^=\"data:image\"]",
+              "[class*=\"preview\"]",
+              "[class*=\"attachment\"]",
+              "mat-chip",
+              ".file-preview",
+              "[class*=\"file-preview\"]",
+              "[class*=\"uploader-file\"]",
+              "[data-test-id*=\"file\"]",
+              "img[src^='blob:']",
+              "img[src^='data:image']"
             ],
             "pending_selectors": [
               ".image-preview.loading",
@@ -1738,8 +1839,23 @@
             "require_attachment_present": true,
             "require_upload_signal_before_ready": false,
             "continue_once_on_unconfirmed_send": false,
-            "idle_timeout": 12,
-            "hard_max_wait": 120
+            "idle_timeout": 12.0,
+            "hard_max_wait": 120.0
+          },
+          "attachments": {
+            "enabled": true,
+            "max_count": 8,
+            "max_file_mb": 20,
+            "max_total_mb": 50,
+            "allowed_types": [],
+            "error_selectors": [],
+            "transport_order": [
+              "cdp_drop",
+              "file_input",
+              "image_clipboard",
+              "file_clipboard"
+            ],
+            "ready_timeout": 30
           }
         },
         "prompt_padding": {

@@ -7,7 +7,7 @@
     "presets": {
       "文本-图像预设": {
         "selectors": {
-          "input_box": "textarea[data-testid=\"chat_input_input\"], textarea[placeholder], textarea",
+          "input_box": "div[data-testid=\"chat_input_input\"] div.tiptap, [data-testid=\"chat_input_input\"] [contenteditable=\"true\"], div.tiptap.ProseMirror, textarea[data-testid=\"chat_input_input\"], textarea[placeholder], textarea",
           "send_btn": "button[data-testid=\"chat_input_send_button\"], button[aria-label*=\"发送\"], button[type=\"submit\"]",
           "result_container": "main [aria-label=\"doc_editor\"], [data-testid=\"message_content\"], [data-testid=\"message-content\"]",
           "new_chat_btn": "[data-testid=\"create_conversation_button\"], [data-testid=\"create-new-chat-button\"], button[aria-label*=\"新对话\"]"
@@ -175,7 +175,7 @@
       },
       "朗读": {
         "selectors": {
-          "input_box": "textarea[data-testid=\"chat_input_input\"], textarea[placeholder], textarea",
+          "input_box": "div[data-testid=\"chat_input_input\"] div.tiptap, [data-testid=\"chat_input_input\"] [contenteditable=\"true\"], div.tiptap.ProseMirror, textarea[data-testid=\"chat_input_input\"], textarea[placeholder], textarea",
           "send_btn": "button[data-testid=\"chat_input_send_button\"], button[aria-label*=\"发送\"], button[type=\"submit\"]",
           "result_container": "main [aria-label=\"doc_editor\"], [data-testid=\"message_content\"], [data-testid=\"message-content\"]",
           "new_chat_btn": "[data-testid=\"create_conversation_button\"], [data-testid=\"create-new-chat-button\"], button[aria-label*=\"新对话\"]"

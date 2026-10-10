@@ -197,13 +197,19 @@ def test_main_app_rejects_cross_origin_management_requests(monkeypatch):
 # H1 · 模板 / 布尔解析 / 启动期拒绝不安全组合
 # ---------------------------------------------------------------------------
 
-def test_auth_switch_placeholder_fails_closed(monkeypatch):
+def test_auth_switch_placeholder_compat_and_fails_closed(monkeypatch):
     from app.core.config import AppConfig
 
+    # 兼容 3.0.0 模板：your-secret-here 视为未设置（False）
     monkeypatch.setenv("AUTH_ENABLED", "your-secret-here")
     monkeypatch.delenv("DASHBOARD_AUTH_ENABLED", raising=False)
+    assert AppConfig.is_auth_enabled() is False
+    assert AppConfig.is_dashboard_auth_enabled() is False
+
+    # 其它非法值 fail-closed 为 True
+    monkeypatch.setenv("AUTH_ENABLED", "invalid-value")
     assert AppConfig.is_auth_enabled() is True
-    assert AppConfig.is_dashboard_auth_enabled() is True
+
     monkeypatch.setenv("AUTH_ENABLED", "off")
     assert AppConfig.is_auth_enabled() is False
 
@@ -212,8 +218,13 @@ def test_startup_security_errors_matrix():
     ok_local = hs.startup_security_errors(host="127.0.0.1", env={})
     assert ok_local == []
 
-    bad_bool = hs.startup_security_errors(host="127.0.0.1", env={"DASHBOARD_AUTH_ENABLED": "your-secret-here"})
+    bad_bool = hs.startup_security_errors(host="127.0.0.1", env={"DASHBOARD_AUTH_ENABLED": "invalid-bool"})
     assert len(bad_bool) == 1 and "DASHBOARD_AUTH_ENABLED" in bad_bool[0]
+
+    # your-secret-here 属于警告而不是阻断启动的错误
+    assert hs.startup_security_errors(host="127.0.0.1", env={"DASHBOARD_AUTH_ENABLED": "your-secret-here"}) == []
+    warns = hs.startup_security_warnings(host="127.0.0.1", env={"DASHBOARD_AUTH_ENABLED": "your-secret-here"})
+    assert len(warns) == 1 and "your-secret-here" in warns[0]
 
     public_no_auth = hs.startup_security_errors(host="0.0.0.0", env={})
     assert len(public_no_auth) == 2
@@ -233,7 +244,7 @@ def test_startup_security_errors_matrix():
     assert hs.startup_security_errors(host="localhost", env={}) == []
 
 
-def test_main_lifespan_refuses_public_bind_without_auth(monkeypatch):
+def test_main_lifespan_warns_public_bind_without_auth(monkeypatch):
     import main
 
     monkeypatch.setenv("APP_HOST", "0.0.0.0")
@@ -241,14 +252,14 @@ def test_main_lifespan_refuses_public_bind_without_auth(monkeypatch):
     for name in ("AUTH_ENABLED", "AUTH_TOKEN", "DASHBOARD_AUTH_ENABLED", "DASHBOARD_AUTH_TOKEN",
                  hs.INSECURE_OVERRIDE_ENV):
         monkeypatch.delenv(name, raising=False)
-    with pytest.raises(main.InsecureStartupConfigError):
-        main._enforce_secure_startup_config()
+    
+    # 改为只告警，不抛出 InsecureStartupConfigError 阻断启动
+    main._enforce_secure_startup_config()
 
     # handoff 代理场景：子进程绑回环，但公开地址由启动器传入
     monkeypatch.setenv("APP_HOST", "127.0.0.1")
     monkeypatch.setenv("UWAPI_PUBLIC_BIND_HOST", "0.0.0.0")
-    with pytest.raises(main.InsecureStartupConfigError):
-        main._enforce_secure_startup_config()
+    main._enforce_secure_startup_config()
 
 
 def test_start_launcher_loads_security_module_without_app_package():
@@ -259,6 +270,34 @@ def test_start_launcher_loads_security_module_without_app_package():
     spec.loader.exec_module(start)
     module = start._load_http_security_module()
     assert module.startup_security_errors(host="0.0.0.0", env={})
+    # 即使存在配置错误，启动器检查也只输出告警并返回 True
+    assert start._check_startup_security() is True
+
+
+def test_v300_env_example_compat_allows_startup_with_warnings(monkeypatch):
+    """3.0.0 模板兼容：AUTH_ENABLED/DASHBOARD_AUTH_ENABLED 为 your-secret-here 且 APP_HOST=0.0.0.0 时只告警不拒绝启动。"""
+    import importlib.util
+    import main
+    from app.core.config import AppConfig
+
+    monkeypatch.setenv("APP_HOST", "0.0.0.0")
+    monkeypatch.setenv("AUTH_ENABLED", "your-secret-here")
+    monkeypatch.setenv("DASHBOARD_AUTH_ENABLED", "your-secret-here")
+    monkeypatch.delenv("AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("DASHBOARD_AUTH_TOKEN", raising=False)
+
+    assert AppConfig.is_auth_enabled() is False
+    assert AppConfig.is_dashboard_auth_enabled() is False
+
+    # main 启动检查不抛异常
+    main._enforce_secure_startup_config()
+
+    # start.py 启动检查返回 True
+    root = Path(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location("_start_compat_test", root / "start.py")
+    start = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(start)
+    assert start._check_startup_security() is True
 
 
 def test_env_example_is_safe_to_copy():

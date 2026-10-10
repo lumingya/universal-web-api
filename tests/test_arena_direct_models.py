@@ -30,7 +30,11 @@ from app.utils.model_routing import inspect_model_route
 
 
 MODEL_UUID = "019c6d29-a30c-7e20-9bd0-6650af926623"
-MODEL_TRIGGER_SELECTOR = 'button[aria-haspopup="dialog"]:has(span.flex-1.truncate.text-left)'
+MODEL_TRIGGER_SELECTOR = (
+    'button[aria-haspopup="dialog"]:has(span.flex-1.truncate.text-start), '
+    'button[aria-haspopup="dialog"]:has(span.flex-1.truncate.text-left), '
+    'button[aria-haspopup="dialog"]:has(span.flex-1.truncate)'
+)
 
 
 class _CatalogTab:

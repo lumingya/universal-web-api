@@ -46,13 +46,20 @@
           },
           "attachment_monitor": {
             "root_selectors": [
+              "form:has(div.ProseMirror)",
               "form:has(#prompt-textarea)",
+              "form",
               ".shadow-short-composer"
             ],
             "attachment_selectors": [
               "div[role='group'][aria-label]",
               "button[aria-label='以全视图打开图片']",
-              "button[aria-label^='移除文件']"
+              "button[aria-label^='移除文件']",
+              "[data-testid*='attachment']",
+              "[class*='attachment']",
+              "[class*='file-preview']",
+              "img[src^='blob:']",
+              "img[src^='data:image']"
             ],
             "pending_selectors": [],
             "busy_text_markers": [],
@@ -161,12 +168,15 @@
           "audio_capture_activity_silence_seconds": 0.65
         },
         "selectors": {
+          "file_input": "input[type=\"file\"]",
+          "upload_btn": "button[aria-label*=\"添加文件\"], button[aria-label*=\"Attach\"], button[aria-label*=\"Upload\"]",
+          "drop_zone": "form, div.ProseMirror",
           "generating_indicator": null,
-          "input_box": "#prompt-textarea",
+          "input_box": "#prompt-textarea, div.ProseMirror[contenteditable=\"true\"], div[role=\"textbox\"][contenteditable=\"true\"]",
           "message_wrapper": "section[data-testid^=\"conversation-turn-\"]",
-          "new_chat_btn": "[data-testid=\"create-new-chat-button\"]",
+          "new_chat_btn": "[data-testid=\"create-new-chat-button\"], a[href=\"/\"]",
           "result_container": "section[data-testid^=\"conversation-turn-\"] .markdown, section[data-testid^=\"conversation-turn-\"] div[id^=\"image-\"]",
-          "send_btn": "[data-testid=\"send-button\"]",
+          "send_btn": "button[data-testid=\"send-button\"], button[type=\"submit\"], button[aria-label*=\"发送\"], button[aria-label*=\"Send\"]",
           "temp_chat_btn": "button[aria-label=\"开启临时聊天\"]"
         },
         "stealth": false,

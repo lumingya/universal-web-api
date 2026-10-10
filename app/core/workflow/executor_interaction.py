@@ -921,22 +921,30 @@ class WorkflowExecutorInteractionMixin:
             if self._check_cancelled():
                 return latest_element
 
-            if target_key in {"input_box", "send_btn"} and (selector or target_key):
-                refreshed = self._refresh_target_element(
-                    selector,
-                    target_key,
-                    timeout=min(sample_interval, 0.3),
-                )
-                if refreshed is not None:
-                    latest_element = refreshed
-
             current_state = self._sample_element_interactable_state(latest_element)
             if current_state.get("interactable"):
                 stable_count = stable_count + 1 if self._is_rect_stable(last_state, current_state, tolerance) else 1
                 if stable_count >= stable_needed:
                     return latest_element
-            else:
-                stable_count = 0
+                last_state = current_state
+                time.sleep(min(sample_interval, 0.05))
+                continue
+
+            # 仅在当前元素未连接或不可交互时，才尝试刷新获取最新 DOM 节点
+            stable_count = 0
+            if target_key in {"input_box", "send_btn"} and (selector or target_key):
+                refreshed = self._refresh_target_element(
+                    selector,
+                    target_key,
+                    timeout=max(sample_interval, 0.1),
+                )
+                if refreshed is not None:
+                    latest_element = refreshed
+                    current_state = self._sample_element_interactable_state(latest_element)
+                    if current_state.get("interactable"):
+                        stable_count = 1
+                        if stable_count >= stable_needed:
+                            return latest_element
 
             last_state = current_state
             time.sleep(sample_interval)

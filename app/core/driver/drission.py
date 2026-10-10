@@ -175,7 +175,19 @@ class DrissionListener:
     @reuse_driver.setter
     def reuse_driver(self, value: bool) -> None:
         # DrissionPage 的私有开关：复用标签页已有的 CDP 连接，避免为监听单独建连接
-        self._listen._reuse_driver = bool(value)
+        try:
+            setattr(self._listen, "_reuse_driver", bool(value))
+        except Exception:
+            pass
+
+    @property
+    def _reuse_driver(self) -> bool:
+        """兼容直接访问私有名称的历史调用或误写。"""
+        return self.reuse_driver
+
+    @_reuse_driver.setter
+    def _reuse_driver(self, value: bool) -> None:
+        self.reuse_driver = value
 
     def start(self, *args: Any, **kwargs: Any) -> Any:
         with translated_errors():

@@ -558,7 +558,7 @@ class _GlobalNetworkInterceptionManager:
                 if not listening:
                     try:
                         # 复用连接，降低对 CDP session 的额外占用
-                        driver_for_tab(tab).listener._reuse_driver = True
+                        driver_for_tab(tab).listener.reuse_driver = True
                         self._start_listen(tab)
                         listening = True
                         last_listener_clear_at = time.monotonic()

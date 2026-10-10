@@ -281,7 +281,14 @@ class SiteStore:
             if site in existing:
                 path, payload = existing[site]
                 payload = dict(payload)
-                payload["config"] = merge_site_records(config, payload["config"])
+                merged_config = merge_site_records(config, payload["config"])
+                if (
+                    site == "_global"
+                    and config.get("selector_definitions") == []
+                    and payload["config"].get("selector_definitions")
+                ):
+                    merged_config["selector_definitions"] = payload["config"]["selector_definitions"]
+                payload["config"] = merged_config
                 merged_count += 1
             else:
                 path = self._unique_path(site, taken)

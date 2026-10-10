@@ -73,7 +73,7 @@ def arena_direct_select_model(
     timeout = executor._coerce_float(settings.get("timeout"), 3.0, minimum=0.5)
     trigger_selector = str(
         selector
-        or 'button[aria-haspopup="dialog"]:has(span.flex-1.truncate.text-left)'
+        or 'button[aria-haspopup="dialog"]:has(span.flex-1.truncate.text-start), button[aria-haspopup="dialog"]:has(span.flex-1.truncate.text-left), button[aria-haspopup="dialog"]:has(span.flex-1.truncate)'
     ).strip()
     dialog_opened = False
 

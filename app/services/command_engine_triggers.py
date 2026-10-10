@@ -749,7 +749,7 @@ class CommandEngineTriggersMixin:
         for cmd in applicable_cmds:
             self._reset_page_check_latch(cmd, session, reason=f"navigated:{reason}")
 
-        logger.info(
+        logger.debug(
             f"[CMD] 标签页导航/刷新通知: session={session_id}, reason={reason}, async={async_dispatch}"
         )
 

@@ -16,7 +16,7 @@ import hashlib
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from app.core.config import BrowserConstants, logger
+from app.core.config import BrowserConstants, get_tutorial_selectors_url, logger
 from app.core.driver import driver_for_tab
 
 _ELEMENT_TIMING_LOG_THRESHOLD = 0.5
@@ -55,6 +55,10 @@ class ElementFinder:
             'css:form button[type="submit"]:not(:disabled):not([aria-disabled="true"])',
             'css:button[type="submit"]:not(:disabled):not([aria-disabled="true"])',
             'css:[role="button"][type="submit"]:not(:disabled):not([aria-disabled="true"])',
+            'css:.enter-icon-container:not(:disabled):not([aria-disabled="true"])',
+            'css:[class*="enter-icon"]:not(:disabled):not([aria-disabled="true"])',
+            'css:[class*="send-icon"]:not(:disabled):not([aria-disabled="true"])',
+            'css:[class*="send-btn"]:not(:disabled):not([aria-disabled="true"])',
         ],
         "result_container": [
             'css:div[class*="message"]',
@@ -258,6 +262,13 @@ class ElementFinder:
             return None
 
         total_timeout = max(0.02, float(timeout or 0.0))
+
+        # 优先尝试完整复合选择器（浏览器原生支持逗号复合选择器，单次直接查询避免拆分超时）
+        direct_timeout = max(0.4, min(total_timeout, 1.2))
+        ele = self._find_with_syntax(raw, direct_timeout)
+        if ele and self._is_visible_enabled(ele):
+            return ele
+
         deadline = time.perf_counter() + total_timeout
         is_first_round = True
 
@@ -266,7 +277,7 @@ class ElementFinder:
                 if time.perf_counter() >= deadline:
                     break
                 rem = max(0.01, deadline - time.perf_counter())
-                per_group_timeout = 0.02 if is_first_round else max(0.02, min(rem / len(groups), 0.15))
+                per_group_timeout = max(0.3, min(rem / max(len(groups), 1), 0.6))
 
                 started_at = time.perf_counter()
                 ele = self._find_with_syntax(group, per_group_timeout)
@@ -329,6 +340,15 @@ class ElementFinder:
         self._last_send_btn_blocked_by_stop = False
         candidates: List[Any] = []
 
+        # 优先直接使用完整选择器进行单次查询（避免复合选择器拆分后单组超时过小导致假失败）
+        if selector:
+            direct_timeout = max(0.4, min(float(timeout or 0.0), 1.2))
+            direct_ele = self._find_with_syntax(selector, direct_timeout)
+            if direct_ele and self._is_visible_enabled(direct_ele):
+                if not self._looks_like_stop_button(direct_ele):
+                    return direct_ele
+                candidates.append(direct_ele)
+
         groups = self._split_css_selector_groups(selector) if selector else []
         if not groups and selector:
             groups = [selector]
@@ -342,7 +362,7 @@ class ElementFinder:
                 if time.perf_counter() >= deadline:
                     break
                 rem = max(0.01, deadline - time.perf_counter())
-                per_group_timeout = 0.02 if is_first_round else max(0.02, min(rem / len(groups), 0.15))
+                per_group_timeout = max(0.3, min(rem / max(len(groups), 1), 0.6))
                 ele = self._find_with_syntax(group, per_group_timeout)
                 if not ele or not self._is_visible_enabled(ele):
                     continue
