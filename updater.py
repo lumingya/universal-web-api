@@ -112,6 +112,9 @@ def http_request_with_retry(url: str, headers: dict = None, timeout: int = API_T
         headers = {}
     
     headers.setdefault('User-Agent', 'Universal-Web-API-Updater/2.1')
+    gh_token = os.getenv('GITHUB_TOKEN', '').strip()
+    if gh_token and 'api.github.com' in url and 'Authorization' not in headers:
+        headers['Authorization'] = f'Bearer {gh_token}'
     
     for attempt in range(MAX_RETRIES):
         try:
