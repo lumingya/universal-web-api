@@ -24,10 +24,10 @@
     },
     "arena.ai": {
       "file": "arena.ai.json",
-      "adapter_version": "2026.09.26",
-      "min_app_version": "3.0.0",
-      "config_sha256": "c8605137eade64c481dc2d524a37bcf131db46bf1b3d91e3f0c3457de230c29d",
-      "file_sha256": "46002768cd8ae83287e45438828ef309b26b085e25c7a824f481a064059d9509"
+      "adapter_version": "2026.10.10",
+      "min_app_version": "3.0.1",
+      "config_sha256": "638303bef47e06ec5863398fd5c64bd39125746e90a53dd5cda07112360e24c7",
+      "file_sha256": "9fb9554446809ded1b978b98585272215146d1fc778a9208ab1f22aa17c02bf5"
     },
     "chat.deepseek.com": {
       "file": "chat.deepseek.com.json",
@@ -40,50 +40,50 @@
       "file": "chat.qwen.ai.json",
       "adapter_version": "2026.09.26",
       "min_app_version": "3.0.0",
-      "config_sha256": "a6d720247a3981b9713c26a4e65c59047193bc793aa75c60008ea6b1c648a1f0",
-      "file_sha256": "b7417fbd20a7849253501e1b131e61b25f9a169b3f6c0c2a1414bb1e5e8364e0"
+      "config_sha256": "99251efe060a358cad204a959cf5d2dad223847157ae25d54110f79bdf9241a4",
+      "file_sha256": "57972cc9b62a47deb2f053b48291e5e4378339e97db8fd861cfcf8fd90121149"
     },
     "chatglm.cn": {
       "file": "chatglm.cn.json",
       "adapter_version": "2026.09.26",
       "min_app_version": "3.0.0",
-      "config_sha256": "75a9a7e47a6183b5329fa423d9a8ec7726b1a124bb58624d32ebb18b5498bc01",
-      "file_sha256": "801f68a5d14bebb517ab639c8606154f7557105afac43a7ac79c8b0b426cbb8d"
+      "config_sha256": "e117cb37069c58b4f9c5996a83d59dd616a25b75423340efb9cc7e4b68f242ca",
+      "file_sha256": "787fd458f61906c73efad3e9e66b86a3190f9c1487fcc3f07610de11b7b9ec79"
     },
     "chatgpt.com": {
       "file": "chatgpt.com.json",
       "adapter_version": "2026.09.26",
       "min_app_version": "3.0.0",
-      "config_sha256": "340d1f8bfdee298a4f8c022806acb17052b166fb24f59b148c3089d62c6c971e",
-      "file_sha256": "ea87ea612f356f8f391814b3f738331f3543dc9e196877277764c71e6600388f"
+      "config_sha256": "33b62e9c5518f9ae34a1d2c4070cc25c75346ec430643183485f2bf20eef327f",
+      "file_sha256": "503bf1541ecde031bd5d73803038ee6462e7033a5282975950538aaaf49e5813"
     },
     "claude.ai": {
       "file": "claude.ai.json",
       "adapter_version": "2026.09.26",
       "min_app_version": "3.0.0",
-      "config_sha256": "224bc879d67edae1b872b59ae1f22793265469c1e6995f8ecb4238d17e56dbf0",
-      "file_sha256": "f0c27f78b1d5828fac033165adbce49971792d116667c4fe71c5eb78a61cd2a9"
+      "config_sha256": "7ffb7b64145a940cf89371cf4c262f0ad6f46801c10abbbb50d88a96af138891",
+      "file_sha256": "b6680f6867108bb87fe4f817b3a184b4b637592c1fb18a35df96567478c84781"
     },
     "gemini.google.com": {
       "file": "gemini.google.com.json",
       "adapter_version": "2026.09.26",
       "min_app_version": "3.0.0",
-      "config_sha256": "e6fba8509ec17ff9137d8ed01337846f9924fe98d6b58643f1aa1571bb72aaa1",
-      "file_sha256": "72b7f2c44cbb81bebdcc74e3b91668d1606c826ac50a35a1b8535a43d07eaccc"
+      "config_sha256": "b6f313fa6440203917d392623eeeebc1dd6fb90bbc0f032ca0f213239aa98672",
+      "file_sha256": "81733dd6716c6254641b3b36a73d3e302fdfc2f0d8a8de89cd00f506d8fc14b7"
     },
     "grok.com": {
       "file": "grok.com.json",
       "adapter_version": "2026.09.26",
       "min_app_version": "3.0.0",
-      "config_sha256": "cb706123756fa874206e01e33a46a55f770b925b2db9bfe5f1ae5336dc27b816",
-      "file_sha256": "f91359b7d7c92c01c1b71c93c849858aca440ffb86c86509b967145284531c11"
+      "config_sha256": "d47f0c92b4eb2a9c4775a482dab4ef7ee75f2c00b619913d8a6477194ce1cfe0",
+      "file_sha256": "5ba351b92f10a47962395af3d09429e76f709c164368ca955a90f1d287bdc9c6"
     },
     "www.doubao.com": {
       "file": "www.doubao.com.json",
       "adapter_version": "2026.09.26",
       "min_app_version": "3.0.0",
-      "config_sha256": "c90b5c0e351c1133dbbec80db1304d56318971c4af50127283b53c2c765a0e09",
-      "file_sha256": "7a30a4a7a2ea765dfe075d2dae33354350108e85f5b766a4c2f58bbd7d41e30a"
+      "config_sha256": "f61f46ab47723da78a94e7915671a5eeaf5a3437592f45e7ca91680561a1133e",
+      "file_sha256": "f4bb0c2fb5d2633dfff0d0b8e82ab1124555b7f169ad071cecc518bcba0005e1"
     },
     "www.kimi.com": {
       "file": "www.kimi.com.json",

@@ -561,6 +561,39 @@ def test_remote_fetch_allows_google_and_cdn_fake_ip_images(monkeypatch):
     assert calls[0][0] == url
 
 
+def test_remote_fetch_allows_ipv6_fake_ip_for_cdn(monkeypatch):
+    from app.utils import remote_resource
+
+    calls = []
+
+    class DummyResponse:
+        status_code = 200
+        headers = {"Content-Type": "application/json"}
+
+        def iter_content(self, chunk_size=65536):
+            yield b"{}"
+
+        def close(self):
+            return None
+
+    # 模拟 TUN 模式下同时解析出 IPv4 和 IPv6 Fake-IP (RFC 5180 2001:2::/48)
+    monkeypatch.setattr(
+        remote_resource,
+        "_resolve_addresses",
+        lambda _host: ("198.18.1.89", "2001:2::14b"),
+    )
+    monkeypatch.setattr(
+        remote_resource.requests,
+        "get",
+        lambda url, **kwargs: calls.append((url, kwargs)) or DummyResponse(),
+    )
+
+    url = "https://raw.githubusercontent.com/lumingya/universal-web-api/main/config/sites/index.json"
+    response = remote_resource.get_public_remote_resource(url)
+    assert response.status_code == 200
+    assert calls[0][0] == url
+
+
 def test_image_screenshot_fallback_matches_stream_url_across_battle_sides(tmp_path, monkeypatch):
     target_url = "https://cdn.example/left/generated.png?signature=new"
     wrong = _FakeDomImage("https://cdn.example/right/old.png")

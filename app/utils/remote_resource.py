@@ -14,7 +14,11 @@ import requests
 
 ALLOWED_REMOTE_SCHEMES = frozenset({"http", "https"})
 MAX_REMOTE_REDIRECTS = 4
-_PROXY_FAKE_IP_NETWORKS = (ipaddress.ip_network("198.18.0.0/15"),)
+_PROXY_FAKE_IP_NETWORKS = (
+    ipaddress.ip_network("198.18.0.0/15"),  # IPv4 Fake-IP (RFC 2544 benchmark, Clash/Mihomo/Sing-box)
+    ipaddress.ip_network("2001:2::/48"),    # IPv6 Fake-IP (RFC 5180 benchmark, Clash/Mihomo/Sing-box standard)
+    ipaddress.ip_network("fc00::/7"),       # IPv6 ULA (RFC 4193, legacy/custom Fake-IP e.g. fdfe::/64)
+)
 _PROXY_FAKE_IP_HTTPS_SUFFIXES = (
     # Google & Gemini CDN / Media
     "googleusercontent.com",
