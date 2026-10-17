@@ -2,7 +2,7 @@
 
 浏览器层换成固定输出的假实现，请求经 httpx.ASGITransport 直接进入 main.app（不监听端口、不启动浏览器）。
 验证的是 SDK 眼中的协议形状：非流式/流式响应能被官方 SDK 正确解析，错误码映射到 SDK 的异常类型。
-没有安装 openai / anthropic 时自动跳过（二者在 requirements-dev.txt 中）。
+没有安装 openai / anthropic 时自动跳过（二者在 pyproject.toml 的 dev 依赖组中）。
 """
 
 from __future__ import annotations

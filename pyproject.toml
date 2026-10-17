@@ -1,5 +1,82 @@
-# 仅存放工具配置。本项目不是可安装的 Python 包，运行方式见 README 与 start.py。
-# 最低支持的 Python 版本以 start.py 中的 MIN_PYTHON 为准（当前为 3.10）。
+# ============================================
+# Universal Web-to-API - 项目与依赖配置
+# ============================================
+# 环境完全由 uv 管理，不使用 pip / requirements.txt / 启动脚本。
+# 依赖的唯一事实来源是本文件的 [project.dependencies] 与 [dependency-groups]；
+# 精确版本记录在 uv.lock 中，由 `uv lock` / `uv sync` 维护。
+#
+# 常用命令：
+#   uv sync                # 创建 .venv，安装运行 + dev 依赖（按 uv.lock）
+#   uv sync --no-dev       # 只安装运行依赖
+#   uv run python main.py  # 启动服务（自动拉起浏览器）
+#   uv run pytest          # 运行测试
+#   uv run ruff check .    # 运行 lint
+#   uv add <包名>          # 添加运行依赖
+#   uv add --group dev <包名>
+#
+# 新增依赖请使用 uv add，不要手工安装到系统 Python。
+
+[project]
+name = "universal-web-api"
+version = "3.0.1"
+description = "Local OpenAI/Anthropic-compatible API bridge for browser-based AI sites"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "AGPL-3.0" }
+authors = [{ name = "Universal Web-to-API contributors" }]
+keywords = ["fastapi", "browser-automation", "openai", "anthropic", "drissionpage"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+]
+dependencies = [
+    "fastapi>=0.100.0,<0.110.0",
+    "uvicorn[standard]>=0.23.0,<0.30.0",
+    "pydantic>=2.0.0,<3.0.0",
+    "typing-extensions>=4.6.0; python_version < '3.11'",
+    "drissionpage>=4.0.0,<5.0.0",
+    "beautifulsoup4>=4.12.0",
+    "json-repair>=0.61.7,<1.0.0",
+    "jsonschema>=4.18.0,<5.0.0",
+    "python-dotenv>=1.0.0",
+    "requests>=2.31.0,<3.0.0",
+    "pysocks>=1.7.1,<2.0.0",
+    "pyperclip>=1.8.2",
+    "pillow>=10.0.0",
+    "reportlab>=4.0.0,<5.0.0",
+    "pywin32>=306; sys_platform == 'win32'",
+    "psutil>=5.9.0",
+    # Time-bounded regular expressions for workflow conditions (no eval).
+    "regex>=2024.5.15,<2027.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8,<10",
+    # FastAPI/Starlette TestClient 与 ASGITransport 端到端测试依赖。
+    "httpx>=0.27,<1",
+    # tests/test_cancel_storm_regressions.py 直接使用 anyio。
+    "anyio>=4,<5",
+    # Optional local Chromium UI/DOM integration tests (not required by the server).
+    "playwright>=1.50,<2",
+    # R1-5 协议一致性测试：用官方 SDK 作为客户端。
+    "openai>=1.40,<4",
+    "anthropic>=0.40,<2",
+    # 格式化 / lint（pyproject 中已有 ruff 配置）。
+    "ruff>=0.6",
+    # Python 3.10 没有 tomllib，测试读取 pyproject.toml 时需要。
+    "tomli>=2.0; python_version < '3.11'",
+]
+
+[tool.uv]
+# 非库项目：uv 只管理依赖和 .venv，不构建/安装本项目。
+package = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -14,7 +91,17 @@ markers = [
 [tool.ruff]
 target-version = "py310"
 line-length = 120
-extend-exclude = ["venv", "scratch", "tmp", "temp", "chrome_profile", "custom_scripts", "js", "logs"]
+extend-exclude = [
+    ".venv",
+    "venv",
+    "scratch",
+    "tmp",
+    "temp",
+    "chrome_profile",
+    "custom_scripts",
+    "js",
+    "logs",
+]
 
 [tool.ruff.lint]
 # 最小基线：只启用“出现即是 bug”的规则（语法错误、未定义名称、比较/断言误用等），风格类规则暂不启用。

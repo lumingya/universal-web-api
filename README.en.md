@@ -74,10 +74,12 @@ graph TD
 ### Setup Steps
 
 1. **Download & Extract**: Download the latest release from [Releases](https://github.com/lumingya/universal-web-api/releases) and extract it to a path **without non-ASCII (e.g. Chinese) characters**.
-2. **Start the Service**:
-   * **Windows**: Double-click **`start.bat`**.
-   * **macOS / Linux**: Run **`python3 start.py`** in your terminal.
-3. **Initialization**: Once dependencies are validated and installed, a controlled browser window will pop up automatically, and the console will open in a normal browser at `http://127.0.0.1:8199`. Keep AI websites in the controlled browser, and use your normal browser for the dashboard and tutorial.
+2. **Start the Service**: install [uv](https://docs.astral.sh/uv/) and run from the project root:
+   ```bash
+   uv sync
+   uv run python main.py
+   ```
+3. **Initialization**: the launcher inside `main.py` verifies `.venv`, applies the DrissionPage patch, and pops up the controlled browser automatically. The console opens in a normal browser at `http://127.0.0.1:8199`. Keep AI websites in the controlled browser, and use your normal browser for the dashboard and tutorial.
 4. **Log In**: In the controlled browser, log in to your own AI web accounts (e.g., chatgpt.com, claude.ai), then keep the target site on a real chat-ready page.
 5. **Configure Clients**: In any client, set the API configurations:
    * **Base URL**: `http://127.0.0.1:8199/v1`
@@ -152,7 +154,7 @@ The tutorial is bundled as static HTML, so it also works without an internet con
 
 ## ⚙️ Configuration Essentials
 
-Copy [`.env.example`](./.env.example) to `.env` only when you need to override defaults. Values are read at process start; restart `start.bat` / `start.py` after changing environment settings.
+Copy [`.env.example`](./.env.example) to `.env` only when you need to override defaults. Values are read at process start; restart `uv run python main.py` after changing environment settings.
 
 | Variable | Recommended local value | Purpose |
 | :--- | :--- | :--- |
@@ -199,12 +201,15 @@ Do not attempt to bypass a site's login or human verification. Complete challeng
 
 ## 🧪 Development and Tests
 
+This project uses [uv](https://docs.astral.sh/uv/) for dependency management. `pyproject.toml`
+declares dependencies and `uv.lock` pins exact versions. There is no pip/requirements
+fallback and no separate launcher script; `uv run python main.py` is the only entry point.
+
 ```bash
-python -m venv venv
-# Windows: .\\venv\\Scripts\\Activate.ps1
-# macOS/Linux: source venv/bin/activate
-pip install -r requirements.txt
-pytest -q
+uv sync              # create .venv and install runtime + dev dependencies
+uv run pytest -q     # run the test suite
+uv run ruff check .  # lint
+uv run python main.py
 ```
 
 Most tests are browser-independent regression tests under [`tests/`](./tests). A live browser session is required for end-to-end site adaptation tests. Keep generated profiles and logs outside commits.

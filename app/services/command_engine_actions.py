@@ -2102,7 +2102,7 @@ return (() => {
 
     def _execute_webhook_action(self, action: Dict, session: 'TabSession') -> Dict[str, Any]:
         if not HAS_REQUESTS:
-            logger.error("[CMD] send_webhook 需要 requests 库，请运行: pip install requests")
+            logger.error("[CMD] send_webhook 需要 requests 库，请运行: uv sync")
             return {"ok": False, "error": "requests_not_installed"}
 
         ctx = self._build_template_context(session)
@@ -2166,7 +2166,7 @@ return (() => {
 
     def _execute_napcat_action(self, action: Dict, session: 'TabSession') -> Dict[str, Any]:
         if not HAS_REQUESTS:
-            logger.error("[CMD] send_napcat 需要 requests 库，请运行: pip install requests")
+            logger.error("[CMD] send_napcat 需要 requests 库，请运行: uv sync")
             return {"ok": False, "error": "requests_not_installed"}
 
         ctx = self._build_template_context(session)
@@ -2292,7 +2292,7 @@ return (() => {
         执行代理节点切换（通过 Clash API）
         """
         if not HAS_REQUESTS:
-            logger.error("[CMD] 切换代理需要 requests 库，请运行: pip install requests")
+            logger.error("[CMD] 切换代理需要 requests 库，请运行: uv sync")
             return {"ok": False, "error": "requests_not_installed"}
 
         # 读取配置

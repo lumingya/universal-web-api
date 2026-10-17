@@ -295,7 +295,7 @@ FORWARDING_HEADERS = (
     "x-client-ip",
 )
 
-# start.py 的定时重启 handoff 代理会用这两个头把真实客户端地址传给子进程；
+# 同机反向代理与 worker 转发会用这两个头把真实客户端地址传给后端；
 # 共享密钥每次启动随机生成并通过环境变量传递，外部请求无法伪造。
 PROXY_CLIENT_HEADER = "x-uwa-client-addr"
 PROXY_SECRET_HEADER = "x-uwa-proxy-secret"

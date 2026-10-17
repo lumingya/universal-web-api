@@ -61,6 +61,7 @@ BACKUP_EXCLUDE_NAMES = {
     ".git",
     ".update_temp",
     "__pycache__",
+    ".venv",
     "venv",
     "logs",
     "temp",

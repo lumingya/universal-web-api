@@ -262,18 +262,6 @@ def test_main_lifespan_warns_public_bind_without_auth(monkeypatch):
     main._enforce_secure_startup_config()
 
 
-def test_start_launcher_loads_security_module_without_app_package():
-    import importlib.util
-    root = Path(__file__).resolve().parents[1]
-    spec = importlib.util.spec_from_file_location("_start_under_test", root / "start.py")
-    start = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(start)
-    module = start._load_http_security_module()
-    assert module.startup_security_errors(host="0.0.0.0", env={})
-    # 即使存在配置错误，启动器检查也只输出告警并返回 True
-    assert start._check_startup_security() is True
-
-
 def test_v300_env_example_compat_allows_startup_with_warnings(monkeypatch):
     """3.0.0 模板兼容：AUTH_ENABLED/DASHBOARD_AUTH_ENABLED 为 your-secret-here 且 APP_HOST=0.0.0.0 时只告警不拒绝启动。"""
     import importlib.util
@@ -291,13 +279,6 @@ def test_v300_env_example_compat_allows_startup_with_warnings(monkeypatch):
 
     # main 启动检查不抛异常
     main._enforce_secure_startup_config()
-
-    # start.py 启动检查返回 True
-    root = Path(__file__).resolve().parents[1]
-    spec = importlib.util.spec_from_file_location("_start_compat_test", root / "start.py")
-    start = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(start)
-    assert start._check_startup_security() is True
 
 
 def test_env_example_is_safe_to_copy():

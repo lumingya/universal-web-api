@@ -1,6 +1,6 @@
 # patch_drissionpage.py - 自动补丁 DrissionPage Listener
 # 用法：python patch_drissionpage.py
-# 时机：pip install 之后、项目启动之前
+# 时机：uv sync 之后、服务启动之前（main.py 启动引导会自动执行）
 
 import importlib
 import inspect

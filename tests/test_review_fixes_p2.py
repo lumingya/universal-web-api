@@ -439,8 +439,7 @@ def test_s10_data_uri_budget_and_pixel_budget(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# S4 · open-profile-url 鉴权 / 目标 URL 限制；handoff 代理的来源传递
-# S5 · handoff 代理：连接/缓冲预算、chunked、Expect、CL+TE
+# S4 · open-profile-url 鉴权 / 目标 URL 限制；同机代理来源头只采信带密钥的转发
 # ---------------------------------------------------------------------------
 
 def _open_profile_app(monkeypatch, calls):
@@ -485,7 +484,7 @@ def test_s4_open_profile_url_rejects_tunneled_and_remote(monkeypatch, no_dashboa
     assert calls == ["https://example.com/a"]
 
 
-def test_s4_open_profile_url_trusts_handoff_proxy_client_addr(monkeypatch, no_dashboard_auth):
+def test_s4_open_profile_url_trusts_worker_proxy_client_addr(monkeypatch, no_dashboard_auth):
     calls = []
     app = _open_profile_app(monkeypatch, calls)
     monkeypatch.setenv("UWAPI_PROXY_SECRET", "launch-secret")
@@ -512,164 +511,6 @@ def test_s4_open_profile_url_token_and_target_restrictions(monkeypatch, no_dashb
                  headers={"Authorization": "Bearer wrong"}).status_code == 401
     assert _call(app, client=("203.0.113.9", 4000),
                  headers={"Authorization": "Bearer dash-token-123"}).status_code == 200
-
-
-# ---- handoff proxy ---------------------------------------------------------
-
-@pytest.fixture
-def handoff_proxy():
-    import socket
-    import threading
-
-    import start
-
-    received = []
-    backend = socket.socket()
-    backend.bind(("127.0.0.1", 0))
-    backend.listen(16)
-    stop = threading.Event()
-
-    def serve():
-        backend.settimeout(0.2)
-        while not stop.is_set():
-            try:
-                conn, _ = backend.accept()
-            except OSError:
-                continue
-            with conn:
-                conn.settimeout(3)
-                data = bytearray()
-                try:
-                    while True:
-                        chunk = conn.recv(65536)
-                        if not chunk:
-                            break
-                        data.extend(chunk)
-                        if b"\r\n\r\n" in data and (data.endswith(b"0\r\n\r\n") or b"chunked" not in data.lower()):
-                            head, _, body = bytes(data).partition(b"\r\n\r\n")
-                            length = 0
-                            for line in head.split(b"\r\n")[1:]:
-                                if line.lower().startswith(b"content-length:"):
-                                    length = int(line.split(b":", 1)[1])
-                            if b"chunked" in head.lower() or len(body) >= length:
-                                break
-                except OSError:
-                    pass
-                received.append(bytes(data))
-                conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
-
-    thread = threading.Thread(target=serve, daemon=True)
-    thread.start()
-    proxies = []
-
-    def make(**kwargs):
-        proxy = start._RestartHandoffProxy("127.0.0.1", 0, backend.getsockname()[1], **kwargs)
-        threading.Thread(target=proxy.serve_forever, daemon=True).start()
-        proxies.append(proxy)
-        return proxy
-
-    try:
-        yield make, received
-    finally:
-        for proxy in proxies:
-            proxy.shutdown()
-            proxy.server_close()
-        stop.set()
-        backend.close()
-
-
-def _raw(port, data, read=True):
-    import socket
-
-    with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
-        for part in (data if isinstance(data, list) else [data]):
-            s.sendall(part)
-        if not read:
-            return b""
-        out = bytearray()
-        try:
-            while True:
-                chunk = s.recv(65536)
-                if not chunk:
-                    break
-                out.extend(chunk)
-        except OSError:
-            pass
-        return bytes(out)
-
-
-def test_s4_proxy_strips_client_uwa_headers_and_injects_secret(handoff_proxy):
-    make, received = handoff_proxy
-    proxy = make(proxy_secret="launch-secret")
-    port = proxy.server_address[1]
-    resp = _raw(port, b"GET /x HTTP/1.1\r\nHost: a\r\nX-UWA-Client-Addr: 127.0.0.1\r\n"
-                      b"X-UWA-Proxy-Secret: forged\r\nX-Forwarded-For: 203.0.113.9\r\n\r\n")
-    assert resp.endswith(b"ok")
-    req = received[-1].decode("latin-1")
-    assert "forged" not in req
-    assert req.count("X-UWA-Client-Addr:") == 1 and "X-UWA-Client-Addr: 127.0.0.1" in req
-    assert "X-UWA-Proxy-Secret: launch-secret" in req
-    assert "X-Forwarded-For: 203.0.113.9" in req  # 外部转发头保留给后端判定
-    assert "Connection: close" in req
-
-
-def test_s5_proxy_handles_chunked_and_expect(handoff_proxy):
-    make, received = handoff_proxy
-    port = make(proxy_secret="s").server_address[1]
-    body = b"5\r\nhello\r\n6;ext=1\r\n world\r\n0\r\n\r\n"
-    resp = _raw(port, [b"POST /c HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: chunked\r\n\r\n", body])
-    assert resp.endswith(b"ok")
-    assert received[-1].endswith(body)
-
-    import socket
-
-    # 真实客户端行为：发完头等 100 再发体
-    with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
-        s.sendall(b"POST /e HTTP/1.1\r\nHost: a\r\nContent-Length: 4\r\nExpect: 100-continue\r\n\r\n")
-        interim = s.recv(64)
-        assert interim == b"HTTP/1.1 100 Continue\r\n\r\n"
-        s.sendall(b"abcd")
-        resp = bytearray()
-        while chunk := s.recv(65536):
-            resp.extend(chunk)
-    assert bytes(resp).endswith(b"ok")
-    assert b"expect:" not in received[-1].lower() and received[-1].endswith(b"abcd")
-
-
-def test_s5_proxy_rejects_smuggling_and_oversize(handoff_proxy):
-    make, received = handoff_proxy
-    proxy = make(max_buffer_bytes=1024 * 1024)
-    port = proxy.server_address[1]
-    before = len(received)
-    assert _raw(port, b"POST / HTTP/1.1\r\nContent-Length: 3\r\nTransfer-Encoding: chunked\r\n\r\nabc") \
-        .startswith(b"HTTP/1.1 400")
-    assert _raw(port, b"POST / HTTP/1.1\r\nContent-Length: abc\r\n\r\n").startswith(b"HTTP/1.1 400")
-    assert _raw(port, b"POST / HTTP/1.1\r\nTransfer-Encoding: gzip\r\n\r\n").startswith(b"HTTP/1.1 501")
-    assert _raw(port, b"POST / HTTP/1.1\r\nContent-Length: 99999999999\r\n\r\n").startswith(b"HTTP/1.1 413")
-    # 超过全局缓冲预算（1MiB）的单个请求 → 503，不会被缓冲
-    assert _raw(port, b"POST / HTTP/1.1\r\nContent-Length: 2000000\r\n\r\n").startswith(b"HTTP/1.1 503")
-    assert _raw(port, b"GET / HTTP/1.1\r\n" + b"X-Big: " + b"a" * 70000 + b"\r\n\r\n") \
-        .startswith(b"HTTP/1.1 431")
-    assert len(received) == before
-    assert proxy._buffered_bytes == 0
-
-
-def test_s5_proxy_connection_budget(handoff_proxy):
-    import socket
-    import time
-
-    make, _received = handoff_proxy
-    proxy = make(max_connections=2)
-    port = proxy.server_address[1]
-    held = [socket.create_connection(("127.0.0.1", port), timeout=5) for _ in range(2)]
-    try:
-        time.sleep(0.3)
-        assert _raw(port, b"GET / HTTP/1.1\r\n\r\n").startswith(b"HTTP/1.1 503")
-    finally:
-        for s in held:
-            s.close()
-    time.sleep(0.3)
-    assert _raw(port, b"GET / HTTP/1.1\r\nHost: a\r\n\r\n").endswith(b"ok")
 
 
 # ---------------------------------------------------------------------------

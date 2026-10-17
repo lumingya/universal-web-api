@@ -132,10 +132,11 @@ def test_b4_api_returns_openai_style_422(monkeypatch):
 def test_h7_annotations_resolvable():
     import typing
 
-    import start
+    import main
+    from app.runtime import browser_launcher, bootstrap, relaunch
     from app.utils import model_routing
 
-    for mod in (start, model_routing):
+    for mod in (main, browser_launcher, bootstrap, relaunch, model_routing):
         for obj in vars(mod).values():
             if callable(obj) and getattr(obj, "__module__", None) == mod.__name__ and not isinstance(obj, type):
                 typing.get_type_hints(obj)  # 旧代码对缺失导入会抛 NameError
@@ -202,14 +203,15 @@ def test_h13_dead_storage_mixin_removed():
 
 
 # ---------------------------------------------------------------------------
-# T2 · 测试用到的 httpx 必须写进 requirements-dev.txt
+# T2 · 测试用到的 httpx 必须写进 pyproject.toml 的 dev 依赖组
 # ---------------------------------------------------------------------------
 
-def test_t2_httpx_declared_in_dev_requirements():
+def test_t2_httpx_declared_in_dev_group():
     import re
 
-    text = (Path(__file__).resolve().parents[1] / "requirements-dev.txt").read_text(encoding="utf-8")
-    assert re.search(r"(?m)^httpx\b", text)
+    text = (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text(encoding="utf-8")
+    dev_group = text.split("[dependency-groups]", 1)[1]
+    assert re.search(r'(?m)^\s*"httpx', dev_group)
 
 
 # ---------------------------------------------------------------------------

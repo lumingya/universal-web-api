@@ -281,14 +281,8 @@ def _schedule_service_restart(delay_seconds: float = 1.0) -> None:
         logger.warning("配置已更新，服务即将重启...")
         logger.warning("=" * 60)
 
-        try:
-            from app.services.restart_guard import mark_service_restart
-            mark_service_restart()
-        except Exception:
-            pass
-
-        import os
-        os._exit(3)
+        from app.runtime.relaunch import restart_service
+        restart_service()
 
     asyncio.create_task(trigger_restart())
 
@@ -2130,7 +2124,7 @@ def _get_path_size_bytes(path: Path, *, skip_dir_names: Optional[set[str]] = Non
 
 
 def _get_project_disk_usage_mb() -> float:
-    """计算项目实际占用磁盘空间，包含 venv 和浏览器用户目录。"""
+    """计算项目实际占用磁盘空间，包含 .venv/venv 和浏览器用户目录。"""
     try:
         project_dir = Path(__file__).resolve().parents[2]
         total_size = _get_path_size_bytes(
@@ -2633,13 +2627,8 @@ async def switch_version(
                 import time as _time
                 logger.warning(f"版本切换成功: {tag}，2 秒后重启服务")
                 _time.sleep(2.0)
-                try:
-                    from app.services.restart_guard import mark_service_restart
-                    mark_service_restart()
-                except Exception:
-                    pass
-                import os as _os
-                _os._exit(3)
+                from app.runtime.relaunch import restart_service
+                restart_service()
         except Exception as exc:
             logger.error(f"版本切换失败: {exc}")
             with _version_switch_lock:

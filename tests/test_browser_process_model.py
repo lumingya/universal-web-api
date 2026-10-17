@@ -2,7 +2,8 @@
 
 import pytest
 
-import start
+from app.core.settings_registry import find
+from app.runtime.browser_launcher import browser_process_model_args
 
 
 @pytest.mark.parametrize(
@@ -20,8 +21,9 @@ import start
     ],
 )
 def test_browser_process_model_args(value, expected):
-    assert start._browser_process_model_args(value) == expected
+    assert browser_process_model_args(value) == expected
 
 
 def test_process_model_not_enabled_by_default():
-    assert start.ENV_DEFAULTS["BROWSER_PROCESS_MODEL"] == ""
+    setting = find("BROWSER_PROCESS_MODEL")
+    assert setting is not None and setting.default == ""

@@ -83,7 +83,7 @@ s = socket.socket(); s.bind(("127.0.0.1", 0)); dbg = s.getsockname()[1]; s.close
 co = ChromiumOptions().set_browser_path(chrome)
 co.set_argument("--no-sandbox"); co.set_local_port(dbg); co.set_user_data_path(tempfile.mkdtemp(prefix=f"uwapi-{args.tag}-"))
 co.headless(False)
-# 与 start.py 默认（BROWSER_MEMORY_SAVER=false）一致的后台参数；--disable-features 只能出现一次
+# 与 app/runtime/browser_launcher.py 默认（BROWSER_MEMORY_SAVER=false）一致的后台参数；--disable-features 只能出现一次
 for a in ("--disable-backgrounding-occluded-windows", "--disable-background-timer-throttling", "--disable-renderer-backgrounding"):
     co.set_argument(a)
 co.set_argument("--disable-features=CalculateNativeWinOcclusion,AutomaticTabDiscarding,TabFreeze,IntensiveWakeUpThrottling,"

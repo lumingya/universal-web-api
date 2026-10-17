@@ -250,11 +250,11 @@
           </div>
 
           <h3 id="quickstart-browser">先区分受控浏览器和普通浏览器</h3>
-          <p>双击运行 <code>start.bat</code> 后，脚本会自动启动一个<strong>受控浏览器</strong>。打开 Windows 任务栏，你应该能看到它已经运行；接下来的登录和站点配置都要在这个浏览器里完成。</p>
+          <p>运行 <code>uv run python main.py</code> 后，启动引导会自动拉起一个<strong>受控浏览器</strong>。打开 Windows 任务栏，你应该能看到它已经运行；接下来的登录和站点配置都要在这个浏览器里完成。</p>
           <div class="browser-compare">
             <div class="browser-kind is-controlled">
               <span class="browser-kind-icon"><i data-lucide="scan-eye" style="width:18px;height:18px"></i></span>
-              <div><strong>受控浏览器</strong><p>由脚本启动并执行网页操作。请在这里打开 AI 站点、登录账号；API 请求执行期间，你可以正常操作或切换标签页查看内容。</p></div>
+              <div><strong>受控浏览器</strong><p>由服务启动并执行网页操作。请在这里打开 AI 站点、登录账号；API 请求执行期间，你可以正常操作或切换标签页查看内容。</p></div>
             </div>
             <div class="browser-kind">
               <span class="browser-kind-icon"><i data-lucide="monitor" style="width:18px;height:18px"></i></span>
@@ -265,7 +265,7 @@
           <h3 id="quickstart-checklist">首次启动检查清单</h3>
           <p>第一次运行时按“进程 → 端口 → 浏览器 → 站点 → API”的顺序确认，任何一步失败都先停在当前层排查，不要直接反复点击发送。</p>
           <ol class="steps">
-            <li><strong>启动脚本没有立即退出。</strong><code>start.bat</code> 窗口应保持打开；若窗口闪退，在项目目录打开 PowerShell 执行 <code>python start.py</code>，保留完整错误信息。</li>
+            <li><strong>服务进程没有退出。</strong>运行 <code>uv run python main.py</code> 的终端应保持打开；若启动失败，保留完整错误信息（先确认已执行 <code>uv sync</code>）。</li>
             <li><strong>端口可访问。</strong>在普通浏览器打开 <code>http://127.0.0.1:8199/health</code>。返回 JSON 且 HTTP 状态为 <code>200</code> 表示服务和浏览器均已就绪；若为 <code>503</code>，服务还在但受控浏览器未连接。</li>
             <li><strong>远程调试端口已监听。</strong>打开 <code>http://127.0.0.1:9222/json/version</code>；能看到 <code>Browser</code> 与 <code>webSocketDebuggerUrl</code> 才表示自动化连接正常。不要把该端口暴露到公网。</li>
             <li><strong>标签页池有可用页面。</strong>控制面板 → 标签页池中至少有一个目标站点，状态为“空闲”；新标签页加载完成后等待 2–3 秒再刷新列表。</li>
@@ -1061,9 +1061,9 @@ curl http://127.0.0.1:8199/v1/messages/count_tokens ^
           <h3>DrissionPage 补丁（必看）</h3>
           <p>为了减少额外连接带来的兼容性问题，项目会给 DrissionPage 打一个小补丁，让网络监听尽量复用浏览器主连接，而不是额外新建连接。</p>
           <ul>
-            <li><strong>自动执行：</strong>运行 <code>start.bat</code> 后自动安装依赖并执行补丁。</li>
-            <li><strong>手动执行：</strong><code>python patch_drissionpage.py</code></li>
-            <li><strong>恢复原文件：</strong><code>python patch_drissionpage.py --restore</code></li>
+            <li><strong>自动执行：</strong><code>uv run python main.py</code> 启动时会自动执行补丁。</li>
+            <li><strong>手动执行：</strong><code>uv run python patch_drissionpage.py</code></li>
+            <li><strong>恢复原文件：</strong><code>uv run python patch_drissionpage.py --restore</code></li>
           </ul>
           <div class="co co-warn">
             <i data-lucide="alert-triangle" style="width:18px;height:18px"></i>
@@ -1250,7 +1250,7 @@ CORS_ORIGINS=http://127.0.0.1:8199</code></pre></div>
             <li><strong>完全退出浏览器和脚本。</strong>关闭所有 Chrome 窗口，并确认任务栏中没有仍在运行的 Chrome；复制使用中的配置容易得到不完整文件。</li>
             <li><strong>复制必要内容。</strong>从原始 <code>...\Google\Chrome\User Data</code> 根目录复制 <code>Local State</code>，再复制刚才确认的配置子目录（如 <code>Default</code>、<code>Profile 1</code>）。</li>
             <li><strong>放入项目专用目录。</strong>把上一步的内容粘贴到项目根目录的 <code>chrome_profile/</code> 中。完成后应能看到 <code>chrome_profile\Local State</code> 和 <code>chrome_profile\Default</code>（或对应的 <code>Profile N</code>）。</li>
-            <li><strong>选择对应配置并重启。</strong>在 <code>.env</code> 中保持 <code>BROWSER_PROFILE_DIR</code> 为空，并把 <code>BROWSER_PROFILE_NAME</code> 写成复制过来的子目录名称；然后重新运行 <code>start.bat</code>。</li>
+            <li><strong>选择对应配置并重启。</strong>在 <code>.env</code> 中保持 <code>BROWSER_PROFILE_DIR</code> 为空，并把 <code>BROWSER_PROFILE_NAME</code> 写成复制过来的子目录名称；然后重新运行 <code>uv run python main.py</code>。</li>
           </ol>
           <div class="cb" data-lang="bash"><div class="cb-top"><span class="cb-dots"><i></i><i></i><i></i></span><span class="cb-lang">.env</span><button class="cb-copy"><i data-lucide="copy" style="width:12px;height:12px"></i><span>复制</span></button></div><pre><code>BROWSER_PATH=C:\Program Files\Google\Chrome\Application\chrome.exe
 # 留空时使用项目根目录的 chrome_profile/
@@ -1318,7 +1318,7 @@ BROWSER_PROFILE_NAME=Default</code></pre></div>
           </ul>
           <div class="co co-info">
             <i data-lucide="lock" style="width:18px;height:18px"></i>
-            <div class="co-bd"><span class="co-t">当前默认保留项</span><p><code>config/sites.local.json</code>（站点默认预设覆盖）、<code>config/commands.local.json</code>（命令启用状态与分组覆盖）、<code>chrome_profile/</code>（登录态，仅本机自用）、<code>venv/</code>、<code>logs/</code>、<code>image/</code>、<code>updater.py</code>、<code>.git/</code>、<code>__pycache__/</code>、<code>*.pyc</code>、<code>backup_*/</code>。只保留登录态和个人配置时保持默认勾选即可；要保留自己改过的代码时再勾对应目录。</p></div>
+            <div class="co-bd"><span class="co-t">当前默认保留项</span><p><code>config/sites.local.json</code>（站点默认预设覆盖）、<code>config/commands.local.json</code>（命令启用状态与分组覆盖）、<code>chrome_profile/</code>（登录态，仅本机自用）、<code>.venv/</code>（uv 环境）、<code>venv/</code>（旧版环境）、<code>logs/</code>、<code>image/</code>、<code>updater.py</code>、<code>.git/</code>、<code>__pycache__/</code>、<code>*.pyc</code>、<code>backup_*/</code>。只保留登录态和个人配置时保持默认勾选即可；要保留自己改过的代码时再勾对应目录。</p></div>
           </div>
           <div class="co co-danger">
             <i data-lucide="alert-octagon" style="width:18px;height:18px"></i>
@@ -1412,7 +1412,7 @@ BROWSER_PROFILE_NAME=Default</code></pre></div>
               <ul>
                 <li><strong>直接指向了系统默认 <code>User Data</code>：</strong>Chrome 136+ 上远程调试端口会起不来——先复制一份独立目录，再让脚本使用副本。</li>
                 <li><strong><code>BROWSER_PROFILE_DIR</code> 层级写错：</strong>应指向 <code>User Data</code> 这一层，而不是 <code>...\User Data\Default</code>；子配置文件夹写在 <code>BROWSER_PROFILE_NAME</code>。</li>
-                <li><strong>改完没重启：</strong>浏览器启动相关配置只有重新运行 <code>start.bat</code> 才生效。</li>
+                <li><strong>改完没重启：</strong>浏览器启动相关配置只有重新启动服务（<code>uv run python main.py</code>）才生效。</li>
               </ul>
               <p>具体步骤回看「系统设置 → 浏览器登录态复用」。</p>
             </div>

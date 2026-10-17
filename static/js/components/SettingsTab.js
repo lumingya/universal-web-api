@@ -80,7 +80,7 @@ window.SettingsTab = {
         },
         getEnvApplyLabel(field, group) {
             const scope = this.getEnvApplyScope(field, group)
-            if (scope === 'launcher') return '需重启 start.bat'
+            if (scope === 'launcher') return '需重新运行 uv run python main.py'
             return '保存后服务重启生效'
         },
         getEnvApplyClass(field, group) {
@@ -378,7 +378,7 @@ window.SettingsTab = {
                                 <h3 class="text-lg font-bold text-gray-900 dark:text-white flex items-center gap-2">
                                     <span class="text-xl" v-html="$icons.folderOpen"></span> 环境配置
                                 </h3>
-                                <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">每个字段都会标明是服务重启生效，还是需要重新运行 start.bat</p>
+                                <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">每个字段都会标明是服务重启生效，还是需要重新运行 uv run python main.py</p>
                             </div>
                             <div class="flex gap-2">
                                 <button @click="$emit('reset-env')" title="重置"
