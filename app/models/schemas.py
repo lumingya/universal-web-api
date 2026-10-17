@@ -12,7 +12,7 @@ from typing import TypedDict, List, Optional, Literal, Dict, Any, Union
 
 try:  # Python 3.11+
     from typing import NotRequired
-except ImportError:  # Python 3.10（最低支持版本，见 start.py MIN_PYTHON）
+except ImportError:  # Python 3.10（最低支持版本，见 pyproject.toml 的 requires-python）
     from typing_extensions import NotRequired
 from pydantic import BaseModel, ConfigDict
 

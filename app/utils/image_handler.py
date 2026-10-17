@@ -411,7 +411,7 @@ def copy_image_to_clipboard(image_path: str) -> bool:
         logger.info("[CLIPBOARD] 当前平台不支持原生图片剪贴板，将依赖网页原生上传入口")
         return False
     except ClipboardDependencyError:
-        logger.error("[CLIPBOARD] 缺少 Windows 原生图片剪贴板依赖，请执行: pip install pywin32")
+        logger.error("[CLIPBOARD] 缺少 Windows 原生图片剪贴板依赖，请执行: uv sync（pywin32 已在 pyproject.toml 中声明）")
         return False
     except Exception as e:
         logger.error(f"[CLIPBOARD] 复制失败: {e}")

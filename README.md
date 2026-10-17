@@ -69,26 +69,38 @@ graph TD
 
 ### 环境要求
 
-- Python 3.10 或更高版本（启动脚本可按 `.env` 中的 `PYTHON_INSTALL_VERSION` 自动准备环境）。
+- [uv](https://docs.astral.sh/uv/) 0.5+。环境只由 uv 管理：uv 会按 `.python-version` 自动准备 Python 3.12，最低支持 3.10。
 - Chrome、Edge 或 Brave 等 Chromium 浏览器。建议使用项目创建的独立 `chrome_profile`，不要与日常浏览器共用配置目录。
 - Windows 支持最完整；macOS/Linux 支持核心功能，文件剪贴板和窗口控制能力可能受系统限制。
 
-### 启动
+### 安装与启动（uv）
 
-1. 从 [Releases](https://github.com/lumingya/universal-web-api/releases) 下载并解压到本地目录。路径尽量使用英文、无空格目录，避免浏览器驱动和脚本的路径兼容问题。
-2. Windows 双击 `start.bat`；macOS/Linux 在项目根目录执行 `python3 start.py`。也可以直接运行 `python main.py`，但不会获得启动脚本的依赖检查、浏览器拉起和重启接管能力。
-3. 首次启动会校验/安装 `requirements.txt`，启动受控浏览器，并在普通浏览器打开控制面板：`http://127.0.0.1:8199/`。
+```bash
+# 1. 安装 uv（已安装可跳过）
+#    Windows: powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+#    macOS/Linux: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# 2. 按 .python-version 准备 Python，并按 uv.lock 创建 .venv、安装依赖
+uv sync
+
+# 3. 启动服务（无需激活虚拟环境）
+uv run python main.py
+```
+
+1. 从 [Releases](https://github.com/lumingya/universal-web-api/releases) 下载并解压到本地目录。路径尽量使用英文、无空格目录。
+2. 在项目根目录执行上面的命令。`main.py` 作为脚本启动时会先校验 `.venv`、应用 DrissionPage 补丁、拉起受控 Chromium，然后再加载应用。
+3. 服务与受控浏览器就绪后，在普通浏览器打开控制面板：`http://127.0.0.1:8199/`。
 4. 在受控浏览器登录目标 AI 网站，停留在可输入消息的对话页面。控制面板和教程请用普通浏览器访问。
 5. 在客户端填写 Base URL `http://127.0.0.1:8199/v1`，模型名从 `GET /v1/models` 返回值中选择。
 
-### 从源码安装（可选）
+项目不再提供 `start.py` / `start.bat` / `requirements.txt`，也不支持用 pip 安装依赖。
+依赖声明在 `pyproject.toml`，精确版本在 `uv.lock`，详见 [`docs/uv.md`](./docs/uv.md)。
 
 ```bash
-python -m venv venv
-# Windows: venv\\Scripts\\activate
-# macOS/Linux: source venv/bin/activate
-python -m pip install -r requirements.txt
-python start.py
+uv run pytest           # 测试
+uv run ruff check .     # lint
+uv add <包名>           # 新增运行依赖
+uv add --group dev <包名>
 ```
 
 启动后可用以下地址确认服务：
@@ -193,7 +205,7 @@ Invoke-RestMethod 'http://127.0.0.1:8199/v1/chat/completions' -Method Post -Cont
 
 ## 故障排查
 
-1. **打不开控制面板**：确认 `start.py` 进程仍在运行，检查 `APP_HOST`/`APP_PORT`，并访问 `/health`。端口被占用时改用其他端口后重启。
+1. **打不开控制面板**：确认 `uv run python main.py` 进程仍在运行，检查 `APP_HOST`/`APP_PORT`，并访问 `/health`。端口被占用时改用其他端口后重启。
 2. **没有可用标签页**：确认受控浏览器已启动、已登录并停留在目标站点；检查 `/v1/provider/status` 的 `browser.connected` 和 `pool.idle`。
 3. **请求排队超时/429**：标签页都在忙或 `acquire_timeout` 太短。降低并发、增加标签页，或调整标签页池分配策略。
 4. **首包超时但页面有回复**：站点网络格式可能变化。先查看请求监控，再测试选择器；网络监听满足条件时会回退到 DOM 解析。

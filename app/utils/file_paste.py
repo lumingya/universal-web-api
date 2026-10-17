@@ -370,7 +370,7 @@ def copy_file_to_clipboard(filepath: str) -> bool:
         logger.info("当前平台不支持原生文件剪贴板，将依赖 file input / drop_zone 上传")
         return False
     except ClipboardDependencyError:
-        logger.error("缺少 Windows 原生文件剪贴板依赖，请执行: pip install pywin32")
+        logger.error("缺少 Windows 原生文件剪贴板依赖，请执行: uv sync（pywin32 已在 pyproject.toml 中声明）")
         return False
     except Exception as e:
         logger.error(f"复制文件到剪贴板失败: {e}")

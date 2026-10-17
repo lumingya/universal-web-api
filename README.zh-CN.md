@@ -74,10 +74,12 @@ graph TD
 ### 安装启动步骤
 
 1. **下载解压**：从 [Releases](https://github.com/lumingya/universal-web-api/releases) 下载最新压缩包，并解压到**无中文路径**的本地目录。
-2. **一键启动**：
-   * **Windows**：双击运行根目录下的 **`start.bat`**。
-   * **macOS / Linux**：在终端执行 **`python3 start.py`**。
-3. **完成初始化**：等待依赖包自动校验安装完成后，系统会自动弹出一个受控的浏览器窗口，并在普通浏览器中打开本地控制台 `http://127.0.0.1:8199`。受控浏览器只建议放 AI 站点，控制台和教程请在普通浏览器里查看。
+2. **启动服务**：安装 [uv](https://docs.astral.sh/uv/) 后在项目根目录执行：
+   ```bash
+   uv sync
+   uv run python main.py
+   ```
+3. **完成初始化**：启动时会校验 `.venv`、应用 DrissionPage 补丁，并自动弹出受控浏览器窗口，同时在普通浏览器中打开本地控制台 `http://127.0.0.1:8199`。受控浏览器只建议放 AI 站点，控制台和教程请在普通浏览器里查看。
 4. **账号登录**：在受控浏览器窗口中，登录您拥有的 AI 网站账号（如 ChatGPT、DeepSeek 等），并保持目标站点停留在可对话页面。
 5. **客户端配置**：在您的任意 AI 客户端（如翻译插件、Chat UI）中修改 API 配置：
    * **API 地址 (Base URL)**：`http://127.0.0.1:8199/v1`
@@ -151,8 +153,7 @@ graph TD
 
 - Python 3.10+，以及 Chrome、Edge 或 Brave 等 Chromium 浏览器。Windows 支持最完整；macOS/Linux 的文件剪贴板和窗口控制能力可能受系统限制。
 - 推荐从 [Releases](https://github.com/lumingya/universal-web-api/releases) 解压到英文、无空格路径，并使用项目独立的 `chrome_profile`，不要复用日常浏览器配置。
-- Windows 双击 `start.bat`；macOS/Linux 执行 `python3 start.py`。启动脚本会检查依赖、启动受控浏览器并打开 `http://127.0.0.1:8199/` 控制面板。
-- 也可从源码执行：`python -m venv venv`、`python -m pip install -r requirements.txt`、`python start.py`。
+- 环境由 uv 管理：在项目根目录执行 `uv sync`，然后 `uv run python main.py`。启动时会启动受控浏览器并打开 `http://127.0.0.1:8199/` 控制面板；不再提供启动脚本、pip 或 `requirements.txt`。详见 [`docs/uv.md`](./docs/uv.md)。
 
 受控浏览器用于登录 AI 站点；控制面板和教程请在普通浏览器打开。登录后让目标站点停留在可输入消息的对话页，再在客户端使用 Base URL `http://127.0.0.1:8199/v1`。模型名以 `GET /v1/models` 返回值为准。
 
@@ -197,7 +198,7 @@ curl http://127.0.0.1:8199/v1/chat/completions \
 
 ### 故障排查
 
-1. 控制面板打不开：确认 `start.py` 仍在运行，检查端口占用并访问 `/health`。
+1. 控制面板打不开：确认 `uv run python main.py` 仍在运行，检查端口占用并访问 `/health`。
 2. 没有可用标签页：确认受控浏览器已启动、已登录且停留在目标站点；查看 `/v1/provider/status` 的 `browser.connected`、`pool.idle`。
 3. 429 或排队超时：标签页均忙或 `acquire_timeout` 太短，降低并发、增加标签页或调整分配模式。
 4. 页面有回复但 API 首包超时：先看请求监控，再测试选择器；网络监听会按配置回退到 DOM 解析。

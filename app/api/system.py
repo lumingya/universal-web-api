@@ -281,14 +281,8 @@ def _schedule_service_restart(delay_seconds: float = 1.0) -> None:
         logger.warning("配置已更新，服务即将重启...")
         logger.warning("=" * 60)
 
-        try:
-            from app.services.restart_guard import mark_service_restart
-            mark_service_restart()
-        except Exception:
-            pass
-
-        import os
-        os._exit(3)
+        from app.runtime.relaunch import restart_service
+        restart_service()
 
     asyncio.create_task(trigger_restart())
 
@@ -2130,7 +2124,7 @@ def _get_path_size_bytes(path: Path, *, skip_dir_names: Optional[set[str]] = Non
 
 
 def _get_project_disk_usage_mb() -> float:
-    """计算项目实际占用磁盘空间，包含 venv 和浏览器用户目录。"""
+    """计算项目实际占用磁盘空间，包含 .venv/venv 和浏览器用户目录。"""
     try:
         project_dir = Path(__file__).resolve().parents[2]
         total_size = _get_path_size_bytes(
@@ -2531,6 +2525,24 @@ def _run_update_check(repo: Optional[str] = None) -> Dict[str, Any]:
         )
 
 
+def _consume_bootstrap_update_check() -> Optional[Dict[str, Any]]:
+    from updater import DEFAULT_REPO
+
+    raw = os.environ.pop("UWAPI_UPDATE_CHECK_RESULT", "")
+    try:
+        cached = json.loads(raw)
+        repo = str(os.getenv("GITHUB_REPO", DEFAULT_REPO) or DEFAULT_REPO).strip()
+        age = time.time() - float(cached["checked_at"])
+        release = cached["release"]
+        if not 0 <= age <= 300 or cached["repo"] != repo:
+            return None
+        if not isinstance(release, dict) or not isinstance(release.get("tag_name"), str) or not release["tag_name"].strip():
+            return None
+        return _build_update_check_payload(release, repo)
+    except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
+        return None
+
+
 def schedule_startup_update_check() -> None:
     """启动时只触发一次后台版本检查，供控制面板红点读取。"""
     global _startup_update_check_scheduled
@@ -2539,6 +2551,11 @@ def schedule_startup_update_check() -> None:
         if _startup_update_check_scheduled or _update_check_state.get("checking"):
             return
         _startup_update_check_scheduled = True
+        cached = _consume_bootstrap_update_check()
+        if cached is not None:
+            _update_check_state.update(cached)
+            logger.info("[startup] 已复用引导阶段版本检查结果")
+            return
         _update_check_state["checking"] = True
         _update_check_state["error"] = ""
 
@@ -2633,13 +2650,8 @@ async def switch_version(
                 import time as _time
                 logger.warning(f"版本切换成功: {tag}，2 秒后重启服务")
                 _time.sleep(2.0)
-                try:
-                    from app.services.restart_guard import mark_service_restart
-                    mark_service_restart()
-                except Exception:
-                    pass
-                import os as _os
-                _os._exit(3)
+                from app.runtime.relaunch import restart_service
+                restart_service()
         except Exception as exc:
             logger.error(f"版本切换失败: {exc}")
             with _version_switch_lock:

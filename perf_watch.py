@@ -28,7 +28,7 @@ import time
 try:
     import psutil
 except ImportError:  # pragma: no cover
-    sys.exit("需要 psutil：pip install psutil（项目 requirements.txt 已包含）")
+    sys.exit("需要 psutil：请先运行 uv sync（psutil 已在 pyproject.toml 中声明）")
 
 
 def mem_mb(proc: "psutil.Process") -> float:

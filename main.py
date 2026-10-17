@@ -1,22 +1,40 @@
 """
 main.py - FastAPI 应用入口
+
+启动方式（环境由 uv 管理）：
+
+    uv sync
+    uv run python main.py
+
+作为脚本运行时，会在导入应用代码之前完成环境校验、自动更新、DrissionPage
+补丁、浏览器配置清理与受控浏览器拉起（app/runtime/bootstrap.py）。
 """
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent
+
+if __name__ == "__main__":
+    # 关键：必须在导入 app / DrissionPage 之前执行，确保补丁对新代码生效。
+    from app.runtime.bootstrap import bootstrap_runtime
+
+    bootstrap_runtime()
+
 import asyncio
 import logging
 logging.getLogger("urllib3").setLevel(logging.WARNING)
-import os
-import logging
 import socket
 import mimetypes
 import shutil
 import subprocess
-import sys
 import threading
 import time
 import webbrowser
 from typing import Any, Dict, Optional
 from urllib.request import urlopen
-from pathlib import Path
 from contextlib import asynccontextmanager
 from app import __version__ as APP_VERSION
 from app.core import get_browser
@@ -68,13 +86,10 @@ def _get_scheduled_restart_active_work() -> int:
 
 
 def _exit_for_scheduled_restart() -> None:
-    try:
-        from app.services.restart_guard import mark_service_restart
-        mark_service_restart()
-    except Exception:
-        pass
     logger.warning("定时守护已排空工作流，服务将重启（浏览器和标签页保持不变）")
-    os._exit(3)
+    from app.runtime.relaunch import restart_service
+
+    restart_service()
 
 def _setup_windows_event_loop_policy():
     """
