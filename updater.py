@@ -1009,6 +1009,21 @@ def update_version_file(project_dir: Path, new_version: str):
     version_file.write_text(normalized)
     log_success(f"版本已更新: {normalized}")
 
+def _write_update_check_result(repo: str, release: Optional[dict]) -> None:
+    """只交接成功的检查；网络失败应让服务在启动时重试。"""
+    target = os.getenv("UWAPI_UPDATE_CHECK_RESULT_FILE")
+    if not target or not release or not release.get("tag_name"):
+        return
+    try:
+        Path(target).write_text(json.dumps({
+            "repo": repo,
+            "checked_at": time.time(),
+            "release": {key: release.get(key, "") for key in ("tag_name", "published_at")},
+        }), encoding="utf-8")
+    except OSError as exc:
+        log_warning(f"无法交接版本检查结果: {exc}")
+
+
 def check_and_update(repo: str = None, force: bool = False, preserve: list = None) -> bool:
     """检查并执行更新"""
     project_dir = Path(__file__).parent.resolve()
@@ -1036,6 +1051,7 @@ def check_and_update(repo: str = None, force: bool = False, preserve: list = Non
     log_info(f"检查仓库: {repo}")
     
     release = fetch_latest_release(repo)
+    _write_update_check_result(repo, release)
     
     if not release:
         log_warning("无法获取版本信息")

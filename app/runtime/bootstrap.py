@@ -16,6 +16,8 @@
 
 from __future__ import annotations
 
+import json
+import tempfile
 import os
 import shutil
 import subprocess
@@ -126,7 +128,7 @@ def _apply_utf8_defaults() -> None:
 def _load_env() -> None:
     env_file = PROJECT_ROOT / ".env"
     if not env_file.exists():
-        _log("[WARN] 未找到 .env 文件，使用默认配置")
+        _log("[WARN] 未找到 .env 文件，使用默认配置；可复制 .env.example 为 .env 后修改")
         return
     try:
         from dotenv import load_dotenv
@@ -198,6 +200,7 @@ def sync_runtime_environment() -> bool:
 
 def _run_auto_update() -> bool:
     """按 AUTO_UPDATE_ENABLED 应用更新；返回是否真的更新了文件。"""
+    os.environ.pop("UWAPI_UPDATE_CHECK_RESULT", None)
     if not _env_flag("AUTO_UPDATE_ENABLED", True):
         _log("[INFO] 自动更新已禁用（AUTO_UPDATE_ENABLED=false）")
         _log("       服务启动后仍会检查新版本并在控制面板提示")
@@ -212,9 +215,19 @@ def _run_auto_update() -> bool:
 
     _section("自动更新")
     _log("[INFO] 检查 GitHub 最新版本...")
-    result = subprocess.run(
-        [sys.executable, str(updater)], cwd=str(PROJECT_ROOT), check=False
-    )
+    # 文件句柄在子进程启动前关闭，兼容 Windows 文件锁。
+    with tempfile.TemporaryDirectory(prefix="uwapi-update-") as temp_dir:
+        result_file = Path(temp_dir) / "result.json"
+        env = dict(os.environ, UWAPI_UPDATE_CHECK_RESULT_FILE=str(result_file))
+        result = subprocess.run(
+            [sys.executable, str(updater)], cwd=str(PROJECT_ROOT), check=False, env=env
+        )
+        try:
+            payload = json.loads(result_file.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                os.environ["UWAPI_UPDATE_CHECK_RESULT"] = json.dumps(payload)
+        except (OSError, ValueError):
+            pass
     applied = result.returncode == 0
     if applied:
         _log("[INFO] 更新已应用，正在同步 uv 环境...")

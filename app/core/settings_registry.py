@@ -82,6 +82,8 @@ EXTERNAL_ENV: Dict[str, str] = {
     'PYTHONIOENCODING': '子进程输出编码（启动引导设置）',
     'PYTHONUTF8': 'Python UTF-8 模式（启动引导设置）',
     'TERM_PROGRAM': '终端类型检测（VS Code 等）',
+    'UWAPI_UPDATE_CHECK_RESULT': '内部标志：引导阶段成功的版本检查结果（仅启动时消费）',
+    'UWAPI_UPDATE_CHECK_RESULT_FILE': '内部标志：更新子进程写入版本检查结果的临时文件',
     'UWAPI_IS_RESTART': '内部标志：由重启保护在自重启时设置',
     'WT_SESSION': '终端类型检测（Windows Terminal）',
 }
